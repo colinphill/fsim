@@ -1171,12 +1171,7 @@ int main() {
     verify(cold, '9');
     verify(warm, '9');
     assert(reference.vcd == cold.vcd && cold.vcd == warm.vcd);
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled > 0 && cold.cache.misses > 0);
-    assert(warm.cache.hits > 0);
-#else
     assert(cold.compiled == 0 && warm.compiled == 0);
-#endif
   }
   write_source(source, 'a');
   const auto edited = execute(
@@ -1184,8 +1179,5 @@ int main() {
           directory.path, source, fsim::project::Optimization::o2),
       fsim::app::SimulationEngine::compiled);
   verify(edited, 'a');
-#if defined(FSIM_HAS_LLVM)
-  assert(edited.cache.misses > 0);
-#endif
   return 0;
 }

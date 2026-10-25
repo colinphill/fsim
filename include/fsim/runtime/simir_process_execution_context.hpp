@@ -8,49 +8,6 @@ struct ProcessUpdateWord {
     bool slice { };
 };
 
-/// Mutable view of one callback-free native update accumulator. The view is
-/// built once with the executor frame and lets the kernel consume all touched
-/// words without first expanding masks into temporary ProcessUpdateWord
-/// records.
-struct ProcessUpdateSlotView {
-    SignalId signal { };
-    std::uint32_t width { };
-    std::uint32_t word_count { };
-    std::uint32_t* active { };
-    std::uint64_t* aval { };
-    std::uint64_t* bval { };
-    std::uint64_t* mask { };
-};
-
-struct PreparedOwnedUpdateSlot;
-
-/// One process's ordered slot set from a native update accumulator. Batches
-/// retain the actual elaborated process identity rather than the structurally
-/// shared process template identity.
-struct ProcessUpdateSlotBatch {
-    ProcessId process { };
-    std::span<const ProcessUpdateSlotView> slots;
-    std::span<std::uint64_t> active_words;
-    /// Optional immutable ownership proof obtained for this batch geometry.
-    /// The runtime checks its owner and slot identity before using the
-    /// prevalidated path; a missing or mismatched proof uses regular validated
-    /// staging. The caller keeps it alive through the synchronous write call.
-    const PreparedOwnedUpdateSlot* owned_slot_certificate { };
-};
-
-/// Immutable geometry for one owned native update slot. The executor owns the
-/// value and the runtime rechecks mutable ownership and phase state when it
-/// stages each activation. No pointer into the interpreter's span vector is
-/// retained across a fork.
-struct PreparedOwnedUpdateSlot {
-    const void* owner { };
-    ProcessId process { };
-    SignalId signal { };
-    std::uint32_t width { };
-    std::uint32_t word_count { };
-    std::array<std::uint64_t, 2U> own_masks { };
-};
-
 /// Mutable view of one callback-buffered single-word Logic9 update. The four
 /// planes use the ordinal Logic9 encoding; checked batch ingress maps malformed
 /// codes 9 through 15 to X before native publication. `mask` selects bits
@@ -344,26 +301,6 @@ public:
     /// Alternate contexts retain the checked behavior by default.
     virtual void write_validated_update_words(
         const std::span<const ProcessUpdateWord> updates);
-    /// Stable identity for contexts which can consume one hierarchy-wide
-    /// native update phase. A null identity requests the ordinary per-process
-    /// path.
-    [[nodiscard]] virtual const void*
-    direct_update_domain() const noexcept;
-    /// Certify one owned slot's immutable layout before publishing a pure
-    /// wave member. The caller must keep the exact batch process, slot
-    /// storage, and geometry associated with this certificate and revoke it
-    /// before any such storage changes. Nullopt retains ordinary validated
-    /// batch staging.
-    [[nodiscard]] virtual std::optional<PreparedOwnedUpdateSlot>
-    prepare_owned_update_slot(const ProcessUpdateSlotBatch&);
-    /// Consume native slot batches in their supplied order. A batch may carry
-    /// an owned-slot certificate from prepare_owned_update_slot; the runtime
-    /// rechecks its owner and geometry, then still validates mutable ownership
-    /// and phase state. Returns false without mutating slots when the context
-    /// requires ordinary word-based staging. Borrowed certificates are never
-    /// retained after this call.
-    virtual bool write_validated_update_slot_batches(
-        std::span<const ProcessUpdateSlotBatch>);
     /// Consume validated inline Logic9 accumulators without expanding them to
     /// temporary packed values. False leaves every mask untouched.
     virtual bool write_validated_logic9_update_batch(

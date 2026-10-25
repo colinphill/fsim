@@ -57,7 +57,7 @@ foreach(FSIM_ROW IN LISTS FSIM_ROWS)
     set(FSIM_OWNERS fsim.schema-identity
       fsim.application.artifact_phases fsim.nested-portable-schema-freeze)
   elseif(FSIM_DOMAIN STREQUAL "cache")
-    set(FSIM_OWNERS fsim.schema-identity fsim.llvm
+    set(FSIM_OWNERS fsim.schema-identity fsim.cache
       fsim.incremental-native-cache-freeze)
   else()
     message(FATAL_ERROR "schema-freeze domain has no behavioral owner: ${FSIM_DOMAIN}")

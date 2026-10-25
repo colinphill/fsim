@@ -80,18 +80,10 @@ foreach(FSIM_ROW IN LISTS FSIM_ROWS)
     message(FATAL_ERROR "v2-input owner is unregistered: ${FSIM_ID}")
   endif()
   if(FSIM_FAMILY STREQUAL "cache")
-    if(NOT FSIM_ID STREQUAL "V3REJECT-CACHE"
-       OR NOT FSIM_PATH STREQUAL "src/compiler/native_cache_schema.hpp"
-       OR NOT FSIM_TEST STREQUAL "fsim.cache"
-       OR NOT FSIM_EVIDENCE_${FSIM_ID} STREQUAL
-         "tests/compiler/cache_test.cpp")
-      message(FATAL_ERROR "native cache lacks namespace-miss owner")
-    endif()
-    foreach(FSIM_CACHE_TEST IN ITEMS fsim.schema-identity fsim.llvm)
-      if(NOT FSIM_CACHE_TEST IN_LIST FSIM_REGISTERED_TESTS)
-        message(FATAL_ERROR "native cache owner is unregistered")
-      endif()
-    endforeach()
+    # The per-process JIT native cache schema was removed in the engine-v4
+    # migration; its V3REJECT-CACHE inventory row must be dropped too.
+    message(FATAL_ERROR
+      "native cache row ${FSIM_ID} is obsolete: the per-process JIT cache was removed")
   elseif(NOT FSIM_EVIDENCE_${FSIM_ID} STREQUAL FSIM_PATH)
     message(FATAL_ERROR "v2-input evidence/owner path differs: ${FSIM_ID}")
   endif()

@@ -455,18 +455,6 @@ fsim_status_t fsim_session_build(const fsim_session_t session)
                 "variables, or drivers for the version-1 object handle encoding");
             return FSIM_STATUS_INTERNAL_ERROR;
         }
-        const auto native_cache = value.simulation->native_cache_statistics();
-        if (native_cache.load_failures != 0
-            || native_cache.store_failures != 0) {
-            value.diagnostics.warning(
-                "FSIM-CACHE-0004",
-                "native LLVM object cache reported "
-                    + std::to_string(native_cache.load_failures)
-                    + " load failure(s) and "
-                    + std::to_string(native_cache.store_failures)
-                    + " store failure(s); simulation remains valid, but cache "
-                      "reuse may be incomplete");
-        }
         attach_callbacks(value);
         lifecycle(value, FSIM_LIFECYCLE_DESIGN_LOADED);
         return FSIM_STATUS_OK;

@@ -228,14 +228,6 @@ struct Interpreter::Impl::ExecutionContext final
     void write_validated_update_words(
         const std::span<const ProcessUpdateWord> updates) override;
 
-    [[nodiscard]] const void* direct_update_domain() const noexcept override;
-
-    [[nodiscard]] std::optional<PreparedOwnedUpdateSlot>
-    prepare_owned_update_slot(const ProcessUpdateSlotBatch&) override;
-
-    bool write_validated_update_slot_batches(
-        const std::span<const ProcessUpdateSlotBatch> batches) override;
-
     bool write_validated_logic9_update_batch(
         const ProcessLogic9UpdateBatch& batch) override;
 

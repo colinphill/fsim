@@ -212,18 +212,8 @@ void verify_mode(
     assert(reference.final_values == actual->final_values);
     assert(reference.vcd == actual->vcd);
   }
-#if defined(FSIM_HAS_LLVM)
-  assert(cold.compiled_processes == 1);
-  assert(cold.native_cache.hits == 0);
-  assert(cold.native_cache.misses == 1);
-  assert(cold.native_cache.stores == 1);
-  assert(warm.compiled_processes == 1);
-  assert(warm.native_cache.hits == 1);
-  assert(warm.native_cache.misses == 0);
-#else
   assert(cold.compiled_processes == 0);
   assert(warm.compiled_processes == 0);
-#endif
 }
 
 }  // namespace

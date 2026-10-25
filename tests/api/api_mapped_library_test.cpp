@@ -118,15 +118,9 @@ void test_mapped_library_api(const std::filesystem::path& directory) {
   assert(view(info.library) == "vendor");
   assert(info.metadata_digest.size == 64);
   assert(info.unit_count == 1);
-#if defined(FSIM_HAS_LLVM)
-  assert(info.native_accepted == 1);
-  assert(view(info.native_kind) == "llvm_object");
-  assert(info.native_fingerprint.size == 64);
-#else
   assert(info.native_accepted == 0);
   assert(info.native_kind.size == 0);
   assert(info.native_fingerprint.size == 0);
-#endif
   assert(
       fsim_session_get_mapped_library_info(session, 1, &info)
       == FSIM_STATUS_INVALID_ARGUMENT);

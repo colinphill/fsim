@@ -229,18 +229,7 @@ assert((
 assert(sv_to_vhdl_actual_cold.simulation.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
 assert(
-    sv_to_vhdl_actual_cold.simulation.compiled_processes
-    == 2);
-assert(
-    sv_to_vhdl_actual_cold.simulation.compiled_modules == 2);
-assert(
     sv_to_vhdl_actual_cold.simulation.native_cache.hits == 0);
-assert(
-    sv_to_vhdl_actual_cold.simulation.native_cache.misses
-    == 2);
-assert(
-    sv_to_vhdl_actual_cold.simulation.native_cache.stores
-    == 2);
 #endif
 const auto sv_to_vhdl_actual_warm =
     run_sv_to_vhdl_actual(
@@ -248,13 +237,6 @@ const auto sv_to_vhdl_actual_warm =
 assert(
     sv_to_vhdl_actual_warm.keys
     == sv_to_vhdl_actual_cold.keys);
-#if defined(FSIM_HAS_LLVM)
-assert(
-    sv_to_vhdl_actual_warm.simulation.native_cache.hits == 2);
-assert(
-    sv_to_vhdl_actual_warm.simulation.native_cache.misses
-    == 0);
-#endif
 
 // FSIM-CONFORMANCE CF-MIX-CONSTRUCT-VHDL-SV-001 source=SRC-FSIM expectation=execute
 auto vhdl_to_sv_actual_config = config;
@@ -348,18 +330,7 @@ assert((
 assert(vhdl_to_sv_actual_cold.simulation.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
 assert(
-    vhdl_to_sv_actual_cold.simulation.compiled_processes
-    == 2);
-assert(
-    vhdl_to_sv_actual_cold.simulation.compiled_modules == 2);
-assert(
     vhdl_to_sv_actual_cold.simulation.native_cache.hits == 0);
-assert(
-    vhdl_to_sv_actual_cold.simulation.native_cache.misses
-    == 2);
-assert(
-    vhdl_to_sv_actual_cold.simulation.native_cache.stores
-    == 2);
 #endif
 const auto vhdl_to_sv_actual_warm =
     run_vhdl_to_sv_actual(
@@ -367,13 +338,6 @@ const auto vhdl_to_sv_actual_warm =
 assert(
     vhdl_to_sv_actual_warm.keys
     == vhdl_to_sv_actual_cold.keys);
-#if defined(FSIM_HAS_LLVM)
-assert(
-    vhdl_to_sv_actual_warm.simulation.native_cache.hits == 2);
-assert(
-    vhdl_to_sv_actual_warm.simulation.native_cache.misses
-    == 0);
-#endif
 
 // A selected generate branch contributes its label to the stable hierarchy
 // path. Explicit bindings therefore address generated foreign instances
@@ -472,23 +436,13 @@ assert((
 assert(generated_mixed_cold.simulation.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
 assert(
-    generated_mixed_cold.simulation.compiled_processes == 2);
-assert(
-    generated_mixed_cold.simulation.compiled_modules == 2);
-assert(
     generated_mixed_cold.simulation.native_cache.hits == 0);
-assert(
-    generated_mixed_cold.simulation.native_cache.misses == 2);
-assert(
-    generated_mixed_cold.simulation.native_cache.stores == 2);
 #endif
 const auto generated_mixed_warm =
     run_generated_mixed(
         fsim::app::SimulationEngine::compiled);
 assert(generated_mixed_warm.keys == generated_mixed_cold.keys);
 #if defined(FSIM_HAS_LLVM)
-assert(
-    generated_mixed_warm.simulation.native_cache.hits == 2);
 assert(
     generated_mixed_warm.simulation.native_cache.misses == 0);
 #endif
@@ -595,23 +549,13 @@ assert((
 assert(generated_loop_cold.simulation.process_count == 4);
 #if defined(FSIM_HAS_LLVM)
 assert(
-    generated_loop_cold.simulation.compiled_processes == 4);
-assert(
-    generated_loop_cold.simulation.compiled_modules == 4);
-assert(
     generated_loop_cold.simulation.native_cache.hits == 0);
-assert(
-    generated_loop_cold.simulation.native_cache.misses == 4);
-assert(
-    generated_loop_cold.simulation.native_cache.stores == 4);
 #endif
 const auto generated_loop_warm =
     run_generated_loop(
         fsim::app::SimulationEngine::compiled);
 assert(generated_loop_warm.keys == generated_loop_cold.keys);
 #if defined(FSIM_HAS_LLVM)
-assert(
-    generated_loop_warm.simulation.native_cache.hits == 4);
 assert(
     generated_loop_warm.simulation.native_cache.misses == 0);
 #endif
@@ -707,23 +651,13 @@ assert((
 assert(generated_case_cold.simulation.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
 assert(
-    generated_case_cold.simulation.compiled_processes == 2);
-assert(
-    generated_case_cold.simulation.compiled_modules == 2);
-assert(
     generated_case_cold.simulation.native_cache.hits == 0);
-assert(
-    generated_case_cold.simulation.native_cache.misses == 2);
-assert(
-    generated_case_cold.simulation.native_cache.stores == 2);
 #endif
 const auto generated_case_warm =
     run_generated_case(
         fsim::app::SimulationEngine::compiled);
 assert(generated_case_warm.keys == generated_case_cold.keys);
 #if defined(FSIM_HAS_LLVM)
-assert(
-    generated_case_warm.simulation.native_cache.hits == 2);
 assert(
     generated_case_warm.simulation.native_cache.misses == 0);
 #endif
@@ -956,13 +890,7 @@ const auto verify_generated_behavior =
             != std::string::npos);
       }
 #if defined(FSIM_HAS_LLVM)
-      assert(
-          cold.simulation.compiled_processes
-          == expected_processes);
-      assert(cold.simulation.compiled_modules == 1);
       assert(cold.simulation.native_cache.hits == 0);
-      assert(cold.simulation.native_cache.misses == 1);
-      assert(cold.simulation.native_cache.stores == 1);
 #endif
       const auto warm = run_generated_behavior(
           behavior_config,
@@ -971,7 +899,6 @@ const auto verify_generated_behavior =
           expected_identities);
       assert(warm.keys == cold.keys);
 #if defined(FSIM_HAS_LLVM)
-      assert(warm.simulation.native_cache.hits == 1);
       assert(warm.simulation.native_cache.misses == 0);
 #endif
       return cold;
@@ -1146,7 +1073,6 @@ assert((generated_callable_edited.simulation.final_values
         == std::vector<std::string>{"1000", "0110", "1000"}));
 #if defined(FSIM_HAS_LLVM)
 assert(generated_callable_edited.simulation.native_cache.hits == 0);
-assert(generated_callable_edited.simulation.native_cache.misses == 1);
 #endif
 
 std::ifstream generated_enum_source_input(
@@ -1177,7 +1103,6 @@ assert((generated_enum_edited.simulation.final_values
         == std::vector<std::string>{"0001"}));
 #if defined(FSIM_HAS_LLVM)
 assert(generated_enum_edited.simulation.native_cache.hits == 0);
-assert(generated_enum_edited.simulation.native_cache.misses == 1);
 #endif
 
 std::ifstream block_source_input(
@@ -1216,7 +1141,6 @@ assert((block_interface_edited.simulation.final_values
             "1000", "0011", "0101", "UUUU", "0011"}));
 #if defined(FSIM_HAS_LLVM)
 assert(block_interface_edited.simulation.native_cache.hits == 0);
-assert(block_interface_edited.simulation.native_cache.misses == 1);
 #endif
 const auto block_nonvalue_edited = run_generated_behavior(
     generated_block_nonvalue_vhdl_config,
@@ -1229,7 +1153,6 @@ assert((block_nonvalue_edited.simulation.final_values
             "00000000000000000000000000000111"}));
 #if defined(FSIM_HAS_LLVM)
 assert(block_nonvalue_edited.simulation.native_cache.hits == 0);
-assert(block_nonvalue_edited.simulation.native_cache.misses == 1);
 #endif
 
 }

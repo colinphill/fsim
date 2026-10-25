@@ -45,7 +45,6 @@ enum class OutputFormat : std::uint8_t;
 
 using fsim::support::RareVector;
 
-class RegionKernelBackendProvider;
 class InterpreterProgramAccess;
 
 template <typename T>
@@ -1874,144 +1873,6 @@ struct ProcessCohortResumeEntry {
     std::uint8_t* active { };
 };
 
-/// One-call view of state shared by every context in a cohort assembled by
-/// the interpreter. The view is valid only during the resume call; alternate
-/// executors may ignore it and use the ordinary cohort entry contract.
-struct ProcessCohortNativeContext {
-    const void* owner { };
-    std::span<const std::uint64_t> signal_aval;
-    std::span<const std::uint64_t> signal_bval;
-    std::uint64_t signal_writer_revision { };
-    bool supports_direct_word_updates { };
-    bool execution_points_enabled { };
-    std::span<const std::uint64_t> wide_signal_aval;
-    std::span<const std::uint64_t> wide_signal_bval;
-    std::span<const std::uint32_t> wide_signal_offsets;
-    std::span<const std::uint64_t> signal_logic9_plane0;
-    std::span<const std::uint64_t> signal_logic9_plane1;
-    std::span<const std::uint64_t> signal_logic9_plane2;
-    std::span<const std::uint64_t> signal_logic9_plane3;
-    std::span<const std::uint64_t> wide_signal_logic9_plane2;
-    std::span<const std::uint64_t> wide_signal_logic9_plane3;
-};
-
-/// Post-elaboration graph certificate for an existing atomic static cohort.
-/// The runtime retains original process and driver identities on every path.
-struct FusedStaticCohortCandidate {
-    std::size_t cohort_id { };
-    std::vector<ProcessId> members;
-    std::vector<SignalId> outputs;
-    std::vector<SignalId> private_outputs;
-    std::vector<SignalId> boundary_outputs;
-    bool projected { };
-    /// The current executor uses a general masked kernel with every member
-    /// selected. The application may set this after validating its mapping.
-    bool masked_all_active { };
-    /// Graph-time proof that the process bodies can use masked compilation.
-    bool masked_all_active_eligible { };
-    std::vector<std::uint64_t> masked_all_active_words;
-};
-
-struct FusedStaticCounters {
-    std::uint64_t candidates { };
-    std::uint64_t invocations { };
-    std::uint64_t represented_members { };
-    std::uint64_t owner_stage_calls_avoided { };
-    std::uint64_t aggregate_signals_staged { };
-    std::uint64_t masked_all_active_invocations { };
-    std::uint64_t generic_update_commit_tickets { };
-    std::uint64_t fallbacks { };
-    std::uint64_t fork_events { };
-    std::uint64_t fork_plans_invalidated { };
-    std::uint64_t fork_plans_surviving_after_last { };
-    std::uint64_t observation_invalidations { };
-};
-
-/// Exact VHDL projected write retained with its original elaborated signal.
-/// The graph plan supplies the original process owner and projected timing.
-struct FusedStaticProjectedWrite {
-    SignalId signal { };
-    PackedLogic4 value;
-};
-
-struct FusedStaticCohortResume {
-    std::span<const ProcessUpdateSlotView> aggregate_slots;
-    std::span<const FusedStaticProjectedWrite> projected_writes;
-};
-
-/// Return nullopt only before changing signal slots or process state. A
-/// successful result borrows stable slot views until the runtime stages them.
-class FusedStaticCohortExecutor {
-public:
-    virtual ~FusedStaticCohortExecutor() = default;
-    [[nodiscard]] virtual std::optional<FusedStaticCohortResume>
-    resume(const ProcessCohortNativeContext& context) = 0;
-    /// Optional general masked entry. Its word span is supplied only after the
-    /// runtime has found the complete static cohort ready. The default keeps
-    /// the existing checked process path available.
-    [[nodiscard]] virtual std::optional<FusedStaticCohortResume>
-    resume_masked_all_active(const ProcessCohortNativeContext&,
-        std::span<const std::uint64_t>)
-    {
-        return std::nullopt;
-    }
-};
-
-/// Retained source-compatibility metadata for the retired masked-region route.
-/// Current interpreters do not publish masked-region candidates.
-struct FusedMaskedRegionCandidate {
-    std::size_t region_id { };
-    std::vector<ProcessId> members;
-    std::vector<SignalId> outputs;
-    // A complete, distinct Logic4 output with one original writer may share
-    // an owned aggregate's masked native call. It still uses the ordinary
-    // update/commit path under that writer's ProcessId.
-    std::optional<SignalId> normal_single_writer_output;
-    // Downstream pure readers folded into the same-snapshot masked region.
-    std::vector<ProcessId> terminal_members;
-    std::vector<SignalId> private_outputs;
-    std::vector<SignalId> boundary_outputs;
-    bool projected { };
-};
-
-struct FusedMaskedRegionCounters {
-    std::uint64_t candidates { };
-    std::uint64_t terminal_candidates { };
-    std::uint64_t normalized_terminal_candidates { };
-    std::uint64_t terminal_regions_bound { };
-    std::uint64_t terminal_members_bound { };
-    std::uint64_t terminal_activations { };
-    std::uint64_t terminal_joint_activations { };
-    std::uint64_t private_candidates { };
-    std::uint64_t private_local_commits { };
-    std::uint64_t private_fanout_entries_avoided { };
-    std::uint64_t private_masked_notifications { };
-    std::uint64_t private_owned_direct_commits { };
-    std::uint64_t virtual_tasks { };
-    std::uint64_t frontier_calls { };
-    std::uint64_t global_frontier_callbacks { };
-    std::uint64_t global_frontier_queue_entries { };
-    std::uint64_t masked_calls { };
-    std::uint64_t represented_members { };
-    std::uint64_t owner_stage_calls_avoided { };
-    std::uint64_t aggregate_signals_staged { };
-    std::uint64_t prepared_fallback_tasks { };
-    std::uint64_t ordinary_fallback_tasks { };
-    std::uint64_t boundary_publications { };
-    std::uint64_t private_publications_elided { };
-    std::uint64_t demotions { };
-};
-
-/// A disengaged result must precede every mutation. On success the output
-/// views remain valid until the interpreter validates and stages all slots.
-class FusedMaskedRegionExecutor {
-public:
-    virtual ~FusedMaskedRegionExecutor() = default;
-    [[nodiscard]] virtual std::optional<FusedStaticCohortResume>
-    resume(const ProcessCohortNativeContext& context,
-        std::span<const std::uint64_t> activation_words) = 0;
-};
-
 enum class ExecutionPointKind : std::uint8_t {
     statement,
     call,
@@ -2093,7 +1954,6 @@ private:
 struct DeferredProcessExecutorContract {
     std::optional<ProcessExecutorProgramBinding> expected_access;
     bool callbacks_observation_safe { };
-    bool expected_region_kernel_equivalent { };
 };
 
 class ProcessExecutor {
@@ -2252,92 +2112,6 @@ public:
         return nullptr;
     }
 
-    /// Opt in only when replacing this executor's operation execution with
-    /// the interpreter's certified region-activation kernel preserves its
-    /// observable execution semantics, including register/frame results and
-    /// any private state observable by a later executor entrypoint. Access
-    /// binding alone is insufficient.
-    [[nodiscard]] virtual bool region_kernel_equivalent() const noexcept
-    {
-        return false;
-    }
-
-    /// Opt in only when this executor has no process-register values that a
-    /// region activation must copy back at a static wait boundary. This is a
-    /// separate promise from region_kernel_equivalent(): the latter permits
-    /// region replacement only when executor-visible state remains equivalent,
-    /// while this narrower promise allows the runtime to omit native
-    /// completion staging after validating the member's bindings and boundary.
-    [[nodiscard]] virtual bool
-    region_kernel_completion_has_no_persistent_registers() const noexcept
-    {
-        return false;
-    }
-
-    /// A statically validated activation-kernel register mapping. Entries are
-    /// in source-register order and activation IDs are strictly increasing.
-    /// `defined` is true only when the source body assigns the register on
-    /// every admitted activation; false entries preserve prior state.
-    struct RegionRegisterBinding {
-        RegisterId source_register { };
-        RegisterId activation_register { };
-        bool defined { };
-        std::uint32_t width { };
-        ValueKind value_kind { ValueKind::logic4 };
-
-        bool operator==(const RegionRegisterBinding&) const = default;
-    };
-
-    /// Prepared copyback owns no semantic state until commit. Destroying it
-    /// cancels it. A non-null stable identity names the executor-owned storage
-    /// that commit mutates; an activation must decline duplicate identities.
-    class PreparedRegionCompletion {
-    public:
-        virtual ~PreparedRegionCompletion() = default;
-
-        [[nodiscard]] virtual const void* storage_identity() const noexcept = 0;
-        virtual void commit() noexcept = 0;
-    };
-
-    /// Prepare a no-throw synchronization of the executed activation's
-    /// defined packed registers into this executor's persistent frame. The
-    /// executor must validate process identity, exact frame boundary, ABI and
-    /// plane extents, register IDs, widths, and value kinds before returning a
-    /// plan. Returning null declines the optimized activation. The source and
-    /// activation spans must remain alive and unchanged until commit or plan
-    /// destruction. Preparation may invalidate performance-only bindings but
-    /// must not change register values or initialized state.
-    [[nodiscard]] virtual std::unique_ptr<PreparedRegionCompletion>
-    prepare_region_completion(
-        ProcessId,
-        InstructionIndex,
-        InstructionIndex,
-        std::span<const RegionRegisterBinding>,
-        std::span<const PackedLogic4>)
-    {
-        return { };
-    }
-
-    /// Allocation-free split-phase completion used only by a native region
-    /// route. The caller preflights before entering the backend, stages the
-    /// returned activation values only after successful execution, and either
-    /// commits or cancels synchronously. Other executor implementations keep
-    /// the conservative default and use the public prepared-completion API.
-    [[nodiscard]] virtual bool prepare_region_completion_native(
-        ProcessId, InstructionIndex, InstructionIndex,
-        std::span<const RegionRegisterBinding>, std::size_t,
-        const void**) noexcept
-    {
-        return false;
-    }
-    [[nodiscard]] virtual bool stage_region_completion_native(
-        std::span<const PackedLogic4>) noexcept
-    {
-        return false;
-    }
-    virtual void commit_region_completion_native() noexcept { }
-    virtual void cancel_region_completion_native() noexcept { }
-
     /// Clone a child executor with private register, string, and container
     /// register storage. Executors that cannot provide an isolated lexical
     /// activation must reject this fork form.
@@ -2348,19 +2122,6 @@ public:
             "executor does not support isolated fork register frames"
         };
     }
-};
-
-/// Optional read-only certificate for an executor already parked at the exact
-/// static-wait completion boundary expected by a native region. The default
-/// ProcessExecutor contract remains opaque; unsupported executors do not opt in.
-class RegionKernelParkedExecutor {
-public:
-    virtual ~RegionKernelParkedExecutor() = default;
-
-    [[nodiscard]] virtual bool region_kernel_completion_is_parked_native(
-        ProcessId, InstructionIndex, InstructionIndex,
-        std::span<const ProcessExecutor::RegionRegisterBinding>,
-        std::size_t activation_register_count) const noexcept = 0;
 };
 
 class InterpreterError : public std::runtime_error {
@@ -2618,13 +2379,6 @@ public:
     /// start and is used by SystemVerilog $timeformat/%t services.
     void set_time_resolution_femtoseconds(std::uint64_t femtoseconds);
 
-    /// Install the application-owned optional region compiler before start.
-    /// The provider is called only during the initial snapshot build; later
-    /// quiet-point snapshots can reuse only exact matches from the runtime's
-    /// persistent backend pool.
-    void set_region_kernel_backend_provider(
-        std::shared_ptr<RegionKernelBackendProvider> provider);
-
     /// Replace one process's reference evaluator with an alternate executor.
     ///
     /// The interpreter remains the sole scheduler and signal store. Installation
@@ -2659,33 +2413,6 @@ public:
     /// wait for native compilation while allowing other callers to overlap
     /// materialization with scheduler execution.
     void materialize_ready_process_executors();
-
-    /// Available after start() has certified the complete elaborated graph.
-    [[nodiscard]] std::vector<FusedStaticCohortCandidate>
-    fused_static_cohort_candidates() const;
-    [[nodiscard]] FusedStaticCounters fused_static_counters() const noexcept;
-    void set_fused_static_counters_enabled(bool enabled);
-    /// Bind only after start() and before the first run(). Unknown or stale
-    /// cohort IDs reject; declined activations use their original process path.
-    void install_fused_static_cohort(
-        std::size_t cohort_id,
-        std::unique_ptr<FusedStaticCohortExecutor> executor,
-        bool use_masked_all_active = false);
-    /// Compatibility query for the retired route; always returns an empty list.
-    [[nodiscard]] std::vector<FusedMaskedRegionCandidate>
-    fused_masked_region_candidates() const;
-    /// Compatibility counters for the retired route; all fields remain zero.
-    [[nodiscard]] FusedMaskedRegionCounters
-    fused_masked_region_counters() const noexcept;
-    /// Retained configuration entry point. It preserves the binding-window
-    /// error behavior but has no masked route to configure.
-    void set_fused_masked_region_counters_enabled(bool enabled);
-    /// Retained source-compatible entry point. Since no masked region IDs are
-    /// published, every call throws `invalid fused masked region binding`.
-    void install_fused_masked_region(
-        std::size_t region_id,
-        std::vector<std::vector<Process::DriverRegion>> mandatory_writes,
-        std::unique_ptr<FusedMaskedRegionExecutor> executor);
 
     void start();
     /// True only while the kernel executes ordered package-static startup
@@ -2778,10 +2505,6 @@ public:
     /// Return the immutable SimIR program owned by a static design process.
     /// The reference remains valid for the lifetime of this interpreter.
     [[nodiscard]] const Process& process_program(ProcessId process) const;
-    /// Compatibility accessor for the retired masked-member specialization.
-    /// It returns the original registered process program.
-    [[nodiscard]] const Process& fused_masked_member_program(
-        ProcessId process) const;
     /// Return the next SimIR instruction for a scheduler-owned process.
     [[nodiscard]] InstructionIndex process_instruction(
         ProcessId process) const;

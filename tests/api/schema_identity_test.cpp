@@ -9,7 +9,6 @@
 #include "fsim/runtime/native_plugin_abi.h"
 #include "fsim/runtime/svdpi_bridge.h"
 #include "fsim/runtime/tf_plugin_abi.h"
-#include "native_cache_schema.hpp"
 
 #include <string_view>
 
@@ -32,8 +31,6 @@ static_assert(fsim::app::kSystemVerilogConstraintHirStateSchema == 14);
 static_assert(fsim::app::kSystemVerilogCoverageStateSchema == 7);
 static_assert(fsim::app::kSystemVerilogUvmStateSchema == 3);
 static_assert(fsim::app::kVhdlHirStateSchema == 8);
-static_assert(fsim::compiler::llvm_detail::kNativeObjectCacheSchema ==
-    std::string_view { "fsim-llvm-native-object-v275" });
 
 int main()
 {

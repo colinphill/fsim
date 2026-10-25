@@ -15,7 +15,6 @@ public:
     [[nodiscard]] static RegionGraph build(
         std::span<const ProcessProgramView> processes,
         std::span<const RegionSignalDescriptor> signals,
-        bool collect_opaque_operation_counts,
         std::span<const RegionContainerDescriptor> containers,
         std::span<const std::uint8_t> process_access_complete,
         std::span<const RegionSignalAliasFamilyDescriptor> signal_alias_families);

@@ -358,13 +358,11 @@ void Interpreter::Impl::execute_compact_startup_write(
 
 void Interpreter::Impl::execute(ProcessId id)
 {
-    require_all_region_forwarding_role_journals_flushed();
     if (auto* const compact = processes.compact_constant(id)) {
         execute_compact_constant(*compact);
         return;
     }
     auto& process = get_process(id);
-    process.region_kernel_completion_boundary_validated = false;
     if (native_process_count_profile_enabled) {
         process.cold().track_interpreter_operations = true;
     }

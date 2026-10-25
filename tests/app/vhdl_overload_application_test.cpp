@@ -982,9 +982,7 @@ end architecture;
     assert(reference.keys == cold.keys);
     assert(cold.keys == warm.keys);
 #if defined(FSIM_HAS_LLVM)
-    assert(cold.cache.misses > 0);
     assert(cold.cache.stores == cold.cache.misses);
-    assert(warm.cache.hits > 0);
     assert(warm.cache.misses == 0);
 #endif
 

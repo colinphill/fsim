@@ -307,12 +307,6 @@ public:
         Interpreter& interpreter,
         std::shared_ptr<const ProcessProgramTemplate> common,
         ProcessInstanceProgram instance);
-    /// Install proof built by trusted elaboration or rebuilt by validated
-    /// from_state ingress. This source-private bridge is not an authenticity
-    /// check; mutable/serialized inventories must be validated before calling.
-    static void set_trusted_signal_driver_inventory(
-        Interpreter& interpreter,
-        std::shared_ptr<const SignalDriverInventory> inventory) noexcept;
     /// Install a report sink that consumes only the supplied message and
     /// metadata. It skips the implicit signal-observation barrier; before it
     /// inspects or mutates interpreter state it must call

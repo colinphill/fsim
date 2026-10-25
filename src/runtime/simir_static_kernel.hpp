@@ -36,6 +36,13 @@ enum class StaticKernelMemberKind : std::uint8_t {
     /// fork/join, calls and runtime-library output);
     /// FSIM_STATIC_KERNEL_BEHAVIORAL=0 leaves such processes on the host.
     behavioral,
+    /// A process the kernel schedules but does not evaluate: its own
+    /// ProcessState is executed by the reference evaluator
+    /// (Interpreter::Impl::execute) at the point of the kernel's region loop
+    /// that the reference scheduler would run it (docs/engine-v4-semantics.md
+    /// S25). Hosted processes are listed in StaticKernelRuntimeSpec::hosted,
+    /// not in `members`.
+    hosted,
 };
 
 struct StaticKernelMemberSpec {
@@ -131,6 +138,10 @@ struct StaticKernelRuntimeSpec {
     /// The host's original program; the scheduler runs the host stub.
     Process host_original;
     std::vector<StaticKernelMemberSpec> members;
+    /// SystemVerilog processes the kernel schedules and the reference
+    /// evaluator executes (StaticKernelMemberKind::hosted); only `process`
+    /// is meaningful. Empty for VHDL and mixed kernels.
+    std::vector<StaticKernelMemberSpec> hosted;
     /// A kernel-owned signal with a pure-routing host resolver
     /// (static_kernel_wiring) over another owned signal is a wired formal:
     /// the kernel drives it in the update phase that changes its source.
@@ -150,6 +161,17 @@ struct StaticKernelRuntimeSpec {
     /// reference scheduler interleaves generic deltas and SystemVerilog
     /// regions (`vhdl` is also set).
     bool mixed { };
+    /// Publish-all mode: some process has statically unknown signal accesses
+    /// and stays on the host, so it may read or write any signal. Every
+    /// owned signal is then a boundary output (the host copy is always
+    /// current for it), and a value the host commits to an owned signal is
+    /// taken into the kernel (StaticKernel::import_host_write).
+    bool import_host_writes { };
+    /// Debugger plan (StaticKernelAccessPlan::debug): every member is a
+    /// behavioral thread, and its debug points are executable: compiled
+    /// bodies stop at each one (KOp::suspend), and the thread runner raises
+    /// the execution-point hook there. Without it they compile to nothing.
+    bool debug_points { };
     /// Writer ranges of owned signals in VHDL mode, merged per process; they
     /// replace the members' declared driver regions for publication.
     std::vector<StaticKernelWriterRegion> writer_regions;
@@ -278,6 +300,8 @@ struct StaticKernelRuntimeSpec {
                 || std::is_same_v<T, StringMethod>
                 || std::is_same_v<T, LoadStringConstant>
                 || std::is_same_v<T, CopyStringRegister>
+                // Between equal-shape private arrays (see the planner).
+                || std::is_same_v<T, CopyContainerRegister>
                 || std::is_same_v<T, PlusArgSelect>
                 || std::is_same_v<T, Call>
                 || std::is_same_v<T, Return>

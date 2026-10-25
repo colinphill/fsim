@@ -659,11 +659,7 @@ void test_display(
     assert(reference.output[47].newline);
     assert(reference.output[47].time == 4);
     assert(reference.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 2);
-#else
     assert(compiled.compiled_processes == 0);
-#endif
 }
 
 void test_monitor_radix(
@@ -803,18 +799,8 @@ void test_vhdl_report(
         reference.reports[5].source.path, source));
     assert(reference.reports[5].source.line == 16);
     assert(reference.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-    assert(compiled.cache.hits == 0);
-    assert(compiled.cache.misses == 1);
-    assert(compiled.cache.stores == 1);
-    assert(warm.compiled_processes == 1);
-    assert(warm.cache.hits == 1);
-    assert(warm.cache.misses == 0);
-#else
     assert(compiled.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
-#endif
 }
 
 void test_vhdl_failure_report(
@@ -864,11 +850,7 @@ void test_vhdl_failure_report(
     assert(fsim::test::same_source_path(reference.source.path, source));
     assert(reference.message == compiled.message);
     assert(reference.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-#else
     assert(compiled.compiled_processes == 0);
-#endif
 }
 
 } // namespace

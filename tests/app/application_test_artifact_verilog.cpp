@@ -271,11 +271,6 @@ endmodule
         assert(capture->provenance == verilog_interpreted.provenance);
         assert(capture->checkpoint == verilog_interpreted.checkpoint);
     }
-#if defined(FSIM_HAS_LLVM)
-    assert(verilog_cold.compiled_processes == 1);
-    assert(verilog_cold.cache.misses == 1);
-    assert(verilog_warm.cache.hits == 1);
-#endif
 
     const auto verilog_relocation = directory / "relocated-verilog";
     std::filesystem::create_directories(verilog_relocation);
@@ -309,9 +304,6 @@ endmodule
     assert(verilog_relocated.keys == verilog_interpreted.keys);
     assert(verilog_relocated.provenance == verilog_interpreted.provenance);
     assert(verilog_relocated.checkpoint == verilog_interpreted.checkpoint);
-#if defined(FSIM_HAS_LLVM)
-    assert(verilog_relocated.cache.hits == 1);
-#endif
 
     const auto active_verilog_design_text
         = support::path_to_utf8(active_verilog_design);
@@ -498,9 +490,6 @@ endmodule
             && mode_interpreted.keys == cold.keys && cold.keys == warm.keys
             && mode_interpreted.checkpoint == cold.checkpoint
             && cold.checkpoint == warm.checkpoint);
-#if defined(FSIM_HAS_LLVM)
-        assert(cold.cache.misses == 1 && warm.cache.hits == 1);
-#endif
         const auto relocation = mode_directory / "relocated";
         std::filesystem::create_directories(relocation);
         const auto relocated_mode_design = relocation / "design.fsimdesign";
@@ -523,9 +512,6 @@ endmodule
                 == mode_interpreted.checkpoint
             && relocated_compiled.checkpoint
                 == mode_interpreted.checkpoint);
-#if defined(FSIM_HAS_LLVM)
-        assert(relocated_compiled.cache.hits == 1);
-#endif
     }
     std::cout
         << "FSIM-OLDER-STANDARD-ARTIFACT-MATRIX-PASS modes=6 "

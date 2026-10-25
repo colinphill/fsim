@@ -433,15 +433,8 @@ end architecture;
             assert(portable->finished_values == reference.finished_values);
             assert(portable->formatted_values == reference.formatted_values);
         }
-#if defined(FSIM_HAS_LLVM)
-        assert(cold.compiled_processes == 1);
-        assert(cold.compiled_modules == 1);
-        assert(cold.native_cache.misses == 1);
-        assert(warm.native_cache.hits == 1);
-#else
         assert(cold.compiled_processes == 0);
         assert(warm.compiled_processes == 0);
-#endif
     }
 
     const auto malformed_source = directory / "simulator-api-malformed.vhd";
@@ -705,11 +698,7 @@ end architecture;
             std::move(*project), config.run.max_deltas, engine };
         if (engine != fsim::app::SimulationEngine::interpreter) {
             simulation.await_all_native_compilation();
-#if defined(FSIM_HAS_LLVM)
-            assert(simulation.compiled_process_count() != 0U);
-#else
             assert(simulation.compiled_process_count() == 0U);
-#endif
         }
         const auto result = simulation.run();
         assert(result.status == fsim::runtime::RunStatus::stopped);
@@ -966,11 +955,7 @@ end architecture;
             std::move(*project), 1000, engine };
         if (engine != fsim::app::SimulationEngine::interpreter) {
             simulation.await_all_native_compilation();
-#if defined(FSIM_HAS_LLVM)
-            assert(simulation.compiled_process_count() != 0U);
-#else
             assert(simulation.compiled_process_count() == 0U);
-#endif
         }
         const auto result = simulation.run();
         assert(result.status == fsim::runtime::RunStatus::stopped);
@@ -1291,14 +1276,8 @@ end architecture;
             assert(portable->passed == reference.passed);
             assert(portable->reports == reference.reports);
         }
-#if defined(FSIM_HAS_LLVM)
-        assert(cold.compiled_processes == 1U);
-        assert(cold.native_cache.misses == 1U);
-        assert(warm.native_cache.hits == 1U);
-#else
         assert(cold.compiled_processes == 0U);
         assert(warm.compiled_processes == 0U);
-#endif
     }
 
     const auto malformed_source = directory / "assert-api-malformed.vhd";

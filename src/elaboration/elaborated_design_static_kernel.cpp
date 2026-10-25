@@ -31,6 +31,7 @@
 #include <optional>
 #include <ranges>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -93,6 +94,148 @@ void collect_container_objects(
     }, operation);
 }
 
+/// Whether a fork child of a program can hold an automatic callable frame
+/// across a suspension. An operation that returns a behavioral thread to its
+/// runner (a wait, fork, join, halt, $stop or $pause) reachable from a Call
+/// target before its Return, or from a frame push before the pop of the same
+/// callable, makes that callable suspending. A SystemVerilog function never
+/// is (IEEE 1800-2023 13.4: no timing controls in a function); a task may
+/// (13.3). The hazard is a fork child entering a suspending callable, or a
+/// fork the parent does not join (join_any, join_none) while a suspending
+/// callable exists: only then may two threads of the member be inside one
+/// callable's registers with one of them suspended.
+template <typename Operations>
+[[nodiscard]] bool fork_holds_suspended_frame(
+    const Operations& operations, const std::size_t count)
+{
+    struct Entry {
+        InstructionIndex pc { };
+        std::optional<std::uint32_t> frame;
+        bool suspends { };
+        std::vector<std::size_t> callees;
+    };
+    std::vector<Entry> entries;
+    std::unordered_map<InstructionIndex, std::size_t> call_entry;
+    std::unordered_map<std::uint32_t, std::size_t> frame_entry;
+    std::vector<InstructionIndex> branches;
+    bool unjoined_fork = false;
+    for (std::size_t op = 0U; op < count; ++op) {
+        const auto operation = operations.expanded(op);
+        if (const auto* call = operation_get_if<Call>(&operation)) {
+            if (call_entry.try_emplace(call->target, entries.size()).second) {
+                entries.push_back({ call->target, std::nullopt, false, { } });
+            }
+        } else if (const auto* push
+                   = operation_get_if<CallableFramePush>(&operation)) {
+            if (frame_entry.try_emplace(push->identity, entries.size()).second) {
+                entries.push_back({ static_cast<InstructionIndex>(op + 1U),
+                    push->identity, false, { } });
+            }
+        } else if (const auto* fork = operation_get_if<Fork>(&operation)) {
+            branches.insert(branches.end(), fork->branches.begin(),
+                fork->branches.end());
+            unjoined_fork = unjoined_fork
+                || fork->join != runtime::simir::ForkJoinKind::all;
+        }
+    }
+    if (entries.empty() || branches.empty()) {
+        return false;
+    }
+    // One callable's own operations: a Call continues at its return target
+    // (the callee is its own entry), a Return or the matching pop ends it.
+    std::vector<std::uint32_t> seen(count, 0U);
+    std::uint32_t epoch = 0U;
+    const auto walk = [&](const InstructionIndex begin,
+                          const std::optional<std::uint32_t> frame,
+                          const bool branch, const auto& visit) {
+        ++epoch;
+        std::vector<InstructionIndex> work { begin };
+        while (!work.empty()) {
+            const auto pc = work.back();
+            work.pop_back();
+            if (pc >= count || seen[pc] == epoch) {
+                continue;
+            }
+            seen[pc] = epoch;
+            const auto operation = operations.expanded(pc);
+            if (frame) {
+                if (const auto* pop
+                    = operation_get_if<CallableFramePop>(&operation);
+                    pop != nullptr && pop->identity == *frame) {
+                    continue;
+                }
+            }
+            if (visit(operation)) {
+                return true;
+            }
+            if (operation_holds<Return>(operation)
+                || (branch && operation_holds<ForkEnd>(operation))) {
+                continue;
+            }
+            if (const auto* jump = operation_get_if<Jump>(&operation)) {
+                work.push_back(jump->target);
+            } else if (const auto* branch_op
+                       = operation_get_if<Branch>(&operation)) {
+                work.push_back(branch_op->when_true);
+                work.push_back(branch_op->when_false);
+            } else if (const auto* call = operation_get_if<Call>(&operation)) {
+                work.push_back(call->return_target);
+            } else {
+                work.push_back(static_cast<InstructionIndex>(pc + 1U));
+            }
+        }
+        return false;
+    };
+    for (auto& entry : entries) {
+        entry.suspends = walk(entry.pc, entry.frame, false,
+            [&](const auto& operation) {
+                if (const auto* call = operation_get_if<Call>(&operation)) {
+                    entry.callees.push_back(call_entry.at(call->target));
+                }
+                return operation_holds<WaitFor>(operation)
+                    || operation_holds<WaitOn>(operation)
+                    || operation_holds<WaitForever>(operation)
+                    || operation_holds<WaitSensitivity>(operation)
+                    || operation_holds<Fork>(operation)
+                    || operation_holds<ForkEnd>(operation)
+                    || operation_holds<Halt>(operation)
+                    || operation_holds<Stop>(operation)
+                    || operation_holds<Pause>(operation);
+            });
+    }
+    // A callable calling a suspending callable suspends.
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (auto& entry : entries) {
+            if (!entry.suspends
+                && std::ranges::any_of(entry.callees, [&](const std::size_t callee) {
+                       return entries[callee].suspends;
+                   })) {
+                entry.suspends = true;
+                changed = true;
+            }
+        }
+    }
+    if (std::ranges::none_of(entries, &Entry::suspends)) {
+        return false;
+    }
+    if (unjoined_fork) {
+        return true;
+    }
+    return std::ranges::any_of(branches, [&](const InstructionIndex begin) {
+        return walk(begin, std::nullopt, true, [&](const auto& operation) {
+            if (const auto* call = operation_get_if<Call>(&operation)) {
+                return entries[call_entry.at(call->target)].suspends;
+            }
+            if (const auto* push
+                = operation_get_if<CallableFramePush>(&operation)) {
+                return entries[frame_entry.at(push->identity)].suspends;
+            }
+            return false;
+        });
+    });
+}
+
 struct Candidate {
     ProcessId process { };
     std::uint8_t kind { };
@@ -115,6 +258,21 @@ constexpr std::uint8_t behavioral_kind = 3U;
 } // namespace
 
 namespace {
+
+// The host of a kernel whose processes are all hosted (no member to replace):
+// the stub alone, without the driver regions, region flags or startup role of
+// the hosted process it is shaped from.
+runtime::simir::Process synthetic_host(runtime::simir::Process stub)
+{
+    runtime::simir::Process host;
+    host.name = "$static_kernel";
+    host.language_standard = std::move(stub.language_standard);
+    host.compatibility_profile = std::move(stub.compatibility_profile);
+    host.static_sensitivity = std::move(stub.static_sensitivity);
+    host.operations = std::move(stub.operations);
+    host.scheduling_domain = stub.scheduling_domain;
+    return host;
+}
 
 /// The program the scheduler runs for the kernel's host process: it wakes
 /// on the boundary inputs and activates the kernel.
@@ -152,13 +310,27 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
 
 } // namespace
 
-StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
+StaticKernelPlan ElaboratedDesign::plan_static_kernel(
+    const StaticKernelAccessPlan& access) const
 {
+    // The access plan replaces the whole-design coverage, specify and
+    // VCD-control gates (docs/engine-v4-semantics.md S19, S21);
+    // FSIM_STATIC_KERNEL_ACCESS_PLAN=0 restores them.
+    const bool access_plans = [] {
+        const char* text = std::getenv("FSIM_STATIC_KERNEL_ACCESS_PLAN");
+        return text == nullptr || std::string_view { text } != "0";
+    }();
     // A mixed kernel can be refused where a single-language one is not;
     // the majority language's kernel is planned instead.
     bool mixed_planned = false;
     const auto plan_for = [&](const bool allow_mixed) -> StaticKernelPlan {
     StaticKernelPlan plan;
+    // Access plan: clients outside the SimIR processes that reach any
+    // signal. Their signals stay host signals, which members write through
+    // the host commit path, so the clients see the reference values,
+    // callbacks and delta timing. A VCD control operation raises
+    // `observe_all` below.
+    bool observe_all = access.observe_all;
     // Census (FSIM_PROFILE_PHASES): the first reason each process stays on
     // the host. Opaque accesses come first: they refuse the whole design.
     // That refusal is then deferred until the processes are classified.
@@ -172,12 +344,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             rejection[index] = reason;
         }
     };
+    // `hosted` marks the processes the kernel schedules and the reference
+    // evaluator executes: they are kernel-owned (not counted as host), and
+    // their reasons (why they are not native members) form their own rows.
     const auto take_census = [&](StaticKernelPlan& result,
-                                 const std::vector<std::uint8_t>* members) {
+                                 const std::vector<std::uint8_t>* members,
+                                 const std::vector<std::uint8_t>* hosted
+                                 = nullptr) {
         if (!census) {
             return;
         }
         std::map<std::string, StaticKernelHostReason> rows;
+        std::map<std::string, StaticKernelHostReason> hosted_rows;
         for (std::size_t index = 0U; index < rejection.size(); ++index) {
             if (census_valid[index] == 0U) {
                 continue;
@@ -186,13 +364,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             if (members != nullptr && (*members)[index] != 0U) {
                 continue;
             }
-            ++result.host_processes;
+            const bool is_hosted = hosted != nullptr && (*hosted)[index] != 0U;
+            if (!is_hosted) {
+                ++result.host_processes;
+            }
             auto reason = !opaque[index].empty() ? opaque[index]
                 : !rejection[index].empty()      ? rejection[index]
                 : result.disabled
                     ? std::string { "design_" } + result.disabled_reason
                     : std::string { "planner_drop" };
-            auto& row = rows[reason];
+            auto& row = (is_hosted ? hosted_rows : rows)[reason];
             if (row.count++ == 0U) {
                 row.reason = std::move(reason);
                 row.example = census_names[index];
@@ -200,6 +381,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         }
         for (auto& [reason, row] : rows) {
             result.host_reasons.push_back(std::move(row));
+        }
+        for (auto& [reason, row] : hosted_rows) {
+            result.hosted_reasons.push_back(std::move(row));
         }
     };
     const auto disable = [&](const char* reason) {
@@ -209,10 +393,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         take_census(disabled, nullptr);
         return disabled;
     };
-    if (code_coverage_inventory_) {
+    // Coverage: the counters are host data bumped by CodeCoverageHit
+    // operations, which the kernel does not evaluate, so the processes that
+    // carry them are not members (they stay host processes with an
+    // unsupported-operation reason) and the rest run as usual.
+    if (code_coverage_inventory_ && !access_plans) {
         return disable("coverage");
     }
-    if (!verilog_specify_paths_.empty() || !verilog_timing_checks_.empty()) {
+    if ((!verilog_specify_paths_.empty() || !verilog_timing_checks_.empty())
+        && !access_plans) {
         return disable("specify");
     }
     if (!systemc_processes_.empty() || !systemc_objects_.empty()) {
@@ -232,11 +421,26 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 ? std::string { views.back().name() } : std::string { };
         }
     }
+    // A design without a single valid process has nothing to schedule: it is
+    // admitted trivially (docs/engine-v4-semantics.md S3), not refused. The
+    // plan carries no specification; the design runs with every signal a
+    // host signal, which is exact because no process reads or writes one.
+    if (std::ranges::none_of(views,
+            [](const auto& view) { return view.valid(); })) {
+        StaticKernelPlan trivial;
+        trivial.disabled_reason = "trivial_no_processes";
+        return trivial;
+    }
     for (const auto& view : views) {
         const auto& operations = view.operations();
         for (std::size_t op = 0U; op < operations.size(); ++op) {
             if (operation_holds<VcdControl>(operations[op])) {
-                return disable("vcd_control");
+                if (!access_plans) {
+                    return disable("vcd_control");
+                }
+                // $dumpvars scopes are run-time values and a dump records
+                // any signal's changes (IEEE 1800-2023 21.7).
+                observe_all = true;
             }
         }
     }
@@ -252,26 +456,66 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     const auto graph_signals = graph.signals();
     const auto graph_processes = graph.processes();
     const char* deferred_refusal = nullptr;
+    // Publish-all mode (docs/engine-v4-semantics.md S4, S19): a process whose
+    // signal accesses are statically unknown (a class method call, a class
+    // property write through a handle) may read or write ANY signal. It stays
+    // a non-member, every kernel-owned signal is published to the host so its
+    // reads are current, and a value the host commits to an owned signal is
+    // imported into the kernel (StaticKernel::import_host_write). Scope is
+    // SystemVerilog: an opaque generic-domain (VHDL) process, or a VHDL kernel
+    // member, keeps the whole-design refusal, because VHDL signals have driver
+    // and resolution semantics (IEEE 1076-2019 14.7.2, 14.7.3) that a
+    // host-computed effective value cannot simply replace in a kernel slot.
+    // FSIM_STATIC_KERNEL_PUBLISH_ALL=0 restores the refusal everywhere.
+    bool publish_all = false;
     if (std::ranges::any_of(graph_processes,
             &RegionProcessNode::dependencies_unknown)) {
-        // Fail closed: an opaque access could read kernel-owned state.
-        if (!census) {
-            return disable("unknown_dependencies");
-        }
-        deferred_refusal = "unknown_dependencies";
-        for (std::size_t index = 0U;
-             index < graph_processes.size() && index < process_count; ++index) {
-            const auto& node = graph_processes[index];
-            if (!node.dependencies_unknown) {
-                continue;
+        const char* publish_all_switch
+            = std::getenv("FSIM_STATIC_KERNEL_PUBLISH_ALL");
+        const bool publish_all_allowed = (publish_all_switch == nullptr
+                || std::string_view { publish_all_switch } != "0")
+            && std::ranges::none_of(graph_processes, [](const auto& node) {
+                   return node.dependencies_unknown
+                       && node.scheduling_domain
+                           != ProcessSchedulingDomain::systemverilog;
+               });
+        // A VHDL opaque process (a VHPIDIRECT foreign subprogram call, say)
+        // is harmless when every signal is a host object anyway: a foreign
+        // library or an observer is attached (S19, S21). Nothing is
+        // kernel-owned, so nothing needs publishing and no host-computed
+        // effective value replaces a kernel slot; the process is hosted like
+        // any other non-member (S25a).
+        const bool all_signals_host
+            = (access.foreign || observe_all)
+            && (publish_all_switch == nullptr
+                || std::string_view { publish_all_switch } != "0");
+        if (publish_all_allowed) {
+            publish_all = true;
+        } else if (all_signals_host) {
+            // Accepted: no refusal, no publish-all mode.
+        } else {
+            // Fail closed: an opaque access could read kernel-owned state.
+            if (!census) {
+                return disable("unknown_dependencies");
             }
-            const auto& operations = views[index].operations();
-            opaque[index] = node.unknown_dependency_instruction
-                    < operations.size()
-                ? "opaque_access:"
-                    + operation_type_name(operations.expanded(
-                        node.unknown_dependency_instruction))
-                : std::string { "opaque_access" };
+            deferred_refusal = "unknown_dependencies";
+        }
+        if (census) {
+            for (std::size_t index = 0U;
+                 index < graph_processes.size() && index < process_count;
+                 ++index) {
+                const auto& node = graph_processes[index];
+                if (!node.dependencies_unknown) {
+                    continue;
+                }
+                const auto& operations = views[index].operations();
+                opaque[index] = node.unknown_dependency_instruction
+                        < operations.size()
+                    ? "opaque_access:"
+                        + operation_type_name(operations.expanded(
+                            node.unknown_dependency_instruction))
+                    : std::string { "opaque_access" };
+            }
         }
     }
     // The first property that keeps a process off the kernel whatever its
@@ -406,6 +650,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             container_uses[index].end()), container_uses[index].end());
         const bool vhdl = view.scheduling_domain()
             != ProcessSchedulingDomain::systemverilog;
+        if (access.debug) {
+            // Debugger plan: no comb/seq/once shape. Every process is
+            // classified by the behavioral tiers below (a resumable thread
+            // that can stop at any debug point) or stays hosted.
+            continue;
+        }
         if (const char* flag = flag_rejection(view, vhdl, false)) {
             reject(index, flag);
             continue;
@@ -628,6 +878,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             // and saved by automatic frames.
             std::set<ContainerRegisterId> bound_containers;
             std::set<ContainerRegisterId> private_containers;
+            // Whole-register copies (CopyContainerRegister): both registers
+            // must be process-private arrays of one shape.
+            std::vector<std::pair<ContainerRegisterId, ContainerRegisterId>>
+                container_copies;
             bool has_fork = false;
             bool has_frame_push = false;
             bool has_random = false;
@@ -663,6 +917,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                         private_containers.insert(value.source);
                     } else if constexpr (std::is_same_v<T, ContainerWrite>) {
                         private_containers.insert(value.target);
+                    } else if constexpr (std::is_same_v<T, CopyContainerRegister>) {
+                        private_containers.insert(value.destination);
+                        private_containers.insert(value.source);
+                        container_copies.emplace_back(
+                            value.destination, value.source);
                     } else if constexpr (std::is_same_v<T, CallableFramePush>) {
                         has_frame_push = true;
                     } else if constexpr (std::is_same_v<T, RandomValue>) {
@@ -702,7 +961,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 failed_at = count;
                 failed_reason = "fork_random";
             }
-            if (supported && has_fork && has_frame_push) {
+            if (supported && has_fork && has_frame_push
+                && fork_holds_suspended_frame(operations, count)) {
                 // Fork children and the activation that joins them observe
                 // the automatic variables of the enclosing callable frames
                 // (IEEE 1800-2023 6.21, 9.3.2), and concurrent activations of
@@ -713,7 +973,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 // single frame stack per thread, so a thread suspended inside
                 // a callable would see a sibling's values on resume. Such
                 // processes stay on the host until the kernel's behavioral
-                // tier gains per-thread callable contexts.
+                // tier gains per-thread callable contexts. A callable that
+                // cannot suspend (every function, 13.4, and any task without
+                // a timing control) runs from frame push to pop without
+                // another thread of the member running in between, so it
+                // shares nothing observable; a joined fork whose children
+                // enter only such callables leaves at most the parent inside
+                // a suspending one, and the children share its frame as
+                // 9.3.2 requires.
                 supported = false;
                 failed_at = count;
                 failed_reason = "fork_callable_frames";
@@ -738,6 +1005,26 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                         failed_at = count;
                         failed_reason = "private_container_shape";
                         break;
+                    }
+                }
+                // A copy keeps the reference semantics only between private
+                // registers of identical type (the reference requires the
+                // same type, IEEE 1800-2023 7.6). A register bound to a
+                // design memory keeps the host: the kernel does not notify
+                // memory readers of a whole-array write.
+                for (const auto& [destination, source] : container_copies) {
+                    if (!supported) {
+                        break;
+                    }
+                    if (bound_containers.contains(destination)
+                        || bound_containers.contains(source)
+                        || destination >= types.size() || source >= types.size()
+                        || !(types[destination] == types[source])
+                        || types[destination].sparse
+                        || types[destination].vhdl_shaped) {
+                        supported = false;
+                        failed_at = count;
+                        failed_reason = "container_copy_shape";
                     }
                 }
             }
@@ -896,6 +1183,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             }
         }
     }
+    if (publish_all && deferred_refusal == nullptr
+        && std::ranges::any_of(candidates, [](const auto& candidate) {
+               return candidate && candidate->vhdl;
+           })) {
+        // A VHDL member with an opaque process (see publish_all above).
+        deferred_refusal = "unknown_dependencies";
+        publish_all = false;
+    }
     if (deferred_refusal != nullptr) {
         return disable(deferred_refusal);
     }
@@ -1004,12 +1299,57 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         && (mixed_text == nullptr || std::string_view { mixed_text } != "0")
         && vhdl_candidates != 0U && sv_candidates != 0U;
     mixed_planned = mixed;
-    const bool vhdl_mode = mixed || vhdl_candidates > sv_candidates;
+    // A design without a native member (no candidates of either language)
+    // takes the language of its processes: its VHDL processes are hosted
+    // (S25a) and its delta semantics are VHDL's (IEEE 1076-2019 14.7.5).
+    std::size_t vhdl_processes = 0U;
+    std::size_t sv_processes = 0U;
+    for (const auto& view : views) {
+        if (view.valid()) {
+            ++(view.scheduling_domain()
+                    == ProcessSchedulingDomain::systemverilog
+                    ? sv_processes
+                    : vhdl_processes);
+        }
+    }
+    const bool vhdl_mode = mixed || vhdl_candidates > sv_candidates
+        || (vhdl_candidates == 0U && sv_candidates == 0U
+            && vhdl_processes > sv_processes);
     for (std::size_t index = 0U; index < process_count; ++index) {
         auto& candidate = candidates[index];
         if (!mixed && candidate && candidate->vhdl != vhdl_mode) {
             candidate.reset();
             reject(index, "language_mode");
+        }
+    }
+    // A module path delays the commit of its destination, measured from the
+    // most recent transition of a path source (IEEE 1800-2023 30.4, 30.5).
+    // The host applies that delay when the driver of the destination writes
+    // it, and finds the source transition only once the source's own update
+    // has committed: the driver runs in a later delta than the update that
+    // changed the source. A kernel member evaluates the whole combinational
+    // cone from the source to the destination in one run, so the source
+    // update is still staged when the destination is written and the host
+    // sees no source transition (the delay is lost or taken from the wrong
+    // path). The processes that drive a path destination therefore stay off
+    // the native members, where they wake after the source commits.
+    std::vector<std::uint8_t> path_destination(signal_count, 0U);
+    for (const auto& path : verilog_specify_paths_) {
+        for (const auto& terminal : path.destinations) {
+            if (terminal.signal < signal_count) {
+                path_destination[terminal.signal] = 1U;
+            }
+        }
+    }
+    for (SignalId signal = 0U; signal < signal_count; ++signal) {
+        if (path_destination[signal] == 0U) {
+            continue;
+        }
+        for (const auto& writer : graph_signals[signal].writers) {
+            if (writer.process < process_count && candidates[writer.process]) {
+                candidates[writer.process].reset();
+                reject(writer.process, "path_destination_driver");
+            }
         }
     }
     const auto vhdl_written = [&](const SignalId signal) {
@@ -1069,11 +1409,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             proxy_signal[family.proxy] = 1U;
         }
     }
+    // Every signal and container is a host object for a foreign library
+    // (VPI/VHPI/DPI) or a trace/VCD observer.
+    const bool host_signals = access.foreign || observe_all;
     std::vector<std::uint8_t> container_shape_ok(object_count, 0U);
     for (std::size_t object = 0U; object < object_count; ++object) {
         const auto& container = container_objects_[object];
         const auto& type = container.initial_value.type;
-        container_shape_ok[object] = type.fixed && !type.associative
+        container_shape_ok[object] = !host_signals && type.fixed
+            && !type.associative
             && !container.slice_alias
             && (type.element_kind == ContainerElementKind::Packed
                 || type.element_kind == ContainerElementKind::Scalar)
@@ -1093,6 +1437,57 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     // read: writes, forces, history and event queries, sampled reads. None
     // of these may target kernel-owned state.
     std::vector<std::uint8_t> host_touched(signal_count, 0U);
+    if (host_signals) {
+        std::ranges::fill(host_touched, 1U);
+    }
+    // Module paths and timing checks run on the host commit path and its
+    // value-change events (IEEE 1800-2023 30.4, 31): their terminals,
+    // conditions, data sources, notifiers and delayed copies stay host
+    // signals, and a path destination takes the host's delayed commit, so
+    // the kernel must not mirror an update the host applies later.
+    {
+        const auto touch = [&](const SignalId signal) {
+            if (signal < signal_count) {
+                host_touched[signal] = 1U;
+            }
+        };
+        const auto touch_expression = [&](const ModulePathExpression& expression) {
+            for (const auto& node : expression.nodes) {
+                if (node.operation == ModulePathExpressionOperator::terminal) {
+                    touch(node.terminal.signal);
+                }
+            }
+        };
+        for (const auto& path : verilog_specify_paths_) {
+            for (const auto& terminal : path.sources) {
+                touch(terminal.signal);
+            }
+            for (const auto& terminal : path.destinations) {
+                touch(terminal.signal);
+            }
+            touch_expression(path.condition_program);
+            touch_expression(path.data_source_program);
+        }
+        for (const auto& check : verilog_timing_checks_) {
+            touch(check.reference.terminal.signal);
+            touch_expression(check.reference.condition);
+            if (check.data) {
+                touch(check.data->terminal.signal);
+                touch_expression(check.data->condition);
+            }
+            if (check.notifier) {
+                touch(*check.notifier);
+            }
+            if (check.delayed_reference) {
+                touch(check.delayed_reference->signal);
+            }
+            if (check.delayed_data) {
+                touch(check.delayed_data->signal);
+            }
+            touch_expression(check.timestamp_condition);
+            touch_expression(check.timecheck_condition);
+        }
+    }
     for (std::size_t index = 0U; index < process_count; ++index) {
         if (candidates[index]) {
             continue;
@@ -1503,6 +1898,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 continue;
             }
             if (has_element_alias[object] == 0U) {
+                // An opaque process (publish_all) may touch any container,
+                // for example a fixed array passed by reference to a method.
+                // Privately stored elements have no signal through which the
+                // host could write back, so such a container stays on the
+                // host; signal-backed containers are imported as signals.
+                if (publish_all) {
+                    continue;
+                }
                 owned_container[object] = 1U;
                 continue;
             }
@@ -1739,6 +2142,31 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         }
     }
 
+    // Hosted VHDL processes (engine-v4-semantics S25a): in a VHDL or mixed
+    // kernel every VHDL process that is not a native member is hosted, so the
+    // kernel schedules it in its delta rounds and the reference evaluator
+    // executes it. The delta exactness the two rules below protect then holds
+    // without a closed kernel: a hosted process wakes in the delta after the
+    // update that woke it (the kernel yields to the host once per round) and
+    // writes through the host's update phase of its own delta, and a signal a
+    // member writes and another member reads crosses the host in that phase
+    // too. FSIM_STATIC_KERNEL_HOSTED_VHDL=0 restores the refusals.
+    const bool hosted_vhdl_enabled = vhdl_mode
+        && [] {
+               const char* text = std::getenv("FSIM_STATIC_KERNEL_HOSTED_VHDL");
+               return text == nullptr || std::string_view { text } != "0";
+           }();
+    // A postponed VHDL process is hosted like any other (S25a): the kernel
+    // keeps it in its postponed region list and runs it after the last delta
+    // cycle of the time step (1076-2019 14.7.5.3).
+    // FSIM_STATIC_KERNEL_HOSTED_POSTPONED=0 restores the vhdl_postponed
+    // refusal.
+    const bool hosted_postponed_enabled = hosted_vhdl_enabled
+        && [] {
+               const char* text
+                   = std::getenv("FSIM_STATIC_KERNEL_HOSTED_POSTPONED");
+               return text == nullptr || std::string_view { text } != "0";
+           }();
     if (vhdl_mode) {
         // Delta exactness holds only inside a closed VHDL kernel: every VHDL
         // process is a member, and every signal one member writes and
@@ -1748,11 +2176,20 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 && host_program[index] == 0U
                 && views[index].scheduling_domain()
                     != ProcessSchedulingDomain::systemverilog) {
+                // A postponed process runs in the last delta of the time
+                // step (1076-2019 14.7.5.3): the kernel has no end-of-slot
+                // region yet (workstream C5c, migration phase P4), so it
+                // keeps the design off the kernel.
+                if (hosted_vhdl_enabled
+                    && (!views[index].postponed() || hosted_postponed_enabled)) {
+                    continue;
+                }
                 if (diagnose) {
                     std::cerr << "fsim-kernel-plan: vhdl_partial process="
                               << views[index].name() << '\n';
                 }
-                return disable("vhdl_partial");
+                return disable(hosted_vhdl_enabled ? "vhdl_postponed"
+                                                   : "vhdl_partial");
             }
         }
         // Signals a VHDL behavioral thread waits on (its wait statements
@@ -1790,7 +2227,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                         && candidates[access.process]->vhdl;
                 });
             };
-            if (member_access(node.writers)
+            if (!hosted_vhdl_enabled && member_access(node.writers)
                 && (member_access(node.readers) || vhdl_waited[signal] != 0U)
                 && (!mixed || vhdl_access(node.writers)
                     || vhdl_access(node.readers)
@@ -1819,6 +2256,110 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         }
     }
 
+    // Hosted processes (StaticKernelMemberKind::hosted, engine-v4-semantics
+    // S25): every valid SystemVerilog process that is neither a native member
+    // nor a host program is scheduled by the kernel and executed by the
+    // reference evaluator, so the host scheduler runs no SimIR process of an
+    // admitted kernel. This only widens an admitted design; every design-level
+    // refusal above is unchanged. VHDL and mixed kernels (delta rounds) keep
+    // their host processes (Phase 2).
+    // BEGIN P4 hosted regions: the processes of the observed, reactive and
+    // postponed regions, final blocks and package static initializers are
+    // hosted too (S25 region model). FSIM_STATIC_KERNEL_HOSTED_REGIONS=0
+    // keeps them on the host scheduler.
+    std::vector<std::uint8_t> hosted(process_count, 0U);
+    {
+        const char* hosted_text = std::getenv("FSIM_STATIC_KERNEL_HOSTED");
+        const bool hosted_enabled = !vhdl_mode
+            && (hosted_text == nullptr
+                || std::string_view { hosted_text } != "0");
+        const char* regions_text
+            = std::getenv("FSIM_STATIC_KERNEL_HOSTED_REGIONS");
+        const bool regions_enabled = regions_text == nullptr
+            || std::string_view { regions_text } != "0";
+        for (std::size_t index = 0U; hosted_enabled && index < process_count;
+             ++index) {
+            const auto& view = views[index];
+            if (!view.valid() || candidates[index] || host_program[index] != 0U
+                || view.scheduling_domain()
+                    != ProcessSchedulingDomain::systemverilog) {
+                continue;
+            }
+            if (!regions_enabled) {
+                const char* region = view.observed()   ? "observed"
+                    : view.reactive()                  ? "reactive"
+                    : view.postponed()                 ? "postponed"
+                    : view.final()                     ? "final"
+                                                       : nullptr;
+                if (region != nullptr) {
+                    if (census) {
+                        rejection[index]
+                            = std::string { "hosted_region_" } + region;
+                    }
+                    continue;
+                }
+                if (view.startup_phase()
+                    == ProcessStartupPhase::package_static_initializer) {
+                    continue;
+                }
+            }
+            hosted[index] = 1U;
+        }
+    }
+    // END P4 hosted regions
+
+    // Hosted VHDL processes (S25a): the VHDL processes that are neither
+    // native members nor host programs. They read and write host signals
+    // (host_touched above), wake through the host's signal fanout, and the
+    // kernel runs them in its delta round. Host programs (resolvers and
+    // conversion drivers) run inside the host's update commit
+    // (run_vhdl_resolver) and are not scheduled processes, so they stay as
+    // they are until the kernel owns that commit (C5b).
+    for (std::size_t index = 0U; hosted_vhdl_enabled && index < process_count;
+         ++index) {
+        const auto& view = views[index];
+        if (!view.valid() || candidates[index] || host_program[index] != 0U
+            || view.scheduling_domain()
+                == ProcessSchedulingDomain::systemverilog
+            || (view.postponed() && !hosted_postponed_enabled)) {
+            continue;
+        }
+        hosted[index] = 1U;
+    }
+
+    // Implicit-signal drivers (S25a): the driver process of S'DELAYED,
+    // S'TRANSACTION, S'STABLE and S'QUIET is a scheduled process of the
+    // SystemVerilog scheduling domain with no initial run (it is not a
+    // member: it is not initialized). The VHDL kernel hosts it like a VHDL
+    // process: it wakes in the delta after the source's update phase
+    // (queue_next_delta: a wake from another domain runs in the next delta,
+    // 1076-2019 14.7.5.3) and its assignments are the host's staged updates.
+    // FSIM_STATIC_KERNEL_HOSTED_IMPLICIT=0 keeps it on the host.
+    {
+        const char* implicit_text
+            = std::getenv("FSIM_STATIC_KERNEL_HOSTED_IMPLICIT");
+        const bool implicit_enabled = hosted_vhdl_enabled
+            && (implicit_text == nullptr
+                || std::string_view { implicit_text } != "0");
+        constexpr std::string_view implicit_suffix { ".$implicit_driver" };
+        for (std::size_t index = 0U; implicit_enabled && index < process_count;
+             ++index) {
+            const auto& view = views[index];
+            if (!view.valid() || candidates[index] || host_program[index] != 0U
+                || view.scheduling_domain()
+                    != ProcessSchedulingDomain::systemverilog
+                || view.initialize() || view.postponed() || view.observed()
+                || view.reactive() || view.final()) {
+                continue;
+            }
+            const std::string_view name { view.name() };
+            if (name.size() > implicit_suffix.size()
+                && name.ends_with(implicit_suffix)) {
+                hosted[index] = 1U;
+            }
+        }
+    }
+
     // 3. Members, specification, host and boundaries.
     auto spec = std::make_shared<StaticKernelRuntimeSpec>();
     std::vector<std::uint8_t> member(process_count, 0U);
@@ -1840,11 +2381,65 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         runtime_member.sensitivity = std::move(candidate.sensitivity);
         spec->members.push_back(std::move(runtime_member));
     }
-    if (spec->members.empty()) {
+    // A design whose processes are all hosted still runs on the kernel: it
+    // schedules them (engine-v4-semantics S25).
+    if (spec->members.empty()
+        && std::ranges::none_of(hosted, [](const auto flag) { return flag != 0U; })) {
+        // Every valid process is a host program (port-association resolver,
+        // conversion driver): run inline by the host's update commit, not a
+        // scheduled process. There is nothing for the kernel to schedule, so
+        // the design is admitted trivially, as one with no processes; the
+        // census still counts the programs as host processes.
+        const bool only_host_programs = [&] {
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                if (views[index].valid() && host_program[index] == 0U) {
+                    return false;
+                }
+            }
+            return true;
+        }();
+        if (only_host_programs) {
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                if (views[index].valid()) {
+                    reject(index, "port_program");
+                }
+            }
+            StaticKernelPlan trivial;
+            trivial.disabled_reason = "trivial_host_programs_only";
+            take_census(trivial, nullptr);
+            return trivial;
+        }
         return disable("no_members");
     }
+    for (std::size_t index = 0U; index < process_count; ++index) {
+        if (hosted[index] != 0U) {
+            StaticKernelMemberSpec hosted_member;
+            hosted_member.process = static_cast<ProcessId>(index);
+            hosted_member.kind = StaticKernelMemberKind::hosted;
+            spec->hosted.push_back(std::move(hosted_member));
+        }
+    }
+    // A VHDL kernel's hosted SystemVerilog-domain processes (implicit-signal
+    // drivers) follow its VHDL ones: the synthetic host of a design with no
+    // member is shaped from the first hosted process.
+    if (vhdl_mode) {
+        std::ranges::stable_partition(spec->hosted,
+            [&](const StaticKernelMemberSpec& entry) {
+                return views[entry.process].scheduling_domain()
+                    != ProcessSchedulingDomain::systemverilog;
+            });
+        // Implicit drivers alone give a VHDL kernel nothing to shape its
+        // host from.
+        if (spec->members.empty() && !spec->hosted.empty()
+            && views[spec->hosted.front().process].scheduling_domain()
+                == ProcessSchedulingDomain::systemverilog) {
+            return disable("no_members");
+        }
+    }
+    plan.hosted_processes = spec->hosted.size();
     spec->vhdl = vhdl_mode;
     spec->mixed = mixed;
+    spec->import_host_writes = publish_all;
     std::vector<std::uint8_t> wired_program(process_count, 0U);
     for (const auto& wiring : wirings) {
         if (wiring.live) {
@@ -1918,7 +2513,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 emit();
             }
         }
-        if (std::ranges::any_of(graph_signals[signal].readers,
+        if (publish_all
+            || std::ranges::any_of(graph_signals[signal].readers,
                 [&](const auto& reader) {
                     return reader.process >= process_count
                         || (member[reader.process] == 0U
@@ -1987,7 +2583,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         });
     for (SignalId signal = 0U; signal < signal_count; ++signal) {
         const auto& node = graph_signals[signal];
-        if (owned[signal] == 0U && virtual_owned[signal] == 0U
+        // A foreign library may deposit into a signal no process writes
+        // between kernel rounds.
+        // A force writes the signal as well (IEEE 1800-2023 10.6.2): a
+        // hosted process that forces an input changes it inside the
+        // activation, where only the written inputs are rescanned.
+        if (!forces && !access.foreign && owned[signal] == 0U
+            && virtual_owned[signal] == 0U
             && node.writers.empty()
             && std::ranges::any_of(node.readers, [&](const auto& reader) {
                    return reader.process < process_count && member[reader.process] != 0U;
@@ -1998,7 +2600,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         // after it (IEEE 1800-2023 4.7, 10.3.2, 10.4.1). A host signal with
         // one driving member process takes that driver's value, so the
         // kernel can mirror its staged Active updates at once.
-        if (!forces && owned[signal] == 0U && virtual_owned[signal] == 0U
+        // A foreign library may deposit or release a signal, and a module
+        // path delays the host's commit of its destination, so the host
+        // does not apply a member's update unchanged and at once.
+        if (!forces && !access.foreign && path_destination[signal] == 0U
+            && owned[signal] == 0U && virtual_owned[signal] == 0U
             && !node.writers.empty()
             // One driver of an unresolved variable or a plain net (no pull,
             // no charge storage) resolves to that driver's value.
@@ -2017,19 +2623,50 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             spec->sole_writer_inputs.push_back(signal);
         }
     }
-    plan.host = spec->members.front().process;
-    plan.host_program = host_stub(views[plan.host], std::move(host_sensitivity));
+    // The kernel runs as a host process whose stub replaces the first
+    // member's program. A design of hosted processes only has no member to
+    // replace: the stub then runs as a process of its own, appended after
+    // the design's processes (plan.host == process_count; create_interpreter
+    // adds it), shaped from the first hosted process.
+    if (spec->members.empty() && spec->hosted.empty()) {
+        return disable("no_members");
+    }
+    plan.host = spec->members.empty() ? static_cast<ProcessId>(process_count)
+                                      : spec->members.front().process;
+    plan.host_program = host_stub(
+        views[spec->members.empty() ? spec->hosted.front().process : plan.host],
+        std::move(host_sensitivity));
+    if (spec->members.empty()) {
+        plan.host_program = synthetic_host(std::move(plan.host_program));
+    }
     plan.members = spec->members.size();
     plan.owned_signals = spec->owned_signals.size();
     plan.boundary_outputs = spec->boundary_outputs.size();
     plan.owned_containers = spec->containers.size();
     plan.spec = std::move(spec);
+    // Commit programs (S25b): the programs of the host's update commit are
+    // part of the kernel's plan. They are not scheduled processes and have
+    // no wake of their own: the commit runs each at its reference position
+    // inside the update phase that follows a kernel delta (IEEE 1076-2019
+    // 14.7.3 for effective values, conversion functions and resolution;
+    // IEEE 1800-2023 23.3.3 and 28 for port coercion and inout networks).
+    // The census therefore counts them as kernel-owned rows, not as host
+    // processes. Whatever the candidate classification said about their
+    // operations is replaced by the program's kind.
+    std::vector<std::uint8_t> kernel_owned = hosted;
     for (std::size_t index = 0U; census && index < process_count; ++index) {
-        if (member[index] == 0U && host_program[index] != 0U) {
-            reject(index, "port_program");
+        if (member[index] != 0U || host_program[index] == 0U) {
+            continue;
         }
+        const auto& view = views[index];
+        kernel_owned[index] = 1U;
+        rejection[index] = !view.valid()                          ? "commit_program"
+            : view.switch_source() || view.switch_target()        ? "commit_program_switch"
+            : !view.initialize() && view.operations().size() == 1U
+                ? "commit_program_stub"
+                : "commit_program";
     }
-    take_census(plan, &member);
+    take_census(plan, &member, &kernel_owned);
     return plan;
     };
     auto plan = plan_for(true);
@@ -2043,7 +2680,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
 namespace detail {
 namespace {
 
-constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v3" };
+constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v4" };
 
 class PlanWriter {
 public:
@@ -2152,7 +2789,11 @@ std::string static_kernel_plan_identity()
     std::string identity { plan_magic };
     identity += ";" __DATE__ " " __TIME__;
     for (const char* name : { "FSIM_STATIC_KERNEL_BEHAVIORAL",
-             "FSIM_STATIC_KERNEL_MIXED" }) {
+             "FSIM_STATIC_KERNEL_MIXED", "FSIM_STATIC_KERNEL_PUBLISH_ALL",
+             "FSIM_STATIC_KERNEL_ACCESS_PLAN", "FSIM_STATIC_KERNEL_HOSTED",
+             "FSIM_STATIC_KERNEL_HOSTED_REGIONS",
+             "FSIM_STATIC_KERNEL_HOSTED_VHDL",
+             "FSIM_STATIC_KERNEL_HOSTED_POSTPONED" }) {
         const char* value = std::getenv(name);
         identity += ";";
         identity += name;
@@ -2184,6 +2825,9 @@ std::string serialize_static_kernel_plan(const StaticKernelPlan& plan)
         out.put(member.vhdl);
         out.put(member.start_late);
     });
+    out.list(spec.hosted, [&](const runtime::simir::StaticKernelMemberSpec& member) {
+        out.put(member.process);
+    });
     out.list(spec.owned_signals, [&](const auto signal) { out.put(signal); });
     out.list(spec.boundary_outputs, [&](const auto signal) { out.put(signal); });
     out.list(spec.families, [&](const runtime::simir::StaticKernelAliasFamily& family) {
@@ -2203,6 +2847,7 @@ std::string serialize_static_kernel_plan(const StaticKernelPlan& plan)
     });
     out.put(spec.vhdl);
     out.put(spec.mixed);
+    out.put(spec.import_host_writes);
     out.list(spec.writer_regions, [&](const runtime::simir::StaticKernelWriterRegion& region) {
         out.put(region.signal);
         out.put(region.process);
@@ -2240,7 +2885,7 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
             return in.get(signal) && signal_ok(signal);
         });
     };
-    const bool read = in.get(plan.host) && plan.host < processes
+    const bool read = in.get(plan.host) && plan.host <= processes
         && in.sensitivities(host_sensitivity) && sensitivity_ok(host_sensitivity)
         && in.list(spec->members, [&](StaticKernelMemberSpec& member) {
                return in.get(member.process) && member.process < processes
@@ -2252,6 +2897,10 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
                    && sensitivity_ok(member.sensitivity)
                    && in.get(member.partition) && in.get(member.vhdl)
                    && in.get(member.start_late);
+           })
+        && in.list(spec->hosted, [&](StaticKernelMemberSpec& member) {
+               member.kind = StaticKernelMemberKind::hosted;
+               return in.get(member.process) && member.process < processes;
            })
         && signal_list(spec->owned_signals) && signal_list(spec->boundary_outputs)
         && in.list(spec->families, [&](StaticKernelAliasFamily& family) {
@@ -2270,6 +2919,7 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
                    && in.get(container.packed_signal);
            })
         && in.get(spec->vhdl) && in.get(spec->mixed)
+        && in.get(spec->import_host_writes)
         && in.list(spec->writer_regions, [&](StaticKernelWriterRegion& region) {
                return in.get(region.signal) && signal_ok(region.signal)
                    && in.get(region.process) && region.process < processes
@@ -2278,13 +2928,25 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
         && signal_list(spec->unwritten_inputs)
         && signal_list(spec->sole_writer_inputs)
         && in.get(plan.boundary_inputs) && in.done();
-    if (!read || spec->members.empty() || spec->members.front().process != plan.host) {
+    // The host is the first member, or a process of its own after the
+    // design's processes when every process is hosted (plan_static_kernel).
+    const bool synthetic_host_process = spec->members.empty();
+    if (!read
+        || (synthetic_host_process
+                ? plan.host != processes || spec->hosted.empty()
+                : plan.host == processes
+                    || spec->members.front().process != plan.host)) {
         return std::nullopt;
     }
     plan.host_program = host_stub(
-        ElaboratedDesignProcessAccess::process_view(design, plan.host),
+        ElaboratedDesignProcessAccess::process_view(design,
+            synthetic_host_process ? spec->hosted.front().process : plan.host),
         std::move(host_sensitivity));
+    if (synthetic_host_process) {
+        plan.host_program = synthetic_host(std::move(plan.host_program));
+    }
     plan.members = spec->members.size();
+    plan.hosted_processes = spec->hosted.size();
     plan.owned_signals = spec->owned_signals.size();
     plan.boundary_outputs = spec->boundary_outputs.size();
     plan.owned_containers = spec->containers.size();

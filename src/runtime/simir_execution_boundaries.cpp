@@ -11,6 +11,7 @@
 #include "simir_execution_context.hpp"
 #include "simir_execution_shared.hpp"
 #include "simir_internal.hpp"
+#include "simir_static_kernel_state.hpp"
 #include "simir_signal_attributes.hpp"
 
 #include <bit>
@@ -1098,7 +1099,6 @@ void Interpreter::Impl::handle_boundary(
         }
         clear_wait_timeout(process);
         auto& cold = process.cold();
-        process.clear_frontier_debug_token();
         cold.current_source = actual_point.source;
         cold.current_scope = process.program().operations().debug_scope(
             actual_point.scope);
@@ -1144,6 +1144,14 @@ void Interpreter::Impl::handle_boundary(
             fail(process, "WaitRegion must target a later scheduler region");
         }
         process.status = ProcessStatus::waiting;
+        // Hosted tier: the kernel resumes the process in the region (S25).
+        if (static_kernel_hosts(process.id)
+            && static_kernel->enqueue_hosted_region(process.id, wait->phase)) {
+            notify_execution_point(
+                process, instruction, ExecutionPointKind::process_suspend,
+                process.cold().current_source);
+            return;
+        }
         process.queued = true;
         struct ProcessResumeTask {
             Interpreter::Impl* owner { };
@@ -2029,8 +2037,6 @@ void Interpreter::Impl::handle_boundary(
         = fsim::runtime::simir::operation_get_if<
             SignalStrengthText>(&operation)) {
         (void)get_signal(strength->signal);
-        require_region_forwarding_role_journal_flushed_for_signal(
-            strength->signal);
         auto text = signal_strength_text(
             strength->signal, strength->offset, strength->width);
         if (process.executor) {

@@ -155,18 +155,8 @@ void verify_mode(
     assert(warm.result.time == reference.result.time);
     assert(warm.percentages == reference.percentages);
     assert(warm.instance_percentages == reference.instance_percentages);
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 1);
-    assert(cold.native_cache.hits == 0);
-    assert(cold.native_cache.misses == 1);
-    assert(cold.native_cache.stores == 1);
-    assert(warm.compiled_processes == 1);
-    assert(warm.native_cache.hits == 1);
-    assert(warm.native_cache.misses == 0);
-#else
     assert(cold.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
-#endif
 }
 
 void verify_invalid_arity(

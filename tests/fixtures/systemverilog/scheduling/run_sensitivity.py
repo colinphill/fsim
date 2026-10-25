@@ -115,7 +115,7 @@ def run_case(executable, case, directory, engine, optimization):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fsim", type=Path, required=True)
-    parser.add_argument("--engine", choices=("interpreter", "compiled"),
+    parser.add_argument("--engine", choices=("interpreter", "v4"),
                         required=True)
     parser.add_argument("--optimization", choices=("O0", "O2"), default="O2")
     parser.add_argument("--workspace-parent", type=Path, required=True)

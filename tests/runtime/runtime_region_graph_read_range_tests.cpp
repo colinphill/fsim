@@ -254,7 +254,7 @@ void check_alias_range_projection()
             true, true, true },
     };
     const auto graph = RegionGraph::build(
-        processes, signals, false, containers, { }, aliases);
+        processes, signals, containers, { }, aliases);
     require(graph.signals()[0U].readers
                 == std::vector<RegionAccess> { { 0U, 6U, 4U, EdgeKind::any } }
             && graph.signals()[1U].readers

@@ -219,13 +219,8 @@ void test_systemverilog_literal_closure(
             std::string(257, 'X') }));
     assert(reference.compiled_processes == 0);
     assert(reference.compiled_modules == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-    assert(compiled.compiled_modules == 1);
-#else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-#endif
 }
 
 void test_systemverilog_packed_index_self_determined(
@@ -276,13 +271,8 @@ void test_systemverilog_packed_index_self_determined(
     assert(reference.result.status == compiled.result.status);
     assert(reference.values == compiled.values);
     assert((compiled.values == std::vector<std::string> { "1" }));
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-    assert(compiled.compiled_modules == 1);
-#else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-#endif
 }
 
 void test_vhdl_concurrent_assertion(
@@ -336,13 +326,8 @@ void test_vhdl_concurrent_assertion(
     assert(reference.result.delta == compiled.result.delta);
     assert(reference.values == compiled.values);
     assert(compiled.values == std::vector<std::string> { "1" });
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 2);
-    assert(compiled.compiled_modules == 1);
-#else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-#endif
 }
 
 void test_vhdl_falling_edge(
@@ -450,15 +435,8 @@ void test_vhdl_falling_edge(
             "1",
             "0",
             "1" }));
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 12);
-    assert(compiled.compiled_modules == 1);
-    assert(warm.native_cache.hits == 1);
-    assert(warm.native_cache.misses == 0);
-#else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-#endif
 }
 
 void test_verilog_stop(
@@ -516,13 +494,8 @@ void test_verilog_stop(
     assert((
         compiled.resumed_values
         == std::vector<std::string> { "1", "1", "1" }));
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 2);
-    assert(compiled.compiled_modules == 1);
-#else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-#endif
 }
 
 void test_systemverilog_exit(
@@ -593,12 +566,7 @@ void test_systemverilog_exit(
     assert(interpreted.values == expected);
     assert(compiled_cold.values == expected);
     assert(compiled_warm.values == expected);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled_cold.compiled_processes != 0);
-    assert(compiled_warm.native_cache.hits != 0);
-#else
     assert(compiled_cold.compiled_processes == 0);
-#endif
 }
 
 void test_invalid_systemverilog_exit(
@@ -746,12 +714,7 @@ void test_systemverilog_sampled_values(
     assert(interpreted.values == expected);
     assert(compiled_cold.values == expected);
     assert(compiled_warm.values == expected);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled_cold.compiled_processes != 0);
-    assert(compiled_warm.native_cache.hits != 0);
-#else
     assert(compiled_cold.compiled_processes == 0);
-#endif
 }
 
 void test_systemverilog_fatal(
@@ -801,13 +764,8 @@ void test_systemverilog_fatal(
     assert(reference.column == compiled.column);
     assert(reference.message.find("fatal\nsource\tmessage \"quoted\"")
         != std::string::npos);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-    assert(compiled.compiled_modules == 1);
-#else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-#endif
 }
 
 void test_vhdl_array_attributes(
@@ -883,13 +841,8 @@ void test_vhdl_array_attributes(
             "00000000000000000000000000000101",
             "00000000000000000000000000000100",
             "1" }));
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-    assert(compiled.compiled_modules == 1);
-#else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-#endif
 }
 
 } // namespace

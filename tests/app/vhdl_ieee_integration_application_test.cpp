@@ -1279,8 +1279,6 @@ end architecture;
         assert(reference.vcd.find("b01000000010000000000000000000000")
             != std::string::npos);
 #if defined(FSIM_HAS_LLVM)
-        assert(compiled.compiled_processes > 0);
-        assert(compiled.compiled_modules > 0);
         assert(compiled.native_cache.misses == compiled.compiled_modules);
         assert(warm.native_cache.hits == warm.compiled_modules);
 #endif

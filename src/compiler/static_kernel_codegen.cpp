@@ -468,6 +468,8 @@ private:
             case KOp::mem_write:
                 reads = { inst.x, inst.y, inst.z };
                 return true;
+            case KOp::mem_copy:
+                return true;
             case KOp::wide_move:
                 reads = { inst.y };
                 return true;
@@ -2347,6 +2349,10 @@ private:
         case KOp::mem_write:
             emit_mem_write(inst, at);
             break;
+        case KOp::mem_copy:
+            // The runtime copies the arena words of the two containers.
+            call_effect(at, zero_pair(), zero_pair(), zero_pair());
+            break;
         case KOp::wide_move:
             call_effect(at, zero_pair(),
                 inst.sub == 1U ? load_register(inst.y) : zero_pair(), zero_pair());
@@ -3627,6 +3633,30 @@ StaticKernelAheadOfTimeScope::~StaticKernelAheadOfTimeScope()
 bool StaticKernelAheadOfTimeScope::active() noexcept
 {
     return ahead_of_time_scopes != 0U;
+}
+
+std::string native_host_fingerprint()
+{
+    // Names the host the v4 kernel's native code is generated for: LLVM
+    // version, target triple, CPU and enabled CPU features, in a stable order.
+    std::vector<std::string> features;
+    for (const auto& [feature, enabled] : llvm::sys::getHostCPUFeatures()) {
+        if (enabled) {
+            features.push_back(feature.str());
+        }
+    }
+    std::ranges::sort(features);
+    CacheKeyBuilder builder;
+    builder.add("kind", "fsim-static-kernel-host-v1");
+    builder.add("build-configuration", FSIM_BUILD_CONFIGURATION);
+    builder.add("llvm-version", LLVM_VERSION_STRING);
+    builder.add("target", llvm::sys::getProcessTriple());
+    builder.add("cpu", std::string { llvm::sys::getHostCPUName() });
+    builder.add("feature-count", std::to_string(features.size()));
+    for (const auto& feature : features) {
+        builder.add("feature", feature);
+    }
+    return builder.finish();
 }
 
 } // namespace fsim::compiler

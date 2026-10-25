@@ -203,9 +203,6 @@ struct Simulation::Impl {
         const SystemVerilogVpiRuntimeUpdates vpi_runtime_updates);
 
     void setup_execution(SimulationEngine engine);
-#if defined(FSIM_HAS_LLVM)
-    void bind_fused_static_cohorts();
-#endif
 
     [[nodiscard]] std::size_t ensure_concurrent_assertion_coverage(
         const runtime::simir::ProcessId process,
@@ -440,13 +437,6 @@ struct Simulation::Impl {
     [[nodiscard]] std::optional<runtime::simir::SignalId>
     backdoor_signal(const std::string_view path) const noexcept;
 
-#if defined(FSIM_HAS_LLVM)
-    void request_background_jit_compilation(
-        const bool force_adaptive = false);
-
-    void cancel_background_jit_compilation() noexcept;
-
-#endif
 
     ~Impl();
 
@@ -671,76 +661,6 @@ struct Simulation::Impl {
     /// heap layout, UVM services, constraints, and unsupported residuals.
     application_detail::SystemVerilogClassHirExecution class_hir_execution;
 
-#if defined(FSIM_HAS_LLVM)
-    // Shared by every compiled executor. It is fully populated before executor
-    // installation and outlives the interpreter that owns those executors.
-    std::vector<std::uint32_t> signal_widths;
-
-    std::vector<runtime::simir::ValueKind>
-        signal_value_kinds;
-
-    std::vector<runtime::simir::ResolutionKind>
-        signal_resolutions;
-
-    // Ordinary compiled execution deliberately omits source restart points.
-    // Retain exactly the LLVM-owned process IDs so a pre-start execution-point
-    // observer can return those processes to the reference interpreter without
-    // disturbing SystemC or other alternate executors.
-    std::vector<runtime::simir::ProcessId> jit_processes;
-
-    bool jit_debug_instrumentation { };
-
-    // The interpreter owns executors referring to this JIT. Member destruction
-    // is reversed, so declaring the JIT first destroys the interpreter first.
-    std::unique_ptr<compiler::LlvmJit> jit;
-    bool fused_static_cohorts_bound { };
-
-    // Original compiled executors borrow fixed-address cells. Destruction
-    // runs in reverse declaration order: interpreter, then cells, then JIT.
-    application_detail::ExecutorHotCellPool executor_hot_cells;
-
-    // Retain each bounded background compilation so cache observers can request
-    // a stable completed snapshot without making normal simulation startup
-    // synchronous again.
-    std::vector<std::shared_future<
-        std::vector<compiler::JitProcessHandle>>>
-        jit_compilations;
-
-    // Only bounded, cold-start-effective modules participate in the startup
-    // barrier. Larger recurring kernels remain in jit_compilations for cache
-    // synchronization and lifetime management, but promote asynchronously.
-    std::vector<std::shared_future<
-        std::vector<compiler::JitProcessHandle>>>
-        jit_startup_compilations;
-
-    // These jobs are already selected for every long run. Await only this
-    // subset before HDL execution, leaving adaptive selection unchanged.
-    std::vector<std::shared_future<
-        std::vector<compiler::JitProcessHandle>>>
-        jit_nonadaptive_background_compilations;
-
-    std::mutex jit_background_mutex;
-
-    std::condition_variable jit_background_condition;
-
-    bool jit_background_requested { };
-
-    bool jit_background_forced { };
-
-    bool jit_background_cancelled { };
-
-    // Large designs may profitably execute their first events while the
-    // bounded startup tier materializes. Small designs retain an eager native
-    // set so debugger/trace observations and short-run behavior stay stable.
-    bool jit_overlap_startup { };
-
-    // The deferred executor promises are fulfilled by this bounded worker
-    // batch while early simulation work proceeds through the interpreter.
-    // It is declared before the interpreter so destruction stops execution
-    // before waiting for compilation, while still outliving the JIT itself.
-    std::shared_future<void> jit_materialization;
-
-#endif
     std::unique_ptr<runtime::simir::Interpreter> interpreter;
 
     std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry> vpi_registry;
@@ -824,10 +744,6 @@ struct Simulation::Impl {
         vhdl_vhpi_registry;
 
     std::unique_ptr<VhdlPslExecution> vhdl_psl;
-
-    std::size_t compiled_processes { };
-
-    std::size_t compiled_modules { };
 
     SignalChangeHook signal_change_hook;
 

@@ -22,7 +22,7 @@ VL05-27-BASE	clause	27	baseline	fsim.api.c_header	fsim.runtime	fsim.runtime	gove
 VL05-C02-GAP	clause	3,4,Annex-A,Annex-B	B164-C02	fsim.frontend	fsim.elaboration	fsim.application.display	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
 VL05-C03-GAP	clause	19,28,Annex-H	B164-C03	fsim.frontend	fsim.frontend	fsim.application.line_directives	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
 VL05-C04-GAP	clause	4,12.2	B164-C04	fsim.frontend	fsim.elaboration	fsim.application.systemverilog_hir	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
-VL05-C05-GAP	clause	5	B164-C05	fsim.llvm	fsim.elaboration	fsim.application.systemverilog_hir	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
+VL05-C05-GAP	clause	5	B164-C05	fsim.application.static-kernel	fsim.elaboration	fsim.application.systemverilog_hir	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
 VL05-C06-GAP	clause	12,13	B164-C06	fsim.frontend	fsim.elaboration	fsim.application.specialization	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
 VL05-C07-GAP	clause	7,8	B164-C07	fsim.frontend	fsim.elaboration	fsim.application.transition_delays	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
 VL05-C08-GAP	clause	7	B164-C08	fsim.frontend	fsim.elaboration	fsim.application.resolution	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
@@ -41,7 +41,7 @@ VLW-LEGACY-INTEGER	width	elaboration	B164-C04	fsim.frontend	fsim.elaboration	fsi
 VLW-PACKED-CONSTANT	width	constant-folding	baseline	fsim.elaboration	fsim.elaboration	fsim.application.expressions	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
 VLW-LOW-WORD	width	constant-folding	B164-C05	fsim.runtime	fsim.elaboration	fsim.elaboration	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
 VLW-PACKED-STORAGE	width	runtime	baseline	fsim.runtime	fsim.runtime	fsim.application	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
-VLW-ENGINE-PLANES	width	engines	B164-C05	fsim.llvm	fsim.llvm	fsim.application.systemverilog_hir	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
+VLW-ENGINE-PLANES	width	engines	B164-C05	fsim.application.static-kernel	fsim.application.static-kernel	fsim.application.systemverilog_hir	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
 VLW-VPI-VECTOR	width	public-api	B164-C15	fsim.runtime	fsim.runtime	fsim.application.vpi	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
 VLW-MEMORY-WORD	width	memory-files	B164-C13	fsim.runtime	fsim.runtime	fsim.application.sv_files	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200
 VLW-TRACE-PUBLIC	width	mixed-public	B164-C16	fsim.runtime	fsim.runtime	fsim.api	governed-17	fsim.application.typed_boundaries+fsim.application.artifact_phases	as6g-delta1000-vcd64-time7200

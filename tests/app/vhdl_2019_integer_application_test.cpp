@@ -123,12 +123,6 @@ void verify_engine(
     const auto target = observed_bits(
         simulation, "wide_integer_runtime.far_target");
     assert(std::ranges::count(target, '1') == 1);
-#if defined(FSIM_HAS_LLVM)
-    if (engine == fsim::app::SimulationEngine::compiled) {
-        assert(simulation.compiled_process_count() > 0U);
-        assert(simulation.compiled_module_count() > 0U);
-    }
-#endif
 }
 
 void verify_overflow(
@@ -177,11 +171,6 @@ void verify_conditional_expression(
                simulation,
                "conditional_expression_runtime.lazy_result")
            == 7);
-#if defined(FSIM_HAS_LLVM)
-    if (engine == fsim::app::SimulationEngine::compiled) {
-        assert(simulation.compiled_process_count() > 0U);
-    }
-#endif
 }
 
 void verify_contextual_result_subtype(
@@ -208,11 +197,6 @@ void verify_contextual_result_subtype(
     assert(observed_bits(
                simulation, "contextual_result_runtime.wide")
            == "00000000");
-#if defined(FSIM_HAS_LLVM)
-    if (engine == fsim::app::SimulationEngine::compiled) {
-        assert(simulation.compiled_process_count() > 0U);
-    }
-#endif
 }
 
 void verify_sequential_block_hir(const fsim::project::Config& config)

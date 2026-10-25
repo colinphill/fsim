@@ -82,28 +82,6 @@ void install_interrupt_hook(Simulation& simulation)
     });
 }
 
-void report_native_cache_failures(
-    const Simulation& simulation,
-    diagnostic::Engine& diagnostics,
-    const bool synchronize)
-{
-    const auto cache = simulation.native_cache_statistics(synchronize);
-    if (cache.load_failures == 0 && cache.store_failures == 0
-        && cache.prune_failures == 0) {
-        return;
-    }
-    diagnostics.warning(
-        "FSIM-CACHE-0004",
-        "native LLVM object cache reported "
-            + std::to_string(cache.load_failures)
-            + " load failure(s) and "
-            + std::to_string(cache.store_failures)
-            + " store failure(s), and "
-            + std::to_string(cache.prune_failures)
-            + " prune failure(s); simulation remains valid, but cache reuse "
-              "or eviction may be incomplete");
-}
-
 int handle_check(
     const cli::Invocation&,
     const project::Config& config,
@@ -147,9 +125,6 @@ int handle_build(
         std::move(*built),
         config.run.max_deltas,
         SimulationEngine::compiled);
-    prepared.await_native_compilation();
-    report_native_cache_failures(prepared, diagnostics);
-    const auto native_cache = prepared.native_cache_statistics();
     for (const auto& request : invocation.library_exports) {
         if (!export_library(
                 config, request.library, request.path, diagnostics)) {
@@ -184,22 +159,8 @@ int handle_build(
         }
         output << ']';
     }
-    output << ", " << prepared.compiled_process_count()
-           << " LLVM-compiled process(es) in "
-           << prepared.compiled_module_count()
-           << " specialization module(s)";
-    output << "; analysis cache "
-           << (cache_hit ? "hit" : "populated");
-    if (prepared.compiled_process_count() == 0) {
-        output << "; native cache unused";
-    } else {
-        output << "; native cache "
-               << native_cache.hits << " hit(s), "
-               << native_cache.misses << " miss(es), "
-               << native_cache.stores << " store(s), "
-               << native_cache.rejected_entries << " rejected";
-    }
-    output << ")\n";
+    output << "; analysis cache " << (cache_hit ? "hit" : "populated")
+           << ")\n";
     if (entropy_seed_selected) {
         output << "random seed " << selected_seed << '\n';
     }
@@ -283,8 +244,11 @@ int run_built_project(
         = trace_config.run.trace_file && trace_config.run.trace_enabled;
     built.cone_fusion = engine != SimulationEngine::debug
         && !built.code_coverage_enabled && !trace_output && !foreign;
+    // Cone fusion hides internal nets and stays off for these clients; the
+    // static kernel's access plan replaces the gates.
+    plan_kernel_access(built, engine, foreign, trace_output);
     if (profile_phases && !built.cone_fusion
-        && static_kernel_requested(engine)) {
+        && !built.kernel_access.admit && static_kernel_requested(engine)) {
         // The census counts these runs as kernel-off, by gate.
         const auto* gate = engine == SimulationEngine::debug ? "gate_debug"
             : built.code_coverage_enabled                    ? "gate_coverage"
@@ -409,7 +373,6 @@ int run_built_project(
                 output.flush();
             }
         });
-    report_native_cache_failures(simulation, diagnostics, false);
     auto trace = attach_trace(simulation, trace_config, diagnostics, false,
         std::move(archived_control));
     if (trace_config.run.trace_file && trace_config.run.trace_enabled && !trace) {

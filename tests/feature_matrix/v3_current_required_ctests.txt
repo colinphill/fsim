@@ -15,8 +15,6 @@ fsim.application
 fsim.application-regression-dedup-contract
 fsim.application.artifact_phases
 fsim.application.classes
-fsim.application.code-coverage-equivalence
-fsim.application.code-coverage-metrics-equivalence
 fsim.application.code-coverage
 fsim.application.code-coverage-control
 fsim.application.compiled_hir_cache
@@ -118,12 +116,10 @@ fsim.ieee-package-inventory
 fsim.incremental-native-cache-freeze
 fsim.installed-pkg-config-consumer
 fsim.installed-public-contract
-fsim.jit-runtime-c
 fsim.legacy-acc-inventory
 fsim.legacy-tf-inventory
 fsim.library.artifact
 fsim.linux-package-definitions
-fsim.llvm
 fsim.msvc-debug-contract
 fsim.msvc-release-contract
 fsim.nested-portable-schema-freeze

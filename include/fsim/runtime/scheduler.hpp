@@ -177,27 +177,6 @@ struct SchedulerBatchCompactionStats {
   std::uint64_t generic_readiness_ticket_fallback_members { };
 };
 
-/// Exact ordering metadata for one SystemVerilog batch callback. The entry
-/// span is borrowed from Scheduler scratch and remains valid only until that
-/// callback returns. Every callback receives a new generation, including a
-/// retry after a batch executor consumes only a prefix.
-struct SchedulerBatchFrontierEntry {
-  StableOrder stable_order { };
-  std::uint64_t sequence { };
-  std::uint64_t payload { };
-};
-
-struct SchedulerBatchFrontier {
-  std::uint64_t generation { };
-  SimulationTick time { };
-  std::uint64_t delta { };
-  SchedulerPhase phase { SchedulerPhase::active };
-  std::uint64_t systemverilog_round { };
-  std::size_t cursor { };
-  std::size_t end { };
-  std::span<const SchedulerBatchFrontierEntry> tasks;
-};
-
 /// Scheduler-owned exact keys for the unconsumed members of one Generic
 /// compact-readiness ticket. The span is borrowed and valid only during the
 /// matching compact-ticket callback; it includes members beyond a foreign-key
@@ -206,25 +185,6 @@ struct SchedulerGenericTicketMember {
   StableOrder order { };
   std::uint64_t sequence { };
     std::uint64_t payload { };
-};
-
-/// Exact ordering metadata for one generic Active batch callback. This is a
-/// generic-delta frontier: it carries no SystemVerilog round and grants no
-/// permission to bypass the caller's projected-write or next-delta contract.
-struct SchedulerGenericBatchFrontier {
-  std::uint64_t generation { };
-  SimulationTick time { };
-  std::uint64_t delta { };
-  SchedulerPhase phase { SchedulerPhase::active };
-  std::size_t cursor { };
-  std::size_t end { };
-  std::span<const SchedulerBatchFrontierEntry> tasks;
-  /// Exact compact ticket identity, present only on a compact-ticket callback.
-  SchedulerBatchGroupKey compact_group_key { };
-  /// Absolute member cursor into that ticket, before this callback consumes.
-  std::size_t ticket_member_offset { };
-  /// All unconsumed ticket keys, including any retained suffix after a cut.
-  std::span<const SchedulerGenericTicketMember> ticket_members;
 };
 
 /// Exact scheduler-issued key for one SystemVerilog task. `valid` is
@@ -432,53 +392,6 @@ public:
   };
   using ReadinessBatchMember = SystemVerilogGroupBatchMember;
 
-  /// A temporary reservation for an internal SystemVerilog Active batch.
-  /// Capacity is held without creating visible queue entries or consuming
-  /// sequence IDs. Destroying an uncommitted ticket cancels it. The ticket is
-  /// scoped to the matching scheduler batch callback and must not outlive or
-  /// outmove its Scheduler.
-  class InternalSystemVerilogBatchReservation {
-  public:
-    InternalSystemVerilogBatchReservation() noexcept = default;
-    ~InternalSystemVerilogBatchReservation();
-    InternalSystemVerilogBatchReservation(
-        InternalSystemVerilogBatchReservation&&) noexcept;
-    InternalSystemVerilogBatchReservation& operator=(
-        InternalSystemVerilogBatchReservation&&) noexcept;
-    InternalSystemVerilogBatchReservation(
-        const InternalSystemVerilogBatchReservation&) = delete;
-    InternalSystemVerilogBatchReservation& operator=(
-        const InternalSystemVerilogBatchReservation&) = delete;
-
-    [[nodiscard]] explicit operator bool() const noexcept
-    {
-      return owner_ != nullptr;
-    }
-
-    [[nodiscard]] bool commit(
-        std::span<const StableOrder> stable_orders,
-        std::span<const detail::SchedulerTaskDescriptor> tasks) noexcept;
-    /// Commit the reserved callbacks as one ordered queue entry while
-    /// retaining every logical member's original order and sequence. The
-    /// ticket keeps owner_lifetime until its last member is consumed or
-    /// discarded.
-    [[nodiscard]] bool commit_ordered_ticket() noexcept;
-    void cancel() noexcept;
-
-  private:
-    friend class Scheduler;
-    InternalSystemVerilogBatchReservation(
-        Scheduler* owner, std::uint64_t reservation_id,
-        std::size_t count) noexcept
-        : owner_(owner), reservation_id_(reservation_id), count_(count)
-    {
-    }
-
-    Scheduler* owner_ { };
-    std::uint64_t reservation_id_ { };
-    std::size_t count_ { };
-  };
-
   /// Invisible preflight for one component-keyed batch ticket. A caller may
   /// hold the reservation while preparing its values, then atomically append
   /// the ordered member entries. Cancellation consumes no sequence IDs. The
@@ -550,49 +463,6 @@ public:
     std::uint64_t target_systemverilog_round_ { };
   };
 
-  /// A split-phase ticket for output callbacks discovered in one generic
-  /// Active batch. Reservation may allocate Update-queue capacity, but creates
-  /// no work and consumes no sequence IDs; commit is non-allocating and
-  /// publishes the complete callback prefix atomically. An installed scheduler
-  /// trace hook declines this ticket so the ordinary fully traced route wins.
-  /// Like the SystemVerilog ticket, it is scoped to this callback and must not
-  /// outlive or outmove its Scheduler.
-  class InternalGenericUpdateBatchReservation {
-  public:
-    InternalGenericUpdateBatchReservation() noexcept = default;
-    ~InternalGenericUpdateBatchReservation();
-    InternalGenericUpdateBatchReservation(
-        InternalGenericUpdateBatchReservation&&) noexcept;
-    InternalGenericUpdateBatchReservation& operator=(
-        InternalGenericUpdateBatchReservation&&) noexcept;
-    InternalGenericUpdateBatchReservation(
-        const InternalGenericUpdateBatchReservation&) = delete;
-    InternalGenericUpdateBatchReservation& operator=(
-        const InternalGenericUpdateBatchReservation&) = delete;
-
-    [[nodiscard]] explicit operator bool() const noexcept
-    {
-      return owner_ != nullptr;
-    }
-
-    [[nodiscard]] bool commit(
-        std::span<const StableOrder> stable_orders,
-        std::span<const detail::SchedulerTaskDescriptor> tasks) noexcept;
-    void cancel() noexcept;
-
-  private:
-    friend class Scheduler;
-    InternalGenericUpdateBatchReservation(
-        Scheduler* owner, std::uint64_t reservation_id,
-        std::size_t count) noexcept
-        : owner_(owner), reservation_id_(reservation_id), count_(count)
-    {
-    }
-
-    Scheduler* owner_ { };
-    std::uint64_t reservation_id_ { };
-    std::size_t count_ { };
-  };
   using SlotStartHook = std::function<void(Scheduler &)>;
   /// Internal runtime hook at a fully drained time-slot boundary. It must not
   /// schedule or inspect a partially executing slot; the context must outlive
@@ -718,39 +588,6 @@ public:
       SimulationTick delay, SchedulerPhase phase, StableOrder stable_order, Task task);
   void schedule_internal_systemverilog_at(SimulationTick time, SchedulerPhase phase,
       StableOrder stable_order, detail::SchedulerTaskDescriptor task);
-  /// Atomically append runtime-owned tasks to the Active queue while handling
-  /// the exact scheduler-issued batch frontier. All entry storage and sequence
-  /// capacity is reserved before the first task becomes visible. A stale or
-  /// non-Active frontier is rejected without consuming task identities.
-  void schedule_internal_systemverilog_batch_from_frontier(
-      std::uint64_t frontier_generation,
-      std::span<const StableOrder> stable_orders,
-      std::span<const detail::SchedulerTaskDescriptor> tasks);
-  /// Native-only split-phase form. reserve() can allocate but is invisible
-  /// and consumes no order/sequence IDs; commit() is non-allocating and
-  /// atomically makes the prepared tasks visible. An installed trace hook
-  /// returns an empty ticket so the caller can use the fully traced path.
-  [[nodiscard]] InternalSystemVerilogBatchReservation
-  reserve_internal_systemverilog_batch_from_frontier(
-      std::uint64_t frontier_generation, std::size_t task_count);
-  /// Reserve one Active WorkQueue slot for a bounded ticket of runtime-owned
-  /// tasks. The member spans are copied before returning; owner_lifetime is
-  /// retained until the ticket drains. Tickets preserve each member's
-  /// insertion sequence and may interleave with foreign queue entries.
-  [[nodiscard]] InternalSystemVerilogBatchReservation
-  reserve_internal_systemverilog_ordered_ticket_from_frontier(
-      std::uint64_t frontier_generation,
-      std::span<const StableOrder> stable_orders,
-      std::span<const detail::SchedulerTaskDescriptor> tasks,
-      InternalSystemVerilogOrderedTicketStorage& storage,
-      std::shared_ptr<void> owner_lifetime);
-  /// Reserve generic Update callbacks while handling the exact current
-  /// generic Active batch. The ticket only reserves queue insertion; callbacks
-  /// must retain the original owner and projected-write path so downstream
-  /// sensitivity still enters the next generic delta.
-  [[nodiscard]] InternalGenericUpdateBatchReservation
-  reserve_internal_generic_update_batch_from_frontier(
-      std::uint64_t frontier_generation, std::size_t task_count);
   [[nodiscard]] bool trace_hook_installed() const noexcept;
   void schedule_internal_systemverilog(SchedulerPhase phase,
       StableOrder stable_order, detail::SchedulerTaskDescriptor task);
@@ -836,15 +673,6 @@ public:
   [[nodiscard]] SimulationTick now() const noexcept;
   [[nodiscard]] std::uint64_t delta() const noexcept;
   [[nodiscard]] std::optional<SchedulerPhase> current_phase() const noexcept;
-  /// Return the scheduler-owned frozen batch metadata only while executing a
-  /// SystemVerilog SchedulerBatchTask callback. The returned task span is
-  /// invalidated when that callback returns.
-  [[nodiscard]] std::optional<SchedulerBatchFrontier>
-  current_batch_frontier() const noexcept;
-  /// Return the generic Active batch frontier only while its SchedulerBatchTask
-  /// callback is executing. The borrowed task span ends with that callback.
-  [[nodiscard]] std::optional<SchedulerGenericBatchFrontier>
-  current_generic_batch_frontier() const noexcept;
   /// Monotonic identity changed whenever work enters the phase currently
   /// being executed. Batch executors use it to stop before crossing newly
   /// inserted canonical work.
@@ -875,14 +703,6 @@ public:
   void remove_discard_hook(DiscardHookToken token) noexcept;
 
 private:
-  [[nodiscard]] bool commit_internal_systemverilog_batch_reservation(
-      std::uint64_t reservation_id, std::size_t count,
-      std::span<const StableOrder> stable_orders,
-      std::span<const detail::SchedulerTaskDescriptor> tasks) noexcept;
-  [[nodiscard]] bool commit_internal_systemverilog_ordered_ticket_reservation(
-      std::uint64_t reservation_id) noexcept;
-  void cancel_internal_systemverilog_batch_reservation(
-      std::uint64_t reservation_id) noexcept;
   [[nodiscard]] bool commit_systemverilog_group_batch_reservation(
       std::uint64_t reservation_id,
       std::span<SystemVerilogGroupBatchMember> members,
@@ -907,12 +727,6 @@ private:
   systemverilog_group_batch_target_round(
       std::uint64_t reservation_id,
       std::uint64_t target_systemverilog_round) const noexcept;
-  [[nodiscard]] bool commit_internal_generic_update_batch_reservation(
-      std::uint64_t reservation_id, std::size_t count,
-      std::span<const StableOrder> stable_orders,
-      std::span<const detail::SchedulerTaskDescriptor> tasks) noexcept;
-  void cancel_internal_generic_update_batch_reservation(
-      std::uint64_t reservation_id) noexcept;
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

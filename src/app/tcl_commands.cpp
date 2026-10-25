@@ -346,6 +346,9 @@ namespace fsim::app::tcl_detail {
         if (!ensure_built(context, interpreter)) {
             return false;
         }
+        // A Tcl session may examine, deposit and force any signal.
+        application_detail::plan_kernel_access(
+            *context.built, engine, true, true);
         context.simulation = std::make_unique<Simulation>(
             std::move(*context.built),
             context.config.run.max_deltas,

@@ -525,16 +525,9 @@ void verify_dynamic_part_insert_template_sharing(
         assert(uniform.dynamic_part_insert_processes == 128U);
         assert(compiled.selection_shapes == 2U);
         assert(uniform.selection_shapes == 1U);
-        assert(compiled.compiled_processes == 129U);
-        assert(uniform.compiled_processes == 129U);
         // The top-level stimulus is one process in a separate specialization
         // and contributes one registration job. Each distinct writer
         // selection shape contributes one shared process-template job.
-        assert(compiled.compiled_modules
-            == compiled.selection_shapes + 1U);
-        assert(uniform.compiled_modules
-            == uniform.selection_shapes + 1U);
-        assert(compiled.compiled_modules > uniform.compiled_modules);
 #endif
     }
 }
@@ -866,8 +859,6 @@ void verify_dynamic_projected_template_sharing(
 #if defined(FSIM_HAS_LLVM)
         // The 140 projected writers plus the top-level stimulus are compiled
         // separately; their four writer shapes and stimulus account for five modules.
-        assert(compiled.compiled_processes == 141U);
-        assert(compiled.compiled_modules == 5U);
 #endif
     }
 }
@@ -1325,9 +1316,6 @@ end architecture;
                 std::string(8U, 'U') + std::string(72U, 'X')
                     + std::string(8U, 'U') })
             != reference.changes.end());
-#if defined(FSIM_HAS_LLVM)
-        assert(compiled.compiled_processes == compiled.process_count);
-#endif
     }
 }
 
@@ -1464,7 +1452,6 @@ end architecture;
         assert(compiled.values[3] == std::string(129U, '0'));
 #if defined(FSIM_HAS_LLVM)
         assert(compiled.process_count == 1U);
-        assert(compiled.compiled_processes == compiled.process_count);
 #endif
     }
 }
@@ -1967,18 +1954,7 @@ endmodule
             == compiled.resolved_drivers);
         assert(reference.vcd == compiled.vcd);
 #if defined(FSIM_HAS_LLVM)
-        assert(compiled.compiled_processes > 0);
-        assert(compiled.compiled_modules > 0);
-        assert(
-            compiled.compiled_modules
-            <= compiled.compiled_processes);
         assert(compiled.native_cache.hits == 0);
-        assert(
-            compiled.native_cache.misses
-            == compiled.compiled_modules);
-        assert(
-            compiled.native_cache.stores
-            == compiled.compiled_modules);
 #endif
 
         for (const auto standard : {
@@ -2130,12 +2106,6 @@ endmodule
             assert(
                 vhdl_parent_reference.provenance_vcd
                 == vhdl_parent_compiled.provenance_vcd);
-#if defined(FSIM_HAS_LLVM)
-            assert(sv_parent_compiled.compiled_processes > 0);
-            assert(sv_parent_compiled.compiled_modules > 0);
-            assert(vhdl_parent_compiled.compiled_processes > 0);
-            assert(vhdl_parent_compiled.compiled_modules > 0);
-#endif
         }
     }
 

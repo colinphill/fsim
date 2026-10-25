@@ -8,16 +8,10 @@ set(FSIM_ROOT "${FSIM_SOURCE_DIR}/CMakeLists.txt")
 set(FSIM_TEST_CMAKE "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 set(FSIM_WORKFLOW "${FSIM_SOURCE_DIR}/.github/workflows/ci.yml")
 set(FSIM_APPLICATION "${FSIM_SOURCE_DIR}/src/app/application_analysis.cpp")
-set(FSIM_JIT "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit.cpp")
-set(FSIM_JIT_KEY "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_cache_key.cpp")
 set(FSIM_CACHE "${FSIM_SOURCE_DIR}/src/compiler/object_cache.cpp")
 set(FSIM_LIBRARY "${FSIM_SOURCE_DIR}/src/platform/dynamic_library.cpp")
-set(FSIM_ABI "${FSIM_SOURCE_DIR}/include/fsim/compiler/jit_runtime_v1.h")
-set(FSIM_ABI_V2 "${FSIM_SOURCE_DIR}/include/fsim/compiler/jit_runtime_v2.h")
-set(FSIM_ABI_TEST "${FSIM_SOURCE_DIR}/tests/compiler/jit_runtime_c_test.c")
-set(FSIM_ABI_V2_TEST
-    "${FSIM_SOURCE_DIR}/tests/compiler/jit_runtime_v2_layout_test.c")
-set(FSIM_JIT_TEST "${FSIM_SOURCE_DIR}/tests/compiler/llvm_jit_cache_test.cpp")
+# The per-process JIT sources, its C ABI headers and their tests were removed
+# in the engine-v4 migration; their policy checks went with them.
 set(FSIM_SCV_ADAPTER "${FSIM_SOURCE_DIR}/cmake/FsimScv.cmake")
 set(FSIM_TCL_MINGW_ADAPTER "${FSIM_SOURCE_DIR}/cmake/BuildTclMinGW.cmake")
 set(FSIM_SCV_PLUGIN_TEST
@@ -33,15 +27,8 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_TEST_CMAKE}"
     "${FSIM_WORKFLOW}"
     "${FSIM_APPLICATION}"
-    "${FSIM_JIT}"
-    "${FSIM_JIT_KEY}"
     "${FSIM_CACHE}"
     "${FSIM_LIBRARY}"
-    "${FSIM_ABI}"
-    "${FSIM_ABI_V2}"
-    "${FSIM_ABI_TEST}"
-    "${FSIM_ABI_V2_TEST}"
-    "${FSIM_JIT_TEST}"
     "${FSIM_SCV_ADAPTER}"
     "${FSIM_TCL_MINGW_ADAPTER}"
     "${FSIM_SCV_PLUGIN_TEST}"
@@ -57,22 +44,8 @@ file(READ "${FSIM_ROOT}" FSIM_ROOT_CONTENTS)
 file(READ "${FSIM_TEST_CMAKE}" FSIM_TEST_CMAKE_CONTENTS)
 file(READ "${FSIM_WORKFLOW}" FSIM_WORKFLOW_CONTENTS)
 file(READ "${FSIM_APPLICATION}" FSIM_APPLICATION_CONTENTS)
-file(READ "${FSIM_JIT}" FSIM_JIT_CONTENTS)
-file(GLOB FSIM_JIT_FRAGMENTS
-  "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_*.cpp"
-  "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_*.hpp")
-foreach(FSIM_JIT_FRAGMENT IN LISTS FSIM_JIT_FRAGMENTS)
-  file(READ "${FSIM_JIT_FRAGMENT}" FSIM_JIT_FRAGMENT_CONTENTS)
-  string(APPEND FSIM_JIT_CONTENTS "\n${FSIM_JIT_FRAGMENT_CONTENTS}")
-endforeach()
-file(READ "${FSIM_JIT_KEY}" FSIM_JIT_KEY_CONTENTS)
 file(READ "${FSIM_CACHE}" FSIM_CACHE_CONTENTS)
 file(READ "${FSIM_LIBRARY}" FSIM_LIBRARY_CONTENTS)
-file(READ "${FSIM_ABI}" FSIM_ABI_CONTENTS)
-file(READ "${FSIM_ABI_V2}" FSIM_ABI_V2_CONTENTS)
-file(READ "${FSIM_ABI_TEST}" FSIM_ABI_TEST_CONTENTS)
-file(READ "${FSIM_ABI_V2_TEST}" FSIM_ABI_V2_TEST_CONTENTS)
-file(READ "${FSIM_JIT_TEST}" FSIM_JIT_TEST_CONTENTS)
 file(READ "${FSIM_SCV_ADAPTER}" FSIM_SCV_ADAPTER_CONTENTS)
 file(READ "${FSIM_TCL_MINGW_ADAPTER}" FSIM_TCL_MINGW_ADAPTER_CONTENTS)
 file(READ "${FSIM_SCV_PLUGIN_TEST}" FSIM_SCV_PLUGIN_TEST_CONTENTS)
@@ -146,32 +119,6 @@ foreach(FSIM_TARGET IN ITEMS
   endif()
 endforeach()
 
-foreach(FSIM_JIT_POLICY IN ITEMS
-    "JITTargetMachineBuilder::detectHost()"
-    "target_builder.getTargetTriple()"
-    "target_builder.getCPU()"
-    "target_builder.getFeatures().getFeatures()"
-    "std::sort(impl_->target_features.begin(), impl_->target_features.end())"
-    "module->setDataLayout(impl_->jit->getDataLayout())"
-    "module->setTargetTriple(impl_->jit->getTargetTriple())"
-    "impl_->jit->lookup(owned_symbol)"
-    "address.template toPtr<NativeProcess>()")
-  string(FIND "${FSIM_JIT_CONTENTS}" "${FSIM_JIT_POLICY}" FSIM_INDEX)
-  if(FSIM_INDEX EQUAL -1)
-    message(FATAL_ERROR "JIT lost native target/symbol policy: ${FSIM_JIT_POLICY}")
-  endif()
-endforeach()
-foreach(FSIM_KEY_POLICY IN ITEMS
-    "target_triple.str()"
-    "data_layout.getStringRepresentation()"
-    "target_cpu"
-    "target_features")
-  string(FIND "${FSIM_JIT_KEY_CONTENTS}" "${FSIM_KEY_POLICY}" FSIM_INDEX)
-  if(FSIM_INDEX EQUAL -1)
-    message(FATAL_ERROR "native cache key lost target input: ${FSIM_KEY_POLICY}")
-  endif()
-endforeach()
-
 foreach(FSIM_CACHE_POLICY IN ITEMS
     "OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION"
     "MoveFileExW("
@@ -196,79 +143,6 @@ foreach(FSIM_LIBRARY_POLICY IN ITEMS
   endif()
 endforeach()
 
-foreach(FSIM_ABI_POLICY IN ITEMS
-    "Callbacks must"
-    "not unwind across this boundary"
-    "FSIM_JIT_RUNTIME_ABI_VERSION_V1"
-    "FSIM_JIT_FRAME_ABI_VERSION_V1")
-  string(FIND "${FSIM_ABI_CONTENTS}" "${FSIM_ABI_POLICY}" FSIM_INDEX)
-  if(FSIM_INDEX EQUAL -1)
-    message(FATAL_ERROR "JIT C ABI lost boundary policy: ${FSIM_ABI_POLICY}")
-  endif()
-endforeach()
-foreach(FSIM_ABI_EVIDENCE IN ITEMS
-    "offsetof(fsim_jit_runtime_v1, vital_delay) == 560"
-    "offsetof(fsim_jit_runtime_v1, force_driver_signal_slice) == 568"
-    "offsetof(fsim_jit_runtime_v1, force_driver_signal_slice_logic9) == 576"
-    "offsetof(fsim_jit_runtime_v1, release_driver_signal_slice) == 584"
-    "offsetof(fsim_jit_runtime_v1, execute_signal_operation) == 592"
-    "offsetof(fsim_jit_runtime_v1, code_coverage_hit_counters) == 816"
-    "offsetof(fsim_jit_runtime_v1, code_coverage_counter_values) == 824"
-    "offsetof(fsim_jit_runtime_v1, code_coverage_hit_count) == 832"
-    "offsetof(fsim_jit_runtime_v1, code_coverage_counter_count) == 836"
-    "offsetof(fsim_jit_runtime_v1, record_code_coverage_counter) == 840"
-    "offsetof(fsim_jit_runtime_v1, sample_coverage) == 848"
-    "offsetof(fsim_jit_runtime_v1, execute_class_property_operation) == 856"
-    "offsetof(fsim_jit_runtime_v1, query_event_triggered) == 864"
-    "offsetof(fsim_jit_runtime_v1, fused_activation_words) == 872"
-    "offsetof(fsim_jit_runtime_v1, fused_activation_word_count) == 880"
-    "offsetof(fsim_jit_runtime_v1, fused_activation_reserved) == 884"
-    "sizeof(fsim_jit_runtime_v1) == 888"
-    "sizeof(fsim_jit_frame_v1) == 344"
-    "sizeof(fsim_jit_resume_result_v1) == 24")
-  string(FIND "${FSIM_ABI_TEST_CONTENTS}" "${FSIM_ABI_EVIDENCE}" FSIM_INDEX)
-  if(FSIM_INDEX EQUAL -1)
-    message(FATAL_ERROR "strict C ABI test lost layout evidence: ${FSIM_ABI_EVIDENCE}")
-  endif()
-endforeach()
-foreach(FSIM_ABI_V2_POLICY IN ITEMS
-    "FSIM_JIT_SERVICES_ABI_VERSION_V2"
-    "FSIM_JIT_RUNTIME_ABI_VERSION_V2"
-    "fsim_jit_services_v2"
-    "fsim_jit_runtime_instance_v2"
-    "uint32_t update_domain")
-  string(FIND "${FSIM_ABI_V2_CONTENTS}" "${FSIM_ABI_V2_POLICY}" FSIM_INDEX)
-  if(FSIM_INDEX EQUAL -1)
-    message(FATAL_ERROR "JIT C ABI v2 lost boundary policy: ${FSIM_ABI_V2_POLICY}")
-  endif()
-endforeach()
-foreach(FSIM_ABI_V2_EVIDENCE IN ITEMS
-    "sizeof(fsim_jit_services_v2) == 688U"
-    "sizeof(fsim_jit_runtime_instance_v2) == 232U"
-    "offsetof(fsim_jit_services_v2, write_update) == 32U"
-    "offsetof(fsim_jit_services_v2, write_signal_packed) == 624U"
-    "offsetof(fsim_jit_runtime_instance_v2, services) == 8U")
-  string(FIND
-    "${FSIM_ABI_V2_TEST_CONTENTS}"
-    "${FSIM_ABI_V2_EVIDENCE}"
-    FSIM_INDEX)
-  if(FSIM_INDEX EQUAL -1)
-    message(FATAL_ERROR
-      "strict C ABI v2 test lost layout evidence: ${FSIM_ABI_V2_EVIDENCE}")
-  endif()
-endforeach()
-
-foreach(FSIM_TEST_POLICY IN ITEMS
-    "JitOptimizationLevel::o0"
-    "JitOptimizationLevel::o2"
-    "test_optimization_cache_invalidation"
-    "DebugPointKind::statement"
-    "source location are unchanged")
-  string(FIND "${FSIM_JIT_TEST_CONTENTS}" "${FSIM_TEST_POLICY}" FSIM_INDEX)
-  if(FSIM_INDEX EQUAL -1)
-    message(FATAL_ERROR "JIT test lost portability evidence: ${FSIM_TEST_POLICY}")
-  endif()
-endforeach()
 foreach(FSIM_JOB_POLICY IN ITEMS
     "windows-llvm-mingw:"
     "timeout-minutes: 120"
@@ -302,6 +176,6 @@ endif()
 
 message(STATUS
   "Windows LLVM contract: x64 GNU Windows ABI target, native PE/COFF target and "
-  "cache identity, strict C layout, safe DLL ownership, atomic cache replace, "
-  "O0/O2/debug provenance, third-party warning isolation, two retained "
+  "cache identity, safe DLL ownership, atomic cache replace, "
+  "third-party warning isolation, two retained "
   "LLVM-MinGW hosted artifacts and one Release binary archive lane are present")

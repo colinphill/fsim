@@ -174,20 +174,6 @@ namespace {
                     : unit.verilog_compatibility_profile);
     }
 
-#if defined(FSIM_HAS_LLVM)
-    std::string feature_identity(const std::vector<std::string>& features)
-    {
-        std::string result;
-        for (const auto& feature : features) {
-            if (!result.empty()) {
-                result.push_back('\n');
-            }
-            result += feature;
-        }
-        return result;
-    }
-#endif
-
     void record_native_acceptance(
         CheckedProject::MappedLibrary& provenance,
         const std::string_view kind,
@@ -206,79 +192,6 @@ namespace {
             provenance.native_fingerprint = fingerprint;
         }
     }
-
-#if defined(FSIM_HAS_LLVM)
-    bool admit_llvm_artifact(
-        const project::Config& config,
-        const std::filesystem::path& directory,
-        const library::NativeArtifact& native,
-        CheckedProject::MappedLibrary& provenance,
-        diagnostic::Engine& diagnostics)
-    {
-        const auto optimization = jit_optimization(config.build.optimization);
-        const auto host = compiler::LlvmJit::native_host_identity(optimization);
-        const std::string expected_optimization {
-            compiler::to_string(optimization)
-        };
-        const auto expected_features = feature_identity(host.features);
-        if (native.runtime_abi != runtime_abi_version
-            || native.compiler_fingerprint != host.fingerprint
-            || native.llvm_version != host.llvm_version
-            || native.target != host.target
-            || native.data_layout != host.data_layout
-            || native.cpu != host.cpu
-            || native.features != expected_features
-            || native.optimization != expected_optimization) {
-            diagnostics.error(
-                "FSIM-LIB-0008",
-                diagnostic::unsupported_artifact_identity(
-                    "mapped LLVM native object producer",
-                    "runtime ABI " + std::to_string(native.runtime_abi)
-                        + ", host fingerprint " + native.compiler_fingerprint
-                        + ", LLVM " + native.llvm_version + ", target "
-                        + native.target + ", data layout "
-                        + native.data_layout + ", CPU " + native.cpu
-                        + ", features SHA-256 "
-                        + support::Sha256::hex(
-                            support::Sha256::digest(native.features))
-                        + ", optimization " + native.optimization,
-                    "runtime ABI " + std::to_string(runtime_abi_version)
-                        + ", host fingerprint " + host.fingerprint
-                        + ", LLVM " + host.llvm_version + ", target "
-                        + host.target + ", data layout " + host.data_layout
-                        + ", CPU " + host.cpu + ", features SHA-256 "
-                        + support::Sha256::hex(
-                            support::Sha256::digest(expected_features))
-                        + ", optimization " + expected_optimization,
-                    ".fsimlib native payload"));
-            return false;
-        }
-        auto bytes = read_payload(
-            directory / native.artifact, native.checksum, diagnostics);
-        if (!bytes.has_value()) {
-            return false;
-        }
-        auto cache_directory = config.build.cache_path;
-        if (!cache_directory.is_absolute()) {
-            cache_directory = config.base_directory / cache_directory;
-        }
-        compiler::ObjectCache cache {
-            cache_directory / "llvm-native" / "llvm" / "objects"
-        };
-        const auto payload = std::as_bytes(
-            std::span<const char> { bytes->data(), bytes->size() });
-        std::error_code error;
-        if (!cache.store(native.cache_key, payload, error)) {
-            diagnostics.error(
-                "FSIM-LIB-0008",
-                "cannot admit mapped LLVM object into the consumer cache: "
-                    + error.message());
-            return false;
-        }
-        record_native_acceptance(provenance, "llvm_object", host.fingerprint);
-        return true;
-    }
-#endif
 
     bool admit_systemc_artifact(
         const project::Config& config,
@@ -898,14 +811,6 @@ bool load_required_mapped_libraries(
                         diagnostics)) {
                     return false;
                 }
-            } else if (native.kind == "llvm_object") {
-#if defined(FSIM_HAS_LLVM)
-                if (!admit_llvm_artifact(
-                        config, mapping->second->path, native, provenance,
-                        diagnostics)) {
-                    return false;
-                }
-#endif
             }
         }
         checked.mapped_libraries.push_back(std::move(provenance));

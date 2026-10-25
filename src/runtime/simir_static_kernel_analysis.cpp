@@ -18,6 +18,107 @@ using namespace static_kernel_detail;
 using namespace static_kernel_compiled_detail;
 namespace kw = kernel_word;
 
+bool Interpreter::Impl::StaticKernel::debug_register_defined(
+    const Member& member, const RegisterId reg) const
+{
+    // The reference evaluator shows a local as <uninitialized> until some
+    // operation has written its register. The kernel does not track writes,
+    // so the answer is the may-be-written set at the member's last debug
+    // point: registers written on some path from the entry to it. A member
+    // with a fork also counts the writes of earlier operations (fork
+    // branches run in order until they wait, and share the registers).
+    const auto size = static_cast<std::uint32_t>(member.operations.size());
+    const auto registers = member.registers.size();
+    if (member.debug_pc == no_slot || member.debug_pc >= size
+        || reg >= registers) {
+        return true;
+    }
+    const auto words = (registers + 63U) / 64U;
+    if (member.debug_defined_pc != member.debug_pc) {
+        std::vector<std::uint64_t> in(static_cast<std::size_t>(size) * words, 0U);
+        std::vector<std::uint8_t> seen(size, 0U);
+        std::vector<std::uint32_t> return_targets;
+        bool has_fork = false;
+        for (const auto& operation : member.operations) {
+            if (const auto* call = operation_get_if<Call>(&operation)) {
+                return_targets.push_back(call->return_target);
+            } else if (operation_holds<Fork>(operation)) {
+                has_fork = true;
+            }
+        }
+        std::vector<RegisterId> reads;
+        std::optional<RegisterId> write;
+        std::vector<std::uint32_t> next;
+        std::vector<std::uint32_t> work { 0U };
+        seen[0] = 1U;
+        std::vector<std::uint64_t> out(words);
+        while (!work.empty()) {
+            const auto pc = work.back();
+            work.pop_back();
+            std::copy_n(in.begin() + static_cast<std::ptrdiff_t>(pc * words),
+                words, out.begin());
+            operation_registers(member.operations[pc], reads, write);
+            if (write && *write < registers) {
+                out[*write / 64U] |= std::uint64_t { 1 } << (*write % 64U);
+            }
+            next.clear();
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, Jump>) {
+                    next.push_back(op.target);
+                } else if constexpr (std::is_same_v<T, Branch>) {
+                    next.push_back(op.when_true);
+                    next.push_back(op.when_false);
+                } else if constexpr (std::is_same_v<T, Call>) {
+                    next.push_back(op.target);
+                } else if constexpr (std::is_same_v<T, Return>) {
+                    next.insert(next.end(), return_targets.begin(),
+                        return_targets.end());
+                } else if constexpr (std::is_same_v<T, Fork>) {
+                    next.insert(next.end(), op.branches.begin(),
+                        op.branches.end());
+                    next.push_back(pc + 1U);
+                } else if constexpr (std::is_same_v<T, Halt>
+                    || std::is_same_v<T, ForkEnd>) {
+                } else {
+                    next.push_back(pc + 1U);
+                }
+            }, member.operations[pc]);
+            for (const auto target : next) {
+                if (target >= size) {
+                    continue;
+                }
+                bool changed = seen[target] == 0U;
+                seen[target] = 1U;
+                auto* destination = in.data()
+                    + static_cast<std::size_t>(target) * words;
+                for (std::size_t word = 0U; word < words; ++word) {
+                    const auto merged = destination[word] | out[word];
+                    changed = changed || merged != destination[word];
+                    destination[word] = merged;
+                }
+                if (changed) {
+                    work.push_back(target);
+                }
+            }
+        }
+        member.debug_defined.assign(
+            in.begin() + static_cast<std::ptrdiff_t>(member.debug_pc * words),
+            in.begin() + static_cast<std::ptrdiff_t>((member.debug_pc + 1U) * words));
+        if (has_fork) {
+            for (std::uint32_t pc = 0U; pc < member.debug_pc; ++pc) {
+                operation_registers(member.operations[pc], reads, write);
+                if (write && *write < registers) {
+                    member.debug_defined[*write / 64U]
+                        |= std::uint64_t { 1 } << (*write % 64U);
+                }
+            }
+        }
+        member.debug_defined_pc = member.debug_pc;
+    }
+    return (member.debug_defined[reg / 64U] >> (reg % 64U) & 1U) != 0U;
+}
+
 void Interpreter::Impl::StaticKernel::prune_operations(
     const std::uint32_t member_index, std::vector<std::uint8_t>& skip,
     std::vector<std::uint64_t>& live_at_entry) const

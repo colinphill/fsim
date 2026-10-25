@@ -2448,7 +2448,7 @@ def main(argv: list[str] | None = None) -> int:
         unsupported = [f"{case['id']}/{config['id']}" for case in cases
                        for config in configurations
                        if config["id"] not in case_configs[case["id"]]
-                       and not (config["id"] == "llvm_o2_aot"
+                       and not (config["id"] in ("llvm_o2_aot", "v4_o2_aot")
                                 and "llvm_o2" in case_configs[case["id"]])]
         if unsupported:
             raise CampaignError("unsupported case/configuration pairs: " + ", ".join(unsupported))

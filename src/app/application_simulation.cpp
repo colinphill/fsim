@@ -34,8 +34,12 @@ Simulation::Simulation(
     const SimulationEngine engine,
     const SystemVerilogVpiRuntimeUpdates vpi_runtime_updates)
     : impl_(
-          std::make_unique<Impl>(
-              std::move(project), max_deltas, engine, vpi_runtime_updates))
+          std::make_unique<Impl>(std::move(project), max_deltas,
+              // `compiled` is an alias of engine v4: the per-process JIT is
+              // retired (docs/simulation-engine-v4-progress.md).
+              engine == SimulationEngine::compiled ? SimulationEngine::v4
+                                                   : engine,
+              vpi_runtime_updates))
 {
     auto* const lifetime = impl_.get();
     impl_->hdl_vcd.remove_observer = [lifetime](const std::uint64_t token) {
@@ -240,56 +244,11 @@ runtime::RunResult Simulation::run(
     const auto profile_run_begin = profile_phase_split
         ? std::chrono::steady_clock::now()
         : std::chrono::steady_clock::time_point { };
-    auto background_barrier_elapsed
-        = std::chrono::steady_clock::duration { };
-#if defined(FSIM_HAS_LLVM)
-    if (!impl_->jit_overlap_startup) {
-        await_native_compilation();
-    }
-    // A bounded run that cannot amortize large-kernel lowering should finish
-    // without launching it (or waiting for it during destruction). Unbounded
-    // and longer runs request the background tier. Wait for its unconditional
-    // jobs below; adaptive jobs can still promote while simulation advances.
-    constexpr SimulationTick minimum_background_jit_run_ticks = 2'000'000U;
-    const bool long_run = !until
-        || *until - now() > minimum_background_jit_run_ticks;
-    if (long_run) {
-        impl_->request_background_jit_compilation();
-    }
-    // Diagnostic gate for measuring the warm-cache cost of publishing every
-    // selected recurring kernel before any interpreter activation can make
-    // its frame ineligible for deferred native promotion.
-    if (std::getenv("FSIM_JIT_SYNCHRONIZE_RECURRING") != nullptr) {
-        impl_->request_background_jit_compilation(true);
-        for (const auto& compilation : impl_->jit_compilations) {
-            compilation.wait();
-        }
-    }
-#endif
     try {
         impl_->start_vpi();
         impl_->start_systemc();
         impl_->refresh_observation_hooks();
-#if defined(FSIM_HAS_LLVM)
-        if (long_run) {
-            const auto barrier_begin = profile_phase_split
-                ? std::chrono::steady_clock::now()
-                : std::chrono::steady_clock::time_point { };
-            for (const auto& compilation
-                : impl_->jit_nonadaptive_background_compilations) {
-                static_cast<void>(compilation.get());
-            }
-            impl_->interpreter->materialize_ready_process_executors();
-            if (profile_phase_split) {
-                background_barrier_elapsed
-                    = std::chrono::steady_clock::now() - barrier_begin;
-            }
-        }
-#endif
         impl_->start_interpreter();
-#if defined(FSIM_HAS_LLVM)
-        impl_->bind_fused_static_cohorts();
-#endif
         const auto interpreter_begin = profile_phase_split
             ? std::chrono::steady_clock::now()
             : std::chrono::steady_clock::time_point { };
@@ -306,7 +265,11 @@ runtime::RunResult Simulation::run(
                 && impl_->vpi_signal_handles.empty()
                 && !impl_->vpi_runtime_updates_enabled
                 && impl_->built.systemc_hierarchies.empty()
-                && !impl_->built.systemc_hierarchy);
+                && !impl_->built.systemc_hierarchy
+                // Foreign libraries and VCD observers may start observing
+                // or depositing at any time step.
+                && !impl_->built.kernel_access.foreign
+                && !impl_->built.kernel_access.observe_all);
         auto result = impl_->interpreter->run(until);
         if (profile_phase_split) {
             const auto milliseconds = [](const auto duration) {
@@ -316,8 +279,6 @@ runtime::RunResult Simulation::run(
             const auto interpreter_end = std::chrono::steady_clock::now();
             std::cerr << "fsim-profile: run pre_interpreter_ms="
                       << milliseconds(interpreter_begin - profile_run_begin)
-                      << " background_barrier_ms="
-                      << milliseconds(background_barrier_elapsed)
                       << " interpreter_ms="
                       << milliseconds(interpreter_end - interpreter_begin)
                       << '\n';
@@ -342,79 +303,6 @@ runtime::RunResult Simulation::run(
             impl_->lifecycle = Impl::Lifecycle::finished;
         }
         impl_->refresh_observation_hooks();
-#if defined(FSIM_HAS_LLVM)
-        if (std::getenv("FSIM_PROFILE_FUSED_STATIC") != nullptr) {
-            const auto counts
-                = impl_->interpreter->fused_static_counters();
-            std::cerr << "fsim fused-static route: invocations="
-                      << counts.invocations
-                      << " represented_members="
-                      << counts.represented_members
-                      << " owner_stage_calls_avoided="
-                      << counts.owner_stage_calls_avoided
-                      << " aggregate_slots_staged="
-                      << counts.aggregate_signals_staged
-                      << " masked_all_active_invocations="
-                      << counts.masked_all_active_invocations
-                      << " static_observation_invalidations="
-                      << counts.observation_invalidations
-                      << " fallbacks=" << counts.fallbacks << '\n';
-            std::cerr << "fsim fused-static fork summary: events="
-                      << counts.fork_events
-                      << " plans_invalidated="
-                      << counts.fork_plans_invalidated
-                      << " surviving_after_last="
-                      << counts.fork_plans_surviving_after_last << '\n';
-        }
-        if (std::getenv("FSIM_PROFILE_FUSED_MASKED") != nullptr) {
-            const auto counts = impl_->interpreter->fused_masked_region_counters();
-            std::cerr << "fsim masked route: masked_calls="
-                      << counts.masked_calls
-                      << " represented_members="
-                      << counts.represented_members
-                      << " owner_stage_calls_avoided="
-                      << counts.owner_stage_calls_avoided
-                      << " aggregate_signals_staged="
-                      << counts.aggregate_signals_staged
-                      << " virtual_tasks=" << counts.virtual_tasks
-                      << " frontier_calls=" << counts.frontier_calls
-                      << " global_frontier_callbacks="
-                      << counts.global_frontier_callbacks
-                      << " global_frontier_queue_entries="
-                      << counts.global_frontier_queue_entries
-                      << " prepared_fallback_tasks="
-                      << counts.prepared_fallback_tasks
-                      << " ordinary_fallback_tasks="
-                      << counts.ordinary_fallback_tasks
-                      << " boundary_publications="
-                      << counts.boundary_publications
-                      << " private_publications_elided="
-                      << counts.private_publications_elided
-                      << " private_candidates="
-                      << counts.private_candidates
-                      << " private_local_commits="
-                      << counts.private_local_commits
-                      << " private_fanout_entries_avoided="
-                      << counts.private_fanout_entries_avoided
-                      << " private_masked_notifications="
-                      << counts.private_masked_notifications
-                      << " private_owned_direct_commits="
-                      << counts.private_owned_direct_commits
-                      << " terminal_candidates="
-                      << counts.terminal_candidates
-                      << " normalized_terminal_candidates="
-                      << counts.normalized_terminal_candidates
-                      << " terminal_regions_bound="
-                      << counts.terminal_regions_bound
-                      << " terminal_members_bound="
-                      << counts.terminal_members_bound
-                      << " terminal_activations="
-                      << counts.terminal_activations
-                      << " terminal_joint_activations="
-                      << counts.terminal_joint_activations
-                      << " demotions=" << counts.demotions << '\n';
-        }
-#endif
         return result;
     } catch (...) {
         impl_->lifecycle = Impl::Lifecycle::poisoned;
@@ -464,68 +352,35 @@ bool Simulation::poisoned() const noexcept
     return impl_->lifecycle == Impl::Lifecycle::poisoned;
 }
 
+// The per-process JIT was removed in the engine-v4 migration; this API is
+// kept as a stub that always reports zero.
 std::size_t Simulation::compiled_process_count() const noexcept
 {
-    return impl_->compiled_processes;
+    return 0U;
 }
 
+// Stub: the per-process JIT no longer exists, so no modules are compiled.
 std::size_t Simulation::compiled_module_count() const noexcept
 {
-    return impl_->compiled_modules;
+    return 0U;
 }
 
+// Stub: the per-process JIT native cache no longer exists; all counters are
+// zero. The v4 kernel cache is reported by the planner and codegen profiles.
 NativeCacheStatistics Simulation::native_cache_statistics(
-    const bool synchronize) const noexcept
+    const bool) const noexcept
 {
-#if defined(FSIM_HAS_LLVM)
-    if (impl_->jit) {
-        if (synchronize) {
-            impl_->request_background_jit_compilation(true);
-            for (const auto& compilation : impl_->jit_compilations) {
-                compilation.wait();
-            }
-        }
-        const auto statistics = impl_->jit->cache_statistics();
-        return {
-            statistics.hits,
-            statistics.misses,
-            statistics.stores,
-            statistics.rejected_entries,
-            statistics.load_failures,
-            statistics.store_failures,
-            statistics.pruned_entries,
-            statistics.pruned_bytes,
-            statistics.prune_failures,
-        };
-    }
-#else
-    static_cast<void>(synchronize);
-#endif
     return { };
 }
 
+// Stub: there is no background native compilation to await.
 void Simulation::await_native_compilation() const
 {
-#if defined(FSIM_HAS_LLVM)
-    for (const auto& compilation : impl_->jit_startup_compilations) {
-        static_cast<void>(compilation.get());
-    }
-    impl_->interpreter->materialize_ready_process_executors();
-#endif
 }
 
+// Stub: there is no background native compilation to await.
 void Simulation::await_all_native_compilation() const
 {
-#if defined(FSIM_HAS_LLVM)
-    impl_->request_background_jit_compilation(true);
-    if (impl_->jit_materialization.valid()) {
-        impl_->jit_materialization.get();
-    }
-    for (const auto& compilation : impl_->jit_compilations) {
-        static_cast<void>(compilation.get());
-    }
-    impl_->interpreter->materialize_ready_process_executors();
-#endif
 }
 
 std::vector<ConcurrentAssertionCoverage>
@@ -708,20 +563,6 @@ bool Simulation::at_sdf_reannotation_safe_point() const noexcept
 
 void Simulation::set_execution_point_hook(ExecutionPointHook hook)
 {
-#if defined(FSIM_HAS_LLVM)
-    if (hook && impl_->jit && !impl_->jit_debug_instrumentation) {
-        for (const auto process : impl_->jit_processes) {
-            if (!impl_->interpreter->clear_process_executor(process)) {
-                // A late observer still applies to interpreter-owned processes;
-                // already-running native frames cannot be replaced safely.
-                break;
-            }
-        }
-        if (impl_->lifecycle == Impl::Lifecycle::ready) {
-            impl_->jit_processes.clear();
-        }
-    }
-#endif
     impl_->interpreter->set_execution_point_hook(std::move(hook));
 }
 

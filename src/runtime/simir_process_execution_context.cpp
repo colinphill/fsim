@@ -579,25 +579,6 @@ void ProcessExecutionContext::write_validated_update_words(
     write_update_words(updates);
 }
 
-[[nodiscard]] const void*
-ProcessExecutionContext::direct_update_domain() const noexcept
-{
-    return nullptr;
-}
-
-std::optional<PreparedOwnedUpdateSlot>
-ProcessExecutionContext::prepare_owned_update_slot(
-    const ProcessUpdateSlotBatch&)
-{
-    return std::nullopt;
-}
-
-bool ProcessExecutionContext::write_validated_update_slot_batches(
-    std::span<const ProcessUpdateSlotBatch>)
-{
-    return false;
-}
-
 bool ProcessExecutionContext::write_validated_logic9_update_batch(
     const ProcessLogic9UpdateBatch&)
 {

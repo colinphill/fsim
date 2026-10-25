@@ -17,7 +17,7 @@ endfunction()
 set(FSIM_CONTRACT
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/cache_corruption_isolation_contract.tsv")
 set(FSIM_EXPECTED_DIGEST
-  "1f422f08663aa0fdebd96611853ef60eebecaed158ece973a58ff91ac1fe5a00")
+  "f45a174f2b0c26128848e363bfb982bc533cb0a6126c9290956233dfce745d30")
 fsim_normalized_text_sha256("${FSIM_CONTRACT}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
@@ -90,21 +90,17 @@ fsim_require_cache_tokens(tests/compiler/cache_test.cpp
   "std::launch::async" "read_only" "uppercase_key")
 fsim_require_cache_tokens(CMakeLists.txt
   "FSIM_BUILD_CONFIGURATION=\"$<CONFIG>\"")
-fsim_require_cache_tokens(src/compiler/llvm_jit.cpp
-  "build-configuration" "optimization" "runtime-abi-version")
+fsim_require_cache_tokens(src/compiler/static_kernel_codegen.cpp
+  "build-configuration" "llvm-version" "native_host_fingerprint")
 fsim_require_cache_tokens(src/systemc/plugin_compiler.cpp
   "build-configuration" "toolchain" "systemc-abi" "scv-compatibility")
 fsim_require_cache_tokens(src/library/artifact.cpp
   "checksum_spelling(native.compiler_fingerprint)")
-fsim_require_cache_tokens(src/app/application_library_export.cpp
-  "host.fingerprint")
-fsim_require_cache_tokens(src/app/application_library_import.cpp
-  "native.compiler_fingerprint != host.fingerprint")
-fsim_require_cache_tokens(tests/compiler/llvm_jit_cache_test.cpp
-  "JitOptimizationLevel::o0" "JitOptimizationLevel::o2"
-  "test_optimization_cache_invalidation")
-fsim_require_cache_tokens(tests/compiler/llvm_jit_vhdl_profile_cache_test.cpp
-  "test_vhdl_language_profile_cache_identity")
+# The per-process JIT checks (llvm_jit.cpp, llvm_jit_*cache_test.cpp, mapped
+# LLVM objects in the library import/export) went with the JIT; the host
+# fingerprint of the v4 kernel cache replaces them.
+fsim_require_cache_tokens(src/app/application_run.cpp
+  "static-kernel-host")
 fsim_require_cache_tokens(tests/systemc/incremental_compiler_test.cpp
   "compiler_fingerprint" "stale_target_plugin")
 

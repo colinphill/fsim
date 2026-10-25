@@ -543,26 +543,14 @@ end architecture;
                    reference.path_identities,
                    "sdf:iopath:native.wide_child:0")
             != reference.path_identities.end());
-#if defined(FSIM_HAS_LLVM)
-        assert(compiled.compiled_processes != 0);
-        assert(compiled.compiled_modules != 0);
-        assert(compiled.cache.misses == compiled.compiled_modules);
-        assert(compiled.cache.stores == compiled.compiled_modules);
-        assert(warm.cache.hits == warm.compiled_modules);
-        assert(debug.compiled_processes != 0);
-#else
         assert(compiled.compiled_processes == 0);
         assert(debug.compiled_processes == 0);
-#endif
         replace_source_text(
             systemverilog, "lane + 2", "lane + 4");
         const auto changed = run_once(
             config, fsim::app::SimulationEngine::compiled);
         replace_source_text(
             systemverilog, "lane + 4", "lane + 2");
-#if defined(FSIM_HAS_LLVM)
-        assert(changed.cache.misses != 0);
-#endif
         assert(changed.reports == reference.reports);
         assert(changed.changes != reference.changes);
     }

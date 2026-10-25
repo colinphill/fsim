@@ -62,11 +62,6 @@ struct SystemCBridgeTestAccess {
         SimulationTick final_time { };
         bool compiled_observer_available { };
         bool systemc_access_complete { };
-        bool region_graph_present { };
-        bool graph_access_inventory_complete { };
-        bool frontier_backend_available { };
-        bool observer_frontier_member_available { };
-        bool readiness_key_valid_at_boundary { };
         bool queued_boundary_captured { };
         bool queued_at_boundary { };
         SimulationTick queued_boundary_time { };
@@ -75,9 +70,6 @@ struct SystemCBridgeTestAccess {
         SignalSnapshot output_at_boundary;
         SignalSnapshot input;
         SignalSnapshot output;
-        std::uint64_t native_frontier_dispatches_before_run { };
-        std::uint64_t native_frontier_dispatches_at_boundary { };
-        std::uint64_t native_frontier_dispatches_after_resume { };
     };
 
     class ScopedEnvironment final {
@@ -140,31 +132,11 @@ struct SystemCBridgeTestAccess {
         const bool materialization_pending
             = signal < state.direct_signal_materialization_pending.size()
             && state.direct_signal_materialization_pending[signal] != 0U;
-        const AuthoritativeSignalPlanes* authoritative_values { };
         const auto width = state.signals[signal].initial_value.width();
-        if (width > 64U
-            && signal < state.region_authoritative_component_by_signal.size()) {
-            const auto component
-                = state.region_authoritative_component_by_signal[signal];
-            if (component
-                    < state.region_authoritative_state_by_component.size()
-                && state.region_authoritative_state_by_component[component]
-                && state.region_authoritative_state_by_component[component]
-                       ->values().packed_signal_slots_bound(signal)) {
-                authoritative_values
-                    = &state.region_authoritative_state_by_component[component]
-                           ->values();
-            }
-        }
-
         PackedLogic4 current;
         PackedLogic4 last;
         PackedLogic4 stored;
-        if (authoritative_values != nullptr) {
-            current = authoritative_values->current(signal);
-            last = authoritative_values->previous(signal);
-            stored = authoritative_values->stored(signal);
-        } else if (materialization_pending) {
+        if (materialization_pending) {
             if (state.signals[signal].value_kind != ValueKind::logic4
                 || width == 0U || width > 64U
                 || signal >= state.direct_signal_aval.size()
@@ -194,10 +166,7 @@ struct SystemCBridgeTestAccess {
         result.stored = stored.to_msb_string();
         state.driver_values.at(signal).for_each_in_process_order(
             [&](const DriverRecord& record) {
-                const auto value = authoritative_values != nullptr
-                    ? authoritative_values->owner_value(
-                          signal, record.process)
-                    : materialization_pending
+                const auto value = materialization_pending
                         && state.direct_single_driver_record(signal) == &record
                     ? current
                     : record.value;
@@ -245,19 +214,6 @@ struct SystemCBridgeTestAccess {
         return process;
     }
 
-    [[nodiscard]] static std::uint64_t native_dispatches(
-        const fsim::app::Simulation& simulation)
-    {
-        const auto& application = *simulation.impl_;
-        if (!application.interpreter) {
-            throw std::logic_error {
-                "the SystemC bridge dispatch counter has no interpreter state"
-            };
-        }
-        return application.interpreter->impl_
-            ->systemverilog_wave_profile_native_frontier_member_dispatches;
-    }
-
     [[nodiscard]] static SystemCBridgeRun run_systemc_method(
         fsim::app::BuiltProject project,
         const SimulationTick max_deltas,
@@ -265,11 +221,6 @@ struct SystemCBridgeTestAccess {
     {
         const bool compiled
             = engine == fsim::app::SimulationEngine::compiled;
-        ScopedEnvironment region_kernel {
-            "FSIM_ENABLE_SV_REGION_KERNEL", compiled ? "1" : "0" };
-        ScopedEnvironment local_wave {
-            "FSIM_ENABLE_SV_LOCAL_WAVE", compiled ? "1" : "0" };
-        ScopedEnvironment wave_profile { "FSIM_PROFILE_SV_WAVES", "1" };
         ScopedEnvironment jit_profile { "FSIM_PROFILE_JIT", nullptr };
 
         const auto input = project.design.find_signal("inverted");
@@ -305,33 +256,6 @@ struct SystemCBridgeTestAccess {
         result.systemc_access_complete
             = state.process_signal_access_is_complete(
                 result.systemc_process);
-        result.region_graph_present = state.region_graph.has_value();
-        result.graph_access_inventory_complete = state.region_graph
-            && state.region_graph->certificate_inventory()
-                   .access_inventory_complete;
-        result.frontier_backend_available = std::ranges::any_of(
-            state.region_frontier_backends_by_component,
-            [](const auto& backend) {
-                return backend && backend->executor;
-            });
-        result.observer_frontier_member_available
-            = result.observer_process
-                    < state.region_readiness_member_index_by_process.size()
-            && state.region_readiness_member_index_by_process[
-                   result.observer_process]
-                != std::numeric_limits<std::size_t>::max();
-#if defined(FSIM_HAS_LLVM)
-        if (compiled
-            && result.observer_process < state.processes.size()) {
-            result.compiled_observer_available
-                = dynamic_cast<const fsim::app::LlvmProcessExecutor*>(
-                      state.processes[result.observer_process]
-                          .executor.get())
-                != nullptr;
-        }
-#endif
-        result.native_frontier_dispatches_before_run
-            = native_dispatches(simulation);
         Scheduler::SafePointHookToken hook_token { };
         hook_token = scheduler.add_safe_point_hook(
             [&simulation, &state, &result, input = *input,
@@ -361,14 +285,6 @@ struct SystemCBridgeTestAccess {
                     = state.processes[result.observer_process].queued;
                 result.queued_boundary_time = active_scheduler.now();
                 result.queued_boundary_delta = active_scheduler.delta();
-                result.readiness_key_valid_at_boundary
-                    = result.observer_process
-                            < state.region_readiness_queued_by_process.size()
-                    && state.region_readiness_queued_by_process[
-                           result.observer_process]
-                           .key_valid;
-                result.native_frontier_dispatches_at_boundary
-                    = native_dispatches(simulation);
                 result.input_at_boundary = input_snapshot;
                 result.output_at_boundary = snapshot(simulation, output);
                 active_scheduler.request_stop();
@@ -394,8 +310,6 @@ struct SystemCBridgeTestAccess {
 
         result.final_status = final.status;
         result.final_time = final.time;
-        result.native_frontier_dispatches_after_resume
-            = native_dispatches(simulation);
         result.input = snapshot(simulation, *input);
         result.output = snapshot(simulation, *output);
         return result;
@@ -577,13 +491,6 @@ const auto [systemc_actual_warm_cache,
 assert(
     systemc_actual_warm_processes
     == systemc_actual_cold_processes);
-#if defined(FSIM_HAS_LLVM)
-assert(systemc_actual_cold_processes > 0);
-assert(systemc_actual_cold_cache.misses > 0);
-assert(systemc_actual_cold_cache.stores > 0);
-assert(systemc_actual_warm_cache.hits > 0);
-assert(systemc_actual_warm_cache.misses == 0);
-#else
 assert(systemc_actual_cold_processes == 0);
 assert(
     systemc_actual_cold_cache
@@ -591,7 +498,6 @@ assert(
 assert(
     systemc_actual_warm_cache
     == fsim::app::NativeCacheStatistics{});
-#endif
 
 auto bound_port_config = hdl_systemc_config;
 bound_port_config.project.top =
@@ -1263,13 +1169,6 @@ const auto run_named_matrix_compiled_pair =
           && std::get<0>(warm_capture).time
               == std::get<0>(cold_capture).time
           && std::get<1>(warm_capture) == std::get<1>(cold_capture));
-#if defined(FSIM_HAS_LLVM)
-      assert(std::get<3>(cold_capture) > 0);
-      assert(std::get<2>(cold_capture).misses > 0);
-      assert(std::get<2>(cold_capture).stores > 0);
-      assert(std::get<2>(warm_capture).hits > 0);
-      assert(std::get<2>(warm_capture).misses == 0);
-#endif
       return cold_capture;
     };
 (void)run_named_matrix_compiled_pair(
@@ -1340,9 +1239,6 @@ assert(
         == std::get<0>(matrix_reference_capture).time
     && std::get<1>(matrix_edited_capture)
         == std::get<1>(matrix_reference_capture));
-#if defined(FSIM_HAS_LLVM)
-assert(std::get<2>(matrix_edited_capture).misses > 0);
-#endif
 
 auto throwing_lifecycle_config = hdl_systemc_config;
 throwing_lifecycle_config.project.top =
@@ -1741,16 +1637,6 @@ const auto assert_checked_systemc_boundary = [](const auto& run) {
     assert(run.first_time == run.queued_boundary_time);
     assert(run.first_delta == run.queued_boundary_delta);
     assert(!run.systemc_access_complete);
-    assert(run.region_graph_present);
-    assert(!run.graph_access_inventory_complete);
-    assert(!run.frontier_backend_available);
-    assert(!run.observer_frontier_member_available);
-    assert(!run.readiness_key_valid_at_boundary);
-    assert(run.native_frontier_dispatches_before_run == 0U);
-    assert(run.native_frontier_dispatches_before_run
-           == run.native_frontier_dispatches_at_boundary);
-    assert(run.native_frontier_dispatches_at_boundary
-           == run.native_frontier_dispatches_after_resume);
 
     const auto& input_at_boundary = run.input_at_boundary;
     assert(input_at_boundary.event.has_value());
@@ -1798,13 +1684,8 @@ for (const auto* const compiled : { &method_compiled, &method_compiled_o2 }) {
     assert(method_reference.output == compiled->output);
     assert(compiled->input.raw_drivers.empty());
 }
-#if defined(FSIM_HAS_LLVM)
-assert(method_compiled.compiled_observer_available);
-assert(method_compiled_o2.compiled_observer_available);
-#else
 assert(!method_compiled.compiled_observer_available);
 assert(!method_compiled_o2.compiled_observer_available);
-#endif
 
 auto vhdl_systemc_method_config = systemc_method_config;
 vhdl_systemc_method_config.project.top =

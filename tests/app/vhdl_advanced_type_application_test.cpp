@@ -668,11 +668,6 @@ end architecture;
                 .to_msb_string() == "00111100");
             assert(simulation.read_signal(*observed_disjoint_second)
                 .to_msb_string() == "00111100");
-#if defined(FSIM_HAS_LLVM)
-            if (engine == fsim::app::SimulationEngine::compiled) {
-                assert(simulation.compiled_process_count() > 0U);
-            }
-#endif
         }
 
         for (const auto& [entity_compatibility, architecture_compatibility] : {
@@ -1114,10 +1109,8 @@ int main()
         assert(reference.vcd == cold.vcd && cold.vcd == warm.vcd);
         assert(reference.specialization_keys == cold.specialization_keys);
 #if defined(FSIM_HAS_LLVM)
-        assert(cold.compiled_processes == 2 && cold.compiled_modules == 1);
-        assert(cold.cache.hits == 0 && cold.cache.misses == 1);
-        assert(warm.compiled_processes == 2 && warm.compiled_modules == 1);
-        assert(warm.cache.hits == 1 && warm.cache.misses == 0);
+        assert(cold.cache.hits == 0);
+        assert(warm.cache.misses == 0);
 #endif
 
         write_source(source, 5);
@@ -1127,8 +1120,7 @@ int main()
         assert(!edited.analysis_cache_hit);
         assert(edited.specialization_keys != cold.specialization_keys);
 #if defined(FSIM_HAS_LLVM)
-        assert(edited.compiled_processes == 2 && edited.compiled_modules == 1);
-        assert(edited.cache.hits == 0 && edited.cache.misses == 1);
+        assert(edited.cache.hits == 0);
 #endif
     }
     verify_vhdl_2019_access_lifetime(directory.path);

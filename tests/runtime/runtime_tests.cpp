@@ -26,22 +26,12 @@ int main(const int argc, const char* const* argv)
                 test_systemverilog_byte_strings();
             } else if (selection == "vhdl_matching_equality") {
                 test_simir_vhdl_matching_equality();
-            } else if (selection == "a4_signal_state") {
-                test_a4_signal_state();
             } else if (selection == "executor_provenance_contract") {
                 test_executor_provenance_contract();
             } else if (selection == "generic_queue_ordering_control") {
                 test_generic_queue_ordering_control();
-            } else if (selection == "generic_update_region") {
-                test_generic_update_region_runtime();
             } else if (selection == "package_static_startup") {
                 test_package_static_startup_runtime();
-            } else if (selection == "resolved_driver_slots") {
-                test_resolved_driver_slots();
-            } else if (selection == "aggregate_proxy_native_fallback") {
-                test_aggregate_proxy_native_fallback();
-            } else if (selection == "element_alias_direct_read_planes") {
-                test_element_alias_direct_read_planes();
             } else if (selection == "aggregate_proxy_driver_family") {
                 test_aggregate_proxy_driver_family();
             } else if (
@@ -87,7 +77,6 @@ int main(const int argc, const char* const* argv)
         test_packed_values();
         test_sensitivity_ranges();
         test_region_graph();
-        test_a4_signal_state();
         test_process_state_storage();
         test_executor_provenance_contract();
         test_systemverilog_scalar_values();
@@ -145,12 +134,6 @@ int main(const int argc, const char* const* argv)
         test_vhdl_psl_attempt_limits();
         test_scheduler_phase_order();
         test_scheduler_private_region_scheduler_contract();
-        test_private_signal_regions();
-        test_runtime_fused_masked_fallback_interleaving();
-        test_fused_masked_fallback_semantics();
-        test_fused_static_cohorts();
-        test_fused_projected_cohorts();
-        test_generic_update_region_runtime();
         test_package_static_startup_runtime();
         test_scheduler_stop_resume();
         test_scheduler_ownership_and_failure_containment();
@@ -166,7 +149,6 @@ int main(const int argc, const char* const* argv)
         test_simir_update_coalescing();
         test_simir_diagnostic_environment_snapshot();
         test_simir_native_signal_dependency_masks();
-        test_resolved_driver_slots();
         test_simir_expressions_and_edges();
         test_simir_noninitializing_static_process();
         test_simir_initial_static_wait_activation_order();
@@ -206,8 +188,6 @@ int main(const int argc, const char* const* argv)
         test_aggregate_proxy_leaf_write_differential();
         test_aggregate_proxy_sampled_data_matches_packed_reference();
         test_aggregate_proxy_sampled_clock_matches_packed_reference();
-        test_aggregate_proxy_native_fallback();
-        test_element_alias_direct_read_planes();
         test_aggregate_proxy_driver_family();
         test_aggregate_proxy_driver_region_registration();
         test_simir_retained_commit_hook_phase_and_alias_materialization();

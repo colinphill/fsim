@@ -795,18 +795,8 @@ endmodule
     if (optimization == fsim::project::Optimization::o2) {
       baseline_o2_keys = warm.specialization_keys;
     }
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 4);
-    assert(cold.compiled_modules == 4);
-    assert(cold.cache.hits == 0);
-    assert(cold.cache.misses == 4);
-    assert(cold.cache.stores == 4);
-    assert(warm.cache.hits == 4);
-    assert(warm.cache.misses == 0);
-#else
     assert(cold.compiled_processes == 0);
     assert(cold.compiled_modules == 0);
-#endif
   }
 
   std::ifstream input(source, std::ios::binary);
@@ -925,10 +915,5 @@ endmodule
   assert(changed.specialization_keys[1] == baseline_o2_keys[1]);
   assert(changed.specialization_keys[2] == baseline_o2_keys[2]);
   assert(changed.specialization_keys[3] != baseline_o2_keys[3]);
-#if defined(FSIM_HAS_LLVM)
-  assert(changed.cache.hits == 2);
-  assert(changed.cache.misses == 2);
-  assert(changed.cache.stores == 2);
-#endif
   return 0;
 }

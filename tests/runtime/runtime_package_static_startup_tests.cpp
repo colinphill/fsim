@@ -18,25 +18,6 @@
 namespace fsim::runtime::simir {
 
 struct PackageStaticStartupRuntimeTestAccess final {
-    [[nodiscard]] static bool graph_has_writer(
-        const Interpreter& interpreter,
-        const ProcessId process,
-        const SignalId signal)
-    {
-        const auto& state = *interpreter.impl_;
-        if (!state.region_graph) {
-            return true;
-        }
-        const auto node = std::ranges::find(
-            state.region_graph->processes(), process,
-            &RegionProcessNode::process);
-        return node == state.region_graph->processes().end()
-            || std::ranges::any_of(node->writes,
-                [signal](const auto& write) {
-                    return write.signal == signal;
-                });
-    }
-
     static void write_package_string_as(
         Interpreter& interpreter,
         const ProcessId process,
@@ -517,9 +498,6 @@ namespace {
                 && interpreter.process_program(native_process).startup_order
                     == 20U,
             "the tagged process retains its phase and global order");
-        require(!PackageStaticStartupRuntimeTestAccess::graph_has_writer(
-                    interpreter, native_process, native_value),
-            "a completed package initializer is not an ongoing graph writer");
 
         const auto result = interpreter.run();
         require(result.status == RunStatus::completed,

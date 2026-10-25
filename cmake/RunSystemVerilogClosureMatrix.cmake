@@ -22,7 +22,7 @@ set(FSIM_WITNESSES
   fsim.frontend
   fsim.elaboration
   fsim.library.artifact
-  fsim.llvm
+  fsim.application.static-kernel
   fsim.application.vpi
   fsim.application.artifact_phases
   fsim.application.classes

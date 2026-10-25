@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 id	path	owner	source	expectation
 CF-COMMON-CABI-001	tests/api/api_header_c_test.c	fsim.api.c_header	SRC-COCOTB	accept
-CF-COMMON-CACHE-001	tests/compiler/llvm_jit_test.cpp	fsim.llvm	SRC-LLVM	execute
+CF-COMMON-CACHE-001	tests/app/static_kernel_test.cpp	fsim.application.static-kernel	SRC-LLVM	execute
 CF-COMMON-CALLBACK-001	tests/api/api_test.cpp	fsim.api	SRC-COCOTB	execute
 CF-COMMON-CAPI-001	tests/api/api_test.cpp	fsim.api	SRC-COCOTB	execute
 CF-COMMON-CLI-001	tests/app/application_test_cli.cpp	fsim.application	SRC-FSIM	execute
@@ -9,8 +9,8 @@ CF-COMMON-DEBUGGER-001	tests/app/application_test_cli.cpp	fsim.application	SRC-F
 CF-COMMON-DIAGNOSTIC-N01	tests/project/project_config_test.cpp	fsim.project	SRC-FSIM	reject
 CF-COMMON-FAILURE-001	tests/runtime/runtime_tests.cpp	fsim.runtime	SRC-COCOTB	contain
 CF-COMMON-HANDLE-001	tests/api/api_test.cpp	fsim.api	SRC-COCOTB	execute
-CF-COMMON-LLVM-001	tests/compiler/llvm_jit_test.cpp	fsim.llvm	SRC-LLVM	execute
-CF-COMMON-LLVM-N01	tests/compiler/llvm_jit_test.cpp	fsim.llvm	SRC-LLVM	reject
+CF-COMMON-LLVM-001	tests/app/static_kernel_test.cpp	fsim.application.static-kernel	SRC-LLVM	execute
+CF-COMMON-LLVM-N01	tests/app/static_kernel_test.cpp	fsim.application.static-kernel	SRC-LLVM	reject
 CF-COMMON-PROJECT-001	tests/project/project_config_test.cpp	fsim.project	SRC-FSIM	accept
 CF-COMMON-SCHEDULER-001	tests/runtime/runtime_tests.cpp	fsim.runtime	SRC-COCOTB	execute
 CF-COMMON-SIMIR-001	tests/runtime/runtime_tests.cpp	fsim.runtime	SRC-FSIM	execute

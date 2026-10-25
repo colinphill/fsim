@@ -2,6 +2,8 @@
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_internal.hpp"
 #include "simir_static_kernel.hpp"
+#include "simir_static_kernel_state.hpp"
+#include "simir_execution_context.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -58,32 +60,6 @@ void Interpreter::set_time_resolution_femtoseconds(
     impl_->time_format.units = exponent;
 }
 
-void Interpreter::set_region_kernel_backend_provider(
-    std::shared_ptr<RegionKernelBackendProvider> provider)
-{
-    if (impl_->started) {
-        throw std::logic_error {
-            "cannot set the region-kernel backend after start"
-        };
-    }
-    if (provider) {
-        const auto identity = provider->identity();
-        if (identity.empty()) {
-            throw std::invalid_argument {
-                "region-kernel backend provider requires a stable identity"
-            };
-        }
-        impl_->region_kernel_backend_provider_identity.assign(identity);
-    } else {
-        impl_->region_kernel_backend_provider_identity.clear();
-    }
-    impl_->region_kernel_backend_provider_supports_frontier
-        = provider != nullptr
-        && dynamic_cast<RegionFrontierBackendProvider*>(provider.get())
-            != nullptr;
-    impl_->region_kernel_backend_provider = std::move(provider);
-}
-
 std::optional<std::uint64_t> Interpreter::take_class_allocation_seed()
 {
     return std::exchange(impl_->pending_class_allocation_seed, std::nullopt);
@@ -92,103 +68,87 @@ std::optional<std::uint64_t> Interpreter::take_class_allocation_seed()
 void Interpreter::set_class_allocate_context_hook(
     ClassAllocateContextHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_allocate_context_hook = std::move(hook);
 }
 
 void Interpreter::set_coverage_sample_hook(CoverageSampleHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->coverage_sample_hook = std::move(hook);
 }
 
 void Interpreter::set_coverage_query_hook(CoverageQueryHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->coverage_query_hook = std::move(hook);
 }
 
 void Interpreter::set_vhdl_psl_api_hook(VhdlPslApiHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->vhdl_psl_api_hook = std::move(hook);
 }
 
 void Interpreter::set_coverage_control_hook(CoverageControlHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->coverage_control_hook = std::move(hook);
 }
 
 void Interpreter::set_system_command_hook(SystemCommandHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->system_command_hook = std::move(hook);
 }
 
 void Interpreter::set_vcd_control_hook(VcdControlHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->vcd_control_hook = std::move(hook);
 }
 
 void Interpreter::set_coverage_database_control_hook(
     CoverageDatabaseControlHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->coverage_database_control_hook = std::move(hook);
 }
 
 void Interpreter::set_class_property_read_hook(ClassPropertyReadHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_property_read_hook = std::move(hook);
 }
 
 void Interpreter::set_class_property_write_hook(ClassPropertyWriteHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_property_write_hook = std::move(hook);
 }
 
 void Interpreter::set_class_property_container_hook(
     ClassPropertyContainerHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_property_container_hook = std::move(hook);
 }
 
 void Interpreter::set_class_method_call_context_hook(
     ClassMethodCallContextHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_method_call_context_hook = std::move(hook);
 }
 
 void Interpreter::set_class_static_property_read_hook(
     ClassStaticPropertyReadHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_static_property_read_hook = std::move(hook);
 }
 
 void Interpreter::set_class_static_property_write_hook(
     ClassStaticPropertyWriteHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_static_property_write_hook = std::move(hook);
 }
 
 void Interpreter::set_class_static_method_call_context_hook(
     ClassStaticMethodCallContextHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_static_method_call_context_hook = std::move(hook);
 }
 
 void Interpreter::set_dpi_function_call_hook(DpiFunctionCallHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->dpi_function_call_hook = std::move(hook);
 }
 
@@ -1018,7 +978,6 @@ void Interpreter::Impl::finish_aggregate_signal_batch(
         = *signal_container_aggregate_aliases.at(signal_id);
     const auto revision = container_aggregate_current_revisions.at(object);
     if (changed) {
-        prepare_region_authoritative_write(signal_id);
         signal_last_values.at(signal_id) = *previous;
         aggregate_signal_last_changes.at(signal_id).reset();
         aggregate_signal_last_projection_revisions.at(signal_id) = revision;
@@ -2244,7 +2203,6 @@ std::uint32_t Interpreter::add_module_path(ModulePath path)
             if (record == nullptr) {
                 continue;
             }
-            impl_->prepare_region_authoritative_write(destination.signal);
             for (auto bit = static_cast<std::size_t>(destination.offset);
                 bit < static_cast<std::size_t>(destination.offset)
                         + destination.width
@@ -2720,12 +2678,6 @@ void Interpreter::set_process_executor(
         throw std::logic_error(
             "a SimIR process executor is already installed");
     }
-    state.region_kernel_equivalence_confirmed
-        = executor->region_kernel_equivalent();
-    state.region_kernel_completion_has_no_persistent_registers
-        = state.region_kernel_equivalence_confirmed
-        && executor->region_kernel_completion_has_no_persistent_registers();
-    state.region_kernel_completion_boundary_validated = false;
     impl_->advance_process_executor_generation(state);
     state.executor = std::move(executor);
 }
@@ -2758,10 +2710,6 @@ void Interpreter::set_deferred_process_executor(
         throw std::logic_error(
             "a SimIR process executor is already installed or deferred");
     }
-    state.region_kernel_equivalence_confirmed
-        = contract.expected_region_kernel_equivalent;
-    state.region_kernel_completion_has_no_persistent_registers = false;
-    state.region_kernel_completion_boundary_validated = false;
     impl_->advance_process_executor_generation(state);
     state.cold().deferred_executor.emplace(
         Impl::ProcessState::DeferredExecutor {
@@ -2783,114 +2731,6 @@ void Interpreter::materialize_ready_process_executors()
             impl_->install_deferred_executor(process);
         }
     }
-}
-
-std::vector<FusedStaticCohortCandidate>
-Interpreter::fused_static_cohort_candidates() const
-{
-    std::vector<FusedStaticCohortCandidate> result;
-    if (!impl_->started) {
-        return result;
-    }
-    for (const auto& plan : impl_->fused_static_cohorts) {
-        if (plan.certified) {
-            result.push_back(plan.candidate);
-        }
-    }
-    return result;
-}
-
-FusedStaticCounters Interpreter::fused_static_counters() const noexcept
-{
-    return impl_->fused_static_counts;
-}
-
-void Interpreter::set_fused_static_counters_enabled(const bool enabled)
-{
-    if (impl_->started && !impl_->fused_static_bindings_open) {
-        throw std::logic_error {
-            "fused static counters must be configured before execution"
-        };
-    }
-    impl_->fused_static_counters_enabled = enabled;
-}
-
-void Interpreter::install_fused_static_cohort(
-    const std::size_t cohort_id,
-    std::unique_ptr<FusedStaticCohortExecutor> executor,
-    const bool use_masked_all_active)
-{
-    if (!impl_->started || !impl_->fused_static_bindings_open
-        || !executor || cohort_id >= impl_->fused_static_cohorts.size()
-        || !impl_->fused_static_cohorts[cohort_id].certified
-        || impl_->fused_static_cohorts[cohort_id].executor) {
-        throw std::logic_error {
-            "invalid or stale fused static cohort binding"
-        };
-    }
-    auto& plan = impl_->fused_static_cohorts[cohort_id];
-    if (use_masked_all_active
-        && !plan.candidate.masked_all_active_eligible) {
-        throw std::logic_error {
-            "masked fused static binding lacks graph eligibility"
-        };
-    }
-    if (use_masked_all_active || plan.candidate.masked_all_active) {
-        const auto member_count = plan.candidate.members.size();
-        if (member_count == 0U
-            || member_count > std::numeric_limits<std::uint32_t>::max()) {
-            throw std::logic_error {
-                "masked fused static binding has an invalid member count"
-            };
-        }
-        const auto word_count = member_count / 64U
-            + static_cast<std::size_t>(member_count % 64U != 0U);
-        auto activation_words = std::vector<std::uint64_t>(
-            word_count, std::numeric_limits<std::uint64_t>::max());
-        const auto remainder = member_count % 64U;
-        if (remainder != 0U) {
-            activation_words.back()
-                = (UINT64_C(1) << remainder) - UINT64_C(1);
-        }
-        plan.candidate.masked_all_active = true;
-        plan.candidate.masked_all_active_words
-            = std::move(activation_words);
-    }
-    plan.executor = std::move(executor);
-}
-
-std::vector<FusedMaskedRegionCandidate>
-Interpreter::fused_masked_region_candidates() const
-{
-    return { };
-}
-
-FusedMaskedRegionCounters
-Interpreter::fused_masked_region_counters() const noexcept
-{
-    return { };
-}
-
-void Interpreter::set_fused_masked_region_counters_enabled(
-    const bool enabled)
-{
-    if (impl_->started && !impl_->fused_static_bindings_open) {
-        throw std::logic_error {
-            "fused masked counters must be configured before execution"
-        };
-    }
-    static_cast<void>(enabled);
-}
-
-void Interpreter::install_fused_masked_region(
-    const std::size_t region_id,
-    std::vector<std::vector<Process::DriverRegion>> mandatory_writes,
-    std::unique_ptr<FusedMaskedRegionExecutor> executor)
-{
-    static_cast<void>(region_id);
-    static_cast<void>(mandatory_writes);
-    static_cast<void>(executor);
-    throw std::logic_error { "invalid fused masked region binding" };
 }
 
 std::optional<Interpreter::Impl::ConstantDriverStartupEntry>
@@ -3246,7 +3086,12 @@ void Interpreter::start()
             }
             impl_->package_static_initialization_process = id;
             try {
-                impl_->execute(id);
+                if (impl_->static_kernel_hosts(id)) {
+                    // Hosted tier: the kernel runs the initializer (S25).
+                    impl_->static_kernel->execute_hosted_startup(id);
+                } else {
+                    impl_->execute(id);
+                }
             } catch (...) {
                 impl_->package_static_initialization_active = false;
                 impl_->package_static_initialization_process
@@ -3276,7 +3121,9 @@ void Interpreter::start()
     // The startup assignments above establish the simulation baseline. Build
     // active runtime inventories and sampled defaults only after that baseline
     // is final, before ordinary time-zero processes are prearmed or queued.
-    impl_->build_region_graph();
+    // Reserve the static-cohort scratch before simulation can run a cohort.
+    impl_->cohort_overflow_contexts.reserve(impl_->processes.size());
+    impl_->cohort_overflow_entries.reserve(impl_->processes.size());
     if (impl_->requires_sampled_values) {
         if (impl_->sampled_value_dependency_mask.size()
             != impl_->signals.size()) {
@@ -3357,8 +3204,6 @@ void Interpreter::start()
                       << " first=" << first.name() << '\n';
         }
     }
-    impl_->build_owned_driver_composites();
-    impl_->build_fused_static_cohort_plans();
     std::vector<bool> prearmed_static_waits(
         impl_->processes.size(), false);
     // Inert static kernel members are never initialized on the host.
@@ -3367,6 +3212,22 @@ void Interpreter::start()
             && id < impl_->fusion_dormant_process.size()
             && impl_->fusion_dormant_process[id] == 1U;
     };
+    // A VHDL or mixed kernel with hosted VHDL processes: the initial run of
+    // a hosted process belongs to the kernel's first round, which is the
+    // initialization delta (S25a).
+    const bool kernel_runs_after_hosted_start = [&] {
+        if (!impl_->static_kernel) {
+            return false;
+        }
+        for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+            if (impl_->static_kernel_hosts(id)
+                && impl_->processes.scheduling_domain(id)
+                    != ProcessSchedulingDomain::systemverilog) {
+                return true;
+            }
+        }
+        return false;
+    }();
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
         if (inert(id)) {
             continue;
@@ -3386,7 +3247,21 @@ void Interpreter::start()
         if (impl_->processes.is_compact_constant(id)) {
             continue;
         }
-        impl_->execute(id);
+        if (kernel_runs_after_hosted_start
+            && id < impl_->fusion_dormant_process.size()
+            && impl_->fusion_dormant_process[id] == 2U) {
+            // The kernel's first activation is the initialization of the
+            // design (IEEE 1076-2019 14.7.5.2), with the hosted VHDL
+            // processes' initial runs: it is queued for the first delta
+            // below like them, not run here. Run here, its rounds would
+            // count start() as a delta and its threads would run one delta
+            // ahead of the host's updates.
+            continue;
+        } else if (impl_->static_kernel_hosts(id)) {
+            impl_->static_kernel->execute_hosted_startup(id);
+        } else {
+            impl_->execute(id);
+        }
         prearmed_static_waits[id] = true;
     }
     // A SystemVerilog process that waits only on time and reads a settling
@@ -3440,7 +3315,6 @@ void Interpreter::start()
             }
         }
     }
-    impl_->fused_static_bindings_open = true;
 }
 
 bool Interpreter::package_static_initialization_active() const noexcept
@@ -3452,7 +3326,6 @@ RunResult Interpreter::run(std::optional<SimulationTick> until)
 {
     impl_->simulator_status.reset();
     start();
-    impl_->fused_static_bindings_open = false;
     auto ordinary = impl_->scheduler.run(until);
     ordinary.simulator_status = impl_->simulator_status;
     const bool design_stop = ordinary.status == RunStatus::stopped
@@ -3468,10 +3341,17 @@ RunResult Interpreter::run(std::optional<SimulationTick> until)
         impl_->scheduler.discard_pending();
         impl_->scheduler.clear_stop();
     }
+    if (impl_->static_kernel) {
+        // Hosted final blocks are scheduled by the kernel (S25).
+        impl_->static_kernel->run_finals(design_stop);
+    }
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
         // Static kernel members are never final blocks.
         if (impl_->static_kernel && id < impl_->fusion_dormant_process.size()
             && impl_->fusion_dormant_process[id] == 1U) {
+            continue;
+        }
+        if (impl_->static_kernel_hosts(id)) {
             continue;
         }
         if (impl_->processes.program_view(id).final()) {
@@ -3516,7 +3396,13 @@ RunResult Interpreter::finish()
     impl_->finals_ran = true;
     impl_->scheduler.discard_pending();
     impl_->scheduler.clear_stop();
+    if (impl_->static_kernel) {
+        impl_->static_kernel->run_finals(true);
+    }
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+        if (impl_->static_kernel_hosts(id)) {
+            continue;
+        }
         if (impl_->processes.program_view(id).final()) {
             impl_->queue_at(id, impl_->scheduler.now());
         }
@@ -3535,8 +3421,6 @@ RunResult Interpreter::finish()
 void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
     const ProcessSchedulingDomain origin_domain)
 {
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
-    impl_->invalidate_fused_static_cohorts();
     if (!impl_->started) {
         impl_->vhdl_deposited_before_start.insert(signal);
     }
@@ -3559,7 +3443,6 @@ void Interpreter::deposit_scalar_signal(
     const SignalId signal,
     const SystemVerilogScalarValue value)
 {
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     const auto& stored = impl_->get_signal(signal);
     if (stored.systemverilog_scalar != value.kind) {
         throw std::invalid_argument { "SimIR scalar signal kind mismatch" };
@@ -3579,7 +3462,6 @@ void Interpreter::force_signal(SignalId signal, PackedLogic4 value,
             "package static startup cannot force a signal"
         };
     }
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     const auto width = impl_->get_signal(signal).initial_value.width();
     if (width != value.width()) {
         throw std::invalid_argument("SimIR signal force width mismatch");
@@ -3592,7 +3474,6 @@ void Interpreter::force_scalar_signal(
     const SignalId signal,
     const SystemVerilogScalarValue value)
 {
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     const auto& stored = impl_->get_signal(signal);
     if (stored.systemverilog_scalar != value.kind) {
         throw std::invalid_argument { "SimIR scalar signal kind mismatch" };
@@ -3612,7 +3493,6 @@ void Interpreter::release_signal(SignalId signal,
             "package static startup cannot release a signal force"
         };
     }
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     const auto width = impl_->get_signal(signal).initial_value.width();
     impl_->release_slice(signal, 0, width,
         SignalChangeOrigin { origin_domain, SchedulerPhase::active });
@@ -3628,7 +3508,6 @@ void Interpreter::force_signal_slice(
             "package static startup cannot force a signal slice"
         };
     }
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     impl_->force_slice(signal, std::move(value), offset);
 }
 
@@ -3642,13 +3521,11 @@ void Interpreter::release_signal_slice(
             "package static startup cannot release a signal slice force"
         };
     }
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     impl_->release_slice(signal, offset, width);
 }
 
 bool Interpreter::signal_is_forced(const SignalId signal) const
 {
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     (void)impl_->get_signal(signal);
     if (signal < impl_->signal_container_aggregate_aliases.size()
         && impl_->signal_container_aggregate_aliases[signal]) {
@@ -3669,7 +3546,6 @@ void Interpreter::schedule_signal_at(SignalId signal, PackedLogic4 value,
             "package static startup cannot schedule a signal write"
         };
     }
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     impl_->require_writable_aggregate_signal(signal);
     // Validate eagerly so a malformed drive does not fail much later.
     if (impl_->get_signal(signal).initial_value.width() != value.width()) {
@@ -3693,7 +3569,6 @@ void Interpreter::schedule_scalar_signal_at(
     const SimulationTick time,
     const StableOrder order)
 {
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     const auto& stored = impl_->get_signal(signal);
     if (stored.systemverilog_scalar != value.kind) {
         throw std::invalid_argument { "SimIR scalar signal kind mismatch" };
@@ -3943,25 +3818,6 @@ void Interpreter::deposit_container_object_element(
             object, replacement);
         return;
     }
-    if (impl_->region_forwarding_role_journal_nonempty_components != 0U) {
-        auto selected = object;
-        for (std::size_t depth = 0U;
-             depth < impl_->container_objects.size();
-             ++depth) {
-            if (selected >= impl_->container_objects.size()) {
-                break;
-            }
-            if (impl_->container_has_signal_alias(selected)) {
-                impl_->require_all_region_forwarding_role_journals_flushed();
-                break;
-            }
-            const auto& container = impl_->container_objects[selected];
-            if (!container.slice_alias) {
-                break;
-            }
-            selected = container.slice_alias->object;
-        }
-    }
     auto& target = impl_->get_container_object(object);
     if (ordinal >= target.initial_value.elements.size()
         || value.width() != target.initial_value.type.element_width
@@ -3979,8 +3835,6 @@ void Interpreter::deposit_container_object_element(
                 "SimIR container element is not writable through its signal alias"
             };
         }
-        impl_->require_region_forwarding_role_journal_flushed_for_signal(
-            alias.signal);
         impl_->commit(alias.signal, std::move(value));
         return;
     }
@@ -4017,18 +3871,11 @@ PackedLogic4 Interpreter::driver_value(
     if (process >= impl_->processes.size()) {
         throw std::out_of_range("invalid SimIR process ID");
     }
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     if (signal < impl_->signal_container_aggregate_aliases.size()
         && impl_->signal_container_aggregate_aliases[signal]) {
         const auto object = *impl_->signal_container_aggregate_aliases[signal];
         const auto& type = impl_->get_container_object(object).initial_value.type;
         const auto& aliases = impl_->container_element_signal_aliases.at(object);
-        for (const auto& alias : aliases) {
-            if (alias) {
-                impl_->require_region_forwarding_role_journal_flushed_for_signal(
-                    alias->signal);
-            }
-        }
         const auto count = aliases.size();
         const auto width = type.element_width;
         auto projection = PackedLogic4(
@@ -4037,16 +3884,6 @@ PackedLogic4 Interpreter::driver_value(
         for (std::size_t ordinal = 0U; ordinal < count; ++ordinal) {
             const auto leaf = aliases[ordinal]->signal;
             const DriverRecord* record { };
-            if (impl_->owned_driver_active(leaf)) {
-                if (process < impl_->owned_driver_spans.size()
-                    && impl_->owned_driver_spans[process].signal == leaf) {
-                    const auto value = impl_->owned_driver_value(process, leaf);
-                    projection.insert_bits(
-                        value, (count - ordinal - 1U) * width);
-                    found_driver = true;
-                }
-                continue;
-            }
             record = impl_->driver_values.at(leaf).find(process);
             if (record == nullptr) {
                 continue;
@@ -4074,12 +3911,14 @@ ProcessId Interpreter::design_process(const ProcessId process) const
 
 const Process& Interpreter::process_program(const ProcessId process) const
 {
-    return impl_->processes.public_program(process);
-}
-
-const Process& Interpreter::fused_masked_member_program(
-    const ProcessId process) const
-{
+    // A debugger plan's host member runs the kernel stub on the scheduler;
+    // the debugger sees the program the member really runs.
+    if (impl_->static_kernel) {
+        if (const auto* original
+            = impl_->static_kernel->debug_program(process)) {
+            return *original;
+        }
+    }
     return impl_->processes.public_program(process);
 }
 
@@ -4170,12 +4009,24 @@ PackedLogic4 Interpreter::read_debug_local(
     const ProcessId process,
     const std::size_t local_index) const
 {
-    const auto program = impl_->processes.program_view(process);
+    // A kernel thread member, or a fork child of one, owns its registers.
+    const auto kernel_owner = impl_->static_kernel
+        ? impl_->static_kernel->debug_owner(process) : std::nullopt;
+    const bool kernel_member = kernel_owner.has_value();
+    const auto* const kernel_original = kernel_member
+        ? impl_->static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl_->processes.program_view(kernel_owner.value_or(process));
     if (local_index >= program.debug_locals().size()) {
         throw std::out_of_range { "invalid SimIR debug-local index" };
     }
-    auto& state = impl_->get_process(process);
     const auto& local = program.debug_locals()[local_index];
+    if (kernel_member) {
+        return impl_->static_kernel->debug_register(
+            *kernel_owner, local.register_id, local.width);
+    }
+    auto& state = impl_->get_process(process);
     if (state.executor) {
         return state.executor->read_register(
             local.register_id, local.width);
@@ -4192,7 +4043,13 @@ SystemVerilogScalarValue Interpreter::read_debug_scalar_local(
     const ProcessId process,
     const std::size_t local_index) const
 {
-    const auto program = impl_->processes.program_view(process);
+    const auto kernel_owner = impl_->static_kernel
+        ? impl_->static_kernel->debug_owner(process) : std::nullopt;
+    const auto* const kernel_original = kernel_owner
+        ? impl_->static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl_->processes.program_view(kernel_owner.value_or(process));
     if (local_index >= program.debug_locals().size()) {
         throw std::out_of_range { "invalid SimIR debug-local index" };
     }
@@ -4214,11 +4071,16 @@ void Interpreter::write_debug_scalar_local(
     const std::size_t local_index,
     const SystemVerilogScalarValue value)
 {
-    const auto program = impl_->processes.program_view(process);
+    const auto kernel_owner = impl_->static_kernel
+        ? impl_->static_kernel->debug_owner(process) : std::nullopt;
+    const auto* const kernel_original = kernel_owner
+        ? impl_->static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl_->processes.program_view(kernel_owner.value_or(process));
     if (local_index >= program.debug_locals().size()) {
         throw std::out_of_range { "invalid SimIR debug-local index" };
     }
-    auto& state = impl_->get_process(process);
     const auto& local = program.debug_locals()[local_index];
     if (value.kind != local.systemverilog_scalar) {
         throw std::invalid_argument { "SimIR scalar debug-local kind mismatch" };
@@ -4227,6 +4089,12 @@ void Interpreter::write_debug_scalar_local(
     if (!encoded || encoded.value.width() != local.width) {
         throw std::invalid_argument { "invalid SimIR scalar debug-local payload" };
     }
+    if (kernel_owner) {
+        impl_->static_kernel->debug_write_register(
+            *kernel_owner, local.register_id, encoded.value);
+        return;
+    }
+    auto& state = impl_->get_process(process);
     impl_->write_process_register(state, local.register_id, encoded.value);
 }
 
@@ -4234,12 +4102,24 @@ std::string Interpreter::read_debug_string_local(
     const ProcessId process,
     const std::size_t local_index) const
 {
-    const auto program = impl_->processes.program_view(process);
+    // A kernel thread member, or a fork child of one, owns its registers.
+    const auto kernel_owner = impl_->static_kernel
+        ? impl_->static_kernel->debug_owner(process) : std::nullopt;
+    const bool kernel_member = kernel_owner.has_value();
+    const auto* const kernel_original = kernel_member
+        ? impl_->static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl_->processes.program_view(kernel_owner.value_or(process));
     if (local_index >= program.debug_string_locals().size()) {
         throw std::out_of_range { "invalid SimIR string debug-local index" };
     }
-    auto& state = impl_->get_process(process);
     const auto& local = program.debug_string_locals()[local_index];
+    if (kernel_member) {
+        return impl_->static_kernel->debug_string_register(
+            *kernel_owner, local.register_id);
+    }
+    auto& state = impl_->get_process(process);
     if (state.executor) {
         return state.executor->read_string_register(local.register_id);
     }
@@ -4251,14 +4131,26 @@ ContainerValue Interpreter::read_debug_container_local(
     const ProcessId process,
     const std::size_t local_index) const
 {
-    const auto program = impl_->processes.program_view(process);
+    // A kernel thread member, or a fork child of one, owns its registers.
+    const auto kernel_owner = impl_->static_kernel
+        ? impl_->static_kernel->debug_owner(process) : std::nullopt;
+    const bool kernel_member = kernel_owner.has_value();
+    const auto* const kernel_original = kernel_member
+        ? impl_->static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl_->processes.program_view(kernel_owner.value_or(process));
     if (local_index >= program.debug_container_locals().size()) {
         throw std::out_of_range {
             "invalid SimIR container debug-local index"
         };
     }
-    auto& state = impl_->get_process(process);
     const auto& local = program.debug_container_locals()[local_index];
+    if (kernel_member) {
+        return impl_->static_kernel->debug_container_register(
+            *kernel_owner, local.register_id);
+    }
+    auto& state = impl_->get_process(process);
     if (state.executor) {
         return state.executor->read_container_register(local.register_id);
     }
@@ -4284,100 +4176,66 @@ const Scheduler& Interpreter::scheduler() const noexcept
 
 void Interpreter::set_signal_change_hook(SignalChangeHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->invalidate_fused_static_cohorts();
-    impl_->note_region_graph_policy_change();
     impl_->signal_change_hook = std::move(hook);
 }
 
 void Interpreter::set_native_signal_observation_required_hook(
     NativeSignalObservationRequiredHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->invalidate_fused_static_cohorts();
-    impl_->note_region_graph_policy_change();
     impl_->native_signal_observation_required_hook = std::move(hook);
 }
 
 void Interpreter::set_native_signal_observation_any_hook(
     NativeSignalObservationAnyHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->invalidate_fused_static_cohorts();
-    impl_->note_region_graph_policy_change();
     impl_->native_signal_observation_any_hook = std::move(hook);
 }
 
 void Interpreter::set_stored_signal_change_hook(StoredSignalChangeHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->invalidate_fused_static_cohorts();
-    impl_->note_region_graph_policy_change();
     impl_->stored_signal_change_hook = std::move(hook);
 }
 
 void Interpreter::set_driver_change_hook(DriverChangeHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->invalidate_fused_static_cohorts();
-    if (hook) {
-        impl_->demote_all_owned_drivers();
-    }
-    impl_->note_region_graph_policy_change();
     impl_->driver_change_hook = std::move(hook);
 }
 
 void Interpreter::set_event_trigger_hook(EventTriggerHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->invalidate_fused_static_cohorts();
     impl_->event_trigger_hook = std::move(hook);
 }
 
 void Interpreter::set_container_object_change_hook(
     ContainerObjectChangeHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->invalidate_fused_static_cohorts();
-    impl_->note_region_graph_policy_change();
     impl_->container_object_change_hook = std::move(hook);
 }
 
 void Interpreter::set_container_element_change_hook(
     ContainerElementChangeHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->invalidate_fused_static_cohorts();
-    impl_->note_region_graph_policy_change();
     impl_->container_element_change_hook = std::move(hook);
 }
 
 void Interpreter::set_scalar_signal_change_hook(
     ScalarSignalChangeHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->invalidate_fused_static_cohorts();
-    impl_->note_region_graph_policy_change();
     impl_->scalar_signal_change_hook = std::move(hook);
 }
 
 void Interpreter::set_execution_point_hook(ExecutionPointHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
-    impl_->invalidate_fused_static_cohorts();
-    impl_->note_region_graph_policy_change();
     impl_->execution_point_hook = std::move(hook);
 }
 
 void Interpreter::set_output_hook(OutputHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->output_hook = std::move(hook);
 }
 
 void Interpreter::set_trusted_text_output_hook(OutputHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->output_hook.set_trusted_text_hook(std::move(hook));
 }
 
@@ -4388,7 +4246,6 @@ void Interpreter::prepare_output_callback_observation()
 
 void Interpreter::set_report_hook(ReportHook hook)
 {
-    impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->report_hook = std::move(hook);
 }
 

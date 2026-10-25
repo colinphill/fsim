@@ -5,6 +5,9 @@
 #include "application_trace_hierarchy.hpp"
 #include "application_trace_observation.hpp"
 #include "fsim/app/design_artifact.hpp"
+#if defined(FSIM_HAS_LLVM)
+#include "fsim/compiler/static_kernel_codegen.hpp"
+#endif
 #include "fsim/runtime/fst_value_encoder.hpp"
 #include "fsim/runtime/fst_writer.hpp"
 #include "fsim/support/glob_match.hpp"
@@ -654,9 +657,9 @@ make_specialization_cache_keys(
     };
 
 #if defined(FSIM_HAS_LLVM)
-    const auto llvm_native_host_fingerprint = compiler::LlvmJit::native_host_identity(
-        jit_optimization(config.build.optimization))
-                                                  .fingerprint;
+    const auto native_host_fingerprint = compiler::native_host_fingerprint();
+#else
+    const std::string native_host_fingerprint;
 #endif
     // The SystemC runtime mapping is the same for every specialization, so
     // its key fields are derived once.
@@ -772,9 +775,8 @@ make_specialization_cache_keys(
         key.add(
             "uvm-source-identity",
             checked.systemverilog_uvm_provenance.source_identity);
-#if defined(FSIM_HAS_LLVM)
-        key.add("llvm-native-host", llvm_native_host_fingerprint);
-#endif
+        // v4: the host the static-kernel code is generated for.
+        key.add("static-kernel-host", native_host_fingerprint);
         std::vector<std::string> specialization_search_libraries;
         specialization_search_libraries.reserve(
             config.elaboration.search_libraries.size());

@@ -342,7 +342,6 @@ void Interpreter::Impl::disable_process_interval(
     owner.cold().waiting_for_children = false;
     owner.pc = end;
     if (owner.executor) {
-        owner.region_kernel_completion_boundary_validated = false;
         advance_process_executor_generation(owner);
         owner.executor->redirect(end);
     }
@@ -574,7 +573,6 @@ void Interpreter::Impl::complete_process(
             || (source != nullptr && !source->event_variable)) {
             fail(process, "EventAlias requires named-event variables");
         }
-        prepare_region_authoritative_write(alias->target);
         set_event_identity(
             alias->target,
             source != nullptr
@@ -850,7 +848,6 @@ void Interpreter::Impl::spawn_fork(
             const bool parent_access_complete_before_clone
                 = process_signal_access_is_complete(parent_id);
             if (!parent_access_complete_before_clone) {
-                process_signal_access_inventory_complete = false;
                 // Do not invoke an unverified nested clone before publishing
                 // the exact hidden signal state it could observe or mutate.
                 prepare_callback_observation();
@@ -879,7 +876,6 @@ void Interpreter::Impl::spawn_fork(
                     *access_binding)
                 || !child.program().matches_forked_binding(
                     child_id, *parent_access_binding)) {
-                process_signal_access_inventory_complete = false;
                 // A fork clone can introduce arbitrary signal effects even
                 // when its parent executor had a valid binding. Materialize
                 // hidden state before the child becomes runnable.
@@ -898,21 +894,16 @@ void Interpreter::Impl::spawn_fork(
         if (operation.join != ForkJoinKind::none) {
             child.cold().fork_group = group_id;
         }
-        try {
+        {
             // A child shares its parent's program; without static
             // sensitivity it adds no fanout entries (the rebuild visits
             // every process, so avoid it per spawn).
             const bool sensitive
                 = !child.program().static_sensitivity().empty();
             processes.push_back(std::move(child));
+            static_kernel_adopt_fork_child(parent_id, child_id);
             static_fanout_dirty = static_fanout_dirty || sensitive;
             register_static_sensitivity_cohort(child_id);
-            invalidate_fused_static_cohorts_for_fork(child_id);
-        } catch (...) {
-            // Insertion may have changed the graph before failing. Retire
-            // every certificate rather than retaining a partial topology.
-            invalidate_fused_static_cohorts();
-            throw;
         }
         children.insert(child_id);
     }

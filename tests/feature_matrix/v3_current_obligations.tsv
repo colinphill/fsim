@@ -63,8 +63,8 @@ RESART-005	cmake/CheckDeterministicPackaging.cmake	fsim.deterministic-packaging
 RESCOV-006	tests/frontend/coverage_source_identity_test.cpp	fsim.frontend.coverage_source_identity
 RESCOV-007	tests/frontend/coverage_point_identity_test.cpp	fsim.frontend.coverage_point_identity
 RESCOV-008	tests/artifact/coverage_database_schema_test.cpp	fsim.artifact.coverage-database-schema
-RESCOV-009	tests/app/code_coverage_equivalence_test.cpp	fsim.application.code-coverage-equivalence
-RESCOV-010	tests/app/code_coverage_metrics_equivalence_test.cpp	fsim.application.code-coverage-metrics-equivalence
+RESCOV-009	tests/app/code_coverage_application_test.cpp	fsim.application.code-coverage
+RESCOV-010	tests/app/code_coverage_metrics_application_test.cpp	fsim.application.code-coverage-metrics
 RESABI-006	cmake/CheckLegacyAccInventory.cmake	fsim.legacy-acc-inventory
 RESABI-007	tests/api/api_header_c_test.c	fsim.api.c_header
 RESABI-008	tests/runtime/acc_callback_test.cpp	fsim.runtime.acc_callback
@@ -136,7 +136,7 @@ V3CUR-ABI-024	tests/runtime/tf_context_test.cpp	fsim.runtime.tf_context
 V3CUR-ABI-025	tests/runtime/tf_containment_test.cpp	fsim.runtime.tf_containment
 V3CUR-ABI-026	tests/runtime/runtime_vpi_reference_plugin_tests.cpp	fsim.runtime.vpi_reference_plugins
 V3CUR-ABI-027	tests/runtime/vpi_data_read_test.cpp	fsim.runtime.vpi_data_read
-V3CUR-ABI-028	tests/compiler/llvm_jit_cache_test.cpp	fsim.llvm
+V3CUR-ABI-028	tests/compiler/cache_test.cpp	fsim.application.static-kernel
 V3CUR-ABI-029	tests/api/schema_identity_test.cpp	fsim.schema-identity
 V3CUR-LANG-001	cmake/CheckVhdl2019Inventory.cmake	fsim.vhdl-2019-inventory
 V3CUR-LANG-002	cmake/CheckSystemVerilog2023Inventory.cmake	fsim.systemverilog-2023-inventory

@@ -4,6 +4,7 @@
 // runtime helpers, template binding and partitions.
 #include "simir_static_kernel_compiled_internal.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cxxabi.h>
 #include <iostream>
@@ -400,13 +401,18 @@ void Interpreter::Impl::StaticKernel::native_effect(
         const auto binding = inst.d;
         std::uint32_t resolved = 0U;
         auto source = Word { xa, xb };
-        if (inst.op == KOp::store_host || inst.op == KOp::mem_write) {
+        if (inst.op == KOp::store_host || inst.op == KOp::mem_write
+            || inst.op == KOp::mem_copy) {
             resolved = frame->bindings[2U * binding];
         } else if (inst.op == KOp::store_slot || inst.op == KOp::store_slot_nba
             || inst.op == KOp::store_slot_dynamic
             || inst.op == KOp::store_slot_part || inst.op == KOp::store_vhdl
             || inst.op == KOp::wide_move) {
             resolved = frame->bindings[2U * binding + 1U] & ~partition_tag;
+        }
+        if (inst.op == KOp::mem_copy) {
+            // x carries the source container.
+            source = { frame->bindings[2U * inst.x], 0U };
         }
         if (inst.op == KOp::wide_move) {
             // x carries the source slot.
@@ -593,6 +599,10 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                     break;
                 case KOp::mem_write:
                     inst.d = bind(3U, inst.d, inst.d, 0U);
+                    break;
+                case KOp::mem_copy:
+                    inst.d = bind(3U, inst.d, inst.d, 0U);
+                    inst.x = bind(3U, inst.x, inst.x, 0U);
                     break;
                 case KOp::mark:
                     inst.x = bind(4U, inst.x, inst.x, 0U);
@@ -1096,6 +1106,7 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
             continue;
         case KOp::generic:
         case KOp::mem_write:
+        case KOp::mem_copy:
         case KOp::mem_read:
             // May write any slot (or a memory a slot holds).
             register_of_slot.clear();
@@ -1115,15 +1126,18 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
 void Interpreter::Impl::StaticKernel::build_partitions(
     const std::vector<std::vector<std::uint32_t>>& successors)
 {
-    // Members on a combinational feedback cycle (strongly connected
-    // components of more than one member) are not partitioned. A partition
-    // runs its members in one fixed order per pass and reruns when a member
-    // writes a signal an earlier member reads; around a cycle a member that
-    // writes a signal transiently (a_r = 0; ...; a_r = c in one block)
-    // invalidates its own cycle on every pass and the partition never
-    // settles. As separate levelized members they wake only on a net value
-    // change and converge like any event-driven evaluation (IEEE 1800-2023
-    // 4.7; 9.2.2.2.2 gives always_comb the same re-evaluation rule).
+    // A combinational feedback cycle (a strongly connected component of
+    // more than one member) with a member that assigns one signal more than
+    // once per run is not partitioned. A partition runs its members in one
+    // fixed order per pass and reruns when a member writes a signal an
+    // earlier member reads; such a transient write (a_r = 0; ...; a_r = c in
+    // one block) invalidates its own cycle on every pass and the partition
+    // never settles. As separate levelized members they wake only on a net
+    // value change and converge like any event-driven evaluation (IEEE
+    // 1800-2023 4.7; 9.2.2.2.2 gives always_comb the same re-evaluation
+    // rule). A cycle only at signal granularity (bit-sliced continuous
+    // assignments to one vector) writes each signal once and stays
+    // partitioned.
     std::vector<std::uint8_t> on_cycle(members_.size(), 0U);
     {
         constexpr auto unvisited = std::numeric_limits<std::uint32_t>::max();
@@ -1171,7 +1185,11 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                             break;
                         }
                     }
-                    if (component.size() > 1U) {
+                    if (component.size() > 1U
+                        && std::ranges::any_of(component,
+                            [&](const std::uint32_t member) {
+                                return members_[member].rewrites_signal;
+                            })) {
                         for (const auto member : component) {
                             on_cycle[member] = 1U;
                         }
@@ -1552,6 +1570,8 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                         inst.aux += part_base;
                     }
                     break;
+                case KOp::mem_copy:
+                    break;
                 case KOp::load_slot9:
                 case KOp::store_vhdl:
                 case KOp::integer_binary:
@@ -1605,6 +1625,10 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                     break;
                 case KOp::mem_write:
                     inst.d = bind((std::uint64_t { 4 } << 40U) | inst.d);
+                    break;
+                case KOp::mem_copy:
+                    inst.d = bind((std::uint64_t { 4 } << 40U) | inst.d);
+                    inst.x = bind((std::uint64_t { 4 } << 40U) | inst.x);
                     break;
                 case KOp::mark:
                     inst.x = 0U;

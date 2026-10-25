@@ -771,18 +771,8 @@ endmodule
         if (optimization == fsim::project::Optimization::o2) {
             baseline_o2_keys = warm.keys;
         }
-#if defined(FSIM_HAS_LLVM)
-        assert(cold.compiled_processes == 1);
-        assert(cold.compiled_modules == 1);
-        assert(cold.cache.hits == 0);
-        assert(cold.cache.misses == 1);
-        assert(cold.cache.stores == 1);
-        assert(warm.cache.hits == 1);
-        assert(warm.cache.misses == 0);
-#else
         assert(cold.compiled_processes == 0);
         assert(cold.compiled_modules == 0);
-#endif
     }
 
     write_package(2);
@@ -806,8 +796,6 @@ endmodule
     assert(changed.keys.front() != baseline_o2_keys.front());
 #if defined(FSIM_HAS_LLVM)
     assert(changed.cache.hits == 0);
-    assert(changed.cache.misses == 1);
-    assert(changed.cache.stores == 1);
 #endif
     return 0;
 }

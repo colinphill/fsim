@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/elaborator.hpp"
 #include "elaborated_design_process_access.hpp"
-#include "../runtime/simir_a4_signal_state.hpp"
+#include "../runtime/simir_signal_driver_inventory.hpp"
 #include "../runtime/simir_region_graph_bindings.hpp"
 #include "../runtime/simir_region_graph_program_access.hpp"
 #include "../runtime/simir_static_kernel.hpp"
@@ -948,16 +948,25 @@ ElaboratedDesign::create_interpreter(
     const std::uint64_t seed,
     const StaticKernelPlan& plan) &&
 {
-    if (plan.disabled || !plan.spec || plan.spec->members.empty()) {
+    if (plan.disabled || !plan.spec
+        || (plan.spec->members.empty() && plan.spec->hosted.empty())) {
         throw std::invalid_argument("static kernel plan is empty");
+    }
+    // A design of hosted processes only: the kernel's host is a process of
+    // its own, added after the design's processes (plan_static_kernel).
+    const bool synthetic_host = plan.spec->members.empty();
+    if (synthetic_host && plan.host != process_count()) {
+        throw std::invalid_argument("static kernel host is not a new process");
     }
     // Reuse the fused-cone substitution: the host runs its stub program and
     // every other member is dormant.
     ConeFusionPlan substitution;
-    ConeFusionPlanCone host;
-    host.sink = plan.host;
-    host.fused = plan.host_program;
-    substitution.cones.push_back(std::move(host));
+    if (!synthetic_host) {
+        ConeFusionPlanCone host;
+        host.sink = plan.host;
+        host.fused = plan.host_program;
+        substitution.cones.push_back(std::move(host));
+    }
     for (const auto& member : plan.spec->members) {
         if (member.process != plan.host) {
             substitution.dormant.push_back(member.process);
@@ -965,7 +974,7 @@ ElaboratedDesign::create_interpreter(
     }
     std::ranges::sort(substitution.dormant);
     auto interpreter = std::make_unique<runtime::simir::Interpreter>(options, seed);
-    interpreter->reserve_process_capacity(process_count());
+    interpreter->reserve_process_capacity(process_count() + (synthetic_host ? 1U : 0U));
     populate_interpreter(interpreter.get(), false,
         process_rows_ ? nullptr : &processes_, &substitution);
     process_rows_.reset();
@@ -973,7 +982,16 @@ ElaboratedDesign::create_interpreter(
     // kernel rather than being copied (85k members for the throughput cases).
     auto spec = std::move(*plan.spec);
     spec.host = plan.host;
-    spec.host_original = std::move(fused_sink_originals_.at(0));
+    if (synthetic_host) {
+        auto host_process = plan.host_program;
+        host_process.id = plan.host;
+        if (interpreter->add_process(std::move(host_process)) != plan.host) {
+            throw std::logic_error("static kernel host process id mismatch");
+        }
+        spec.host_original = plan.host_program;
+    } else {
+        spec.host_original = std::move(fused_sink_originals_.at(0));
+    }
     fused_sink_originals_.clear();
     runtime::simir::InterpreterProgramAccess::install_static_kernel(
         *interpreter, std::move(spec));
@@ -1170,19 +1188,12 @@ void ElaboratedDesign::populate_interpreter(
     for (const auto& check : verilog_timing_checks_) {
         (void)interpreter->add_module_timing_check(check);
     }
-    if (!validation_only && signal_driver_inventory_) {
-        runtime::simir::InterpreterProgramAccess::
-            set_trusted_signal_driver_inventory(
-            *interpreter,
-            std::make_shared<const runtime::simir::SignalDriverInventory>(
-                *signal_driver_inventory_));
-    }
 }
 
 runtime::simir::SignalDriverInventory
 ElaboratedDesign::compute_signal_driver_inventory() const
 {
-    return runtime::simir::SignalDriverLayout::inventory(
+    return runtime::simir::build_signal_driver_inventory(
         *detail::ElaboratedDesignProcessAccess::region_graph(*this));
 }
 
@@ -2105,7 +2116,7 @@ detail::ElaboratedDesignProcessAccess::region_graph(
         design.container_aggregate_signal_aliases_);
     auto graph = std::make_shared<const RegionGraph>(
         region_graph_detail::RegionGraphProgramBuilder::build(
-            programs, descriptors, false, graph_bindings.containers,
+            programs, descriptors, graph_bindings.containers,
             access_complete, graph_bindings.alias_families));
     if (rows && !design.process_builder_) {
         rows->region_graph = graph;

@@ -25,7 +25,7 @@ REF174-22	sdf-nested	schemas-1-2-4	exact-current-portable	Current-persisted-iden
 REF174-23	trace-nested	archive-1-fst-v2	exact-current-portable	Current-persisted-identities	tests/feature_matrix/nested_portable_contract.tsv
 REF174-24	scv-nested	artifact-cache-protocol-transport-transaction-1	exact-current-portable	Current-persisted-identities	tests/feature_matrix/nested_portable_contract.tsv
 REF174-25	portable-provenance	language-profile-content-and-relative-paths	host-independent	Composition-and-provenance	tests/feature_matrix/source_hidden_relocation_contract.tsv
-REF174-26	llvm-native	build-llvm-abi-target-cpu-features-optimization	exact-producer	Composition-and-provenance	src/compiler/llvm_jit.cpp
+REF174-26	llvm-native	build-llvm-abi-target-cpu-features-optimization	exact-producer	Composition-and-provenance	src/compiler/static_kernel_codegen.cpp
 REF174-27	systemc-native	build-compiler-environment-runtime-toolchain	exact-producer	Composition-and-provenance	src/systemc/plugin_compiler.cpp
 REF174-28	rejection	pre-mutation-and-pre-publication	transactional	Rejection-and-transactionality	tests/feature_matrix/schema_producer_diagnostic_contract.tsv
 REF174-29	migration	no-legacy-reader-or-dual-writer	regenerate-current	Regeneration-and-rebuild-workflows	tests/feature_matrix/portable_stale_schema_contract.tsv

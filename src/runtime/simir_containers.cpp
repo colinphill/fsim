@@ -50,31 +50,6 @@ private:
     std::optional<AggregateSignalBatch> suspended_;
 };
 
-template <typename Owner>
-void require_container_signal_role_materialized(
-    Owner& owner, ContainerObjectId object)
-{
-    if (owner.region_forwarding_role_journal_nonempty_components == 0U) {
-        return;
-    }
-    for (std::size_t depth = 0U;
-         depth < owner.container_objects.size();
-         ++depth) {
-        if (object >= owner.container_objects.size()) {
-            return;
-        }
-        if (owner.container_has_signal_alias(object)) {
-            owner.require_all_region_forwarding_role_journals_flushed();
-            return;
-        }
-        const auto& container = owner.container_objects[object];
-        if (!container.slice_alias) {
-            return;
-        }
-        object = container.slice_alias->object;
-    }
-}
-
 class ScopedContainerAliasWriteFrame final {
 public:
     explicit ScopedContainerAliasWriteFrame(ContainerAliasWriteBatch& batch)
@@ -892,7 +867,6 @@ const ContainerValue&
 Interpreter::Impl::read_container_object_value(
     const ContainerObjectId id)
 {
-    require_container_signal_role_materialized(*this, id);
     auto& object = get_container_object(id);
     if (id < container_value_reference_exposed.size()
         && container_value_reference_exposed[id] != 0U) {
@@ -977,7 +951,6 @@ bool Interpreter::Impl::read_container_object_element(
     const std::size_t ordinal,
     PackedLogic4& result)
 {
-    require_container_signal_role_materialized(*this, id);
     const auto& object = get_container_object(id);
     const auto& value = object.initial_value;
     if (value.type.sparse && !object.slice_alias) {
@@ -1388,30 +1361,6 @@ void Interpreter::Impl::publish_container_alias_family(
     };
 
     try {
-        if (forced_current || driver_force_publication) {
-            if (started && systemverilog_region_kernel_enabled) {
-                // Force masks and per-owner force maps participate in graph
-                // admission. A family publication therefore requires a rebuilt
-                // snapshot, even if none of its resolved values change.
-                request_full_region_recertification();
-            }
-            for (const auto& alias : aliases) {
-                if (alias
-                    && alias->signal
-                        < region_authoritative_component_by_signal.size()) {
-                    demote_region_authoritative_slots(
-                        region_authoritative_component_by_signal[
-                            alias->signal], false);
-                }
-            }
-            if (proxy < region_authoritative_component_by_signal.size()) {
-                demote_region_authoritative_slots(
-                    region_authoritative_component_by_signal[proxy], false);
-            }
-            invalidate_fused_static_cohorts();
-        }
-        prepare_region_authoritative_family_write(object);
-
         if (any_stored_change) {
             for (auto& leaf : plan) {
                 if (leaf.stored_changed) {
@@ -1827,14 +1776,12 @@ Interpreter::Impl::prepare_container_alias_driver_family(
             normalize_signal_value(signal, values[ordinal]));
     }
 
-    prepare_region_authoritative_family_write(object);
     for (std::size_t ordinal = 0U; ordinal < aliases.size(); ++ordinal) {
         if (!selected_leaves.empty() && selected_leaves[ordinal] == 0U) {
             continue;
         }
         const auto& alias = aliases[ordinal];
         const auto signal = alias->signal;
-        demote_owned_driver(signal);
         materialize_direct_signal(signal);
     }
 
@@ -1912,7 +1859,6 @@ void Interpreter::Impl::begin_container_alias_driver_family(
 void Interpreter::Impl::install_container_alias_driver_family(
     PreparedContainerAliasDriverFamily& prepared) noexcept
 {
-    prepare_region_authoritative_family_write(prepared.object);
     for (auto& leaf : prepared.leaves) {
         if (!leaf.selected) {
             continue;
@@ -2084,7 +2030,7 @@ void Interpreter::Impl::require_package_static_write(
             + std::string { what } };
     };
     if (!package_static_initialization_active
-        || started || region_graph || scheduler.has_pending() || !in_range) {
+        || started || scheduler.has_pending() || !in_range) {
         fail_with(std::string { kind } + " write is outside startup actions");
     }
     if (process) {
@@ -2190,7 +2136,6 @@ void Interpreter::Impl::write_container_object_value(
         initialize_package_static_container_object(id, value, driver);
         return;
     }
-    require_container_signal_role_materialized(*this, id);
     validate_container_value(value);
     auto& object = get_container_object(id);
     invalidate_container_aggregate_extract(id);
@@ -2392,7 +2337,6 @@ void Interpreter::Impl::write_container_object_element_value(
             "package startup processes cannot write container elements"
         };
     }
-    require_container_signal_role_materialized(*this, id);
     auto& object = get_container_object(id);
     invalidate_container_aggregate_extract(id);
     auto& target = object.initial_value;

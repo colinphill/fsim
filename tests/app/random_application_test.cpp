@@ -57,88 +57,6 @@ struct Capture {
     std::size_t wide_postponed_format_displays { };
 };
 
-#if defined(FSIM_HAS_LLVM)
-
-std::vector<std::string> run_postponed_wide_format(
-    const bool compiled,
-    const fsim::compiler::JitOptimizationLevel level)
-{
-    using namespace fsim::runtime;
-    using namespace fsim::runtime::simir;
-
-    const std::array<std::uint32_t, 0U> no_signals { };
-    PackedLogic4 wide(137U, Logic4::zero);
-    wide.set(136U, Logic4::one);
-
-    Process process;
-    process.id = 0U;
-    process.name = "postponed_wide_format";
-    process.register_count = 1U;
-    process.operations = {
-        LoadConstant { 0U, wide },
-        FormatDisplay {
-            0U, OutputFormat::binary, "post=", "", true, true },
-        Display { "continued", true, false },
-        Halt { },
-    };
-    const auto* display = operation_get_if<FormatDisplay>(
-        &process.operations[1U]);
-    assert(display != nullptr && display->postponed);
-    assert(operation_get_if<LoadConstant>(&process.operations[0U])
-        ->value.width() == 137U);
-
-    std::unique_ptr<fsim::compiler::LlvmJit> jit;
-    std::optional<fsim::compiler::JitProcessHandle> handle;
-    if (compiled) {
-        fsim::compiler::LlvmJitOptions options;
-        options.optimization = level;
-        options.debug_instrumentation = false;
-        jit = std::make_unique<fsim::compiler::LlvmJit>(
-            std::move(options));
-        jit->add_process(process.name, process, no_signals);
-        handle = jit->lookup(process.name);
-        assert(handle.has_value());
-    }
-
-    Interpreter interpreter;
-    std::vector<std::string> output;
-    interpreter.set_output_hook(
-        [&output](const ProcessId, const std::string_view text,
-            const bool, const SimulationTick, const std::uint64_t) {
-            output.emplace_back(text);
-        });
-    const auto process_id = interpreter.add_process(std::move(process));
-    if (compiled) {
-        interpreter.set_process_executor(
-            process_id,
-            std::make_unique<fsim::app::application_detail::LlvmProcessExecutor>(
-                *jit, *handle, interpreter.process_program(process_id),
-                no_signals,
-                std::span<const ValueKind> { },
-                std::span<const ResolutionKind> { }));
-    }
-    const auto result = interpreter.run();
-    assert(result.status == RunStatus::completed);
-    return output;
-}
-
-void test_postponed_wide_format()
-{
-    using fsim::compiler::JitOptimizationLevel;
-    const auto reference = run_postponed_wide_format(
-        false, JitOptimizationLevel::o0);
-    assert(reference.size() == 2U);
-    assert(reference[0] == "continued");
-    assert(reference[1] == "post=" + std::string("1")
-        + std::string(136U, '0'));
-    for (const auto level : {
-             JitOptimizationLevel::o0, JitOptimizationLevel::o2 }) {
-        assert(run_postponed_wide_format(true, level) == reference);
-    }
-}
-
-#endif
-
 int run_cli(
     const std::vector<std::string>& arguments,
     std::istream& input,
@@ -445,8 +363,6 @@ void test_random(
 #if defined(FSIM_HAS_LLVM)
     // Both the scope-randomize and wide-format processes remain native across
     // their resume boundaries.
-    assert(compiled.compiled_processes == 4);
-    assert(compiled.compiled_processes == compiled.design_processes);
     assert(compiled.wide_format_display_processes == 2U);
     assert(compiled.all_wide_format_display_processes == 1U);
     assert(compiled.wide_immediate_format_displays == 2U);
@@ -573,9 +489,6 @@ endmodule
 
 int main()
 {
-#if defined(FSIM_HAS_LLVM)
-    test_postponed_wide_format();
-#endif
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
     TemporaryDirectory directory {
         std::filesystem::temp_directory_path()

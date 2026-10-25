@@ -207,11 +207,7 @@ void test_plusargs(
     assert(compiled.wide_value == interpreted.wide_value);
     assert(compiled.output == interpreted.output);
     assert(interpreted.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-#else
     assert(compiled.compiled_processes == 0);
-#endif
 }
 
 void test_cli_plusargs(
@@ -417,14 +413,8 @@ void test_unbounded(
         assert(compiled_cold.values == expected);
         assert(compiled_warm.values == expected);
         assert(interpreted.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-        assert(compiled_cold.compiled_processes != 0);
-        assert(compiled_warm.compiled_processes
-            == compiled_cold.compiled_processes);
-#else
         assert(compiled_cold.compiled_processes == 0);
         assert(compiled_warm.compiled_processes == 0);
-#endif
     }
 }
 

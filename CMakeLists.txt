@@ -791,24 +791,8 @@ add_library(
     src/runtime/simir.cpp
     src/runtime/simir_sensitivity.cpp
     src/runtime/simir_region_graph.cpp
-    src/runtime/simir_region_graph_runtime.cpp
-    src/runtime/simir_native_frontier.cpp
-    src/runtime/simir_native_frontier_dispatch.cpp
-    src/runtime/simir_native_frontier_bind.cpp
-    src/runtime/simir_native_frontier_generic.cpp
-    src/runtime/simir_native_frontier_generic_stage.cpp
-    src/runtime/simir_native_frontier_issue.cpp
-    src/runtime/simir_native_frontier_member_sync.cpp
-    src/runtime/simir_native_frontier_fallback.cpp
-    src/runtime/simir_native_frontier_boundary.cpp
-    src/runtime/simir_native_frontier_sync.cpp
-    src/runtime/simir_a4_signal_state.cpp
-    src/runtime/simir_region_kernel_backend.cpp
-    src/runtime/simir_region_activation.cpp
-    src/runtime/simir_region_program.cpp
-    src/runtime/simir_generic_projected_region.cpp
-    src/runtime/simir_systemverilog_wave.cpp
-    src/runtime/simir_prepared_successor_dispatch.cpp
+    src/runtime/simir_signal_driver_inventory.cpp
+    src/runtime/simir_observation.cpp
     src/runtime/simir_process_execution_context.cpp
     src/runtime/simir_coverage.cpp
     src/runtime/simir_arithmetic.cpp
@@ -829,9 +813,9 @@ add_library(
     src/runtime/simir_static_kernel_behavioral.cpp
     src/runtime/simir_static_kernel_compiled.cpp
     src/runtime/simir_static_kernel_execute.cpp
+    src/runtime/simir_static_kernel_hosted.cpp
     src/runtime/simir_static_kernel_native_units.cpp
     src/runtime/simir_static_kernel_specialize.cpp
-    src/runtime/simir_fused_static_graph.cpp
     src/runtime/simir_execution_context.cpp
     src/runtime/simir_execution_boundaries.cpp
     src/runtime/simir_execution_interpreter.cpp
@@ -849,7 +833,6 @@ add_library(
       src/runtime/simir_random_distribution.cpp
       src/runtime/simir_module_path.cpp
     src/runtime/simir_scheduling.cpp
-    src/runtime/simir_owned_driver.cpp
     src/runtime/simir_scheduling_commit.cpp
     src/runtime/simir_scheduling_stage.cpp
     src/runtime/simir_synchronization.cpp
@@ -1184,56 +1167,12 @@ if(FSIM_WITH_LLVM)
   add_library(
     fsim_compiler
     ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
-      src/compiler/llvm_jit.cpp
-      src/compiler/llvm_jit_compilation_contexts.cpp
-      src/compiler/llvm_jit_llvm_args.cpp
-      src/compiler/llvm_jit_fast_isel_census.cpp
-      src/compiler/llvm_jit_execution.cpp
-      src/compiler/llvm_jit_process_modules.cpp
-      src/compiler/llvm_jit_fused_masked_process.cpp
-      src/compiler/llvm_jit_masked_lowering.cpp
-      src/compiler/llvm_jit_cache_key.cpp
-      src/compiler/llvm_jit_cache_key_operations.cpp
-      src/compiler/llvm_jit_coverage.cpp
-    src/compiler/llvm_jit_lowering.cpp
-    src/compiler/llvm_jit_nounwind.cpp
-    src/compiler/llvm_jit_lowering_planning.cpp
-    src/compiler/llvm_jit_lowering_operations_prefix.cpp
-    src/compiler/llvm_jit_lowering_operations_suffix.cpp
-      src/compiler/llvm_jit_dynamic_part.cpp
-      src/compiler/llvm_jit_module.cpp
-      src/compiler/llvm_jit_codegen_preparation.cpp
-      src/compiler/llvm_jit_operations_control.cpp
-      src/compiler/llvm_jit_operations_logic.cpp
-      src/compiler/llvm_jit_operations_file.cpp
-      src/compiler/llvm_jit_operations_output.cpp
-      src/compiler/llvm_jit_operations_signal.cpp
-      src/compiler/llvm_jit_operations_string.cpp
-      src/compiler/llvm_jit_operations_container.cpp
-      src/compiler/llvm_jit_operations_value.cpp
-    src/compiler/llvm_jit_validation.cpp
-    src/compiler/llvm_jit_validation_class.cpp
-    src/compiler/llvm_jit_validation_operations_prefix.cpp
-      src/compiler/llvm_jit_validation_selection.cpp
-      src/compiler/llvm_jit_validation_support.cpp
-    src/compiler/llvm_jit_region_kernel.cpp
-    src/compiler/llvm_jit_region_frontier.cpp
-    src/compiler/llvm/region_frontier_kernel_plan.cpp
-    src/compiler/llvm/region_frontier_planner_storage_profile.hpp
-    src/compiler/llvm/emit_region_frontier_loop.cpp
-    src/compiler/llvm/emit_region_frontier_internal_commit.cpp
-    src/compiler/llvm/emit_region_frontier_loop_v2.cpp
-    src/compiler/llvm/emit_region_frontier_internal_commit_v2.cpp
-    src/compiler/llvm/region_frontier_initial_slot_validation.cpp
-    src/compiler/llvm/region_frontier_initial_slot_validation.hpp
-    src/compiler/llvm/logic9_word_lowering.cpp
-      src/compiler/llvm_jit_value_lowering.cpp
-      src/compiler/llvm_jit_wide_bitwise_lowering.cpp
       src/compiler/static_kernel_codegen.cpp
   )
   add_library(fsim::compiler ALIAS fsim_compiler)
   fsim_configure_subsystem_library(fsim_compiler)
-  # The LLVM JIT was fsim_llvm; consumers may keep that name.
+  # The LLVM layer was once fsim_llvm (the per-process JIT, since removed);
+  # consumers may keep that name. It now carries the v4 kernel code generator.
   add_library(fsim_llvm INTERFACE)
   add_library(fsim::llvm ALIAS fsim_llvm)
   target_link_libraries(fsim_llvm INTERFACE fsim_compiler)
@@ -1365,17 +1304,6 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_coverage_control.cpp
       src/app/application_debug_coverage.cpp
       src/app/application_uvm_inspection.cpp
-      src/app/application_executor_frame.cpp
-      src/app/application_fused_static_executor.cpp
-      src/app/application_fused_static_setup.cpp
-      src/app/application_executors.cpp
-      src/app/application_region_kernel_backend.cpp
-      src/app/application_executor_vital.cpp
-      src/app/application_executor_signal_attributes.cpp
-      src/app/application_executor_container_operation.cpp
-      src/app/application_executor_services.cpp
-      src/app/application_executor_signals.cpp
-      src/app/application_executor_values.cpp
       src/app/application_trace_archive.cpp
       src/app/application_trace_api.cpp
       src/app/application_trace_format.cpp
@@ -1629,13 +1557,6 @@ install(
 )
 install(
   FILES
-    include/fsim/compiler/jit_runtime.h
-    include/fsim/compiler/jit_runtime_v1.h
-    include/fsim/compiler/jit_runtime_v2.h
-  DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/compiler"
-)
-install(
-  FILES
     include/fsim/semantic/hierarchy_path.hpp
     include/fsim/semantic/model.hpp
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/semantic"
@@ -1650,8 +1571,6 @@ install(
     include/fsim/runtime/vpi_bridge.h
     include/fsim/runtime/vhpi_bridge.h
     include/fsim/runtime/simir_driver_inventory.hpp
-    include/fsim/runtime/simir_region_frontier.hpp
-    include/fsim/runtime/simir_region_frontier_v2.hpp
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/fsim/runtime"
 )
 install(

@@ -343,6 +343,10 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 registers[inst.x], registers[inst.y],
                 inst.aux != 0U ? registers[inst.z] : Word { }, inst.d);
             break;
+        case KOp::mem_copy:
+            effect_slow(body, inst, at, member_index, origin, { inst.x, 0U },
+                { }, { }, inst.d);
+            break;
         case KOp::wide_move:
             effect_slow(body, inst, at, member_index, origin, { inst.x, 0U },
                 inst.sub == 1U ? registers[inst.y] : Word { }, { }, inst.d);
@@ -1242,6 +1246,11 @@ void Interpreter::Impl::StaticKernel::effect_slow(const CompiledBody& body,
                 : std::nullopt,
             (inst.flags & flag_blocking) != 0U,
             static_cast<SignalUpdateDomain>(inst.sub));
+        return;
+    case KOp::mem_copy:
+        // x carries the source container; resolved is the destination.
+        copy_container(resolved, static_cast<std::uint32_t>(x.a), member_index,
+            body_begin + at);
         return;
     case KOp::wide_move: {
         move_wide(body, inst, at, member_index, static_cast<std::uint32_t>(x.a),

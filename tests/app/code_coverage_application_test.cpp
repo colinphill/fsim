@@ -60,38 +60,14 @@ runtime::simir::Process debug_covered_process()
     return process;
 }
 
-void run_debug_engine(const bool compiled)
+void run_debug_engine()
 {
     auto program = debug_covered_process();
-    const std::array<std::uint32_t, 1> signal_widths { 1U };
-    std::unique_ptr<compiler::LlvmJit> jit;
-    std::optional<compiler::JitProcessHandle> handle;
-    if (compiled) {
-        compiler::LlvmJitOptions options;
-        options.optimization = compiler::JitOptimizationLevel::o0;
-        options.debug_instrumentation = true;
-        jit = std::make_unique<compiler::LlvmJit>(std::move(options));
-        jit->add_process("coverage_debug", program, signal_widths);
-        handle = jit->lookup("coverage_debug");
-    }
-
     runtime::simir::Interpreter interpreter;
     (void)interpreter.add_signal({ "top.coverage_trigger",
         runtime::PackedLogic4::from_msb_string("0") });
     const auto process = interpreter.add_process(program);
     interpreter.set_code_coverage_counters({ 0U });
-    if (compiled) {
-        interpreter.set_process_executor(
-            process,
-            std::make_unique<
-                app::application_detail::LlvmProcessExecutor>(
-                *jit,
-                *handle,
-                interpreter.process_program(process),
-                signal_widths,
-                std::span<const runtime::simir::ValueKind> { },
-                std::span<const runtime::simir::ResolutionKind> { }));
-    }
 
     std::vector<runtime::simir::ExecutionPoint> points;
     interpreter.set_execution_point_hook(
@@ -197,130 +173,11 @@ void test_debug_snapshot_validation()
         "Debug observation must reject duplicate point identities");
 }
 
-void run_compiled(
-    const compiler::JitOptimizationLevel optimization,
-    const std::uint64_t initial,
-    const std::uint64_t expected,
-    const bool expect_overflow)
-{
-    auto representative = covered_process(0U);
-    auto instance = covered_process(5U);
-    const std::vector signals {
-        runtime::simir::Signal {
-            "top.coverage_trigger",
-            runtime::PackedLogic4::from_msb_string("0") }
-    };
-    require(runtime::simir::share_process_operations(
-                representative,
-                instance,
-                signals,
-                nullptr),
-        "coverage-equivalent instances must share their native body");
-
-    compiler::LlvmJit jit {
-        compiler::LlvmJitOptions { optimization, { } }
-    };
-    const auto symbol = std::string { "coverage_" }
-        + std::string { compiler::to_string(optimization) }
-        + (expect_overflow ? "_overflow" : "_increment");
-    const std::array<std::uint32_t, 1> signal_widths { 1U };
-    jit.add_process(symbol, representative, signal_widths);
-    const auto handle = jit.lookup(symbol);
-
-    runtime::simir::Interpreter interpreter;
-    (void)interpreter.add_signal(signals[0]);
-    const auto process = interpreter.add_process(instance);
-    std::vector<std::uint64_t> counters(6U);
-    counters[5U] = initial;
-    interpreter.set_code_coverage_counters(std::move(counters));
-    std::size_t overflow_calls { };
-    interpreter.set_code_coverage_overflow_hook(
-        [&](const runtime::CodeCoverageCounterId counter) {
-            require(counter.value == 5U,
-                "compiled overflow must retain the instance counter");
-            ++overflow_calls;
-        });
-    interpreter.set_process_executor(
-        process,
-        std::make_unique<app::application_detail::LlvmProcessExecutor>(
-            jit,
-            handle,
-            interpreter.process_program(process),
-            signal_widths,
-            std::span<const runtime::simir::ValueKind> { },
-            std::span<const runtime::simir::ResolutionKind> { }));
-
-    const auto result = interpreter.run();
-    require(result.status == runtime::RunStatus::completed,
-        "compiled coverage process must complete");
-    require(interpreter.code_coverage_counters()[5U] == expected,
-        "compiled coverage must update the effective instance counter");
-    require(overflow_calls == (expect_overflow ? 1U : 0U),
-        "compiled coverage overflow must be reported exactly once");
-    require(interpreter.code_coverage_counter_overflowed({ 5U })
-            == expect_overflow,
-        "compiled coverage saturation state must match the interpreter");
-}
-
-void run_compiled_failure(
-    const bool configure_counters,
-    const std::string_view expected)
-{
-    auto process_program = covered_process(5U);
-    compiler::LlvmJit jit;
-    constexpr std::string_view symbol = "coverage_failure";
-    const std::array<std::uint32_t, 1> signal_widths { 1U };
-    jit.add_process(symbol, process_program, signal_widths);
-    const auto handle = jit.lookup(symbol);
-
-    runtime::simir::Interpreter interpreter;
-    (void)interpreter.add_signal({ "top.coverage_trigger",
-        runtime::PackedLogic4::from_msb_string("0") });
-    const auto process = interpreter.add_process(process_program);
-    if (configure_counters) {
-        interpreter.set_code_coverage_counters({ 0U });
-    }
-    interpreter.set_process_executor(
-        process,
-        std::make_unique<app::application_detail::LlvmProcessExecutor>(
-            jit,
-            handle,
-            interpreter.process_program(process),
-            signal_widths,
-            std::span<const runtime::simir::ValueKind> { },
-            std::span<const runtime::simir::ResolutionKind> { }));
-    try {
-        (void)interpreter.run();
-        require(false, "compiled coverage accepted an invalid counter service");
-    } catch (const runtime::simir::InterpreterError& error) {
-        require(std::string_view { error.what() }.find(expected)
-                != std::string_view::npos,
-            "compiled coverage failure diagnostic mismatch");
-    }
-}
-
 } // namespace
 
 int main()
 {
-    using fsim::compiler::JitOptimizationLevel;
-    run_compiled(JitOptimizationLevel::o0, 41U, 42U, false);
-    run_compiled(JitOptimizationLevel::o1, 41U, 42U, false);
-    run_compiled(JitOptimizationLevel::o2, 41U, 42U, false);
-    run_compiled(
-        JitOptimizationLevel::o2,
-        std::numeric_limits<std::uint64_t>::max(),
-        std::numeric_limits<std::uint64_t>::max(),
-        true);
-    run_compiled_failure(false, "service is unavailable");
-    run_compiled_failure(true, "counter is out of range");
-    run_debug_engine(false);
-    run_debug_engine(true);
+    run_debug_engine();
     test_debug_snapshot_validation();
-    require(
-        fsim::app::application_detail::jit_optimization(
-            fsim::project::Optimization::o3)
-            == JitOptimizationLevel::o2,
-        "application O3 must retain the qualified optimized native profile");
-    std::cout << "compiled code coverage application tests passed\n";
+    std::cout << "code coverage application tests passed\n";
 }

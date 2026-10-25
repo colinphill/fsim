@@ -85,7 +85,6 @@ template <typename Owner>
     const ProcessId process,
     const SignalId signal,
     const std::optional<SignalSelection> selection = std::nullopt) {
-    owner.require_region_forwarding_role_journal_flushed_for_signal(signal);
     if (!driving(owner, process, signal, selection)) {
         throw std::logic_error {
             "process has no driver for signal driving-value query"

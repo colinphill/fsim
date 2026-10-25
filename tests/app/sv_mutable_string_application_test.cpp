@@ -362,12 +362,6 @@ endmodule
         assert(cold.output == warm.output);
         assert(reference.title == cold.title && cold.title == warm.title);
         assert(reference.keys == cold.keys && cold.keys == warm.keys);
-#if defined(FSIM_HAS_LLVM)
-        assert(cold.compiled_processes == 3);
-        assert(cold.compiled_modules == 3);
-        assert(cold.cache.misses == 3 && cold.cache.stores == 3);
-        assert(warm.cache.hits == 3);
-#endif
         inspect_suspended(
             config, fsim::app::SimulationEngine::interpreter);
         inspect_suspended(
@@ -392,10 +386,5 @@ endmodule
         fsim::app::SimulationEngine::compiled);
     assert(changed.output == std::vector<std::string>({ "stable", "Fsim-v2!", "|FSIM-V2!", "|fsim-v2!", "|sim", "|Sim", "|-42", "|ff", "|11", "|101", "|0", "|0", "|70", "|0", "|123", "|255", "|15", "|5", "|fmt=42/Sim/mutable_top.worker/0001", "|fsim-v2!:0a", "|sim  |0011|%", "|011110xz", "|a5xz", "|2455", "|input:port", "|Shared", "3", "|255", "|67", "|0", "|12.5", "|seedA", "|seedAB", "|taskA", "|taskAB" }));
     assert(changed.keys != baseline.keys);
-#if defined(FSIM_HAS_LLVM)
-    assert(changed.cache.hits == 1);
-    assert(changed.cache.misses == 2);
-    assert(changed.cache.stores == 2);
-#endif
     return 0;
 }

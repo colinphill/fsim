@@ -623,9 +623,6 @@ endmodule
             mode == 0U ? fsim::app::SimulationEngine::interpreter
                        : fsim::app::SimulationEngine::compiled
         };
-#if defined(FSIM_HAS_LLVM)
-        assert(mode == 0U || simulation.compiled_process_count() > 0U);
-#endif
         auto& registry = simulation.systemverilog_vpi_objects();
         auto& callbacks = simulation.systemverilog_vpi_callbacks();
         auto& values = simulation.systemverilog_vpi_values();
@@ -2012,13 +2009,8 @@ endmodule
         fsim::app::SimulationEngine::compiled,
         initial, middle, next, late, deposited, forced);
     assert(interpreter.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled_o0.compiled_processes > 0
-        && compiled_o2.compiled_processes > 0);
-#else
     assert(compiled_o0.compiled_processes == 0
         && compiled_o2.compiled_processes == 0);
-#endif
     assert(interpreter.observably_equal(compiled_o0)
         && interpreter.observably_equal(compiled_o2));
     assert(interpreter.named_events.size() == 1

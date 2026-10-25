@@ -23,7 +23,7 @@ set(FSIM_WITNESSES
   fsim.application.vhdl_numeric
   fsim.application.vhdl_logic9
   fsim.application.artifact_phases
-  fsim.llvm
+  fsim.application.static-kernel
   fsim.api
   fsim.api.c_header
   fsim.tcl.version-selection

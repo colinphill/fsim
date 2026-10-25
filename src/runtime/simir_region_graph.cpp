@@ -6,6 +6,7 @@
 
 #include <unordered_map>
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cstdlib>
 #include <iostream>
@@ -366,6 +367,33 @@ infer_static_read_ranges(
         ranges.emplace(instruction, std::move(candidate_ranges));
     }
     return ranges;
+}
+
+// A guarded VHDL signal assignment whose guard is false disconnects the
+// driver (IEEE 1076-2019 11.6, 10.5.2.2): the lowerer emits a static call
+// "@vhdl-disconnect:<signal>:<delay>" that cancels the process's later
+// transactions on that signal and schedules the null transaction
+// (Interpreter::Impl::schedule_vhdl_disconnect). Its only signal access is a
+// driver write to the named signal, so it is a known write.
+std::optional<SignalId> vhdl_disconnect_signal(std::string_view identity)
+{
+    constexpr std::string_view prefix { "@vhdl-disconnect:" };
+    if (!identity.starts_with(prefix)) {
+        return std::nullopt;
+    }
+    const auto fields = identity.substr(prefix.size());
+    const auto separator = fields.find(':');
+    if (separator == std::string_view::npos) {
+        return std::nullopt;
+    }
+    SignalId signal { };
+    const auto parsed = std::from_chars(
+        fields.data(), fields.data() + separator, signal);
+    if (parsed.ec != std::errc { }
+        || parsed.ptr != fields.data() + separator) {
+        return std::nullopt;
+    }
+    return signal;
 }
 
 // Access completeness is independent from the smaller pure-execution subset.
@@ -745,6 +773,14 @@ bool visit_known_region_accesses(
             observe(value.signal,
                 RegionObservation::current | RegionObservation::drivers);
             return true;
+        } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
+            // Any other static call runs a callee body (opaque); the VHDL
+            // driver disconnection names its one signal.
+            if (const auto signal = vhdl_disconnect_signal(value.method_identity)) {
+                record_write(*signal);
+                return true;
+            }
+            return false;
         } else if constexpr (std::is_same_v<T, ClassPropertyRead>
             || std::is_same_v<T, ClassStaticPropertyRead>
             || std::is_same_v<T, ClassPropertyContainerRead>) {
@@ -1214,544 +1250,6 @@ void classify_drivers(RegionSignalNode& signal)
         detail::RegionDriverClassificationMode::runtime_capabilities);
 }
 
-template<typename Reason>
-constexpr std::size_t reason_index(Reason reason)
-{
-    return static_cast<std::size_t>(reason);
-}
-
-bool has_observation(RegionObservation observations, RegionObservation capability)
-{
-    return (static_cast<std::uint32_t>(observations)
-        & static_cast<std::uint32_t>(capability)) != 0U;
-}
-
-constexpr std::array<std::pair<RegionObservation, RegionBoundaryReason>, 8U>
-    observation_boundary_reasons {{
-        { RegionObservation::current, RegionBoundaryReason::observed_current },
-        { RegionObservation::previous, RegionBoundaryReason::observed_previous },
-        { RegionObservation::drivers, RegionBoundaryReason::observed_drivers },
-        { RegionObservation::pending, RegionBoundaryReason::observed_pending },
-        { RegionObservation::events, RegionBoundaryReason::observed_events },
-        { RegionObservation::mutation, RegionBoundaryReason::observed_mutation },
-        { RegionObservation::coverage, RegionBoundaryReason::observed_coverage },
-        { RegionObservation::unknown, RegionBoundaryReason::observed_unknown },
-    }};
-
-void count_process_exclusion(RegionCertificateInventory& inventory,
-    RegionProcessExclusionReason reason)
-{
-    ++inventory.process_exclusion_counts[reason_index(reason)];
-}
-
-void count_boundary_reason(RegionCertificateInventory& inventory,
-    RegionBoundaryReason reason)
-{
-    ++inventory.boundary_reason_counts[reason_index(reason)];
-}
-
-RegionCertificateInventory build_certificate_inventory(
-    const std::vector<RegionProcessNode>& processes,
-    const std::vector<RegionSignalNode>& signals,
-    const std::vector<std::uint64_t>& capability_epochs,
-    const std::vector<std::size_t>& signal_alias_family_by_signal)
-{
-    RegionCertificateInventory inventory;
-    inventory.access_inventory_complete = std::ranges::none_of(processes,
-        &RegionProcessNode::dependencies_unknown);
-
-    std::vector<bool> candidate_process(processes.size(), false);
-    for (std::size_t index = 0U; index < processes.size(); ++index) {
-        const auto& process = processes[index];
-        if (!process.pure) {
-            count_process_exclusion(inventory,
-                RegionProcessExclusionReason::not_pure);
-        }
-        const bool sv_active
-            = process.scheduling_domain
-                    == ProcessSchedulingDomain::systemverilog
-            && process.update_kind == RegionUpdateKind::systemverilog_active;
-        const bool vhdl_projected
-            = process.scheduling_domain == ProcessSchedulingDomain::generic
-            && process.update_kind == RegionUpdateKind::vhdl_projected;
-        const bool generic_update
-            = process.scheduling_domain == ProcessSchedulingDomain::generic
-            && process.update_kind == RegionUpdateKind::generic;
-        if (!sv_active && !vhdl_projected && !generic_update) {
-            count_process_exclusion(inventory,
-                RegionProcessExclusionReason::wrong_scheduling_domain);
-        }
-        if (!sv_active && !vhdl_projected && !generic_update) {
-            count_process_exclusion(inventory,
-                RegionProcessExclusionReason::wrong_update_kind);
-        }
-        if (process.cyclic_or_dependent_on_cycle) {
-            count_process_exclusion(inventory,
-                RegionProcessExclusionReason::cyclic_or_dependent_on_cycle);
-        }
-        if (process.dependencies_unknown) {
-            count_process_exclusion(inventory,
-                RegionProcessExclusionReason::unknown_dependencies);
-        }
-        if (std::ranges::any_of(process.sensitivities,
-                [](const auto& sensitivity) {
-                    return sensitivity.edge != EdgeKind::any;
-                })) {
-            count_process_exclusion(inventory,
-                RegionProcessExclusionReason::edge_sensitivity);
-        }
-        candidate_process[index] = process.pure
-            && (sv_active || vhdl_projected || generic_update)
-            && !process.cyclic_or_dependent_on_cycle
-            && !process.dependencies_unknown
-            && std::ranges::none_of(process.sensitivities,
-                [](const auto& sensitivity) {
-                    return sensitivity.edge != EdgeKind::any;
-                });
-    }
-
-    struct IndexedAccess {
-        const RegionAccess* access { };
-        bool writer { };
-    };
-    struct AccessInterval {
-        ProcessId process { };
-        std::uint32_t begin { };
-        std::uint32_t end { };
-    };
-    struct WriterCluster {
-        std::uint32_t begin { };
-        std::uint32_t end { };
-        ProcessId representative { };
-    };
-
-    std::vector<std::vector<ProcessId>> adjacent(processes.size());
-    const auto connect = [&](const ProcessId left, const ProcessId right) {
-        if (left == right) {
-            return;
-        }
-        adjacent[left].push_back(right);
-        adjacent[right].push_back(left);
-    };
-    const auto no_alias_family = std::numeric_limits<std::size_t>::max();
-
-    // These synthetic edges preserve certificate connectivity only. The
-    // topological dependency graph below still uses every known access row.
-    for (SignalId signal_id = 0U; signal_id < signals.size(); ++signal_id) {
-        const auto& signal = signals[signal_id];
-        const auto& descriptor = signal.descriptor;
-        const bool supported_resolution
-            = descriptor.resolution == ResolutionKind::none
-            || descriptor.resolution == ResolutionKind::sv_wire;
-        const bool supported_value_kind
-            = descriptor.value_kind == ValueKind::logic4
-            || descriptor.value_kind == ValueKind::logic9;
-        const bool known_driver_class = [&] {
-            switch (signal.drivers) {
-            case RegionDriverClass::undriven:
-            case RegionDriverClass::single_whole:
-            case RegionDriverClass::single_partial:
-            case RegionDriverClass::disjoint_partial:
-                return true;
-            case RegionDriverClass::resolved:
-            case RegionDriverClass::unknown:
-                return false;
-            }
-            return false;
-        }();
-        const bool exact_interval_signal
-            = inventory.access_inventory_complete
-            && descriptor.width != 0U
-            && supported_resolution
-            && supported_value_kind
-            && known_driver_class
-            && !descriptor.implicit_driver
-            && !descriptor.external_driver
-            && !descriptor.event_variable
-            && descriptor.observations == RegionObservation::none
-            && signal.observations == RegionObservation::none
-            && !signal.writers_unknown
-            && !signal.dynamic_fork_writers
-            && !signal.partial_projected_transactions
-            && signal_id < signal_alias_family_by_signal.size()
-            && signal_alias_family_by_signal[signal_id] == no_alias_family;
-
-        std::vector<IndexedAccess> accesses;
-        accesses.reserve(signal.readers.size() + signal.writers.size());
-        const auto append_accesses = [&](const std::vector<RegionAccess>& rows,
-                                         const bool writer) {
-            for (const auto& access : rows) {
-                if (access.process < candidate_process.size()
-                    && candidate_process[access.process]) {
-                    accesses.push_back({ &access, writer });
-                }
-            }
-        };
-        append_accesses(signal.readers, false);
-        append_accesses(signal.writers, true);
-        std::ranges::sort(accesses, [&](const IndexedAccess& left,
-                                        const IndexedAccess& right) {
-            const auto key = [&](const IndexedAccess& indexed) {
-                const auto& process = processes[indexed.access->process];
-                return std::tuple { process.scheduling_domain,
-                    process.update_kind, indexed.access->process,
-                    indexed.writer, indexed.access->offset,
-                    indexed.access->width, indexed.access->edge };
-            };
-            return key(left) < key(right);
-        });
-
-        for (std::size_t group_begin = 0U;
-             group_begin < accesses.size();) {
-            const auto& first_access = *accesses[group_begin].access;
-            const auto& group_process = processes[first_access.process];
-            auto group_end = group_begin + 1U;
-            while (group_end < accesses.size()) {
-                const auto& access = *accesses[group_end].access;
-                const auto& process = processes[access.process];
-                if (process.scheduling_domain
-                        != group_process.scheduling_domain
-                    || process.update_kind != group_process.update_kind) {
-                    break;
-                }
-                ++group_end;
-            }
-
-            std::vector<ProcessId> touching;
-            bool has_candidate_writer { };
-            for (auto index = group_begin; index < group_end; ++index) {
-                const auto& indexed = accesses[index];
-                const auto process = indexed.access->process;
-                if (touching.empty() || touching.back() != process) {
-                    touching.push_back(process);
-                }
-                has_candidate_writer = has_candidate_writer || indexed.writer;
-            }
-            if (!has_candidate_writer) {
-                group_begin = group_end;
-                continue;
-            }
-
-            const auto make_interval = [&](const IndexedAccess& indexed,
-                                           AccessInterval& interval) {
-                const auto& access = *indexed.access;
-                if (access.edge != EdgeKind::any) {
-                    return false;
-                }
-                interval.process = access.process;
-                if (access.width == 0U) {
-                    interval.begin = 0U;
-                    interval.end = descriptor.width;
-                    return true;
-                }
-                if (access.offset >= descriptor.width
-                    || access.width > descriptor.width - access.offset) {
-                    return false;
-                }
-                interval.begin = access.offset;
-                interval.end = access.offset + access.width;
-                return true;
-            };
-
-            if (!exact_interval_signal) {
-                // Preserve the conservative prior writer-star for signals
-                // whose ownership, shape, or observation contract is broad.
-                for (auto index = 1U; index < touching.size(); ++index) {
-                    connect(touching.front(), touching[index]);
-                }
-                group_begin = group_end;
-                continue;
-            }
-
-            std::vector<AccessInterval> writer_ranges;
-            std::vector<AccessInterval> reader_ranges;
-            writer_ranges.reserve(group_end - group_begin);
-            reader_ranges.reserve(group_end - group_begin);
-            bool valid_ranges = true;
-            for (auto index = group_begin; index < group_end; ++index) {
-                AccessInterval interval;
-                if (!make_interval(accesses[index], interval)) {
-                    valid_ranges = false;
-                    break;
-                }
-                (accesses[index].writer ? writer_ranges : reader_ranges)
-                    .push_back(interval);
-            }
-            if (!valid_ranges) {
-                for (auto index = 1U; index < touching.size(); ++index) {
-                    connect(touching.front(), touching[index]);
-                }
-                group_begin = group_end;
-                continue;
-            }
-
-            std::ranges::sort(writer_ranges,
-                [](const AccessInterval& left, const AccessInterval& right) {
-                    return std::tuple { left.begin, left.end, left.process }
-                        < std::tuple { right.begin, right.end, right.process };
-                });
-            std::vector<WriterCluster> clusters;
-            clusters.reserve(writer_ranges.size());
-            for (const auto& writer : writer_ranges) {
-                if (clusters.empty()
-                    || writer.begin >= clusters.back().end) {
-                    clusters.push_back({ writer.begin, writer.end,
-                        writer.process });
-                } else {
-                    clusters.back().end = std::max(
-                        clusters.back().end, writer.end);
-                }
-            }
-
-            std::size_t cluster_index { };
-            for (const auto& writer : writer_ranges) {
-                while (cluster_index + 1U < clusters.size()
-                    && writer.begin >= clusters[cluster_index].end) {
-                    ++cluster_index;
-                }
-                connect(clusters[cluster_index].representative,
-                    writer.process);
-            }
-
-            // A contiguous read that reaches multiple writer clusters connects
-            // those clusters. Each adjacent cluster gap needs one synthetic
-            // edge regardless of how many readers bridge across it.
-            std::vector<std::size_t> next_unjoined_gap(clusters.size());
-            for (std::size_t gap = 0U;
-                 gap < next_unjoined_gap.size(); ++gap) {
-                next_unjoined_gap[gap] = gap;
-            }
-            const auto find_unjoined_gap = [&](std::size_t gap) {
-                auto root = gap;
-                while (next_unjoined_gap[root] != root) {
-                    root = next_unjoined_gap[root];
-                }
-                while (next_unjoined_gap[gap] != gap) {
-                    const auto next = next_unjoined_gap[gap];
-                    next_unjoined_gap[gap] = root;
-                    gap = next;
-                }
-                return root;
-            };
-            for (const auto& reader : reader_ranges) {
-                const auto first_cluster = std::upper_bound(
-                    clusters.begin(), clusters.end(), reader.begin,
-                    [](const std::uint32_t begin,
-                       const WriterCluster& cluster) {
-                        return begin < cluster.end;
-                    });
-                const auto past_last_cluster = std::lower_bound(
-                    clusters.begin(), clusters.end(), reader.end,
-                    [](const WriterCluster& cluster,
-                       const std::uint32_t end) {
-                        return cluster.begin < end;
-                    });
-                if (first_cluster == past_last_cluster) {
-                    continue;
-                }
-                const auto first_index = static_cast<std::size_t>(
-                    first_cluster - clusters.begin());
-                const auto past_last_index = static_cast<std::size_t>(
-                    past_last_cluster - clusters.begin());
-                connect(reader.process,
-                    clusters[first_index].representative);
-                auto gap = find_unjoined_gap(first_index);
-                while (gap < past_last_index - 1U) {
-                    connect(clusters[gap].representative,
-                        clusters[gap + 1U].representative);
-                    next_unjoined_gap[gap] = find_unjoined_gap(gap + 1U);
-                    gap = find_unjoined_gap(gap);
-                }
-            }
-            group_begin = group_end;
-        }
-    }
-    for (auto& neighbors : adjacent) {
-        std::ranges::sort(neighbors);
-        neighbors.erase(std::ranges::unique(neighbors).begin(), neighbors.end());
-    }
-
-    constexpr auto no_component = std::numeric_limits<std::size_t>::max();
-    std::vector<std::size_t> component_for_process(
-        processes.size(), no_component);
-    std::vector<bool> visited(processes.size(), false);
-    std::vector<std::vector<ProcessId>> member_groups;
-    for (std::size_t seed = 0U; seed < processes.size(); ++seed) {
-        if (!candidate_process[seed] || visited[seed]) {
-            continue;
-        }
-        const auto component_id = member_groups.size();
-        std::vector<ProcessId> members { static_cast<ProcessId>(seed) };
-        visited[seed] = true;
-        component_for_process[seed] = component_id;
-        for (std::size_t cursor = 0U; cursor < members.size(); ++cursor) {
-            const auto process = members[cursor];
-            for (const auto neighbor : adjacent[process]) {
-                if (!visited[neighbor]) {
-                    visited[neighbor] = true;
-                    component_for_process[neighbor] = component_id;
-                    members.push_back(neighbor);
-                }
-            }
-        }
-        std::ranges::sort(members);
-        member_groups.push_back(std::move(members));
-    }
-
-    std::vector<std::vector<SignalId>> signals_by_component(
-        member_groups.size());
-    std::vector<std::size_t> touching_components;
-    for (SignalId signal_id = 0U; signal_id < signals.size(); ++signal_id) {
-        touching_components.clear();
-        const auto add_component = [&](const RegionAccess& access) {
-            if (access.process < component_for_process.size()) {
-                const auto component = component_for_process[access.process];
-                if (component != no_component) {
-                    touching_components.push_back(component);
-                }
-            }
-        };
-        for (const auto& access : signals[signal_id].readers) {
-            add_component(access);
-        }
-        for (const auto& access : signals[signal_id].writers) {
-            add_component(access);
-        }
-        std::ranges::sort(touching_components);
-        touching_components.erase(
-            std::ranges::unique(touching_components).begin(),
-            touching_components.end());
-        for (const auto component : touching_components) {
-            signals_by_component[component].push_back(signal_id);
-        }
-    }
-
-    inventory.components.reserve(member_groups.size());
-    for (std::size_t component_id = 0U;
-         component_id < member_groups.size(); ++component_id) {
-        RegionComponentCertificate component;
-        component.members = std::move(member_groups[component_id]);
-        for (const auto process : component.members) {
-            component.captured_epochs.push_back(
-                { process, capability_epochs.at(process) });
-        }
-
-        const auto belongs_to_component = [&](const RegionAccess& access) {
-            return access.process < component_for_process.size()
-                && component_for_process[access.process] == component_id;
-        };
-        for (const auto signal_id : signals_by_component[component_id]) {
-            const auto& signal = signals[signal_id];
-            std::array<bool,
-                static_cast<std::size_t>(RegionBoundaryReason::count)> reasons { };
-            const auto mark = [&](RegionBoundaryReason reason) {
-                reasons[reason_index(reason)] = true;
-            };
-            const bool has_member_writer = std::ranges::any_of(signal.writers,
-                belongs_to_component);
-            if (!has_member_writer) {
-                mark(signal.writers.empty()
-                        ? RegionBoundaryReason::no_internal_writer
-                        : RegionBoundaryReason::writer_outside_component);
-            }
-            if (std::ranges::any_of(signal.writers,
-                    [&](const auto& access) {
-                        return !belongs_to_component(access);
-                    })) {
-                mark(RegionBoundaryReason::writer_outside_component);
-            }
-            if (std::ranges::any_of(signal.readers,
-                    [&](const auto& access) {
-                        return !belongs_to_component(access);
-                    })) {
-                mark(RegionBoundaryReason::reader_outside_component);
-            }
-            switch (signal.drivers) {
-            case RegionDriverClass::undriven:
-                mark(RegionBoundaryReason::no_internal_writer);
-                break;
-            case RegionDriverClass::single_whole:
-                break;
-            case RegionDriverClass::single_partial:
-            case RegionDriverClass::disjoint_partial:
-                mark(RegionBoundaryReason::partial_driver);
-                break;
-            case RegionDriverClass::resolved:
-                mark(RegionBoundaryReason::resolved_driver_class);
-                break;
-            case RegionDriverClass::unknown:
-                mark(RegionBoundaryReason::unknown_driver_ownership);
-                break;
-            }
-            if (signal.writers_unknown || signal.dynamic_fork_writers) {
-                mark(RegionBoundaryReason::unknown_driver_ownership);
-            }
-            if (signal.descriptor.resolution != ResolutionKind::none
-                && signal.descriptor.resolution != ResolutionKind::sv_wire) {
-                mark(RegionBoundaryReason::unsupported_resolution_mode);
-            }
-            if (signal.descriptor.implicit_driver) {
-                mark(RegionBoundaryReason::implicit_driver);
-            }
-            if (signal.descriptor.external_driver) {
-                mark(RegionBoundaryReason::external_driver);
-            }
-            if (signal.descriptor.event_variable) {
-                mark(RegionBoundaryReason::event_signal);
-            }
-            if (signal.descriptor.width == 0U) {
-                mark(RegionBoundaryReason::unsupported_width);
-            }
-            if (signal.descriptor.value_kind != ValueKind::logic4
-                && signal.descriptor.value_kind != ValueKind::logic9) {
-                mark(RegionBoundaryReason::unsupported_value_kind);
-            }
-            if (signal.partial_projected_transactions) {
-                mark(RegionBoundaryReason::partial_projected_transactions);
-            }
-            if (!inventory.access_inventory_complete) {
-                mark(RegionBoundaryReason::access_inventory_incomplete);
-            }
-            for (const auto& [capability, reason]
-                : observation_boundary_reasons) {
-                if (has_observation(signal.observations, capability)) {
-                    mark(reason);
-                }
-            }
-
-            const bool hidden = std::ranges::none_of(reasons,
-                [](bool excluded) { return excluded; });
-            if (hidden) {
-                component.structural_internal_signal_candidates.push_back(signal_id);
-                if (signal.descriptor.resolution == ResolutionKind::sv_wire) {
-                    component.runtime_single_driver_proof_signals.push_back(signal_id);
-                    component.requires_runtime_single_driver_proof = true;
-                }
-            } else {
-                component.boundary_signals.push_back(signal_id);
-                for (std::size_t reason = 0U; reason < reasons.size(); ++reason) {
-                    if (reasons[reason]) {
-                        count_boundary_reason(inventory,
-                            static_cast<RegionBoundaryReason>(reason));
-                    }
-                }
-            }
-        }
-
-        if (!inventory.access_inventory_complete) {
-            component.status
-                = RegionComponentCertificateStatus::incomplete_access_inventory;
-        } else if (component.structural_internal_signal_candidates.empty()) {
-            component.status = RegionComponentCertificateStatus::no_internal_state;
-        } else {
-            component.status
-                = RegionComponentCertificateStatus::structural_candidate;
-        }
-        inventory.components.push_back(std::move(component));
-    }
-    return inventory;
-}
-
 } // namespace
 
 namespace detail {
@@ -1837,7 +1335,6 @@ bool RegionSignalAliasFamilyDescriptor::project_range(
 
 RegionGraph RegionGraph::build(std::span<const Process* const> programs,
     std::span<const RegionSignalDescriptor> descriptors,
-    const bool collect_opaque_operation_counts,
     const std::span<const RegionContainerDescriptor> container_descriptors,
     const std::span<const std::uint8_t> process_access_complete,
     const std::span<const RegionSignalAliasFamilyDescriptor>
@@ -1858,7 +1355,7 @@ RegionGraph RegionGraph::build(std::span<const Process* const> programs,
         }
     }
     return region_graph_detail::RegionGraphProgramBuilder::build(
-        process_views, descriptors, collect_opaque_operation_counts,
+        process_views, descriptors,
         container_descriptors, process_access_complete,
         signal_alias_families);
 }
@@ -1866,7 +1363,6 @@ RegionGraph RegionGraph::build(std::span<const Process* const> programs,
 RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
     std::span<const ProcessProgramView> programs,
     std::span<const RegionSignalDescriptor> descriptors,
-    const bool collect_opaque_operation_counts,
     const std::span<const RegionContainerDescriptor> container_descriptors,
     const std::span<const std::uint8_t> process_access_complete,
     const std::span<const RegionSignalAliasFamilyDescriptor>
@@ -1878,18 +1374,8 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             "RegionGraph executor-access inventory has the wrong size");
     }
     RegionGraph graph;
-    std::optional<std::map<std::type_index, std::size_t>>
-        opaque_operation_counts;
-    if (collect_opaque_operation_counts) {
-        opaque_operation_counts.emplace();
-    }
     graph.signals_.resize(descriptors.size());
     graph.processes_.resize(programs.size());
-    graph.capability_epochs_.assign(programs.size(), 1U);
-    constexpr auto no_topological_rank
-        = std::numeric_limits<std::size_t>::max();
-    graph.topological_rank_by_process_.assign(
-        programs.size(), no_topological_rank);
     constexpr auto no_alias_family = std::numeric_limits<std::size_t>::max();
     graph.signal_alias_family_by_signal_.assign(
         descriptors.size(), no_alias_family);
@@ -2061,7 +1547,6 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 auto& target = graph.signals_[signal];
                 target.writers_unknown = true;
                 target.observations = target.observations | RegionObservation::unknown;
-                target.invalidation_dependencies.push_back(node.process);
             }
             if (!has_update_kind) {
                 node.update_kind = kind;
@@ -2092,7 +1577,6 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     auto& target = graph.signals_[leaf.signal];
                     target.observations = target.observations
                         | RegionObservation::unknown;
-                    target.invalidation_dependencies.push_back(node.process);
                 }
                 node.dependencies_unknown = true;
                 return;
@@ -2184,7 +1668,6 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 target.writers_unknown = true;
                 target.observations = target.observations
                     | RegionObservation::unknown;
-                target.invalidation_dependencies.push_back(node.process);
             }
         };
         const auto record_container_write_access = [&](
@@ -2205,7 +1688,6 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 target.writers_unknown = true;
                 target.observations = target.observations
                     | RegionObservation::unknown;
-                target.invalidation_dependencies.push_back(node.process);
             }
             const bool has_full_access = std::ranges::any_of(
                 graph.signals_[signal].writers,
@@ -2326,13 +1808,6 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     == std::numeric_limits<std::uint32_t>::max()) {
                     node.unknown_dependency_instruction
                         = static_cast<std::uint32_t>(instruction);
-                }
-                if (opaque_operation_counts) {
-                    const auto operation_type = visit_operation(
-                        [](const auto& value) {
-                            return std::type_index { typeid(value) };
-                        }, operation);
-                    ++(*opaque_operation_counts)[operation_type];
                 }
                 // Preserve a local invalidation edge when an opaque operation
                 // still names one fixed signal, while keeping the whole-graph
@@ -2520,7 +1995,6 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             return dependencies.size() - 1U;
         };
         for (const auto& access : signal.writers) {
-            signal.invalidation_dependencies.push_back(access.process);
             const auto& process = graph.processes_[access.process];
             if (process.pure) {
                 const auto dependency = dependency_for(process);
@@ -2529,7 +2003,6 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             }
         }
         for (const auto& access : signal.readers) {
-            signal.invalidation_dependencies.push_back(access.process);
             const auto& process = graph.processes_[access.process];
             if (process.pure) {
                 const auto dependency = dependency_for(process);
@@ -2539,35 +2012,6 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 }
             }
         }
-        std::ranges::sort(signal.invalidation_dependencies);
-        signal.invalidation_dependencies.erase(
-            std::ranges::unique(signal.invalidation_dependencies).begin(),
-            signal.invalidation_dependencies.end());
-    }
-    // Observation can run from a no-throw mutation hook. Freeze each family
-    // closure here so invalidation never allocates or exposes a partial epoch
-    // update after public state has changed.
-    graph.signal_alias_invalidation_dependencies_.resize(
-        graph.signal_alias_families_.size());
-    for (std::size_t family_index = 0U;
-         family_index < graph.signal_alias_families_.size();
-         ++family_index) {
-        const auto& family = graph.signal_alias_families_[family_index];
-        auto& family_dependencies
-            = graph.signal_alias_invalidation_dependencies_[family_index];
-        const auto append_dependencies = [&](const SignalId signal) {
-            const auto& member_dependencies
-                = graph.signals_[signal].invalidation_dependencies;
-            family_dependencies.insert(family_dependencies.end(),
-                member_dependencies.begin(), member_dependencies.end());
-        };
-        append_dependencies(family.proxy);
-        for (const auto& leaf : family.leaves) {
-            append_dependencies(leaf.signal);
-        }
-        std::ranges::sort(family_dependencies);
-        family_dependencies.erase(std::ranges::unique(family_dependencies).begin(),
-            family_dependencies.end());
     }
     std::priority_queue<ProcessId, std::vector<ProcessId>, std::greater<>> ready;
     for (std::size_t process = 0; process < programs.size(); ++process) {
@@ -2578,9 +2022,6 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
     while (!ready.empty()) {
         const auto process = ready.top();
         ready.pop();
-        graph.topological_order_.push_back(process);
-        graph.topological_rank_by_process_[process]
-            = graph.topological_order_.size() - 1U;
         // Canonical entries can include several disjoint ranges per owner.
         // Each contributes one pending edge and is retired exactly once.
         for (const auto dependency_id : outputs[process]) {
@@ -2598,41 +2039,8 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
         graph.processes_[process].cyclic_or_dependent_on_cycle
             = graph.processes_[process].pure && pending_process[process] != 0U;
     }
-    graph.certificate_inventory_ = build_certificate_inventory(
-        graph.processes_, graph.signals_, graph.capability_epochs_,
-        graph.signal_alias_family_by_signal_);
-    constexpr auto no_certificate_component
-        = std::numeric_limits<std::size_t>::max();
-    graph.certificate_component_by_process_.assign(
-        graph.processes_.size(), no_certificate_component);
-    graph.component_epochs_stale_.assign(
-        graph.certificate_inventory_.components.size(), 0U);
-    for (std::size_t component = 0U;
-         component < graph.certificate_inventory_.components.size();
-         ++component) {
-        for (const auto process
-            : graph.certificate_inventory_.components[component].members) {
-            auto& process_component
-                = graph.certificate_component_by_process_.at(process);
-            if (process_component != no_certificate_component) {
-                throw std::logic_error {
-                    "RegionGraph process belongs to multiple certificate components"
-                };
-            }
-            process_component = component;
-        }
-    }
-    if (opaque_operation_counts) {
-        graph.certificate_inventory_.opaque_operation_counts.reserve(
-            opaque_operation_counts->size());
-        for (const auto& [operation_type, incidences] : *opaque_operation_counts) {
-            graph.certificate_inventory_.opaque_operation_counts.push_back(
-                { operation_type.name(), incidences });
-        }
-        std::ranges::sort(
-            graph.certificate_inventory_.opaque_operation_counts,
-            {}, &RegionOpaqueOperationCount::type_name);
-    }
+    graph.access_inventory_complete_ = std::ranges::none_of(
+        graph.processes_, &RegionProcessNode::dependencies_unknown);
     return graph;
 }
 
@@ -2845,55 +2253,5 @@ RegionGraphContainerBindings build_region_graph_container_bindings(
 }
 
 } // namespace detail
-
-std::span<const ProcessId> RegionGraph::observe_signal(
-    const SignalId signal, const RegionObservation capabilities)
-{
-    if (signal >= signals_.size()) {
-        throw std::out_of_range("RegionGraph observation signal is invalid");
-    }
-    const auto family_index = signal_alias_family_by_signal_[signal];
-    std::span<const ProcessId> invalidated;
-    if (family_index == std::numeric_limits<std::size_t>::max()) {
-        auto& node = signals_[signal];
-        node.observations = node.observations | capabilities;
-        invalidated = node.invalidation_dependencies;
-    } else {
-        const auto& family = signal_alias_families_[family_index];
-        signals_[family.proxy].observations
-            = signals_[family.proxy].observations | capabilities;
-        for (const auto& leaf : family.leaves) {
-            signals_[leaf.signal].observations
-                = signals_[leaf.signal].observations | capabilities;
-        }
-        invalidated = signal_alias_invalidation_dependencies_[family_index];
-    }
-    constexpr auto no_certificate_component
-        = std::numeric_limits<std::size_t>::max();
-    for (const auto process : invalidated) {
-        auto& epoch = capability_epochs_[process];
-        if (epoch != 0U) {
-            epoch = epoch == std::numeric_limits<std::uint64_t>::max()
-                ? 0U : epoch + 1U;
-        }
-        const auto component = certificate_component_by_process_[process];
-        if (component != no_certificate_component
-            && component_epochs_stale_[component] == 0U) {
-            component_epochs_stale_[component] = 1U;
-        }
-    }
-    return invalidated;
-}
-
-std::uint64_t RegionGraph::capability_epoch(const ProcessId process) const
-{
-    return capability_epochs_.at(process);
-}
-
-bool RegionGraph::component_epochs_current(const std::size_t component) const
-{
-    static_cast<void>(certificate_inventory_.components.at(component));
-    return component_epochs_stale_.at(component) == 0U;
-}
 
 } // namespace fsim::runtime::simir

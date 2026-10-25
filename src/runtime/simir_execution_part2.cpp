@@ -976,58 +976,10 @@ SchedulerBatchResult Interpreter::Impl::execute(
     Scheduler& runtime,
     const std::span<const std::uint64_t> cohort_ids)
 {
-    if (!cohort_ids.empty()
-        && (cohort_ids.front() & systemverilog_wave_payload) != 0U) {
-        return execute_systemverilog_wave(cohort_ids);
-    }
     SchedulerBatchResult result;
     const auto phase_revision = runtime.current_phase_revision();
     std::size_t batch_index { };
     while (batch_index < cohort_ids.size()) {
-        if ((cohort_ids[batch_index]
-                & generic_projected_region_payload) != 0U) {
-            auto region = execute_generic_projected_region(
-                cohort_ids.subspan(batch_index), batch_index);
-            if (region.failure) {
-                // Preserve a prefix whose deferred Update rows were secured.
-                // The scheduler must not replay those publications.
-                result.executed += region.executed;
-                result.failure = region.failure;
-                break;
-            }
-            if (region.executed == 0U) {
-                break;
-            }
-            result.executed += region.executed;
-            batch_index += region.executed;
-            if (runtime.stop_requested()
-                || runtime.current_phase_revision() != phase_revision) {
-                break;
-            }
-            continue;
-        }
-        std::size_t offered_tasks { };
-        try {
-            if (const auto completed = try_execute_fused_static_cohort(
-                    cohort_ids.subspan(batch_index), offered_tasks)) {
-                result.executed += *completed;
-                batch_index += *completed;
-                if (runtime.stop_requested()
-                    || runtime.current_phase_revision()
-                        != phase_revision) {
-                    break;
-                }
-                continue;
-            }
-        } catch (...) {
-            result.failure = std::current_exception();
-            // A prepared executor sets offered_tasks only after accepting a
-            // task prefix. Zero means admission/staging failed before any
-            // task was accepted, so leave the scheduler's whole suffix
-            // available for retry.
-            result.executed += offered_tasks;
-            break;
-        }
         const auto raw_cohort = cohort_ids[batch_index];
         if (raw_cohort >= static_sensitivity_cohorts.size()) {
             result.failure = std::make_exception_ptr(

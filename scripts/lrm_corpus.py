@@ -3627,7 +3627,9 @@ def main(argv: list[str] | None = None) -> int:
     p_run = sub.add_parser("run", help="run cases")
     add_selection(p_run)
     p_run.add_argument("--fsim", type=Path, default=DEFAULT_FSIM)
-    p_run.add_argument("--engine", default="interpreter",
+    # v4 is fsim's default engine; `compiled` names it too, and the
+    # interpreter is the reference oracle.
+    p_run.add_argument("--engine", default="v4",
                        choices=("interpreter", "compiled", "v4"))
     p_run.add_argument("-j", "--jobs", type=int, default=8)
     p_run.add_argument("--timeout", type=float, default=60.0)

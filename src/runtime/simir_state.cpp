@@ -9,239 +9,6 @@
 
 namespace fsim::runtime::simir {
 
-namespace {
-
-template <typename ImplType, typename StatePointer>
-[[nodiscard]] bool prepare_native_a4_single_owner_publication(
-    ImplType& implementation,
-    const SignalId signal_id,
-    const ValueKind expected_kind,
-    const ResolutionKind expected_resolution,
-    StatePointer& a4_state,
-    ProcessId& a4_owner)
-{
-    if (implementation.scheduler.trace_hook_installed()
-        || implementation.native_signal_observation_any_hook
-        || implementation.native_signal_observation_required_hook
-        || implementation.signal_change_hook
-        || implementation.stored_signal_change_hook
-        || implementation.driver_change_hook
-        || implementation.scalar_signal_change_hook
-        || implementation.container_object_change_hook
-        || implementation.container_element_change_hook
-        || implementation.region_recertification_pending
-        || implementation.region_recertification_requires_snapshot
-        || implementation.region_authoritative_recertification_waiting
-        || signal_id >= implementation.signals.size()
-        || signal_id >= implementation.direct_single_driver_routes.size()
-        || signal_id
-            >= implementation.direct_signal_materialization_pending.size()
-        || signal_id >= implementation.direct_wide_signal_offsets.size()
-        || signal_id
-            >= implementation.native_signal_publication_shape_certificate.size()
-        || implementation.native_signal_publication_shape_certificate[
-               signal_id]
-            == 0U
-        || implementation.direct_signal_materialization_pending[signal_id]
-            != 0U
-        || implementation.native_signal_has_runtime_dependency(signal_id)
-        || implementation.has_dynamic_waits(signal_id)
-        || implementation.monitor_watches(signal_id)
-        || signal_id >= implementation.external_driver_values.size()
-        || signal_id >= implementation.forced_values.size()
-        || signal_id >= implementation.forced_masks.size()
-        || signal_id >= implementation.forced_driver_values.size()
-        || signal_id >= implementation.forced_driver_masks.size()
-        || implementation.external_driver_values[signal_id]
-        || implementation.forced_values[signal_id]
-        || implementation.forced_masks[signal_id]
-        || implementation.forced_driver_values[signal_id]
-        || implementation.forced_driver_masks[signal_id]) {
-        return false;
-    }
-
-    const auto wide_offset
-        = implementation.direct_wide_signal_offsets[signal_id];
-    if (wide_offset >= implementation.direct_wide_signal_aval.size()
-        || wide_offset >= implementation.direct_wide_signal_bval.size()
-        || signal_id >= implementation.signal_last_values.size()
-        || signal_id >= implementation.driven_values.size()) {
-        return false;
-    }
-    if (expected_kind == ValueKind::logic4) {
-        if (signal_id >= implementation.direct_signal_aval.size()
-            || signal_id >= implementation.direct_signal_bval.size()
-            || signal_id >= implementation.direct_signal_last_aval.size()
-            || signal_id >= implementation.direct_signal_last_bval.size()) {
-            return false;
-        }
-    } else if (signal_id
-                   >= implementation.direct_signal_logic9_plane0.size()
-        || signal_id
-            >= implementation.direct_signal_logic9_plane1.size()
-        || signal_id
-            >= implementation.direct_signal_logic9_plane2.size()
-        || signal_id
-            >= implementation.direct_signal_logic9_plane3.size()
-        || signal_id
-            >= implementation.direct_signal_last_logic9_plane0.size()
-        || signal_id
-            >= implementation.direct_signal_last_logic9_plane1.size()
-        || signal_id
-            >= implementation.direct_signal_last_logic9_plane2.size()
-        || signal_id
-            >= implementation.direct_signal_last_logic9_plane3.size()
-        || wide_offset
-            >= implementation.direct_wide_signal_logic9_plane2.size()
-        || wide_offset
-            >= implementation.direct_wide_signal_logic9_plane3.size()) {
-        return false;
-    }
-
-    const auto& signal = implementation.signals[signal_id];
-    const auto& route = implementation.direct_single_driver_routes[signal_id];
-    const auto* const driver
-        = implementation.direct_single_driver_record(signal_id);
-    const auto width = signal.initial_value.width();
-    if (!route.active || driver == nullptr
-        || signal.resolution != expected_resolution
-        || signal.value_kind != expected_kind
-        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
-        || signal.event_variable || signal.has_implicit_driver
-        || signal.has_charge_strength || width == 0U || width > 64U) {
-        return false;
-    }
-
-    auto* const candidate_state
-        = implementation.region_authoritative_state_for_signal(signal_id);
-    if (candidate_state == nullptr || !candidate_state->valid()
-        || candidate_state->generation()
-            != implementation.region_runtime_generation
-        || !candidate_state->values().requires_prewrite_unbind()
-        || !candidate_state->values().packed_slots_bound()
-        || !candidate_state->values().packed_signal_slots_bound(signal_id)
-        || !candidate_state->values().packed_owner_slot_bound(
-            signal_id, route.process)
-        || candidate_state->wide_mutation_scratch().words.capacity() < 1U) {
-        return false;
-    }
-
-    const auto& layout = candidate_state->values().layout();
-    const auto owners = layout.owners(signal_id);
-    const auto owner_mask
-        = layout.owner_mask_words(signal_id, route.process);
-    const auto valid_mask = width == 64U
-        ? std::numeric_limits<std::uint64_t>::max()
-        : (UINT64_C(1) << width) - UINT64_C(1);
-    if (owners.size() != 1U || owners.front().process != route.process
-        || owners.front().aliases_stored || owner_mask.size() != 1U
-        || owner_mask.front() != valid_mask
-        || layout.signal(signal_id).storage_class
-            != SignalDriverStorageClass::single_owner) {
-        return false;
-    }
-
-    if (expected_kind == ValueKind::logic4) {
-        const auto current = Logic4Word {
-            width, implementation.direct_signal_aval[signal_id],
-            implementation.direct_signal_bval[signal_id]
-        };
-        const auto previous = Logic4Word {
-            width, implementation.direct_signal_last_aval[signal_id],
-            implementation.direct_signal_last_bval[signal_id]
-        };
-        if (signal.initial_value.unchecked_low_word() != current
-            || implementation.signal_last_values[signal_id]
-                    .unchecked_low_word() != previous
-            || candidate_state->values().current(signal_id)
-                != signal.initial_value
-            || candidate_state->values().previous(signal_id)
-                != implementation.signal_last_values[signal_id]
-            || candidate_state->values().stored(signal_id)
-                != implementation.driven_values[signal_id]
-            || candidate_state->values().owner_value(
-                signal_id, route.process) != driver->value) {
-            return false;
-        }
-    } else {
-        const auto current = Logic9Word {
-            width,
-            { implementation.direct_signal_logic9_plane0[signal_id],
-                implementation.direct_signal_logic9_plane1[signal_id],
-                implementation.direct_signal_logic9_plane2[signal_id],
-                implementation.direct_signal_logic9_plane3[signal_id] }
-        };
-        const auto previous = Logic9Word {
-            width,
-            { implementation.direct_signal_last_logic9_plane0[signal_id],
-                implementation.direct_signal_last_logic9_plane1[signal_id],
-                implementation.direct_signal_last_logic9_plane2[signal_id],
-                implementation.direct_signal_last_logic9_plane3[signal_id] }
-        };
-        if (!current.has_canonical_codes()
-            || !previous.has_canonical_codes()
-            || !signal.initial_value.is_logic9()
-            || !implementation.signal_last_values[signal_id].is_logic9()
-            || !implementation.driven_values[signal_id].is_logic9()
-            || !driver->value.is_logic9()) {
-            return false;
-        }
-        const auto current_value = PackedLogic4::from_logic9_word(current);
-        const auto previous_value = PackedLogic4::from_logic9_word(previous);
-        if (signal.initial_value != current_value
-            || implementation.signal_last_values[signal_id]
-                != previous_value
-            || candidate_state->values().current(signal_id)
-                != signal.initial_value
-            || candidate_state->values().previous(signal_id)
-                != implementation.signal_last_values[signal_id]
-            || candidate_state->values().stored(signal_id)
-                != implementation.driven_values[signal_id]
-            || candidate_state->values().owner_value(
-                signal_id, route.process) != driver->value) {
-            return false;
-        }
-    }
-
-    a4_state = candidate_state;
-    a4_owner = route.process;
-    return true;
-}
-
-template <typename ImplType, typename StatePointer>
-[[nodiscard]] bool publish_native_a4_single_owner_value(
-    ImplType& implementation,
-    const SignalId signal_id,
-    StatePointer* const a4_state,
-    const ProcessId a4_owner,
-    const PackedLogic4& value)
-{
-    if (a4_state == nullptr
-        || signal_id
-            >= implementation.region_authoritative_component_by_signal.size()) {
-        return false;
-    }
-    if (a4_state->values().packed_slots_bound()
-        && implementation.systemverilog_wave_profile_enabled) {
-        ++implementation.systemverilog_wave_profile_a4_authoritative_slot_writes;
-    }
-    const auto revision = a4_state->values().revision();
-    a4_state->values().mirror_owner_into(
-        a4_state->wide_mutation_scratch(), signal_id, a4_owner,
-        value, value, value);
-    return a4_state->valid()
-        && a4_state->generation() == implementation.region_runtime_generation
-        && implementation.region_authoritative_state_for_signal(signal_id)
-            == a4_state
-        && a4_state->values().requires_prewrite_unbind()
-        && a4_state->values().packed_slots_bound()
-        && a4_state->values().packed_signal_slots_bound(signal_id)
-        && a4_state->values().packed_owner_slot_bound(signal_id, a4_owner)
-        && a4_state->values().revision() == revision + 1U;
-}
-
-} // namespace
-
 [[nodiscard]] std::size_t Interpreter::Impl::InertialDriverKeyHash::operator()(
     const InertialDriverKey& key) const noexcept
 {
@@ -277,26 +44,6 @@ template <typename ImplType, typename StatePointer>
     return result;
 }
 
-void Interpreter::Impl::retire_forwarding_epoch_after_scheduler_discard() noexcept
-{
-    bool pending_role_flush { };
-    for (const auto& local : region_local_wave_state_by_component) {
-        if (!local || !local->forwarding_results) {
-            continue;
-        }
-        auto& bank = *local->forwarding_results;
-        const bool applied_roles = !bank.applied_role_mutations.empty()
-            || !bank.applied_role_metadata.empty();
-        bank.discard();
-        if (applied_roles) {
-            bank.private_epoch_retired = true;
-            pending_role_flush = true;
-        }
-    }
-    region_forwarding_role_flush_pending_after_discard = pending_role_flush
-        || region_forwarding_role_journal_nonempty_components != 0U;
-}
-
 void Interpreter::Impl::discard_scheduler_work() noexcept
 {
     clear_systemverilog_update_pool();
@@ -313,36 +60,6 @@ void Interpreter::Impl::discard_scheduler_work() noexcept
             processes[id].queued = false;
         }
     }
-    for (const auto& runtime : region_frontier_runtime_by_component) {
-        if (!runtime || runtime->execution_mode
-                != RegionFrontierExecutionModeV2::generic_deferred_update) {
-            continue;
-        }
-        std::ranges::fill(runtime->generic_queued_ready_words, UINT64_C(0));
-        std::ranges::fill(runtime->generic_queued_members,
-            RegionFrontierComponentRuntime::GenericQueuedMember { });
-        runtime->generic_prefix_processes.clear();
-        runtime->generic_prefix_members.clear();
-    }
-    for (const auto& readiness : vhdl_projected_readiness_by_component) {
-        if (!readiness) {
-            continue;
-        }
-        for (auto& member : readiness->members) {
-            member.receipt = { };
-            member.static_trigger_mask = 0U;
-        }
-        std::ranges::fill(readiness->ticket_member_offsets,
-            std::numeric_limits<std::size_t>::max());
-    }
-    std::ranges::fill(region_readiness_mask_words, 0U);
-    for (auto& queued : region_readiness_queued_by_process) {
-        queued = { };
-    }
-    // Scheduler entries are gone and the update pool has canceled only their
-    // unapplied tokens. Applied role rows stay in the banks until a checked
-    // read, write, or later slot start can materialize them.
-    retire_forwarding_epoch_after_scheduler_discard();
 }
 
 [[nodiscard]] SignalHot& Interpreter::Impl::get_signal(SignalId id)
@@ -453,7 +170,6 @@ void Interpreter::Impl::materialize_direct_signal(const SignalId id)
         || direct_signal_materialization_pending[id] == 0U) {
         return;
     }
-    prepare_region_authoritative_write(id);
     const auto width = signals[id].initial_value.width();
     if (signals[id].value_kind == ValueKind::logic9) {
         const auto current = Logic9Word {
@@ -620,7 +336,6 @@ Interpreter::Impl::ProcessTable::promote(const std::size_t id)
     promoted.suspended_status = compact.suspended_status;
     promoted.cold().design_process = compact.id;
     promoted.cold().random_state = compact.random_state;
-    promoted.clear_frontier_debug_token();
     promoted.cold().current_source = compact.current_source;
     promoted.cold().current_scope = compact.current_scope;
     promoted.cold().track_interpreter_operations
@@ -1872,194 +1587,6 @@ Interpreter::Impl::static_fanout_indices_for(
         .subspan(span.begin, span.count);
 }
 
-RegionAuthoritativeComponentState*
-Interpreter::Impl::region_authoritative_state_for_signal(
-    const SignalId signal) noexcept
-{
-    if (!region_graph
-        || signal >= region_authoritative_component_by_signal.size()) {
-        return nullptr;
-    }
-    const auto component = region_authoritative_component_by_signal[signal];
-    if (component >= region_authoritative_state_by_component.size()
-        || component >= region_graph->certificate_inventory().components.size()
-        || !region_graph->component_epochs_current(component)) {
-        return nullptr;
-    }
-    auto* const state
-        = region_authoritative_state_by_component[component].get();
-    if (state == nullptr || !state->valid()
-        || state->generation() != region_runtime_generation) {
-        return nullptr;
-    }
-    return state;
-}
-
-void Interpreter::Impl::note_region_authoritative_mirror() noexcept
-{
-    if (region_authoritative_recertification_waiting) {
-        // A previous quiet-point reseed found a checked value that the A4
-        // planes cannot represent. Retry only after subsequent state traffic,
-        // rather than rebuilding the whole snapshot at every quiet point.
-        request_full_region_recertification();
-    }
-}
-
-bool Interpreter::Impl::region_has_fanout_member(
-    const SignalId signal, const ProcessId process) noexcept
-{
-    auto* const state = region_authoritative_state_for_signal(signal);
-    if (state == nullptr || process >= region_authoritative_member_index_by_process.size()
-        || process >= region_component_by_process.size()) {
-        return false;
-    }
-    const auto component = region_authoritative_component_by_signal[signal];
-    return region_component_by_process[process] == component
-        && region_authoritative_member_index_by_process[process]
-            < state->readiness().member_count();
-}
-
-bool Interpreter::Impl::region_take_ready(
-    const SignalId signal,
-    const ProcessId process,
-    std::uint64_t& trigger_mask) noexcept
-{
-    trigger_mask = 0U;
-    if (!region_has_fanout_member(signal, process)) {
-        return false;
-    }
-    const auto component = region_authoritative_component_by_signal[signal];
-    auto& state = *region_authoritative_state_by_component[component];
-    const auto member = region_authoritative_member_index_by_process[process];
-    if (!state.readiness().ready(member)) {
-        return false;
-    }
-    trigger_mask = state.readiness().trigger_mask(member);
-    state.readiness().clear(member);
-    if (trigger_mask != 0U && systemverilog_wave_profile_enabled) {
-        ++systemverilog_wave_profile_a4_ready_consumptions;
-    }
-    return trigger_mask != 0U;
-}
-
-void Interpreter::Impl::mark_region_value_change(
-    const SignalId signal,
-    const PackedLogic4& previous,
-    const PackedLogic4& current) noexcept
-{
-    auto* const state = region_authoritative_state_for_signal(signal);
-    if (state == nullptr) {
-        return;
-    }
-    if (systemverilog_wave_profile_enabled) {
-        ++systemverilog_wave_profile_a4_value_marks;
-    }
-    state->fanout().mark_transition(signal, previous, current,
-        EdgeKind::any, state->readiness());
-    if (previous.width() == 0U || current.width() == 0U) {
-        return;
-    }
-    const auto transition = decode_static_transition(
-        edge_value(previous), edge_value(current));
-    if (transition.posedge) {
-        state->fanout().mark_transition(signal, previous, current,
-            EdgeKind::posedge, state->readiness());
-    }
-    if (transition.negedge) {
-        state->fanout().mark_transition(signal, previous, current,
-            EdgeKind::negedge, state->readiness());
-    }
-}
-
-void Interpreter::Impl::mirror_region_stored(
-    const SignalId signal) noexcept
-{
-    note_region_authoritative_mirror();
-    if (auto* const state = region_authoritative_state_for_signal(signal)) {
-        if (state->values().packed_slots_bound()
-            && systemverilog_wave_profile_enabled) {
-            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
-        }
-        if (systemverilog_wave_profile_enabled) {
-            ++systemverilog_wave_profile_a4_stored_mirrors;
-        }
-        const bool was_valid = state->valid();
-        state->values().mirror_stored(signal, driven_values[signal]);
-        if (!state->valid()) {
-            request_full_region_recertification();
-            demote_region_authoritative_slots(
-                region_authoritative_component_by_signal[signal], true);
-            if (was_valid && systemverilog_wave_profile_enabled) {
-                ++systemverilog_wave_profile_a4_invalidations;
-            }
-        }
-    }
-}
-
-void Interpreter::Impl::mirror_region_visible(
-    const SignalId signal) noexcept
-{
-    note_region_authoritative_mirror();
-    if (auto* const state = region_authoritative_state_for_signal(signal)) {
-        if (state->values().packed_slots_bound()
-            && systemverilog_wave_profile_enabled) {
-            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
-        }
-        if (systemverilog_wave_profile_enabled) {
-            ++systemverilog_wave_profile_a4_visible_mirrors;
-        }
-        const bool was_valid = state->valid();
-        state->values().mirror_visible(signal,
-            signal_last_values[signal], signals[signal].initial_value);
-        if (!state->valid()) {
-            request_full_region_recertification();
-            demote_region_authoritative_slots(
-                region_authoritative_component_by_signal[signal], true);
-            if (was_valid && systemverilog_wave_profile_enabled) {
-                ++systemverilog_wave_profile_a4_invalidations;
-            }
-        }
-    }
-}
-
-void Interpreter::Impl::mirror_region_owner(
-    const SignalId signal,
-    const ProcessId process,
-    const PackedLogic4& value) noexcept
-{
-    note_region_authoritative_mirror();
-    if (auto* const state = region_authoritative_state_for_signal(signal)) {
-        if (state->values().packed_slots_bound()
-            && systemverilog_wave_profile_enabled) {
-            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
-        }
-        if (systemverilog_wave_profile_enabled) {
-            ++systemverilog_wave_profile_a4_owner_mirrors;
-        }
-        const bool was_valid = state->valid();
-        const bool reusable_wide_storage
-            = signals[signal].initial_value.width() > 64U
-            && state->values().requires_prewrite_unbind()
-            && state->values().packed_signal_slots_bound(signal)
-            && state->values().packed_owner_slot_bound(signal, process);
-        if (reusable_wide_storage) {
-            state->values().mirror_owner_into(
-                state->wide_mutation_scratch(), signal, process, value,
-                signals[signal].initial_value, driven_values[signal]);
-        } else {
-            state->values().mirror_owner(signal, process, value);
-        }
-        if (!state->valid()) {
-            request_full_region_recertification();
-            demote_region_authoritative_slots(
-                region_authoritative_component_by_signal[signal], true);
-            if (was_valid && systemverilog_wave_profile_enabled) {
-                ++systemverilog_wave_profile_a4_invalidations;
-            }
-        }
-    }
-}
-
 Interpreter::Impl::StaticTransitionMatches
 Interpreter::Impl::decode_static_transition(
     const Logic4 old_value,
@@ -2075,31 +1602,16 @@ void Interpreter::Impl::notify_static_value_change(
     const SignalId signal_id,
     const StaticTransitionMatches transition,
     const bool count_native_word_profile,
-    const SignalChangeOrigin origin,
-    const bool region_value_prepared)
+    const SignalChangeOrigin origin)
 {
     const bool group_static_fanout = fanout_cohort_grouping_enabled;
     const auto visit = next_static_fanout_visit();
     const auto no_cohort = std::numeric_limits<std::size_t>::max();
-    auto* const region_state
-        = region_authoritative_state_for_signal(signal_id);
     // Grouped fanout compares the packed previous/current values below. A
-    // deferred direct publication can change a boundary signal without an
-    // A4 component state to trigger its usual materialization.
+    // deferred direct publication can change a boundary signal, so
+    // materialize it before inspecting the packed values.
     materialize_direct_signal(signal_id);
     const auto visit_category = [&](const EdgeKind edge) {
-        if (region_state != nullptr && !region_value_prepared) {
-            region_state->fanout().mark_transition(signal_id,
-                signal_last_values[signal_id],
-                signals[signal_id].initial_value, edge,
-                region_state->readiness());
-        }
-        if (edge == EdgeKind::any
-            && schedule_systemverilog_grouped_fanout(signal_id,
-                signal_last_values[signal_id],
-                signals[signal_id].initial_value, origin)) {
-            return;
-        }
         for (const auto entry_index :
              static_fanout_indices_for(signal_id, edge)) {
             const auto& sensitivity = static_fanout_entries[entry_index];
@@ -2115,17 +1627,8 @@ void Interpreter::Impl::notify_static_value_change(
                 }
             }
             auto& triggered_process = get_process(sensitivity.process);
-            std::uint64_t grouped_trigger_mask { };
-            if (region_take_ready(signal_id, sensitivity.process,
-                    grouped_trigger_mask)) {
-                triggered_process.static_trigger_mask
-                    |= grouped_trigger_mask;
-            } else {
-                triggered_process.static_trigger_mask
-                    |= sensitivity.static_trigger_mask;
-            }
-            merge_generic_frontier_ready_mask(sensitivity.process,
-                triggered_process.static_trigger_mask);
+            triggered_process.static_trigger_mask
+                |= sensitivity.static_trigger_mask;
 
             if (native_process_count_profile_enabled) {
                 if (count_native_word_profile) {
@@ -2161,34 +1664,6 @@ void Interpreter::Impl::notify_static_value_change(
             if (group_static_fanout && cohort != no_cohort
                 && static_sensitivity_cohorts[cohort].members.size() >= 2U) {
                 auto& grouped = static_sensitivity_cohorts[cohort];
-                bool all_generic_update_members =
-                    origin.process_domain == ProcessSchedulingDomain::generic
-                    && triggered_process.program().scheduling_domain()
-                        == ProcessSchedulingDomain::generic
-                    && region_graph.has_value();
-                if (all_generic_update_members) {
-                    const auto& graph_processes = region_graph->processes();
-                    for (const auto member : grouped.members) {
-                        if (member >= graph_processes.size()
-                            || graph_processes[member].scheduling_domain
-                                != ProcessSchedulingDomain::generic
-                            || graph_processes[member].update_kind
-                                != RegionUpdateKind::generic) {
-                            all_generic_update_members = false;
-                            break;
-                        }
-                    }
-                }
-                if (all_generic_update_members) {
-                    // Generic Update members must reach their per-member
-                    // region admission before the legacy shared-cohort path.
-                    // Queue each triggered member at its original key so its
-                    // trigger mask and queued state remain member-specific.
-                    if (triggered_process.waiting_on_static) {
-                        queue_static_next_delta(sensitivity.process, origin);
-                    }
-                    continue;
-                }
                 if (grouped.fanout_visit != visit) {
                     grouped.fanout_visit = visit;
                     if (origin.process_domain
@@ -2235,6 +1710,21 @@ void Interpreter::Impl::queue_at(
                 == ProcessStartupPhase::after_procedures
         ? after_procedures_order + id
         : StableOrder { id };
+    if (static_kernel_hosts(id)) {
+        const auto program = processes.program_view(id);
+        if (initial && program.postponed()
+            && program.scheduling_domain()
+                != ProcessSchedulingDomain::systemverilog) {
+            // A postponed process makes its initialization run with the
+            // others (IEEE 1076-2019 14.7.5.2): in the Active work of the
+            // first round, not in the postponed region.
+            static_kernel_enqueue_hosted(id, StaticKernelHostedWake::current);
+            return;
+        }
+        static_kernel_enqueue_hosted(
+            id, StaticKernelHostedWake::at, time, order);
+        return;
+    }
     if (auto* const compact = processes.compact_constant(id)) {
         if (compact->halted || compact->queued) {
             return;
@@ -2357,6 +1847,19 @@ void Interpreter::Impl::queue_next_delta(
     const ProcessId id,
     const SignalChangeOrigin origin)
 {
+    if (static_kernel_hosts(id)) {
+        // The host scheduler runs a SystemVerilog process's same-domain
+        // next-delta wake in the next round of the Active region and any
+        // other wake, including every wake of a VHDL (generic domain)
+        // process, in the next delta (IEEE 1076-2019 14.7.5.3).
+        static_kernel_enqueue_hosted(id,
+            origin.process_domain == ProcessSchedulingDomain::systemverilog
+                    && processes.scheduling_domain(id)
+                        == ProcessSchedulingDomain::systemverilog
+                ? StaticKernelHostedWake::active
+                : StaticKernelHostedWake::next_delta);
+        return;
+    }
     auto& process = get_process(id);
     if (process.halted || process.queued) {
         return;
@@ -2390,25 +1893,6 @@ void Interpreter::Impl::queue_next_delta(
                 SchedulerPhase::active, id,
                 [this, id, phase](Scheduler& runtime) {
                     auto& state = get_process(id);
-                    bool queued_as_wave { };
-                    if (phase == SchedulerPhase::active) {
-                        // This callback is already the generic-origin
-                        // next-delta boundary. Requeue only the final SV
-                        // activation as a receipt-bearing wave entry so an
-                        // eligible static member can use the native frontier.
-                        state.queued = false;
-                        try {
-                            queued_as_wave = queue_systemverilog_wave(id);
-                        } catch (...) {
-                            // Restore local queue state before propagating a
-                            // scheduler exception.
-                            state.queued = true;
-                            throw;
-                        }
-                    }
-                    if (queued_as_wave) {
-                        return;
-                    }
                     state.queued = true;
                     runtime.schedule_systemverilog(
                         phase, id,
@@ -2429,6 +1913,17 @@ void Interpreter::Impl::queue_next_delta(
 void Interpreter::Impl::queue_zero_delay_resume(
     ProcessState& process)
 {
+    // A SystemVerilog #0 resumes in the Inactive region; a VHDL
+    // `wait for 0 ns` (generic domain) resumes in the next delta cycle and
+    // takes the queue_next_delta path below (IEEE 1076-2019 10.2).
+    if (static_kernel_hosts(process.id)
+        && process.program().scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog
+        && !process.program().postponed()) {
+        static_kernel_enqueue_hosted(
+            process.id, StaticKernelHostedWake::inactive);
+        return;
+    }
     if (process.halted || process.queued) {
         return;
     }
@@ -2463,31 +1958,20 @@ void Interpreter::Impl::queue_static_next_delta(
     const ProcessId id,
     const SignalChangeOrigin origin)
 {
+    if (static_kernel_hosts(id)) {
+        queue_next_delta(id, origin);
+        return;
+    }
     auto& process = get_process(id);
     if (process.halted || process.queued) {
         return;
     }
     const auto scheduling_domain
         = processes.scheduling_origin(id).process_domain;
-    if (scheduling_domain == ProcessSchedulingDomain::systemverilog
-        && origin.process_domain == ProcessSchedulingDomain::systemverilog
-        && queue_systemverilog_wave(id)) {
-        return;
-    }
     if (scheduling_domain != ProcessSchedulingDomain::generic
         || origin.process_domain
             != ProcessSchedulingDomain::generic) {
         queue_next_delta(id, origin);
-        return;
-    }
-    const bool generic_update = region_graph
-        && id < region_graph->processes().size()
-        && region_graph->processes()[id].update_kind
-            == RegionUpdateKind::generic;
-    if (generic_update && queue_generic_projected_region(id)) {
-        return;
-    }
-    if (!generic_update && queue_generic_projected_region(id)) {
         return;
     }
     const auto no_cohort = std::numeric_limits<std::size_t>::max();
@@ -2506,6 +1990,22 @@ void Interpreter::Impl::queue_static_cohort_next_delta(
     const std::size_t cohort_id)
 {
     auto& cohort = static_sensitivity_cohorts.at(cohort_id);
+    // The kernel schedules a hosted process, so a cohort task must not run
+    // it. The cohort fanout stands for one wake of every member waiting on
+    // the signal, so a hosted member is woken here on its own, as a
+    // generic-domain next-delta wake (the callers only group generic wakes of
+    // generic processes; IEEE 1076-2019 14.7.5.3). This is independent of a
+    // task already pending for the other members.
+    for (const auto member : cohort.members) {
+        if (!static_kernel_hosts(member)) {
+            continue;
+        }
+        const auto& candidate = get_process(member);
+        if (!candidate.halted && !candidate.queued
+            && candidate.waiting_on_static) {
+            queue_next_delta(member, SignalChangeOrigin { });
+        }
+    }
     if (cohort.pending) {
         return;
     }
@@ -2515,7 +2015,7 @@ void Interpreter::Impl::queue_static_cohort_next_delta(
     for (const auto member : cohort.members) {
         auto& candidate = get_process(member);
         if (candidate.halted || candidate.queued
-            || !candidate.waiting_on_static) {
+            || !candidate.waiting_on_static || static_kernel_hosts(member)) {
             continue;
         }
         cohort.ready.push_back(member);
@@ -2533,10 +2033,6 @@ void Interpreter::Impl::queue_static_cohort_next_delta(
     try {
         if (static_phase_batches_enabled) {
             static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
-            if (cohort_id >= generic_projected_region_payload) {
-                throw std::overflow_error(
-                    "static cohort identifier exceeds scheduler payload");
-            }
             scheduler.schedule_next_delta_batchable(
                 phase, order, *this,
                 static_cast<std::uint64_t>(cohort_id), execute_one);
@@ -2586,6 +2082,10 @@ std::uint64_t Interpreter::Impl::next_static_fanout_visit()
 
 void Interpreter::Impl::queue_current(ProcessId id)
 {
+    if (static_kernel_hosts(id)) {
+        static_kernel_enqueue_hosted(id, StaticKernelHostedWake::current);
+        return;
+    }
     if (auto* const compact = processes.compact_constant(id)) {
         if (compact->halted || compact->queued) {
             return;
@@ -2651,6 +2151,10 @@ void Interpreter::Impl::queue_current(ProcessId id)
 
 void Interpreter::Impl::queue_active_current(ProcessId id)
 {
+    if (static_kernel_hosts(id)) {
+        static_kernel_enqueue_hosted(id, StaticKernelHostedWake::active);
+        return;
+    }
     auto& process = get_process(id);
     if (process.halted || process.queued) {
         return;
@@ -2683,15 +2187,17 @@ void Interpreter::Impl::queue_active_current(ProcessId id)
 
 void Interpreter::Impl::queue_static_active_current(const ProcessId id)
 {
+    if (static_kernel_hosts(id)) {
+        static_kernel_enqueue_hosted(id, StaticKernelHostedWake::active);
+        return;
+    }
     auto& process = get_process(id);
     if (process.halted || process.queued) {
         return;
     }
     if (process.program().scheduling_domain()
         == ProcessSchedulingDomain::systemverilog) {
-        if (!queue_systemverilog_wave(id)) {
-            queue_active_current(id);
-        }
+        queue_active_current(id);
         return;
     }
     const auto no_cohort = std::numeric_limits<std::size_t>::max();
@@ -2711,6 +2217,12 @@ void Interpreter::Impl::queue_static_active_current(const ProcessId id)
         auto& candidate = get_process(member);
         if (candidate.halted || candidate.queued
             || !candidate.waiting_on_static) {
+            continue;
+        }
+        if (static_kernel_hosts(member)) {
+            // The kernel runs a hosted member, not the cohort task.
+            static_kernel_enqueue_hosted(
+                member, StaticKernelHostedWake::active);
             continue;
         }
         active_cohort_ready.push_back(member);
@@ -2802,10 +2314,6 @@ void Interpreter::Impl::trigger_event(
         for (const auto& sensitivity : static_fanout_for(member)) {
             auto& process = get_process(sensitivity.process);
             process.static_trigger_mask |= sensitivity.static_trigger_mask;
-            merge_systemverilog_readiness_mask(
-                sensitivity.process, sensitivity.static_trigger_mask);
-            merge_generic_frontier_ready_mask(sensitivity.process,
-                process.static_trigger_mask);
             if (process.waiting_on_static) {
                 if (process.program().scheduling_domain()
                     == origin.process_domain) {
@@ -3225,6 +2733,13 @@ void Interpreter::Impl::notify_execution_point(
     const SourceLocation& source,
     const std::string_view scope)
 {
+    // The static kernel's host process runs a stub program that is not part
+    // of the design: it raises no execution points. (Its members do, through
+    // the ProcessId overload.)
+    if (static_kernel && process.id < fusion_dormant_process.size()
+        && fusion_dormant_process[process.id] == 2U) {
+        return;
+    }
     notify_execution_point(
         process.id, process.cold().design_process, process.program(),
         instruction, kind, source,
@@ -3651,7 +3166,6 @@ void Interpreter::Impl::publish(
     SignalId signal_id, PackedLogic4 value,
     const bool notify_fanout)
 {
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     auto& signal = get_signal(signal_id);
     if (signal.initial_value.width() != value.width()) {
         throw std::invalid_argument(
@@ -3670,8 +3184,6 @@ void Interpreter::Impl::publish_normalized(
     const bool notify_fanout,
     const SignalChangeOrigin origin)
 {
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
-    prepare_region_authoritative_write(signal_id);
     const std::array<SignalId, 1U> changed_signals { signal_id };
     auto reference_refresh
         = prepare_container_value_reference_refresh(changed_signals);
@@ -3693,7 +3205,6 @@ void Interpreter::Impl::publish_normalized(
     }
     signal_last_values[signal_id] = std::move(signal.initial_value);
     signal.initial_value = std::move(value);
-    mirror_region_visible(signal_id);
     refresh_direct_signal_planes(signal_id);
     synchronize_container_value_references(changed_signals, reference_refresh);
     publish_value_change(signal_id, notify_fanout, origin);
@@ -3705,8 +3216,6 @@ void Interpreter::Impl::publish_normalized_word(
     const bool notify_fanout,
     const SignalChangeOrigin origin)
 {
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
-    prepare_region_authoritative_write(signal_id);
     const std::array<SignalId, 1U> changed_signals { signal_id };
     auto reference_refresh
         = prepare_container_value_reference_refresh(changed_signals);
@@ -3722,7 +3231,6 @@ void Interpreter::Impl::publish_normalized_word(
         &active_refresh, finish_refresh);
     note_signal_transaction(signal_id, notify_fanout, origin);
     auto& signal = signals[signal_id];
-    const auto width = signal.initial_value.width();
     const auto current = signal.initial_value.unchecked_low_word();
     if (current == value) {
         synchronize_container_value_references(changed_signals, reference_refresh);
@@ -3733,22 +3241,6 @@ void Interpreter::Impl::publish_normalized_word(
     }
     signal_last_values[signal_id].assign_word(current);
     signal.initial_value.assign_word(value);
-    if (auto* const state
-        = region_authoritative_state_for_signal(signal_id)) {
-        if (state->values().packed_slots_bound()
-            && systemverilog_wave_profile_enabled) {
-            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
-        }
-        state->values().mirror_logic4_word(signal_id,
-            Logic4Word { width, current.aval, current.bval },
-            value,
-            driven_values[signal_id].unchecked_low_word());
-        if (!state->valid()) {
-            request_full_region_recertification();
-            demote_region_authoritative_slots(
-                region_authoritative_component_by_signal[signal_id], true);
-        }
-    }
     const auto encoded = signal.initial_value.unchecked_low_word();
     direct_signal_aval[signal_id] = encoded.aval;
     direct_signal_bval[signal_id] = encoded.bval;
@@ -3794,8 +3286,7 @@ bool Interpreter::Impl::native_word_publication_phase_eligible() noexcept
 }
 
 bool Interpreter::Impl::native_signal_has_runtime_dependency(
-    const SignalId signal_id,
-    const bool region_graph_has_exact_sensitivity_ranges) const noexcept
+    const SignalId signal_id) const noexcept
 {
     if (signal_id >= signals.size()
         || signals[signal_id].public_value_reference_exposed
@@ -3814,21 +3305,8 @@ bool Interpreter::Impl::native_signal_has_runtime_dependency(
         || signal_container_aggregate_aliases[signal_id]) {
         return true;
     }
-    return native_signal_has_non_alias_runtime_dependency(signal_id,
-        region_graph_has_exact_sensitivity_ranges);
-}
-
-bool Interpreter::Impl::native_signal_has_non_alias_runtime_dependency(
-    const SignalId signal_id,
-    const bool region_graph_has_exact_sensitivity_ranges) const noexcept
-{
-    if (signal_id >= signals.size()
-        || signals[signal_id].public_value_reference_exposed
-        || native_signal_dependencies_unknown
-        || native_signal_dependency_mask.size() != signals.size()
-        || (region_graph_has_exact_sensitivity_ranges
-            && native_signal_non_range_dependency_mask.size()
-                != signals.size())) {
+    if (native_signal_dependencies_unknown
+        || native_signal_dependency_mask.size() != signals.size()) {
         return true;
     }
     if (requires_sampled_values) {
@@ -3853,39 +3331,30 @@ bool Interpreter::Impl::native_signal_has_non_alias_runtime_dependency(
     if (monitor_watches(signal_id)) {
         return true;
     }
-    return region_graph_has_exact_sensitivity_ranges
-        ? native_signal_non_range_dependency_mask[signal_id] != 0U
-        : native_signal_dependency_mask[signal_id] != 0U;
+    return native_signal_dependency_mask[signal_id] != 0U;
 }
 
 void Interpreter::Impl::build_native_signal_dependency_masks() noexcept
 {
     native_signal_dependencies_unknown = false;
     native_signal_dependency_mask.clear();
-    native_signal_non_range_dependency_mask.clear();
     module_path_destination_mask.clear();
     try {
         native_signal_dependency_mask.assign(signals.size(), 0U);
-        native_signal_non_range_dependency_mask.assign(signals.size(), 0U);
         module_path_destination_mask.assign(signals.size(), 0U);
     } catch (...) {
         native_signal_dependency_mask.clear();
-        native_signal_non_range_dependency_mask.clear();
         module_path_destination_mask.clear();
         native_signal_dependencies_unknown = true;
         return;
     }
 
-    const auto mark_signal = [&](const SignalId signal,
-                                 const bool non_range_dependency = true) {
+    const auto mark_signal = [&](const SignalId signal) {
         if (signal >= native_signal_dependency_mask.size()) {
             native_signal_dependencies_unknown = true;
             return;
         }
         native_signal_dependency_mask[signal] = 1U;
-        if (non_range_dependency) {
-            native_signal_non_range_dependency_mask[signal] = 1U;
-        }
     };
     const auto mark_terminal = [&](const ModulePathTerminal& terminal) {
         mark_signal(terminal.signal);
@@ -3924,8 +3393,8 @@ void Interpreter::Impl::build_native_signal_dependency_masks() noexcept
         mark_expression(event.condition);
     };
 
-    // Legacy native publication/cone routes lack range-aware readiness proofs.
-    // Keep these signals on checked publication until RegionGraph certifies them.
+    // Native publication routes lack range-aware readiness proofs. Keep
+    // ranged static sensitivities on checked publication.
     for (ProcessId id = 0U; id < processes.size(); ++id) {
         // Inert static kernel members have no static sensitivity.
         if (static_kernel && id < fusion_dormant_process.size()
@@ -3935,7 +3404,7 @@ void Interpreter::Impl::build_native_signal_dependency_masks() noexcept
         const auto program = processes.program_view(id);
         for (const auto& sensitivity : program.static_sensitivity()) {
             if (sensitivity.width != 0U)
-                mark_signal(sensitivity.signal, false);
+                mark_signal(sensitivity.signal);
         }
     }
 
@@ -4156,22 +3625,11 @@ void Interpreter::Impl::publish_native_word(
             "native signal publication is disabled during package startup"
         };
     }
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
 
     const auto wide_offset = direct_wide_signal_offsets[signal_id];
-    RegionAuthoritativeComponentState* a4_state { };
-    ProcessId a4_owner { };
-    const bool use_a4_direct_publication
-        = prepare_native_a4_single_owner_publication(*this, signal_id,
-            ValueKind::logic4, ResolutionKind::sv_wire, a4_state, a4_owner);
-    if (!use_a4_direct_publication) {
-        prepare_region_authoritative_write(signal_id);
-    }
-    note_region_authoritative_mirror();
 
     const bool has_static_fanout = !static_fanout_for(signal_id).empty();
-    note_signal_transaction(signal_id, has_static_fanout, origin,
-        use_a4_direct_publication);
+    note_signal_transaction(signal_id, has_static_fanout, origin);
     const auto width = signals[signal_id].initial_value.width();
     const auto mask = width == 64U
         ? std::numeric_limits<std::uint64_t>::max()
@@ -4185,13 +3643,7 @@ void Interpreter::Impl::publish_native_word(
         return;
     }
 
-    std::optional<PackedLogic4> packed_value;
-    if (use_a4_direct_publication) {
-        packed_value.emplace(PackedLogic4::from_aval_bval(
-            width, value.aval, value.bval));
-    }
-
-    completed_callback_observation_generation = 0U;
+    callback_observation_complete = false;
     direct_signal_last_aval[signal_id] = current.aval;
     direct_signal_last_bval[signal_id] = current.bval;
     direct_signal_aval[signal_id] = value.aval;
@@ -4199,53 +3651,7 @@ void Interpreter::Impl::publish_native_word(
     direct_wide_signal_aval[wide_offset] = value.aval;
     direct_wide_signal_bval[wide_offset] = value.bval;
 
-    bool a4_direct_publication_completed { };
-    if (use_a4_direct_publication) {
-        a4_direct_publication_completed
-            = publish_native_a4_single_owner_value(
-                *this, signal_id, a4_state, a4_owner, *packed_value);
-        if (!a4_direct_publication_completed) {
-            request_full_region_recertification();
-            demote_region_authoritative_slots(
-                region_authoritative_component_by_signal[signal_id], true);
-        }
-    }
-
-    if (a4_direct_publication_completed) {
-        mark_region_value_change(signal_id,
-            signal_last_values[signal_id], signals[signal_id].initial_value);
-    } else {
-        direct_signal_materialization_pending[signal_id] = 1U;
-        if (use_a4_direct_publication) {
-            materialize_direct_signal(signal_id);
-        }
-        if (auto* const state
-            = region_authoritative_state_for_signal(signal_id)) {
-            materialize_direct_signal(signal_id);
-            if (state->values().packed_slots_bound()
-                && systemverilog_wave_profile_enabled) {
-                ++systemverilog_wave_profile_a4_authoritative_slot_writes;
-            }
-            state->values().mirror_logic4_word(signal_id, current, value,
-                driven_values[signal_id].unchecked_low_word());
-            const auto& route = direct_single_driver_routes[signal_id];
-            if (route.active) {
-                if (const auto* const record
-                    = direct_single_driver_record(signal_id)) {
-                    state->values().mirror_owner(
-                        signal_id, route.process, record->value);
-                }
-            }
-            if (!state->valid()) {
-                request_full_region_recertification();
-                demote_region_authoritative_slots(
-                    region_authoritative_component_by_signal[signal_id], true);
-            }
-            mark_region_value_change(signal_id,
-                signal_last_values[signal_id],
-                signals[signal_id].initial_value);
-        }
-    }
+    direct_signal_materialization_pending[signal_id] = 1U;
 
     ++signal_value_revisions[signal_id];
     note_aggregate_leaf_current_change(signal_id);
@@ -4277,8 +3683,7 @@ void Interpreter::Impl::publish_native_word(
         transition = decode_static_transition(
             decode_low(current), decode_low(value));
     }
-    notify_static_value_change(
-        signal_id, transition, true, origin, true);
+    notify_static_value_change(signal_id, transition, true, origin);
 }
 
 void Interpreter::Impl::publish_native_logic9_word(
@@ -4286,7 +3691,6 @@ void Interpreter::Impl::publish_native_logic9_word(
     Logic9Word value,
     const SignalChangeOrigin origin)
 {
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     const auto width = signals[signal_id].initial_value.width();
     const auto mask = width == 64U
         ? std::numeric_limits<std::uint64_t>::max()
@@ -4296,23 +3700,11 @@ void Interpreter::Impl::publish_native_logic9_word(
         plane &= mask;
     }
 
-    RegionAuthoritativeComponentState* a4_state { };
-    ProcessId a4_owner { };
-    const bool use_a4_direct_publication
-        = value.has_canonical_codes()
-        && prepare_native_a4_single_owner_publication(*this, signal_id,
-            ValueKind::logic9, ResolutionKind::std_logic, a4_state, a4_owner);
-    if (!use_a4_direct_publication) {
-        prepare_region_authoritative_write(signal_id);
-    }
-    note_region_authoritative_mirror();
     const bool has_static_fanout = !static_fanout_for(signal_id).empty();
-    note_signal_transaction(signal_id, has_static_fanout, origin,
-        use_a4_direct_publication);
+    note_signal_transaction(signal_id, has_static_fanout, origin);
 
     // Preserve the checked runtime value even if a raw native plane contains
-    // a reserved code. The A4 mirror declines this component until a later
-    // quiet-point snapshot can seed valid checked values again.
+    // a reserved code.
     const auto current = Logic9Word {
         width,
         { direct_signal_logic9_plane0[signal_id],
@@ -4328,11 +3720,7 @@ void Interpreter::Impl::publish_native_logic9_word(
         == 0U) {
         return;
     }
-    completed_callback_observation_generation = 0U;
-    std::optional<PackedLogic4> packed_value;
-    if (use_a4_direct_publication) {
-        packed_value.emplace(PackedLogic4::from_logic9_word(value));
-    }
+    callback_observation_complete = false;
     direct_signal_last_logic9_plane0[signal_id] = current.planes[0];
     direct_signal_last_logic9_plane1[signal_id] = current.planes[1];
     direct_signal_last_logic9_plane2[signal_id] = current.planes[2];
@@ -4342,58 +3730,7 @@ void Interpreter::Impl::publish_native_logic9_word(
     direct_signal_logic9_plane2[signal_id] = value.planes[2];
     direct_signal_logic9_plane3[signal_id] = value.planes[3];
 
-    const auto wide_offset = direct_wide_signal_offsets[signal_id];
-    bool a4_direct_publication_completed { };
-    if (use_a4_direct_publication) {
-        direct_wide_signal_aval[wide_offset] = value.planes[0U];
-        direct_wide_signal_bval[wide_offset] = value.planes[1U];
-        direct_wide_signal_logic9_plane2[wide_offset] = value.planes[2U];
-        direct_wide_signal_logic9_plane3[wide_offset] = value.planes[3U];
-        a4_direct_publication_completed
-            = publish_native_a4_single_owner_value(
-                *this, signal_id, a4_state, a4_owner, *packed_value);
-        if (!a4_direct_publication_completed) {
-            request_full_region_recertification();
-            demote_region_authoritative_slots(
-                region_authoritative_component_by_signal[signal_id], true);
-        }
-    }
-
-    if (!a4_direct_publication_completed) {
-        direct_signal_materialization_pending[signal_id] = 1U;
-        if (use_a4_direct_publication) {
-            materialize_direct_signal(signal_id);
-        }
-        if (auto* const state
-            = region_authoritative_state_for_signal(signal_id)) {
-            materialize_direct_signal(signal_id);
-            if (state->values().packed_slots_bound()
-                && systemverilog_wave_profile_enabled) {
-                ++systemverilog_wave_profile_a4_authoritative_slot_writes;
-            }
-            state->values().mirror_logic9_word(signal_id, current, value,
-                driven_values[signal_id].logic9_low_word());
-            const auto& route = direct_single_driver_routes[signal_id];
-            if (route.active) {
-                if (const auto* const record
-                    = direct_single_driver_record(signal_id)) {
-                    state->values().mirror_owner(
-                        signal_id, route.process, record->value);
-                }
-            }
-            if (!state->valid()) {
-                request_full_region_recertification();
-                demote_region_authoritative_slots(
-                    region_authoritative_component_by_signal[signal_id],
-                    true);
-            }
-            mark_region_value_change(signal_id,
-                signal_last_values[signal_id], signals[signal_id].initial_value);
-        }
-    } else {
-        mark_region_value_change(signal_id,
-            signal_last_values[signal_id], signals[signal_id].initial_value);
-    }
+    direct_signal_materialization_pending[signal_id] = 1U;
 
     ++signal_value_revisions[signal_id];
     note_aggregate_leaf_current_change(signal_id);
@@ -4431,30 +3768,14 @@ void Interpreter::Impl::publish_native_logic9_word(
         transition = decode_static_transition(
             decode_low(current), decode_low(value));
     }
-    notify_static_value_change(
-        signal_id, transition, false, origin, true);
+    notify_static_value_change(signal_id, transition, false, origin);
 }
 
 void Interpreter::Impl::note_signal_transaction(
     const SignalId signal_id,
     const bool notify_fanout,
-    const SignalChangeOrigin origin,
-    const bool authoritative_write_prepared)
+    const SignalChangeOrigin origin)
 {
-    if (!authoritative_write_prepared) {
-        prepare_region_authoritative_write(signal_id);
-        mirror_region_stored(signal_id);
-    }
-    if (notify_fanout) {
-        if (auto* const region_state
-            = region_authoritative_state_for_signal(signal_id)) {
-            if (systemverilog_wave_profile_enabled) {
-                ++systemverilog_wave_profile_a4_transaction_marks;
-            }
-            region_state->fanout().mark_transaction(
-                signal_id, region_state->readiness());
-        }
-    }
     scheduler.note_signal_transaction(signal_id);
     // A port conversion of an active source is itself active in the same
     // cycle, even without an event (IEEE 1076-2008 14.7.3.3).
@@ -4497,17 +3818,8 @@ void Interpreter::Impl::note_signal_transaction(
         for (const auto entry_index : transaction_fanout) {
             const auto& sensitivity = static_fanout_entries[entry_index];
             auto& triggered_process = get_process(sensitivity.process);
-            std::uint64_t grouped_trigger_mask { };
-            if (region_take_ready(signal_id, sensitivity.process,
-                    grouped_trigger_mask)) {
-                triggered_process.static_trigger_mask
-                    |= grouped_trigger_mask;
-            } else {
-                triggered_process.static_trigger_mask
-                    |= sensitivity.static_trigger_mask;
-            }
-            merge_generic_frontier_ready_mask(sensitivity.process,
-                triggered_process.static_trigger_mask);
+            triggered_process.static_trigger_mask
+                |= sensitivity.static_trigger_mask;
             const auto cohort
                 = sensitivity.process
                         < static_sensitivity_cohort_by_process.size()
@@ -4518,30 +3830,6 @@ void Interpreter::Impl::note_signal_transaction(
                 && static_sensitivity_cohorts[cohort].members.size()
                     >= 2U) {
                 auto& grouped = static_sensitivity_cohorts[cohort];
-                bool all_generic_update_members =
-                    origin.process_domain == ProcessSchedulingDomain::generic
-                    && triggered_process.program().scheduling_domain()
-                        == ProcessSchedulingDomain::generic
-                    && region_graph.has_value();
-                if (all_generic_update_members) {
-                    const auto& graph_processes = region_graph->processes();
-                    for (const auto member : grouped.members) {
-                        if (member >= graph_processes.size()
-                            || graph_processes[member].scheduling_domain
-                                != ProcessSchedulingDomain::generic
-                            || graph_processes[member].update_kind
-                                != RegionUpdateKind::generic) {
-                            all_generic_update_members = false;
-                            break;
-                        }
-                    }
-                }
-                if (all_generic_update_members) {
-                    if (triggered_process.waiting_on_static) {
-                        queue_static_next_delta(sensitivity.process, origin);
-                    }
-                    continue;
-                }
                 if (grouped.fanout_visit != visit) {
                     grouped.fanout_visit = visit;
                     if (origin.process_domain
@@ -4601,7 +3889,6 @@ void Interpreter::Impl::publish_aggregate_signal_value_change(
     std::exception_ptr* observer_error,
     const bool event_prepared)
 {
-    prepare_region_authoritative_write(proxy);
     // Whole-family writes can preinstall the stamp and history before traces.
     if (!event_prepared) {
         record_signal_event(proxy, scheduler.delta() + 1U, origin);
@@ -4723,11 +4010,11 @@ void Interpreter::Impl::publish_value_change(
         record_signal_event(
             signal_id, scheduler.delta() + 1U, origin);
     }
-    if (notify_fanout) {
-        mark_region_value_change(
-            signal_id, old_value, signal.initial_value);
-    }
     scheduler.note_signal_change(signal_id);
+    if (static_kernel_import_enabled) {
+        // An opaque host process wrote a kernel-owned signal.
+        import_static_kernel_write(signal_id, origin);
+    }
     evaluate_module_timing_checks(signal_id, old_value, signal.initial_value);
     auto* alias_observer = container_alias_leaf_observer(signal_id);
     if (signal_change_hook && alias_observer) {
@@ -4775,8 +4062,7 @@ void Interpreter::Impl::publish_value_change(
                 edge_value(old_value), edge_value(signal.initial_value));
             transition_decoded = true;
         }
-        notify_static_value_change(
-            signal_id, transition, false, origin, true);
+        notify_static_value_change(signal_id, transition, false, origin);
 
         // Copy because queue_next_delta removes a process from every dynamic list.
         const auto dynamic = dynamic_fanout[signal_id];

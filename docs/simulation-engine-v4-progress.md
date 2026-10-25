@@ -20,6 +20,13 @@ Every target also requires exact Vivado parity on the deterministic round-2 fixt
 
 ## 2. Current status (2026-10-07)
 
+**2026-10-25 (Stage D, retirement bundles 1-2):** the legacy per-process LLVM JIT
+is deleted from the non-test code (`src/compiler/llvm_jit*`, `src/compiler/llvm/`,
+the `application_executor*` services, the app-layer JIT setup block and AOT
+receipts). `--engine compiled` is an alias of v4; `fsim_compiler` holds only
+`static_kernel_codegen.cpp`. The region/frontier runtime (bundle 3) is still
+present but unreachable. The numbers below predate the removal.
+
 Paired qualification `v4-p1-pair-10071004` (7 pairs, CPU 9, fresh caches, frozen
 candidate `.local-artifacts/v4cand-p1-10071004`) against the HEAD control:
 
@@ -130,6 +137,83 @@ per completed phase).
 | D5 whole-design fallback | done (planner disables the kernel with a reason) | `elaborated_design_static_kernel.cpp` |
 
 ## 4. Log
+
+### 2026-10-25 (night): legacy JIT gone, debugger on the kernel, perf regressions fixed (sweep `v4b6`)
+
+The legacy per-process LLVM JIT and its runtime are deleted, and the kernel
+runs every SystemVerilog and VHDL client.
+- **Retirement bundles 1-3.** Bundles 1-2 removed the JIT code (non-test and
+  tests). Bundle 3 removed the runtime machinery that only the JIT reached:
+  - the native frontier, the A4 signal state and the region-graph runtime;
+  - region activation and programs, the fused static graph and the owned
+    drivers;
+  - the scheduler frontier-batch API.
+  `RegionGraph` keeps only the build and the access and alias analyses.
+  Signal driver inventories moved to `simir_signal_driver_inventory.cpp`, and
+  the surviving observation barriers to `simir_observation.cpp`.
+- **Debugger on the kernel.** `fsim debug` and every Tcl session now plan the
+  kernel's access the same way as the run command (`plan_kernel_access`):
+  foreign and observing, and the debugger also gets stoppable threads. Before
+  this, the Tcl path never set an access plan, so the debugger ran on the
+  interpreter. `FSIM_DEBUG_KERNEL=0` still selects the interpreter. The SV and
+  VHDL debugger scripts produce identical transcripts on both (breakpoints,
+  step, frame, signal breakpoints, inspect).
+- **Simulate regressions found by the G5 campaign.**
+  - **`fork_callable_frames` (M1) was too broad.** It is now
+    `fork_holds_suspended_frame`: a process is refused only when a fork child
+    can enter an automatic callable that may suspend, or when a join_any or
+    join_none fork coexists with such a callable (IEEE 1800-2023 9.3.2,
+    13.4.2).
+  - **The sole-writer partition rule (M1) ignored bit ranges.** Writers of
+    disjoint bits of one vector now stay partitioned (one continuous
+    assignment per bit, as in `gf_mult`).
+  - **The cycle exclusion (M1) was too broad.** It applies only to a cycle
+    with a member that assigns one signal more than once per run.
+  - **`CopyContainerRegister`.** The whole-array copy that B81 lowering emits
+    is supported in behavioral members (`KOp::mem_copy`).
+- **Kernel correctness.**
+  - Private containers of the member in the host stub's slot.
+  - Final blocks see the values a `$finish`-ed activation staged (the end of
+    simulation commits every output at once).
+  - Behavioral waiters on a part-select wake only when the selected bits
+    change (9.4.2).
+- **Audits.** The diagnostic codes only the JIT emitted (FSIM-AOT-002,
+  FSIM-CACHE-0004, FSIM-COV-011) are retired. Inventory anchors and pins
+  follow the moved code, and the closure witness `fsim.llvm` is replaced by
+  `fsim.application.static-kernel`.
+
+| Case (simulate, CPU 9) | v4a1 | v4a7 | v4a8 |
+|---|---:|---:|---:|
+| original_throughput | 2.08 s | 15.3 s | 2.4 s |
+| original_codec | >250 s | 120 s | 3.1 s |
+
+Labelled ctest: 18 failures, all known (`tools/ctest-known-v4.txt`). The
+`.compiled` names on the B96 list are now `.v4`, and five entries named
+deleted tests.
+
+Sweep `v4b6`: the frozen binary `fsim-archive/v4a8`, `--engine v4`, against
+`b96x1`.
+
+| Suite | Pass (base) | Pass (v4) | Planned | Admitted | host=0 | Host processes | Hosted processes |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ivtest | 2635 | 2642 | 2273 | 2273 | 2273 | 0 | 2592 |
+| sv-tests | 1495 | 1495 | 387 | 387 | 387 | 0 | 422 |
+| verilator | 2065 | 2070 | 2087 | 2087 | 2087 | 0 | 3647 |
+| vests | 3646 | 3646 | 1606 | 1606 | 1605 | 1 | 980 |
+| nvc | 1261 | 1261 | 1209 | 1209 | 1198 | 12 | 1058 |
+| vhdl-compliance | 65 | 65 | 65 | 65 | 65 | 0 | 86 |
+
+- **Losses against `b96x1`: 0 (G2 met).** Every planned simulate admits the
+  kernel; no design-level refusal remains.
+- **Host processes (G3 open, 12 cases).**
+  - Eight designs have no native member and one VHDL process beside
+    implicit-signal drivers (SystemVerilog scheduling domain). The planner
+    counts the drivers as SystemVerilog processes and plans the design in
+    SystemVerilog mode, which leaves the VHDL process on the host.
+  - Two designs (`bounds43`, `issue1161`) have only port-conversion
+    programs; the trivial plan counts them as host processes.
+  - Two mixed designs (`vlog1`, `issue1285`) have a Verilog process with
+    non-`logic` registers in a VHDL kernel.
 
 ### 2026-10-25 (later): M1 — no losses on `--engine v4` (sweep `v4b3`)
 

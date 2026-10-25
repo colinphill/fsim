@@ -88,7 +88,7 @@ void Interpreter::Impl::initialize_package_static_signal(
             "package static signal initialization is outside its startup phase"
         };
     }
-    if (started || region_graph || scheduler.has_pending()
+    if (started || scheduler.has_pending()
         || signal_id >= signals.size()
         || signal_id >= driven_values.size()
         || signal_id >= signal_last_values.size()
@@ -207,7 +207,6 @@ void Interpreter::Impl::commit(
         initialize_package_static_signal(signal_id, std::move(value));
         return;
     }
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     if (signal_id < signal_container_aggregate_aliases.size()
         && signal_container_aggregate_aliases[signal_id]) {
@@ -230,9 +229,6 @@ void Interpreter::Impl::commit(
         return;
     }
     const auto& signal = get_signal(signal_id);
-    if (signal.event_variable) {
-        require_all_region_forwarding_role_journals_flushed();
-    }
     if (driven_values[signal_id].width() != value.width()) {
         throw std::invalid_argument(
             "SimIR signal assignment width mismatch (signal "
@@ -249,8 +245,6 @@ void Interpreter::Impl::commit(
         }
         const auto old_value = signals[signal_id].initial_value;
         const auto& members = event_identity_members.at(*identity);
-        prepare_region_authoritative_write(
-            std::span<const SignalId> { members });
         for (const auto member : members) {
             const bool stored_changed = driven_values[member] != value;
             driven_values[member] = value;
@@ -295,10 +289,8 @@ void Interpreter::Impl::commit(
         refresh_switch_network();
         return;
     }
-    prepare_region_authoritative_write(signal_id);
     const bool stored_changed = driven_values[signal_id] != value;
     driven_values[signal_id] = value;
-    mirror_region_stored(signal_id);
     if (stored_changed) {
         note_aggregate_leaf_stored_change(signal_id);
     }
@@ -317,7 +309,6 @@ void Interpreter::Impl::commit_direct_single_driver(
     const SignalId signal_id,
     PackedLogic4 value)
 {
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     // This path is selected only for a prevalidated native write to an
     // unforced, strength-free SystemVerilog net with one driver. The generic
@@ -329,10 +320,8 @@ void Interpreter::Impl::commit_direct_single_driver(
         commit_resolved(signal_id, std::move(value));
         return;
     }
-    prepare_region_authoritative_write(signal_id);
     const bool stored_changed = driven_values[signal_id] != value;
     driven_values[signal_id] = value;
-    mirror_region_stored(signal_id);
     if (stored_changed) {
         note_aggregate_leaf_stored_change(signal_id);
     }
@@ -570,19 +559,12 @@ void Interpreter::Impl::refresh_switch_network()
     std::ranges::sort(endpoints);
     endpoints.erase(
         std::unique(endpoints.begin(), endpoints.end()), endpoints.end());
-    for (const auto signal : endpoints) {
-        require_region_forwarding_role_journal_flushed_for_signal(signal);
-    }
     std::vector<std::pair<SignalId, PackedLogic4>> values;
     values.reserve(endpoints.size());
     for (const auto signal : endpoints) {
         values.emplace_back(signal, resolved_driver_value(signal));
     }
 
-    for (const auto& [signal, value] : values) {
-        (void)value;
-        prepare_region_authoritative_write(signal);
-    }
     const auto refreshing_components
         = std::move(dirty_switch_components);
     dirty_switch_components.clear();
@@ -595,7 +577,6 @@ void Interpreter::Impl::refresh_switch_network()
         for (auto& [signal, value] : values) {
             const bool stored_changed = driven_values[signal] != value;
             driven_values[signal] = value;
-            mirror_region_stored(signal);
             if (stored_changed) {
                 note_aggregate_leaf_stored_change(signal);
             }
@@ -667,7 +648,6 @@ void Interpreter::Impl::update_container_alias_force(
     current.reserve(aliases.size());
     const auto end = offset + width;
     bool any_update { };
-    invalidate_fused_static_cohorts();
 
     for (std::size_t ordinal = 0U; ordinal < aliases.size(); ++ordinal) {
         const auto signal = aliases[ordinal]->signal;
@@ -680,7 +660,6 @@ void Interpreter::Impl::update_container_alias_force(
             continue;
         }
 
-        demote_owned_driver(signal);
         auto& update = updates[ordinal];
         update.active = true;
         any_update = true;
@@ -816,7 +795,6 @@ void Interpreter::Impl::force_slice(
             "package static startup cannot force a signal slice"
         };
     }
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
     if (signal.systemverilog_scalar != SystemVerilogScalarKind::None
@@ -841,7 +819,6 @@ void Interpreter::Impl::force_slice(
         const auto element_width
             = get_container_object(object).initial_value.type.element_width;
         const auto end = offset + value.width();
-        prepare_region_authoritative_family_write(object);
         begin_aggregate_signal_batch(signal_id);
         try {
             for (std::size_t ordinal = 0U;
@@ -871,13 +848,6 @@ void Interpreter::Impl::force_slice(
         && record_port_force_layer(signal_id, value, offset, port_segment)) {
         return;
     }
-    prepare_region_authoritative_write(signal_id);
-    if (signal_id < region_authoritative_component_by_signal.size()) {
-        demote_region_authoritative_slots(
-            region_authoritative_component_by_signal[signal_id], false);
-    }
-    invalidate_fused_static_cohorts();
-    demote_owned_driver(signal_id);
     value = coerce_value_kind(std::move(value), signal.value_kind);
     if (!forced_values[signal_id]) {
         forced_values[signal_id]
@@ -913,7 +883,6 @@ void Interpreter::Impl::release_slice(
             "package static startup cannot release a signal slice force"
         };
     }
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
     if (signal.systemverilog_scalar != SystemVerilogScalarKind::None
@@ -938,7 +907,6 @@ void Interpreter::Impl::release_slice(
         const auto element_width
             = get_container_object(object).initial_value.type.element_width;
         const auto end = offset + width;
-        prepare_region_authoritative_family_write(object);
         begin_aggregate_signal_batch(signal_id);
         try {
             for (std::size_t ordinal = 0U;
@@ -970,12 +938,6 @@ void Interpreter::Impl::release_slice(
     if (!forced_values[signal_id]) {
         return;
     }
-    prepare_region_authoritative_write(signal_id);
-    if (signal_id < region_authoritative_component_by_signal.size()) {
-        demote_region_authoritative_slots(
-            region_authoritative_component_by_signal[signal_id], false);
-    }
-    invalidate_fused_static_cohorts();
     update_force_mask(*forced_masks[signal_id], offset, width, false);
     const bool any_forced = has_forced_bits(*forced_masks[signal_id]);
     if (!any_forced) {
@@ -1086,7 +1048,6 @@ void Interpreter::Impl::force_driver_slice(
             "package static startup cannot force a driver signal slice"
         };
     }
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
     if (offset > signal.initial_value.width()
@@ -1107,7 +1068,6 @@ void Interpreter::Impl::force_driver_slice(
         const auto element_width
             = get_container_object(object).initial_value.type.element_width;
         const auto end = offset + value.width();
-        prepare_region_authoritative_family_write(object);
         begin_aggregate_signal_batch(
             signal_id, capture_signal_change_origin(process));
         try {
@@ -1138,18 +1098,6 @@ void Interpreter::Impl::force_driver_slice(
         force_slice(signal_id, std::move(value), offset);
         return;
     }
-    if (started && systemverilog_region_kernel_enabled) {
-        // A forced-driver map changes the certified writer set even when the
-        // currently resolved value happens to stay equal. Do not let this
-        // writer-policy mutation inherit the value-only recertification latch.
-        request_full_region_recertification();
-    }
-    prepare_region_authoritative_write(signal_id);
-    if (signal_id < region_authoritative_component_by_signal.size()) {
-        demote_region_authoritative_slots(
-            region_authoritative_component_by_signal[signal_id], false);
-    }
-    invalidate_fused_static_cohorts();
     value = coerce_value_kind(std::move(value), signal.value_kind);
     auto& forced = forced_driver_values.at(signal_id);
     auto& masks = forced_driver_masks.at(signal_id);
@@ -1171,7 +1119,6 @@ void Interpreter::Impl::force_driver_slice(
     auto resolved = resolved_driver_value(signal_id);
     const bool stored_changed = driven_values[signal_id] != resolved;
     driven_values[signal_id] = resolved;
-    mirror_region_stored(signal_id);
     if (stored_changed) {
         note_aggregate_leaf_stored_change(signal_id);
     }
@@ -1195,7 +1142,6 @@ void Interpreter::Impl::release_driver_slice(
             "slice force"
         };
     }
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
     if (offset > signal.initial_value.width()
@@ -1216,7 +1162,6 @@ void Interpreter::Impl::release_driver_slice(
         const auto element_width
             = get_container_object(object).initial_value.type.element_width;
         const auto end = offset + width;
-        prepare_region_authoritative_family_write(object);
         begin_aggregate_signal_batch(
             signal_id, capture_signal_change_origin(process));
         try {
@@ -1255,17 +1200,6 @@ void Interpreter::Impl::release_driver_slice(
     if (forced_entry == forced->end() || mask_entry == masks->end()) {
         return;
     }
-    if (started && systemverilog_region_kernel_enabled) {
-        // Releasing a force changes the certified writer set too; require a
-        // full graph snapshot before the new driver policy can be admitted.
-        request_full_region_recertification();
-    }
-    prepare_region_authoritative_write(signal_id);
-    if (signal_id < region_authoritative_component_by_signal.size()) {
-        demote_region_authoritative_slots(
-            region_authoritative_component_by_signal[signal_id], false);
-    }
-    invalidate_fused_static_cohorts();
     update_force_mask(mask_entry->second, offset, width, false);
     const bool any_forced = has_forced_bits(mask_entry->second);
     if (!any_forced) {
@@ -1280,7 +1214,6 @@ void Interpreter::Impl::release_driver_slice(
     auto resolved = resolved_driver_value(signal_id);
     const bool stored_changed = driven_values[signal_id] != resolved;
     driven_values[signal_id] = resolved;
-    mirror_region_stored(signal_id);
     if (stored_changed) {
         note_aggregate_leaf_stored_change(signal_id);
     }
@@ -1415,8 +1348,7 @@ bool Interpreter::Impl::update_container_alias_driver_force(
         if (signal.resolution != ResolutionKind::sv_wire
             || signal.value_kind != ValueKind::logic4
             || signal.initial_value.width() != type.element_width
-            || signal.has_implicit_driver || signal.has_charge_strength
-            || owned_driver_active(signal_id)) {
+            || signal.has_implicit_driver || signal.has_charge_strength) {
             return false;
         }
         const auto& external = external_driver_values.at(signal_id);
@@ -1958,15 +1890,14 @@ PackedLogic4& Interpreter::Impl::driver_slot(
     const ProcessId process,
     const SignalId signal_id)
 {
-    demote_owned_driver(signal_id);
     auto& values = driver_values.at(signal_id);
     if (auto* record = values.find(process)) {
         return record->value;
     }
-    if (started && region_graph) {
-        // Adding an unregistered owner changes the writer topology. Revoke
-        // graph/A4 certificates and detach every borrowed value slot before
-        // DriverTable insertion can change its record storage.
+    if (started) {
+        // Adding an unregistered owner changes the writer topology. Make the
+        // signal's hidden state public before DriverTable insertion can
+        // change its record storage.
         prepare_signal_observation(signal_id);
     }
     const bool inserted = values.insert_if_absent(DriverRecord {
@@ -2043,9 +1974,6 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         return found != vhdl_resolved_values.end()
             ? found->second
             : get_signal(signal_id).initial_value;
-    }
-    if (owned_driver_active(signal_id)) {
-        return owned_driver_composites[signal_id].committed;
     }
     const auto& values = driver_values.at(signal_id);
     if (values.empty()
@@ -2549,8 +2477,7 @@ std::string Interpreter::Impl::signal_strength_text(
     const auto& value = signal.initial_value;
     const auto width = value.width();
     const bool network = switch_network_member(signal_id);
-    const bool driven = signal.resolution != ResolutionKind::none
-        && !owned_driver_active(signal_id);
+    const bool driven = signal.resolution != ResolutionKind::none;
     const auto empty = DriveStrength { StrengthRank::highz, StrengthRank::highz };
     std::vector<SwitchBitStrength> solved(width,
         SwitchBitStrength { empty, empty, false });
@@ -2668,13 +2595,10 @@ std::string Interpreter::Impl::signal_strength_text(
 PackedLogic4& Interpreter::Impl::external_driver_slot(
     const SignalId signal_id)
 {
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
-    demote_owned_driver(signal_id);
     auto& value = external_driver_values.at(signal_id);
     if (!value) {
         auto replacement = std::make_unique<PackedLogic4>(
             initial_driver_value(signal_id));
-        note_region_graph_policy_change();
         value = std::move(replacement);
     }
     return *value;
@@ -2696,13 +2620,6 @@ DriveStrength Interpreter::Impl::resolved_signal_strength(
     if (signal.resolution == ResolutionKind::none) {
         const auto& value = driven_values.at(signal_id);
         for (std::size_t bit = 0; bit < value.width(); ++bit) {
-            include(value.get(bit), DriveStrength { });
-        }
-        return result;
-    }
-    if (owned_driver_active(signal_id)) {
-        const auto& value = owned_driver_composites[signal_id].committed;
-        for (std::size_t bit = 0U; bit < value.width(); ++bit) {
             include(value.get(bit), DriveStrength { });
         }
         return result;
@@ -2739,7 +2656,6 @@ DriveStrength Interpreter::Impl::resolved_signal_strength(
 
 DriveStrength Interpreter::signal_strength(const SignalId signal) const
 {
-    impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     return impl_->resolved_signal_strength(signal);
 }
 
@@ -2756,10 +2672,6 @@ void Interpreter::Impl::reset_switch_drivers(
         return;
     }
     for (const auto signal : switch_components[component].signals) {
-        require_region_forwarding_role_journal_flushed_for_signal(signal);
-    }
-    for (const auto signal : switch_components[component].signals) {
-        prepare_region_authoritative_write(signal);
         driver_values[signal].for_each_in_process_order(
             [&](DriverRecord& record) {
                 if (switch_process(record.process)) {
@@ -2777,8 +2689,6 @@ void Interpreter::Impl::register_driver(
     std::shared_ptr<const std::vector<Process::DriverRegion>> scalar_regions,
     const bool delayed_writer)
 {
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
-    demote_owned_driver(signal_id);
     const auto& signal = get_signal(signal_id);
     for (const auto& region : regions) {
         if (region.signal != signal_id
@@ -2836,10 +2746,6 @@ void Interpreter::Impl::register_driver(
     if (!adds_driver_owner) {
         return;
     }
-    prepare_region_authoritative_write(signal_id);
-    if (started && adds_driver_owner) {
-        note_region_graph_policy_change();
-    }
     const bool inserted = values.insert_if_absent(DriverRecord {
         process, std::move(initial), strength, std::move(scalar_regions)
     });
@@ -2872,27 +2778,9 @@ void Interpreter::Impl::register_driver(
 void Interpreter::Impl::set_driver(
     const ProcessId process,
     const SignalId signal_id,
-    PackedLogic4 value,
-    const bool preserve_wide_authority)
+    PackedLogic4 value)
 {
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
-    bool can_preserve_wide_authority
-        = preserve_wide_authority && !owned_driver_active(signal_id);
-    if (can_preserve_wide_authority) {
-        const auto program = processes.program_view(process);
-        const bool has_switch_behavior
-            = program.switch_source() || program.switch_target()
-            || program.switch_bidirectional();
-        can_preserve_wide_authority = !has_switch_behavior;
-    }
-    can_preserve_wide_authority
-        = can_preserve_wide_authority
-        && (can_try_wide_single_owner_commit(process, signal_id)
-            || can_try_wide_disjoint_owner_commit(process, signal_id));
-    if (!can_preserve_wide_authority) {
-        demote_owned_driver(signal_id);
-    }
     const auto& signal = get_signal(signal_id);
     if (signal.initial_value.width() != value.width()) {
         throw std::invalid_argument(
@@ -2930,28 +2818,6 @@ void Interpreter::Impl::set_driver(
         }
         switch_strength = strength;
     }
-    can_preserve_wide_authority
-        = can_preserve_wide_authority && !switch_strength;
-    if (can_preserve_wide_authority && driver_already_registered) {
-        // A registered wide record may be the bound owner-role facade itself.
-        // Publish its new raw value through the versioned A4 plane so a
-        // retained owner snapshot stays immutable and the later value phase
-        // can still observe the raw-before-value ordering.
-        const auto* const record
-            = driver_values.at(signal_id).find(process);
-        if (record == nullptr) {
-            throw std::logic_error {
-                "wide owner route lost its registered driver record"
-            };
-        }
-        if (record->value == value) {
-            return;
-        }
-        if (try_publish_wide_owner_raw(process, signal_id, value)) {
-            wake_switch_source_readers(signal_id, process);
-            return;
-        }
-    }
     auto& slot = driver_slot(process, signal_id);
     if (switch_strength && driver_already_registered) {
         auto* record = driver_values.at(signal_id).find(process);
@@ -2964,7 +2830,6 @@ void Interpreter::Impl::set_driver(
         return;
     }
     slot = std::move(value);
-    mirror_region_owner(signal_id, process, slot);
     if (driver_change_hook) {
         driver_change_hook(process, signal_id, scheduler.now());
         publish_aggregate_leaf_driver_change(process, signal_id);
@@ -2985,140 +2850,17 @@ void Interpreter::Impl::wake_switch_source_readers(
     }
 }
 
-bool Interpreter::Impl::try_publish_wide_owner_raw(
-    const ProcessId process,
-    const SignalId signal_id,
-    const PackedLogic4& value)
-{
-    const bool single_owner_route
-        = can_try_wide_single_owner_commit(process, signal_id);
-    const bool disjoint_owner_route
-        = !single_owner_route
-        && can_try_wide_disjoint_owner_commit(process, signal_id);
-    if (!single_owner_route && !disjoint_owner_route) {
-        if (signal_id < region_authoritative_component_by_signal.size()) {
-            demote_region_authoritative_slots(
-                region_authoritative_component_by_signal[signal_id], false);
-        }
-        return false;
-    }
-    const auto component
-        = region_authoritative_component_by_signal[signal_id];
-    auto* const state = region_authoritative_state_for_signal(signal_id);
-    if (state == nullptr
-        || !state->values().packed_owner_slot_bound(signal_id, process)) {
-        demote_region_authoritative_slots(component, false);
-        return false;
-    }
-
-    auto& mutation = state->wide_mutation_scratch();
-    try {
-        state->values().prepare_owner_change_into(mutation, signal_id,
-            process, value, signals[signal_id].initial_value,
-            driven_values[signal_id]);
-        if (!state->values().begin_prepared_publication(mutation)) {
-            state->values().cancel_prepared_publication(mutation);
-            demote_region_authoritative_slots(component, false);
-            return false;
-        }
-    } catch (const std::bad_alloc&) {
-        state->values().cancel_prepared_publication(mutation);
-        demote_region_authoritative_slots(component, false);
-        return false;
-    } catch (const std::invalid_argument&) {
-        state->values().cancel_prepared_publication(mutation);
-        if (disjoint_owner_route) {
-            demote_region_authoritative_slots(component, false);
-            return false;
-        }
-        throw;
-    } catch (...) {
-        state->values().cancel_prepared_publication(mutation);
-        throw;
-    }
-
-    const bool owner_changed = mutation.any_owner_changed;
-    state->values().publish(std::move(mutation));
-    if (!state->valid()) {
-        demote_region_authoritative_slots(component, false);
-        return false;
-    }
-    if (owner_changed) {
-        note_region_authoritative_mirror();
-        if (systemverilog_wave_profile_enabled) {
-            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
-            ++systemverilog_wave_profile_a4_owner_mirrors;
-        }
-    }
-    return true;
-}
-
-bool Interpreter::Impl::try_publish_wide_owner_slice_raw(
-    const ProcessId process,
-    const SignalId signal_id,
-    const PackedLogic4& slice_value,
-    const std::size_t offset,
-    const WideDisjointOwnerCommitContext& context)
-{
-    if (context.process != process || context.signal != signal_id
-        || context.state == nullptr) {
-        return false;
-    }
-    const auto component = context.component;
-    auto* const state = context.state;
-
-    auto& mutation = state->wide_mutation_scratch();
-    try {
-        state->values().prepare_owner_slice_change_into(
-            mutation, signal_id, process, slice_value, offset,
-            signals[signal_id].initial_value, driven_values[signal_id]);
-        if (!state->values().begin_prepared_publication(mutation)) {
-            state->values().cancel_prepared_publication(mutation);
-            demote_region_authoritative_slots(component, false);
-            return false;
-        }
-    } catch (const std::bad_alloc&) {
-        state->values().cancel_prepared_publication(mutation);
-        demote_region_authoritative_slots(component, false);
-        return false;
-    } catch (const std::invalid_argument&) {
-        state->values().cancel_prepared_publication(mutation);
-        demote_region_authoritative_slots(component, false);
-        return false;
-    } catch (...) {
-        state->values().cancel_prepared_publication(mutation);
-        throw;
-    }
-
-    const bool owner_changed = mutation.any_owner_changed;
-    state->values().publish(std::move(mutation));
-    if (!state->valid()) {
-        demote_region_authoritative_slots(component, false);
-        return false;
-    }
-    if (owner_changed) {
-        note_region_authoritative_mirror();
-        if (systemverilog_wave_profile_enabled) {
-            ++systemverilog_wave_profile_a4_authoritative_slot_writes;
-            ++systemverilog_wave_profile_a4_owner_mirrors;
-        }
-    }
-    return true;
-}
-
 void Interpreter::Impl::commit_driver(
     const ProcessId process,
     const SignalId signal_id,
     PackedLogic4 value,
     const std::optional<SignalChangeOrigin> origin,
-    const bool route_path,
-    const bool allow_wide_single_owner_commit)
+    const bool route_path)
 {
     if (package_static_initialization_active) {
         initialize_package_static_signal(signal_id, std::move(value));
         return;
     }
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     // A value reconnects a disconnected guarded driver.
     if (!vhdl_disconnected_drivers.empty()) {
@@ -3143,608 +2885,14 @@ void Interpreter::Impl::commit_driver(
             object, replacement, process, change_origin);
         return;
     }
-    if (allow_wide_single_owner_commit
-        && try_commit_wide_single_owner(
-            process, signal_id, value, change_origin, false)) {
-        return;
-    }
     if (get_signal(signal_id).resolution
         == ResolutionKind::none) {
-        if (change_origin.process_domain
-                == ProcessSchedulingDomain::systemverilog
-            && change_origin.phase == SchedulerPhase::active
-            && try_commit_wide_unresolved_owner_alias(
-                process, signal_id, value, change_origin)) {
-            return;
-        }
         commit(signal_id, std::move(value), change_origin);
         return;
     }
-    // The versioned wide-slot specialization may decline because tracing,
-    // observation, or an unsupported runtime effect became active. Detach
-    // those slots before the ordinary path changes its original raw driver;
-    // set_driver itself mirrors the raw value before commit_resolved begins.
-    prepare_region_authoritative_write(signal_id);
     set_driver(process, signal_id, std::move(value));
     commit_resolved(
         signal_id, resolved_driver_value(signal_id), change_origin);
-}
-
-bool Interpreter::Impl::try_commit_wide_single_owner(
-    const ProcessId process,
-    const SignalId signal_id,
-    PackedLogic4 value,
-    const SignalChangeOrigin origin,
-    const bool raw_owner_already_mirrored)
-{
-    if (!can_try_wide_single_owner_commit(process, signal_id)
-        || value.width() != signals[signal_id].initial_value.width()) {
-        return false;
-    }
-
-    const auto component
-        = region_authoritative_component_by_signal[signal_id];
-    auto* const state = region_authoritative_state_for_signal(signal_id);
-    if (state == nullptr) {
-        return false;
-    }
-
-    auto& mutation = state->wide_mutation_scratch();
-    try {
-        value = normalize_signal_value(signal_id, std::move(value));
-        if (raw_owner_already_mirrored) {
-            state->values().prepare_owner_value_change_into(
-                mutation, signal_id, process, value);
-        } else {
-            state->values().prepare_owner_change_into(mutation, signal_id,
-                process, value, value, value);
-        }
-        if (!state->values().begin_prepared_publication(mutation)) {
-            state->values().cancel_prepared_publication(mutation);
-            demote_region_authoritative_slots(component, false);
-            return false;
-        }
-    } catch (const std::bad_alloc&) {
-        state->values().cancel_prepared_publication(mutation);
-        demote_region_authoritative_slots(component, false);
-        return false;
-    }
-
-    const bool current_changed = mutation.any_current_changed;
-    try {
-        // This path admits no trace hook, transaction observer, alias, or
-        // other callback. Queueing transaction waiters therefore remains
-        // internal bookkeeping while every versioned role is locked.
-        note_signal_transaction(signal_id, true, origin, true);
-    } catch (...) {
-        state->values().cancel_prepared_publication(mutation);
-        demote_region_authoritative_slots(component, false);
-        throw;
-    }
-
-    state->values().publish(std::move(mutation));
-    if (!state->valid()) {
-        demote_region_authoritative_slots(component, false);
-        throw std::logic_error {
-            "preflighted wide A4 publication became invalid"
-        };
-    }
-    if (current_changed) {
-        refresh_direct_signal_planes(signal_id);
-        publish_value_change(signal_id, true, origin);
-    }
-    return true;
-}
-
-bool Interpreter::Impl::try_commit_wide_unresolved_owner_alias(
-    const ProcessId process,
-    const SignalId signal_id,
-    const PackedLogic4& value,
-    const SignalChangeOrigin origin)
-{
-    // A same-kind non-scalar Logic4 or Logic9 payload is already normalized
-    // for this route. Kind coercions decline and retain ordinary commit's
-    // normalization behavior.
-    if (!can_try_wide_unresolved_owner_alias(process, signal_id, origin)
-        || value.is_logic9()
-            != (signals[signal_id].value_kind == ValueKind::logic9)
-        || value.width() != signals[signal_id].initial_value.width()) {
-        return false;
-    }
-    const auto component
-        = region_authoritative_component_by_signal[signal_id];
-    auto* const state = region_authoritative_state_for_signal(signal_id);
-    if (state == nullptr) {
-        return false;
-    }
-
-    auto& mutation = state->wide_mutation_scratch();
-    try {
-        state->values().prepare_owner_change_into(
-            mutation, signal_id, process, value, value, value);
-        if (!state->values().begin_prepared_publication(mutation)) {
-            state->values().cancel_prepared_publication(mutation);
-            demote_region_authoritative_slots(component, false);
-            return false;
-        }
-    } catch (const std::bad_alloc&) {
-        state->values().cancel_prepared_publication(mutation);
-        demote_region_authoritative_slots(component, false);
-        return false;
-    } catch (const std::invalid_argument&) {
-        state->values().cancel_prepared_publication(mutation);
-        demote_region_authoritative_slots(component, false);
-        return false;
-    } catch (...) {
-        state->values().cancel_prepared_publication(mutation);
-        throw;
-    }
-
-    const bool current_changed = mutation.any_current_changed;
-    try {
-        // The no-resolution owner aliases the stored/raw role, so this is a
-        // single prepared publication with the ordinary transaction-before-
-        // current-change ordering and no fabricated DriverRecord.
-        note_signal_transaction(signal_id, true, origin, true);
-    } catch (...) {
-        state->values().cancel_prepared_publication(mutation);
-        demote_region_authoritative_slots(component, false);
-        throw;
-    }
-
-    state->values().publish(std::move(mutation));
-    if (!state->valid()) {
-        demote_region_authoritative_slots(component, false);
-        throw std::logic_error {
-            "preflighted unresolved wide A4 publication became invalid"
-        };
-    }
-    if (systemverilog_wave_profile_enabled) {
-        ++systemverilog_wave_profile_a4_unresolved_owner_alias_commits;
-    }
-    if (current_changed) {
-        refresh_direct_signal_planes(signal_id);
-        publish_value_change(signal_id, true, origin);
-    }
-    return true;
-}
-
-bool Interpreter::Impl::can_try_wide_unresolved_owner_alias(
-    const ProcessId process,
-    const SignalId signal_id,
-    const SignalChangeOrigin origin)
-{
-    if (!a4_wide_single_owner_commit_enabled || !started
-        || !region_graph || scheduler.trace_hook_installed()
-        || signal_id >= signals.size()
-        || signal_id >= driven_values.size()
-        || signal_id >= driver_values.size()
-        || signal_id >= external_driver_values.size()
-        || signal_id >= forced_values.size()
-        || signal_id >= forced_driver_values.size()
-        || signal_id >= signal_transaction_observed.size()
-        || signal_id >= signal_value_revisions.size()
-        || signal_id >= direct_signal_materialization_pending.size()
-        || !process_signal_access_inventory_complete
-        || !process_signal_access_is_complete(process)
-        || has_bidirectional_switches || !module_timing_checks.empty()
-        || signal_change_hook || stored_signal_change_hook
-        || driver_change_hook || scalar_signal_change_hook
-        || container_object_change_hook || container_element_change_hook
-        || native_signal_observation_required_hook
-        || native_signal_observation_any_hook || execution_point_hook) {
-        return false;
-    }
-
-    const auto& signal = signals[signal_id];
-    if (signal.initial_value.width() <= 64U
-        || (signal.value_kind != ValueKind::logic4
-            && signal.value_kind != ValueKind::logic9)
-        || signal.resolution != ResolutionKind::none
-        || signal.event_variable || signal.has_implicit_driver
-        || signal.has_charge_strength
-        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
-        || owned_driver_active(signal_id)
-        || external_driver_values[signal_id] || forced_values[signal_id]
-        || forced_driver_values[signal_id]
-        || direct_signal_materialization_pending[signal_id] != 0U
-        || native_signal_has_runtime_dependency(signal_id)
-        || has_dynamic_waits(signal_id) || monitor_watches(signal_id)
-        || !signal_container_aliases[signal_id].empty()
-        || signal_transaction_observed[signal_id]
-        || !driver_values[signal_id].empty()) {
-        return false;
-    }
-
-    if (process >= region_graph->processes().size()
-        || signal_id >= region_graph->signals().size()
-        || signal_id >= region_authoritative_component_by_signal.size()) {
-        return false;
-    }
-    const auto& process_node = region_graph->processes()[process];
-    const bool vhdl_projected_owner
-        = process_node.scheduling_domain == ProcessSchedulingDomain::generic
-        && process_node.update_kind == RegionUpdateKind::vhdl_projected;
-    const bool systemverilog_active_owner
-        = process_node.scheduling_domain
-            == ProcessSchedulingDomain::systemverilog
-        && process_node.update_kind
-            == RegionUpdateKind::systemverilog_active;
-    const bool original_vhdl_origin
-        = vhdl_projected_owner
-        && origin.process_domain == ProcessSchedulingDomain::generic;
-    const bool original_active_origin
-        = systemverilog_active_owner
-        && origin.process_domain == ProcessSchedulingDomain::systemverilog
-        && origin.phase == SchedulerPhase::active;
-    if (!original_vhdl_origin && !original_active_origin) {
-        return false;
-    }
-    const auto& signal_node = region_graph->signals()[signal_id];
-    if (signal_node.drivers != RegionDriverClass::single_whole
-        || signal_node.writers.size() != 1U
-        || signal_node.writers.front().process != process
-        || signal_node.writers.front().offset != 0U
-        || (signal_node.writers.front().width != 0U
-            && signal_node.writers.front().width != signal.initial_value.width())
-        || signal_node.writers_unknown
-        || signal_node.dynamic_fork_writers
-        || signal_node.partial_projected_transactions
-        || signal_node.observations != RegionObservation::none) {
-        return false;
-    }
-
-    const auto component
-        = region_authoritative_component_by_signal[signal_id];
-    if (component >= region_authoritative_state_by_component.size()
-        || component >= region_graph->certificate_inventory()
-                            .components.size()) {
-        return false;
-    }
-    const auto* const state
-        = region_authoritative_state_for_signal(signal_id);
-    if (state == nullptr || !state->valid()
-        || state->generation() != region_runtime_generation
-        || !state->values().packed_slots_bound()
-        || !state->values().packed_signal_slots_bound(signal_id)
-        || !state->values().packed_owner_slot_bound(signal_id, process)
-        || !region_graph->component_epochs_current(component)) {
-        return false;
-    }
-    const auto& certificate = region_graph->certificate_inventory()
-        .components[component];
-    if (!region_graph->certificate_inventory().access_inventory_complete
-        || certificate.status
-            == RegionComponentCertificateStatus::incomplete_access_inventory
-        || !std::ranges::binary_search(certificate.members, process)) {
-        return false;
-    }
-    const auto& layout_signal = state->values().layout().signal(signal_id);
-    const auto owners = state->values().layout().owners(signal_id);
-    return layout_signal.storage_class
-            == SignalDriverStorageClass::single_owner
-        && owners.size() == 1U && owners.front().process == process
-        && owners.front().aliases_stored;
-}
-
-// Whether a plain wire or std_logic signal has no state (drivers, forces,
-// waits, observers or aliases) that a wide direct commit would bypass.
-bool Interpreter::Impl::wide_commit_signal_eligible(
-    const SignalId signal_id) const
-{
-    const auto& signal = signals[signal_id];
-    if (signal.event_variable || signal.has_implicit_driver
-        || signal.has_charge_strength
-        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
-        || owned_driver_active(signal_id)
-        || external_driver_values[signal_id] || forced_values[signal_id]
-        || forced_driver_values[signal_id]
-        || direct_signal_materialization_pending[signal_id] != 0U
-        || native_signal_has_runtime_dependency(signal_id)
-        || has_dynamic_waits(signal_id) || monitor_watches(signal_id)
-        || !signal_container_aliases[signal_id].empty()
-        || (signal_id < signal_transaction_observed.size()
-            && signal_transaction_observed[signal_id])) {
-        return false;
-    }
-    if ((signal.value_kind == ValueKind::logic4
-            && signal.resolution != ResolutionKind::sv_wire)
-        || (signal.value_kind == ValueKind::logic9
-            && signal.resolution != ResolutionKind::std_logic)
-        || (signal.value_kind != ValueKind::logic4
-            && signal.value_kind != ValueKind::logic9)) {
-        return false;
-    }
-    return true;
-}
-
-bool Interpreter::Impl::can_try_wide_single_owner_commit(
-    const ProcessId process,
-    const SignalId signal_id)
-{
-    if (signal_id >= signals.size()
-        || signals[signal_id].initial_value.width() <= 64U) {
-        return false;
-    }
-    if (!a4_wide_single_owner_commit_enabled || !started
-        || !region_graph || scheduler.trace_hook_installed()
-        || signal_id >= signals.size()
-        || signal_id >= driven_values.size()
-        || signal_id >= driver_values.size()
-        || signal_id >= direct_single_driver_routes.size()
-        || signal_id >= external_driver_values.size()
-        || signal_id >= forced_values.size()
-        || signal_id >= forced_driver_values.size()
-        || signal_id >= signal_transactions.size()
-        || signal_id >= signal_value_revisions.size()
-        || signal_id >= direct_signal_materialization_pending.size()
-        || !process_signal_access_inventory_complete
-        || !process_signal_access_is_complete(process)
-        || has_bidirectional_switches || !module_timing_checks.empty()
-        || signal_change_hook || stored_signal_change_hook
-        || driver_change_hook || scalar_signal_change_hook
-        || container_object_change_hook || container_element_change_hook
-        || native_signal_observation_required_hook
-        || native_signal_observation_any_hook || execution_point_hook) {
-        return false;
-    }
-
-    if (!wide_commit_signal_eligible(signal_id)) {
-        return false;
-    }
-
-    if (signal_id >= region_authoritative_component_by_signal.size()) {
-        return false;
-    }
-    const auto component
-        = region_authoritative_component_by_signal[signal_id];
-    if (component >= region_authoritative_state_by_component.size()
-        || component >= region_graph->certificate_inventory()
-                            .components.size()) {
-        return false;
-    }
-    const auto& route = direct_single_driver_routes[signal_id];
-    const auto* const record = direct_single_driver_record(signal_id);
-    auto* const state = region_authoritative_state_for_signal(signal_id);
-    if (!route.active || route.process != process || record == nullptr
-        || record->strength != DriveStrength { }
-        || driver_values[signal_id].size() != 1U || state == nullptr
-        || !state->valid() || state->generation() != region_runtime_generation
-        || !state->values().packed_slots_bound()
-        || !state->values().packed_signal_slots_bound(signal_id)
-        || !state->values().packed_owner_slot_bound(signal_id, process)
-        || !region_graph->component_epochs_current(component)) {
-        return false;
-    }
-    const auto& certificate = region_graph->certificate_inventory()
-        .components[component];
-    if (!region_graph->certificate_inventory().access_inventory_complete
-        || certificate.status
-            == RegionComponentCertificateStatus::incomplete_access_inventory) {
-        return false;
-    }
-    // The mapped single-owner layout is an independent storage proof. A
-    // public std_logic boundary need not have an executable cone program.
-    const auto& layout_signal = state->values().layout().signal(signal_id);
-    const auto owners = state->values().layout().owners(signal_id);
-    if (layout_signal.storage_class != SignalDriverStorageClass::single_owner
-        || owners.size() != 1U || owners.front().process != process) {
-        return false;
-    }
-    return true;
-}
-
-bool Interpreter::Impl::can_try_wide_disjoint_signal_commit(
-    const SignalId signal_id,
-    RegionAuthoritativeComponentState** const eligible_state)
-{
-    if (eligible_state != nullptr) {
-        *eligible_state = nullptr;
-    }
-    if (!a4_wide_disjoint_owner_commit_enabled || !started
-        || !region_graph || scheduler.trace_hook_installed()
-        || signal_id >= signals.size()
-        || signal_id >= driven_values.size()
-        || signal_id >= driver_values.size()
-        || signal_id >= direct_single_driver_routes.size()
-        || signal_id >= external_driver_values.size()
-        || signal_id >= forced_values.size()
-        || signal_id >= forced_driver_values.size()
-        || signal_id >= signal_transactions.size()
-        || signal_id >= signal_value_revisions.size()
-        || signal_id >= direct_signal_materialization_pending.size()
-        || !process_signal_access_inventory_complete
-        || !region_graph->certificate_inventory().access_inventory_complete
-        || has_bidirectional_switches || !module_timing_checks.empty()
-        || signal_change_hook || stored_signal_change_hook
-        || driver_change_hook || scalar_signal_change_hook
-        || container_object_change_hook || container_element_change_hook
-        || native_signal_observation_required_hook
-        || native_signal_observation_any_hook || execution_point_hook) {
-        return false;
-    }
-
-    if (signals[signal_id].initial_value.width() == 0U
-        || !wide_commit_signal_eligible(signal_id)) {
-        return false;
-    }
-
-    if (signal_id >= region_authoritative_component_by_signal.size()) {
-        return false;
-    }
-    const auto component
-        = region_authoritative_component_by_signal[signal_id];
-    if (component >= region_authoritative_state_by_component.size()
-        || component >= region_graph->certificate_inventory()
-                            .components.size()
-        || direct_single_driver_routes[signal_id].active) {
-        return false;
-    }
-    auto* const state
-        = region_authoritative_state_for_signal(signal_id);
-    const auto component_status
-        = region_graph->certificate_inventory().components[component].status;
-    const bool status_allows_disjoint_boundary_state
-        = a4_wide_disjoint_owner_commit_enabled
-        && component_status
-            != RegionComponentCertificateStatus::incomplete_access_inventory;
-    if (state == nullptr || !state->valid()
-        || state->generation() != region_runtime_generation
-        || !state->values().packed_slots_bound()
-        || !state->values().packed_signal_slots_bound(signal_id)
-        || !region_graph->component_epochs_current(component)
-        || (component_status
-                != RegionComponentCertificateStatus::structural_candidate
-            && !status_allows_disjoint_boundary_state)) {
-        return false;
-    }
-
-    const auto& layout = state->values().layout();
-    if (!layout.contains(signal_id)) {
-        return false;
-    }
-    const auto& signal = signals[signal_id];
-    const auto& layout_signal = layout.signal(signal_id);
-    const auto owners = layout.owners(signal_id);
-    if (layout_signal.storage_class
-            != SignalDriverStorageClass::disjoint_owner
-        || layout_signal.width != signal.initial_value.width()
-        || layout_signal.value_kind != signal.value_kind
-        || owners.size() < 2U
-        || driver_values[signal_id].size() != owners.size()) {
-        return false;
-    }
-    for (const auto& owner : owners) {
-        const auto* const record
-            = driver_values[signal_id].find(owner.process);
-        if (record == nullptr || record->strength != DriveStrength { }) {
-            return false;
-        }
-    }
-    if (eligible_state != nullptr) {
-        *eligible_state = state;
-    }
-    return true;
-}
-
-bool Interpreter::Impl::can_try_wide_disjoint_owner_commit(
-    const ProcessId process,
-    const SignalId signal_id)
-{
-    if (!can_try_wide_disjoint_signal_commit(signal_id)
-        || !process_signal_access_is_complete(process)) {
-        return false;
-    }
-    const auto* const state
-        = region_authoritative_state_for_signal(signal_id);
-    if (state == nullptr) {
-        return false;
-    }
-    const auto owners = state->values().layout().owners(signal_id);
-    return std::ranges::find(owners, process,
-               &SignalDriverOwnerLayout::process)
-        != owners.end();
-}
-
-bool Interpreter::Impl::prepare_wide_disjoint_owner_commit_context(
-    const ProcessId process,
-    const SignalId signal_id,
-    WideDisjointOwnerCommitContext& context)
-{
-    context = { };
-    // Preserve the ordinary fast rejection before consulting executor code.
-    if (!can_try_wide_disjoint_signal_commit(signal_id)
-        || !process_signal_access_is_complete(process)) {
-        return false;
-    }
-    // The binding accessor is virtual. Revalidate after it returns so a
-    // reentrant executor cannot leave this context holding a stale graph or
-    // A4 state view.
-    RegionAuthoritativeComponentState* state { };
-    if (!can_try_wide_disjoint_signal_commit(signal_id, &state)
-        || state == nullptr) {
-        return false;
-    }
-    const auto component
-        = region_authoritative_component_by_signal[signal_id];
-    const auto owners = state->values().layout().owners(signal_id);
-    if (std::ranges::find(owners, process,
-            &SignalDriverOwnerLayout::process)
-        == owners.end()) {
-        return false;
-    }
-    context = { process, signal_id, component, state };
-    return true;
-}
-
-bool Interpreter::Impl::try_commit_wide_disjoint_value(
-    const SignalId signal_id,
-    PackedLogic4 value,
-    const SignalChangeOrigin origin,
-    const WideDisjointOwnerCommitContext* const context)
-{
-    if (context != nullptr) {
-        if (context->signal != signal_id || context->state == nullptr) {
-            return false;
-        }
-    } else if (!can_try_wide_disjoint_signal_commit(signal_id)) {
-        return false;
-    }
-    if (value.width() != signals[signal_id].initial_value.width()
-        || value.is_logic9()
-            != (signals[signal_id].value_kind == ValueKind::logic9)) {
-        return false;
-    }
-
-    const auto component = context != nullptr
-        ? context->component
-        : region_authoritative_component_by_signal[signal_id];
-    auto* const state = context != nullptr
-        ? context->state
-        : region_authoritative_state_for_signal(signal_id);
-    if (state == nullptr) {
-        return false;
-    }
-
-    auto& mutation = state->wide_mutation_scratch();
-    try {
-        state->values().prepare_value_change_into(
-            mutation, signal_id, value, value);
-        if (!state->values().begin_prepared_publication(mutation)) {
-            state->values().cancel_prepared_publication(mutation);
-            demote_region_authoritative_slots(component, false);
-            return false;
-        }
-    } catch (const std::bad_alloc&) {
-        state->values().cancel_prepared_publication(mutation);
-        demote_region_authoritative_slots(component, false);
-        return false;
-    } catch (...) {
-        state->values().cancel_prepared_publication(mutation);
-        throw;
-    }
-
-    const bool current_changed = mutation.any_current_changed;
-    try {
-        note_signal_transaction(signal_id, true, origin, true);
-    } catch (...) {
-        state->values().cancel_prepared_publication(mutation);
-        demote_region_authoritative_slots(component, false);
-        throw;
-    }
-
-    state->values().publish(std::move(mutation));
-    if (!state->valid()) {
-        demote_region_authoritative_slots(component, false);
-        throw std::logic_error {
-            "preflighted disjoint-wide A4 publication became invalid"
-        };
-    }
-    if (current_changed) {
-        refresh_direct_signal_planes(signal_id);
-        publish_value_change(signal_id, true, origin);
-    }
-    return true;
 }
 
 void Interpreter::Impl::commit_resolved(
@@ -3752,7 +2900,6 @@ void Interpreter::Impl::commit_resolved(
     PackedLogic4 value,
     const SignalChangeOrigin origin)
 {
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
     auto& handle = charge_decay_handles.at(signal_id);
@@ -3882,14 +3029,6 @@ void Interpreter::Impl::commit_resolved(
         == ResolutionKind::none) {
         return driven_values.at(signal_id);
     }
-    if (owned_driver_active(signal_id)) {
-        if (process >= owned_driver_spans.size()
-            || owned_driver_spans[process].signal != signal_id) {
-            throw std::out_of_range(
-                "process has no driver slot for SimIR signal");
-        }
-        return owned_driver_value(process, signal_id);
-    }
     const auto& values = driver_values.at(signal_id);
     const auto* record = values.find(process);
     if (record == nullptr) {
@@ -3929,7 +3068,6 @@ void Interpreter::Impl::commit_slice(
         initialize_package_static_signal(signal_id, std::move(updated));
         return;
     }
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     if (get_signal(signal_id).systemverilog_scalar
         != SystemVerilogScalarKind::None) {
@@ -3967,7 +3105,6 @@ void Interpreter::Impl::commit_driver_slice(
     if (!vhdl_disconnected_drivers.empty()) {
         vhdl_disconnected_drivers.erase({ signal_id, process });
     }
-    require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto change_origin = origin.value_or(
         capture_signal_change_origin(process));
@@ -4035,12 +3172,7 @@ void Interpreter::Impl::commit_driver_slice(
                 }
 
                 auto driver_value = initial_driver_value(alias.signal);
-                if (owned_driver_active(alias.signal)
-                    && process < owned_driver_spans.size()
-                    && owned_driver_spans[process].signal == alias.signal) {
-                    driver_value = owned_driver_value(
-                        process, alias.signal);
-                } else if (const auto* record
+                if (const auto* record
                     = driver_values.at(alias.signal).find(process)) {
                     driver_value = record->value;
                 }
@@ -4067,7 +3199,6 @@ void Interpreter::Impl::commit_driver_slice(
             }
         }
 
-        prepare_region_authoritative_family_write(object);
         begin_aggregate_signal_batch(signal_id, change_origin);
         try {
             for (std::size_t ordinal = 0U;
@@ -4107,30 +3238,12 @@ void Interpreter::Impl::commit_driver_slice(
         };
     }
     stage_selected_signal_transaction(signal_id, offset, value.width());
-    WideDisjointOwnerCommitContext wide_disjoint_context;
-    if (prepare_wide_disjoint_owner_commit_context(
-            process, signal_id, wide_disjoint_context)) {
-        if (try_publish_wide_owner_slice_raw(
-                process, signal_id, value, offset,
-                wide_disjoint_context)) {
-            auto resolved = resolved_driver_value(signal_id);
-            if (try_commit_wide_disjoint_value(
-                    signal_id, resolved, change_origin,
-                    &wide_disjoint_context)) {
-                return;
-            }
-            prepare_region_authoritative_write(signal_id);
-            commit_resolved(signal_id, std::move(resolved), change_origin);
-            return;
-        }
-    }
-    prepare_region_authoritative_write(signal_id);
     const auto updated = insert_value(
         driver_slot(process, signal_id),
         value,
         offset);
     commit_driver(
-        process, signal_id, std::move(updated), change_origin, false, false);
+        process, signal_id, std::move(updated), change_origin, false);
 }
 
 } // namespace fsim::runtime::simir

@@ -945,18 +945,9 @@ ProcessId InterpreterProgramAccess::validate_program(
         program, std::move(common), nullptr, &instance, false);
 }
 
-void InterpreterProgramAccess::set_trusted_signal_driver_inventory(
-    Interpreter& interpreter,
-    std::shared_ptr<const SignalDriverInventory> inventory) noexcept
-{
-    interpreter.impl_->elaborated_signal_driver_inventory
-        = std::move(inventory);
-}
-
 void InterpreterProgramAccess::set_trusted_text_report_hook(
     Interpreter& interpreter, Interpreter::ReportHook hook)
 {
-    interpreter.impl_->require_all_region_forwarding_role_journals_flushed();
     interpreter.impl_->report_hook.set_trusted_text_hook(std::move(hook));
 }
 

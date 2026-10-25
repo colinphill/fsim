@@ -11,11 +11,11 @@ if(NOT DEFINED FSIM_SCHEDULING_ENGINE)
 endif()
 if(FSIM_SCHEDULING_ENGINE STREQUAL "interpreter")
   set(fsim_engine interpreter)
-elseif(FSIM_SCHEDULING_ENGINE STREQUAL "llvm")
-  set(fsim_engine compiled)
+elseif(FSIM_SCHEDULING_ENGINE STREQUAL "v4")
+  set(fsim_engine v4)
 else()
   message(FATAL_ERROR
-    "FSIM_SCHEDULING_ENGINE must be interpreter or llvm")
+    "FSIM_SCHEDULING_ENGINE must be interpreter or v4")
 endif()
 
 if(NOT DEFINED FSIM_SCHEDULING_OPTIMIZATION)
@@ -23,11 +23,6 @@ if(NOT DEFINED FSIM_SCHEDULING_OPTIMIZATION)
 endif()
 if(NOT FSIM_SCHEDULING_OPTIMIZATION MATCHES "^O[02]$")
   message(FATAL_ERROR "FSIM_SCHEDULING_OPTIMIZATION must be O0 or O2")
-endif()
-if(FSIM_SCHEDULING_ENGINE STREQUAL "llvm")
-  # Admission evidence is stderr-only and is kept outside canonical output.
-  set(ENV{FSIM_PROFILE_JIT} 1)
-  set(ENV{FSIM_PROFILE_SV_WAVES} 1)
 endif()
 unset(ENV{FSIM_ENABLE_SV_REGION_KERNEL})
 unset(ENV{FSIM_ENABLE_SV_LOCAL_WAVE})
@@ -89,15 +84,7 @@ foreach(case_name IN LISTS cases)
   set(ENV{FSIM_ENABLE_SV_LOCAL_WAVE} 0)
   set(case_dir "${workspace}/${case_name}")
   file(MAKE_DIRECTORY "${case_dir}")
-  if(FSIM_SCHEDULING_ENGINE STREQUAL "llvm"
-      AND (case_name STREQUAL "a2_native_chain"
-        OR case_name STREQUAL "a2_chain_fork_merge"))
-    # Retain explicit route controls for the admission/fallback witnesses.
-    # Every case also runs with the default policy and profiling disabled below.
-    set(ENV{FSIM_ENABLE_SV_REGION_KERNEL} 1)
-  else()
-    set(ENV{FSIM_ENABLE_SV_REGION_KERNEL} 0)
-  endif()
+  set(ENV{FSIM_ENABLE_SV_REGION_KERNEL} 0)
   if(case_name STREQUAL "mixed_domain_boundary")
     file(COPY_FILE
       "${FSIM_FIXTURE_DIR}/mixed_language_leaf.vhd"
@@ -126,191 +113,11 @@ foreach(case_name IN LISTS cases)
       compile -q "${case_name}.sv")
   endif()
 
-  if(FSIM_SCHEDULING_ENGINE STREQUAL "llvm"
-      AND case_name STREQUAL "a1_alias_leaf_native_read")
-    set(ENV{FSIM_PROFILE_JIT_PROCESSES} 1)
-    set(ENV{FSIM_PROFILE_JIT_PROCESSES_ALL} 1)
-  endif()
-  if(FSIM_SCHEDULING_ENGINE STREQUAL "llvm"
-      AND case_name STREQUAL "packed_vector_edge_sensitivity")
-    # Correlate the vector process operations in SimIR with per-process JIT
-    # executions. The ordinary design-wide JIT count cannot prove that either
-    # the vector static-sensitivity or dynamic-WaitOn process ran natively.
-    set(ENV{FSIM_PROFILE_JIT_PROCESSES} 1)
-    set(ENV{FSIM_PROFILE_JIT_PROCESSES_ALL} 1)
-    set(ENV{FSIM_PROFILE_JIT_OPERATIONS} 1)
-  endif()
   run_fsim_step("${case_name}" elaborate
     elaborate -q --top "${case_name}" --no-aot
       --optimization "${FSIM_SCHEDULING_OPTIMIZATION}")
   run_fsim_step("${case_name}" simulate
     simulate --engine "${fsim_engine}")
-
-  if(FSIM_SCHEDULING_ENGINE STREQUAL "llvm")
-    file(READ "${case_dir}/simulate.stderr" native_evidence)
-    string(REGEX MATCH "fsim-profile: jit setup_ms=[^\r\n]* processes=([0-9]+)"
-      native_summary "${native_evidence}")
-    if(NOT native_summary OR CMAKE_MATCH_1 LESS 1)
-      message(FATAL_ERROR
-        "${case_name} has no proven native process admission at "
-        "${FSIM_SCHEDULING_OPTIMIZATION}\nworkspace: ${case_dir}")
-    endif()
-    set(native_processes "${CMAKE_MATCH_1}")
-    file(WRITE "${case_dir}/native-admission.txt"
-      "${FSIM_SCHEDULING_OPTIMIZATION} processes=${native_processes}\n")
-    message(STATUS "Native admission: ${case_name} ${FSIM_SCHEDULING_OPTIMIZATION} "
-      "processes=${native_processes}")
-    string(REGEX MATCH
-      "fsim-profile: sv-ordered-wave-summary [^\r\n]*"
-      region_backend_summary "${native_evidence}")
-    if(NOT region_backend_summary)
-      message(FATAL_ERROR
-        "${case_name} lacks the region backend profile summary\n"
-        "${native_evidence}\nworkspace: ${case_dir}")
-    endif()
-    if(case_name STREQUAL "a2_native_chain")
-      string(REGEX MATCH "region_backend_runs=([1-9][0-9]*)"
-        native_backend_run "${region_backend_summary}")
-      string(REGEX MATCH "region_backend_completions=([1-9][0-9]*)"
-        native_backend_completion "${region_backend_summary}")
-      if(NOT native_backend_run OR NOT native_backend_completion)
-        message(FATAL_ERROR
-          "${case_name} must execute and commit the real LLVM region backend at "
-          "${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
-          "workspace: ${case_dir}")
-      endif()
-      file(WRITE "${case_dir}/native-region-backend-admission.txt"
-        "${FSIM_SCHEDULING_OPTIMIZATION} ${region_backend_summary}\n")
-      message(STATUS "Native region backend: ${case_name} "
-        "${FSIM_SCHEDULING_OPTIMIZATION} ${native_backend_run}")
-    else()
-      if(NOT region_backend_summary MATCHES "region_backend_runs=0"
-          OR NOT region_backend_summary MATCHES "region_backend_completions=0")
-        message(FATAL_ERROR
-          "${case_name} unexpectedly executed an excluded region backend\n"
-          "${native_evidence}\nworkspace: ${case_dir}")
-      endif()
-    endif()
-    if(case_name STREQUAL "ordered_wave_native")
-      string(REGEX MATCH
-        "fsim-profile: sv-ordered-wave [^\r\n]*offered=([0-9]+) executed=([2-9]|[1-9][0-9]+) failure=0"
-        native_wave_summary "${native_evidence}")
-      if(NOT native_wave_summary)
-        message(FATAL_ERROR
-          "ordered_wave_native lacks an executed ordered SV Active cohort at "
-          "${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
-          "workspace: ${case_dir}")
-      endif()
-      set(native_wave_offered "${CMAKE_MATCH_1}")
-      set(native_wave_executed "${CMAKE_MATCH_2}")
-      if(native_wave_offered LESS 2)
-        message(FATAL_ERROR
-          "ordered_wave_native lacks a two-member ordered SV Active cohort at "
-          "${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
-          "workspace: ${case_dir}")
-      endif()
-      file(WRITE "${case_dir}/native-wave-admission.txt"
-        "${FSIM_SCHEDULING_OPTIMIZATION} offered=${native_wave_offered} "
-        "executed=${native_wave_executed}\n")
-      string(REGEX MATCH
-        "fsim-profile: sv-ordered-wave-summary [^\r\n]*"
-        native_wave_totals "${native_evidence}")
-      if(NOT native_wave_totals)
-        message(FATAL_ERROR
-          "ordered_wave_native must execute all three 20-member waves at "
-          "${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
-          "workspace: ${case_dir}")
-      endif()
-      foreach(required_metric IN ITEMS
-          offered_batches=3 offered_members=60 accepted_batches=3
-          accepted_members=60 zero_accepted_batches=0 failed_batches=0
-          region_kernel_attempts=0 region_kernel_runs=0
-          region_kernel_members=0 region_kernel_publications=0
-          region_kernel_failures=0)
-        if(NOT native_wave_totals MATCHES
-            "(^|[ \t])${required_metric}([ \t]|$)")
-          message(FATAL_ERROR
-            "ordered_wave_native has incorrect ${required_metric} at "
-            "${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
-            "workspace: ${case_dir}")
-        endif()
-      endforeach()
-      file(APPEND "${case_dir}/native-wave-admission.txt"
-        "${native_wave_totals}\n")
-      message(STATUS "Native ordered wave: ${case_name} "
-        "${FSIM_SCHEDULING_OPTIMIZATION} offered=${native_wave_offered} "
-        "executed=${native_wave_executed}")
-    endif()
-    if(case_name STREQUAL "a1_alias_leaf_native_read"
-        AND FSIM_REQUIRE_A1_NATIVE_DIRECT_READ_SLOTS)
-      string(REGEX MATCH
-        "fsim-profile: jit-process [^\r\n]*direct_read_slots=([2-9]|[1-9][0-9]+)[^\r\n]*"
-        native_direct_read_line "${native_evidence}")
-      if(NOT native_direct_read_line)
-        message(FATAL_ERROR
-          "a1_alias_leaf_native_read must admit a native process with at "
-          "least two compiled current-value read slots at "
-          "${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
-          "workspace: ${case_dir}")
-      endif()
-      set(native_direct_read_slots "${CMAKE_MATCH_1}")
-      file(WRITE "${case_dir}/native-direct-read-admission.txt"
-        "${FSIM_SCHEDULING_OPTIMIZATION} direct_read_slots="
-        "${native_direct_read_slots}\n")
-    endif()
-    if(case_name STREQUAL "packed_vector_edge_sensitivity")
-      string(REGEX MATCHALL
-        "fsim-profile: jit-operation-summary id=[0-9]+ count=[1-9][0-9]* type=[^\r\n]*(WaitOn|WaitSensitivity)[^\r\n]*"
-        vector_edge_operation_lines "${native_evidence}")
-      set(vector_wait_on_processes 0)
-      set(vector_static_wait_processes 0)
-      foreach(operation_line IN LISTS vector_edge_operation_lines)
-        string(REGEX MATCH
-          "fsim-profile: jit-operation-summary id=([0-9]+)"
-          operation_id_match "${operation_line}")
-        set(operation_process_id "${CMAKE_MATCH_1}")
-        string(REGEX MATCH
-          "fsim-profile: jit-process id=${operation_process_id} generated_id=[^\r\n]* resumes=[1-9][0-9]*[^\r\n]*"
-          process_profile_line "${native_evidence}")
-        if(NOT process_profile_line)
-          message(FATAL_ERROR
-            "packed_vector_edge_sensitivity SimIR process ${operation_process_id} "
-            "contains an edge-wait operation but has no native JIT execution "
-            "at ${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
-            "workspace: ${case_dir}")
-        endif()
-        if(operation_line MATCHES "WaitOn")
-          math(EXPR vector_wait_on_processes
-            "${vector_wait_on_processes} + 1")
-        elseif(operation_line MATCHES "WaitSensitivity")
-          if(NOT process_profile_line MATCHES "static_waits=[1-9][0-9]*")
-            message(FATAL_ERROR
-              "packed_vector_edge_sensitivity static-wait process "
-              "${operation_process_id} ran natively without its static wait "
-              "at ${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
-              "workspace: ${case_dir}")
-          endif()
-          math(EXPR vector_static_wait_processes
-            "${vector_static_wait_processes} + 1")
-        endif()
-      endforeach()
-      if(vector_wait_on_processes LESS 1
-          OR vector_static_wait_processes LESS 1)
-        message(FATAL_ERROR
-          "packed_vector_edge_sensitivity lacks per-process native admission "
-          "for vector WaitOn and static-wait operations at "
-          "${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
-          "workspace: ${case_dir}")
-      endif()
-      file(WRITE "${case_dir}/vector-edge-native-admission.txt"
-        "${FSIM_SCHEDULING_OPTIMIZATION} WaitOn=${vector_wait_on_processes} "
-        "WaitSensitivity=${vector_static_wait_processes}\n")
-    endif()
-    if(case_name STREQUAL "a1_alias_leaf_native_read")
-      unset(ENV{FSIM_PROFILE_JIT_PROCESSES})
-      unset(ENV{FSIM_PROFILE_JIT_PROCESSES_ALL})
-    endif()
-  endif()
 
   file(READ "${case_dir}/simulate.stdout" actual)
   string(REPLACE "\r\n" "\n" actual "${actual}")
@@ -327,13 +134,9 @@ foreach(case_name IN LISTS cases)
       "workspace: ${case_dir}")
   endif()
   # Profiling and an explicit enable flag must not be prerequisites for
-  # correctness. Reuse the same compiled design with the ordinary policy.
+  # correctness. Reuse the same design with the ordinary policy.
   unset(ENV{FSIM_ENABLE_SV_REGION_KERNEL})
   unset(ENV{FSIM_ENABLE_SV_LOCAL_WAVE})
-  unset(ENV{FSIM_PROFILE_JIT})
-  unset(ENV{FSIM_PROFILE_SV_WAVES})
-  unset(ENV{FSIM_PROFILE_JIT_PROCESSES})
-  unset(ENV{FSIM_PROFILE_JIT_PROCESSES_ALL})
   run_fsim_step("${case_name}" simulate_default
     simulate --engine "${fsim_engine}")
   file(READ "${case_dir}/simulate_default.stdout" default_actual)
@@ -347,10 +150,6 @@ foreach(case_name IN LISTS cases)
       "${case_name} default unprofiled transcript mismatch for ${FSIM_SCHEDULING_ENGINE}\n"
       "Expected:\n${expected}Actual:\n${default_actual}\n"
       "workspace: ${case_dir}")
-  endif()
-  if(FSIM_SCHEDULING_ENGINE STREQUAL "llvm")
-    set(ENV{FSIM_PROFILE_JIT} 1)
-    set(ENV{FSIM_PROFILE_SV_WAVES} 1)
   endif()
   message(STATUS "Scheduling witness passed: ${case_name} (controlled and default)")
 endforeach()

@@ -1592,16 +1592,11 @@ find_program(FSIM_PERFORMANCE_PYTHON_EXECUTABLE NAMES python3 python)
 if(FSIM_PERFORMANCE_PYTHON_EXECUTABLE)
   set(sensitivity_modes interpreter)
   if(FSIM_WITH_LLVM)
-    list(APPEND sensitivity_modes llvm-o0 llvm-o2)
+    list(APPEND sensitivity_modes v4)
   endif()
   foreach(sensitivity_mode IN LISTS sensitivity_modes)
-    set(sensitivity_engine compiled)
+    set(sensitivity_engine "${sensitivity_mode}")
     set(sensitivity_optimization O2)
-    if(sensitivity_mode STREQUAL "interpreter")
-      set(sensitivity_engine interpreter)
-    elseif(sensitivity_mode STREQUAL "llvm-o0")
-      set(sensitivity_optimization O0)
-    endif()
     add_test(
       NAME fsim.sensitivity-ranges.${sensitivity_mode}
       COMMAND "${FSIM_PERFORMANCE_PYTHON_EXECUTABLE}"
@@ -3085,56 +3080,6 @@ set_tests_properties(
 )
 
 add_executable(
-  fsim_jit_runtime_c_tests
-  compiler/jit_runtime_c_test.c
-)
-target_compile_features(fsim_jit_runtime_c_tests PRIVATE c_std_11)
-set_target_properties(fsim_jit_runtime_c_tests PROPERTIES C_EXTENSIONS OFF)
-target_include_directories(
-  fsim_jit_runtime_c_tests
-  PRIVATE "${PROJECT_SOURCE_DIR}/include"
-)
-fsim_enable_warnings(fsim_jit_runtime_c_tests)
-fsim_configure_test_platform(fsim_jit_runtime_c_tests)
-add_test(NAME fsim.jit-runtime-c COMMAND fsim_jit_runtime_c_tests)
-
-add_executable(
-  fsim_jit_runtime_v2_c_layout_tests
-  compiler/jit_runtime_v2_layout_test.c
-)
-target_compile_features(fsim_jit_runtime_v2_c_layout_tests PRIVATE c_std_11)
-set_target_properties(
-  fsim_jit_runtime_v2_c_layout_tests
-  PROPERTIES C_EXTENSIONS OFF
-)
-target_include_directories(
-  fsim_jit_runtime_v2_c_layout_tests
-  PRIVATE "${PROJECT_SOURCE_DIR}/include"
-)
-fsim_enable_warnings(fsim_jit_runtime_v2_c_layout_tests)
-fsim_configure_test_platform(fsim_jit_runtime_v2_c_layout_tests)
-add_test(
-  NAME fsim.jit-runtime-v2-c-layout
-  COMMAND fsim_jit_runtime_v2_c_layout_tests
-)
-
-add_executable(
-  fsim_jit_runtime_v2_cpp_layout_tests
-  compiler/jit_runtime_v2_layout_test.cpp
-)
-target_compile_features(fsim_jit_runtime_v2_cpp_layout_tests PRIVATE cxx_std_20)
-target_include_directories(
-  fsim_jit_runtime_v2_cpp_layout_tests
-  PRIVATE "${PROJECT_SOURCE_DIR}/include"
-)
-fsim_enable_warnings(fsim_jit_runtime_v2_cpp_layout_tests)
-fsim_configure_test_platform(fsim_jit_runtime_v2_cpp_layout_tests)
-add_test(
-  NAME fsim.jit-runtime-v2-cpp-layout
-  COMMAND fsim_jit_runtime_v2_cpp_layout_tests
-)
-
-add_executable(
   fsim_elaboration_tests
   elaboration/elaborator_test_support.cpp
   elaboration/elaborator_test.cpp
@@ -4183,100 +4128,6 @@ fsim_register_simple_test(
 
 if(FSIM_WITH_LLVM)
   find_package(Threads REQUIRED)
-  add_executable(
-    fsim_llvm_region_kernel_tests
-    compiler/llvm_jit_region_kernel_test.cpp
-    ${PROJECT_SOURCE_DIR}/src/app/allocation_profile.cpp
-    ${PROJECT_SOURCE_DIR}/src/app/allocation_profile_global_new.cpp)
-  fsim_configure_test(fsim_llvm_region_kernel_tests)
-  target_include_directories(
-    fsim_llvm_region_kernel_tests
-    PRIVATE
-      "${PROJECT_SOURCE_DIR}/src/runtime"
-      "${PROJECT_SOURCE_DIR}/src/app")
-  target_include_directories(
-    fsim_llvm_region_kernel_tests SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_link_libraries(
-    fsim_llvm_region_kernel_tests
-    PRIVATE fsim_llvm fsim_object_cache Threads::Threads)
-  add_test(NAME fsim.llvm.region-kernel COMMAND fsim_llvm_region_kernel_tests)
-
-  add_executable(
-    fsim_llvm_region_frontier_tests
-    compiler/llvm_jit_region_frontier_adversarial_test.hpp
-    compiler/llvm_jit_region_frontier_adversarial_test.cpp
-    compiler/llvm_jit_region_frontier_extract_test.hpp
-    compiler/llvm_jit_region_frontier_extract_test.cpp
-    compiler/llvm_jit_region_frontier_concatenate_test.hpp
-    compiler/llvm_jit_region_frontier_concatenate_test.cpp
-    compiler/llvm_jit_region_frontier_lifecycle_test.hpp
-    compiler/llvm_jit_region_frontier_lifecycle_test.cpp
-    compiler/llvm_jit_region_frontier_capacity_test.hpp
-    compiler/llvm_jit_region_frontier_capacity_test.cpp
-    compiler/llvm_jit_region_frontier_known_logic4_test.hpp
-    compiler/llvm_jit_region_frontier_known_logic4_test.cpp
-    compiler/llvm_jit_region_frontier_preparation_test.hpp
-    compiler/llvm_jit_region_frontier_preparation_test.cpp
-    compiler/llvm_jit_region_frontier_round_boundary_test.hpp
-    compiler/llvm_jit_region_frontier_round_boundary_test.cpp
-    compiler/llvm_jit_region_frontier_test.cpp
-    compiler/llvm_jit_region_frontier_cache_test.hpp
-    compiler/llvm_jit_region_frontier_cache_test.cpp
-    compiler/llvm_jit_region_frontier_shared_body_cache_test.hpp
-    compiler/llvm_jit_region_frontier_shared_body_cache_test.cpp
-    compiler/llvm_jit_region_frontier_shared_identity_test.hpp
-    compiler/llvm_jit_region_frontier_shared_identity_test.cpp
-    compiler/llvm_jit_region_frontier_test_support.hpp
-    compiler/llvm_jit_region_frontier_test_support.cpp
-    compiler/llvm_jit_region_frontier_staging_test.hpp
-    compiler/llvm_jit_region_frontier_staging_test.cpp
-    compiler/llvm_jit_region_frontier_issue_helper_test.hpp
-    compiler/llvm_jit_region_frontier_issue_helper_test.cpp
-    compiler/llvm_jit_region_frontier_logic9_issue_helper_test.hpp
-    compiler/llvm_jit_region_frontier_logic9_issue_helper_test.cpp
-    compiler/llvm_jit_region_frontier_shift_test.hpp
-    compiler/llvm_jit_region_frontier_shift_test.cpp
-    compiler/llvm_jit_region_frontier_logic9_words_test.hpp
-    compiler/llvm_jit_region_frontier_logic9_words_test.cpp)
-  fsim_configure_test(fsim_llvm_region_frontier_tests)
-  target_include_directories(
-    fsim_llvm_region_frontier_tests
-    PRIVATE
-      "${PROJECT_SOURCE_DIR}/src/runtime"
-      "${PROJECT_SOURCE_DIR}/src/compiler")
-  target_include_directories(
-    fsim_llvm_region_frontier_tests SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_link_libraries(
-    fsim_llvm_region_frontier_tests
-    PRIVATE fsim_llvm fsim_object_cache Threads::Threads)
-  add_test(
-    NAME fsim.llvm.region-frontier
-    COMMAND fsim_llvm_region_frontier_tests)
-
-  add_executable(
-    fsim_llvm_region_activation_backing_tests
-    compiler/llvm_jit_region_activation_backing_test.cpp)
-  fsim_configure_test(fsim_llvm_region_activation_backing_tests)
-  target_link_libraries(
-    fsim_llvm_region_activation_backing_tests PRIVATE fsim_llvm)
-  add_test(NAME fsim.llvm.region-activation-backing
-    COMMAND fsim_llvm_region_activation_backing_tests)
-
-  add_executable(
-    fsim_application_native_region_route_tests
-    app/native_region_allocation_test.cpp
-    runtime/runtime_fused_staging_failure_support.cpp)
-  fsim_configure_test(fsim_application_native_region_route_tests)
-  target_link_libraries(
-    fsim_application_native_region_route_tests PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.native-region-route
-    COMMAND fsim_application_native_region_route_tests)
-  set_tests_properties(
-    fsim.application.native-region-route
-    PROPERTIES LABELS "fast;application;systemverilog;region;native;allocation"
-      RUN_SERIAL TRUE)
-
   add_executable(fsim_application_cone_fusion_tests app/cone_fusion_test.cpp)
   fsim_configure_test(fsim_application_cone_fusion_tests)
   target_link_libraries(
@@ -4322,211 +4173,6 @@ if(FSIM_WITH_LLVM)
   set_tests_properties(
     fsim.application.static-kernel-behavioral
     PROPERTIES LABELS "fast;application;systemverilog;static-kernel;llvm")
-
-  # Standalone fixed-topology steady-state allocation gate for the default
-  # native-frontier application route. Keep this separate from the broader
-  # activation-only and mutation/failure fixtures.
-  add_executable(
-    fsim_application_native_frontier_steady_allocation_tests
-    app/native_frontier_steady_allocation_test.cpp
-    runtime/runtime_fused_staging_failure_support.cpp)
-  fsim_configure_test(fsim_application_native_frontier_steady_allocation_tests)
-  target_link_libraries(
-    fsim_application_native_frontier_steady_allocation_tests
-    PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.native-frontier-steady-allocation
-    COMMAND fsim_application_native_frontier_steady_allocation_tests)
-  set_tests_properties(
-    fsim.application.native-frontier-steady-allocation
-    PROPERTIES LABELS "fast;application;systemverilog;native;frontier;allocation"
-      RUN_SERIAL TRUE)
-
-  # Native-frontier generated-entry application witnesses. Keep these
-  # standalone because several targets own global allocation hooks or private
-  # access friends.
-  add_executable(
-    fsim_application_native_frontier_random_dag_tests
-    app/native_frontier_random_dag_test.cpp)
-  fsim_configure_test(fsim_application_native_frontier_random_dag_tests)
-  target_link_libraries(
-    fsim_application_native_frontier_random_dag_tests
-    PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.native-frontier-random-dag
-    COMMAND fsim_application_native_frontier_random_dag_tests)
-  set_tests_properties(
-    fsim.application.native-frontier-random-dag
-    PROPERTIES LABELS "fast;application;systemverilog;native;frontier;differential"
-      RUN_SERIAL TRUE)
-
-  add_executable(
-    fsim_application_native_frontier_mutation_tests
-    app/native_frontier_mutation_test.cpp)
-  fsim_configure_test(fsim_application_native_frontier_mutation_tests)
-  target_link_libraries(
-    fsim_application_native_frontier_mutation_tests PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.native-frontier-mutation
-    COMMAND fsim_application_native_frontier_mutation_tests)
-  set_tests_properties(
-    fsim.application.native-frontier-mutation
-    PROPERTIES LABELS "fast;application;systemverilog;region;native;frontier"
-      RUN_SERIAL TRUE)
-
-  # Preparation failure must leave the runtime eligible for its checked retry.
-  add_executable(
-    fsim_application_native_frontier_preparation_failure_tests
-    app/native_frontier_adapter_preparation_failure_test.cpp
-    runtime/runtime_fused_staging_failure_support.cpp)
-  fsim_configure_test(
-    fsim_application_native_frontier_preparation_failure_tests)
-  target_include_directories(
-    fsim_application_native_frontier_preparation_failure_tests
-    PRIVATE
-      "${PROJECT_SOURCE_DIR}/src/app"
-      "${PROJECT_SOURCE_DIR}/src/runtime"
-      "${PROJECT_SOURCE_DIR}/tests/runtime")
-  target_link_libraries(
-    fsim_application_native_frontier_preparation_failure_tests
-    PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.native-frontier-preparation-failure
-    COMMAND fsim_application_native_frontier_preparation_failure_tests)
-  set_tests_properties(
-    fsim.application.native-frontier-preparation-failure
-    PROPERTIES LABELS "fast;application;systemverilog;region;native;allocation"
-      RUN_SERIAL TRUE)
-
-  add_executable(
-    fsim_application_native_frontier_staged_preparation_tests
-    app/native_frontier_staged_preparation_test.cpp)
-  fsim_configure_test(
-    fsim_application_native_frontier_staged_preparation_tests)
-  target_include_directories(
-    fsim_application_native_frontier_staged_preparation_tests
-    PRIVATE
-      "${PROJECT_SOURCE_DIR}/src/app"
-      "${PROJECT_SOURCE_DIR}/src/runtime"
-      "${PROJECT_SOURCE_DIR}/tests/runtime")
-  target_link_libraries(
-    fsim_application_native_frontier_staged_preparation_tests
-    PRIVATE fsim_application)
-  add_test(
-    NAME fsim.application.native-frontier-staged-preparation
-    COMMAND fsim_application_native_frontier_staged_preparation_tests)
-  set_tests_properties(
-    fsim.application.native-frontier-staged-preparation
-    PROPERTIES
-      LABELS "fast;application;region;native;frontier;preparation"
-      RUN_SERIAL TRUE
-      TIMEOUT 55)
-
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_retained_stop_resume.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_a2_applied_prefix.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_a2_dag_join.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_a2_single_root_fanout.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_a2_root_forest.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_a2_blocking_immediate.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_a2_blocking_failure.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_a2_blocking_reentry.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_generic_update.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_generic_partial_prefix.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_v2_first_generic.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_selected_signal_history.cmake")
-  include("${CMAKE_CURRENT_SOURCE_DIR}/app/native_frontier_generic_update_failure.cmake")
-
-  add_executable(fsim_llvm_tests compiler/llvm_jit_test.cpp)
-  target_sources(
-    fsim_llvm_tests
-    PRIVATE
-      compiler/llvm_jit_test_support.cpp
-      compiler/llvm_jit_scheduling_test.cpp
-      compiler/llvm_jit_fused_masked_all_active_test.cpp
-      compiler/llvm_jit_fused_masked_process_test.cpp
-      compiler/llvm_jit_value_test.cpp
-      compiler/llvm_jit_dynamic_bit_test.cpp
-      compiler/llvm_jit_value_arithmetic_test.cpp
-      compiler/llvm_jit_cache_test.cpp
-      compiler/llvm_jit_cache_advanced_test.cpp
-      compiler/llvm_jit_coverage_test.cpp
-      compiler/llvm_jit_nounwind_test.cpp
-      compiler/llvm_jit_vhdl_profile_cache_test.cpp
-      compiler/llvm_jit_control_cache_test.cpp
-      compiler/llvm_jit_slice_cache_test.cpp
-      compiler/llvm_jit_logic9_test.cpp
-      compiler/llvm_jit_wide_bitwise_test.cpp
-      compiler/llvm_jit_display_test.cpp
-      compiler/llvm_jit_string_test.cpp
-      compiler/llvm_jit_backend_tier_test.cpp
-      compiler/llvm_jit_codegen_preparation_test.cpp
-      compiler/llvm_jit_compilation_contexts_test.cpp
-  )
-  fsim_configure_test(fsim_llvm_tests)
-  target_include_directories(
-    fsim_llvm_tests
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/compiler"
-  )
-  target_include_directories(fsim_llvm_tests SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_link_libraries(
-    fsim_llvm_tests
-    PRIVATE
-      fsim_llvm
-      fsim_object_cache
-  )
-  add_test(NAME fsim.llvm COMMAND fsim_llvm_tests)
-
-  add_executable(
-    fsim_llvm_callback_buffer_tests
-    compiler/llvm_jit_callback_buffer_test.cpp
-    compiler/llvm_jit_test_support.cpp)
-  fsim_configure_test(fsim_llvm_callback_buffer_tests)
-  target_include_directories(
-    fsim_llvm_callback_buffer_tests
-    PRIVATE "${PROJECT_SOURCE_DIR}/src/compiler")
-  target_include_directories(
-    fsim_llvm_callback_buffer_tests SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-  target_link_libraries(
-    fsim_llvm_callback_buffer_tests PRIVATE fsim_llvm fsim_object_cache)
-  add_test(
-    NAME fsim.llvm.callback-buffers
-    COMMAND fsim_llvm_callback_buffer_tests)
-  set_tests_properties(
-    fsim.llvm.callback-buffers
-    PROPERTIES LABELS "fast;compiler;llvm;callback;wide")
-
-  add_test(
-    NAME fsim.llvm.fast-isel-profile
-    COMMAND "${CMAKE_COMMAND}" -E env
-      FSIM_PROFILE_LLVM_MODULES=1
-      "$<TARGET_FILE:fsim_llvm_tests>" --fast-isel-profile)
-  set_tests_properties(
-    fsim.llvm.fast-isel-profile
-    PROPERTIES PASS_REGULAR_EXPRESSION
-      "fsim-profile: llvm-fast-isel .*compiled=1 fallback_functions=[1-9][0-9]*")
-  add_test(
-    NAME fsim.llvm.wide-bitwise-ir
-    COMMAND "${CMAKE_COMMAND}"
-      "-DFSIM_LLVM_TEST_EXECUTABLE=$<TARGET_FILE:fsim_llvm_tests>"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/compiler/check_wide_bitwise_ir.cmake")
-
-  add_executable(
-    fsim_llvm_arguments_tests compiler/llvm_jit_arguments_test.cpp)
-  fsim_configure_test(fsim_llvm_arguments_tests)
-  target_include_directories(
-    fsim_llvm_arguments_tests PRIVATE "${PROJECT_SOURCE_DIR}/src/compiler")
-  target_link_libraries(
-    fsim_llvm_arguments_tests PRIVATE fsim_llvm fsim_object_cache)
-  foreach(mode freeze invalid help response)
-    add_test(
-      NAME "fsim.llvm.arguments.${mode}"
-      COMMAND fsim_llvm_arguments_tests "${mode}")
-  endforeach()
-  add_test(
-    NAME fsim.llvm.arguments.cache-identity
-    COMMAND "${CMAKE_COMMAND}"
-      "-DFSIM_LLVM_ARGUMENTS_TEST=$<TARGET_FILE:fsim_llvm_arguments_tests>"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/compiler/llvm_jit_arguments_identity.cmake")
 endif()
 
 if(TARGET fsim_application)
@@ -4543,131 +4189,18 @@ if(TARGET fsim_application)
     "fast;application;coverage;project;cli;schema;resource"
   )
 
-  if(TARGET fsim_llvm)
-    add_executable(
-      fsim_wide_associative_container_jit_tests
-      app/wide_associative_container_jit_test.cpp
-    )
-    fsim_configure_test(fsim_wide_associative_container_jit_tests)
-    target_link_libraries(
-      fsim_wide_associative_container_jit_tests
-      PRIVATE fsim_application fsim_llvm)
-    fsim_register_simple_test(
-      fsim.application.wide-associative-container-jit
-      fsim_wide_associative_container_jit_tests
-      "fast;application;compiler;llvm;containers;wide;interpreter;o0;o2"
-    )
-
-    add_executable(
-      fsim_wide_associative_container_numeric_key_jit_tests
-      app/wide_associative_container_numeric_key_jit_test.cpp
-    )
-    fsim_configure_test(
-      fsim_wide_associative_container_numeric_key_jit_tests)
-    target_link_libraries(
-      fsim_wide_associative_container_numeric_key_jit_tests
-      PRIVATE fsim_application fsim_llvm)
-    fsim_register_simple_test(
-      fsim.application.wide-associative-container-numeric-key-jit
-      fsim_wide_associative_container_numeric_key_jit_tests
-      "fast;application;compiler;llvm;containers;wide;interpreter;o0;o2"
-    )
-
-    add_executable(
-      fsim_wide_file_binary_read_jit_tests
-      app/wide_file_binary_read_jit_test.cpp
-    )
-    fsim_configure_test(fsim_wide_file_binary_read_jit_tests)
-    target_link_libraries(
-      fsim_wide_file_binary_read_jit_tests
-      PRIVATE fsim_application fsim_llvm)
-    fsim_register_simple_test(
-      fsim.application.wide-file-binary-read-jit
-      fsim_wide_file_binary_read_jit_tests
-      "fast;application;compiler;llvm;file;wide;interpreter;o0;o2"
-    )
-
-    add_executable(
-      fsim_application_unsupported_pack_tests
-      app/application_simulation_unsupported_pack_test.cpp
-    )
-    fsim_configure_test(fsim_application_unsupported_pack_tests)
-    target_link_libraries(
-      fsim_application_unsupported_pack_tests
-      PRIVATE fsim_application fsim_llvm)
-    fsim_register_simple_test(
-      fsim.application.unsupported-pack
-      fsim_application_unsupported_pack_tests
-      "fast;application;compiler;llvm;cache;fallback"
-    )
-
-    add_executable(
-      fsim_coverage_observer_native_application_tests
-      app/coverage_observer_native_application_test.cpp
-    )
-    fsim_configure_test(fsim_coverage_observer_native_application_tests)
-    target_link_libraries(
-      fsim_coverage_observer_native_application_tests
-      PRIVATE fsim_application fsim_llvm)
-    fsim_register_simple_test(
-      fsim.application.coverage-observer-native
-      fsim_coverage_observer_native_application_tests
-      "fast;application;coverage;observer;trace;native;cache;equivalence;llvm"
-    )
-
-    add_executable(
-      fsim_code_coverage_application_tests
-      app/code_coverage_application_test.cpp
-    )
-    fsim_configure_test(fsim_code_coverage_application_tests)
-    target_link_libraries(
-      fsim_code_coverage_application_tests PRIVATE fsim_application)
-    fsim_register_simple_test(
-      fsim.application.code-coverage
-      fsim_code_coverage_application_tests
-      "fast;application;coverage;debug;interpreter;llvm;o0;o1;o2;o3;saturation;instance"
-    )
-
-    add_executable(
-      fsim_code_coverage_equivalence_tests
-      app/code_coverage_equivalence_test.cpp
-    )
-    fsim_configure_test(fsim_code_coverage_equivalence_tests)
-    target_link_libraries(
-      fsim_code_coverage_equivalence_tests PRIVATE fsim_application)
-    fsim_register_simple_test(
-      fsim.application.code-coverage-equivalence
-      fsim_code_coverage_equivalence_tests
-      "fast;application;coverage;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;instance;aggregation"
-    )
-
-    add_executable(
-      fsim_code_coverage_region_admission_tests
-      app/code_coverage_region_admission_test.cpp
-    )
-    fsim_configure_test(fsim_code_coverage_region_admission_tests)
-    target_link_libraries(
-      fsim_code_coverage_region_admission_tests
-      PRIVATE fsim_application fsim_llvm)
-    fsim_register_simple_test(
-      fsim.application.code-coverage-region-admission
-      fsim_code_coverage_region_admission_tests
-      "fast;application;coverage;statement;branch;region;admission;interpreter;llvm;o0;o2"
-    )
-
-    add_executable(
-      fsim_code_coverage_metrics_equivalence_tests
-      app/code_coverage_metrics_equivalence_test.cpp
-    )
-    fsim_configure_test(fsim_code_coverage_metrics_equivalence_tests)
-    target_link_libraries(
-      fsim_code_coverage_metrics_equivalence_tests PRIVATE fsim_application)
-    fsim_register_simple_test(
-      fsim.application.code-coverage-metrics-equivalence
-      fsim_code_coverage_metrics_equivalence_tests
-      "fast;application;coverage;condition;expression;toggle;fsm;equivalence;verilog;systemverilog;vhdl;interpreter;llvm;o0;o1;o2;o3;debug;generate;instance;aggregation"
-    )
-  endif()
+  add_executable(
+    fsim_code_coverage_application_tests
+    app/code_coverage_application_test.cpp
+  )
+  fsim_configure_test(fsim_code_coverage_application_tests)
+  target_link_libraries(
+    fsim_code_coverage_application_tests PRIVATE fsim_application)
+  fsim_register_simple_test(
+    fsim.application.code-coverage
+    fsim_code_coverage_application_tests
+    "fast;application;coverage;debug;interpreter;saturation;instance"
+  )
 
   add_executable(
     fsim_code_coverage_metrics_application_tests
@@ -5109,7 +4642,6 @@ if(TARGET fsim_application)
       fsim_application_tests
       PRIVATE
         app/application_test_cli.cpp
-        app/fused_static_executor_test.cpp
         app/application_test_cli_trace.cpp
         app/application_test_artifact_phases.cpp
         app/application_test_artifact_verilog.cpp
@@ -5118,7 +4650,6 @@ if(TARGET fsim_application)
         app/application_test_multiple_roots.cpp
         app/application_test_non_project_cli.cpp
         app/application_test_simulation.cpp
-        app/application_test_fused_static.cpp
         app/application_test_classes.cpp
         app/application_test_uvm_virtual.cpp
         app/application_test_source_updates.cpp
@@ -5136,16 +4667,6 @@ if(TARGET fsim_application)
     target_sources(
       fsim_application_tests
       PRIVATE app/expression_application_advanced_test.cpp)
-    fsim_add_application_case(
-      0 structural_signal_remap
-      app/structural_signal_remap_application_test.cpp
-      fsim.application.structural_signal_remap
-      fast llvm systemverilog hierarchy)
-    fsim_add_application_case(
-      0 connected_remap_direct
-      app/connected_remap_direct_application_test.cpp
-      fsim.application.connected_remap_direct
-      fast llvm vhdl hierarchy)
     fsim_add_application_case(
       0 sv_hierarchy app/sv_hierarchy_application_test.cpp
       fsim.application.sv_hierarchy fast systemverilog hierarchy)
@@ -6935,7 +6456,7 @@ fsim_require_fixture_witnesses(
   fsim.application.vhdl_numeric
   fsim.application.vhdl_logic9
   fsim.application.artifact_phases
-  fsim.llvm
+  fsim.application.static-kernel
   fsim.api
   fsim.api.c_header
   fsim.tcl.version-selection
@@ -6952,7 +6473,7 @@ fsim_require_fixture_witnesses(
   fsim.application.sv_conformance
   fsim.application.typed_boundaries
   fsim.application.artifact_phases
-  fsim.llvm
+  fsim.application.static-kernel
   fsim.application.vpi
   fsim.application.tcl
   fsim.api
@@ -6971,7 +6492,7 @@ fsim_require_fixture_witnesses(
   fsim.frontend
   fsim.elaboration
   fsim.library.artifact
-  fsim.llvm
+  fsim.application.static-kernel
   fsim.application.vpi
   fsim.application.artifact_phases
   fsim.application.classes
@@ -6998,7 +6519,7 @@ fsim_require_fixture_witnesses(
   fsim.frontend
   fsim.library.artifact
   fsim.elaboration
-  fsim.llvm
+  fsim.application.static-kernel
   fsim.application.vpi
   fsim.application
   fsim.application.specialization
@@ -7038,7 +6559,7 @@ if(TARGET fsim)
     "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/*.vhd")
   set(compliance_engines interpreter)
   if(FSIM_WITH_LLVM)
-    list(APPEND compliance_engines compiled)
+    list(APPEND compliance_engines v4)
   endif()
   foreach(compliance_fixture IN LISTS compliance_fixtures)
     get_filename_component(compliance_name "${compliance_fixture}" NAME_WE)
@@ -7150,19 +6671,17 @@ endif()
 # The scheduling contract is kept as a source-only CLI corpus so both runtime
 # engines run the same independent-oracle transcripts from fresh workspaces.
 if(TARGET fsim)
-  foreach(witness_engine IN ITEMS interpreter llvm-O0 llvm-O2)
+  foreach(witness_engine IN ITEMS interpreter v4)
     if(witness_engine STREQUAL "interpreter")
       set(witness_name fsim.application.systemverilog-scheduling-witnesses)
-      set(witness_runtime interpreter)
-      set(witness_optimization O2)
     elseif(FSIM_WITH_LLVM)
       set(witness_name
         "fsim.application.systemverilog-scheduling-witnesses.${witness_engine}")
-      set(witness_runtime llvm)
-      string(REPLACE "llvm-" "" witness_optimization "${witness_engine}")
     else()
       continue()
     endif()
+    set(witness_runtime "${witness_engine}")
+    set(witness_optimization O2)
     add_test(
       NAME "${witness_name}"
       COMMAND "${CMAKE_COMMAND}"
@@ -7176,33 +6695,6 @@ if(TARGET fsim)
     set_tests_properties("${witness_name}" PROPERTIES
       LABELS "application;systemverilog;scheduling;witness"
       TIMEOUT 600)
-  endforeach()
-endif()
-
-# Prove the real cold JIT boundary for a shared process template. Every design
-# includes 65 distinct filler processes so the selective large-design path is
-# active at both 63 and 64 target instances.
-if(TARGET fsim AND FSIM_WITH_LLVM)
-  foreach(tier_instance_count IN ITEMS 63 64)
-    foreach(tier_optimization IN ITEMS O0 O2)
-      set(tier_test_name
-        "fsim.application.llvm-backend-tier.${tier_instance_count}.${tier_optimization}")
-      add_test(
-        NAME "${tier_test_name}"
-        COMMAND "${CMAKE_COMMAND}"
-          "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
-          "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog"
-          "-DFSIM_TIER_INSTANCE_COUNT=${tier_instance_count}"
-          "-DFSIM_TIER_OPTIMIZATION=${tier_optimization}"
-          -P
-          "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/run_backend_tier_boundary.cmake"
-      )
-      set_tests_properties(
-        "${tier_test_name}"
-        PROPERTIES
-          LABELS "application;systemverilog;llvm;backend-tier;witness"
-          TIMEOUT 600)
-    endforeach()
   endforeach()
 endif()
 
@@ -7244,5 +6736,3 @@ if(WIN32)
   fsim_configure_windows_test_runtime("${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
-include("${CMAKE_CURRENT_SOURCE_DIR}/compiler/simir_region_frontier_abi_layout_test.cmake")
-include("${CMAKE_CURRENT_SOURCE_DIR}/compiler/simir_region_frontier_abi_v2_layout_test.cmake")

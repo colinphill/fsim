@@ -47,6 +47,8 @@ enum class Verbosity {
   verbose,
 };
 
+/// Accepted for compatibility and ignored: elaborate --aot always populates
+/// the v4 static-kernel cache.
 enum class AotScope {
   selected,
   all,
@@ -54,6 +56,7 @@ enum class AotScope {
   kernel,
 };
 
+/// Accepted for compatibility and ignored: the per-process JIT was removed.
 enum class CompiledProcessPolicy {
   automatic,
   selected,

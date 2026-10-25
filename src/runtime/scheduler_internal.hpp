@@ -1329,8 +1329,6 @@ struct Scheduler::Impl {
             throw std::invalid_argument("max_delta_cycles must be greater than zero");
         }
         batch_payloads.reserve(64U);
-        batch_frontier_entries.reserve(64U);
-        generic_batch_frontier_entries.reserve(64U);
         recent_signals.reserve(options.recent_signal_capacity);
         const auto* trace = std::getenv("FSIM_TRACE_SCHEDULER");
         if (trace && trace[0] == '1' && trace[1] == '\0')
@@ -1364,15 +1362,6 @@ struct Scheduler::Impl {
     SimulationTick now { };
     std::uint64_t callbacks { };
     std::uint64_t next_sequence { };
-    std::uint64_t next_internal_batch_reservation_id { 1U };
-    std::uint64_t active_internal_batch_reservation_id { };
-    WorkQueue* active_internal_batch_queue { };
-    std::size_t active_internal_batch_reservation_count { };
-    bool active_internal_batch_uses_insertions { };
-    std::uint64_t active_internal_batch_frontier_generation { };
-    InternalSystemVerilogOrderedTicketStorage*
-        active_internal_ordered_ticket_storage { };
-    std::shared_ptr<void> active_internal_ordered_ticket_owner;
     std::uint64_t next_systemverilog_group_batch_reservation_id { 1U };
     std::uint64_t active_systemverilog_group_batch_reservation_id { };
     WorkQueue* active_systemverilog_group_batch_queue { };
@@ -1384,12 +1373,6 @@ struct Scheduler::Impl {
     std::size_t active_systemverilog_group_batch_count { };
     std::size_t active_systemverilog_group_batch_previous_count { };
     bool active_systemverilog_group_batch_new_ticket { };
-    std::uint64_t next_generic_update_reservation_id { 1U };
-    std::uint64_t active_generic_update_reservation_id { };
-    WorkQueue* active_generic_update_queue { };
-    std::size_t active_generic_update_reservation_count { };
-    bool active_generic_update_uses_insertions { };
-    std::uint64_t active_generic_update_frontier_generation { };
     std::uint64_t reservation_epoch { };
     std::uint64_t current_phase_revision { };
     bool in_run { };
@@ -1423,7 +1406,6 @@ struct Scheduler::Impl {
     DiscardHookToken next_discard_hook_token { 1U };
     std::vector<Entry> batch_entries;
     std::vector<std::uint64_t> batch_payloads;
-    std::vector<SchedulerBatchFrontierEntry> batch_frontier_entries;
     std::vector<BatchTicket> systemverilog_batch_tickets;
     std::vector<Entry> systemverilog_batch_ticket_members;
     static constexpr std::size_t default_readiness_ticket_count = 64U;
@@ -1450,13 +1432,6 @@ struct Scheduler::Impl {
         generic_readiness_compact_member_overflow;
     SchedulerBatchCompactionStats systemverilog_batch_compaction_stats;
     SchedulerBatchCompactionStats generic_batch_compaction_stats;
-    std::optional<SchedulerBatchFrontier> active_batch_frontier;
-    std::uint64_t next_batch_frontier_generation { 1U };
-    std::vector<SchedulerBatchFrontierEntry>
-        generic_batch_frontier_entries;
-    std::optional<SchedulerGenericBatchFrontier>
-        active_generic_batch_frontier;
-    std::uint64_t next_generic_batch_frontier_generation { 1U };
     std::vector<RuntimeSignalId> recent_signals;
     std::size_t recent_signal_cursor { };
     std::size_t cancellations_since_compaction { };
@@ -1692,11 +1667,7 @@ struct Scheduler::Impl {
     {
         if (in_run || in_callback || discarding
             || active_systemverilog_group_batch_reservation_id != 0U
-            || active_systemverilog_group_batch_ticket != nullptr
-            || active_internal_batch_reservation_id != 0U
-            || active_generic_update_reservation_id != 0U
-            || active_internal_ordered_ticket_storage != nullptr
-            || active_internal_ordered_ticket_owner != nullptr) {
+            || active_systemverilog_group_batch_ticket != nullptr) {
             return false;
         }
 
@@ -2135,29 +2106,6 @@ struct Scheduler::Impl {
         const auto was_discarding = discarding;
         discarding = true;
         release_active_systemverilog_group_batch_reservation();
-        if (active_internal_batch_reservation_id != 0U
-            && active_internal_batch_queue != nullptr && current
-            && active_internal_batch_queue
-                == &current->systemverilog.queues[
-                    phase_index(SchedulerPhase::active)]) {
-            auto& reserved = active_internal_batch_uses_insertions
-                ? active_internal_batch_queue->reserved_insertions_capacity
-                : active_internal_batch_queue->reserved_entries_capacity;
-            if (reserved >= active_internal_batch_reservation_count) {
-                reserved -= active_internal_batch_reservation_count;
-            } else {
-                reserved = 0U;
-            }
-        }
-        active_internal_batch_reservation_id = 0U;
-        active_internal_batch_queue = nullptr;
-        active_internal_batch_reservation_count = 0U;
-        active_internal_batch_uses_insertions = false;
-        active_internal_batch_frontier_generation = 0U;
-        if (active_internal_ordered_ticket_storage != nullptr)
-            active_internal_ordered_ticket_storage->retire();
-        active_internal_ordered_ticket_storage = nullptr;
-        active_internal_ordered_ticket_owner.reset();
         clear_batch_scratch();
         auto discarded_current = std::move(current);
         current.reset();
@@ -2208,68 +2156,10 @@ struct Scheduler::Impl {
         discarding = was_discarding;
     }
 
-    void release_active_internal_systemverilog_reservation() noexcept
-    {
-        if (active_internal_batch_reservation_id != 0U
-            && active_internal_batch_queue != nullptr && current
-            && active_internal_batch_queue
-                == &current->systemverilog.queues[
-                    phase_index(SchedulerPhase::active)]) {
-            auto& reserved = active_internal_batch_uses_insertions
-                ? active_internal_batch_queue->reserved_insertions_capacity
-                : active_internal_batch_queue->reserved_entries_capacity;
-            if (reserved >= active_internal_batch_reservation_count) {
-                reserved -= active_internal_batch_reservation_count;
-            } else {
-                reserved = 0U;
-            }
-        }
-        active_internal_batch_reservation_id = 0U;
-        active_internal_batch_queue = nullptr;
-        active_internal_batch_reservation_count = 0U;
-        active_internal_batch_uses_insertions = false;
-        active_internal_batch_frontier_generation = 0U;
-        if (active_internal_ordered_ticket_storage != nullptr)
-            active_internal_ordered_ticket_storage->retire();
-        active_internal_ordered_ticket_storage = nullptr;
-        active_internal_ordered_ticket_owner.reset();
-    }
-
-    void release_active_internal_generic_update_reservation() noexcept
-    {
-        if (active_generic_update_reservation_id != 0U
-            && active_generic_update_queue != nullptr && current
-            && active_generic_update_queue
-                == &current->current.queues[
-                    phase_index(SchedulerPhase::update)]) {
-            auto& reserved = active_generic_update_uses_insertions
-                ? active_generic_update_queue->reserved_insertions_capacity
-                : active_generic_update_queue->reserved_entries_capacity;
-            if (reserved >= active_generic_update_reservation_count) {
-                reserved -= active_generic_update_reservation_count;
-            } else {
-                reserved = 0U;
-            }
-        }
-        active_generic_update_reservation_id = 0U;
-        active_generic_update_queue = nullptr;
-        active_generic_update_reservation_count = 0U;
-        active_generic_update_uses_insertions = false;
-        active_generic_update_frontier_generation = 0U;
-    }
-
     void clear_batch_scratch() noexcept
     {
-        // A ticket is only valid during its matching batch callback. Clear any
-        // abandoned reservation before invalidating the frontier.
-        release_active_internal_systemverilog_reservation();
-        release_active_internal_generic_update_reservation();
         batch_entries.clear();
         batch_payloads.clear();
-        batch_frontier_entries.clear();
-        active_batch_frontier.reset();
-        generic_batch_frontier_entries.clear();
-        active_generic_batch_frontier.reset();
     }
 
     [[nodiscard]] Entry make_entry(

@@ -378,14 +378,8 @@ endmodule
     verify(warm, first_expected);
     assert(reference.vcd == cold.vcd);
     assert(cold.vcd == warm.vcd);
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes > 0);
-    assert(cold.cache.misses > 0);
-    assert(warm.cache.hits > 0);
-#else
     assert(cold.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
-#endif
   }
 
   write_header(header, 3);
@@ -397,9 +391,6 @@ endmodule
   const auto edited = execute(
       edited_config, fsim::app::SimulationEngine::compiled);
   verify(edited, changed_expected);
-#if defined(FSIM_HAS_LLVM)
-  assert(edited.cache.misses > 0);
-#endif
 
   for (const auto optimization : {
            fsim::project::Optimization::o0,
@@ -416,14 +407,8 @@ endmodule
     assert(reference.values == std::vector<std::string>({"00001101", "1"}));
     assert(cold.values == reference.values);
     assert(warm.values == reference.values);
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes > 0);
-    assert(cold.cache.misses > 0);
-    assert(warm.cache.hits > 0);
-#else
     assert(cold.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
-#endif
   }
   std::cout << "SystemVerilog preprocessor/generate application tests passed\n";
   return 0;

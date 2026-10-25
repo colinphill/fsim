@@ -1,4 +1,6 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
+> Historical: the per-process JIT was removed in the v4 migration.
+
 # Design-specific JIT scheduling and update paths
 
 Assessment date: 2026-09-27.

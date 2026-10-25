@@ -622,11 +622,6 @@ end architecture;
       assert(reference.reports == debug->reports);
       assert(reference.vcd == debug->vcd);
     }
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes > 0U);
-    assert(compiled.cache.misses > 0U);
-    assert(warm.cache.hits > 0U);
-#endif
   }
 
   const auto artifact_config = make_config(

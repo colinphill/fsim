@@ -450,6 +450,10 @@ PersistedPlanSlot persisted_plan_slot(const BuiltProject& built,
         key.add("canonical", runtime::simir::static_kernel_canonical_identity());
     }
     key.add("kind", kind);
+    // A plan made for foreign or observing clients differs from the default.
+    if (const auto access = built.kernel_access.identity(); !access.empty()) {
+        key.add("access", access);
+    }
     key.add("design", built.artifact_identity);
     slot.key = key.finish();
     return slot;
@@ -504,11 +508,42 @@ restore_specializations(const std::string_view bytes)
 bool application_detail::static_kernel_requested(
     const SimulationEngine engine) noexcept
 {
-    if (engine == SimulationEngine::v4) {
+    // `compiled` is an alias of v4 (Simulation normalizes it).
+    if (engine == SimulationEngine::v4 || engine == SimulationEngine::compiled) {
         return true;
+    }
+    // The debugger runs the kernel, its members stoppable at every debug
+    // point; FSIM_DEBUG_KERNEL=0 keeps it on the reference interpreter.
+    if (engine == SimulationEngine::debug) {
+        const char* debug_kernel = std::getenv("FSIM_DEBUG_KERNEL");
+        return debug_kernel == nullptr
+            || std::string_view { debug_kernel } != "0";
     }
     const char* requested = std::getenv("FSIM_STATIC_KERNEL");
     return requested != nullptr && std::string_view { requested } == "1";
+}
+
+void application_detail::plan_kernel_access(BuiltProject& built,
+    const SimulationEngine engine, const bool foreign, const bool observe_all)
+{
+    // The static kernel keeps every signal such a client can reach a host
+    // signal. The debugger examines, deposits and forces any signal, so it
+    // runs the kernel as a foreign and observing client whose plan also
+    // makes every member a stoppable thread (StaticKernelAccessPlan::debug).
+    const char* access_switch = std::getenv("FSIM_STATIC_KERNEL_ACCESS_PLAN");
+    const bool access_plans = access_switch == nullptr
+        || std::string_view { access_switch } != "0";
+    const bool debug_kernel = engine == SimulationEngine::debug
+        && access_plans && static_kernel_requested(engine);
+    if (built.cone_fusion || !access_plans
+        || (engine == SimulationEngine::debug && !debug_kernel)) {
+        return;
+    }
+    built.kernel_access.admit = true;
+    built.kernel_access.foreign = foreign || debug_kernel;
+    built.kernel_access.observe_all = observe_all || debug_kernel;
+    built.kernel_access.coverage = built.code_coverage_enabled;
+    built.kernel_access.debug = debug_kernel;
 }
 
 namespace {
@@ -529,7 +564,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
 #if defined(FSIM_HAS_LLVM)
     kernel = kernel || compiler::StaticKernelAheadOfTimeScope::active();
 #endif
-    if (built.cone_fusion && kernel) {
+    if ((built.cone_fusion || built.kernel_access.admit) && kernel) {
         auto plan = [&] {
             const application_detail::ScopedPhaseProfile planning {
                 "static_kernel_plan"
@@ -550,7 +585,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                     }
                 }
             }
-            auto planned = built.design.plan_static_kernel();
+            auto planned = built.design.plan_static_kernel(built.kernel_access);
             if (slot.cache && ahead_of_time) {
                 const auto bytes
                     = elaboration::detail::serialize_static_kernel_plan(planned);
@@ -563,10 +598,17 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
             }
             return planned;
 #else
-            return built.design.plan_static_kernel();
+            return built.design.plan_static_kernel(built.kernel_access);
 #endif
         }();
         if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
+            if (built.kernel_access.admit) {
+                std::cerr << "fsim-profile: static-kernel-access foreign="
+                          << built.kernel_access.foreign << " observe_all="
+                          << built.kernel_access.observe_all << " coverage="
+                          << built.kernel_access.coverage << " debug="
+                          << built.kernel_access.debug << '\n';
+            }
             std::cerr << "fsim-profile: static-kernel disabled=" << plan.disabled
                       << " reason=" << plan.disabled_reason
                       << " members=" << plan.members
@@ -576,14 +618,22 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                       << " containers=" << plan.owned_containers
                       << " processes=" << plan.processes
                       << " host=" << plan.host_processes
+                      << " hosted=" << plan.hosted_processes
                       << '\n';
             for (const auto& row : plan.host_reasons) {
                 std::cerr << "fsim-profile: static-kernel-host reason="
                           << row.reason << " count=" << row.count
                           << " example=" << row.example << '\n';
             }
+            for (const auto& row : plan.hosted_reasons) {
+                std::cerr << "fsim-profile: static-kernel-hosted reason="
+                          << row.reason << " count=" << row.count
+                          << " example=" << row.example << '\n';
+            }
         }
-        if (!plan.disabled) {
+        // A trivial plan (no processes, no specification) runs on the
+        // ordinary path: there is nothing for the kernel to schedule.
+        if (!plan.disabled && plan.spec) {
             // Partition combinational members by module instance.
             const auto& design_ir = built.design_ir;
             std::vector<std::uint32_t> instance_of;
@@ -664,6 +714,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                     }
                 }
             }
+            plan.spec->debug_points = built.kernel_access.debug;
             auto interpreter = std::move(built.design).create_interpreter(
                 options, built.seed, plan);
             if (recorded_native && !recorded_native->empty()) {
@@ -690,6 +741,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
             }
             return interpreter;
 #else
+            plan.spec->debug_points = built.kernel_access.debug;
             return std::move(built.design).create_interpreter(
                 options, built.seed, plan);
 #endif
@@ -1370,8 +1422,10 @@ Simulation::Impl::Impl(
         interpreter->set_code_coverage_counters(
             std::vector<std::uint64_t>(counter_count));
     }
-    coverage_execution_mode = engine == SimulationEngine::interpreter
-            || engine == SimulationEngine::v4
+    // Every engine executes coverage hits on the reference evaluator: the
+    // kernel leaves instrumented processes on the host, and `debug` is the
+    // reference evaluator with debugger hooks.
+    coverage_execution_mode = engine != SimulationEngine::compiled
         ? frontend::SystemVerilogCoverageExecutionMode::Interpreter
         : built.optimization == fsim::project::Optimization::o0
         ? frontend::SystemVerilogCoverageExecutionMode::LlvmO0

@@ -82,7 +82,7 @@ void ApplicationTestFixture::compare_captures(
       assert(reference.result.status == hybrid.result.status);
       assert(reference.result.time == hybrid.result.time);
       assert(reference.result.delta == hybrid.result.delta);
-      // Native coalescing may execute fewer internal scheduler callbacks while
+      // The v4 kernel may execute fewer internal scheduler callbacks while
       // preserving the same time, delta, signal changes, and final state.
       assert(reference.changes == hybrid.changes);
       assert(reference.final_values == hybrid.final_values);
@@ -90,24 +90,14 @@ void ApplicationTestFixture::compare_captures(
       assert(
           reference.normalized_vcd.find("$version fsim $end")
           != std::string::npos);
+      // The reference evaluator never compiles native processes. The
+      // engine-v4 side's kernel admission is not reported through this
+      // capture, so only output equivalence is asserted.
       assert(reference.compiled_processes == 0);
       assert(reference.compiled_modules == 0);
       assert(
           reference.native_cache
           == fsim::app::NativeCacheStatistics{});
-#if defined(FSIM_HAS_LLVM)
-      assert(hybrid.compiled_processes > 0);
-      assert(
-          hybrid.compiled_processes
-          <= hybrid.process_count);
-      assert(hybrid.compiled_modules > 0);
-      assert(
-          hybrid.compiled_modules
-          <= hybrid.compiled_processes);
-#else
-      assert(hybrid.compiled_processes == 0);
-      assert(hybrid.compiled_modules == 0);
-#endif
 }
 
 }  // namespace fsim::test

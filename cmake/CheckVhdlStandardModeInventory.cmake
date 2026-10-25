@@ -40,7 +40,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "fsim.application.vhdl_numeric"
     "fsim.application.vhdl_logic9"
     "fsim.application.artifact_phases"
-    "fsim.llvm"
+    "fsim.application.static-kernel"
     "fsim.msvc-debug-contract"
     "fsim.windows-llvm-contract"
     "fsim.contract.language-resources"

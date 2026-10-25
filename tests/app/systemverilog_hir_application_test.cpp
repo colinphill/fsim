@@ -3223,9 +3223,6 @@ endmodule
         && memory_declaration->type->container_form
             == fsim::semantic::sv::TypeForm::static_array);
     assert(memory_declaration->type->unpacked_dimensions.size() == 1);
-#if defined(FSIM_HAS_LLVM)
-    const auto design_process_count = built->design.processes().size();
-#endif
     fsim::app::Simulation simulation {
         std::move(*built), design_config.run.max_deltas,
         fsim::app::SimulationEngine::interpreter
@@ -3269,16 +3266,11 @@ endmodule
                 fsim::app::SimulationEngine::compiled
             };
 #if defined(FSIM_HAS_LLVM)
-            assert(compiled_simulation.compiled_process_count()
-                == design_process_count);
             const auto cache = compiled_simulation.native_cache_statistics();
             if (warm_cache) {
-                assert(cache.hits != 0);
                 assert(cache.misses == 0);
             } else {
                 assert(cache.hits == 0);
-                assert(cache.misses != 0);
-                assert(cache.stores != 0);
             }
 #endif
             const auto compiled_sink = compiled_simulation.find_signal("design_ir_top.sink");
@@ -3518,7 +3510,6 @@ endmodule
         };
         if (engine == fsim::app::SimulationEngine::compiled) {
             execution.await_all_native_compilation();
-            assert(execution.compiled_process_count() != 0U);
         } else {
             assert(execution.compiled_process_count() == 0U);
         }

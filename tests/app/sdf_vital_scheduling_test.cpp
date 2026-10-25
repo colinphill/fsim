@@ -391,11 +391,7 @@ end architecture;
     const auto [reference, compiled]
         = fsim::test::run_interpreter_compiled_pair(
             std::move(*project), run_engine);
-#if defined(FSIM_HAS_LLVM)
-    const bool compiled_process_count_ok = compiled.compiled_processes > 0U;
-#else
     const bool compiled_process_count_ok = compiled.compiled_processes == 0U;
-#endif
     require(compiled_process_count_ok
             && compiled.changes == reference.changes
             && std::ranges::any_of(reference.changes, [](const auto& change) {

@@ -56,14 +56,7 @@ Interpreter::Impl::Impl(
         this, +[](void* context) noexcept {
             static_cast<Impl*>(context)->discard_scheduler_work();
         });
-    scheduler.set_runtime_slot_quiet_hook(this,
-        +[](void* context) noexcept {
-            static_cast<Impl*>(context)->try_recertify_region_graph();
-        });
     scheduler.set_slot_start_hook([this](Scheduler&) {
-        if (region_forwarding_role_flush_pending_after_discard) {
-            require_all_region_forwarding_role_journals_flushed();
-        }
         if (!requires_sampled_values) {
             return;
         }
@@ -85,7 +78,6 @@ Interpreter::Impl::Impl(
 
 Interpreter::Impl::~Impl()
 {
-    scheduler.set_runtime_slot_quiet_hook(nullptr, nullptr);
     scheduler.remove_discard_hook(scheduler_discard_hook);
 }
 
@@ -973,9 +965,6 @@ bool Interpreter::clear_process_executor(const ProcessId process)
     impl_->advance_process_executor_generation(state);
     state.executor.reset();
     state.cold().deferred_executor.reset();
-    state.region_kernel_equivalence_confirmed = false;
-    state.region_kernel_completion_has_no_persistent_registers = false;
-    state.region_kernel_completion_boundary_validated = false;
     return true;
 }
 
@@ -990,7 +979,6 @@ void Interpreter::Impl::prepare_deferred_executor_callback(
     // Public deferred callbacks can inspect or mutate any signal. Prepare the
     // complete observable state before each callout; a previous ready() call
     // is not a durable guarantee about the next call or the later take().
-    process_signal_access_inventory_complete = false;
     prepare_callback_observation();
 }
 
@@ -1032,17 +1020,8 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
         && program.matches_registered_binding(process.id, *actual_access)
         && deferred->contract.expected_access->same_execution_binding(
             *actual_access);
-    process.region_kernel_equivalence_confirmed
-        = access_matches
-        && deferred->contract.expected_region_kernel_equivalent
-        && executor.region_kernel_equivalent();
-    process.region_kernel_completion_has_no_persistent_registers
-        = process.region_kernel_equivalence_confirmed
-        && executor.region_kernel_completion_has_no_persistent_registers();
-    process.region_kernel_completion_boundary_validated = false;
     if (!access_matches) {
         deferred->access_binding_rejected = true;
-        process_signal_access_inventory_complete = false;
     }
     if (started && !access_matches) {
         // The graph may have trusted the deferred registration before the
@@ -1147,7 +1126,6 @@ void Interpreter::Impl::install_deferred_executor(ProcessState& process)
 void Interpreter::Impl::execute_static_cohort(
     const std::span<const ProcessId> process_ids)
 {
-    require_all_region_forwarding_role_journals_flushed();
     struct PendingSuffix {
         Impl& owner;
         std::span<const ProcessId> members;
@@ -1302,13 +1280,6 @@ void Interpreter::Impl::execute_static_cohort(
             });
         }
         std::span<ProcessCohortResumeEntry> entries = overflow_entries;
-        // Cohort executors bypass Impl::execute(id), which normally clears
-        // the stateless-region completion proof. Clear every offered member
-        // before entry; declined members remain conservatively unvalidated.
-        for (std::size_t offset = 0U; offset < entries.size(); ++offset) {
-            get_process(process_ids[begin + offset])
-                .region_kernel_completion_boundary_validated = false;
-        }
         const auto executed
             = entries.front().executor->resume_cohort(entries);
         if (native_phase_profile_enabled) {

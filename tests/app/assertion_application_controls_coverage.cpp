@@ -907,10 +907,6 @@ endmodule
         assert(interpreted.hits == compiled_cold.hits);
         assert(interpreted.report == compiled_cold.report);
         assert(compiled_cold.report == compiled_warm.report);
-#if defined(FSIM_HAS_LLVM)
-        assert(compiled_cold.compiled_processes >= 1);
-        assert(compiled_warm.cache.hits == 1);
-#endif
     }
     const auto object = directory / "coverage-execution.fsimobj";
     const auto artifact = directory / "coverage-execution.fsimdesign";
@@ -955,9 +951,6 @@ endmodule
         }));
     assert(artifact_capture.callbacks.size() == 18);
     assert(artifact_capture.trace.size() == 18);
-#if defined(FSIM_HAS_LLVM)
-    assert(artifact_capture.compiled_processes >= 1);
-#endif
 }
 
 struct AdvancedCoverageCapture {
@@ -1090,9 +1083,6 @@ endmodule
             }));
         assert(interpreted.cross_operands.size() == 6);
         assert(interpreted.callbacks.size() >= 16);
-#if defined(FSIM_HAS_LLVM)
-        assert(compiled_cold.compiled_processes >= 1);
-#endif
     }
 }
 

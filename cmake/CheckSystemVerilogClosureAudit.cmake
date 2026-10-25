@@ -143,7 +143,7 @@ set(FSIM_EXPECTED_TESTS
   fsim.application.vpi
   fsim.frontend
   fsim.library.artifact
-  fsim.llvm
+  fsim.application.static-kernel
   fsim.runtime
   fsim.semantic
   fsim.uvm-phase-tlm-matrix)

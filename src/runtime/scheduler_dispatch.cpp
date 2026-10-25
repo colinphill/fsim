@@ -229,13 +229,10 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                         throw std::logic_error(
                             "malformed Generic compact readiness ticket");
 
-                    const bool frontier_available
-                        = impl_->next_generic_batch_frontier_generation != 0U
-                        && bounded_dispatch.count
-                            <= impl_->batch_payloads.capacity()
-                        && bounded_dispatch.count
-                            <= impl_->generic_batch_frontier_entries.capacity();
-                    if (!frontier_available) {
+                    const bool dispatch_available
+                        = bounded_dispatch.count
+                            <= impl_->batch_payloads.capacity();
+                    if (!dispatch_available) {
                         if (!queue.begin_batch_ticket_dispatch(
                                 bounded_dispatch)) {
                             throw std::logic_error(
@@ -269,41 +266,19 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                     }
 
                     batch_payloads.clear();
-                    impl_->generic_batch_frontier_entries.clear();
                     for (std::size_t index = 0U;
                          index < bounded_dispatch.count;
                          ++index) {
                         const auto member_index = first_member + index;
-                        const auto member_payload
-                            = ticket->member_payload(member_index);
-                        batch_payloads.push_back(member_payload);
-                        impl_->generic_batch_frontier_entries.push_back({
-                            ticket->member_order(member_index),
-                            ticket->member_sequence(member_index),
-                            member_payload });
+                        batch_payloads.push_back(
+                            ticket->member_payload(member_index));
                     }
                     if (!queue.begin_batch_ticket_dispatch(bounded_dispatch)) {
                         batch_payloads.clear();
-                        impl_->generic_batch_frontier_entries.clear();
                         throw std::logic_error(
                             "Generic compact ticket dispatch lost its queue entry");
                     }
 
-                    const auto generation
-                        = impl_->next_generic_batch_frontier_generation;
-                    impl_->next_generic_batch_frontier_generation
-                        = generation
-                                == std::numeric_limits<std::uint64_t>::max()
-                        ? 0U : generation + 1U;
-                    impl_->active_generic_batch_frontier
-                        = SchedulerGenericBatchFrontier {
-                            generation, slot.time, slot.delta, phase, 0U,
-                            impl_->generic_batch_frontier_entries.size(),
-                            impl_->generic_batch_frontier_entries,
-                            ticket->group_key, first_member,
-                            std::span<const SchedulerGenericTicketMember> {
-                                compact_members + first_member,
-                                ticket->count - first_member } };
                     ++impl_->generic_batch_compaction_stats.direct_dispatches;
                     impl_->generic_batch_compaction_stats.direct_members
                         += static_cast<std::uint64_t>(bounded_dispatch.count);
@@ -315,7 +290,6 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                         batch_result = batch_task->execute(
                             *this, batch_payloads);
                     } catch (...) {
-                        impl_->active_generic_batch_frontier.reset();
                         impl_->trace(SchedulerTraceKind::batch_failure,
                             &first);
                         queue.finish_batch_ticket_dispatch();
@@ -323,7 +297,6 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                         impl_->in_callback = false;
                         throw;
                     }
-                    impl_->active_generic_batch_frontier.reset();
                     if (batch_result.executed > bounded_dispatch.count) {
                         impl_->trace(SchedulerTraceKind::batch_failure,
                             &first);
@@ -391,15 +364,12 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
             }
             if (systemverilog && !end_of_slot
                 && phase == SchedulerPhase::active
-                && impl_->current
-                && impl_->next_batch_frontier_generation != 0U) {
+                && impl_->current) {
                 const auto ticket_dispatch
                     = queue.next_batch_ticket_dispatch();
                 if (ticket_dispatch
                     && ticket_dispatch.count
-                        <= impl_->batch_payloads.capacity()
-                    && ticket_dispatch.count
-                        <= impl_->batch_frontier_entries.capacity()) {
+                        <= impl_->batch_payloads.capacity()) {
                     auto* const ticket = ticket_dispatch.ticket;
                     const auto first_member = ticket->cursor;
                     auto& first = *ticket_dispatch.queue_entry;
@@ -427,37 +397,14 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                     if (direct_shape_valid) {
                         batch_entries.clear();
                         batch_payloads.clear();
-                        impl_->batch_frontier_entries.clear();
                         for (std::size_t index = 0U;
                              index < ticket_dispatch.count;
                              ++index) {
-                            const auto payload = ticket->member_payload(
-                                first_member + index);
-                            batch_payloads.push_back(payload);
-                            impl_->batch_frontier_entries.push_back({
-                                ticket->member_order(first_member + index),
-                                ticket->member_sequence(first_member + index),
-                                payload });
+                            batch_payloads.push_back(ticket->member_payload(
+                                first_member + index));
                         }
                         if (queue.begin_batch_ticket_dispatch(
                                 ticket_dispatch)) {
-                            const auto generation
-                                = impl_->next_batch_frontier_generation;
-                            impl_->next_batch_frontier_generation
-                                = generation
-                                        == std::numeric_limits<std::uint64_t>::max()
-                                ? 0U : generation + 1U;
-                            impl_->active_batch_frontier
-                                = SchedulerBatchFrontier {
-                                    generation,
-                                    slot.time,
-                                    slot.delta,
-                                    phase,
-                                    slot.systemverilog_round,
-                                    0U,
-                                    impl_->batch_frontier_entries.size(),
-                                    impl_->batch_frontier_entries,
-                                };
                             ++impl_->systemverilog_batch_compaction_stats
                                   .direct_dispatches;
                             impl_->systemverilog_batch_compaction_stats
@@ -471,8 +418,6 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                                 batch_result = batch_task->execute(
                                     *this, batch_payloads);
                             } catch (...) {
-                                impl_->active_batch_frontier.reset();
-                                impl_->active_generic_batch_frontier.reset();
                                 impl_->trace(
                                     SchedulerTraceKind::batch_failure,
                                     &first);
@@ -481,8 +426,6 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                                 impl_->in_callback = false;
                                 throw;
                             }
-                            impl_->active_batch_frontier.reset();
-                            impl_->active_generic_batch_frontier.reset();
                             if (batch_result.executed
                                 > ticket_dispatch.count) {
                                 impl_->trace(
@@ -568,7 +511,6 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                             continue;
                         }
                         batch_payloads.clear();
-                        impl_->batch_frontier_entries.clear();
                     }
                 }
             }
@@ -633,56 +575,6 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                     batch_payloads.push_back(candidate.batch_payload());
                 }
 
-                if (systemverilog && impl_->current
-                    && batch_entries.size()
-                        <= impl_->batch_frontier_entries.capacity()
-                    && impl_->next_batch_frontier_generation != 0U) {
-                    impl_->batch_frontier_entries.clear();
-                    for (const auto& candidate : batch_entries) {
-                        impl_->batch_frontier_entries.push_back({ candidate.order,
-                            candidate.sequence, candidate.batch_payload() });
-                    }
-                    const auto generation
-                        = impl_->next_batch_frontier_generation;
-                    impl_->next_batch_frontier_generation
-                        = generation == std::numeric_limits<std::uint64_t>::max()
-                        ? 0U : generation + 1U;
-                    impl_->active_batch_frontier = SchedulerBatchFrontier {
-                        generation,
-                        slot.time,
-                        slot.delta,
-                        phase,
-                        slot.systemverilog_round,
-                        0U,
-                        impl_->batch_frontier_entries.size(),
-                        impl_->batch_frontier_entries,
-                    };
-                }
-                if (!systemverilog && !end_of_slot
-                    && phase == SchedulerPhase::active && impl_->current
-                    && batch_entries.size()
-                        <= impl_->generic_batch_frontier_entries.capacity()
-                    && impl_->next_generic_batch_frontier_generation != 0U) {
-                    impl_->generic_batch_frontier_entries.clear();
-                    for (const auto& candidate : batch_entries) {
-                        impl_->generic_batch_frontier_entries.push_back({
-                            candidate.order, candidate.sequence,
-                            candidate.batch_payload() });
-                    }
-                    const auto generation
-                        = impl_->next_generic_batch_frontier_generation;
-                    impl_->next_generic_batch_frontier_generation
-                        = generation == std::numeric_limits<std::uint64_t>::max()
-                        ? 0U : generation + 1U;
-                    impl_->active_generic_batch_frontier
-                        = SchedulerGenericBatchFrontier {
-                            generation, slot.time, slot.delta, phase,
-                            0U, impl_->generic_batch_frontier_entries.size(),
-                            impl_->generic_batch_frontier_entries,
-                            SchedulerBatchGroupKey { }, 0U,
-                            std::span<const SchedulerGenericTicketMember> { } };
-                }
-
                 impl_->in_callback = true;
                 SchedulerBatchResult batch_result;
                 impl_->trace(SchedulerTraceKind::batch_begin,
@@ -691,8 +583,6 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                     batch_result = batch_task->execute(
                         *this, batch_payloads);
                 } catch (...) {
-                    impl_->active_batch_frontier.reset();
-                    impl_->active_generic_batch_frontier.reset();
                     impl_->trace(SchedulerTraceKind::batch_failure,
                         &batch_entries.front());
                     suffix_reservation.release();
@@ -703,8 +593,6 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                     impl_->in_callback = false;
                     throw;
                 }
-                impl_->active_batch_frontier.reset();
-                impl_->active_generic_batch_frontier.reset();
                 if (batch_result.executed > batch_entries.size()) {
                     impl_->trace(SchedulerTraceKind::batch_failure,
                         &batch_entries.front());

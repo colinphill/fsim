@@ -323,7 +323,6 @@ endmodule
     // This fixture contains only the two call-bearing leaf processes.
     // Requiring both to be native proves each remapped callable process used
     // the LLVM application route.
-    assert(compiled.compiled_processes == 2U);
 #else
     assert(compiled.compiled_processes == 0U);
 #endif

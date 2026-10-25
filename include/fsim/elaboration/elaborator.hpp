@@ -852,6 +852,49 @@ struct StaticKernelHostReason {
     std::string example;
 };
 
+/// What code outside the SimIR processes observes or touches, as the
+/// application knows it before planning (docs/engine-v4-semantics.md S19,
+/// S21). The planner keeps every signal such a client can reach a host
+/// signal: kernel members write it through the host commit path and read it
+/// as a boundary input, so the client sees exactly the reference values,
+/// callbacks and delta timing. The planner derives the design-local needs
+/// itself (module paths, timing checks and VCD control operations).
+struct StaticKernelAccessPlan {
+    /// The application admits the kernel for this run although cone fusion
+    /// is off, because this plan replaces the whole-design gate (switch
+    /// FSIM_STATIC_KERNEL_ACCESS_PLAN=0 restores the gates).
+    bool admit { };
+    /// A VPI, VHPI or DPI library is loaded: it reads and writes any design
+    /// object, registers value-change callbacks, and may deposit values
+    /// between kernel rounds. Every signal and container is a host object.
+    bool foreign { };
+    /// A trace writer or a VCD control observer records every value change
+    /// of any signal (IEEE 1800-2023 21.7): every signal is a host signal.
+    bool observe_all { };
+    /// Code coverage is on. Statement, branch and line counters are host
+    /// data bumped by CodeCoverageHit operations, which the kernel does not
+    /// evaluate: processes with such operations stay host processes.
+    bool coverage { };
+    /// The source-level debugger drives the run (`--engine debug`): every
+    /// process is a behavioral thread or a hosted process, so each can stop
+    /// at a statement, and the members' debug points are executable.
+    bool debug { };
+
+    /// Key text for persisted plans; empty for the default plan.
+    [[nodiscard]] std::string identity() const
+    {
+        if (!foreign && !observe_all && !coverage && !debug) {
+            return { };
+        }
+        std::string text { "access" };
+        text += foreign ? ";foreign" : "";
+        text += observe_all ? ";observe_all" : "";
+        text += coverage ? ";coverage" : "";
+        text += debug ? ";debug" : "";
+        return text;
+    }
+};
+
 /// Engine v4 static kernel plan (docs/simulation-engine-v4-plan.md). The
 /// runtime specification is opaque to callers; the counts are diagnostics.
 struct StaticKernelPlan {
@@ -872,6 +915,12 @@ struct StaticKernelPlan {
     std::size_t processes { };
     std::size_t host_processes { };
     std::vector<StaticKernelHostReason> host_reasons;
+    /// Hosted processes (StaticKernelMemberKind::hosted): kernel-scheduled,
+    /// executed by the reference evaluator. They count as kernel-owned (not in
+    /// `host_processes`); `hosted_reasons` aggregates why each is not native.
+    /// `hosted_processes` is always set, the rows with FSIM_PROFILE_PHASES.
+    std::size_t hosted_processes { };
+    std::vector<StaticKernelHostReason> hosted_reasons;
 };
 
 class ElaboratedDesign final {
@@ -1023,7 +1072,8 @@ public:
         std::uint64_t seed, const StaticKernelPlan& plan) &&;
     /// Plan the static kernel. Callers opt in only when no observer outside
     /// SimIR processes can inspect kernel-owned state.
-    [[nodiscard]] StaticKernelPlan plan_static_kernel() const;
+    [[nodiscard]] StaticKernelPlan plan_static_kernel(
+        const StaticKernelAccessPlan& access = { }) const;
 
     [[nodiscard]] ElaboratedDesignState state() const &;
     /// Transfer the complete portable state out of a design that has reached

@@ -259,8 +259,8 @@ struct BuiltProject {
         selected,
         all,
     };
-    /// Native-process admission policy for this in-memory consumer. Portable
-    /// design artifacts intentionally do not persist this cache-local choice.
+    /// Retained for source compatibility only: the per-process JIT was
+    /// removed in the engine-v4 migration, so this choice has no effect.
     CompiledProcessSelection compiled_process_selection {
         CompiledProcessSelection::selected
     };
@@ -272,6 +272,11 @@ struct BuiltProject {
     /// coverage) can inspect hidden internal nets; hidden nets are still
     /// materialized before any runtime observation.
     bool cone_fusion { };
+    /// What replaces the whole-design static-kernel gates for this
+    /// in-memory consumer (foreign libraries, trace output, coverage): the
+    /// planner keeps the signals those clients can reach as host signals.
+    /// `admit` lets the kernel run although cone fusion is off.
+    elaboration::StaticKernelAccessPlan kernel_access { };
     /// Validated file inputs awaiting the design digest assigned at publication.
     std::vector<std::shared_ptr<const SdfSessionPublication>>
         sdf_session_publications { };
@@ -340,15 +345,11 @@ verilog_scope_provenance(
 enum class SimulationEngine : std::uint8_t {
     /// Use the reference SimIR evaluator for every process.
     interpreter,
-    /// Compile supported processes when the LLVM backend is available and use
-    /// the reference evaluator for explicitly unsupported processes.
+    /// An alias of `v4` (normalized when a Simulation is constructed). The
+    /// per-process LLVM JIT it once named was removed.
     compiled,
-    /// Compile supported processes at O0 for debugger use, retaining the
-    /// reference evaluator for explicitly unsupported processes.
-    ///
-    /// Executable statement, wait, assertion, and process-boundary points retain
-    /// source locations. Call safe points and addressable locals remain future
-    /// work.
+    /// The reference SimIR evaluator with debugger execution-point hooks;
+    /// no native code is used.
     debug,
     /// Engine v4 (docs/simulation-engine-v4-plan.md): the static kernel owns
     /// every member process; the reference evaluator runs the rest. The
@@ -1018,24 +1019,18 @@ public:
     /// True once a final procedure has executed `$stop`.
     [[nodiscard]] bool paused_in_final() const noexcept;
     [[nodiscard]] bool poisoned() const noexcept;
-    /// Number of processes using the LLVM executor. This is zero for the
-    /// reference engine and for builds without the LLVM adapter.
+    /// Stub kept for API compatibility: always zero. The per-process LLVM
+    /// executor was removed in the engine-v4 migration.
     [[nodiscard]] std::size_t compiled_process_count() const noexcept;
-    /// Number of elaborated specialization modules containing those processes.
-    ///
-    /// Several processes directly owned by one specialization share a single
-    /// LLVM optimization and native-object cache unit.
+    /// Stub kept for API compatibility: always zero.
     [[nodiscard]] std::size_t compiled_module_count() const noexcept;
-    /// Native-object cache activity incurred while materializing this
-    /// simulation's compiled specialization modules.
+    /// Stub kept for API compatibility: all counters are zero (there is no
+    /// per-process native-object cache any more).
     [[nodiscard]] NativeCacheStatistics
     native_cache_statistics(bool synchronize = true) const noexcept;
-    /// Join the cold-start LLVM tier and surface any lowering, codegen, or
-    /// cache failure. Larger recurring kernels promote asynchronously only
-    /// for runs long enough to amortize compilation.
+    /// Stub kept for API compatibility: no-op (no background compilation).
     void await_native_compilation() const;
-    /// Force every selected native tier, join all materialization work, and
-    /// surface lowering, codegen, and cache failures before returning.
+    /// Stub kept for API compatibility: no-op (no background compilation).
     void await_all_native_compilation() const;
     void set_signal_change_hook(SignalChangeHook hook);
     /// Add an independent signal observer without replacing the trace/API hook.

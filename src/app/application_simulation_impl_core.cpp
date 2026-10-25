@@ -2604,41 +2604,8 @@ Simulation::Impl::backdoor_signal(const std::string_view path) const noexcept
               runtime::simir::SignalId>(found->runtime_index) };
 }
 
-#if defined(FSIM_HAS_LLVM)
-void Simulation::Impl::request_background_jit_compilation(
-    const bool force_adaptive)
-{
-    {
-        std::scoped_lock lock { jit_background_mutex };
-        jit_background_requested = true;
-        jit_background_forced |= force_adaptive;
-    }
-    jit_background_condition.notify_all();
-}
-
-void Simulation::Impl::cancel_background_jit_compilation() noexcept
-{
-    {
-        std::scoped_lock lock { jit_background_mutex };
-        jit_background_cancelled = true;
-    }
-    jit_background_condition.notify_all();
-}
-
-#endif
-
 Simulation::Impl::~Impl()
 {
-#if defined(FSIM_HAS_LLVM)
-    // Materialization jobs retain pointers to process programs owned by
-    // the interpreter. Normal simulation may deliberately finish before
-    // background promotion, so join while both the interpreter and JIT
-    // are still alive rather than relying on reverse member destruction.
-    cancel_background_jit_compilation();
-    if (jit_materialization.valid()) {
-        jit_materialization.wait();
-    }
-#endif
     if (coverage_database_path && lifecycle != Lifecycle::finished) {
         try {
             save_coverage_database();

@@ -114,11 +114,7 @@ std::string execute(
         const auto result = simulation.run();
         assert(result.status == fsim::runtime::RunStatus::completed);
         if (engine == fsim::app::SimulationEngine::compiled) {
-#if defined(FSIM_HAS_LLVM)
-            assert(compiled != 0);
-#else
             assert(compiled == 0);
-#endif
         }
     }
     std::ifstream input(output, std::ios::binary);

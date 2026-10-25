@@ -285,13 +285,7 @@ void test_optimization(
       && cold.debugger == warm.debugger);
   assert(reference.trace == cold.trace && cold.trace == warm.trace);
   assert(reference.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-  assert(cold.compiled_processes == 3);
-  assert(cold.cache.hits == 0 && cold.cache.misses == 1);
-  assert(warm.cache.hits == 1 && warm.cache.misses == 0);
-#else
   assert(cold.compiled_processes == 0);
-#endif
 }
 
 void test_relocated_library(

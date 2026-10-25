@@ -55,6 +55,9 @@ enum class KOp : std::uint8_t {
     mem_bind,
     mem_read,
     mem_write,
+    /// Whole-array copy of private container d from private container x
+    /// (equal shapes; no register operands).
+    mem_copy,
     /// Partition member boundary: d is the member's position, x its index.
     mark,
     /// Executes SimIR operation x of the current member through the

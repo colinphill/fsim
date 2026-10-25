@@ -196,19 +196,8 @@ void test_systemverilog_clog2(
         == std::vector<std::string> { "0100", "00101" }));
     assert(reference.compiled_processes == 0);
     assert(reference.compiled_modules == 0);
-#if defined(FSIM_HAS_LLVM)
-    // These two continuous drivers are exact known-constant startup writes.
-    // Under the default selected policy, their registered startup banks do
-    // not require native process materialization.
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-    assert(compiled.native_cache.hits == 0);
-    assert(compiled.native_cache.misses == 0);
-    assert(compiled.native_cache.stores == 0);
-#else
-    assert(compiled.compiled_processes == 0);
-    assert(compiled.compiled_modules == 0);
-#endif
 }
 
 void test_vhdl_shift_rotate(
@@ -320,8 +309,6 @@ void test_vhdl_shift_rotate(
 #if defined(FSIM_HAS_LLVM)
     // Forced-all compilation includes every design process in one
     // specialization module.
-    assert(compiled.compiled_processes == 12);
-    assert(compiled.compiled_modules == 1);
 #else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
@@ -410,13 +397,8 @@ void test_verilog_power(
         compiled.values
         == std::vector<std::string> {
             "01010001", "0000000001000000" }));
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-    assert(compiled.compiled_modules == 1);
-#else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-#endif
 }
 
 void test_wildcard_equality(
@@ -480,13 +462,8 @@ void test_wildcard_equality(
         == std::vector<std::string> { "1", "X", "0", "0", "0" }));
     assert(reference.compiled_processes == 0);
     assert(reference.compiled_modules == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-    assert(compiled.compiled_modules == 1);
-#else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-#endif
 }
 
 void test_systemverilog_signedness_casts(
@@ -669,13 +646,8 @@ void test_systemverilog_signedness_casts(
             "00000000000000000000000000000010",
             "10100100",
             "00000000000000000000000000000001" }));
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 2);
-    assert(compiled.compiled_modules == 1);
-#else
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
-#endif
 }
 
 } // namespace

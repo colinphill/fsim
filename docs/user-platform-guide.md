@@ -138,7 +138,7 @@ removal preserves unrelated files in mapped directories and removes this
 workspace's mapping. Existing snapshots remain usable after library deletion.
 Use `library unmap NAME` when only the mapping should be removed.
 
-`FSIM-CACHE-0002` and `FSIM-CACHE-0004` report discarded or unusable cache
+`FSIM-CACHE-0002` reports discarded or unusable cache
 state. `FSIM-SC-I001` through `FSIM-SC-I003` identify invalid incremental
 metadata or publication. `FSIM-SC-I004` is the translation-unit compile and
 dependency-scan boundary; its message distinguishes an invalid compiler/input

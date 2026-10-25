@@ -456,11 +456,7 @@ endmodule
         = run_engine(std::move(*project), app::SimulationEngine::interpreter);
     const auto compiled
         = run_engine(std::move(compiled_project), app::SimulationEngine::compiled);
-#if defined(FSIM_HAS_LLVM)
-    const bool compiled_process_count_ok = compiled.compiled_processes > 0U;
-#else
     const bool compiled_process_count_ok = compiled.compiled_processes == 0U;
-#endif
     require(compiled_process_count_ok
             && compiled.changes == reference.changes
             && std::ranges::any_of(reference.changes, [](const auto& change) {
@@ -575,13 +571,8 @@ endmodule
             app::SimulationEngine::interpreter, outputs);
         const auto compiled = run_engine(std::move(compiled_project),
             app::SimulationEngine::compiled, outputs);
-#if defined(FSIM_HAS_LLVM)
-        const bool compiled_process_count_ok
-            = compiled.compiled_processes > 0U;
-#else
         const bool compiled_process_count_ok
             = compiled.compiled_processes == 0U;
-#endif
         require(compiled_process_count_ok
                 && compiled.changes == reference.changes,
             "interpreter and LLVM must agree on partial force and release");

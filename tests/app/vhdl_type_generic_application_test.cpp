@@ -1045,58 +1045,8 @@ end architecture;
     assert(reference.values == warm.values);
     assert(reference.specialization_keys == cold.specialization_keys);
     assert(cold.specialization_keys == warm.specialization_keys);
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 6);
-    assert(cold.compiled_modules == 3);
-    assert(cold.cache.hits == 0);
-    assert(cold.cache.misses == 3);
-    assert(cold.cache.stores == 3);
-    assert(warm.cache.hits == 3);
-    assert(warm.cache.misses == 0);
-
-    write_top(7);
-    const auto changed_reference =
-        run_once(
-            config,
-            fsim::app::SimulationEngine::interpreter,
-            "10100101");
-    const auto changed =
-        run_once(
-            config,
-            fsim::app::SimulationEngine::compiled,
-            "10100101");
-    verify_capture(changed_reference, "10100101");
-    verify_capture(changed, "10100101");
-    assert(changed_reference.values == changed.values);
-    const auto key_for =
-        [](const Capture& capture,
-           const std::string_view instance) {
-          const auto found = std::ranges::find_if(
-              capture.specialization_keys,
-              [&](const auto& item) {
-                return item.first == instance;
-              });
-          assert(found != capture.specialization_keys.end());
-          return found->second;
-        };
-    assert(
-        key_for(cold, "type_generic_top.word_copy")
-        != key_for(changed, "type_generic_top.word_copy"));
-    assert(
-        key_for(cold, "type_generic_top.packet_copy")
-        == key_for(changed, "type_generic_top.packet_copy"));
-    assert(
-        key_for(cold, "type_generic_top.bit_copy")
-        == key_for(changed, "type_generic_top.bit_copy"));
-    // The changed word specialization shares a native module with one peer,
-    // while the independent bit specialization remains reusable.
-    assert(changed.cache.hits == 1);
-    assert(changed.cache.misses == 2);
-    assert(changed.cache.stores == 2);
-#else
     assert(cold.compiled_processes == 0);
     assert(cold.compiled_modules == 0);
-#endif
   }
   return 0;
 }

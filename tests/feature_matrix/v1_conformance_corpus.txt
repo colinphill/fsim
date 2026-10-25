@@ -24,7 +24,7 @@ tests/systemc/plugin_loader_test.cpp|fsim.systemc.plugin|plugin,lifecycle,callba
 tests/systemc/plugin_compiler_test.cpp|fsim.systemc.compiler|compiler,cache-cold,cache-warm,cache-edit,source-map,portable-path,diagnostic
 tests/app/application_test_systemc_scheduling.cpp|fsim.application.systemc_matrix|interpreter,llvm-o0,llvm-o2,cache-cold,cache-warm,debugger,callbacks,vcd-normalized,source-map,portable-path,lifecycle
 tests/runtime/runtime_tests.cpp|fsim.runtime|interpreter,callbacks,vcd-normalized,source-map,portable-path,diagnostic
-tests/compiler/llvm_jit_test.cpp|fsim.llvm|llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,debugger,compiler,source-map,portable-path,diagnostic
+tests/app/static_kernel_test.cpp|fsim.application.static-kernel|llvm-o0,llvm-o2,cache-cold,cache-warm,cache-edit,debugger,compiler,source-map,portable-path,diagnostic
 tests/api/api_header_c_test.c|fsim.api.c_header|c-abi,source-map,portable-path
 tests/api/api_test.cpp|fsim.api|c-api,interpreter,callbacks,debugger,source-map,portable-path,diagnostic
 tests/app/application_test_cli.cpp|fsim.application|interpreter,llvm-o0,cache-cold,cache-warm,debugger,cli,vcd-normalized,source-map,portable-path,diagnostic

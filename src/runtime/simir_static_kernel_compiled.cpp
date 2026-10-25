@@ -817,6 +817,12 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     || std::is_same_v<T, WaitSensitivity>
                     || behavioral_suspension<T>) {
                     barriers.push_back(pc);
+                } else if constexpr (std::is_same_v<T, DebugPoint>) {
+                    // A stoppable point: the debugger may deposit a value
+                    // while the thread is stopped there.
+                    if (debug_points_ && debug_point_executable(op.kind)) {
+                        barriers.push_back(pc);
+                    }
                 } else if constexpr (std::is_same_v<T, Extract>
                     || std::is_same_v<T, DynamicPartSelect>
                     || std::is_same_v<T, DynamicExtract>) {
@@ -1178,6 +1184,18 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                             throw reject("display_source");
                         }
                         has_wide = has_wide || width[op.source] > 64U;
+                    }
+                } else if constexpr (std::is_same_v<T, DebugPoint>) {
+                    // Debugger plan: a statement, call, wait, assertion or
+                    // entry point returns to the thread runner like a
+                    // suspension, which raises the execution-point hook
+                    // there and may stop the run. Block markers and every
+                    // point of a normal plan compile to nothing.
+                    if (debug_points_ && debug_point_executable(op.kind)) {
+                        inst.op = KOp::suspend;
+                        inst.x = pc;
+                    } else {
+                        inst.op = KOp::nop;
                     }
                 } else if constexpr (std::is_same_v<T, CallableFramePush>
                     || std::is_same_v<T, CallableFramePop>) {
@@ -1979,6 +1997,29 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.flags = static_cast<std::uint8_t>(
                     (op.linear_index ? flag_linear : 0U)
                     | (op.signed_index ? flag_signed : 0U));
+            } else if constexpr (std::is_same_v<T, CopyContainerRegister>) {
+                // Equal-shape private arrays; the runtime copies the words.
+                if (op.destination >= container_of_register.size()
+                    || op.source >= container_of_register.size()) {
+                    throw reject("container_copy");
+                }
+                const auto destination = container_of_register[op.destination];
+                const auto source = container_of_register[op.source];
+                if (destination == no_container || source == no_container
+                    || containers_[destination].object != no_container_object
+                    || containers_[source].object != no_container_object
+                    || containers_[destination].storage
+                        != StaticKernelContainerStorage::elements
+                    || containers_[source].storage
+                        != StaticKernelContainerStorage::elements
+                    || !(containers_[destination].type
+                        == containers_[source].type)
+                    || containers_[destination].count != containers_[source].count) {
+                    throw reject("container_copy");
+                }
+                inst.op = KOp::mem_copy;
+                inst.d = destination;
+                inst.x = source;
             } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
                 if (op.object >= container_of_object_.size()
                     || container_of_object_[op.object] == no_container
@@ -2083,6 +2124,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 if constexpr (behavioral_suspension<T>
                     || std::is_same_v<T, WaitSensitivity>) {
                     body.resume_entries.push_back(pc + 1U);
+                }
+                if constexpr (std::is_same_v<T, DebugPoint>) {
+                    if (debug_points_ && debug_point_executable(op.kind)) {
+                        body.resume_entries.push_back(pc + 1U);
+                    }
                 }
             }, member.operations[pc]);
         }

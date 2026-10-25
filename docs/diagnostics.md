@@ -55,7 +55,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-CLI-0002` | error | The selected command has no connected implementation in this build. |
 | `FSIM-CLI-0003` | error | An exception escaped command dispatch. |
 | `FSIM-AOT-001` | error | Explicit post-elaboration native compilation or atomic AOT receipt publication failed; the already-published portable design remains valid. |
-| `FSIM-AOT-002` | warning | A native AOT receipt was unreadable, oversized, incompatible, or recovered alongside non-fatal cache read/pruning failures; simulation uses selected compilation when the receipt cannot be trusted. |
 | `FSIM-TCL-0001` | error | The selected build has no embedded Tcl interface. |
 | `FSIM-TCL-0002` | error | The Tcl interpreter, standard library, fsim namespace, or standard channels could not be initialized. |
 | `FSIM-TCL-0003` | error | A batch Tcl command or script failed during evaluation. |
@@ -141,7 +140,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-COV-008` | error | Coverage-inventory attachment received incomplete, duplicate, unknown, or mismatched elaborated-instance ownership; invalid source, span, line, point, metric, or counter ownership; noncanonical stored order; or excessive source, instance, or point counts. |
 | `FSIM-COV-009` | error | A SimIR code-coverage hit has an invalid point identity or executable metric, does not match its exact dense instance counter owner, duplicates instrumentation, uses noncanonical ownership, or exceeds the bounded point or operation count. |
 | `FSIM-COV-010` | error | Interpreter code-coverage counter execution has no configured dense table, names a counter outside that table, exceeds the bounded table size, or attempts to increment beyond uint64; overflow saturates and is reported once per counter. |
-| `FSIM-COV-011` | error | Compiled LLVM code-coverage execution has a missing or truncated instance hit map, unavailable dense counter storage, an out-of-range effective counter, or a failed checked saturation service. |
 | `FSIM-COV-012` | error | A hierarchical coverage-instance identity has missing, malformed, duplicate, or excessive canonical hierarchy, language, library, unit, or parameter identity inputs. |
 | `FSIM-COV-013` | error | Code-coverage source aggregation received an invalid result, incomplete or noncanonical point ownership, unknown instance/source, conflicting point definition, duplicate instance point, or excessive bounded input. |
 | `FSIM-COV-014` | error | A v3 object, design, elaboration request, or native-cache coverage identity has the wrong schema, enablement/model pairing, or content digest; v2 identities and cross-configuration reuse are rejected directly. |
@@ -3026,7 +3024,6 @@ one stable diagnostic from the five-code FST reader family.
 | `FSIM-CACHE-0001` | error | A parsed source could not be hashed or associated with its cache provenance. |
 | `FSIM-CACHE-0002` | warning | An unreadable or incompatible design-cache entry was discarded. |
 | `FSIM-CACHE-0003` | error | A design-cache entry could not be populated. |
-| `FSIM-CACHE-0004` | warning | Native-object cache load, store, or prune failures prevented complete cache reuse or eviction. |
 
 ## Non-project artifacts
 

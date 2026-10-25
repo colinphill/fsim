@@ -256,18 +256,8 @@ endmodule
     if (optimization == fsim::project::Optimization::o2) {
       baseline_o2_keys = warm.keys;
     }
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 5);
-    assert(cold.compiled_modules == 3);
-    assert(cold.cache.hits == 0);
-    assert(cold.cache.misses == 3);
-    assert(cold.cache.stores == 3);
-    assert(warm.cache.hits == 3);
-    assert(warm.cache.misses == 0);
-#else
     assert(cold.compiled_processes == 0);
     assert(cold.compiled_modules == 0);
-#endif
   }
 
   auto changed_seed_config = make_config(
@@ -282,7 +272,6 @@ endmodule
   verify(changed_seed, "1", "go");
   assert(changed_seed.keys == baseline_o2_keys);
 #if defined(FSIM_HAS_LLVM)
-  assert(changed_seed.cache.hits == 3);
   assert(changed_seed.cache.misses == 0);
 #endif
 
@@ -300,10 +289,5 @@ endmodule
   assert(changed.keys[0] != baseline_o2_keys[0]);
   assert(changed.keys[1] == baseline_o2_keys[1]);
   assert(changed.keys[2] != baseline_o2_keys[2]);
-#if defined(FSIM_HAS_LLVM)
-  assert(changed.cache.hits == 1);
-  assert(changed.cache.misses == 2);
-  assert(changed.cache.stores == 2);
-#endif
   return 0;
 }

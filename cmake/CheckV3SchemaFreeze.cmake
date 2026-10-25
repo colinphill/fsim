@@ -153,8 +153,8 @@ fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
   "kSystemVerilogCoverageStateSchema = 7"
   "kSystemVerilogUvmStateSchema = 3"
   "kVhdlHirStateSchema = 8")
-fsim_require_schema_tokens(src/compiler/native_cache_schema.hpp
-  "fsim-llvm-native-object-v169")
+# native_cache_schema.hpp (the per-process JIT object schema) was removed with
+# the JIT in the engine-v4 migration.
 
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 message(STATUS

@@ -777,22 +777,6 @@ void Interpreter::Impl::ExecutionContext::write_validated_update_words(
     owner.stage_validated_update_words(process, updates);
 }
 
-[[nodiscard]] const void* Interpreter::Impl::ExecutionContext::direct_update_domain() const noexcept{
-    return &owner;
-}
-
-std::optional<PreparedOwnedUpdateSlot>
-Interpreter::Impl::ExecutionContext::prepare_owned_update_slot(
-    const ProcessUpdateSlotBatch& batch)
-{
-    return owner.prepare_owned_update_slot(batch);
-}
-
-bool Interpreter::Impl::ExecutionContext::write_validated_update_slot_batches(
-    const std::span<const ProcessUpdateSlotBatch> batches){
-    return owner.stage_validated_update_slot_batches(batches);
-}
-
 bool Interpreter::Impl::ExecutionContext::write_validated_logic9_update_batch(
     const ProcessLogic9UpdateBatch& batch){
     return owner.stage_validated_logic9_update_batch(batch);

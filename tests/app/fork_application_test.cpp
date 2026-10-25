@@ -190,13 +190,7 @@ void test_optimization(
             [](const auto& point) { return point.process > 0; }));
     }
     assert(reference.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 1);
-    assert(cold.cache.hits == 0 && cold.cache.misses == 1);
-    assert(warm.cache.hits == 1 && warm.cache.misses == 0);
-#else
     assert(cold.compiled_processes == 0);
-#endif
     assert(reference.vcd == cold.vcd && cold.vcd == warm.vcd);
 }
 

@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
 
 namespace fsim::runtime::simir {
 class StaticKernelCodegen;
@@ -22,6 +23,11 @@ struct StaticKernelCodegenOptions {
 /// LLVM native code generator for engine v4 static kernel templates.
 [[nodiscard]] std::shared_ptr<runtime::simir::StaticKernelCodegen>
 make_static_kernel_codegen(StaticKernelCodegenOptions options = { });
+
+/// A stable fingerprint of the host the kernel's native code targets (LLVM
+/// version, triple, CPU and features). Cache and library keys include it so
+/// entries built for another host are never reused.
+[[nodiscard]] std::string native_host_fingerprint();
 
 /// While one exists, simulations set up on this thread build their static
 /// kernel code ahead of time (elaborate --aot).

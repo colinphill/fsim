@@ -100,6 +100,15 @@ struct WriterRegion {
         width);
 }
 
+/// The debug points a debugger plan executes: all but the block markers
+/// (the reference evaluator raises no execution point for those either).
+[[nodiscard]] constexpr bool debug_point_executable(
+    const DebugPointKind kind) noexcept
+{
+    return kind != DebugPointKind::block_entry
+        && kind != DebugPointKind::block_exit;
+}
+
 /// A word plus 'U' mask as a value of the given kind.
 [[nodiscard]] inline PackedLogic4 uword_value(const kernel_word::Word value,
     const std::uint64_t unknown, const std::uint32_t width,
@@ -142,6 +151,59 @@ public:
             && (text == nullptr || std::string_view { text } != "0");
     }
     void materialize(SignalId signal);
+    /// The host committed a new value to the kernel-owned signal (a process
+    /// outside the kernel wrote it): take the host value into the slot and
+    /// run the ordinary change handling, so readers, waiters, edges and
+    /// outputs behave as for a kernel write, and wake the kernel's host
+    /// process so the affected members run in the Active region of this
+    /// time step. Not called for the kernel's own publication or
+    /// materialization (Impl::import_static_kernel_write filters those).
+    void import_host_write(SignalId signal, SignalChangeOrigin origin);
+    /// Hosted tier: a wake of a hosted process, redirected from the host
+    /// scheduler's queue_* entry points (Impl::static_kernel_enqueue_hosted).
+    void enqueue_hosted(ProcessId process, StaticKernelHostedWake wake,
+        SimulationTick time, StableOrder order);
+    /// Hosted tier, region model (S25): a hosted process executing a
+    /// WaitRegion resumes in `phase` of this time step. Returns false when
+    /// the kernel does not run that region (the host scheduler does).
+    [[nodiscard]] bool enqueue_hosted_region(
+        ProcessId process, SchedulerPhase phase);
+    /// Runs a hosted process to its first suspension during startup, before
+    /// the first activation (package static initializers, static-wait
+    /// prearming): the kernel invokes the reference evaluator itself.
+    void execute_hosted_startup(ProcessId process);
+    /// End of simulation (IEEE 1800-2023 9.2.3): drops what the host
+    /// scheduler discarded (`discarded`) and schedules the hosted final
+    /// blocks. Final blocks the kernel does not host are the caller's.
+    void run_finals(bool discarded);
+    /// Debugger: whether `process` is a native (thread) member, and the
+    /// values of its registers. The registers are shared by the member's
+    /// threads; a compiled member keeps them in its kernel register file.
+    /// The readers throw std::logic_error for an unavailable register.
+    [[nodiscard]] bool debug_member(ProcessId process) const noexcept;
+    /// The original program of the host process when it is a member (its
+    /// scheduler program is the kernel stub); null for every other process
+    /// and outside a debugger plan.
+    [[nodiscard]] const Process* debug_program(ProcessId process) const noexcept
+    {
+        return host_original_ && process == host_process_ ? &*host_original_
+                                                          : nullptr;
+    }
+    [[nodiscard]] PackedLogic4 debug_register(
+        ProcessId process, RegisterId reg, std::size_t width) const;
+    [[nodiscard]] std::string debug_string_register(
+        ProcessId process, StringRegisterId reg) const;
+    [[nodiscard]] ContainerValue debug_container_register(
+        ProcessId process, ContainerRegisterId reg) const;
+    /// The thread member a debugger process id names: the member itself, or
+    /// the member whose fork created the child with that id (children get the
+    /// ids the reference evaluator would give them, in a debugger plan).
+    [[nodiscard]] std::optional<ProcessId> debug_owner(
+        ProcessId process) const noexcept;
+    /// Writes a register of a thread member (a debugger local); throws
+    /// std::invalid_argument when the width differs from the register's.
+    void debug_write_register(
+        ProcessId process, RegisterId reg, const PackedLogic4& value);
 
 private:
     struct NativeUnit {
@@ -235,6 +297,9 @@ private:
         std::uint32_t off_runs { };
         std::uint32_t off_retry { 256U };
         std::uint32_t partition_key { static_kernel_detail::no_slot };
+        /// The body assigns one signal more than once in a run, so an
+        /// intermediate value is visible to the members it wakes.
+        bool rewrites_signal { };
         std::uint32_t partition { static_kernel_detail::no_slot };
         std::uint32_t position { };
         /// VHDL delta mode: the next run starts at operation 0.
@@ -255,6 +320,12 @@ private:
         /// VHDL members with a specialized body (specialize_member): the
         /// original operation each operation stands for; empty otherwise.
         std::vector<InstructionIndex> origin;
+        /// Debugger plan: the operation of the last debug point any thread
+        /// of the member reached, and the registers that may have been
+        /// written before it (debug_register_defined).
+        std::uint32_t debug_pc { static_kernel_detail::no_slot };
+        mutable std::vector<std::uint64_t> debug_defined;
+        mutable std::uint32_t debug_defined_pc { static_kernel_detail::no_slot };
     };
 
     struct Partition {
@@ -324,6 +395,10 @@ private:
         std::uint32_t mirror { static_kernel_detail::no_slot };
         /// Host value revision at the last scan.
         std::uint64_t revision { };
+        /// The host's event stamp of the signal at the last scan. A VHDL
+        /// signal that changed and returned to the scanned value inside one
+        /// update phase (two forces in one cycle) still had an event.
+        std::optional<std::pair<SimulationTick, std::uint64_t>> event_seen;
         std::vector<Reader> readers;
         std::vector<EdgeReader> edges;
         /// No process writes the signal (StaticKernelRuntimeSpec::
@@ -482,6 +557,9 @@ private:
     void push_generic_pending(Pending pending);
     /// Queues a nonblocking memory element write (SystemVerilog).
     void push_element_write(const NbaEntry& entry);
+    /// A whole-array copy between private containers of one type.
+    void copy_container(std::uint32_t destination, std::uint32_t source,
+        std::uint32_t member, InstructionIndex instruction);
     void write_container_element_word(Container& container,
         std::size_t ordinal, Word value, std::uint32_t member);
     void write_host(std::uint32_t member, SignalId signal, PackedLogic4 value,
@@ -609,14 +687,18 @@ private:
     void settle();
     void check_owned_edges();
     void commit_pending();
-    void publish(bool immediate = false);
+    /// `immediate` commits Active-region values at once. `ending` (the end
+    /// of simulation, where no later region runs and the scheduler may have
+    /// discarded what earlier publishes staged) commits every output's
+    /// current value at once, in every domain.
+    void publish(bool immediate = false, bool ending = false);
     void initialize();
     [[nodiscard]] bool scan_inputs(bool all = true);
     /// Take one input's committed host value into its mirror and wake its
     /// readers; false when it is unchanged.
     bool refresh_input(Input& input);
     /// Take a new value into an input's mirror and wake its readers.
-    void apply_input(Input& input, PackedLogic4 value);
+    void apply_input(Input& input, PackedLogic4 value, bool event = false);
     [[noreturn]] void fail(std::uint32_t member, InstructionIndex instruction,
         const std::string& message) const;
 
@@ -682,6 +764,12 @@ private:
         /// Compiled members: the synthetic call stack (pointer, entries)
         /// saved while the thread is suspended.
         std::vector<Word> stack;
+        /// The last debug point the thread passed (a source position for
+        /// its process_suspend notification); no_slot before the first.
+        std::uint32_t last_point { static_kernel_detail::no_slot };
+        /// Debugger plan: the process id of a fork child (as the reference
+        /// evaluator numbers them); no_slot for a member's own threads.
+        std::uint32_t debug_process { static_kernel_detail::no_slot };
     };
     struct ForkGroup {
         std::uint32_t parent { };
@@ -693,6 +781,25 @@ private:
         std::uint32_t thread { };
         std::uint64_t epoch { };
         EdgeKind edge { EdgeKind::any };
+        /// LSB-normalized any-change range; zero width means the whole signal
+        /// (IEEE 1800-2023 9.4.2: a part-select event control observes only
+        /// the selected bits).
+        std::uint32_t offset { };
+        std::uint32_t width { };
+    };
+    /// What a signal change tells wake_waiters about the selected bits: a
+    /// slot's changed mask or pre-change words, or an input's old and new
+    /// values.
+    struct WaitChange {
+        Logic4 before { };
+        Logic4 after { };
+        const std::uint64_t* slot_before { };
+        const PackedLogic4* input_before { };
+        const PackedLogic4* input_after { };
+        std::uint32_t slot { };
+        std::uint32_t field_offset { };
+        std::uint64_t changed_mask { };
+        bool event { };
     };
     struct Timer {
         SimulationTick time { };
@@ -815,8 +922,9 @@ private:
     void run_thread(std::uint32_t thread);
     void wait_on(std::uint32_t thread, std::span<const Sensitivity> entries);
     void finish_thread(std::uint32_t thread);
-    void wake_waiters(std::vector<Waiter>& waiters, Logic4 before,
-        Logic4 after);
+    void wake_waiters(std::vector<Waiter>& waiters, const WaitChange& change);
+    [[nodiscard]] bool waiter_range_changed(const Waiter& waiter,
+        const WaitChange& change) const;
     void collect_timers();
     void arm_timer();
     void behavioral_output(std::uint32_t member, std::string_view text,
@@ -855,6 +963,36 @@ private:
     std::vector<std::uint64_t> arena_;
     /// VHDL delta mode (StaticKernelRuntimeSpec::vhdl).
     bool vhdl_ { };
+    /// Debugger plan (StaticKernelRuntimeSpec::debug_points).
+    bool debug_points_ { };
+    /// Debugger plan: the program the host member ran before its scheduler
+    /// program became the kernel stub.
+    std::optional<Process> host_original_;
+    [[nodiscard]] ProcessProgramView program_of(const Member& member) const
+    {
+        return host_original_ && member.process == host_process_
+            ? ProcessProgramView { *host_original_ }
+            : impl_.processes.program_view(member.process);
+    }
+    /// The debugger stopped the run at a thread's debug point or at its
+    /// suspension; the next activation clears the kernel's stop.
+    bool debug_stopped_ { };
+    /// Debugger plan: fork children by their reference-style process id, and
+    /// the next id to hand out.
+    std::unordered_map<ProcessId, std::uint32_t> debug_children_;
+    std::size_t debug_next_child_ { };
+    /// Whether the interpreter would show `reg` of `member` as written at the
+    /// member's last debug point (else its debug local is <uninitialized>).
+    [[nodiscard]] bool debug_register_defined(
+        const Member& member, RegisterId reg) const;
+    /// Raises the execution-point hook for operation `pc` of the thread's
+    /// member; true when the run must stop after it (hook set and the
+    /// scheduler's stop is requested).
+    [[nodiscard]] bool debug_point(std::uint32_t thread, std::uint32_t pc);
+    /// process_suspend of the thread at `pc` (a wait, join or halt).
+    void debug_suspend(std::uint32_t thread, std::uint32_t pc);
+    /// Stops the run after the current thread step: `paused` resumes first.
+    void debug_stop(std::uint32_t paused);
     std::vector<std::uint32_t> touched_;
     std::vector<std::uint64_t> round_before_;
     std::optional<static_kernel_detail::KernelDeopt> pending_deopt_;
@@ -952,6 +1090,99 @@ private:
     /// (Member::start_late), in member order.
     std::vector<std::uint32_t> late_members_;
     bool late_start_armed_ { };
+
+    // Hosted tier (simir_static_kernel_hosted.cpp). A hosted process keeps
+    // its own ProcessState and runs on the reference evaluator
+    // (Impl::execute), but the kernel owns its scheduling: the queue_* entry
+    // points hand its wakes to these queues, and the activation loop runs
+    // them in the Active region (every round, in stable ProcessId order), the
+    // Inactive region (a host task of that region re-enters the kernel) and
+    // the next delta (the kernel yields).
+    struct HostedReady {
+        StableOrder order { };
+        ProcessId process { };
+        /// queue_at wakes: the process's timer_epoch when queued; a disable
+        /// that redirects the process advances it and abandons the wake.
+        std::uint32_t epoch { };
+        bool timer { };
+        /// Clear waiting_on_static and the dynamic wait registrations, as the
+        /// scheduler tasks of queue_at, queue_active_current, queue_next_delta
+        /// and queue_zero_delay_resume do (queue_current does not).
+        bool wake { };
+        /// The region the wake runs in (the process's execution phase, or the
+        /// region a WaitRegion or the current region names).
+        SchedulerPhase phase { SchedulerPhase::active };
+    };
+    struct HostedDelayed {
+        SimulationTick time { };
+        std::uint64_t delta { };
+        HostedReady ready;
+    };
+    struct HostedTimer {
+        SimulationTick time { };
+        std::uint64_t sequence { };
+        HostedReady ready;
+        friend bool operator>(const HostedTimer& left, const HostedTimer& right)
+        {
+            return left.time != right.time ? left.time > right.time
+                : left.ready.order != right.ready.order
+                ? left.ready.order > right.ready.order
+                : left.sequence > right.sequence;
+        }
+    };
+    bool has_hosted_ { };
+    /// Inside activate(): hosted wakes wait for its loop (finish_hosted wakes
+    /// the host process for what is left).
+    bool in_activation_ { };
+    /// This activation runs in a host Inactive-region task (or the NBA one):
+    /// hosted Active work waits for the host's Active region.
+    bool hosted_inactive_task_ { };
+    /// The one-shot token that lets the activation run hosted #0 resumptions.
+    bool hosted_inactive_region_ { };
+    bool hosted_inactive_deferred_ { };
+    /// run_hosted_inactive is running: queue_current continues in Inactive.
+    bool hosted_running_inactive_ { };
+    std::vector<HostedReady> hosted_active_;
+    std::vector<HostedReady> hosted_inactive_;
+    /// Ready lists of the regions after NBA (observed, reactive,
+    /// re-inactive, postponed), indexed by SchedulerPhase. Each non-empty
+    /// list has a doorbell: a host task of that phase that runs it, so the
+    /// host scheduler keeps the order of the regions (IEEE 1800-2023 4.4,
+    /// 4.5, Figure 4-1) and its own events of the region.
+    std::array<std::vector<HostedReady>, 8> hosted_regions_;
+    std::array<bool, 8> hosted_region_bell_ { };
+    /// The region run_hosted_region is running: queue_current continues there.
+    std::optional<SchedulerPhase> hosted_running_region_;
+    std::vector<HostedDelayed> hosted_next_delta_;
+    std::priority_queue<HostedTimer, std::vector<HostedTimer>, std::greater<>>
+        hosted_timers_;
+    std::uint64_t hosted_sequence_ { };
+    std::optional<SimulationTick> armed_hosted_timer_;
+    /// Marks the specification's hosted processes in the interpreter.
+    void adopt_hosted(const std::vector<StaticKernelMemberSpec>& hosted);
+    /// Due timers and next-delta wakes of an earlier delta become Active.
+    void collect_hosted();
+    /// Runs one round of the hosted Active region; false when none was ready.
+    [[nodiscard]] bool run_hosted_active();
+    /// Runs the hosted #0 resumptions; false when none was ready.
+    [[nodiscard]] bool run_hosted_inactive();
+    void run_hosted(const HostedReady& ready);
+    /// First activation: the hosted declaration initializers run before the
+    /// members are initialized (IEEE 1800-2023 6.8).
+    void run_hosted_initializers();
+    void defer_hosted_inactive();
+    /// Queues a wake in its region's list (Active: the Active list) and
+    /// rings the region's doorbell.
+    void route_hosted(const HostedReady& ready);
+    void push_hosted_region(const HostedReady& ready);
+    void ring_hosted_region(SchedulerPhase phase);
+    void run_hosted_region(SchedulerPhase phase);
+    /// Forgets queued hosted work and host tasks the scheduler discarded.
+    void discard_hosted();
+    void arm_hosted_timer();
+    void hosted_timer_due(SimulationTick time);
+    /// End of an activation: wakes the host for hosted work left behind.
+    void finish_hosted();
     bool profile_ { };
     bool trace_ { };
     std::uint64_t profile_activations_ { };
@@ -969,6 +1200,8 @@ private:
     std::uint64_t profile_operations_ { };
     std::uint64_t profile_input_changes_ { };
     std::uint64_t profile_publishes_ { };
+    /// import_host_write's copy of a slot before the host value lands.
+    std::vector<std::uint64_t> import_before_;
     std::vector<std::uint64_t> profile_member_runs_;
     std::vector<std::string> profile_names_;
     std::size_t compiled_members_ { };

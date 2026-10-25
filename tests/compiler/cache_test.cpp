@@ -2,7 +2,6 @@
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/cache_support.hpp"
 #include "fsim/support/sha256.hpp"
-#include "native_cache_schema.hpp"
 
 #include <array>
 #include <cassert>
@@ -451,7 +450,7 @@ int main() {
     CacheKeyBuilder current_native;
     const auto current_native_key = current_native
         .add("llvm-object-schema",
-            fsim::compiler::llvm_detail::kNativeObjectCacheSchema)
+            "fsim-llvm-native-object-v275")
         .add("process-identity", "legacy-namespace-fixture")
         .finish();
     assert(legacy_native_key != current_native_key);

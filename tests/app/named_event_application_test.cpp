@@ -286,13 +286,8 @@ void test_event_alias_rebinding(
     assert(capture->second_caught == "1");
     assert(capture->second_caught_before_replacement == "0");
   }
-#if defined(FSIM_HAS_LLVM)
-  assert(reference.compiled_processes == 0);
-  assert(compiled.compiled_processes > 0);
-#else
   assert(reference.compiled_processes == 0);
   assert(compiled.compiled_processes == 0);
-#endif
 }
 
 void test_named_events(
@@ -389,11 +384,7 @@ void test_named_events(
   assert(reference.compiled_processes == 0);
   assert(reference.vcd == compiled.vcd);
   assert(reference.vcd.find("#4") != std::string::npos);
-#if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes == 28);
-#else
   assert(compiled.compiled_processes == 0);
-#endif
 }
 
 }  // namespace

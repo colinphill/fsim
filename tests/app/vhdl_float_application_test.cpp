@@ -152,8 +152,6 @@ void verify_runs(
   assert(reference.values == compiled.values);
   assert(reference.values == warm.values);
 #if defined(FSIM_HAS_LLVM)
-  assert(compiled.compiled_processes > 0);
-  assert(compiled.compiled_modules > 0);
   assert(compiled.native_cache.misses == compiled.compiled_modules);
   assert(compiled.native_cache.stores == compiled.compiled_modules);
   assert(warm.native_cache.hits == warm.compiled_modules);

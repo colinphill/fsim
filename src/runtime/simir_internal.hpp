@@ -1,14 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "simir_frontier_member_sync_workset.hpp"
-
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
-#include "fsim/runtime/simir_region_kernel_backend.hpp"
-#include "fsim/runtime/simir_region_frontier_v2.hpp"
-#include "fsim/runtime/simir_region_graph.hpp"
-#include "simir_a4_signal_state.hpp"
 #include "fsim/runtime/output_format.hpp"
 #include "simir_cohort_snapshot_pool.hpp"
 #include "simir_driver_table.hpp"
@@ -40,83 +34,6 @@
 #include <utility>
 
 namespace fsim::runtime::simir {
-
-// First failed predicate for profiled boundary member-sync admission. The
-// numeric order is stable for one source revision and is emitted as rN=count.
-enum class FrontierBoundarySyncRejectReason : std::uint8_t {
-    admitted,
-    runtime_or_backend_missing,
-    runtime_generation_stale,
-    component_runtime_stale,
-    authoritative_state_stale,
-    component_epoch_stale,
-    wrong_execution_mode,
-    nonprivate_entry,
-    unavailable_workset,
-    prior_force_full,
-    publication_signal_mismatch,
-    signal_id_out_of_range,
-    signal_effect_vectors_misaligned,
-    container_vectors_misaligned,
-    ownership_vectors_misaligned,
-    dependency_masks_unavailable,
-    static_fanout_index_unavailable,
-    wrong_value_kind,
-    wrong_resolution,
-    signal_too_wide,
-    logic9_value,
-    event_variable,
-    implicit_driver,
-    charge_strength,
-    systemverilog_scalar,
-    external_driver,
-    forced_value,
-    forced_mask,
-    forced_driver_value,
-    forced_driver_mask,
-    transaction_observed,
-    dynamic_fanout,
-    container_alias,
-    container_element_alias,
-    container_aggregate_alias,
-    writer_count,
-    stable_writer_mismatch,
-    module_path_destination,
-    nonrange_dependency,
-    sampled_values_unknown,
-    sampled_mask_unavailable,
-    sampled_dependency,
-    monitor_watch,
-    bidirectional_switches,
-    fanout_process_out_of_range,
-    unsealed_fanout_executor,
-    driver_count,
-    driver_record_missing,
-    driver_strength,
-    scalar_driver_regions,
-    process_switch_source,
-    process_switch_target,
-    process_bidirectional_switch,
-    process_profile_enabled,
-    execution_point_hook,
-    scheduler_trace_hook,
-    driver_change_hook,
-    signal_change_hook,
-    stored_signal_change_hook,
-    scalar_signal_change_hook,
-    container_object_change_hook,
-    container_element_change_hook,
-    native_observation_any_hook,
-    native_observation_required_hook,
-    writer_graph_unavailable,
-    writer_graph_shape,
-    driver_owner_set_mismatch,
-    active_owned_driver,
-    unsealed_current_writer,
-    count,
-};
-inline constexpr std::size_t kFrontierBoundarySyncRejectReasonCount
-    = static_cast<std::size_t>(FrontierBoundarySyncRejectReason::count);
 
 struct SignalChangeOrigin {
     ProcessSchedulingDomain process_domain {
@@ -400,64 +317,6 @@ void validate_container_value(const ContainerValue& value);
 [[nodiscard]] PackedLogic4 default_container_element(
     const ContainerType& type);
 
-[[nodiscard]] inline RegionFrontierValueKindV2 region_frontier_value_kind_v2(
-    const ValueKind kind) noexcept
-{
-    switch (kind) {
-    case ValueKind::logic4:
-        return RegionFrontierValueKindV2::logic4;
-    case ValueKind::logic9:
-        return RegionFrontierValueKindV2::logic9;
-    }
-    return static_cast<RegionFrontierValueKindV2>(UINT32_MAX);
-}
-
-[[nodiscard]] inline std::uint64_t region_frontier_tail_mask_v2(
-    const std::uint32_t width) noexcept
-{
-    const auto remainder = width % 64U;
-    return remainder == 0U
-        ? std::numeric_limits<std::uint64_t>::max()
-        : (std::uint64_t { 1U } << remainder) - 1U;
-}
-
-[[nodiscard]] inline bool region_frontier_plane_words_canonical_v2(
-    const RegionFrontierValueKindV2 kind,
-    const std::uint32_t width,
-    const std::uint32_t word_count,
-    const std::array<std::span<const std::uint64_t>, 4U>& planes) noexcept
-{
-    const auto plane_count = region_frontier_required_plane_count_v2(kind);
-    if (plane_count == 0U || width == 0U
-        || word_count != (static_cast<std::uint64_t>(width) + 63U) / 64U) {
-        return false;
-    }
-    for (std::size_t plane = 0U; plane < 4U; ++plane) {
-        if ((plane < plane_count) != (planes[plane].size() == word_count)
-            || (plane < plane_count && planes[plane].data() == nullptr)
-            || (plane >= plane_count && !planes[plane].empty())) {
-            return false;
-        }
-    }
-    const auto tail_mask = region_frontier_tail_mask_v2(width);
-    for (std::size_t word = 0U; word < word_count; ++word) {
-        const auto mask = word + 1U == word_count
-            ? tail_mask : std::numeric_limits<std::uint64_t>::max();
-        for (std::size_t plane = 0U; plane < plane_count; ++plane) {
-            if ((planes[plane][word] & ~mask) != 0U) {
-                return false;
-            }
-        }
-        if (kind == RegionFrontierValueKindV2::logic9
-            && !region_frontier_logic9_word_is_canonical_v2(
-                planes[0U][word], planes[1U][word], planes[2U][word],
-                planes[3U][word])) {
-            return false;
-        }
-    }
-    return true;
-}
-
 struct Interpreter::Impl : SchedulerBatchTask {
     struct ExecutionContext;
 
@@ -541,30 +400,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
     static constexpr std::size_t no_systemverilog_update_slot
         = std::numeric_limits<std::size_t>::max();
 
-    struct RegionPreparedOutputBatchState;
-
     struct SystemVerilogUpdateSlot {
         ProcessId process { };
         SignalId signal { };
         PackedLogic4 value;
-        std::shared_ptr<RegionPreparedOutputBatchState>
-            prepared_output_batch;
-        std::size_t prepared_output_slot {
-            no_systemverilog_update_slot };
-        std::size_t prepared_output_dispatch_ordinal {
-            no_systemverilog_update_slot };
         std::optional<std::size_t> offset;
         SignalChangeOrigin origin;
-        std::size_t region_local_component {
-            no_systemverilog_update_slot };
-        std::uint64_t region_local_generation { };
         std::size_t next_free { no_systemverilog_update_slot };
         std::uint64_t generation { 1U };
         bool occupied { };
         bool reserved { };
         bool retired { };
-        bool region_internal_output { };
-        bool invalidate_local_wave_bank_on_commit { };
     };
 
     struct SystemVerilogUpdateToken {
@@ -573,440 +419,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint64_t generation { };
     };
 
-    struct RegionForwardingPrivateStageBatch;
-
-    struct RegionForwardingPrivateOutputDispatchToken {
-        RegionForwardingPrivateStageBatch* batch { };
-        std::uint64_t ordinal { };
-    };
-
-    struct RegionForwardingPrivateStageOutput {
-        ProcessId process { };
-        SignalId signal { };
-        PackedLogic4 value;
-        SignalChangeOrigin origin;
-        std::size_t component { no_systemverilog_update_slot };
-        std::uint64_t runtime_generation { };
-        bool pending { };
-        bool role_deferred { };
-    };
-
-    struct RegionForwardingPrivateStageBatch final : SchedulerOrderedBatchTask {
-        static constexpr std::uint64_t private_output_payload_flag
-            = UINT64_C(1) << 63U;
-        static constexpr std::uint64_t payload_ordinal_mask
-            = ~private_output_payload_flag;
-
-        Impl* owner { };
-        std::size_t component { no_systemverilog_update_slot };
-        std::uint64_t runtime_generation { };
-        SimulationTick time { };
-        std::vector<SystemVerilogUpdateToken> tokens;
-        std::vector<RegionForwardingPrivateStageOutput> private_outputs;
-
-        [[nodiscard]] SchedulerBatchResult execute(
-            Scheduler& active_scheduler,
-            std::span<const std::uint64_t> payloads) override;
-        [[nodiscard]] ::fsim::runtime::detail::SchedulerTaskDescriptor
-        make_fallback_descriptor(std::uint64_t payload) noexcept override;
-    };
-
-    struct RegionForwardingAppliedRoleCommitMetadata {
-        std::size_t output_index { };
-        SignalId signal { };
-        ProcessId owner { };
-        SimulationTick callback_time { };
-        std::uint64_t callback_delta { };
-        std::uint64_t callback_systemverilog_round { };
-        std::uint64_t callback_order { };
-        SignalChangeOrigin origin;
-        std::optional<std::pair<SimulationTick, std::uint64_t>>
-            expected_signal_event;
-        SignalEventSchedulingStamp expected_event_stamp;
-        std::optional<std::pair<SimulationTick, std::uint64_t>>
-            expected_transaction;
-        std::uint64_t expected_value_revision { };
-    };
-
-    static_assert(std::is_nothrow_move_constructible_v<
-        AuthoritativeSignalPlanes::PreparedMutation>);
-    static_assert(std::is_nothrow_move_constructible_v<
-        RegionForwardingAppliedRoleCommitMetadata>);
-
     static_assert(std::is_trivially_copyable_v<SystemVerilogUpdateToken>);
     static_assert(sizeof(SystemVerilogUpdateToken)
-        <= ::fsim::runtime::detail::scheduler_task_payload_size);
-    static_assert(std::is_trivially_copyable_v<
-        RegionForwardingPrivateOutputDispatchToken>);
-    static_assert(sizeof(RegionForwardingPrivateOutputDispatchToken)
         <= ::fsim::runtime::detail::scheduler_task_payload_size);
     static_assert(std::is_nothrow_move_assignable_v<PackedLogic4>);
     static_assert(std::is_nothrow_move_constructible_v<
         SystemVerilogUpdateSlot>);
-
-    struct RegionPreparedOutputSlotStorage {
-        std::array<std::uint64_t, 2U> owner_mask { };
-        std::array<std::uint64_t, 2U> old_stored { };
-        std::array<std::uint64_t, 2U> old_owner { };
-        std::array<std::uint64_t, 2U> next_last { };
-        std::uint8_t changed { };
-        std::uint8_t value_ready { };
-        std::uint8_t transaction_ready { };
-        AuthoritativeSignalPlanes::PreparedMutation visible_mutation;
-    };
-
-    struct RegionDirectReadyInputSource {
-        SignalId signal { };
-        RegisterId register_id { };
-        std::uint32_t width { };
-        std::size_t value_index { };
-        bool internal { };
-    };
-
-    struct RegionFrontierSensitivityRange {
-        std::uint32_t offset { };
-        std::uint32_t width { };
-    };
-
-    struct RegionPreparedSuccessorReaderBinding {
-        ProcessId process { };
-        // Scheduler readiness uses activation-kernel member order.
-        std::size_t readiness_member { };
-        std::size_t readiness_word { };
-        std::size_t queued_mask_word { };
-        std::uint64_t readiness_bit { };
-        // The A4 fanout mask follows certified graph-component member order.
-        std::size_t authoritative_member { };
-        std::size_t authoritative_readiness_word { };
-        std::uint64_t authoritative_readiness_bit { };
-        std::uint64_t static_trigger_mask { };
-        std::size_t sensitivity_range_offset { };
-        std::size_t sensitivity_range_count { };
-        std::uint64_t sensitivity_range_generation { };
-    };
-
-    struct RegionPreparedSuccessorSignalMap {
-        std::size_t reader_offset { };
-        std::size_t reader_count { };
-        std::size_t component { std::numeric_limits<std::size_t>::max() };
-        std::uint64_t generation { };
-        std::uint64_t expected_mask { };
-    };
-
-    /// Per-output copy of the immutable snapshot map. It stores offsets rather
-    /// than pointers so stale tickets cannot dereference a replaced snapshot.
-    struct RegionPreparedSuccessorSlotMap {
-        SignalId signal { };
-        std::size_t reader_offset { };
-        std::size_t reader_count { };
-        std::size_t component { std::numeric_limits<std::size_t>::max() };
-        std::uint64_t generation { };
-        std::uint64_t expected_mask { };
-    };
-
-    /// Private output storage stays owned by the native workspace while the
-    /// ordered update tickets borrow it. Tickets retain only this allocation
-    /// and an ordinal; component state is re-looked-up after checking both
-    /// runtime and component generations at dispatch.
-    struct RegionPreparedOutputBatchState
-        : SchedulerBatchTask
-        , std::enable_shared_from_this<RegionPreparedOutputBatchState> {
-        explicit RegionPreparedOutputBatchState(
-            const RegionConeActivationKernel& kernel)
-            : slot_storage(kernel.internal_signals.size())
-            , descriptors(kernel.internal_signals.size())
-            , successor_masks(kernel.internal_signals.size())
-            , expected_successor_masks(kernel.internal_signals.size())
-            , successor_mapping_by_slot(kernel.internal_signals.size())
-        {
-            if (descriptors.size()
-                > std::numeric_limits<std::uint32_t>::max()) {
-                throw std::length_error {
-                    "prepared output batch exceeds its ABI slot count"
-                };
-            }
-            prepare_direct_ready_sources(kernel);
-            current_internal_values.reserve(
-                kernel.internal_signals.size());
-            ordered_prefix.reserve(kernel.outputs.size());
-            ticket_slot_indices.reserve(kernel.outputs.size());
-            dispatch_tokens.reserve(kernel.outputs.size());
-            group_batch_members.reserve(kernel.outputs.size());
-            ticket_pending.resize(kernel.internal_signals.size());
-            dispatch_member_pending.resize(kernel.outputs.size());
-            for (auto& slot : slot_storage) {
-                slot.visible_mutation.words.reserve(1U);
-            }
-            abi_batch.abi_version
-                = kRegionPreparedOutputBatchAbiVersionV1;
-            abi_batch.struct_size = sizeof(RegionPreparedOutputBatchV1);
-            abi_batch.slot_count = static_cast<std::uint32_t>(
-                descriptors.size());
-            abi_batch.slots = descriptors.data();
-            successor_abi.abi_version
-                = kRegionPreparedOutputSuccessorMasksAbiVersionV1;
-            successor_abi.struct_size = sizeof(successor_abi);
-            successor_abi.slot_count = static_cast<std::uint32_t>(
-                successor_masks.size());
-            successor_abi.member_masks = successor_masks.data();
-        }
-
-        void retire_ticket(
-            const std::size_t slot, const bool cancel) noexcept
-        {
-            if (slot >= ticket_pending.size()
-                || ticket_pending[slot] == 0U) {
-                return;
-            }
-            ticket_pending[slot] = 0U;
-            if (pending_tickets != 0U) {
-                --pending_tickets;
-            }
-            cancelled = cancelled || cancel;
-            retire_if_idle();
-        }
-
-        void retire_dispatch_member(
-            const std::size_t ordinal, const bool cancel) noexcept
-        {
-            if (ordinal >= dispatch_member_pending.size()
-                || dispatch_member_pending[ordinal] == 0U) {
-                return;
-            }
-            dispatch_member_pending[ordinal] = 0U;
-            if (pending_dispatch_members != 0U) {
-                --pending_dispatch_members;
-            }
-            cancelled = cancelled || cancel;
-            retire_if_idle();
-        }
-
-        void retire_if_idle() noexcept
-        {
-            if (pending_tickets == 0U && pending_dispatch_members == 0U) {
-                active = false;
-                group_ticket_active = false;
-            }
-        }
-
-        void cancel_unattached() noexcept
-        {
-            cancelled = true;
-            retire_if_idle();
-        }
-
-        void cancel_prepared_outputs() noexcept
-        {
-            cancelled = true;
-            std::ranges::fill(ticket_pending, 0U);
-            pending_tickets = 0U;
-            if (!group_ticket_active) {
-                retire_if_idle();
-            }
-        }
-
-        void prepare_direct_ready_sources(
-            const RegionConeActivationKernel& kernel)
-        {
-            const auto maximum_slot_count
-                = static_cast<std::size_t>(
-                    std::numeric_limits<std::uint32_t>::max());
-            if (kernel.internal_signals.size() > maximum_slot_count
-                || kernel.inputs.size()
-                    > maximum_slot_count - kernel.internal_signals.size()) {
-                return;
-            }
-            const auto slot_count
-                = kernel.inputs.size() + kernel.internal_signals.size();
-            std::size_t boundary_index { };
-            try {
-                direct_input_sources.reserve(slot_count);
-                direct_input_slots.resize(slot_count);
-                for (const auto& input : kernel.inputs) {
-                    std::size_t value_index { };
-                    if (input.internal) {
-                        const auto internal = std::ranges::lower_bound(
-                            kernel.internal_signals, input.signal);
-                        if (internal == kernel.internal_signals.end()
-                            || *internal != input.signal) {
-                            direct_input_sources.clear();
-                            direct_input_slots.clear();
-                            return;
-                        }
-                        value_index = static_cast<std::size_t>(
-                            internal - kernel.internal_signals.begin());
-                    } else {
-                        value_index = boundary_index++;
-                    }
-                    direct_input_sources.push_back({ input.signal,
-                        input.value_register, input.width, value_index,
-                        input.internal });
-                }
-                std::ranges::sort(direct_input_sources,
-                    std::ranges::less { },
-                    &RegionDirectReadyInputSource::register_id);
-
-                for (std::size_t index = 0U;
-                     index < kernel.internal_signals.size(); ++index) {
-                    const auto signal = kernel.internal_signals[index];
-                    const auto output = std::ranges::find(kernel.outputs,
-                        signal, &RegionConeOutputBinding::signal);
-                    const auto register_id
-                        = static_cast<std::uint64_t>(
-                            kernel.program.register_count) + index;
-                    if (output == kernel.outputs.end()
-                        || register_id
-                            > std::numeric_limits<RegisterId>::max()) {
-                        direct_input_sources.clear();
-                        direct_input_slots.clear();
-                        return;
-                    }
-                    direct_input_sources.push_back({ signal,
-                        static_cast<RegisterId>(register_id), output->width,
-                        index, true });
-                }
-                direct_ready_mapping_valid
-                    = direct_input_sources.size() == slot_count;
-            } catch (const std::bad_alloc&) {
-                direct_input_sources.clear();
-                direct_input_slots.clear();
-                direct_ready_mapping_valid = false;
-                return;
-            } catch (const std::length_error&) {
-                direct_input_sources.clear();
-                direct_input_slots.clear();
-                direct_ready_mapping_valid = false;
-                return;
-            }
-            if (direct_ready_mapping_valid) {
-                direct_ready_window.abi_version
-                    = kRegionDirectReadyWindowAbiVersionV1;
-                direct_ready_window.struct_size
-                    = sizeof(RegionDirectReadyWindowV1);
-                direct_ready_window.input_slot_count
-                    = static_cast<std::uint32_t>(slot_count);
-                direct_ready_window.input_slots
-                    = direct_input_slots.data();
-                direct_ready_member_count = kernel.members.size();
-                direct_boundary_input_count = boundary_index;
-                direct_internal_count = kernel.internal_signals.size();
-            }
-        }
-
-        [[nodiscard]] SchedulerBatchResult execute(
-            Scheduler& scheduler,
-            std::span<const std::uint64_t> payloads) override;
-
-        Impl* owner { };
-        RegionPreparedOutputBatchV1 abi_batch;
-        RegionPreparedOutputSuccessorMasksV1 successor_abi;
-        RegionDirectReadyWindowV1 direct_ready_window;
-        std::vector<RegionPreparedOutputSlotStorage> slot_storage;
-        std::vector<RegionPreparedOutputSlotV1> descriptors;
-        std::vector<std::uint64_t> successor_masks;
-        std::vector<std::uint64_t> expected_successor_masks;
-        std::vector<RegionPreparedSuccessorSlotMap>
-            successor_mapping_by_slot;
-        std::vector<RegionDirectReadyInputSource> direct_input_sources;
-        std::vector<RegionDirectReadyInputSlotV1> direct_input_slots;
-        std::size_t direct_ready_member_count { };
-        std::size_t direct_boundary_input_count { };
-        std::size_t direct_internal_count { };
-        std::vector<PackedLogic4> current_internal_values;
-        std::vector<RegionConeOutputBinding> ordered_prefix;
-        std::vector<std::size_t> ticket_slot_indices;
-        std::vector<std::uint8_t> ticket_pending;
-        std::vector<SystemVerilogUpdateToken> dispatch_tokens;
-        std::vector<std::uint8_t> dispatch_member_pending;
-        std::vector<Scheduler::SystemVerilogGroupBatchMember>
-            group_batch_members;
-        std::size_t component { no_systemverilog_update_slot };
-        std::uint64_t runtime_generation { };
-        std::uint64_t component_generation { };
-        std::uint64_t expected_value_revision { };
-        std::size_t pending_tickets { };
-        std::size_t pending_dispatch_members { };
-        std::size_t sealed_tickets { };
-        SchedulerBatchGroupKey dispatch_group_key;
-        std::uint64_t next_dispatch_group { 1U };
-        bool group_ticket_active { };
-        bool direct_ready_mapping_valid { };
-        bool successor_mapping_valid { };
-        bool successor_masks_verified { };
-        bool active { };
-        bool cancelled { };
-    };
-
-    struct RegionKernelNativeWorkspace {
-        explicit RegionKernelNativeWorkspace(
-            const RegionConeActivationKernel& kernel)
-            : activation(kernel)
-            , prepared_output_batch(
-                  std::make_shared<RegionPreparedOutputBatchState>(kernel))
-        {
-            prefix.tasks.reserve(kernel.members.size());
-            boundary_inputs.reserve(kernel.inputs.size());
-            internal_seeds.reserve(kernel.internal_signals.size());
-            authoritative_logic4_inputs.reserve(kernel.inputs.size());
-            authoritative_input_planes.reserve(kernel.inputs.size());
-            reserved_update_slots.reserve(kernel.outputs.size());
-            update_tokens.reserve(kernel.outputs.size());
-            stable_orders.reserve(kernel.outputs.size());
-            tasks.reserve(kernel.outputs.size());
-            completion_storage_identities.reserve(kernel.members.size());
-            readiness_mask.resize(
-                (kernel.members.size() + 63U) / 64U, 0U);
-        }
-
-        RegionKernelActivationState activation;
-        std::shared_ptr<RegionPreparedOutputBatchState>
-            prepared_output_batch;
-        RegionKernelSchedulerPrefix prefix;
-        std::vector<PackedLogic4> boundary_inputs;
-        std::vector<RegionKernelInternalSeed> internal_seeds;
-        std::vector<RegionKernelLogic4InputPlane>
-            authoritative_logic4_inputs;
-        std::vector<RegionKernelInputPlane> authoritative_input_planes;
-        std::vector<std::size_t> reserved_update_slots;
-        std::vector<SystemVerilogUpdateToken> update_tokens;
-        std::vector<StableOrder> stable_orders;
-        std::vector<::fsim::runtime::detail::SchedulerTaskDescriptor> tasks;
-        std::vector<const void*> completion_storage_identities;
-        std::vector<std::uint64_t> readiness_mask;
-    };
-
-    struct RegionKernelGenericWorkspace {
-        struct FinalDebugState {
-            ProcessId process { };
-            SourceLocation source;
-            std::string scope;
-        };
-
-        explicit RegionKernelGenericWorkspace(
-            const RegionConeActivationKernel& kernel)
-            : activation(kernel)
-        {
-            prefix.tasks.reserve(kernel.members.size());
-            boundary_inputs.reserve(kernel.inputs.size());
-            internal_seeds.reserve(kernel.internal_signals.size());
-            prepared_processes.reserve(kernel.members.size());
-            completion_storage_identities.reserve(kernel.members.size());
-            final_debug_states.reserve(kernel.members.size());
-            projected_values.resize(kernel.outputs.size());
-            for (auto& waveform : projected_values) {
-                waveform.reserve(1U);
-            }
-        }
-
-        RegionKernelActivationState activation;
-        RegionKernelSchedulerPrefix prefix;
-        std::vector<PackedLogic4> boundary_inputs;
-        std::vector<RegionKernelInternalSeed> internal_seeds;
-        std::vector<ProcessId> prepared_processes;
-        std::vector<const void*> completion_storage_identities;
-        std::vector<FinalDebugState> final_debug_states;
-        std::vector<std::vector<ProjectedWaveformValue>> projected_values;
-    };
 
     struct ProcessFrame {
         std::vector<PackedLogic4> registers;
@@ -1201,16 +619,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         // Changes before executor destruction, replacement, redirect, or fork
         // so cached optional executor interfaces cannot outlive their object.
         std::uint64_t executor_lifecycle_generation { 1U };
-        // True only when the immediate executor opted in, or a deferred
-        // contract's expectation was confirmed against its installed executor.
-        bool region_kernel_equivalence_confirmed { };
-        // This executor opt-in is cached at installation. It is paired with
-        // the RegionConeKernelMember's static definite-definition proof.
-        bool region_kernel_completion_has_no_persistent_registers { };
-        // Set only after native preflight confirmed the executor was parked
-        // at its canonical static WaitSensitivity/Jump boundary. Ordinary
-        // executor resume clears it before touching that frame.
-        bool region_kernel_completion_boundary_validated { };
         std::uint64_t static_trigger_mask { Process::full_static_trigger_mask };
         SchedulerPhase execution_phase { SchedulerPhase::active };
         bool queued { };
@@ -1228,14 +636,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         bool halted { };
         bool killed { };
         bool has_callable_frame_push { };
-
-        // Native frontier synchronization may reuse its exact final-debug
-        // result while this process and runtime generation remain unchanged.
-        // The saved address is never dereferenced. Check the monotonic runtime
-        // generation first so a token from a replaced snapshot is never
-        // compared after its immutable backend-owned target may have expired.
-        const RegionConeFinalDebugState* frontier_debug_target { };
-        std::uint64_t frontier_debug_runtime_generation { };
 
         // The sidecar is allocated with its program at process creation and
         // remains heap-stable if this small deque record is moved.
@@ -1260,28 +660,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         [[nodiscard]] const ProcessColdState& cold() const
         {
             return *cold_state;
-        }
-
-        [[nodiscard]] bool frontier_debug_matches(
-            const RegionConeFinalDebugState& target,
-            const std::uint64_t runtime_generation) const noexcept
-        {
-            return frontier_debug_runtime_generation == runtime_generation
-                && frontier_debug_target == &target;
-        }
-
-        void clear_frontier_debug_token() noexcept
-        {
-            frontier_debug_target = nullptr;
-            frontier_debug_runtime_generation = 0U;
-        }
-
-        void remember_frontier_debug(
-            const RegionConeFinalDebugState& target,
-            const std::uint64_t runtime_generation) noexcept
-        {
-            frontier_debug_target = &target;
-            frontier_debug_runtime_generation = runtime_generation;
         }
 
         [[nodiscard]] bool has_active_wait_timeout() const noexcept
@@ -1671,33 +1049,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint64_t fanout_visit { };
     };
 
-    struct FusedStaticCohortPlan {
-        struct Output {
-            enum class Route : std::uint8_t {
-                disjoint_owner_group_logic4,
-                projected_logic4,
-                projected_logic9,
-            };
-            struct DisjointOwner {
-                ProcessId process { };
-                std::vector<std::uint64_t> mask;
-                PackedLogic4 staged_value;
-            };
-            SignalId signal { };
-            std::uint32_t width { };
-            std::vector<std::uint64_t> owner_masks;
-            std::vector<DisjointOwner> disjoint_owners;
-            ProcessId original_owner { };
-            Route route { Route::disjoint_owner_group_logic4 };
-        };
-        FusedStaticCohortCandidate candidate;
-        std::vector<InstructionIndex> resume_instructions;
-        std::uint64_t owner_stage_calls_total { };
-        std::vector<Output> outputs;
-        std::unique_ptr<FusedStaticCohortExecutor> executor;
-        bool certified { };
-    };
-
     struct PendingUpdate {
         enum Flag : std::uint8_t {
             has_driver = 1U << 0U,
@@ -1744,37 +1095,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
     struct PendingDriverCommit {
         std::optional<ProcessId> driver;
         PackedLogic4 value;
-        bool owned_composite { };
-        std::optional<std::size_t> fused_cohort;
 
         PendingDriverCommit(std::optional<ProcessId> owner,
-            PackedLogic4 pending_value, bool composite = false,
-            std::optional<std::size_t> cohort = std::nullopt)
+            PackedLogic4 pending_value)
             : driver(owner)
             , value(std::move(pending_value))
-            , owned_composite(composite)
-            , fused_cohort(cohort)
         {
         }
-    };
-
-    struct OwnedDriverSpan {
-        SignalId signal { std::numeric_limits<SignalId>::max() };
-        std::uint32_t offset { };
-        std::uint32_t width { };
-    };
-
-    struct OwnedDriverComposite {
-        PackedLogic4 committed;
-        PackedLogic4 phase;
-        bool active { };
-        bool phase_active { };
-    };
-
-    enum class OwnedDriverStage : std::uint8_t {
-        unsupported,
-        unchanged,
-        changed,
     };
 
     struct DirectSingleDriverRoute {
@@ -2046,10 +1373,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // a driven signal, until a source of the signal changes.
     std::unordered_set<SignalId> vhdl_deposited_before_start;
     std::vector<DriverTable> driver_values;
-    // Certified disjoint owners use this as their raw-driver authority.
-    // Their DriverRecord values are restored on cold demotion.
-    std::vector<OwnedDriverComposite> owned_driver_composites;
-    std::vector<OwnedDriverSpan> owned_driver_spans;
     using ForcedDriverMap = std::map<ProcessId, PackedLogic4>;
     struct ForcedDriverMapView {
         const ForcedDriverMap* values { };
@@ -2087,1379 +1410,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // Dependency maps are built once after all topology is registered. The
     // module-path destination map lets update staging avoid scanning every
     // path for unrelated signals.
-    // Immutable elaborated topology; runtime observation only narrows admission.
-    std::optional<RegionGraph> region_graph;
-    // The elaboration proof seeds the first runtime snapshot; later snapshots
-    // reuse the structurally matching inventory or replace it after writer
-    // topology changes.
-    std::shared_ptr<const SignalDriverInventory>
-        elaborated_signal_driver_inventory;
-    std::shared_ptr<const SignalDriverInventory>
-        region_signal_driver_inventory;
-    bool region_recertification_pending { };
-    // Only prepare_region_authoritative_write may set a component bit. Every
-    // other recertification cause sets the full-snapshot latch and clears all
-    // component bits so an unclassified cause always fails closed.
-    bool region_recertification_requires_snapshot { };
-    std::vector<std::uint8_t>
-        region_value_only_recertification_by_component;
-    // Exact number of set component bits above. The common clear path runs
-    // once per observed signal, so it must not scan/zero the whole vector
-    // when no value-only candidate is pending.
-    std::size_t region_value_only_recertification_nonempty_components { };
-    struct RegionKernelBackendEntry {
-        RegionConeActivationKernel kernel;
-        std::string provider_identity;
-        std::unique_ptr<RegionKernelBackend> executor;
-        std::unique_ptr<RegionKernelNativeWorkspace> native_workspace;
-        std::unique_ptr<RegionKernelGenericWorkspace> generic_workspace;
-        std::atomic_flag in_use = ATOMIC_FLAG_INIT;
-
-        [[nodiscard]] bool try_enter() noexcept
-        {
-            return !in_use.test_and_set(std::memory_order_acquire);
-        }
-
-        void leave() noexcept
-        {
-            in_use.clear(std::memory_order_release);
-        }
-    };
-    struct VhdlProjectedReadinessTask final : SchedulerOrderedBatchTask {
-        struct QueuedMember {
-            ProcessId process { };
-            SchedulerGenericKeyReceipt receipt;
-            std::uint64_t static_trigger_mask { };
-        };
-        struct FallbackPayload {
-            VhdlProjectedReadinessTask* task { };
-            std::uint64_t payload { };
-        };
-
-        Impl* owner { };
-        std::size_t component { no_systemverilog_update_slot };
-        std::uint64_t runtime_generation { };
-        std::shared_ptr<RegionKernelBackendEntry> backend;
-        std::vector<QueuedMember> members;
-        // Callback-time member-to-position scratch. It is sized during
-        // snapshot preparation and never caches scheduler append order.
-        std::vector<std::size_t> ticket_member_offsets;
-        bool invalidated { };
-
-        [[nodiscard]] std::optional<std::size_t> member_index(
-            ProcessId process) const noexcept;
-        void clear_member(ProcessId process) noexcept;
-        [[nodiscard]] SchedulerBatchResult execute(
-            Scheduler& active_scheduler,
-            std::span<const std::uint64_t> payloads) override;
-        [[nodiscard]] ::fsim::runtime::detail::SchedulerTaskDescriptor
-        make_fallback_descriptor(std::uint64_t payload) noexcept override;
-        static void dispatch_fallback(
-            Scheduler&, const FallbackPayload&);
-    };
-    struct RegionConeForwardingBackendEntry {
-        RegionConeForwardingKernel kernel;
-        std::string provider_identity;
-        std::unique_ptr<RegionConeForwardingBackend> executor;
-        std::atomic_flag in_use = ATOMIC_FLAG_INIT;
-
-        [[nodiscard]] bool try_enter() noexcept
-        {
-            return !in_use.test_and_set(std::memory_order_acquire);
-        }
-
-        void leave() noexcept
-        {
-            in_use.clear(std::memory_order_release);
-        }
-    };
-    struct RegionFrontierBackendEntry {
-        RegionConeActivationKernel kernel;
-        std::string provider_identity;
-        std::unique_ptr<RegionFrontierBackend> executor;
-    };
-
-    enum class RegionFrontierAliasMissReason : std::uint8_t {
-        unprimed,
-        context,
-        collector,
-        task_extent_only,
-        task_extent_with_other,
-        pointer,
-        extent,
-        alias_tag,
-        count,
-    };
-
-    /// Exact byte interval included in the V2 nested alias-geometry proof.
-    /// The numeric start and extent are captured while the backing is live;
-    /// alias_tag mirrors the generated key/role encoding for a same-slot
-    /// stored/owner exception.
-    struct RegionFrontierAliasRange final {
-        std::uintptr_t address { };
-        std::size_t bytes { };
-        std::uint64_t alias_tag { };
-
-        friend bool operator==(const RegionFrontierAliasRange&,
-            const RegionFrontierAliasRange&) = default;
-    };
-
-    struct RegionFrontierAliasCertifiedPendingBacking final {
-        std::uintptr_t words_address { };
-        std::size_t word_count { };
-        std::uintptr_t offsets_address { };
-        std::size_t offset_count { };
-        std::uintptr_t writable_signals_address { };
-        std::size_t writable_signal_count { };
-        bool valid { };
-    };
-
-    struct RegionFrontierAliasBindProof final {
-        std::uint64_t serial { };
-        const RegionFrontierBackendEntry* backend { };
-        const RegionFrontierBackend* executor { };
-        const RegionFrontierLayoutV2* layout { };
-        const RegionFrontierFrameV2* frame { };
-        const RegionAuthoritativeComponentState* state { };
-        const AuthoritativeSignalPlanes::FrontierWriteLease* lease { };
-        std::uint64_t runtime_generation { };
-        std::uint64_t state_revision { };
-        bool valid { };
-        bool plane_ranges_match_certificate { };
-        bool pending_backing_matches_certificate { };
-        bool receipt_consumed { };
-    };
-
-    /// The cache is local to one persistent component runtime, but its key
-    /// still names every object/code generation whose immutable range recipe
-    /// can affect the nested geometry decision.
-    struct RegionFrontierAliasCertificateContext final {
-        const Impl* owner { };
-        std::size_t component { no_systemverilog_update_slot };
-        const RegionFrontierBackendEntry* backend { };
-        const RegionFrontierBackend* executor { };
-        const RegionFrontierLayoutV2* layout { };
-        const RegionFrontierFrameV2* frame { };
-        RegionFrontierStepEntryV2 checked_entry { };
-        RegionFrontierStepEntryV2 trusted_entry { };
-        std::uint64_t runtime_generation { };
-        std::uint64_t frame_runtime_generation { };
-        std::uint64_t bound_runtime_generation { };
-        std::uint64_t certificate_generation { };
-        std::uint64_t component_generation { };
-        RegionFrontierExecutionModeV2 execution_mode {
-            RegionFrontierExecutionModeV2::systemverilog_active
-        };
-
-        friend bool operator==(const RegionFrontierAliasCertificateContext&,
-            const RegionFrontierAliasCertificateContext&) = default;
-    };
-
-    /// The successful preparation owns every pending row and payload span.
-    /// This certificate names that exact immutable recipe and storage, and is
-    /// available only for the sealed builtin descriptor-shapes producer.
-    struct RegionFrontierDescriptorShapesStorageCertificate final {
-        const RegionFrontierBackendEntry* backend { };
-        const RegionFrontierBackend* executor { };
-        const RegionFrontierLayoutV2* layout { };
-        const RegionFrontierWriteSiteV2* write_sites { };
-        RegionFrontierPendingWriteV2* pending_writes { };
-        const std::uint64_t* pending_plane_words { };
-        const std::size_t* pending_plane_offsets { };
-        RegionFrontierStepEntryV2 entry { };
-        std::size_t pending_write_count { };
-        std::size_t pending_plane_word_count { };
-        std::size_t pending_plane_offset_count { };
-        std::uint32_t write_site_count { };
-        std::uint64_t runtime_generation { };
-        std::uint64_t certificate_generation { };
-        std::uint64_t component_generation { };
-    };
-
-    /// Separately consumed authority attached to the current binding snapshot.
-    /// Canonical success alone never authorizes descriptor shape elision.
-    struct RegionFrontierDescriptorShapesBindingReceipt final {
-        RegionFrontierStepEntryV2 entry { };
-        std::uint64_t bind_serial { };
-    };
-
-    /// A one-use proof that this exact backend layout was bound to the live
-    /// runtime-owned planes under an active A4 write lease. This is a content
-    /// provenance receipt, not an alias-geometry certificate: the successful
-    /// binder validates each read-only boundary plane and binds internal roles
-    /// through the current A4 lease, while pending value words are runtime-owned
-    /// buffers whose only nonzero writer is the generated stage-write helper.
-    /// It authorizes only builtin canonical-values entries and is consumed
-    /// before each generated call.
-    struct RegionFrontierCanonicalValuesBindingReceipt final {
-        const Impl* owner { };
-        std::size_t component { no_systemverilog_update_slot };
-        const RegionFrontierBackendEntry* backend { };
-        const RegionFrontierBackend* executor { };
-        const RegionFrontierLayoutV2* layout { };
-        const RegionAuthoritativeComponentState* authoritative_state { };
-        std::uint64_t* ready_words { };
-        RegionFrontierMemberV2* members { };
-        const RegionFrontierSchedulerTaskV2* scheduler_tasks { };
-        RegionFrontierPlaneV2* planes { };
-        RegionFrontierSignalMetadataV2* metadata { };
-        const RegionFrontierFanoutEdgeV2* fanout_edges { };
-        const RegionFrontierPlaneV2* const* port_planes { };
-        RegionFrontierPendingWriteV2* pending_writes { };
-        RegionFrontierStagedEventV2* staged_events { };
-        RegionFrontierCommittedSignalV2* committed_signals { };
-        std::uint64_t* native_frontier_member_dispatches { };
-        const std::uint32_t* stop_requested { };
-        const std::uint64_t* pending_plane_words { };
-        const std::size_t* pending_plane_offsets { };
-        const AuthoritativeSignalPlanes::FrontierWriteBinding*
-            writable_signals { };
-        const AuthoritativeSignalPlanes::FrontierWriteLease* lease { };
-        std::size_t pending_plane_word_count { };
-        std::size_t pending_plane_offset_count { };
-        std::size_t writable_signal_count { };
-        std::uint64_t runtime_generation { };
-        std::uint64_t certificate_generation { };
-        std::uint64_t component_generation { };
-        std::uint64_t authoritative_revision { };
-        std::uint64_t bind_serial { };
-        std::uint32_t member_count { };
-        std::uint32_t scheduler_task_capacity { };
-        std::uint32_t readiness_word_count { };
-        std::uint32_t signal_slot_count { };
-        std::uint32_t metadata_count { };
-        std::uint32_t fanout_edge_count { };
-        std::uint32_t pending_write_capacity { };
-        std::uint32_t staged_event_capacity { };
-        std::uint32_t committed_signal_capacity { };
-        bool valid { };
-    };
-
-    // The component's mutable V2 frame buffers share one aligned allocation.
-    // Direct runtime fixtures can still use these vectors before preparation;
-    // production preparation configures the bounded arena before the first
-    // vector allocation, after which an unexpected growth fails closed.
-    struct RegionFrontierWorkspaceAllocationState final {
-        static constexpr std::size_t allocation_alignment
-            = alignof(std::max_align_t);
-
-        RegionFrontierWorkspaceAllocationState() = default;
-        RegionFrontierWorkspaceAllocationState(
-            const RegionFrontierWorkspaceAllocationState&) = delete;
-        RegionFrontierWorkspaceAllocationState& operator=(
-            const RegionFrontierWorkspaceAllocationState&) = delete;
-
-        [[nodiscard]] bool configure(const std::size_t byte_count)
-        {
-            if (storage_ != nullptr || byte_count == 0U
-                || live_fallback_allocations_ != 0U) {
-                return false;
-            }
-            storage_ = std::shared_ptr<std::byte> {
-                static_cast<std::byte*>(::operator new(byte_count)),
-                [](std::byte* const pointer) noexcept {
-                    ::operator delete(pointer);
-                }
-            };
-            capacity_ = byte_count;
-            return true;
-        }
-
-        [[nodiscard]] void* allocate(
-            const std::size_t byte_count,
-            const std::size_t alignment)
-        {
-            if (byte_count == 0U) {
-                return nullptr;
-            }
-            if (alignment == 0U) {
-                throw std::bad_alloc { };
-            }
-            if (!storage_) {
-                void* const result = allocate_system(byte_count, alignment);
-                if (live_fallback_allocations_
-                    == std::numeric_limits<std::size_t>::max()) {
-                    deallocate_system(result, alignment);
-                    throw std::bad_alloc { };
-                }
-                ++live_fallback_allocations_;
-                return result;
-            }
-            if (alignment > allocation_alignment || used_ > capacity_) {
-                throw std::bad_alloc { };
-            }
-            const auto base = reinterpret_cast<std::uintptr_t>(storage_.get());
-            if (used_ > std::numeric_limits<std::uintptr_t>::max() - base) {
-                throw std::bad_alloc { };
-            }
-            const auto current = base + used_;
-            const auto remainder = current % alignment;
-            const auto padding = remainder == 0U
-                ? 0U : alignment - remainder;
-            if (padding > capacity_ - used_
-                || byte_count > capacity_ - used_ - padding) {
-                throw std::bad_alloc { };
-            }
-            const auto offset = used_ + padding;
-            used_ = offset + byte_count;
-            return storage_.get() + offset;
-        }
-
-        void deallocate(
-            void* const pointer,
-            const std::size_t alignment) noexcept
-        {
-            if (pointer == nullptr || owns(pointer, 1U)) {
-                return;
-            }
-            if (live_fallback_allocations_ != 0U) {
-                --live_fallback_allocations_;
-            }
-            deallocate_system(pointer, alignment);
-        }
-
-        [[nodiscard]] bool owns(
-            const void* const pointer,
-            const std::size_t byte_count) const noexcept
-        {
-            if (!storage_ || pointer == nullptr) {
-                return false;
-            }
-            const auto begin = reinterpret_cast<std::uintptr_t>(storage_.get());
-            const auto address = reinterpret_cast<std::uintptr_t>(pointer);
-            if (address < begin || address - begin > capacity_) {
-                return false;
-            }
-            return byte_count <= capacity_ - (address - begin);
-        }
-
-        [[nodiscard]] std::size_t capacity() const noexcept
-        {
-            return capacity_;
-        }
-
-        [[nodiscard]] const void* begin() const noexcept
-        {
-            return storage_.get();
-        }
-
-        /// Pins only the backing bytes, never this allocator's bump state.
-        /// Versioned A4 blocks can outlive the runtime workspace after COW
-        /// snapshots or read leases retain the slab.
-        [[nodiscard]] std::shared_ptr<void> storage_lifetime() const noexcept
-        {
-            return storage_;
-        }
-
-        [[nodiscard]] std::size_t used() const noexcept
-        {
-            return used_;
-        }
-
-        [[nodiscard]] static void* allocate_system(
-            const std::size_t byte_count,
-            const std::size_t alignment)
-        {
-            if (alignment > allocation_alignment) {
-                return ::operator new(byte_count,
-                    std::align_val_t { alignment });
-            }
-            return ::operator new(byte_count);
-        }
-
-        static void deallocate_system(
-            void* const pointer,
-            const std::size_t alignment) noexcept
-        {
-            if (pointer == nullptr) {
-                return;
-            }
-            if (alignment > allocation_alignment) {
-                ::operator delete(pointer,
-                    std::align_val_t { alignment });
-                return;
-            }
-            ::operator delete(pointer);
-        }
-
-    private:
-        std::shared_ptr<std::byte> storage_;
-        std::size_t capacity_ { };
-        std::size_t used_ { };
-        std::size_t live_fallback_allocations_ { };
-    };
-
-    template <typename T>
-    class RegionFrontierWorkspaceAllocator {
-    public:
-        using value_type = T;
-        using propagate_on_container_copy_assignment = std::false_type;
-        using propagate_on_container_move_assignment = std::false_type;
-        using propagate_on_container_swap = std::false_type;
-        using is_always_equal = std::false_type;
-
-        RegionFrontierWorkspaceAllocator() noexcept = default;
-
-        explicit RegionFrontierWorkspaceAllocator(
-            RegionFrontierWorkspaceAllocationState& state) noexcept
-            : state_(&state)
-        {
-        }
-
-        template <typename U>
-        RegionFrontierWorkspaceAllocator(
-            const RegionFrontierWorkspaceAllocator<U>& other) noexcept
-            : state_(other.state())
-        {
-        }
-
-        [[nodiscard]] T* allocate(const std::size_t count)
-        {
-            if (count > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
-                throw std::bad_array_new_length { };
-            }
-            const auto byte_count = count * sizeof(T);
-            if (state_ != nullptr) {
-                return static_cast<T*>(state_->allocate(
-                    byte_count, alignof(T)));
-            }
-            return static_cast<T*>(
-                RegionFrontierWorkspaceAllocationState::allocate_system(
-                    byte_count, alignof(T)));
-        }
-
-        void deallocate(T* const pointer, const std::size_t) noexcept
-        {
-            if (state_ != nullptr) {
-                state_->deallocate(pointer, alignof(T));
-            } else {
-                RegionFrontierWorkspaceAllocationState::deallocate_system(
-                    pointer, alignof(T));
-            }
-        }
-
-        [[nodiscard]] RegionFrontierWorkspaceAllocator
-        select_on_container_copy_construction() const noexcept
-        {
-            // A detached test snapshot must not retain the runtime's arena
-            // owner pointer or outlive that component workspace.
-            return { };
-        }
-
-        [[nodiscard]] RegionFrontierWorkspaceAllocationState* state()
-            const noexcept
-        {
-            return state_;
-        }
-
-        template <typename U>
-        [[nodiscard]] bool operator==(
-            const RegionFrontierWorkspaceAllocator<U>& other) const noexcept
-        {
-            return state_ == other.state();
-        }
-
-        template <typename U>
-        friend class RegionFrontierWorkspaceAllocator;
-
-    private:
-        RegionFrontierWorkspaceAllocationState* state_ { };
-    };
-
-    struct RegionFrontierComponentWorkspace {
-        struct GenericQueuedMember {
-            SchedulerGenericKeyReceipt receipt;
-            std::uint64_t static_trigger_mask { };
-        };
-        struct GenericParkedExecutorBinding {
-            // Checked against the live ProcessState before capability use. The
-            // generation is advanced before any executor lifetime mutation, so
-            // even allocator address reuse cannot revive a stale cross-cast.
-            ProcessExecutor* executor { };
-            const RegionKernelParkedExecutor* capability { };
-            std::uint64_t lifecycle_generation { };
-        };
-
-        template <typename T>
-        using Vector = std::vector<T, RegionFrontierWorkspaceAllocator<T>>;
-
-        RegionFrontierComponentWorkspace()
-            : ready_words { RegionFrontierWorkspaceAllocator<std::uint64_t> {
-                  workspace_allocation } }
-            , members { RegionFrontierWorkspaceAllocator<
-                  RegionFrontierMemberV2> { workspace_allocation } }
-            , scheduler_tasks { RegionFrontierWorkspaceAllocator<
-                  RegionFrontierSchedulerTaskV2> { workspace_allocation } }
-            , original_scheduler_tasks { RegionFrontierWorkspaceAllocator<
-                  SchedulerBatchFrontierEntry> { workspace_allocation } }
-            , planes { RegionFrontierWorkspaceAllocator<
-                  RegionFrontierPlaneV2> { workspace_allocation } }
-            , metadata { RegionFrontierWorkspaceAllocator<
-                  RegionFrontierSignalMetadataV2> { workspace_allocation } }
-            , fanout_edges { RegionFrontierWorkspaceAllocator<
-                  RegionFrontierFanoutEdgeV2> { workspace_allocation } }
-            , port_planes { RegionFrontierWorkspaceAllocator<
-                  const RegionFrontierPlaneV2*> { workspace_allocation } }
-            , pending_writes { RegionFrontierWorkspaceAllocator<
-                  RegionFrontierPendingWriteV2> { workspace_allocation } }
-            , staged_events { RegionFrontierWorkspaceAllocator<
-                  RegionFrontierStagedEventV2> { workspace_allocation } }
-            , committed_signals { RegionFrontierWorkspaceAllocator<
-                  RegionFrontierCommittedSignalV2> { workspace_allocation } }
-            , generic_snapshot_plane_offsets { RegionFrontierWorkspaceAllocator<
-                  std::size_t> { workspace_allocation } }
-            , generic_snapshot_words { RegionFrontierWorkspaceAllocator<
-                  std::uint64_t> { workspace_allocation } }
-            , generic_member_task_indices { RegionFrontierWorkspaceAllocator<
-                  std::size_t> { workspace_allocation } }
-            , raw_activation_summary { RegionFrontierWorkspaceAllocator<
-                  std::size_t> { workspace_allocation } }
-            , generic_ticket_member_offsets { RegionFrontierWorkspaceAllocator<
-                  std::size_t> { workspace_allocation } }
-            , generic_queued_ready_words { RegionFrontierWorkspaceAllocator<
-                  std::uint64_t> { workspace_allocation } }
-            , generic_queued_members { RegionFrontierWorkspaceAllocator<
-                  GenericQueuedMember> { workspace_allocation } }
-            , generic_parked_executors { RegionFrontierWorkspaceAllocator<
-                  GenericParkedExecutorBinding> { workspace_allocation } }
-            , generic_prefix_processes { RegionFrontierWorkspaceAllocator<
-                  ProcessId> { workspace_allocation } }
-            , generic_prefix_members { RegionFrontierWorkspaceAllocator<
-                  std::uint32_t> { workspace_allocation } }
-            , writable_signals { RegionFrontierWorkspaceAllocator<
-                  AuthoritativeSignalPlanes::FrontierWriteBinding> {
-                  workspace_allocation } }
-            , writable_layout_indices { RegionFrontierWorkspaceAllocator<
-                  std::size_t> { workspace_allocation } }
-            , pending_plane_offsets { RegionFrontierWorkspaceAllocator<
-                  std::size_t> { workspace_allocation } }
-            , pending_plane_words { RegionFrontierWorkspaceAllocator<
-                  std::uint64_t> { workspace_allocation } }
-            , compact_members { RegionFrontierWorkspaceAllocator<
-                  SystemVerilogCompactBatchMember> { workspace_allocation } }
-            , issued_sequences { RegionFrontierWorkspaceAllocator<
-                  std::uint64_t> { workspace_allocation } }
-        {
-        }
-
-        RegionFrontierWorkspaceAllocationState workspace_allocation;
-        Vector<std::uint64_t> ready_words;
-        Vector<RegionFrontierMemberV2> members;
-        Vector<RegionFrontierSchedulerTaskV2> scheduler_tasks;
-        // Exact scheduler-owned payloads paired with the generated frame's
-        // local member/event payloads. The borrowed scheduler span is never
-        // retained after execute() returns.
-        Vector<SchedulerBatchFrontierEntry> original_scheduler_tasks;
-        Vector<RegionFrontierPlaneV2> planes;
-        Vector<RegionFrontierSignalMetadataV2> metadata;
-        Vector<RegionFrontierFanoutEdgeV2> fanout_edges;
-        Vector<const RegionFrontierPlaneV2*> port_planes;
-        Vector<RegionFrontierPendingWriteV2> pending_writes;
-        Vector<RegionFrontierStagedEventV2> staged_events;
-        Vector<RegionFrontierCommittedSignalV2> committed_signals;
-        // Generic V2 evaluates from detached per-callback Logic4/Logic9
-        // snapshots. These words never retain pins into A4 signal roles
-        // across a callback.
-        Vector<std::size_t> generic_snapshot_plane_offsets;
-        Vector<std::uint64_t> generic_snapshot_words;
-        Vector<std::size_t> generic_member_task_indices;
-        // Borrowed scheduler activations are indexed once per dispatch from
-        // the active frontier. Values are task indices, never retained task
-        // pointers, and the summary is rebuilt on every dispatch.
-        Vector<std::size_t> raw_activation_summary;
-        // Authenticated scheduler-ticket position for every runtime member.
-        // This is callback scratch; it is pre-sized with the component and
-        // never escapes the borrowed Generic compact-ticket callback.
-        Vector<std::size_t> generic_ticket_member_offsets;
-        // Scheduler-owned queued work remains authoritative across generated
-        // frame retries. The generated ready_words are per-entry scratch and
-        // can be mutated before the host ACK.
-        Vector<std::uint64_t> generic_queued_ready_words;
-        Vector<GenericQueuedMember> generic_queued_members;
-        Vector<GenericParkedExecutorBinding> generic_parked_executors;
-        // The Generic path proves each executor is already parked and never
-        // stages or commits its register frame. This differs from legacy
-        // activation copyback, where mutable completion storage aliases must
-        // be rejected before any executor frame is written.
-        Vector<ProcessId> generic_prefix_processes;
-        Vector<std::uint32_t> generic_prefix_members;
-        Vector<AuthoritativeSignalPlanes::FrontierWriteBinding>
-            writable_signals;
-        // A4 layout ordinals are filled by each acquired lease. The caller-
-        // owned span remains stable until lease release and is reused on the
-        // post-callback reacquire.
-        Vector<std::size_t> writable_layout_indices;
-        Vector<std::size_t> pending_plane_offsets;
-        Vector<std::uint64_t> pending_plane_words;
-        Vector<SystemVerilogCompactBatchMember> compact_members;
-        Vector<std::uint64_t> issued_sequences;
-        // Optional geometry-only certificate storage uses its own bounded
-        // allocations so failure to allocate this optimization never rejects
-        // an otherwise valid checked runtime. All three vectors are sized
-        // during preparation and remain allocation-free during dispatch.
-        std::vector<RegionFrontierAliasRange> alias_certificate_ranges;
-        std::vector<RegionFrontierAliasRange> alias_candidate_ranges;
-        std::vector<std::size_t> alias_sorted_indices;
-    };
-
-    struct RegionFrontierComponentRuntime final
-        : SchedulerOrderedBatchTask, RegionFrontierComponentWorkspace {
-        static constexpr std::size_t scheduler_task_capacity = 64U;
-
-        using GenericQueuedMember
-            = RegionFrontierComponentWorkspace::GenericQueuedMember;
-        using GenericParkedExecutorBinding
-            = RegionFrontierComponentWorkspace::GenericParkedExecutorBinding;
-
-        struct FallbackToken {
-            RegionFrontierComponentRuntime* runtime { };
-            std::uint64_t payload { };
-        };
-        struct GenericFallbackToken {
-            RegionFrontierComponentRuntime* runtime { };
-            std::uint64_t payload { };
-        };
-
-        Impl* owner { };
-        std::size_t component { no_systemverilog_update_slot };
-        std::uint64_t runtime_generation { };
-        RegionFrontierExecutionModeV2 execution_mode {
-            RegionFrontierExecutionModeV2::systemverilog_active
-        };
-        // Keep the exact A4 backing selected during preparation alive while
-        // scheduler tickets retain this runtime. This does not make a stale
-        // generation executable; dispatch revalidates active ownership.
-        std::shared_ptr<RegionAuthoritativeComponentState>
-            authoritative_state;
-        std::shared_ptr<RegionFrontierBackendEntry> backend;
-        RegionFrontierFrameV2 frame;
-        std::uint32_t stop_requested { };
-        std::uint32_t boundary_callback_started_slot {
-            std::numeric_limits<std::uint32_t>::max() };
-        std::uint64_t native_member_dispatches { };
-        // This journal proves only which private frame members have been
-        // written since their last host copy. It caches no host-state validity.
-        FrontierMemberSyncWorkset member_sync_workset;
-        bool member_sync_workset_available { };
-        bool member_sync_force_full { true };
-        bool member_sync_private_entry { };
-        std::uint8_t member_sync_full_reasons {
-            static_cast<std::uint8_t>(FrontierMemberSyncFullReason::seed) };
-        void require_full_member_sync(
-            FrontierMemberSyncFullReason reason) noexcept
-        {
-            member_sync_force_full = true;
-            if (owner && owner->systemverilog_wave_profile_enabled) {
-                member_sync_full_reasons |= static_cast<std::uint8_t>(reason);
-            }
-        }
-        std::uint64_t member_sync_full_passes { };
-        std::uint64_t member_sync_full_members { };
-        std::uint64_t member_sync_selected_passes { };
-        std::uint64_t member_sync_selected_members { };
-        std::uint64_t member_sync_selected_total_members { };
-        void mark_member_sync_write(std::uint32_t member) noexcept;
-        void collect_member_sync_writes(std::uint32_t old_cursor) noexcept;
-        RegionFrontierAliasCertificateContext alias_certificate_context;
-        // A confirmed task extent also certifies every smaller prefix for
-        // the same task-buffer address and exact peer-range geometry.
-        std::array<std::uint8_t, scheduler_task_capacity + 1U>
-            alias_certificate_task_count_valid { };
-        std::size_t alias_certificate_pending_task_count { };
-        RegionFrontierAliasCertifiedPendingBacking
-            alias_certificate_pending_backing;
-        RegionFrontierAliasBindProof alias_bind_proof;
-        std::uint64_t alias_bind_serial { };
-        bool alias_bind_serial_exhausted { };
-        // Geometry-route totals: canonical-only is included in checked, and
-        // alias+canonical is included in trusted.
-        std::uint64_t alias_checked_entries { };
-        std::uint64_t alias_trusted_entries { };
-        std::uint64_t canonical_values_only_entries { };
-        std::uint64_t alias_and_canonical_values_entries { };
-        std::uint64_t descriptor_shapes_entries { };
-        RegionFrontierDescriptorShapesStorageCertificate
-            descriptor_shapes_storage_certificate;
-        RegionFrontierDescriptorShapesBindingReceipt
-            descriptor_shapes_binding_receipt;
-        RegionFrontierCanonicalValuesBindingReceipt
-            canonical_values_binding_receipt;
-        std::uint64_t alias_sorted_proof_attempts { };
-        std::uint64_t alias_sorted_proof_successes { };
-        std::uint64_t alias_sorted_proof_failures { };
-        std::uint64_t alias_full_collector_calls { };
-        std::uint64_t alias_bind_proof_attempts { };
-        std::uint64_t alias_bind_proof_reuse_hits { };
-        std::uint64_t alias_bind_proof_plane_misses { };
-        std::uint64_t alias_bind_proof_unconfirmed_task_count_misses { };
-        bool frame_initialized { };
-        bool scheduler_state_seeded { };
-        bool alias_certificate_storage_available { };
-        // True only when the common inventory/context has at least one
-        // confirmed exact task-count key.
-        bool alias_certificate_valid { };
-        bool alias_certificate_pending_confirmation { };
-        bool invalidated { };
-        std::atomic_flag in_use = ATOMIC_FLAG_INIT;
-
-        [[nodiscard]] bool try_enter() noexcept
-        {
-            return !in_use.test_and_set(std::memory_order_acquire);
-        }
-
-        void end_alias_bind_lease() noexcept
-        {
-            clear_alias_bind_proof();
-            clear_canonical_values_binding_receipt();
-        }
-
-        void leave() noexcept
-        {
-            end_alias_bind_lease();
-            in_use.clear(std::memory_order_release);
-        }
-
-        void invalidate(std::source_location caller
-            = std::source_location::current()) noexcept;
-
-        [[nodiscard]] bool collect_alias_certificate_ranges(
-            const RegionFrontierLayoutV2& layout) noexcept;
-        void clear_alias_bind_proof() noexcept;
-        void begin_alias_bind_attempt() noexcept;
-        void begin_alias_bind_proof(
-            const RegionFrontierBackendEntry& backend_entry,
-            const RegionFrontierLayoutV2& layout,
-            const AuthoritativeSignalPlanes::FrontierWriteLease& lease)
-            noexcept;
-        void compare_bound_alias_plane_ranges(std::size_t slot,
-            const RegionFrontierPlaneV2& plane,
-            std::size_t& tuple_index) noexcept;
-        void finish_alias_bind_proof(bool receipt_issued) noexcept;
-        [[nodiscard]] bool alias_certificate_frame_ranges_match()
-            const noexcept;
-        [[nodiscard]] bool alias_certificate_pending_backing_matches_receipt()
-            const noexcept;
-        [[nodiscard]] bool prove_alias_geometry_sorted() noexcept;
-        [[nodiscard]] RegionFrontierAliasCertificateContext
-        make_alias_certificate_context(
-            const RegionFrontierBackendEntry& backend_entry,
-            RegionFrontierStepEntryV2 checked_entry,
-            RegionFrontierStepEntryV2 trusted_entry) const noexcept;
-        [[nodiscard]] bool alias_certificate_common_ranges_match(
-            bool& task_extent_changed,
-            std::size_t& first_other_mismatch,
-            bool& task_address_changed,
-            bool& task_alias_tag_changed) const noexcept;
-        [[nodiscard]] bool alias_certificate_matches(
-            const RegionFrontierAliasCertificateContext& context,
-            bool builtin_alias_and_canonical_route = false) noexcept;
-        [[nodiscard]] bool stage_alias_certificate(
-            const RegionFrontierAliasCertificateContext& context) noexcept;
-        [[nodiscard]] bool confirm_alias_certificate(
-            const RegionFrontierAliasCertificateContext& context,
-            RegionFrontierStatusV2 status) noexcept;
-        void clear_alias_certificate() noexcept;
-        void prepare_descriptor_shapes_storage_certificate(
-            const RegionFrontierLayoutV2& layout) noexcept;
-        [[nodiscard]] bool descriptor_shapes_storage_matches(
-            const RegionFrontierBackendEntry& backend_entry,
-            const RegionFrontierLayoutV2& layout) const noexcept;
-        void issue_descriptor_shapes_binding_receipt(
-            const RegionFrontierBackendEntry& backend_entry,
-            const RegionFrontierLayoutV2& layout) noexcept;
-        void clear_canonical_values_binding_receipt() noexcept;
-        [[nodiscard]] bool issue_canonical_values_binding_receipt(
-            const RegionFrontierBackendEntry& backend_entry,
-            const RegionFrontierLayoutV2& layout,
-            const AuthoritativeSignalPlanes::FrontierWriteLease& lease)
-            noexcept;
-        [[nodiscard]] bool consume_canonical_values_binding_receipt(
-            const RegionFrontierBackendEntry& backend_entry,
-            const RegionFrontierLayoutV2& layout,
-            RegionFrontierStepEntryV2 canonical_values_entry,
-            RegionFrontierStepEntryV2 alias_and_canonical_values_entry,
-            const AuthoritativeSignalPlanes::FrontierWriteLease& lease,
-            RegionFrontierStepEntryV2 descriptor_shapes_entry = nullptr,
-            bool* descriptor_shapes_binding_valid = nullptr) noexcept;
-        void record_alias_certificate_miss(
-            RegionFrontierAliasMissReason reason,
-            std::size_t tuple_index = std::numeric_limits<std::size_t>::max(),
-            std::uint32_t context_mask = 0U,
-            std::size_t other_tuple_index
-                = std::numeric_limits<std::size_t>::max()) noexcept;
-
-        void clear_generic_queued_member(std::size_t member) noexcept;
-
-        [[nodiscard]] SchedulerBatchResult execute(
-            Scheduler& active_scheduler,
-            std::span<const std::uint64_t> payloads) override;
-        [[nodiscard]] ::fsim::runtime::detail::SchedulerTaskDescriptor
-        make_fallback_descriptor(std::uint64_t payload) noexcept override;
-        void synchronize_committed_state(
-            AuthoritativeSignalPlanes::FrontierWriteLease& lease) noexcept;
-        [[nodiscard]] bool bind_frame_planes_and_metadata(
-            AuthoritativeSignalPlanes::FrontierWriteLease& lease) noexcept;
-        [[nodiscard]] bool commit_staged_events(
-            Scheduler::SystemVerilogGroupBatchReservation& reservation,
-            std::shared_ptr<void> owner_lifetime,
-            const SchedulerBatchFrontier& frontier) noexcept;
-        void publish_boundary_commit(
-            const SchedulerBatchFrontierEntry& task,
-            std::uint32_t pending_slot,
-            AuthoritativeSignalPlanes::FrontierWriteLease& lease);
-    };
-    struct RegionConeForwardingResultBank {
-        explicit RegionConeForwardingResultBank(
-            const RegionConeForwardingKernel& kernel,
-            const std::size_t activation_member_count)
-        {
-            const auto boundary_count = std::ranges::count_if(
-                kernel.execution_kernel.inputs,
-                [](const RegionConeKernelInput& input) {
-                    return !input.internal;
-                });
-            boundary_signals.reserve(
-                static_cast<std::size_t>(boundary_count));
-            boundary_revisions.reserve(
-                static_cast<std::size_t>(boundary_count));
-            boundary_values.reserve(
-                static_cast<std::size_t>(boundary_count));
-            for (const auto& input : kernel.execution_kernel.inputs) {
-                if (!input.internal) {
-                    boundary_signals.push_back(input.signal);
-                    boundary_revisions.push_back(0U);
-                    boundary_values.emplace_back();
-                }
-            }
-            internal_initial_revisions.resize(
-                kernel.internal_signals.size(), 0U);
-            for (auto& seed_bank : internal_seed_banks) {
-                seed_bank.reserve(kernel.internal_signals.size());
-            }
-            for (const auto signal : kernel.internal_signals) {
-                const auto output = std::ranges::find(
-                    kernel.execution_kernel.outputs, signal,
-                    &RegionConeOutputBinding::signal);
-                if (output == kernel.execution_kernel.outputs.end()
-                    || output->width == 0U
-                    || output->value_kind != ValueKind::logic4) {
-                    throw std::invalid_argument {
-                        "forwarding seed bank lacks a whole Logic4 output binding"
-                    };
-                }
-                for (auto& seed_bank : internal_seed_banks) {
-                    seed_bank.push_back({ signal, output->owner,
-                        PackedLogic4(output->width, Logic4::zero),
-                        PackedLogic4(output->width, Logic4::zero),
-                        PackedLogic4(output->width, Logic4::zero) });
-                }
-            }
-            output_values.reserve(
-                kernel.execution_kernel.outputs.size());
-            prepared_role_mutations.resize(
-                kernel.execution_kernel.outputs.size());
-            prepared_role_mutation_ready.resize(
-                kernel.execution_kernel.outputs.size(), 0U);
-            for (std::size_t index = 0U;
-                 index < kernel.execution_kernel.outputs.size(); ++index) {
-                const auto& output
-                    = kernel.execution_kernel.outputs[index];
-                if (output.value_kind != ValueKind::logic4
-                    || output.width == 0U) {
-                    throw std::invalid_argument {
-                        "forwarding result bank requires nonempty Logic4 outputs"
-                    };
-                }
-                output_values.emplace_back(output.width, Logic4::zero);
-                const auto word_count
-                    = static_cast<std::size_t>(output.width / 64U)
-                    + static_cast<std::size_t>(output.width % 64U != 0U);
-                prepared_role_mutations[index].words.reserve(word_count);
-            }
-            applied_role_mutations.reserve(
-                kernel.execution_kernel.outputs.size());
-            applied_role_metadata.reserve(
-                kernel.execution_kernel.outputs.size());
-            member_active.resize(kernel.members.size(), 0U);
-            member_consumed.resize(kernel.members.size(), 0U);
-            seed_seen.resize(kernel.members.size(), 0U);
-            topological_position.resize(kernel.members.size(),
-                kernel.members.size());
-            readiness_mask.resize((activation_member_count + 63U) / 64U, 0U);
-            prefix.tasks.reserve(kernel.members.size());
-            seed_indices.reserve(kernel.members.size());
-            member_indices.reserve(kernel.members.size());
-            output_indices.reserve(kernel.execution_kernel.outputs.size());
-            stable_orders.reserve(kernel.execution_kernel.outputs.size());
-            update_slots.reserve(kernel.execution_kernel.outputs.size());
-            update_tokens.reserve(kernel.execution_kernel.outputs.size());
-            tasks.reserve(kernel.execution_kernel.outputs.size());
-            compact_members.reserve(kernel.execution_kernel.outputs.size());
-            completion_storage_identities.reserve(kernel.members.size());
-            stage_batch_group_shape
-                = kernel.execution_kernel.outputs.size() > 1U
-                && kernel.execution_kernel.outputs.size() <= 64U;
-            if (stage_batch_group_shape) {
-                stage_batch_pool.reserve(1U);
-                auto batch
-                    = std::make_shared<RegionForwardingPrivateStageBatch>();
-                batch->tokens.reserve(
-                    kernel.execution_kernel.outputs.size());
-                batch->private_outputs.reserve(
-                    kernel.execution_kernel.outputs.size());
-                stage_batch_pool.push_back(std::move(batch));
-            }
-        }
-
-        [[nodiscard]] std::shared_ptr<RegionForwardingPrivateStageBatch>
-        acquire_stage_batch(Impl* const owner,
-            const std::size_t component,
-            const std::uint64_t stage_runtime_generation,
-            const SimulationTick stage_time,
-            const std::size_t token_capacity)
-        {
-            for (auto& batch : stage_batch_pool) {
-                if (batch && batch.use_count() == 1
-                    && batch->tokens.capacity() >= token_capacity
-                    && batch->private_outputs.capacity() >= token_capacity) {
-                    batch->tokens.clear();
-                    batch->private_outputs.clear();
-                    batch->owner = owner;
-                    batch->component = component;
-                    batch->runtime_generation = stage_runtime_generation;
-                    batch->time = stage_time;
-                    return batch;
-                }
-            }
-
-            auto batch = std::make_shared<RegionForwardingPrivateStageBatch>();
-            batch->tokens.reserve(token_capacity);
-            batch->private_outputs.reserve(token_capacity);
-            batch->owner = owner;
-            batch->component = component;
-            batch->runtime_generation = stage_runtime_generation;
-            batch->time = stage_time;
-            stage_batch_pool.push_back(batch);
-            return batch;
-        }
-
-        void discard() noexcept
-        {
-            active = false;
-            remaining_members = 0U;
-            std::ranges::fill(member_active, 0U);
-            std::ranges::fill(member_consumed, 0U);
-            stage_batch.reset();
-        }
-
-        bool active { };
-        std::uint64_t runtime_generation { };
-        SimulationTick time { };
-        std::uint64_t starting_delta { };
-        std::size_t remaining_members { };
-        std::vector<SignalId> boundary_signals;
-        std::vector<std::uint64_t> boundary_revisions;
-        std::vector<PackedLogic4> boundary_values;
-        std::array<std::vector<RegionKernelInternalSeed>, 2U>
-            internal_seed_banks;
-        // Activation copies share the selected wide owning values. Refill only
-        // the opposite bank, and advance this index only after reset succeeds.
-        std::size_t activation_seed_bank_index { };
-        bool activation_seed_bank_valid { };
-        std::vector<std::uint64_t> internal_initial_revisions;
-        std::vector<PackedLogic4> output_values;
-        // Output-indexed mutations are prepared before original callback
-        // tickets become visible. Applied rows move into callback order, so
-        // an observer can publish the exact consumed role prefix atomically.
-        std::vector<AuthoritativeSignalPlanes::PreparedMutation>
-            prepared_role_mutations;
-        std::vector<std::uint8_t> prepared_role_mutation_ready;
-        std::vector<AuthoritativeSignalPlanes::PreparedMutation>
-            applied_role_mutations;
-        std::vector<RegionForwardingAppliedRoleCommitMetadata>
-            applied_role_metadata;
-        AuthoritativeSignalPlanes::PreparedGroupScratch role_flush_scratch;
-        std::uint64_t role_callback_order { };
-        bool role_journal_enabled { };
-        bool private_epoch_retired { };
-        std::vector<std::uint8_t> member_active;
-        std::vector<std::uint8_t> member_consumed;
-        std::vector<std::uint8_t> seed_seen;
-        std::vector<std::size_t> topological_position;
-        std::vector<std::uint64_t> readiness_mask;
-        std::shared_ptr<RegionForwardingPrivateStageBatch> stage_batch;
-        std::vector<std::shared_ptr<RegionForwardingPrivateStageBatch>>
-            stage_batch_pool;
-        bool stage_batch_group_shape { };
-        std::vector<std::size_t> seed_indices;
-        std::vector<std::size_t> member_indices;
-        std::vector<std::size_t> output_indices;
-        RegionKernelSchedulerPrefix prefix;
-        std::vector<StableOrder> stable_orders;
-        std::vector<std::size_t> update_slots;
-        std::vector<SystemVerilogUpdateToken> update_tokens;
-        std::vector<::fsim::runtime::detail::SchedulerTaskDescriptor> tasks;
-        std::vector<SystemVerilogCompactBatchMember> compact_members;
-        std::vector<const void*> completion_storage_identities;
-    };
-    /// Persistent internal-register contents for one graph component. This
-    /// state is separate from the pooled backend, whose immutable kernel may
-    /// be shared by different graph components.
-    struct RegionLocalWaveComponentState {
-        static constexpr std::size_t max_pending_private_update_tickets = 16U;
-        static constexpr std::size_t no_output_index
-            = std::numeric_limits<std::size_t>::max();
-
-        struct OutputIndexKernelIdentity final {
-            const RegionConeActivationKernel* kernel { };
-            const SignalId* internal_signal_data { };
-            std::size_t internal_signal_count { };
-            const RegionConeOutputBinding* output_binding_data { };
-            std::size_t output_binding_count { };
-
-            void bind(const RegionConeActivationKernel& candidate) noexcept
-            {
-                kernel = &candidate;
-                internal_signal_data = candidate.internal_signals.data();
-                internal_signal_count = candidate.internal_signals.size();
-                output_binding_data = candidate.outputs.data();
-                output_binding_count = candidate.outputs.size();
-            }
-
-            [[nodiscard]] bool matches(
-                const RegionConeActivationKernel& candidate) const noexcept
-            {
-                return kernel == &candidate
-                    && internal_signal_data
-                        == candidate.internal_signals.data()
-                    && internal_signal_count
-                        == candidate.internal_signals.size()
-                    && output_binding_data == candidate.outputs.data()
-                    && output_binding_count == candidate.outputs.size();
-            }
-        };
-
-        RegionLocalWaveComponentState(
-            const std::uint64_t runtime_generation,
-            const RegionConeActivationKernel& kernel,
-            const RegionConeForwardingKernel* forwarding = nullptr)
-            : generation(runtime_generation)
-            , activation(kernel)
-        {
-            activation_kernel_identity.bind(kernel);
-            try {
-                struct OutputSignalIndex final {
-                    SignalId signal { };
-                    std::size_t output_index { };
-                };
-                std::vector<OutputSignalIndex> sorted_outputs;
-                if (kernel.outputs.size() <= sorted_outputs.max_size()
-                    && kernel.internal_signals.size()
-                        <= internal_output_indices.max_size()) {
-                    sorted_outputs.reserve(kernel.outputs.size());
-                    for (std::size_t output_index = 0U;
-                         output_index < kernel.outputs.size(); ++output_index) {
-                        sorted_outputs.push_back({
-                            kernel.outputs[output_index].signal, output_index });
-                    }
-                    std::ranges::sort(sorted_outputs,
-                        [](const OutputSignalIndex& left,
-                           const OutputSignalIndex& right) {
-                            if (left.signal != right.signal) {
-                                return left.signal < right.signal;
-                            }
-                            return left.output_index < right.output_index;
-                        });
-                    internal_output_indices.reserve(
-                        kernel.internal_signals.size());
-                    for (const auto signal : kernel.internal_signals) {
-                        const auto first = std::ranges::lower_bound(
-                            sorted_outputs, signal, { },
-                            &OutputSignalIndex::signal);
-                        if (first == sorted_outputs.end()
-                            || first->signal != signal
-                            || ((first + 1) != sorted_outputs.end()
-                                && (first + 1)->signal == signal)) {
-                            internal_output_indices.push_back(no_output_index);
-                        } else {
-                            internal_output_indices.push_back(
-                                first->output_index);
-                        }
-                    }
-                    output_index_generation = runtime_generation;
-                    output_index_ready = true;
-                }
-            } catch (const std::bad_alloc&) {
-                internal_output_indices.clear();
-                output_index_generation = 0U;
-                output_index_ready = false;
-            }
-            std::size_t max_output_words { 1U };
-            for (const auto& output : kernel.outputs) {
-                const auto output_words
-                    = static_cast<std::size_t>(output.width / 64U)
-                    + static_cast<std::size_t>(output.width % 64U != 0U);
-                max_output_words = std::max(max_output_words,
-                    output_words);
-            }
-            mutation_scratch.words.reserve(max_output_words);
-            if (forwarding != nullptr) {
-                forwarding_results.emplace(*forwarding,
-                    kernel.members.size());
-            }
-        }
-
-        [[nodiscard]] InternalSystemVerilogOrderedTicketStorage*
-        acquire_private_update_ticket_storage()
-        {
-            for (auto& storage : private_update_ticket_storage) {
-                if (storage && storage->available())
-                    return storage.get();
-            }
-            for (auto& storage : private_update_ticket_storage) {
-                if (!storage) {
-                    storage = std::make_unique<
-                        InternalSystemVerilogOrderedTicketStorage>();
-                    return storage.get();
-                }
-            }
-            return nullptr;
-        }
-
-        std::uint64_t generation { };
-        std::uint64_t output_index_generation { };
-        bool output_index_ready { };
-        OutputIndexKernelIdentity activation_kernel_identity;
-        OutputIndexKernelIdentity frontier_kernel_identity;
-        // Immutable binding indices for kernel.internal_signals. A sentinel
-        // records a missing or non-unique output and therefore declines.
-        std::vector<std::size_t> internal_output_indices;
-        // A matching A4 revision proves the persistent internal register bank
-        // still reflects current/previous/raw-owner inputs without rereading
-        // those planes before the next wave.
-        std::uint64_t authoritative_revision { };
-        RegionKernelActivationState activation;
-        std::optional<RegionConeForwardingResultBank> forwarding_results;
-        // The reusable owner mutation stores one PreparedWord per output word;
-        // reserve to the widest immutable kernel output before any wave.
-        AuthoritativeSignalPlanes::PreparedMutation mutation_scratch;
-        // Active slots remain unavailable until their original-key suffixes
-        // complete or are discarded; the fixed pool is the pending-ticket cap.
-        std::array<std::unique_ptr<
-            InternalSystemVerilogOrderedTicketStorage>,
-            max_pending_private_update_tickets> private_update_ticket_storage;
-        bool seeded { };
-    };
-    struct RegionReadinessQueueMember {
-        std::size_t component { std::numeric_limits<std::size_t>::max() };
-        std::size_t member { std::numeric_limits<std::size_t>::max() };
-        std::uint64_t generation { };
-        RegionFrontierKeyV1 queued_key;
-        std::uint64_t static_trigger_mask { };
-        bool key_valid { };
-    };
-    struct RegionReadinessMaskDescriptor {
-        std::size_t offset { };
-        std::size_t word_count { };
-        std::uint64_t generation { };
-    };
-    struct RegionGroupedFanoutMember {
-        ProcessId process { };
-        std::size_t readiness_member { };
-        std::uint64_t static_trigger_mask { };
-        std::size_t sensitivity_range_offset { };
-        std::size_t sensitivity_range_count { };
-        std::uint64_t sensitivity_range_generation { };
-    };
-    struct RegionGroupedFanoutGroup {
-        std::size_t component { };
-        std::size_t member_offset { };
-        std::size_t member_count { };
-        std::uint64_t generation { };
-    };
-    struct RegionGroupedFanoutSignal {
-        std::size_t group_offset { };
-        std::size_t group_count { };
-        std::uint64_t generation { };
-    };
-    struct RegionRuntimeSnapshot {
-        RegionGraph graph;
-        std::shared_ptr<const SignalDriverInventory> signal_driver_inventory;
-        std::vector<std::optional<RegionConeProgram>> programs_by_component;
-        std::vector<std::size_t> component_by_process;
-        std::vector<std::shared_ptr<RegionKernelBackendEntry>>
-            backends_by_component;
-        std::vector<std::uint64_t> backend_generation_by_component;
-        std::vector<std::shared_ptr<RegionKernelBackendEntry>> backend_pool;
-        std::vector<std::shared_ptr<RegionConeForwardingBackendEntry>>
-            forwarding_backends_by_component;
-        std::vector<std::shared_ptr<RegionConeForwardingBackendEntry>>
-            forwarding_backend_pool;
-        std::vector<std::shared_ptr<RegionFrontierBackendEntry>>
-            frontier_backends_by_component;
-        std::vector<std::shared_ptr<RegionFrontierBackendEntry>>
-            frontier_backend_pool;
-        std::vector<std::shared_ptr<RegionFrontierComponentRuntime>>
-            frontier_runtime_by_component;
-        std::vector<std::shared_ptr<VhdlProjectedReadinessTask>>
-            vhdl_projected_readiness_by_component;
-        std::vector<std::shared_ptr<RegionAuthoritativeComponentState>>
-            authoritative_state_by_component;
-        std::vector<std::shared_ptr<RegionLocalWaveComponentState>>
-            local_wave_state_by_component;
-        std::vector<std::uint8_t>
-            value_only_recertification_by_component;
-        std::vector<std::size_t> authoritative_component_by_signal;
-        std::vector<std::size_t> authoritative_member_index_by_process;
-        std::vector<std::uint64_t> readiness_mask_words;
-        std::vector<RegionReadinessMaskDescriptor>
-            readiness_mask_by_component;
-        std::vector<std::size_t> readiness_member_index_by_process;
-        std::vector<RegionReadinessQueueMember>
-            readiness_queued_by_process;
-        std::vector<RegionGroupedFanoutSignal>
-            grouped_fanout_by_signal;
-        std::vector<RegionGroupedFanoutGroup> grouped_fanout_groups;
-        std::vector<RegionGroupedFanoutMember> grouped_fanout_members;
-        std::vector<RegionFrontierSensitivityRange>
-            grouped_fanout_sensitivity_ranges;
-        std::vector<Scheduler::SystemVerilogGroupBatchMember>
-            grouped_readiness_member_scratch;
-        std::vector<SchedulerSystemVerilogKeyReceipt>
-            grouped_readiness_receipt_scratch;
-        std::vector<RegionReadinessQueueMember>
-            grouped_readiness_queue_scratch;
-        std::vector<std::uint8_t>
-            grouped_readiness_member_changed_scratch;
-        std::vector<ProcessId> grouped_readiness_process_scratch;
-        std::vector<RegionPreparedSuccessorSignalMap>
-            prepared_successor_by_signal;
-        std::vector<RegionPreparedSuccessorReaderBinding>
-            prepared_successor_readers;
-        std::uint64_t grouped_fanout_oversized_group_fallbacks { };
-        bool authoritative_state_incomplete { };
-        bool profile_systemverilog_waves { };
-        std::uint64_t generation { };
-        bool process_signal_access_inventory_complete { true };
-    };
-    [[nodiscard]] RegionRuntimeSnapshot prepare_region_runtime_snapshot(
-        RegionGraph graph,
-        std::span<const Process* const> programs,
-        bool process_access_inventory_complete,
-        bool enable_region_kernel,
-        bool may_compile_backends,
-        std::shared_ptr<const SignalDriverInventory> signal_driver_inventory);
-    [[nodiscard]] RegionRuntimeSnapshot build_region_runtime_snapshot(
-        bool profile_systemverilog_waves,
-        bool enable_region_kernel,
-        bool may_compile_backends);
-    [[nodiscard]] RegionRuntimeSnapshot prepare_current_region_runtime_snapshot();
-    void publish_region_runtime_snapshot(
-        RegionRuntimeSnapshot&& snapshot) noexcept;
-    void request_full_region_recertification(
-        std::source_location caller = std::source_location::current()) noexcept;
-    void clear_value_only_region_recertification(
-        std::source_location caller = std::source_location::current()) noexcept;
-    void mark_value_only_region_recertification(
-        std::size_t component) noexcept;
-    [[nodiscard]] bool try_rebind_value_only_region_components() noexcept;
-    [[nodiscard]] bool prepare_region_frontier_component(
-        RegionRuntimeSnapshot& snapshot,
-        std::size_t component,
-        const RegionConeActivationKernel& kernel,
-        std::shared_ptr<RegionFrontierBackendEntry> backend,
-        RegionFrontierComponentRuntime& runtime,
-        const char** rejection_reason = nullptr);
-    [[nodiscard]] bool preflight_region_frontier_component_layout(
-        const RegionRuntimeSnapshot& snapshot,
-        std::size_t component,
-        const RegionConeActivationKernel& kernel,
-        const RegionFrontierLayoutV2& layout,
-        const char** rejection_reason = nullptr) const;
-    [[nodiscard]] bool bind_generic_frontier_read_snapshots(
-        RegionFrontierComponentRuntime& runtime);
-    [[nodiscard]] bool stage_generic_frontier_update_batch(
-        RegionFrontierComponentRuntime& runtime,
-        std::exception_ptr& failure) noexcept;
-    [[nodiscard]] std::optional<SchedulerBatchResult>
-    execute_generic_region_frontier_prefix(
-        RegionFrontierComponentRuntime& runtime,
-        const SchedulerGenericBatchFrontier& frontier,
-        std::span<const std::uint64_t> payloads,
-        std::size_t frontier_offset,
-        std::size_t task_prefix_count,
-        bool require_compact_receipts = false);
-    static void dispatch_region_frontier_fallback(
-        Scheduler&,
-        const RegionFrontierComponentRuntime::FallbackToken&);
-    static void dispatch_generic_frontier_fallback(
-        Scheduler&,
-        const RegionFrontierComponentRuntime::GenericFallbackToken&);
-    [[nodiscard]] std::optional<SchedulerBatchResult>
-    try_execute_region_frontier_prefix(
-        const SchedulerBatchFrontier& frontier,
-        std::span<const std::uint64_t> payloads);
-    [[nodiscard]] std::optional<SchedulerBatchResult>
-    try_execute_region_frontier_component(
-        RegionFrontierComponentRuntime& runtime,
-        const SchedulerBatchFrontier& frontier,
-        std::span<const std::uint64_t> payloads,
-        std::size_t task_prefix_count);
-    [[nodiscard]] bool synchronize_frontier_process_states(
-        RegionFrontierComponentRuntime& runtime) noexcept;
-    [[nodiscard]] RegionAuthoritativeComponentState*
-    region_authoritative_state_for_signal(SignalId signal) noexcept;
-    [[nodiscard]] bool region_has_fanout_member(
-        SignalId signal, ProcessId process) noexcept;
-    [[nodiscard]] bool region_take_ready(
-        SignalId signal, ProcessId process,
-        std::uint64_t& trigger_mask) noexcept;
-    void record_systemverilog_readiness_key(
-        ProcessId process, std::size_t component, std::size_t member,
-        std::uint64_t generation,
-        const SchedulerSystemVerilogKeyReceipt& receipt,
-        std::uint64_t trigger_mask) noexcept;
-    void merge_systemverilog_readiness_mask(
-        ProcessId process, std::uint64_t trigger_mask) noexcept;
-    void mark_region_value_change(
-        SignalId signal, const PackedLogic4& previous,
-        const PackedLogic4& current) noexcept;
-    void mirror_region_stored(SignalId signal) noexcept;
-    void mirror_region_visible(SignalId signal) noexcept;
-    void mirror_region_owner(
-        SignalId signal, ProcessId process,
-        const PackedLogic4& value) noexcept;
-    void demote_region_authoritative_slots(
-        std::size_t component, bool observation,
-        std::source_location caller = std::source_location::current()) noexcept;
-    void unbind_region_authoritative_slots(
-        std::size_t component, bool observation) noexcept;
-    void demote_all_region_authoritative_slots(bool observation,
-        std::source_location caller = std::source_location::current()) noexcept;
-    void prepare_region_authoritative_write(SignalId signal) noexcept;
-    void prepare_region_authoritative_write(
-        std::span<const SignalId> signals) noexcept;
-    void prepare_region_authoritative_family_write(
-        ContainerObjectId object) noexcept;
-    void note_region_authoritative_mirror() noexcept;
-    // Legacy native hidden-state paths do not all consult RegionGraph. They
-    // therefore require a cached proof that every alternate process
-    // executor is bound to its exact registered signal-access program.
-    bool process_signal_access_inventory_complete { true };
-    void build_region_graph();
-    void try_recertify_region_graph() noexcept;
-    void note_region_graph_policy_change() noexcept;
     [[nodiscard]] bool process_signal_access_is_complete(
-        ProcessId process) const noexcept;
-    [[nodiscard]] bool process_region_kernel_eligible(
         ProcessId process) const noexcept;
     [[nodiscard]] std::optional<ConstantDriverStartupEntry>
     recognize_constant_driver_startup(
         ProcessId process, const ProcessProgramView& program) const;
     std::vector<std::uint8_t> native_signal_dependency_mask;
-    // Distinguishes module/timing dependencies from ranged static
-    // sensitivities, which RegionGraph records with exact bit ranges.
-    std::vector<std::uint8_t> native_signal_non_range_dependency_mask;
     std::vector<std::uint8_t> module_path_destination_mask;
     // Immutable after start: static dependency and alias facts used by native
     // word publication. Runtime observations, waiters, drivers, force state,
@@ -3541,317 +1497,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // hierarchy. Cohorts batch scheduler dispatch while retaining each
     // member's process identity, frame, driver ownership, and program counter.
     std::vector<StaticSensitivityCohort> static_sensitivity_cohorts;
-    std::vector<FusedStaticCohortPlan> fused_static_cohorts;
-    FusedStaticCounters fused_static_counts;
-    std::size_t fused_static_certified_plan_count { };
-    bool fused_static_counters_enabled { };
-    bool fused_static_trace_enabled { };
-    bool fused_static_bindings_open { };
 
     std::vector<std::size_t> static_sensitivity_cohort_by_process;
     std::unordered_map<std::string, std::size_t>
         static_sensitivity_cohort_by_key;
     std::uint64_t static_fanout_visit_generation { };
-    bool systemverilog_wave_profile_enabled { };
-    bool systemverilog_region_kernel_enabled { };
-    bool systemverilog_local_wave_enabled { };
-    bool a4_wide_single_owner_commit_enabled { };
-    bool a4_wide_single_owner_versioned_storage_explicit { };
-    bool a4_wide_disjoint_owner_commit_enabled { };
-    bool a4_wide_disjoint_owner_versioned_storage_explicit { };
-    std::vector<std::optional<RegionConeProgram>> region_activation_programs;
-    std::vector<std::size_t> region_component_by_process;
-    std::vector<std::shared_ptr<RegionKernelBackendEntry>>
-        region_kernel_backends_by_component;
-    std::vector<std::uint64_t>
-        region_kernel_backend_generation_by_component;
-    std::vector<std::shared_ptr<RegionKernelBackendEntry>>
-        region_kernel_backend_pool;
-    std::vector<std::shared_ptr<RegionConeForwardingBackendEntry>>
-        region_cone_forwarding_backends_by_component;
-    std::vector<std::shared_ptr<RegionConeForwardingBackendEntry>>
-        region_cone_forwarding_backend_pool;
-    std::vector<std::shared_ptr<RegionFrontierBackendEntry>>
-        region_frontier_backends_by_component;
-    std::vector<std::shared_ptr<RegionFrontierBackendEntry>>
-        region_frontier_backend_pool;
-    std::vector<std::shared_ptr<RegionFrontierComponentRuntime>>
-        region_frontier_runtime_by_component;
-    std::vector<std::shared_ptr<VhdlProjectedReadinessTask>>
-        vhdl_projected_readiness_by_component;
-    std::shared_ptr<RegionKernelBackendProvider>
-        region_kernel_backend_provider;
-    bool region_kernel_backend_provider_supports_frontier { };
-    std::string region_kernel_backend_provider_identity;
-    std::uint64_t region_runtime_generation { };
-    // Nonzero only after every signal completed a callback-observation pass
-    // for this runtime snapshot. Mutations and recertification invalidate it.
-    std::uint64_t completed_callback_observation_generation { };
-    bool region_forwarding_role_flush_pending_after_discard { };
-    std::size_t region_forwarding_role_journal_nonempty_components { };
-    std::vector<std::shared_ptr<RegionAuthoritativeComponentState>>
-        region_authoritative_state_by_component;
-    std::vector<std::shared_ptr<RegionLocalWaveComponentState>>
-        region_local_wave_state_by_component;
-    std::vector<std::size_t> region_authoritative_component_by_signal;
-    std::vector<std::size_t> region_authoritative_member_index_by_process;
-    std::vector<std::uint64_t> region_readiness_mask_words;
-    std::vector<RegionReadinessMaskDescriptor>
-        region_readiness_mask_by_component;
-    std::vector<std::size_t> region_readiness_member_index_by_process;
-    std::vector<RegionReadinessQueueMember>
-        region_readiness_queued_by_process;
-    std::vector<RegionGroupedFanoutSignal>
-        region_grouped_fanout_by_signal;
-    std::vector<RegionGroupedFanoutGroup> region_grouped_fanout_groups;
-    std::vector<RegionGroupedFanoutMember> region_grouped_fanout_members;
-    std::vector<RegionFrontierSensitivityRange>
-        region_grouped_fanout_sensitivity_ranges;
-    std::vector<Scheduler::SystemVerilogGroupBatchMember>
-        region_grouped_readiness_member_scratch;
-    std::vector<SchedulerSystemVerilogKeyReceipt>
-        region_grouped_readiness_receipt_scratch;
-    std::vector<RegionReadinessQueueMember>
-        region_grouped_readiness_queue_scratch;
-    std::vector<std::uint8_t>
-        region_grouped_readiness_member_changed_scratch;
-    std::vector<ProcessId> region_grouped_readiness_process_scratch;
-    std::vector<RegionPreparedSuccessorSignalMap>
-        region_prepared_successor_by_signal;
-    std::vector<RegionPreparedSuccessorReaderBinding>
-        region_prepared_successor_readers;
-    std::uint64_t region_grouped_fanout_oversized_group_fallbacks { };
-    bool region_authoritative_recertification_waiting { };
-    std::uint64_t systemverilog_wave_profile_calls { };
-    std::uint64_t systemverilog_wave_profile_offered_members { };
-    std::uint64_t systemverilog_wave_profile_accepted_calls { };
-    std::uint64_t systemverilog_wave_profile_accepted_members { };
-    std::uint64_t systemverilog_wave_profile_declined_calls { };
-    std::uint64_t systemverilog_wave_profile_failed_calls { };
-    std::uint64_t systemverilog_wave_profile_region_kernel_attempts { };
-    std::uint64_t systemverilog_wave_profile_region_kernel_runs { };
-    std::uint64_t
-        systemverilog_wave_profile_native_frontier_member_dispatches { };
-    std::uint64_t systemverilog_wave_profile_member_sync_full_passes { };
-    std::uint64_t systemverilog_wave_profile_member_sync_full_members { };
-    std::uint64_t systemverilog_wave_profile_member_sync_selected_passes { };
-    std::uint64_t systemverilog_wave_profile_member_sync_selected_members { };
-    std::uint64_t systemverilog_wave_profile_member_sync_selected_total_members { };
-    std::uint64_t systemverilog_wave_profile_boundary_sync_eligible { };
-    std::uint64_t systemverilog_wave_profile_boundary_sync_conservative { };
-    std::array<std::uint64_t, kFrontierBoundarySyncRejectReasonCount>
-        systemverilog_wave_profile_boundary_sync_first_rejects { };
-    // Correlated writer-inventory dimensions: static owners (0/>1),
-    // DriverTable size (0/1/>1), exact count equality, current owner present,
-    // and whole/slice publication kind.
-    std::array<std::uint64_t, 48U>
-        systemverilog_wave_profile_boundary_sync_writer_inventory { };
-    std::array<std::uint64_t, kFrontierMemberSyncFullReasonCombinations>
-        systemverilog_wave_profile_member_sync_full_reason_passes { };
-    std::array<std::uint64_t, kFrontierMemberSyncFullReasonCombinations>
-        systemverilog_wave_profile_member_sync_full_reason_members { };
-    std::uint64_t systemverilog_wave_profile_native_frontier_budget_trims { };
-    std::uint64_t systemverilog_wave_profile_native_frontier_alias_entry_rows { };
-    bool systemverilog_wave_profile_native_frontier_alias_trusted_entry_seen { };
-    std::uint64_t systemverilog_wave_profile_alias_checked_entries { };
-    std::uint64_t systemverilog_wave_profile_alias_trusted_entries { };
-    std::uint64_t systemverilog_wave_profile_canonical_values_only_entries { };
-    std::uint64_t systemverilog_wave_profile_alias_and_canonical_values_entries { };
-    std::uint64_t systemverilog_wave_profile_descriptor_shapes_entries { };
-    std::uint64_t systemverilog_wave_profile_alias_unavailable_entries { };
-    std::uint64_t systemverilog_wave_profile_alias_forced_staged_entries { };
-    std::uint64_t systemverilog_wave_profile_alias_confirmation_attempts { };
-    std::uint64_t systemverilog_wave_profile_alias_confirmation_successes { };
-    std::uint64_t systemverilog_wave_profile_alias_confirmation_failures { };
-    std::uint64_t systemverilog_wave_profile_alias_miss_rows { };
-    std::array<std::uint64_t,
-        static_cast<std::size_t>(RegionFrontierAliasMissReason::count)>
-        systemverilog_wave_profile_alias_misses { };
-    std::uint64_t systemverilog_wave_profile_region_forwarding_attempts { };
-    std::uint64_t systemverilog_wave_profile_region_forwarding_evaluations { };
-    std::uint64_t systemverilog_wave_profile_region_forwarding_member_consumptions { };
-    std::uint64_t systemverilog_wave_profile_v2_selected_forwarding_prefixes { };
-    std::uint64_t systemverilog_wave_profile_v2_selected_forwarding_members { };
-    std::uint64_t systemverilog_wave_profile_region_forwarding_declines { };
-    std::uint64_t systemverilog_wave_profile_region_forwarding_stage_attempts { };
-    std::uint64_t systemverilog_wave_profile_region_forwarding_stage_dispatches { };
-    std::uint64_t systemverilog_wave_profile_region_forwarding_stage_members { };
-    std::uint64_t systemverilog_wave_profile_region_forwarding_stage_declines { };
-    std::uint64_t
-        systemverilog_wave_profile_region_forwarding_stage_fallback_descriptors { };
-    std::uint64_t
-        systemverilog_wave_profile_region_forwarding_private_parent_slots_elided { };
-    std::uint64_t
-        systemverilog_wave_profile_region_forwarding_private_parent_dispatches { };
-    std::uint64_t
-        systemverilog_wave_profile_region_forwarding_private_parent_fallbacks { };
-    std::uint64_t
-        systemverilog_wave_profile_region_forwarding_public_update_tokens { };
-    std::uint64_t systemverilog_wave_profile_region_kernel_members { };
-    std::uint64_t systemverilog_wave_profile_region_kernel_publications { };
-    std::uint64_t systemverilog_wave_profile_region_kernel_failures { };
-    std::uint64_t systemverilog_wave_profile_region_backend_attempts { };
-    std::uint64_t systemverilog_wave_profile_region_backend_runs { };
-    std::uint64_t systemverilog_wave_profile_region_backend_completions { };
-    std::uint64_t systemverilog_wave_profile_region_trace_declines { };
-    std::uint64_t systemverilog_wave_profile_region_recertification_attempts { };
-    std::uint64_t systemverilog_wave_profile_region_recertification_successes { };
-    std::uint64_t systemverilog_wave_profile_region_recertification_failures { };
-    std::uint64_t systemverilog_wave_profile_region_recertification_processes { };
-    std::uint64_t systemverilog_wave_profile_region_recertification_signals { };
-    std::uint64_t systemverilog_wave_profile_region_recertification_components { };
-    std::uint64_t systemverilog_wave_profile_a4_seeded_components { };
-    std::uint64_t systemverilog_wave_profile_a4_seeded_signals { };
-    std::uint64_t systemverilog_wave_profile_a4_seeded_owners { };
-    std::uint64_t systemverilog_wave_profile_a4_slot_bind_components { };
-    std::uint64_t systemverilog_wave_profile_a4_slot_bindings { };
-    std::uint64_t systemverilog_wave_profile_a4_slot_rebinds { };
-    std::uint64_t systemverilog_wave_profile_a4_bound_components { };
-    std::uint64_t systemverilog_wave_profile_a4_bound_slots { };
-    std::uint64_t systemverilog_wave_profile_a4_materialized_components { };
-    std::uint64_t systemverilog_wave_profile_a4_materialized_slots { };
-    std::uint64_t systemverilog_wave_profile_a4_authoritative_slot_writes { };
-    std::uint64_t
-        systemverilog_wave_profile_a4_unresolved_owner_alias_commits { };
-    std::uint64_t systemverilog_wave_profile_prepared_output_batches { };
-    std::uint64_t
-        systemverilog_wave_profile_generated_successor_mask_batches { };
-    std::uint64_t systemverilog_wave_profile_direct_ready_window_attempts { };
-    std::uint64_t systemverilog_wave_profile_direct_ready_window_completions { };
-    std::uint64_t systemverilog_wave_profile_prepared_output_seals { };
-    std::uint64_t systemverilog_wave_profile_prepared_output_fallbacks { };
-    std::uint64_t
-        systemverilog_wave_profile_prepared_output_group_dispatches { };
-    std::uint64_t
-        systemverilog_wave_profile_prepared_output_group_members { };
-    std::uint64_t systemverilog_wave_profile_a4_stored_mirrors { };
-    std::uint64_t systemverilog_wave_profile_a4_visible_mirrors { };
-    std::uint64_t systemverilog_wave_profile_a4_owner_mirrors { };
-    std::uint64_t systemverilog_wave_profile_a4_invalidations { };
-    std::uint64_t systemverilog_wave_profile_a4_value_marks { };
-    std::uint64_t systemverilog_wave_profile_a4_transaction_marks { };
-    std::uint64_t systemverilog_wave_profile_a4_ready_consumptions { };
-    std::uint64_t systemverilog_wave_profile_a4_native_input_handoffs { };
-    std::uint64_t systemverilog_wave_profile_a4_native_input_completions { };
-    std::uint64_t systemverilog_wave_profile_readiness_mask_images { };
-    std::uint64_t systemverilog_wave_profile_a2_local_update_dispatches { };
-    std::uint64_t systemverilog_wave_profile_a2_local_update_fallbacks { };
-    std::uint64_t systemverilog_wave_profile_a2_local_fanout_suppressions { };
-    std::uint64_t systemverilog_wave_profile_a2_ordinary_internal_updates { };
-    std::uint64_t systemverilog_wave_profile_a2_internal_seed_reads { };
-    std::uint64_t systemverilog_wave_profile_a2_internal_state_seeds { };
-    std::uint64_t systemverilog_wave_profile_a2_internal_state_reuses { };
-    std::uint64_t systemverilog_wave_profile_a3_private_update_ticket_entries { };
-    std::uint64_t systemverilog_wave_profile_a3_private_update_ticket_members { };
-    std::uint64_t systemverilog_wave_profile_a3_private_update_entries_elided { };
-    std::uint64_t systemverilog_wave_profile_a3_private_update_fallback_members { };
-    std::uint64_t systemverilog_wave_profile_a2_grouped_fanout_members { };
-    std::uint64_t systemverilog_wave_profile_a2_completion_fast_batches { };
-    std::uint64_t systemverilog_wave_profile_a2_completion_fast_members { };
-    std::uint64_t systemverilog_wave_profile_a2_completion_preflights { };
-    std::uint64_t systemverilog_wave_profile_a2_completion_register_declines { };
-    std::uint64_t systemverilog_wave_profile_p3_group_fanout_groups { };
-    std::uint64_t systemverilog_wave_profile_p3_group_fanout_members { };
-    std::uint64_t systemverilog_wave_profile_p3_group_fanout_tickets { };
-    std::uint64_t systemverilog_wave_profile_p3_group_fanout_declines { };
-    std::uint64_t systemverilog_wave_profile_a3_mapped_successor_batches { };
-    std::uint64_t systemverilog_wave_profile_a3_mapped_successor_readers { };
-    std::uint64_t generic_projected_region_attempts { };
-    std::uint64_t generic_projected_region_backend_runs { };
-    std::uint64_t generic_projected_region_completions { };
-    std::uint64_t generic_projected_region_members { };
-    std::uint64_t generic_projected_region_publications { };
-    std::uint64_t generic_projected_region_declines { };
-    std::uint64_t generic_projected_region_failures { };
-    static constexpr std::uint64_t systemverilog_wave_payload
-        = UINT64_C(1) << 61U;
-    [[nodiscard]] bool can_queue_systemverilog_wave(ProcessId) const;
-    [[nodiscard]] SchedulerBatchGroupKey
-    systemverilog_wave_batch_group_key(ProcessId) const noexcept;
-    [[nodiscard]] bool systemverilog_wave_member_eligible(ProcessId) const;
-    [[nodiscard]] bool schedule_systemverilog_grouped_fanout(
-        SignalId signal,
-        const PackedLogic4& previous,
-        const PackedLogic4& current,
-        SignalChangeOrigin origin,
-        const RegionPreparedOutputBatchState* prepared_batch = nullptr,
-        std::size_t prepared_slot = no_systemverilog_update_slot) noexcept;
-    [[nodiscard]] bool prepare_region_prepared_output_successors(
-        std::size_t component,
-        const RegionConeActivationKernel& kernel,
-        RegionPreparedOutputBatchState& batch) noexcept;
-    [[nodiscard]] bool schedule_prepared_successor_readers(
-        SignalId signal,
-        const PackedLogic4& previous,
-        const PackedLogic4& current,
-        SignalChangeOrigin origin,
-        const RegionPreparedOutputBatchState& batch,
-        std::size_t slot) noexcept;
-    [[nodiscard]] bool match_region_fanout_sensitivity_ranges(
-        std::size_t component,
-        SignalId signal,
-        std::uint64_t generation,
-        std::size_t range_offset,
-        std::size_t range_count,
-        const PackedLogic4& previous,
-        const PackedLogic4& current,
-        bool& changed,
-        bool* has_partial_range = nullptr) const noexcept;
-    [[nodiscard]] bool validate_region_prepared_output_successors(
-        const RegionConeActivationKernel& kernel,
-        const RegionPreparedOutputBatchState& batch) const noexcept;
-    struct SystemVerilogWaveFallbackPayload {
-        Impl* owner { };
-        ProcessId process { };
-    };
-    static void dispatch_systemverilog_wave_fallback(
-        Scheduler&, const SystemVerilogWaveFallbackPayload&);
-    [[nodiscard]] bool region_local_wave_component_eligible(
-        std::size_t component,
-        const RegionConeActivationKernel& kernel);
-    void invalidate_region_local_wave_signal(SignalId signal) noexcept;
-    void notify_region_local_value_change(
-        std::size_t component,
-        SignalId signal,
-        const PackedLogic4& previous,
-        const PackedLogic4& current,
-        SignalChangeOrigin origin,
-        const RegionPreparedOutputBatchState* prepared_batch = nullptr,
-        std::size_t prepared_slot = no_systemverilog_update_slot);
-    bool queue_systemverilog_wave(ProcessId);
-    [[nodiscard]] bool build_systemverilog_readiness_mask(
-        std::size_t component, std::span<const ExecutionContext> contexts,
-        std::size_t member_count,
-        std::span<std::uint64_t> active_mask) const noexcept;
-    void clear_systemverilog_readiness_member(
-        ProcessId, const RegionFrontierKeyV1* consumed_key = nullptr,
-        std::source_location caller = std::source_location::current()) noexcept;
-    void clear_systemverilog_readiness_prefix(
-        const SchedulerBatchFrontier&, std::size_t count,
-        std::source_location caller = std::source_location::current()) noexcept;
-    [[nodiscard]] SchedulerBatchResult execute_systemverilog_wave(
-        std::span<const std::uint64_t>);
-    [[nodiscard]] bool execute_region_forwarding_prefix(
-        std::size_t component,
-        const RegionConeProgram& program,
-        std::span<const ExecutionContext> contexts,
-        std::size_t& executed_members,
-        std::exception_ptr& backend_failure);
-    [[nodiscard]] SchedulerBatchResult
-    execute_region_forwarding_private_stage_batch(
-        RegionForwardingPrivateStageBatch& batch,
-        Scheduler& active_scheduler,
-        std::span<const std::uint64_t> payloads);
-    static constexpr std::uint64_t generic_projected_region_payload
-        = UINT64_C(1) << 60U;
-    [[nodiscard]] bool generic_projected_region_member_eligible(
-        ProcessId) const;
-    [[nodiscard]] bool queue_generic_projected_region(ProcessId);
-    void merge_generic_frontier_ready_mask(
-        ProcessId, std::uint64_t trigger_mask) noexcept;
-    [[nodiscard]] SchedulerBatchResult execute_generic_projected_region(
-        std::span<const std::uint64_t>, std::size_t frontier_offset,
-        VhdlProjectedReadinessTask* ticket_runtime = nullptr);
+    // Set once a complete callback observation pass has made every hidden
+    // signal public; a single-signal observation or native publication clears
+    // it so the next callback repeats the pass.
+    bool callback_observation_complete { };
     std::vector<std::vector<DynamicWaitRegistration>> dynamic_fanout;
     // Counts exclude tombstones. Slot indices in each live process sidecar
     // make removal proportional to that process's own sensitivity list.
@@ -3867,20 +1521,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SimulationTick, std::uint64_t>>>
         signal_transactions;
     std::vector<PendingUpdate> pending_updates;
-    // The first driver per signal among pending_updates[0, cursor) and the
-    // signals with a second driver there, so each staged update is scanned
-    // once. Eligibility of a signal is checked when the scan is consumed.
-    std::size_t pending_update_driver_scan_cursor { };
-    // Per signal: its first driver and whether a second one was seen.
-    std::unordered_map<SignalId, std::pair<ProcessId, bool>>
-        pending_update_first_drivers;
-    std::vector<SignalId> pending_update_multi_driver_signals;
-    void reset_pending_update_driver_scan() noexcept
-    {
-        pending_update_driver_scan_cursor = 0U;
-        pending_update_first_drivers.clear();
-        pending_update_multi_driver_signals.clear();
-    }
     std::vector<PackedLogic4> pending_update_values;
     // Update-phase scratch is indexed by the dense signal identity and reused
     // across deltas. Only touched entries are reset after publication, avoiding
@@ -3914,7 +1554,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         PackedLogic4 value;
         std::size_t next_in_word {
             std::numeric_limits<std::size_t>::max() };
-        bool disjoint_owner_group { };
     };
     struct UpdateCommitWordScratch {
         std::uint64_t dirty_mask { };
@@ -3923,13 +1562,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
     };
     std::vector<UpdateCommitScratchRow> update_commit_scratch;
     std::vector<UpdateCommitWordScratch> update_commit_words;
-    struct DisjointOwnerGroupScratch {
-        std::vector<AuthoritativeSignalPlanes::PreparedMutation> mutations;
-        PackedLogic4 resolved;
-        bool prepared { };
-    };
-    std::vector<DisjointOwnerGroupScratch>
-        disjoint_owner_group_scratch_by_signal;
     std::unordered_set<std::uint64_t> pending_channel_updates;
     std::unordered_map<
         InertialDriverKey,
@@ -4088,6 +1720,43 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::uint8_t> static_kernel_owned_signal;
     bool static_kernel_materializing { };
     void materialize_static_kernel_signal(SignalId signal);
+    /// Publish-all designs (StaticKernelRuntimeSpec::import_host_writes):
+    /// publish_value_change hands host commits to kernel-owned signals to the
+    /// kernel. One flag test guards the hook; it is false otherwise.
+    bool static_kernel_import_enabled { };
+    /// True while StaticKernel::publish commits its own outputs under the
+    /// member driver identities; those commits must not be imported back.
+    bool static_kernel_publishing { };
+    void import_static_kernel_write(SignalId signal, SignalChangeOrigin origin);
+    // Hosted processes (StaticKernelMemberKind::hosted,
+    // simir_static_kernel_hosted.cpp): 1 for a process the kernel schedules
+    // and this evaluator executes. Every queue_* entry point hands such a
+    // process's wake to the kernel instead of the host scheduler.
+    enum class StaticKernelHostedWake : std::uint8_t {
+        /// queue_current: continue in the current region (the next round).
+        current,
+        /// queue_active_current and a same-domain queue_next_delta: the next
+        /// round of the Active region.
+        active,
+        /// queue_next_delta from another scheduling domain: after the
+        /// current delta, as the host scheduler's next-delta queue.
+        next_delta,
+        /// queue_zero_delay_resume: the Inactive region (IEEE 1800-2023 4.4).
+        inactive,
+        /// queue_at: a timer at `time` (or the Active region if due).
+        at,
+    };
+    std::vector<std::uint8_t> static_kernel_hosted_process;
+    [[nodiscard]] bool static_kernel_hosts(const ProcessId id) const noexcept
+    {
+        return id < static_kernel_hosted_process.size()
+            && static_kernel_hosted_process[id] != 0U;
+    }
+    void static_kernel_enqueue_hosted(ProcessId id,
+        StaticKernelHostedWake wake, SimulationTick time = 0U,
+        StableOrder order = 0U);
+    /// A fork child of a hosted process is hosted too.
+    void static_kernel_adopt_fork_child(ProcessId parent, ProcessId child);
     std::vector<CommitSignalProfileRow> commit_signal_profile_rows;
     std::uint64_t update_profile_commits { };
     std::uint64_t update_profile_updates { };
@@ -4756,100 +2425,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         PackedLogic4 value,
         std::optional<std::size_t> offset,
         SignalChangeOrigin origin);
-    void reserve_systemverilog_update_slots(
-        std::span<std::size_t> reserved_slots);
-    void cancel_systemverilog_update_slots(
-        std::span<const std::size_t> reserved_slots) noexcept;
-    [[nodiscard]] SystemVerilogUpdateToken commit_reserved_systemverilog_update(
-        std::size_t slot,
-        ProcessId process,
-        SignalId signal,
-        PackedLogic4 value,
-        SignalChangeOrigin origin,
-        std::optional<std::size_t> offset,
-        bool region_internal_output = false,
-        std::size_t region_local_component
-            = no_systemverilog_update_slot,
-        std::uint64_t region_local_generation = 0U) noexcept;
-    void attach_prepared_output_ticket(
-        const SystemVerilogUpdateToken& token,
-        const std::shared_ptr<RegionPreparedOutputBatchState>& batch,
-        std::size_t slot) noexcept;
-    void attach_prepared_output_group_member(
-        const SystemVerilogUpdateToken& token,
-        const std::shared_ptr<RegionPreparedOutputBatchState>& batch,
-        std::size_t prepared_slot,
-        std::size_t dispatch_ordinal) noexcept;
-    [[nodiscard]] SchedulerBatchResult execute_prepared_output_group(
-        RegionPreparedOutputBatchState& batch,
-        Scheduler& scheduler,
-        std::span<const std::uint64_t> payloads);
-    [[nodiscard]] bool prepare_region_prepared_output_batch(
-        std::size_t component,
-        const RegionConeActivationKernel& kernel,
-        const RegionKernelActivationState& activation,
-        std::span<const RegionConeOutputBinding* const> publications,
-        RegionPreparedOutputBatchState& batch,
-        std::size_t& prepared_publication_count) noexcept;
-    [[nodiscard]] bool prepare_region_direct_ready_window(
-        const RegionKernelActivationImage& image,
-        std::span<const PackedLogic4> boundary_inputs,
-        std::span<const std::uint64_t> readiness_mask,
-        RegionPreparedOutputBatchState& batch) noexcept;
-    enum class PreparedOutputTicketResult : std::uint8_t {
-        declined,
-        sealed,
-    };
-    [[nodiscard]] PreparedOutputTicketResult
-    try_publish_region_prepared_output(
-        RegionPreparedOutputBatchState& batch,
-        std::size_t slot,
-        ProcessId process,
-        SignalId signal,
-        PackedLogic4& value,
-        SignalChangeOrigin origin,
-        bool& publication_committed);
     void release_systemverilog_update(
         const SystemVerilogUpdateToken& token) noexcept;
     void clear_systemverilog_update_pool() noexcept;
     static void dispatch_systemverilog_update(
         Scheduler& scheduler,
         const SystemVerilogUpdateToken& token);
-    static void dispatch_region_internal_update(
-        Scheduler& scheduler,
-        const SystemVerilogUpdateToken& token);
-    static void dispatch_region_forwarding_private_output(
-        Scheduler& scheduler,
-        const RegionForwardingPrivateOutputDispatchToken& token);
-    [[nodiscard]] bool publish_region_internal_value(
-        std::size_t component,
-        std::uint64_t generation,
-        ProcessId process,
-        SignalId signal,
-        const PackedLogic4& value,
-        SignalChangeOrigin origin,
-        RegionPreparedOutputBatchState* prepared_batch = nullptr,
-        std::size_t prepared_slot = no_systemverilog_update_slot,
-        bool* role_deferred = nullptr,
-        bool* publication_committed = nullptr,
-        RegionOutputPublicationKind publication_kind
-            = RegionOutputPublicationKind::update,
-        bool fanout_pre_reserved = false);
-    [[nodiscard]] bool try_publish_region_blocking_output(
-        std::size_t component,
-        ProcessId process,
-        std::size_t output_index,
-        const PackedLogic4& value,
-        bool& publication_committed,
-        std::exception_ptr& failure);
-    [[nodiscard]] bool try_flush_region_forwarding_role_journal(
-        std::size_t component) noexcept;
-    [[nodiscard]] bool try_flush_all_region_forwarding_role_journals()
-        noexcept;
-    void require_region_forwarding_role_journal_flushed_for_signal(
-        SignalId signal);
-    void require_all_region_forwarding_role_journals_flushed();
-    void retire_forwarding_epoch_after_scheduler_discard() noexcept;
     void discard_scheduler_work() noexcept;
     [[nodiscard]] SchedulerBatchResult execute(
         Scheduler&, std::span<const std::uint64_t> cohort_ids) override;
@@ -4891,15 +2472,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal,
         StaticTransitionMatches transition,
         bool count_native_word_profile = false,
-        SignalChangeOrigin origin = { },
-        bool region_value_prepared = false);
-    void build_fused_static_cohort_plans();
-    void invalidate_fused_static_cohorts() noexcept;
-    void invalidate_fused_static_cohorts_for_fork(ProcessId child);
-    [[nodiscard]] std::optional<std::size_t>
-    try_execute_fused_static_cohort(
-        std::span<const std::uint64_t> task_payloads,
-        std::size_t& offered_tasks);
+        SignalChangeOrigin origin = { });
     [[nodiscard]] std::uint64_t next_static_fanout_visit();
 
     void queue_current(ProcessId id);
@@ -5048,14 +2621,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal_id, ProcessId process) noexcept;
     [[nodiscard]] bool native_word_publication_phase_eligible() noexcept;
     [[nodiscard]] bool native_signal_has_runtime_dependency(
-        SignalId signal_id,
-        bool region_graph_has_exact_sensitivity_ranges = false) const noexcept;
-    /// Runtime dependencies other than the legacy container-alias guard.
-    /// Only the RegionGraph's exact-family proof may use this query; legacy
-    /// native publication and fused callers must keep the full predicate.
-    [[nodiscard]] bool native_signal_has_non_alias_runtime_dependency(
-        SignalId signal_id,
-        bool region_graph_has_exact_sensitivity_ranges = false) const noexcept;
+        SignalId signal_id) const noexcept;
     void advance_direct_signal_read_capability_epoch() noexcept;
     void build_native_signal_dependency_masks() noexcept;
     void build_native_signal_publication_shape_certificate() noexcept;
@@ -5081,10 +2647,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void note_signal_transaction(
         SignalId signal_id,
         bool notify_fanout,
-        SignalChangeOrigin origin = { },
-        // Only a caller holding a complete prepared A4 write may skip the
-        // ordinary prewrite unbind and stored-plane mirror.
-        bool authoritative_write_prepared = false);
+        SignalChangeOrigin origin = { });
     void register_signal_selection(
         SignalId signal_id, SignalSelection selection);
     [[nodiscard]] const SignalSelectionHistory* find_signal_selection_history(
@@ -5199,11 +2762,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] PackedLogic4 initial_driver_value(
         const SignalId signal_id) const;
 
-    void build_owned_driver_composites();
-    void demote_owned_driver(SignalId signal_id);
-    void demote_all_owned_drivers();
-    [[nodiscard]] bool owned_driver_active(SignalId signal_id) const noexcept;
-    [[nodiscard]] bool wide_commit_signal_eligible(SignalId signal_id) const;
     void require_writable_aggregate_signal(SignalId signal_id) const;
     void promote_container_alias_authority(SignalId signal_id);
     void promote_all_container_alias_authorities();
@@ -5245,22 +2803,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal_id);
     [[nodiscard]] const PackedLogic4& logical_signal_last_value(
         SignalId signal_id);
-    [[nodiscard]] PackedLogic4 owned_driver_value(
-        ProcessId process, SignalId signal_id) const;
-    [[nodiscard]] OwnedDriverStage stage_owned_driver_slot(
-        ProcessId process, const ProcessUpdateSlotView& slot);
-    [[nodiscard]] std::optional<PreparedOwnedUpdateSlot>
-    prepare_owned_update_slot(const ProcessUpdateSlotBatch& batch) const;
-    [[nodiscard]] OwnedDriverStage stage_prepared_owned_update_slot(
-        const PreparedOwnedUpdateSlot& prepared,
-        const ProcessUpdateSlotView& slot);
-    [[nodiscard]] OwnedDriverStage stage_owned_driver_slot_impl(
-        ProcessId process,
-        const ProcessUpdateSlotView& slot,
-        const PreparedOwnedUpdateSlot* prepared);
-    [[nodiscard]] bool stage_owned_driver_pending(PendingUpdate& pending);
-    void commit_owned_driver(SignalId signal_id);
-
     PackedLogic4& driver_slot(
         const ProcessId process,
         const SignalId signal_id);
@@ -5354,73 +2896,19 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void set_driver(
         const ProcessId process,
         const SignalId signal_id,
-        PackedLogic4 value,
-        bool preserve_wide_authority = false);
-    [[nodiscard]] bool try_publish_wide_owner_raw(
-        ProcessId process,
-        SignalId signal_id,
-        const PackedLogic4& value);
+        PackedLogic4 value);
 
     void commit_driver(
         const ProcessId process,
         const SignalId signal_id,
         PackedLogic4 value,
         std::optional<SignalChangeOrigin> origin = std::nullopt,
-        bool route_module_path = true,
-        bool allow_wide_single_owner_commit = true);
+        bool route_module_path = true);
     void note_unresolved_update_owner(
         SignalId signal,
         std::optional<ProcessId> process,
         bool whole_update);
     void clear_unresolved_update_owner_provenance() noexcept;
-    [[nodiscard]] bool try_commit_wide_unresolved_owner_alias(
-        ProcessId process,
-        SignalId signal,
-        const PackedLogic4& value,
-        SignalChangeOrigin origin);
-    [[nodiscard]] bool try_commit_wide_single_owner(
-        ProcessId process,
-        SignalId signal_id,
-        PackedLogic4 value,
-        SignalChangeOrigin origin,
-        // True only after the generic Update raw-driver phase mirrored this
-        // owner's new value into the A4 owner plane.
-        bool raw_owner_already_mirrored);
-    [[nodiscard]] bool can_try_wide_single_owner_commit(
-        ProcessId process,
-        SignalId signal_id);
-    [[nodiscard]] bool can_try_wide_unresolved_owner_alias(
-        ProcessId process,
-        SignalId signal_id,
-        SignalChangeOrigin origin);
-    struct WideDisjointOwnerCommitContext {
-        ProcessId process { };
-        SignalId signal { };
-        std::size_t component { };
-        RegionAuthoritativeComponentState* state { };
-    };
-    [[nodiscard]] bool prepare_wide_disjoint_owner_commit_context(
-        ProcessId process,
-        SignalId signal_id,
-        WideDisjointOwnerCommitContext& context);
-    [[nodiscard]] bool try_publish_wide_owner_slice_raw(
-        ProcessId process,
-        SignalId signal_id,
-        const PackedLogic4& slice_value,
-        std::size_t offset,
-        const WideDisjointOwnerCommitContext& context);
-    [[nodiscard]] bool try_commit_wide_disjoint_value(
-        SignalId signal_id,
-        PackedLogic4 value,
-        SignalChangeOrigin origin,
-        const WideDisjointOwnerCommitContext* context = nullptr);
-    [[nodiscard]] bool can_try_wide_disjoint_signal_commit(
-        SignalId signal_id,
-        RegionAuthoritativeComponentState** eligible_state = nullptr);
-    [[nodiscard]] bool can_try_wide_disjoint_owner_commit(
-        ProcessId process,
-        SignalId signal_id);
-
     [[nodiscard]] PackedLogic4 current_driver_value(
         const ProcessId process,
         const SignalId signal_id) const;
@@ -5442,12 +2930,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::optional<SignalChangeOrigin> origin = std::nullopt,
         bool route_module_path = true);
 
-    [[nodiscard]] bool native_boundary_slice_matches_alias_family(
-        SignalId proxy,
-        std::uint32_t offset,
-        std::uint32_t width,
-        SignalId leaf) const noexcept;
-
     [[nodiscard]] SignalChangeOrigin capture_signal_change_origin(
         ProcessId process,
         SignalUpdateDomain update_domain = SignalUpdateDomain::generic) const;
@@ -5460,13 +2942,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalUpdateDomain update_domain,
         SimulationTick delay = 0);
 
-    [[nodiscard]] bool can_stage_disjoint_owner_group(
-        SignalId signal,
-        const std::vector<PendingDriverCommit>& staged);
-    [[nodiscard]] bool prepare_disjoint_owner_group_scratch(
-        SignalId signal, std::size_t owner_capacity) noexcept;
-    [[nodiscard]] bool disjoint_owner_group_scratch_ready(
-        SignalId signal, std::size_t owner_count) const noexcept;
     void schedule_update_commit();
     void block_native_logic9_update_before_generic(SignalId signal);
 
@@ -5535,14 +3010,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void stage_validated_update_words(
         ProcessId process,
         std::span<const ProcessUpdateWord> updates);
-    [[nodiscard]] bool stage_validated_update_slot_batches(
-        std::span<const ProcessUpdateSlotBatch> batches);
-    template <typename Batches>
-    [[nodiscard]] bool stage_validated_update_slot_batches_impl(
-        Batches& batches,
-        bool schedule_commit = true,
-        bool* staged_any_out = nullptr,
-        bool count_profile_call = true);
     [[nodiscard]] bool stage_validated_logic9_update_batch(
         const ProcessLogic9UpdateBatch& batch);
     [[nodiscard]] bool stage_validated_logic9_update_batches(

@@ -72,9 +72,6 @@ set(FSIM_EXPECTED_PATHS
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/vpi_user.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/sv_vpi_user.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/api.h"
-  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/compiler/jit_runtime.h"
-  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/compiler/jit_runtime_v1.h"
-  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/compiler/jit_runtime_v2.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/diagnostic/diagnostic.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/semantic/hierarchy_path.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/semantic/model.hpp"
@@ -85,8 +82,7 @@ set(FSIM_EXPECTED_PATHS
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/vpi_abi.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/vpi_bridge.h"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/vhpi_bridge.h"
-  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/simir_region_frontier.hpp"
-  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/simir_region_frontier_v2.hpp"
+  "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/runtime/simir_driver_inventory.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/accellera.hpp"
   "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/systemc/kernel_backend_protocol.hpp"
@@ -167,8 +163,7 @@ foreach(FSIM_TF_HEADER IN ITEMS
 endforeach()
 
 foreach(FSIM_FRONTIER_HEADER IN ITEMS
-    simir_driver_inventory.hpp simir_region_frontier.hpp
-    simir_region_frontier_v2.hpp)
+    simir_driver_inventory.hpp)
   file(SHA256
     "${FSIM_SOURCE_DIR}/include/fsim/runtime/${FSIM_FRONTIER_HEADER}"
     FSIM_SOURCE_DIGEST)
@@ -178,20 +173,6 @@ foreach(FSIM_FRONTIER_HEADER IN ITEMS
   if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
     message(FATAL_ERROR
       "installed public header changed: runtime/${FSIM_FRONTIER_HEADER}")
-  endif()
-endforeach()
-
-foreach(FSIM_JIT_HEADER IN ITEMS
-    jit_runtime.h jit_runtime_v1.h jit_runtime_v2.h)
-  file(SHA256
-    "${FSIM_SOURCE_DIR}/include/fsim/compiler/${FSIM_JIT_HEADER}"
-    FSIM_SOURCE_DIGEST)
-  file(SHA256
-    "${FSIM_STAGE}/${FSIM_INCLUDEDIR}/fsim/compiler/${FSIM_JIT_HEADER}"
-    FSIM_INSTALLED_DIGEST)
-  if(NOT FSIM_SOURCE_DIGEST STREQUAL FSIM_INSTALLED_DIGEST)
-    message(FATAL_ERROR
-      "installed public header changed: compiler/${FSIM_JIT_HEADER}")
   endif()
 endforeach()
 

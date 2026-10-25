@@ -183,7 +183,7 @@ ConeFusionPlan ElaboratedDesign::plan_cone_fusion() const
         container_element_signal_aliases_,
         container_aggregate_signal_aliases_);
     const auto graph = region_graph_detail::RegionGraphProgramBuilder::build(
-        views, descriptors, false, graph_bindings.containers,
+        views, descriptors, graph_bindings.containers,
         access_complete, graph_bindings.alias_families);
     const auto graph_signals = graph.signals();
     const auto graph_processes = graph.processes();

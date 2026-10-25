@@ -164,18 +164,8 @@ void verify_mode(
     assert(reference.changes == warm.changes);
     assert(reference.final_value == warm.final_value);
     assert(reference.vcd == warm.vcd);
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 1);
-    assert(cold.native_cache.hits == 0);
-    assert(cold.native_cache.misses == 1);
-    assert(cold.native_cache.stores == 1);
-    assert(warm.compiled_processes == 1);
-    assert(warm.native_cache.hits == 1);
-    assert(warm.native_cache.misses == 0);
-#else
     assert(cold.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
-#endif
 }
 
 void verify_resolution_diagnostic(
@@ -463,11 +453,6 @@ ScalarSurfaceCapture verify_scalar_surfaces(
         vcd.find(
             "b0000000000100000000000000000000000000000000000000000000000000001")
         != std::string::npos);
-#if defined(FSIM_HAS_LLVM)
-    if (engine == fsim::app::SimulationEngine::compiled) {
-        assert(simulation.compiled_process_count() == 1);
-    }
-#endif
     return capture;
 }
 
@@ -746,10 +731,6 @@ void verify_time_format(
         "Time scale of (time_rounding) is 1ns / 1ps"));
     assert(contains_at_zero(
         "Time scale of (time_rounding.u) is 10ns / 100ps"));
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 2);
-    assert(warm.compiled_processes == 2);
-#endif
 }
 
 } // namespace

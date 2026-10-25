@@ -310,6 +310,9 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         }
         fall();
         break;
+    case KOp::mem_copy:
+        fall();
+        break;
     case KOp::wide_move:
         if (inst.sub == 1U) {
             use.push_back(inst.y);

@@ -136,7 +136,7 @@ set(FSIM_EXPECTED_TESTS
   fsim.elaboration
   fsim.frontend
   fsim.library.artifact
-  fsim.llvm
+  fsim.application.static-kernel
   fsim.runtime)
 list(SORT FSIM_EXPECTED_TESTS)
 if(NOT FSIM_WITNESS_TESTS STREQUAL FSIM_EXPECTED_TESTS)
@@ -243,7 +243,7 @@ endforeach()
 foreach(FSIM_TOKEN IN ITEMS
     "34 supported, 0 active, and 3 deferred"
     "12 preserved, 0 active, and 3 physical"
-    "diagnostic catalog covers 2974 production codes"
+    "diagnostic catalog covers 2971 production codes"
     "Translation-unit structure checked: 0 forbidden .tpp files"
     "authored license inventory:"
     "language resources:")

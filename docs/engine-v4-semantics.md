@@ -31,6 +31,7 @@ Terms:
 |---|---|
 | Kernel | The static kernel: `src/runtime/simir_static_kernel*.cpp`, planned by `ElaboratedDesign::plan_static_kernel` (`src/elaboration/elaborated_design_static_kernel.cpp`) |
 | Member | A process the kernel runs: kind combinational, sequential, once or behavioral |
+| Hosted | A process the kernel schedules and the reference evaluator executes (S25); counts as kernel-owned |
 | Host | The reference path: the `runtime::simir::Interpreter`, its scheduler, and the reference evaluator (`step_generic`) |
 | Reference | The interpreter without the kernel (`--engine interpreter`, `FSIM_STATIC_KERNEL` unset) |
 | Oracle | The reference, used as the differential oracle (S22) |
@@ -50,8 +51,8 @@ Witness tests (all in `tests/CMakeLists.txt`, labelled `static-kernel`):
 Each of T-sv, T-beh and T-vhdl builds one design, runs it with the kernel off
 and on, and requires identical transcripts and identical hidden-signal values
 mid-run and at the end. T-sv and T-vhdl loop over `SimulationEngine::interpreter`
-and `SimulationEngine::compiled`. The loop over `compiled` goes away with the
-legacy JIT (S1).
+and `SimulationEngine::compiled`. `compiled` is now an alias of v4 (S1); the
+legacy JIT was removed, so the loop compares the reference evaluator with v4.
 
 ## S1. Engine selection
 
@@ -61,9 +62,17 @@ legacy JIT (S1).
   - `--engine interpreter` runs the reference evaluator only. It stays as the
     differential oracle and as the debug engine.
   - `--engine debug` keeps its meaning (S20).
-  - `--engine compiled` is an alias of v4 once the legacy per-process JIT is
-    deleted.
-  - A run never starts the legacy JIT when v4 is selected.
+  - `--engine compiled` is an alias of v4. The legacy per-process JIT is
+    deleted (engine-v4 migration, Stage D).
+  - `--compiled-processes` and `--aot-scope` are accepted for command-line
+    compatibility and ignored.
+  - `elaborate --aot` populates the v4 kernel cache.
+
+  | `--engine` | Runs | Native code |
+  |---|---|---|
+  | `v4` (default), `compiled` | the static kernel, reference evaluator for non-members | LLVM kernel templates (cache `static-kernel/`) |
+  | `interpreter` | reference evaluator only | none (unless `FSIM_STATIC_KERNEL=1`) |
+  | `debug` | reference evaluator with debugger hooks | none |
 - **Basis.** Plan §5 (interpreter kept as oracle), §6 (side by side), Phase 5;
   owner decisions 2026-10-25 (HANDOFF §2 G1, §10 items 2 and 4).
 - **Status:** *partial*.
@@ -160,17 +169,32 @@ state, S3):
     | `systemc` | SystemC processes or objects |
     | `vcd_control` | a process holds a `VcdControl` operation |
     | `signal_width` | a signal wider than 2^32 - 1 bits |
-    | `unknown_dependencies` | some process has accesses the region graph cannot resolve |
-    | `vhdl_partial` | VHDL kernel, but some VHDL process is not a member |
-    | `vhdl_unowned` | VHDL kernel, a signal written and read by members is not kernel-owned |
-    | `no_members` | no process qualifies |
+    | `unknown_dependencies` | some process has accesses the region graph cannot resolve (not a VHDL guarded-driver disconnection, which names its signal, and not a VHDL opaque process when a foreign library or observer makes every signal a host object, S19) |
+    | `vhdl_partial` | VHDL kernel, but some VHDL process is not a member (only with `FSIM_STATIC_KERNEL_HOSTED_VHDL=0`; otherwise the process is hosted, S25a) |
+    | `vhdl_postponed` | VHDL kernel with a postponed VHDL process (only with `FSIM_STATIC_KERNEL_HOSTED_POSTPONED=0` or `FSIM_STATIC_KERNEL_HOSTED_VHDL=0`; otherwise the process is hosted in the postponed region, S25a) |
+    | `vhdl_unowned` | VHDL kernel, a signal written and read by members is not kernel-owned (only with `FSIM_STATIC_KERNEL_HOSTED_VHDL=0`, S25a) |
+    | `no_members` | some valid process exists but none is a member, hosted, or a host program |
 
-  - Per-process fallback is implemented for SystemVerilog. For VHDL it does
-    not exist: a VHDL design needs every VHDL process to be a member
-    (`vhdl_partial`).
+    A design with no valid process at all, or whose valid processes are all
+    host programs, is not refused: the plan is *trivial* (not disabled, no
+    specification, census reason `trivial_no_processes` /
+    `trivial_host_programs_only`) and the design runs on the ordinary path. The
+    kernel has nothing to schedule, so no ordering can differ: every signal is
+    a host signal and no process reads or writes one (IEEE 1076-2019 14.7.5,
+    1800-2023 4.5 have no process to order). Host programs (S25a) are not
+    scheduled processes either; they still count as `host=` until the
+    host-program work moves them.
+
+  - Per-process fallback is implemented for SystemVerilog. For VHDL a process
+    that is not a member is hosted (S25a); with
+    `FSIM_STATIC_KERNEL_HOSTED_VHDL=0` a VHDL design needs every VHDL process
+    to be a member (`vhdl_partial`).
   - The profile line (`FSIM_PROFILE_PHASES=1`) reports members, owned
-    signals, outputs, inputs and containers. It does not count host
-    processes or give per-process reasons yet.
+    signals, outputs, inputs, containers, the valid processes (`processes=`),
+    those that stay on the host scheduler (`host=`) and those the kernel
+    hosts (`hosted=`, S25). `static-kernel-host` rows give the reason each
+    host process is outside the kernel; `static-kernel-hosted` rows give the
+    reason each hosted process is not a native member (the promotion queue).
 - **Witness.** Corpus census (`tools/census.py`) ranks refusals and, once
   added, host-process reasons. G3 is the census showing `host=0` in every
   case. T-vhdl checks that its design is admitted.
@@ -392,10 +416,13 @@ state, S3):
   - Implemented for members with one static wait, zero-delay inertial
     assignments (`WriteProjected*` with delay 0), and shared-variable writes
     (immediate).
-  - A design is admitted only when every VHDL process is a member
-    (`vhdl_partial` otherwise) and every signal that one member writes and
-    another reads is kernel-owned (`vhdl_unowned`), so a host round trip
-    cannot add a delta.
+  - With `FSIM_STATIC_KERNEL_HOSTED_VHDL=0` a design is admitted only when
+    every VHDL process is a member (`vhdl_partial` otherwise) and every signal
+    that one member writes and another reads is kernel-owned
+    (`vhdl_unowned`). By default a VHDL process that is not a member is hosted
+    (S25a) and a signal exchanged between members through the host is
+    admitted: the host's update phase of the writer's delta commits it and the
+    reader runs in the next delta, which is the reference schedule.
   - Not implemented: delayed (`after`), transport, reject and
     waveform assignments; `wait for`, `wait until`, several waits per
     process, waits inside procedures (S14).
@@ -684,6 +711,18 @@ state, S3):
   | Unresolvable accesses | planner `unknown_dependencies` | fail closed |
   | Wide signals (> 2^32 - 1 bits) | planner `signal_width` | representation |
 
+  Access plan (`StaticKernelAccessPlan`, P3): unless
+  `FSIM_STATIC_KERNEL_ACCESS_PLAN=0`, the coverage, trace, foreign-library,
+  `vcd_control` and `specify` rows are no longer gates. Foreign libraries
+  and trace/VCD observers make every signal and container a host object
+  (members write it through the host commit path, read it as a boundary
+  input; no unwritten or sole-writer input shortcuts for foreign). Module
+  paths and timing checks mark their terminals, conditions, notifiers and
+  delayed copies host signals. Coverage leaves processes with
+  `CodeCoverageHit` as host processes. The debug engine, `systemc` and
+  `signal_width` rows stay gates. The run reports
+  `fsim-profile: static-kernel-access ...`.
+
   The gate profile line cannot yet distinguish a kernel-off run caused by
   these flags from one with no simulate step (stage A of the handoff adds it).
 - **Witness.** Corpus census (`not planned` column). To add: a test per gate
@@ -774,7 +813,8 @@ state, S3):
 
 - **Guarantee.** A persisted kernel plan, specialization, compiled body or
   native image is used only when its identity (build, planner knobs such as
-  `FSIM_STATIC_KERNEL_BEHAVIORAL` and `FSIM_STATIC_KERNEL_MIXED`, specializer,
+  `FSIM_STATIC_KERNEL_BEHAVIORAL`, `FSIM_STATIC_KERNEL_MIXED` and
+  `FSIM_STATIC_KERNEL_HOSTED`, specializer,
   compiler and canonicalization identity) matches. Loading never changes the
   transcript: a run from a cache equals a run that plans and compiles from
   scratch.
@@ -784,6 +824,217 @@ state, S3):
 - **Status:** *implemented*.
 - **Witness.** T-vhdl (the `aot` and `loaded` runs equal the reference).
 
+## S25. Hosted processes
+
+- **Guarantee.**
+  - A SystemVerilog process that is neither a native member nor a host
+    program is *hosted*: it keeps its own `ProcessState` and its operations
+    run on the reference evaluator (`Interpreter::Impl::execute`), so its
+    behavior is the reference's by construction. The kernel owns its
+    scheduling. Every wake the host scheduler would queue for it is handed to
+    the kernel, and the kernel runs it at the point of its region loop where
+    the reference scheduler runs it:
+    - Active region: in rounds, in stable ProcessId order; a process woken
+      while a round runs is run in the next round (IEEE 1800-2023 4.4, 4.7);
+    - Inactive region (`#0`): after all Active work, including the host's, and
+      before any NBA commit (4.4, 4.5);
+    - timers: at their time, in stable order, abandoned when a disable
+      redirects the process (9.6.2);
+    - next delta (a wake from another scheduling domain, the time-zero late
+      starters): in a later delta than the one that queued it.
+  - Hosted execution is never re-entrant: the process runs inside the kernel's
+    own host callback, queues every wake it causes, and runs none of them from
+    inside `execute`.
+  - A hosted process reads and writes host signals only (the planner's
+    host-touched rule), through the reference paths; the kernel sees its
+    writes as it sees any host process's (input scan, publication).
+  - Fork children of a hosted process are hosted.
+  - A design with hosted processes has no kernel-owned time (S10): the warp
+    needs a closed kernel.
+  - Region model (Phase 4). The processes of the Observed, Reactive and
+    Postponed regions, `final` blocks and package static initializers are
+    hosted as well. Hosted wakes of those regions wait in per-region ready
+    lists (observed, reactive, re-inactive, postponed). Each non-empty list
+    owns a *doorbell*: a host task of that scheduler phase. The host
+    scheduler restarts at the first non-empty region after every region it
+    runs (the order of IEEE 1800-2023 4.4, 4.5, Figure 4-1: Active,
+    Inactive, NBA, Observed, Reactive, Re-Inactive, Re-NBA, Postponed), so the
+    kernel runs each list exactly where the reference scheduler runs those
+    wakes, after the kernel's own Active and NBA work and the host's earlier
+    regions; the kernel never reorders regions itself (same pattern as the
+    deferred NBA commit and the hosted Inactive region). A wake made while a
+    region runs joins that region's next round (a new doorbell); a `#0` made
+    while a reactive-region process runs is a Re-Inactive wake (4.4, 4.5);
+    `WaitRegion` into the Observed, Reactive, Re-Inactive or Postponed
+    region is a kernel wake of that region's list. Within a list processes
+    run in stable order.
+  - Package static initializers (IEEE 1800-2023 6.21, 26.3) are hosted
+    members: `Interpreter::start()` still runs them synchronously in
+    startup order before any process, but through the kernel
+    (`execute_hosted_startup`), as it does the prearming of static waits.
+  - Final blocks (9.2.3): `Interpreter::run/finish` call
+    `StaticKernel::run_finals`, which forgets the work the scheduler
+    discarded (lists, timers, doorbells, the kernel's own deferred-NBA and
+    host-process flags) and queues each hosted final block at the end time;
+    the activation runs them as Active-region processes.
+  - Not moved (service tasks, no SimIR process): the end-of-time-slot and
+    postponed publication closures of `$strobe`, `$monitor` and sampled-value
+    publishing (`schedule_end_of_time_slot`), VPI/VHPI callbacks, and the
+    scheduler's own timed events. They run in the host's Postponed region
+    beside the kernel's doorbell. Kernel-owned time (a warp over every
+    heap) is not implemented: a design with hosted processes steps through
+    the host scheduler's time (S10).
+  - `FSIM_STATIC_KERNEL_HOSTED_REGIONS=0` restores the host scheduler for
+    these processes (census reasons `hosted_region_<phase>`,
+    `package_static_initializer`). Hosted VHDL processes are S25a.
+- **Basis.** Plan §3.4 (behavioral fallback on the reference evaluator);
+  HANDOFF §2 G3 (no SimIR process runs on the host evaluator); IEEE 1800-2023
+  4.4 to 4.9 for the region order.
+- **Status:** *partial*. SystemVerilog hosted processes of every region are
+  implemented (`src/runtime/simir_static_kernel_hosted.cpp`,
+  `FSIM_STATIC_KERNEL_HOSTED=0` restores the host fallback). A hosted
+  process's signal writes still go through the host scheduler's update
+  queues. The kernel does not own them yet.
+- **Witness.** Corpus on `--engine v4` with and without
+  `FSIM_STATIC_KERNEL_HOSTED=0`; the census `hosted=` rows. A dedicated
+  `static_kernel_hosted_test.cpp` is to add.
+
+## S25a. Hosted VHDL processes
+
+- **Guarantee.**
+  - In a VHDL or mixed kernel, a VHDL process that is not a native member and
+    not a host program is *hosted*. The kernel schedules it, the reference
+    evaluator executes it (S25), and it runs in the delta cycle where the
+    reference scheduler runs it:
+    - initialization: its first run is part of the kernel's first round
+      (1076-2019 14.7.5.2). `Interpreter::start` does not run the host
+      stub's prearmed wait; it queues the stub's first activation for the
+      scheduler's first delta with every hosted process's initial run, so a
+      hosted process initializes in the same delta as the members and
+      threads, and its assignments take effect one delta later, as on the
+      reference. (Run inside `start`, the first round would count as a delta
+      of its own and the kernel's threads would run one delta ahead of the
+      host's updates: nvc issue1143.);
+    - a signal event, a `wait for` timeout and a `wait for 0 ns` resume the
+      process in the delta after the update phase that caused them, together
+      with the members and threads the same update wakes (14.7.5.3, 10.2);
+      the host's change fanout still detects the event and hands the wake to
+      the kernel (`queue_next_delta`, which never runs a VHDL process in the
+      delta it was woken in, whatever the writer's language). Processes with
+      the same static sensitivity form a *cohort* that the host wakes with one
+      task; a hosted member of a cohort is never run by that task, the cohort
+      wake hands it to the kernel on its own
+      (`queue_static_cohort_next_delta`, `queue_static_active_current`);
+    - its signal assignments are not applied by the process: they are the
+      host's staged updates (`stage_update*`, `schedule_projected`,
+      `schedule_inertial`, `after` waveforms), so driver, projected-waveform
+      and resolution semantics (14.7.2, 14.7.3) are the reference's own and
+      are not duplicated. They are applied in the update phase of the delta
+      in which the process ran, after the kernel round's own commit.
+  - One kernel round is one host delta whenever a design has hosted VHDL
+    processes (`host_boundary_`): the kernel yields to the host after each
+    round that leaves work, so hosted writes commit, and their wakes are
+    released, at the reference delta.
+  - A hosted process reads and writes host signals (the planner's
+    host-touched rule). A kernel-owned signal it reads or waits on is a
+    boundary output published at the round that changed it. A signal a member
+    writes and another member reads may cross the host (no `vhdl_unowned`
+    refusal).
+  - A host signal that members read and no member writes (written by hosted
+    processes, forces or a testbench) is a kernel input. An event on it is an
+    event even when its value after the update phase equals the value the
+    kernel scanned last: two force assignments of one cycle apply one after
+    the other, 1 to 2 to 1, and the processes sensitive to the signal resume
+    (10.5.2.1, 14.7.3.1). The kernel compares the host's event stamp of the
+    signal besides its value (`refresh_input`) and wakes the readers.
+  - The language of a design with no native member is that of the majority of
+    its valid processes (generic scheduling domain: VHDL), so a design whose
+    VHDL processes are all hosted is admitted through the synthetic host (no
+    `no_members` refusal). Host programs stay on the host (census reason
+    `port_program`): they are not scheduled processes. The VHDL processes
+    that stay off the kernel are exactly: host programs, compact constant
+    drivers (no full process state).
+  - A postponed VHDL process (11.3, 14.7.5.3) is hosted and waits in the
+    kernel's postponed region list, which reuses the SystemVerilog region
+    doorbell (S25): a host task of the postponed phase that runs after the
+    last delta cycle of the time step. A wake of such a process (a signal
+    event or a timeout) goes to that list at once, as the host scheduler puts
+    it in the end-of-slot queue; its initial run (14.7.5.2) is an ordinary
+    Active run of the first round. A postponed process cannot cause a delta
+    cycle (14.7.5.3), so running the list in one go, ordered by process id as
+    the end-of-slot queue is, equals running its entries one at a time.
+    `FSIM_STATIC_KERNEL_HOSTED_POSTPONED=0` restores the `vhdl_postponed`
+    refusal.
+  - A guarded-signal driver disconnection (6.9, 10.5.2.2; the static call
+    `@vhdl-disconnect:<signal>:<delay>`) is a known driver write to its
+    signal for the access analysis; the process is hosted. A VHDL opaque
+    process (a VHPIDIRECT foreign subprogram call) no longer refuses the
+    design when a foreign library or an observer is attached, because every
+    signal is then a host object.
+  - Host programs (port-association resolvers, conversion drivers) are not
+    scheduled processes: the host's update commit runs them inline
+    (`run_vhdl_resolver`), so there is nothing to schedule and they stay host
+    programs.
+  - A design with hosted processes has no kernel-owned time (S10).
+- **Basis.** 1076-2019 14.7.5.2 (initialization), 14.7.5.3 (simulation
+  cycle), 14.7.2 (drivers), 14.7.3 (signal update), 10.2 (wait statement),
+  11.3 (process statement).
+- **Status:** *partial*. Scheduling is kernel-owned
+  (`simir_static_kernel_hosted.cpp`, the VHDL branch of `activate_step` and
+  `activate_mixed` in `simir_static_kernel.cpp`, the `queue_*` guards in
+  `simir_state.cpp`). *Not yet* (workstream C5b, kernel-owned update queues):
+  the host's pending-update queue and `after` waveform tasks still live in
+  the host scheduler's update phase; the kernel does not commit or order
+  them itself. The hook points are `Impl::schedule_update_commit`
+  (`simir_scheduling_stage.cpp`) and `update_commit_callback`: the kernel
+  would call the callback at the end of its round instead of the scheduler's
+  update phase.
+- **Witness.** Corpus (vests, nvc, vhdl-compliance, rs-vhdl) on `--engine v4`
+  with and without `FSIM_STATIC_KERNEL_HOSTED_VHDL=0`; `FSIM_KERNEL_VERIFY=1`;
+  `rs_vhdl_parity.py`; the census `hosted=` rows of VHDL designs.
+
+## S25b. Commit programs and implicit-signal drivers
+
+- **Guarantee.**
+  - A *commit program* is a SimIR program the host update commit runs inline
+    and nobody schedules: a VHDL port-association resolver or conversion
+    driver (`run_vhdl_resolver`; the conversion program and its halted stub),
+    and the halted adapter process of a SystemVerilog inout or switch
+    connection (`switch_source`/`switch_target`, solved by the network
+    commit). It has no wake, no `ProcessState` run and no position of its
+    own: it executes at one fixed place of the update phase, when the signal
+    it serves has a staged update (1076-2019 14.7.3: effective value,
+    conversion function, resolution function, in that order, once per
+    signal per update phase; 1800-2023 23.3.3 and 28: port coercion and
+    net-network solution).
+  - The kernel plan owns each commit program as a plan row, not as a host
+    process: census reasons `commit_program` (resolver/conversion program),
+    `commit_program_stub` (its halted stub) and `commit_program_switch`
+    (inout/switch adapter) are rows of kernel-owned processes (`hosted`
+    group, not counted in `host=`). The kernel takes part in the commit
+    through its delta boundary: a design with commit programs is a
+    `host_boundary_` design whenever a commit program serves a host signal
+    (the planner marks the sources and targets host-touched), so every kernel
+    round is one delta and the commit of that delta follows the round, in
+    the reference position.
+  - Implicit-signal drivers (`S'DELAYED`, `S'TRANSACTION`, `S'STABLE`,
+    `S'QUIET` helpers named `<signal>.$implicit_driver`) are real scheduled
+    processes (SystemVerilog scheduling domain, no initial run). A VHDL
+    kernel hosts them (S25): the wake is the host fanout's next-delta wake
+    for another-domain origin (1076-2019 14.7.5.3), the writes are staged
+    host updates. `FSIM_STATIC_KERNEL_HOSTED_IMPLICIT=0` restores the host.
+- **Basis.** 1076-2019 14.7.3, 14.7.5.3, 6.5.7; 1800-2023 23.3.3, 28.
+- **Status:** *partial*. Direction (b) of C5: the commit program still
+  executes inside the host's update callback; the kernel does not call
+  `update_commit_callback` itself (C5b, S25a status). The accounting is
+  honest only while that callback runs at every kernel delta boundary of the
+  design, which holds because a commit program's signals are host-touched, so the members' accesses to them are boundary inputs/outputs and `host_boundary_` is set (to verify by census on the listed cases); a SystemVerilog
+  kernel yields to the host's update phase by construction (the NBA/update
+  region follows the Active region the kernel runs in).
+- **Witness.** Census of the nvc port cases (`elab8`, `elab19`, `issue112`,
+  `issue405`, `conv2`), the vests port cases, ivtest `inout2`, `br965`;
+  `implicit1..3`; every output equal to `--engine interpreter`.
+
 ## Appendix A. Environment switches that affect semantics
 
 | Variable | Effect |
@@ -791,6 +1042,11 @@ state, S3):
 | `FSIM_STATIC_KERNEL=1` | turn the kernel on (becomes the default with `--engine v4`) |
 | `FSIM_STATIC_KERNEL_BEHAVIORAL=0` | keep behavioral processes on the host |
 | `FSIM_STATIC_KERNEL_MIXED=0` | plan the majority language only |
+| `FSIM_STATIC_KERNEL_HOSTED=0` | keep non-member SystemVerilog processes on the host scheduler (S25) |
+| `FSIM_STATIC_KERNEL_HOSTED_REGIONS=0` | keep observed, reactive, postponed, final and package-initializer processes on the host (S25) |
+| `FSIM_STATIC_KERNEL_HOSTED_VHDL=0` | keep non-member VHDL processes on the host and refuse such designs (`vhdl_partial`, `vhdl_unowned`; S25a) |
+| `FSIM_STATIC_KERNEL_HOSTED_IMPLICIT=0` | keep implicit-signal drivers on the host in a VHDL kernel (S25b) |
+| `FSIM_STATIC_KERNEL_HOSTED_POSTPONED=0` | refuse designs with a postponed VHDL process (`vhdl_postponed`) instead of hosting it (S25a) |
 | `FSIM_STATIC_KERNEL_NATIVE=0` | no LLVM code; interpreted KIR |
 | `FSIM_STATIC_KERNEL_SPECIALIZE=0` | no VHDL body specialization |
 | `FSIM_STATIC_KERNEL_TIME_WARP=0` | no kernel-owned time |
@@ -821,5 +1077,5 @@ diagnostics may differ. (About 45 `FSIM_STATIC_KERNEL_*` and
    (`=0` disables), as `simir_static_kernel.hpp` states.
 7. The header comment of `elaborated_design_static_kernel.cpp` says members
    are SystemVerilog processes; VHDL and behavioral members were added later.
-8. The tests T-sv and T-vhdl loop over `SimulationEngine::compiled`; with the
-   legacy JIT deleted that loop changes meaning (S1).
+8. The tests T-sv and T-vhdl loop over `SimulationEngine::compiled`; since the
+   legacy JIT was deleted that loop runs v4 (S1).

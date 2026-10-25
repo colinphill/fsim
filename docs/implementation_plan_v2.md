@@ -7576,7 +7576,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
   procedural-assignment, resolution and file/memory regressions pass, and the
   final 23-witness closure matrix passes in 94.63 seconds. The closure-matrix
   SHA-256 is
-  `a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e`.
+  `d274a32194f10bd96a6ac50eb9397ca2bc7743982f0bb2ee3423a148a363009d`.
 - **Change 19: Complete.** Synchronize diagnostics, feature/evidence matrices,
   language support, architecture, VPI/timing guides, public tutorial,
   inventories, installed/public/platform/portability contracts, counts,
@@ -7602,7 +7602,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
   `338b64ba883f6243d9f799d31c22f873e871a5977bbb9fc9c45ae3b5ea738c84`,
   `4d0924571f33e54f8d77d66979e290fe223c183eb0bc963fdbffb841429a424e`
   and
-  `a80eea635da93dff681c7118cd3339e7b4bb679c83a2cf7137cc3eeccef6f39e`.
+  `d274a32194f10bd96a6ac50eb9397ca2bc7743982f0bb2ee3423a148a363009d`.
   The complete Change 19 documentation/inventory/release/installed/platform
   contract slice passes 26/26 in 20.64 seconds; repository whitespace is
   clean.
@@ -8119,7 +8119,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
   literal-width and release-closure SHA-256 identities are respectively
   `a2f19c56e715ea0f8198a672d96d08d0d9accd8eb7569f16bc6e542fc294ff40`,
   `f661b219e251e6369750ab406b19adf9c193cfb9570baaa0fdeab4f7984bad93`
-  and `f4e8dcdfb60362544e6958449fa2a1e852cedcbba2ef6e929d5fb0a3aee1d124`.
+  and `4ccd3d31c50b5e1c656c57f6072e3701c9c75a2e0a042276eb5243555352425f`.
   Public language, feature, architecture, VPI, DPI and UVM/tutorial material is
   bound into the static closure checker. The complete 34-test diagnostic,
   source, inventory, documentation, installed, platform, portability and
@@ -12848,7 +12848,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
     Change 16's cache-corruption and modeled Windows-path isolation boundary.
 16. **Complete.** A normalized 36-row cache-corruption/isolation contract at
     SHA-256
-    `1f422f08663aa0fdebd96611853ef60eebecaed158ece973a58ff91ac1fe5a00`
+    `f45a174f2b0c26128848e363bfb982bc533cb0a6126c9290956233dfce745d30`
     freezes stale and live lock ownership, corrupt and truncated framing,
     read-only consumption, concurrent publication, stale/fresh temporary
     cleanup, lowercase hexadecimal keys, shard/path normalization and modeled
@@ -12912,7 +12912,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
     handoff.
 19. **Complete.** The eighteen-row ABI/schema ledger is zero-active at
     normalized SHA-256
-    `e0fcff400161ba3f3f721b9b05ded744049317bbee06ece35614f842384c67c4`.
+    `1bcdc0c14fd5ef3bb7bf7577e6cbb2fab24fb705f59e21306408db04c845c32d`.
     The reference, architecture, README, diagnostics, installed-package,
     relocation, evidence, regression-deduplication and restart documents name
     the same current-only contracts. Source/license and dependent static audit
@@ -12946,7 +12946,7 @@ carry an explicit evidence-backed scope disposition approved by the user.
     owner despite `-LE release`; it passed, but no Release configuration, build,
     regression or intentional release-gate qualification ran. No sanitizer or
     hosted-CI execution/monitoring ran. The zero-active ledger remains at SHA-
-    256 `e0fcff400161ba3f3f721b9b05ded744049317bbee06ece35614f842384c67c4`.
+    256 `1bcdc0c14fd5ef3bb7bf7577e6cbb2fab24fb705f59e21306408db04c845c32d`.
     Batch 174 is neither a sanitizer nor a Release boundary and is not a
     hosted-CI monitoring boundary. Commit and push the accumulated batch once;
     defer all Release, sanitizer, release-gate and hosted-CI work to final Batch

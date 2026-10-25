@@ -1932,7 +1932,7 @@ P101 cold wall or optimization was made.
    seconds at 190,060 KiB peak RSS with zero swaps; its retained log SHA-256
    is a395b80e1683fc9a93b2dc0c4dadd430d96330f6e54e41be1b69382cf7a2ee9a.
    COVBASE-C02 through COVBASE-C18 are preserved at normalized SHA-256
-   e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814;
+   2f5cfb8b20cc092c51b553b87da944fb5850574e84e3008442b117062226dd39;
    the regenerated source manifest contains 1,571 paths at SHA-256
    e45bb9ac875ae03ce24bc31ac876c80217ce89505be9ea523593a0f7fc17d92f.
    No Release, sanitizer, hosted-CI, clean-first, commit, or push action ran.
@@ -1951,7 +1951,7 @@ P101 cold wall or optimization was made.
    and covered/uncovered aggregation assertions. With Change 19 complete all
    seventeen COVBASE-C02 through COVBASE-C18 rows and every declared evidence
    owner exist at normalized SHA-256
-   e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814.
+   2f5cfb8b20cc092c51b553b87da944fb5850574e84e3008442b117062226dd39.
    The regenerated source manifest contains 1,572 paths at SHA-256
    d3ce8dc4beef96671f495f6585920e50880d311ece86ecf20deba6e271a0ab96.
    The accumulated exact-LLVM warnings-as-errors Debug Change 2-19 slice
@@ -1985,7 +1985,7 @@ P101 cold wall or optimization was made.
    sources, 1,507 SPDX-owned files, 454 conformance test/control files, and
    656 FST test/control files. All seventeen COVBASE-C02 through COVBASE-C18
    rows remain preserved at normalized SHA-256
-   e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814;
+   2f5cfb8b20cc092c51b553b87da944fb5850574e84e3008442b117062226dd39;
    the 1,572-path source manifest remains at SHA-256
    d3ce8dc4beef96671f495f6585920e50880d311ece86ecf20deba6e271a0ab96.
    Batch 178 is not a sanitizer or hosted-CI boundary, so those lanes remain
@@ -2565,7 +2565,7 @@ P101 cold wall or optimization was made.
     inference-side resource propagation, and every standalone resource
     ceiling. COVMET-C02-C18 are all preserved and zero rows remain active. The
     normalized ledger SHA-256 is
-    9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113,
+    abcee589bcedf70840f5814d41a3d05fd1714bac27109b9de979704288240bf8,
     and the 1,618-path source manifest SHA-256 is
     30ca495468c5079caaff91c6964cbdc9605585be2c3640aa48c1eded6d3dbac6.
     The public inference-model change passes a 129-step, eight-worker,
@@ -2595,7 +2595,7 @@ P101 cold wall or optimization was made.
     rejected deterministically, while disabled identity remains `none`.
     Engine, aggregation, and artifact evidence owners for every COVMET row are
     now required to exist. The normalized seventeen-row ledger remains
-    `9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113`;
+    `abcee589bcedf70840f5814d41a3d05fd1714bac27109b9de979704288240bf8`;
     the source manifest contains 1,621 ordered paths at SHA-256
     `c0542c5b8baae097e53cccf2d282aab580efcf18b2853f76a23f2fb74a39b5b1`.
     The 334-step warnings-as-errors Debug impact build completes with eight
@@ -2608,7 +2608,7 @@ P101 cold wall or optimization was made.
     The complete broad-metric surface is frozen with all seventeen
     COVMET-C02-C18 rows preserved, zero active rows, and normalized ledger
     SHA-256
-    `9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113`.
+    `abcee589bcedf70840f5814d41a3d05fd1714bac27109b9de979704288240bf8`.
     MC/DC remains explicitly outside Batch 179, and the 1,621-path source
     manifest remains
     `c0542c5b8baae097e53cccf2d282aab580efcf18b2853f76a23f2fb74a39b5b1`.
@@ -7256,7 +7256,7 @@ P101 cold wall or optimization was made.
 
     S23-B187-C19 is preserved, leaving zero active and all 56 independently
     worded SystemVerilog-2023 inventory rows preserved at normalized SHA-256
-    `69f7d088e4d0a1f1acd09e1b675423dcf6240294c889b45fb2a518e819053cc9`.
+    `a38f902d778d56cd0ddd1611aba4bfdef8604038d16f3298263c7a040cc0b79c`.
     The inventory validator retains exact one-to-one ownership across Batches
     185-187 and rejects forbidden private-reference tokens, missing owners,
     duplicate identities, profile drift, and any reopened row.
@@ -7286,7 +7286,7 @@ P101 cold wall or optimization was made.
     3,149 build steps, and the full Debug suite passes 408/408 in 527.08 wall
     seconds. Full SystemVerilog-2023 support is therefore declared complete
     with zero active and 56 preserved inventory rows at normalized SHA-256
-    `69f7d088e4d0a1f1acd09e1b675423dcf6240294c889b45fb2a518e819053cc9`.
+    `a38f902d778d56cd0ddd1611aba4bfdef8604038d16f3298263c7a040cc0b79c`.
     Batch 187 is not a sanitizer or hosted-CI boundary, so neither lane ran.
 
     The mandatory pre-push CI inspection found the preceding Batch 186 run

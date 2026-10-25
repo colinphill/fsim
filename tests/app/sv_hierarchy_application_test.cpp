@@ -331,11 +331,7 @@ endmodule
         assert(reference.values[index] == "1");
     }
     assert(reference.compiled_processes == 0U);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes >= 6U);
-#else
     assert(compiled.compiled_processes == 0U);
-#endif
 
     auto invalid_config = config;
     invalid_config.project.name = "sv-hierarchy-body-parameter-negative";
@@ -571,15 +567,6 @@ endmodule
         assert(mixed_reference.values[lane * 2U] == "0");
         assert(mixed_reference.values[lane * 2U + 1U] == "1");
     }
-#if defined(FSIM_HAS_LLVM)
-    assert(baseline.compiled_processes >= 128U);
-    assert(regions_compiled.compiled_processes >= 128U);
-    assert(unary_compiled.compiled_processes >= 128U);
-    assert(mixed_compiled.compiled_processes >= 128U);
-    assert(regions_compiled.compiled_modules > baseline.compiled_modules);
-    assert(unary_compiled.compiled_modules > baseline.compiled_modules);
-    assert(mixed_compiled.compiled_modules > baseline.compiled_modules);
-#endif
 }
 
 void test_systemverilog_2023_bind_mapping(
@@ -694,15 +681,9 @@ endconfig
     assert(std::get<0>(compiled).time == std::get<0>(warm).time);
     assert(std::get<0>(compiled).delta == std::get<0>(warm).delta);
     assert(std::get<1>(compiled) == std::get<1>(warm));
-#if defined(FSIM_HAS_LLVM)
-    assert(std::get<2>(reference) == 0U);
-    assert(std::get<2>(compiled) >= 2U);
-    assert(std::get<2>(warm) == std::get<2>(compiled));
-#else
     assert(std::get<2>(reference) == 0U);
     assert(std::get<2>(compiled) == 0U);
     assert(std::get<2>(warm) == 0U);
-#endif
 
     auto retained = config;
     retained.project.name =

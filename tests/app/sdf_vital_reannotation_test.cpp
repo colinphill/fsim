@@ -304,12 +304,6 @@ void test_ordering_wildcards_generics_and_rollback()
         "rejected duplicate transaction must not mutate its baseline");
 }
 
-enum class LiveExecutionMode {
-    interpreter,
-    llvm_o0,
-    llvm_o2,
-};
-
 struct LiveCaseResult {
     std::size_t reports { };
     std::vector<std::pair<fsim::runtime::SimulationTick,
@@ -323,8 +317,7 @@ struct LiveCaseResult {
 
 LiveCaseResult run_live_case(
     const fsim::app::SdfVitalTimingStatePolicy state_policy,
-    const bool expect_pending_rejection,
-    const LiveExecutionMode execution = LiveExecutionMode::interpreter)
+    const bool expect_pending_rejection)
 {
     using namespace fsim;
     using namespace app;
@@ -343,16 +336,6 @@ LiveCaseResult run_live_case(
     const auto transaction = apply_sdf_vital_reannotation(
         baseline, layers, 11U, policy, state_policy);
     require(transaction.ok(), "live VITAL transaction must publish");
-#if defined(FSIM_HAS_LLVM)
-    std::array<std::uint32_t, 10U> signal_widths { };
-    signal_widths.fill(1U);
-    std::array<runtime::simir::ValueKind, 10U> signal_value_kinds { };
-    signal_value_kinds.fill(runtime::simir::ValueKind::logic9);
-    std::array<runtime::simir::ResolutionKind, 10U>
-        signal_resolutions { };
-    signal_resolutions.fill(runtime::simir::ResolutionKind::none);
-    std::unique_ptr<compiler::LlvmJit> jit;
-#endif
     auto interpreter = baseline->design().create_interpreter();
     std::array<std::size_t, 5U> operation_counts { };
     for (std::size_t index = 0U; index < operation_counts.size(); ++index) {
@@ -360,40 +343,6 @@ LiveCaseResult run_live_case(
         operation_counts[index]
             = interpreter->process_program(process).operations.size();
     }
-#if defined(FSIM_HAS_LLVM)
-    if (execution != LiveExecutionMode::interpreter) {
-        const auto selected_optimization
-            = execution == LiveExecutionMode::llvm_o0
-            ? compiler::JitOptimizationLevel::o0
-            : compiler::JitOptimizationLevel::o2;
-        compiler::LlvmJitOptions options;
-        options.optimization = selected_optimization;
-        jit = std::make_unique<compiler::LlvmJit>(std::move(options));
-        // Native timing checks read the reannotated operation slot. The
-        // delay processes retain interpreted LoadConstant replacements.
-        for (std::size_t index = 4U; index < operation_counts.size(); ++index) {
-            const auto process = static_cast<runtime::simir::ProcessId>(index);
-            const auto& program = interpreter->process_program(process);
-            const auto symbol = std::string { "vital_live_" }
-                + std::string { compiler::to_string(selected_optimization) }
-                + "_" + std::to_string(process);
-            jit->add_process(
-                symbol, program, signal_widths, signal_value_kinds);
-            interpreter->set_process_executor(
-                process,
-                std::make_unique<app::application_detail::LlvmProcessExecutor>(
-                    *jit,
-                    jit->lookup(symbol),
-                    interpreter->process_program(process),
-                    signal_widths,
-                    signal_value_kinds,
-                    signal_resolutions));
-        }
-    }
-#else
-    require(execution == LiveExecutionMode::interpreter,
-        "compiled VITAL checks require the LLVM-enabled target");
-#endif
     LiveCaseResult result;
     interpreter->set_signal_change_hook([&](const auto signal,
                                             const auto& value,
@@ -511,23 +460,6 @@ void test_safe_point_pending_and_timing_state()
             && !rejected.safe_point_commit_succeeded
             && rejected.safe_point_generation == 0U,
         "pending VITAL reannotation must retain its rejection result");
-#if defined(FSIM_HAS_LLVM)
-    constexpr std::array compiled_modes {
-        LiveExecutionMode::llvm_o0,
-        LiveExecutionMode::llvm_o2,
-    };
-    for (const auto mode : compiled_modes) {
-        require(run_live_case(SdfVitalTimingStatePolicy::PreserveHistory,
-                    false, mode) == preserved,
-            "compiled VITAL timing-check replacement must match the interpreter");
-        require(run_live_case(SdfVitalTimingStatePolicy::ResetHistory,
-                    false, mode) == reset,
-            "compiled VITAL history reset must match the interpreter");
-        require(run_live_case(SdfVitalTimingStatePolicy::PreserveHistory,
-                    true, mode) == rejected,
-            "compiled VITAL pending rejection must match the interpreter");
-    }
-#endif
 }
 } // namespace
 

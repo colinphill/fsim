@@ -46,6 +46,15 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     thread.group = group;
     thread.epoch = epoch;
     thread.alive = true;
+    if (debug_points_ && parent != no_slot) {
+        // A fork child is a process of its own for the debugger, numbered
+        // after the processes that exist (Interpreter::execute_fork).
+        const auto id = static_cast<ProcessId>(
+            std::max(impl_.processes.size(), debug_next_child_));
+        debug_next_child_ = static_cast<std::size_t>(id) + 1U;
+        thread.debug_process = id;
+        debug_children_[id] = member;
+    }
     return index;
 }
 
@@ -160,11 +169,17 @@ bool Interpreter::Impl::StaticKernel::run_vhdl_threads()
     // in the update phase) belong to the next round.
     auto ready = std::move(vhdl_ready_threads_);
     vhdl_ready_threads_.clear();
-    for (const auto index : ready) {
-        threads_[index].queued = false;
+    for (std::size_t position = 0U; position < ready.size(); ++position) {
+        const auto index = ready[position];
         if (stopped_) {
+            // Threads not yet run stay ready for a resumed run ($stop, the
+            // debugger), ahead of what this round woke.
+            vhdl_ready_threads_.insert(vhdl_ready_threads_.begin(),
+                ready.begin() + static_cast<std::ptrdiff_t>(position),
+                ready.end());
             break;
         }
+        threads_[index].queued = false;
         if (threads_[index].alive) {
             run_thread(index);
         }
@@ -177,7 +192,8 @@ void Interpreter::Impl::StaticKernel::wait_on(const std::uint32_t index,
 {
     const auto epoch = threads_[index].epoch;
     for (const auto& entry : entries) {
-        const Waiter waiter { index, epoch, entry.edge };
+        const Waiter waiter { index, epoch, entry.edge, entry.offset,
+            entry.edge == EdgeKind::any ? entry.width : 0U };
         if (const auto slot = slot_of_signal_[entry.signal]; slot != no_slot) {
             slot_waiters_[slot].push_back(waiter);
         } else {
@@ -187,7 +203,7 @@ void Interpreter::Impl::StaticKernel::wait_on(const std::uint32_t index,
 }
 
 void Interpreter::Impl::StaticKernel::wake_waiters(std::vector<Waiter>& waiters,
-    const Logic4 before, const Logic4 after)
+    const WaitChange& change)
 {
     std::size_t kept = 0U;
     for (std::size_t index = 0U; index < waiters.size(); ++index) {
@@ -196,8 +212,10 @@ void Interpreter::Impl::StaticKernel::wake_waiters(std::vector<Waiter>& waiters,
         if (!thread.alive || thread.queued || thread.epoch != waiter.epoch) {
             continue;
         }
+        // A ranged waiter wakes only when its selected bits changed.
         if (waiter.edge == EdgeKind::any
-            || edge_matches(waiter.edge, before, after)) {
+            ? waiter.width == 0U || waiter_range_changed(waiter, change)
+            : edge_matches(waiter.edge, change.before, change.after)) {
             ready_thread(waiter.thread);
             continue;
         }
@@ -659,9 +677,21 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
         return member.registers[reg];
     };
     auto outcome = Boundary::none;
+    // process_suspend is raised once the wait (or halt) is registered.
+    bool suspend_point = false;
     visit_operation([&](const auto& op) {
         using T = std::decay_t<decltype(op)>;
-        if constexpr (std::is_same_v<T, WaitFor>) {
+        if constexpr (std::is_same_v<T, DebugPoint>) {
+            // Debugger plan (also a deoptimized member's reference path):
+            // the execution point of a statement, call, wait, assertion or
+            // process entry. A requested stop pauses the thread right after
+            // it; it resumes at the next operation when the run continues.
+            if (debug_point_executable(op.kind)) {
+                outcome = debug_point(index, pc) ? Boundary::suspend
+                                                 : Boundary::advance;
+            }
+        } else if constexpr (std::is_same_v<T, WaitFor>) {
+            suspend_point = true;
             auto delay = op.delay;
             if (op.source) {
                 try {
@@ -699,6 +729,7 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
             }
             outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, WaitOn>) {
+            suspend_point = true;
             std::vector<Sensitivity> entries;
             entries.reserve(op.signals.size());
             for (std::size_t entry = 0U; entry < op.signals.size(); ++entry) {
@@ -755,6 +786,7 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
             }
             outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, WaitSensitivity>) {
+            suspend_point = true;
             wait_on(index, member.wait_sensitivity);
             if (member.vhdl) {
                 threads_[index].deadline.reset();
@@ -762,9 +794,11 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
             }
             outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, WaitForever>) {
+            suspend_point = true;
             outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, Halt>
             || std::is_same_v<T, ForkEnd>) {
+            suspend_point = true;
             outcome = Boundary::finish;
         } else if constexpr (std::is_same_v<T, Stop>) {
             if (op.status) {
@@ -827,9 +861,242 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
             }
             outcome = op.join == ForkJoinKind::none ? Boundary::advance
                                                     : Boundary::suspend;
+            suspend_point = op.join != ForkJoinKind::none;
         }
     }, member.operations[pc]);
+    if (suspend_point && debug_points_) {
+        debug_suspend(index, pc);
+    }
     return outcome;
+}
+
+bool Interpreter::Impl::StaticKernel::debug_point(
+    const std::uint32_t thread_index, const std::uint32_t pc)
+{
+    auto& thread = threads_[thread_index];
+    thread.last_point = pc;
+    auto& member = members_[thread.member];
+    member.debug_pc = pc;
+    if (!impl_.execution_point_hook) {
+        return false;
+    }
+    const auto* point = operation_get_if<DebugPoint>(&member.operations[pc]);
+    if (point == nullptr) {
+        return false;
+    }
+    // The kinds map as the reference evaluator maps them
+    // (simir_execution_boundaries.cpp).
+    auto kind = ExecutionPointKind::statement;
+    switch (point->kind) {
+    case DebugPointKind::statement:
+        kind = ExecutionPointKind::statement;
+        break;
+    case DebugPointKind::call:
+        kind = ExecutionPointKind::call;
+        break;
+    case DebugPointKind::wait:
+        kind = ExecutionPointKind::wait;
+        break;
+    case DebugPointKind::assertion:
+        kind = ExecutionPointKind::assertion;
+        break;
+    case DebugPointKind::process_entry:
+        kind = ExecutionPointKind::process_entry;
+        break;
+    case DebugPointKind::block_entry:
+    case DebugPointKind::block_exit:
+        return false;
+    }
+    const auto instruction = static_cast<InstructionIndex>(
+        pc < member.origin.size() ? member.origin[pc] : pc);
+    // A member is a design process: its runtime and design ids agree; a fork
+    // child has an id of its own.
+    impl_.notify_execution_point(
+        thread.debug_process != no_slot ? thread.debug_process : member.process,
+        member.process,
+        program_of(member), instruction, kind,
+        point->source, point->scope.str());
+    if (!impl_.scheduler.stop_requested()) {
+        return false;
+    }
+    debug_stop(thread_index);
+    return true;
+}
+
+void Interpreter::Impl::StaticKernel::debug_suspend(
+    const std::uint32_t thread_index, const std::uint32_t pc)
+{
+    if (!impl_.execution_point_hook) {
+        return;
+    }
+    const auto& thread = threads_[thread_index];
+    const auto& member = members_[thread.member];
+    SourceLocation source;
+    std::string scope;
+    if (thread.last_point < member.operations.size()) {
+        if (const auto* point = operation_get_if<DebugPoint>(
+                &member.operations[thread.last_point])) {
+            source = point->source;
+            scope = point->scope.str();
+        }
+    }
+    const auto instruction = static_cast<InstructionIndex>(
+        pc < member.origin.size() ? member.origin[pc] : pc);
+    impl_.notify_execution_point(
+        thread.debug_process != no_slot ? thread.debug_process : member.process,
+        member.process, program_of(member), instruction,
+        ExecutionPointKind::process_suspend, source, scope);
+    if (impl_.scheduler.stop_requested()) {
+        // The thread is already registered as waiting: only the run stops.
+        debug_stop(no_slot);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::debug_stop(const std::uint32_t paused)
+{
+    // The kernel stops like a design $stop (Pause): its drain loops end at
+    // `stopped_`, ready threads stay ready, and `paused` resumes first. The
+    // host process is requeued in this region so that the next run
+    // activates the kernel again without waiting for an event.
+    debug_stopped_ = true;
+    stopped_ = true;
+    if (paused != no_slot) {
+        paused_thread_ = paused;
+    }
+    impl_.queue_current(host_process_);
+}
+
+bool Interpreter::Impl::StaticKernel::debug_member(
+    const ProcessId process) const noexcept
+{
+    return std::ranges::any_of(members_, [&](const Member& member) {
+        return member.process == process
+            && member.kind == StaticKernelMemberKind::behavioral;
+    });
+}
+
+PackedLogic4 Interpreter::Impl::StaticKernel::debug_register(
+    const ProcessId process, const RegisterId reg,
+    const std::size_t width) const
+{
+    const auto found = std::ranges::find_if(members_, [&](const Member& member) {
+        return member.process == process;
+    });
+    if (found == members_.end()) {
+        throw std::logic_error { "debug process is not a kernel member" };
+    }
+    const auto& member = *found;
+    if (!debug_register_defined(member, reg)) {
+        throw std::logic_error { "SimIR debug local has not been initialized" };
+    }
+    PackedLogic4 value;
+    if (member.compiled && !member.generic_mode) {
+        const auto& body = *member.compiled;
+        if (reg >= body.register_widths.size()
+            || body.register_widths[reg] == 0U) {
+            throw std::logic_error { "SimIR debug local has not been initialized" };
+        }
+        const auto register_width = body.register_widths[reg];
+        value = register_width > 64U
+            ? body.wide_registers.at(reg)
+            : uword_value(body.registers[reg], 0U, register_width,
+                  ValueKind::logic4);
+    } else {
+        if (reg >= member.registers.size()) {
+            throw std::out_of_range { "invalid SimIR register ID" };
+        }
+        value = member.registers[reg];
+    }
+    if (value.width() != width) {
+        throw std::logic_error { "SimIR debug local has not been initialized" };
+    }
+    return value;
+}
+
+std::optional<ProcessId> Interpreter::Impl::StaticKernel::debug_owner(
+    const ProcessId process) const noexcept
+{
+    if (const auto child = debug_children_.find(process);
+        child != debug_children_.end()) {
+        return members_[child->second].process;
+    }
+    if (debug_member(process)) {
+        return process;
+    }
+    return std::nullopt;
+}
+
+ContainerValue Interpreter::Impl::StaticKernel::debug_container_register(
+    const ProcessId process, const ContainerRegisterId reg) const
+{
+    const auto found = std::ranges::find_if(members_, [&](const Member& member) {
+        return member.process == process;
+    });
+    if (found == members_.end() || reg >= found->container_registers.size()
+        || found->container_registers[reg] == no_container) {
+        throw std::logic_error { "SimIR debug container local is unbound" };
+    }
+    // Kernel containers are fixed packed or scalar arrays: element ordinal
+    // order is the reference value's element order.
+    const auto& container = containers_[found->container_registers[reg]];
+    ContainerValue value;
+    value.type = container.type;
+    value.elements.reserve(container.count);
+    for (std::uint32_t ordinal = 0U; ordinal < container.count; ++ordinal) {
+        value.elements.push_back(container_element(container, ordinal));
+    }
+    return value;
+}
+
+void Interpreter::Impl::StaticKernel::debug_write_register(
+    const ProcessId process, const RegisterId reg, const PackedLogic4& value)
+{
+    const auto found = std::ranges::find_if(members_, [&](Member& member) {
+        return member.process == process;
+    });
+    if (found == members_.end()) {
+        throw std::logic_error { "debug process is not a kernel member" };
+    }
+    auto& member = *found;
+    if (member.compiled && !member.generic_mode) {
+        auto& body = *member.compiled;
+        if (reg >= body.register_widths.size()
+            || body.register_widths[reg] != value.width()) {
+            throw std::invalid_argument {
+                "invalid SimIR scalar debug-local payload"
+            };
+        }
+        const auto converted = Impl::coerce_value_kind(value, ValueKind::logic4);
+        if (value.width() > 64U) {
+            body.wide_registers.at(reg) = converted;
+        } else {
+            const auto aval = converted.aval_words();
+            const auto bval = converted.bval_words();
+            body.registers[reg] = { aval.empty() ? 0U : aval[0],
+                bval.empty() ? 0U : bval[0] };
+        }
+        // Two-state code assumes known registers; recheck before using it.
+        member.registers_known = false;
+        return;
+    }
+    if (reg >= member.registers.size()) {
+        throw std::out_of_range { "invalid SimIR register ID" };
+    }
+    member.registers[reg] = Impl::coerce_value_kind(value,
+        reg < member.register_kinds.size() ? member.register_kinds[reg]
+                                           : ValueKind::logic4);
+}
+
+std::string Interpreter::Impl::StaticKernel::debug_string_register(
+    const ProcessId process, const StringRegisterId reg) const
+{
+    const auto found = std::ranges::find_if(members_, [&](const Member& member) {
+        return member.process == process;
+    });
+    if (found == members_.end() || reg >= found->strings.size()) {
+        throw std::logic_error { "SimIR debug string local is unavailable" };
+    }
+    return found->strings[reg];
 }
 
 void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)

@@ -21,8 +21,6 @@ set(FSIM_SYSTEMC_LOADER
 set(FSIM_DPI_LOADER "${FSIM_SOURCE_DIR}/src/runtime/dpi_plugin.cpp")
 set(FSIM_VPI_LOADER "${FSIM_SOURCE_DIR}/src/runtime/vpi_plugin.cpp")
 set(FSIM_VHPI_LOADER "${FSIM_SOURCE_DIR}/src/runtime/vhpi_plugin.cpp")
-set(FSIM_LLVM_KEY "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit_cache_key.cpp")
-set(FSIM_LLVM_JIT "${FSIM_SOURCE_DIR}/src/compiler/llvm_jit.cpp")
 set(FSIM_APPLICATION_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_cli.cpp")
 set(FSIM_INCREMENTAL_TEST
@@ -47,8 +45,6 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_DPI_LOADER}"
     "${FSIM_VPI_LOADER}"
     "${FSIM_VHPI_LOADER}"
-    "${FSIM_LLVM_KEY}"
-    "${FSIM_LLVM_JIT}"
     "${FSIM_APPLICATION_TEST}"
     "${FSIM_INCREMENTAL_TEST}"
     "${FSIM_SYSTEMC_LOADER_TEST}"
@@ -120,13 +116,12 @@ function(fsim_require_native_producer_order path anchor first second)
   endif()
 endfunction()
 
+# The per-process LLVM JIT (mapped LLVM native objects, llvm_jit*.cpp) was
+# removed in the engine-v4 migration; only the SystemC producer remains.
 fsim_require_native_producer_tokens("${FSIM_LIBRARY_IMPORT}"
-  "mapped LLVM native object producer"
   "mapped SystemC native plug-in producer"
   "native.runtime_abi != runtime_abi_version"
   "native.compiler_fingerprint != *fingerprint")
-fsim_require_native_producer_order("${FSIM_LIBRARY_IMPORT}"
-  "bool admit_llvm_artifact(" "mapped LLVM native object producer" "read_payload(")
 fsim_require_native_producer_order("${FSIM_LIBRARY_IMPORT}"
   "bool admit_systemc_artifact(" "mapped SystemC native plug-in producer" "read_payload(")
 
@@ -180,20 +175,6 @@ fsim_require_native_producer_order("${FSIM_VHPI_LOADER}"
   "load_vhdl_vhpi_plugin(" "validate_vhdl_vhpi_host(" "platform::DynamicLibrary::open(")
 fsim_require_native_producer_order("${FSIM_DPI_LOADER}"
   "load_systemverilog_dpi_plugin(" "validate_systemverilog_dpi_plugin_descriptor(" "resolve(manifest.imported_symbols")
-
-fsim_require_native_producer_tokens("${FSIM_LLVM_KEY}"
-  "kNativeObjectCacheSchema"
-  "runtime-abi-version"
-  "llvm-version"
-  "data-layout"
-  "resume-result-abi-version"
-  "container-semantics")
-fsim_require_native_producer_tokens("${FSIM_LLVM_JIT}"
-  "isRelocatableObject()"
-  "getBytesInAddress() == sizeof(void*)"
-  "getArch() == target_triple_.getArch()"
-  "getTripleObjectFormat()"
-  "target_triple_.getObjectFormat()")
 
 fsim_require_native_producer_tokens("${FSIM_APPLICATION_TEST}"
   "mapped-native-incompatible"

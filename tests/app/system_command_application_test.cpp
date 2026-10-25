@@ -146,11 +146,7 @@ void test_system_command(
         assert(capture->commands == expected_commands);
     }
     assert(interpreted.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-#else
     assert(compiled.compiled_processes == 0);
-#endif
 }
 
 void test_invalid_system_command(const std::filesystem::path& directory)

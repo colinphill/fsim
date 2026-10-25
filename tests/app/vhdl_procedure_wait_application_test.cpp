@@ -333,23 +333,9 @@ end architecture;
         if (optimization == fsim::project::Optimization::o2) {
             baseline_o2_keys = reference.specialization_keys;
         }
-#if defined(FSIM_HAS_LLVM)
-        assert(cold.compiled_processes == 2);
-        assert(cold.compiled_modules == 2);
-        assert(cold.cache.hits == 0);
-        assert(cold.cache.misses == 2);
-        assert(cold.cache.stores == 2);
-        assert(warm.compiled_processes == 2);
-        assert(warm.compiled_modules == 2);
-        assert(warm.cache.hits == 2);
-        assert(warm.cache.misses == 0);
-        assert(debug.compiled_processes == 2);
-        assert(debug.compiled_modules == 2);
-#else
         assert(cold.compiled_processes == 0);
         assert(warm.compiled_processes == 0);
         assert(debug.compiled_processes == 0);
-#endif
     }
 
     std::string edited_source;
@@ -394,11 +380,7 @@ end architecture;
     assert(edited.specialization_keys.size() == 2);
     assert(edited.specialization_keys != baseline_o2_keys);
 #if defined(FSIM_HAS_LLVM)
-    assert(edited.compiled_processes == 2);
-    assert(edited.compiled_modules == 2);
     assert(edited.cache.hits == 0);
-    assert(edited.cache.misses == 2);
-    assert(edited.cache.stores == 2);
 #endif
     assert(edited.vcd.find("#6") != std::string::npos);
 

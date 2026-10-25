@@ -119,11 +119,7 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     assert(exported_metadata);
     assert(!exported_metadata->units.empty());
     assert(!exported_metadata->sources.empty());
-#if defined(FSIM_HAS_LLVM)
-    assert(!exported_metadata->native_artifacts.empty());
-#else
     assert(exported_metadata->native_artifacts.empty());
-#endif
     assert(std::ranges::all_of(
         exported_metadata->sources,
         [](const auto& source_entry) {
@@ -191,83 +187,7 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     }
     assert(mapped_direct);
     assert(mapped_direct->mapped_libraries.size() == 1);
-#if defined(FSIM_HAS_LLVM)
-    assert(mapped_direct->mapped_libraries.front().native_accepted);
-    assert(mapped_direct->mapped_libraries.front().native_kind == "llvm_object");
-    fsim::app::Simulation mapped_direct_simulation(
-        std::move(*mapped_direct), mapped_direct_config.run.max_deltas,
-        fsim::app::SimulationEngine::compiled);
-    assert(mapped_direct_simulation.native_cache_statistics().hits != 0);
-    const auto incompatible_library = directory / "work-incompatible.fsimlib";
-    clone_library_writable(exported_library, incompatible_library);
-    auto incompatible_metadata = *exported_metadata;
-    for (auto& native : incompatible_metadata.native_artifacts) {
-        native.target += "-incompatible";
-    }
-    const auto incompatible_metadata_path = incompatible_library / fsim::library::kMetadataFilename;
-    std::filesystem::permissions(
-        incompatible_metadata_path,
-        std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream output(incompatible_metadata_path, std::ios::binary);
-        output << fsim::library::serialize_metadata(incompatible_metadata);
-        assert(output.good());
-    }
-    auto incompatible_native_config = mapped_direct_config;
-    incompatible_native_config.project.name = "mapped-native-incompatible";
-    incompatible_native_config.build.cache_path = directory / "mapped-native-incompatible-cache";
-    incompatible_native_config.library_mappings.front().path = incompatible_library;
-    fsim::diagnostic::Engine incompatible_native_diagnostics;
-    auto incompatible_native = fsim::app::build_project(
-        incompatible_native_config, incompatible_native_diagnostics);
-    assert(!incompatible_native);
-    assert(std::ranges::any_of(
-        incompatible_native_diagnostics.diagnostics(),
-        [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-LIB-0008"
-                && diagnostic.message.find("mapped LLVM native object")
-                != std::string::npos
-                && diagnostic.message.find("identity: found")
-                != std::string::npos
-                && diagnostic.message.find("; required ")
-                != std::string::npos
-                && diagnostic.message.ends_with(
-                    "regenerate .fsimlib native payload with this fsim build");
-        }));
-    const auto incompatible_cache_has_file = std::filesystem::exists(incompatible_native_config.build.cache_path)
-        && std::ranges::any_of(
-            std::filesystem::recursive_directory_iterator(
-                incompatible_native_config.build.cache_path),
-            [](const auto& entry) { return entry.is_regular_file(); });
-    assert(!incompatible_cache_has_file);
-    const auto corrupt_native_library = directory / "work-native-corrupt.fsimlib";
-    clone_library_writable(exported_library, corrupt_native_library);
-    const auto corrupt_native_payload = corrupt_native_library
-        / exported_metadata->native_artifacts.front().artifact;
-    {
-        std::ofstream output(
-            corrupt_native_payload, std::ios::binary | std::ios::app);
-        output.put('\0');
-        assert(output.good());
-    }
-    auto corrupt_native_config = mapped_direct_config;
-    corrupt_native_config.project.name = "mapped-native-corrupt";
-    corrupt_native_config.build.cache_path = directory / "mapped-native-corrupt-cache";
-    corrupt_native_config.library_mappings.front().path = corrupt_native_library;
-    fsim::diagnostic::Engine corrupt_native_diagnostics;
-    assert(!fsim::app::build_project(
-        corrupt_native_config, corrupt_native_diagnostics));
-    assert(std::ranges::any_of(
-        corrupt_native_diagnostics.diagnostics(),
-        [](const auto& diagnostic) {
-            return diagnostic.code == "FSIM-LIB-0008"
-                && diagnostic.message.find("checksum mismatch")
-                != std::string::npos;
-        }));
-#else
     assert(!mapped_direct->mapped_libraries.front().native_accepted);
-#endif
     fsim::diagnostic::Engine mapped_interpreter_diagnostics;
     auto mapped_interpreter = fsim::app::build_project(
         mapped_direct_config, mapped_interpreter_diagnostics);
@@ -468,12 +388,7 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     assert(
         mapped_build->mapped_libraries.front().unit_checksums.size()
         == exported_metadata->units.size());
-#if defined(FSIM_HAS_LLVM)
-    assert(mapped_build->mapped_libraries.front().native_accepted);
-    assert(mapped_build->mapped_libraries.front().native_kind == "llvm_object");
-#else
     assert(!mapped_build->mapped_libraries.front().native_accepted);
-#endif
     assert(std::ranges::any_of(
         mapped_build->design.specializations(),
         [](const auto& specialization) {
@@ -1472,19 +1387,8 @@ endmodule
         std::move(*compiled_debug_project),
         config.run.max_deltas,
         fsim::app::SimulationEngine::debug);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled_debug_simulation.compiled_process_count() == 2);
-    assert(compiled_debug_simulation.compiled_module_count() == 2);
-    const auto debug_native_cache = compiled_debug_simulation.native_cache_statistics();
-    // The same specialization modules were already cached at the configured O2
-    // run setting. Cold objects here therefore prove that debug forces O0.
-    assert(debug_native_cache.hits == 0);
-    assert(debug_native_cache.misses == 2);
-    assert(debug_native_cache.stores == 2);
-#else
     assert(compiled_debug_simulation.compiled_process_count() == 0);
     assert(compiled_debug_simulation.compiled_module_count() == 0);
-#endif
     std::size_t compiled_observed_changes = 0;
     compiled_debug_simulation.set_signal_change_hook(
         [&compiled_observed_changes](
@@ -1516,11 +1420,7 @@ endmodule
     assert(poisoned_project);
     fsim::app::Simulation poisoned_simulation(
         std::move(*poisoned_project), config.run.max_deltas);
-#if defined(FSIM_HAS_LLVM)
-    assert(poisoned_simulation.compiled_process_count() > 0);
-#else
     assert(poisoned_simulation.compiled_process_count() == 0);
-#endif
     poisoned_simulation.set_signal_change_hook(
         [](
             fsim::runtime::simir::SignalId,

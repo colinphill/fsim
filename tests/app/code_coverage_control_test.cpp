@@ -299,12 +299,7 @@ void test_systemverilog_coverage_control(
     assert(read_u32(simulation, "constant_nocov") == 0U);
     assert(read_u32(simulation, "constant_ok") == 1U);
     assert(read_u32(simulation, "constant_partial") == 2U);
-#if defined(FSIM_HAS_LLVM)
-    assert(simulation.compiled_process_count()
-        == (engine == fsim::app::SimulationEngine::interpreter ? 0U : 1U));
-#else
     assert(simulation.compiled_process_count() == 0U);
-#endif
 }
 
 void test_standard_coverage_selection(

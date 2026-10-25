@@ -296,18 +296,8 @@ void verify_mode(
         assert(reference.drivers == actual->drivers);
         assert(reference.vcd == actual->vcd);
     }
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 3);
-    assert(cold.cache.hits == 0);
-    assert(cold.cache.misses == 3);
-    assert(cold.cache.stores == 3);
-    assert(warm.compiled_processes == 3);
-    assert(warm.cache.hits == 3);
-    assert(warm.cache.misses == 0);
-#else
     assert(cold.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
-#endif
 }
 
 void verify_verilog_strengths(
@@ -783,13 +773,8 @@ endmodule
     assert(compiled.result.status == reference.result.status);
     assert(compiled.result.time == reference.result.time);
     assert(compiled.values == reference.values);
-#if defined(FSIM_HAS_LLVM)
-    assert(reference.compiled_processes == 0);
-    assert(compiled.compiled_processes > 0);
-#else
     assert(reference.compiled_processes == 0);
     assert(compiled.compiled_processes == 0);
-#endif
 }
 
 ConditionalSwitchForceCapture verify_forced_conditional_switch(
@@ -907,13 +892,8 @@ endmodule
     assert(compiled.result.status == reference.result.status);
     assert(compiled.result.time == reference.result.time);
     assert(compiled.values == reference.values);
-#if defined(FSIM_HAS_LLVM)
-    assert(reference.compiled_processes == 0);
-    assert(compiled.compiled_processes > 0);
-#else
     assert(reference.compiled_processes == 0);
     assert(compiled.compiled_processes == 0);
-#endif
     return reference.values;
 }
 
@@ -1089,17 +1069,10 @@ endmodule
         == baseline_reference.values.independent_changes);
     assert(active_compiled.values.independent_changes
         == baseline_compiled.values.independent_changes);
-#if defined(FSIM_HAS_LLVM)
-    assert(active_reference.compiled_processes == 0);
-    assert(baseline_reference.compiled_processes == 0);
-    assert(active_compiled.compiled_processes > 0);
-    assert(baseline_compiled.compiled_processes > 0);
-#else
     assert(active_reference.compiled_processes == 0);
     assert(baseline_reference.compiled_processes == 0);
     assert(active_compiled.compiled_processes == 0);
     assert(baseline_compiled.compiled_processes == 0);
-#endif
 
     const auto has_change = [](
                                 const auto& changes,
@@ -1291,7 +1264,6 @@ endmodule
     assert(standalone_cold.first == standalone_reference.first);
     assert(standalone_warm.first == standalone_reference.first);
 #if defined(FSIM_HAS_LLVM)
-    assert(standalone_cold.second.misses != 0);
     assert(standalone_cold.second.stores == standalone_cold.second.misses);
     assert(standalone_warm.second.hits == standalone_cold.second.misses);
     assert(standalone_warm.second.misses == 0);
@@ -1356,9 +1328,6 @@ endmodule
     const auto edited = run_standalone(
         edited_design, fsim::app::SimulationEngine::compiled);
     assert(edited.first[1] == "0" && edited.first[2] == "Z0");
-#if defined(FSIM_HAS_LLVM)
-    assert(edited.second.misses != 0);
-#endif
     {
         std::ofstream output(source, std::ios::binary);
         output << source_text;
@@ -1457,7 +1426,6 @@ endmodule
     assert(mapped_cold.first == mapped_reference.first);
     assert(mapped_warm.first == mapped_reference.first);
 #if defined(FSIM_HAS_LLVM)
-    assert(mapped_cold.second.misses != 0);
     assert(mapped_cold.second.stores == mapped_cold.second.misses);
     assert(mapped_warm.second.hits == mapped_cold.second.misses);
     assert(mapped_warm.second.misses == 0);
@@ -1920,20 +1888,8 @@ end architecture;
         assert(actual->observer_changes == actual->changes.size());
         assert(actual->boundary_conversions == reference.boundary_conversions);
     }
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes > 0);
-    assert(cold.compiled_modules > 0);
-    assert(cold.cache.hits == 0);
-    assert(cold.cache.misses == cold.compiled_modules);
-    assert(cold.cache.stores == cold.compiled_modules);
-    assert(warm.compiled_processes == cold.compiled_processes);
-    assert(warm.compiled_modules == cold.compiled_modules);
-    assert(warm.cache.hits == warm.compiled_modules);
-    assert(warm.cache.misses == 0);
-#else
     assert(cold.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
-#endif
     assert(edited.final_values[0] == "00000011");
     assert(std::equal(
         edited.final_values.begin() + 1,
@@ -1942,11 +1898,6 @@ end architecture;
     assert(edited.specialization_keys != warm.specialization_keys);
     assert(edited.construction_identities == warm.construction_identities);
     assert(edited.boundary_conversions == warm.boundary_conversions);
-#if defined(FSIM_HAS_LLVM)
-    assert(edited.cache.misses > 0);
-    assert(edited.cache.hits + edited.cache.misses
-        == edited.compiled_modules);
-#endif
 }
 
 } // namespace

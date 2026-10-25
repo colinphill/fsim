@@ -22,7 +22,7 @@ set(FSIM_WITNESSES
   fsim.application.sv_conformance
   fsim.application.typed_boundaries
   fsim.application.artifact_phases
-  fsim.llvm
+  fsim.application.static-kernel
   fsim.application.vpi
   fsim.application.tcl
   fsim.api

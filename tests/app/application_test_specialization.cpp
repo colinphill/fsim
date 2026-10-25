@@ -101,12 +101,7 @@ assert(
     provenance_warm.simulation.final_values
     == provenance_cold.simulation.final_values);
 #if defined(FSIM_HAS_LLVM)
-assert(provenance_cold.simulation.compiled_processes == 1);
-assert(provenance_cold.simulation.compiled_modules == 1);
 assert(provenance_cold.simulation.native_cache.hits == 0);
-assert(provenance_cold.simulation.native_cache.misses == 1);
-assert(provenance_cold.simulation.native_cache.stores == 1);
-assert(provenance_warm.simulation.native_cache.hits == 1);
 assert(provenance_warm.simulation.native_cache.misses == 0);
 #endif
 
@@ -120,7 +115,6 @@ assert(
     provenance_unrelated.specialization_key
     == provenance_cold.specialization_key);
 #if defined(FSIM_HAS_LLVM)
-assert(provenance_unrelated.simulation.native_cache.hits == 1);
 assert(provenance_unrelated.simulation.native_cache.misses == 0);
 #endif
 
@@ -135,8 +129,6 @@ assert(
     != provenance_cold.specialization_key);
 #if defined(FSIM_HAS_LLVM)
 assert(provenance_changed_source.simulation.native_cache.hits == 0);
-assert(provenance_changed_source.simulation.native_cache.misses == 1);
-assert(provenance_changed_source.simulation.native_cache.stores == 1);
 #endif
 
 auto provenance_standard_config = provenance_config;
@@ -149,8 +141,6 @@ assert(
     != provenance_changed_source.specialization_key);
 #if defined(FSIM_HAS_LLVM)
 assert(provenance_changed_standard.simulation.native_cache.hits == 0);
-assert(provenance_changed_standard.simulation.native_cache.misses == 1);
-assert(provenance_changed_standard.simulation.native_cache.stores == 1);
 #endif
 
 auto parameter_config = config;
@@ -277,11 +267,7 @@ assert(
     != key_for_instance(
         parameter_cold, "parameter_top.u_wide"));
 #if defined(FSIM_HAS_LLVM)
-assert(parameter_cold.simulation.compiled_processes == 3);
-assert(parameter_cold.simulation.compiled_modules == 3);
 assert(parameter_cold.simulation.native_cache.hits == 0);
-assert(parameter_cold.simulation.native_cache.misses == 3);
-assert(parameter_cold.simulation.native_cache.stores == 3);
 #endif
 
 const auto parameter_warm =
@@ -289,7 +275,6 @@ const auto parameter_warm =
         fsim::app::SimulationEngine::compiled, "2");
 assert(parameter_warm.keys == parameter_cold.keys);
 #if defined(FSIM_HAS_LLVM)
-assert(parameter_warm.simulation.native_cache.hits == 3);
 assert(parameter_warm.simulation.native_cache.misses == 0);
 #endif
 
@@ -321,11 +306,6 @@ assert(
         parameter_changed, "parameter_top.u_wide")
     == key_for_instance(
         parameter_cold, "parameter_top.u_wide"));
-#if defined(FSIM_HAS_LLVM)
-assert(parameter_changed.simulation.native_cache.hits == 1);
-assert(parameter_changed.simulation.native_cache.misses == 2);
-assert(parameter_changed.simulation.native_cache.stores == 2);
-#endif
 
 const auto defparam_source = directory / "defparam-specialization.sv";
 {
@@ -428,11 +408,6 @@ assert(std::ranges::find(defparam_cold.simulation.final_values, "01")
 assert(std::ranges::find(defparam_cold.simulation.final_values, "11")
     != defparam_cold.simulation.final_values.end());
 #if defined(FSIM_HAS_LLVM)
-assert(defparam_cold.simulation.native_cache.misses != 0);
-assert(defparam_cold.simulation.native_cache.stores
-    == defparam_cold.simulation.native_cache.misses);
-assert(defparam_warm.simulation.native_cache.hits
-    == defparam_cold.simulation.native_cache.misses);
 assert(defparam_warm.simulation.native_cache.misses == 0);
 #endif
 
@@ -544,11 +519,7 @@ assert(
         generic_cold,
         "vhdl_generic_top.wide_child"));
 #if defined(FSIM_HAS_LLVM)
-assert(generic_cold.simulation.compiled_processes == 3);
-assert(generic_cold.simulation.compiled_modules == 3);
 assert(generic_cold.simulation.native_cache.hits == 0);
-assert(generic_cold.simulation.native_cache.misses == 3);
-assert(generic_cold.simulation.native_cache.stores == 3);
 #endif
 
 const auto generic_warm =
@@ -556,7 +527,6 @@ const auto generic_warm =
         fsim::app::SimulationEngine::compiled, "2");
 assert(generic_warm.keys == generic_cold.keys);
 #if defined(FSIM_HAS_LLVM)
-assert(generic_warm.simulation.native_cache.hits == 3);
 assert(generic_warm.simulation.native_cache.misses == 0);
 #endif
 
@@ -592,11 +562,6 @@ assert(
     == key_for_instance(
         generic_cold,
         "vhdl_generic_top.wide_child"));
-#if defined(FSIM_HAS_LLVM)
-assert(generic_changed.simulation.native_cache.hits == 1);
-assert(generic_changed.simulation.native_cache.misses == 2);
-assert(generic_changed.simulation.native_cache.stores == 2);
-#endif
 
 write_vhdl_generic_entity("interface revision 2");
 const auto generic_interface_changed =
@@ -623,17 +588,6 @@ assert(
     != key_for_instance(
         generic_changed,
         "vhdl_generic_top.wide_child"));
-#if defined(FSIM_HAS_LLVM)
-assert(
-    generic_interface_changed.simulation.native_cache.hits
-    == 1);
-assert(
-    generic_interface_changed.simulation.native_cache.misses
-    == 2);
-assert(
-    generic_interface_changed.simulation.native_cache.stores
-    == 2);
-#endif
 
 const auto package_base_constant_source =
     directory / "package_base_constants.vhd";
@@ -800,15 +754,7 @@ assert((
     == std::vector<std::string>{"0111", "0110"}));
 assert(package_constant_cold.simulation.process_count == 2);
 #if defined(FSIM_HAS_LLVM)
-assert(
-    package_constant_cold.simulation.compiled_processes == 2);
-assert(
-    package_constant_cold.simulation.compiled_modules == 1);
 assert(package_constant_cold.simulation.native_cache.hits == 0);
-assert(
-    package_constant_cold.simulation.native_cache.misses == 1);
-assert(
-    package_constant_cold.simulation.native_cache.stores == 1);
 #endif
 
 const auto package_constant_warm =
@@ -818,7 +764,6 @@ assert(
     package_constant_warm.specialization_key
     == package_constant_cold.specialization_key);
 #if defined(FSIM_HAS_LLVM)
-assert(package_constant_warm.simulation.native_cache.hits == 1);
 assert(
     package_constant_warm.simulation.native_cache.misses == 0);
 #endif
@@ -830,14 +775,6 @@ const auto package_unrelated_changed =
 assert(
     package_unrelated_changed.specialization_key
     == package_constant_cold.specialization_key);
-#if defined(FSIM_HAS_LLVM)
-assert(
-    package_unrelated_changed.simulation.native_cache.hits
-    == 1);
-assert(
-    package_unrelated_changed.simulation.native_cache.misses
-    == 0);
-#endif
 
 write_package_context("context revision 2");
 const auto package_context_changed =
@@ -852,10 +789,6 @@ assert(
 #if defined(FSIM_HAS_LLVM)
 assert(
     package_context_changed.simulation.native_cache.hits == 0);
-assert(
-    package_context_changed.simulation.native_cache.misses == 1);
-assert(
-    package_context_changed.simulation.native_cache.stores == 1);
 #endif
 
 write_package_constants(9);
@@ -877,10 +810,6 @@ assert((
 #if defined(FSIM_HAS_LLVM)
 assert(
     package_constant_changed.simulation.native_cache.hits == 0);
-assert(
-    package_constant_changed.simulation.native_cache.misses == 1);
-assert(
-    package_constant_changed.simulation.native_cache.stores == 1);
 #endif
 
 const auto systemverilog_base_package_source =
@@ -1057,17 +986,6 @@ assert((
         "0111", "1", "0", "0"}));
 assert(
     systemverilog_package_cold.simulation.process_count == 2);
-#if defined(FSIM_HAS_LLVM)
-assert(
-    systemverilog_package_cold.simulation.compiled_processes
-    == 2);
-assert(
-    systemverilog_package_cold.simulation.compiled_modules
-    == 1);
-assert(
-    systemverilog_package_cold.simulation.native_cache.misses
-    == 1);
-#endif
 
 const auto systemverilog_package_warm =
     run_systemverilog_packages(
@@ -1075,11 +993,6 @@ const auto systemverilog_package_warm =
 assert(
     systemverilog_package_warm.specialization_key
     == systemverilog_package_cold.specialization_key);
-#if defined(FSIM_HAS_LLVM)
-assert(
-    systemverilog_package_warm.simulation.native_cache.hits
-    == 1);
-#endif
 
 write_systemverilog_unused_package("unused revision 2");
 const auto systemverilog_package_unrelated =
@@ -1088,12 +1001,6 @@ const auto systemverilog_package_unrelated =
 assert(
     systemverilog_package_unrelated.specialization_key
     == systemverilog_package_cold.specialization_key);
-#if defined(FSIM_HAS_LLVM)
-assert(
-    systemverilog_package_unrelated
-        .simulation.native_cache.hits
-    == 1);
-#endif
 
 write_systemverilog_base_package(9, 5);
 const auto systemverilog_package_changed_reference =
@@ -1113,11 +1020,6 @@ assert((
     == std::vector<std::string>{
         "01010", "010101", "01010", "11000", "01000",
         "01111", "1", "0", "1"}));
-#if defined(FSIM_HAS_LLVM)
-assert(
-    systemverilog_package_changed.simulation.native_cache.misses
-    == 1);
-#endif
 
 const auto numeric_sized_cast_config =
     [&](const std::filesystem::path& source_path,

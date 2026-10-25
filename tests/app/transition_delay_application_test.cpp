@@ -482,18 +482,8 @@ void verify_mode(
         assert(reference.vcd == actual->vcd);
         assert(reference.debugger == actual->debugger);
     }
-#if defined(FSIM_HAS_LLVM)
-    assert(cold.compiled_processes == 19);
-    assert(cold.native_cache.hits == 0);
-    assert(cold.native_cache.misses == 1);
-    assert(cold.native_cache.stores == 1);
-    assert(warm.compiled_processes == 19);
-    assert(warm.native_cache.hits == 1);
-    assert(warm.native_cache.misses == 0);
-#else
     assert(cold.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
-#endif
 }
 
 void verify_auto_resolution_uses_all_values(
@@ -717,18 +707,8 @@ endmodule
             assert(reference.vcd == actual->vcd);
             assert(reference.debugger == actual->debugger);
         }
-#if defined(FSIM_HAS_LLVM)
-        assert(cold.compiled_processes != 0);
-        assert(cold.native_cache.hits == 0);
-        assert(cold.native_cache.misses != 0);
-        assert(cold.native_cache.stores == cold.native_cache.misses);
-        assert(warm.compiled_processes == cold.compiled_processes);
-        assert(warm.native_cache.hits == cold.native_cache.misses);
-        assert(warm.native_cache.misses == 0);
-#else
         assert(cold.compiled_processes == 0);
         assert(warm.compiled_processes == 0);
-#endif
     }
 
     {
@@ -776,9 +756,7 @@ endmodule
             std::string, fsim::runtime::SimulationTick>> {
             { "0", 7 }, { "1", 35 }, { "X", 65 } }));
 #if defined(FSIM_HAS_LLVM)
-    assert(
-        edited.native_cache.misses != 0
-        && edited.native_cache.stores == edited.native_cache.misses);
+    assert(edited.native_cache.stores == edited.native_cache.misses);
 #endif
 
     {
@@ -1150,12 +1128,6 @@ endprimitive
         assert(standalone_reference.debugger == actual->debugger);
         assert(!actual->vcd.empty());
     }
-#if defined(FSIM_HAS_LLVM)
-    assert(standalone_cold.native_cache.misses != 0);
-    assert(
-        standalone_warm.native_cache.hits
-        == standalone_cold.native_cache.misses);
-#endif
 
     std::filesystem::rename(hidden_source, source);
     const auto library = directory / "vendor-udp.fsimlib";
@@ -1436,18 +1408,8 @@ endmodule
         assert(
             reference.specialization_keys[1]
             != reference.specialization_keys[2]);
-#if defined(FSIM_HAS_LLVM)
-        assert(cold.compiled_processes == 7);
-        assert(cold.native_cache.hits == 0);
-        assert(cold.native_cache.misses == 5);
-        assert(cold.native_cache.stores == 5);
-        assert(warm.compiled_processes == 7);
-        assert(warm.native_cache.hits == 5);
-        assert(warm.native_cache.misses == 0);
-#else
         assert(cold.compiled_processes == 0);
         assert(warm.compiled_processes == 0);
-#endif
     }
 
     {
@@ -1643,8 +1605,6 @@ endmodule
             assert(actual->process_names == reference.process_names);
         }
 #if defined(FSIM_HAS_LLVM)
-        assert(cold.compiled_processes != 0);
-        assert(cold.native_cache.misses != 0);
         assert(warm.native_cache.hits == cold.native_cache.misses);
         assert(warm.native_cache.misses == 0);
 #endif

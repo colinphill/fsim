@@ -272,23 +272,9 @@ void test_assertion_actions(
         reference.failure_severity
         == fsim::runtime::simir::AssertionSeverity::failure);
     assert(reference.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes == 1);
-    assert(compiled.native_cache.hits == 0);
-    assert(compiled.native_cache.misses == 1);
-    assert(compiled.native_cache.stores == 1);
-    assert(warm.compiled_processes == 1);
-    assert(warm.native_cache.hits == 1);
-    assert(warm.native_cache.misses == 0);
-    assert(changed.compiled_processes == 1);
-    assert(changed.native_cache.hits == 0);
-    assert(changed.native_cache.misses == 1);
-    assert(changed.native_cache.stores == 1);
-#else
     assert(compiled.compiled_processes == 0);
     assert(warm.compiled_processes == 0);
     assert(changed.compiled_processes == 0);
-#endif
 }
 
 void test_cli_failure_reporting(
@@ -495,9 +481,6 @@ endmodule
                    fsim::runtime::SchedulerPhase::postponed)
             != interpreted.phases.end());
 #if defined(FSIM_HAS_LLVM)
-        assert(compiled.native_cache.misses == 1);
-        assert(compiled.native_cache.stores == 1);
-        assert(warm.native_cache.hits == 1);
         assert(warm.native_cache.misses == 0);
 #endif
     }
@@ -883,10 +866,6 @@ endmodule
         assert(capture->callback_events == capture->events);
         assert(capture->action_handoffs == reference.action_handoffs);
     }
-#if defined(FSIM_HAS_LLVM)
-    assert(artifact_compiled_cold.compiled_processes >= 5);
-    assert(artifact_compiled_warm.native_cache.hits != 0);
-#endif
     const auto relocated_design = directory / "relocated-concurrent-assertions.fsimdesign";
     std::filesystem::rename(design, relocated_design);
     fsim::diagnostic::Engine relocated_diagnostics;
@@ -910,11 +889,7 @@ endmodule
                })
         == 2);
     assert(reference.compiled_processes == 0);
-#if defined(FSIM_HAS_LLVM)
-    assert(compiled.compiled_processes >= 5);
-#else
     assert(compiled.compiled_processes == 0);
-#endif
 }
 
 void test_overlapped_implication(const std::filesystem::path& directory)

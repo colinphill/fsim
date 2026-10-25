@@ -138,15 +138,8 @@ fsim_require_v2_rejection_tokens(tests/app/application_test_artifact_phases.cpp
 fsim_require_v2_rejection_tokens(tests/app/application_test_classes.cpp
   "{ 6U, fsim::app::kSystemVerilogConstraintHirStateSchema + 1U }"
   "incompatible-sv-constraint-hir.bin")
-fsim_require_v2_rejection_tokens(src/compiler/native_cache_schema.hpp
-  "fsim-llvm-native-object-v169")
-file(READ "${FSIM_SOURCE_DIR}/src/compiler/native_cache_schema.hpp"
-  FSIM_CACHE_KEY_TEXT)
-string(FIND "${FSIM_CACHE_KEY_TEXT}" "fsim-llvm-native-object-v116"
-  FSIM_V2_CACHE_FOUND)
-if(NOT FSIM_V2_CACHE_FOUND EQUAL -1)
-  message(FATAL_ERROR "v3 native cache regained the v2 namespace")
-endif()
+# The native object cache schema (src/compiler/native_cache_schema.hpp) was
+# removed with the per-process JIT; the V3REJECT-CACHE row goes with it.
 fsim_require_v2_rejection_tokens(tests/runtime/native_plugin_abi_test.cpp
   "value.abi_version = 2"
   "native plug-in ABI rejects v2 directly"
@@ -177,7 +170,7 @@ fsim_require_v2_rejection_tokens(tests/CMakeLists.txt
   "CheckCurrentV2InputRejection.cmake")
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 set(FSIM_EXPECTED_DIGEST
-  "601f7f20964c79f13c970ee08c94eb215b71f46e030b5b520c2a8c2cfdd7c095")
+  "8d2e1038e381776ebecd46939c1981484437977995b5cc61de0b0d8075bb6983")
 if(NOT FSIM_LEDGER_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "v3 v2-input rejection digest changed: expected=${FSIM_EXPECTED_DIGEST} actual=${FSIM_LEDGER_DIGEST}")

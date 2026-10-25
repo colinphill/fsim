@@ -60,8 +60,8 @@ provenance and artifact anchors. The registered 16-witness serial matrix
 retains one log per witness and a 17-row stage ledger across engines, caches,
 artifacts, mixed languages, public services, platforms and resources. The
 mode, compatibility, revision-corpus and switch-corpus SHA-256 identities are
-`0da5aa061721a8a58a213d462ddb44677bc203a9894c0a21d4b4b558c32513c9`,
-`84eea9da575770077be46e44cfa3faeccbabb0873f4665a69a66db483ceaa874`,
+`0adb7927fefe79f2c1df463282719d66676252f40bca415b49dce909f534bf99`,
+`263453e48f70c9c19b1e9d9a06eed6861944d44ad60fe82ee0a9f3359b0c226b`,
 `8c3018215c3e8c7d1fdc90c275d2f3d3e4ee065956c8b205fb740a8d750981f7`, and
 `9b4beb086ee639c4fb3d40aa8ebc1df2b1c9e17e0a84e350fd975b6db81dc9a3`.
 
@@ -125,7 +125,7 @@ aggregation, artifact, diagnostic, and resource owners. The language-neutral
 All seventeen rows are preserved. Change 19 proves cross-row engine and
 aggregation equivalence, and Change 20 freezes the completed batch. The
 registered normalized SHA-256 identity is
-`e3921c7c2e4a7a18bfdfc2d6984f8dad1105943e27ab73042ba7dce150be7814`.
+`2f5cfb8b20cc092c51b553b87da944fb5850574e84e3008442b117062226dd39`.
 
 Batch 179 starts with the exact 17-row
 `code_coverage_metrics_inventory.tsv` ledger. All seventeen rows are preserved
@@ -144,7 +144,7 @@ mixed-language equivalence and advances enabled artifact identity to the
 broad-metrics model; Change 20 freezes the complete broad-metric set with
 MC/DC still excluded. The registered normalized
 SHA-256 identity is
-`9776aa279d03422fb469bf869783a274fe8f6f79ceaa4df4a574b45880f86113`.
+`abcee589bcedf70840f5814d41a3d05fd1714bac27109b9de979704288240bf8`.
 
 Batch 181 starts with the IEEE-only 18-row `legacy_tf_inventory.tsv` ledger.
 Its stable rows assign Changes 2-19 one-to-one across the direct v3 native
@@ -317,8 +317,6 @@ These suites are the evidence currently referenced by the matrix:
 | [api/api_test.cpp](../api/api_test.cpp) | Source-ID-marked C API/callback/handle expectations: C ABI lifecycle, generation-checked hierarchy/value handles, force/deposit/release, synchronous process-bearing safe-point callbacks and re-entry guards, ordered VHDL/SystemVerilog note/warning/error/failure callbacks without fatal duplication, run, statement/process/delta/time stepping, callback-issued asynchronous stop/resume, and terminal-stop precedence |
 | [api/api_header_c_test.c](../api/api_header_c_test.c) | Source-ID-marked strict-C public-header ABI prefix, flag separation, callback-layout, session creation, version, and destruction checks |
 | [compiler/cache_test.cpp](../compiler/cache_test.cpp) | SHA-256 stability, process-aware locking/stale-lock recovery, atomic replacement, and cache store/load/erase |
-| [compiler/jit_runtime_c_test.c](../compiler/jit_runtime_c_test.c) | C11 compilation, preserved resume-status values 0–5, appended wait/debug/permanent-wait statuses 6–9, fixed ABI offsets/size, and callback layout for the append-only v1 scheduled-write, inertial/projected-write, debug-control, signal-event, signal-last-value, elapsed-event-time, signal-transaction, language-output, report, runtime-formatting, mutable-string, and opaque text-file fields |
-| [compiler/llvm_jit_test.cpp](../compiler/llvm_jit_test.cpp) | Source-ID-marked LLVM execution/cache/rejection expectations: LLVM O0/O2 CFG, logical/reduction/arithmetic-shift/rotate truth tables, exhaustive scalar four-state case-equality, `casez`, `casex`, and one-sided wildcard-equality kernels plus vector unknown-dominance cases, scheduled/inertial/projected writes, `WaitOn`, `WaitSensitivity`, `WaitForever`, and source `DebugPoint` operations; grouped specialization modules with atomic validation, execution, warm reuse, and member invalidation; layout-preserving resume statuses; O0-unconditional/O2-size-gated debug suspension; finite cyclic CFG execution at O0/O2 and raw zero-time-cycle compilation without execution; sensitivity-only 128/257-bit signals; wait-list/signal/width/static-and-dynamic-edge validation; runtime-tail validation; and persistent-cache tests for referenced values, wildcard comparison policy, scheduled kind/delay, projected mode/delay/rejection, wait kind/operand/referenced-width/edge, and source-point identity |
 | [systemc/systemc_compatibility_test.cpp](../systemc/systemc_compatibility_test.cpp) | Official Accellera SystemC version, module, process, signal, export-macro, ABI-identity, and compiler/standard-library compatibility expectations |
 | [systemc/systemc_abi_c_test.c](../systemc/systemc_abi_c_test.c) | Source-ID-marked strict C11 compilation plus append-only host/registrar layout and opaque-handle checks |
 | [systemc/plugin_loader_test.cpp](../systemc/plugin_loader_test.cpp) | Source-ID-marked native plug-in load/lifecycle and transactional factory registration, typed module/port/foreign-child construction, method/static-edge sensitivity and initialization metadata with opaque-handle connectivity, and throwing/rejected-initializer containment without partial registration |
