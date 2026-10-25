@@ -316,8 +316,9 @@ struct StaticKernelRuntimeSpec {
 
 /// Operations a VHDL delta-mode member may use: the pure value operations,
 /// control flow with fixed or dynamic call stacks and automatic frames,
-/// VHDL integer arithmetic and checks, assertions, current-value reads,
-/// zero-delay signal assignments and shared-variable writes.
+/// VHDL integer arithmetic and checks, assertions and report statements,
+/// current-value reads, zero-delay signal assignments and shared-variable
+/// writes.
 [[nodiscard]] inline bool static_kernel_vhdl_operation_supported(
     const Operation& operation)
 {
@@ -375,9 +376,24 @@ struct StaticKernelRuntimeSpec {
                 || std::is_same_v<T, IntegerUnary>
                 || std::is_same_v<T, IntegerBinary>
                 || std::is_same_v<T, IntegerCheck>
-                || std::is_same_v<T, Assert>;
+                || std::is_same_v<T, Assert>
+                || std::is_same_v<T, Report>;
         }
     }, operation);
+}
+
+/// A halt that follows a failure-severity report, as the VHDL lowering emits
+/// for its runtime checks (value length, slice bounds, loop iteration limit):
+/// the report ends the simulation (the kernel raises the assertion failure,
+/// IEEE 1076-2019 10.9), so the halt never runs. Callers also check that no
+/// branch targets it.
+[[nodiscard]] inline bool static_kernel_halt_after_failure(
+    const Operation& previous, const Operation& operation)
+{
+    const auto* halt = operation_get_if<Halt>(&operation);
+    const auto* report = operation_get_if<Report>(&previous);
+    return halt != nullptr && !halt->program_exit && report != nullptr
+        && report->severity == AssertionSeverity::failure;
 }
 
 /// Operations a VHDL behavioral member may use (IEEE 1076-2019 11.3, 10.2):

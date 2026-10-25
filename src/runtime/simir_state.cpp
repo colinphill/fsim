@@ -3654,6 +3654,7 @@ void Interpreter::Impl::publish_native_word(
     direct_signal_materialization_pending[signal_id] = 1U;
 
     ++signal_value_revisions[signal_id];
+    note_signal_revision(signal_id);
     note_aggregate_leaf_current_change(signal_id);
     if (signal_value_revisions[signal_id] == 0U) {
         signal_value_revisions[signal_id] = 1U;
@@ -3733,6 +3734,7 @@ void Interpreter::Impl::publish_native_logic9_word(
     direct_signal_materialization_pending[signal_id] = 1U;
 
     ++signal_value_revisions[signal_id];
+    note_signal_revision(signal_id);
     note_aggregate_leaf_current_change(signal_id);
     if (signal_value_revisions[signal_id] == 0U) {
         signal_value_revisions[signal_id] = 1U;
@@ -4001,6 +4003,7 @@ void Interpreter::Impl::publish_value_change(
     }
     if (!state_prepared) {
         ++signal_value_revisions[signal_id];
+        note_signal_revision(signal_id);
         note_aggregate_leaf_current_change(signal_id);
         if (signal_value_revisions[signal_id] == 0U) {
             signal_value_revisions[signal_id] = 1U;

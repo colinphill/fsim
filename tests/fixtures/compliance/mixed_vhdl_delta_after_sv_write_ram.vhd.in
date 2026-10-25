@@ -1,0 +1,43 @@
+-- Compiled before mixed_vhdl_delta_after_sv_write.sv into the same library.
+-- SPDX-License-Identifier: Apache-2.0
+-- A counter and a read port of a lookup table, both clocked by the
+-- SystemVerilog testbench. The read port waits on clk'event (not a native
+-- kernel member), so it runs as a hosted process beside the counter.
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity mixed_delta_ram is
+  port (clk    : in  std_logic;
+        rdata  : out std_logic_vector(7 downto 0);
+        addr_o : out std_logic_vector(3 downto 0));
+end entity;
+
+architecture rtl of mixed_delta_ram is
+  type table_t is array (0 to 15) of std_logic_vector(7 downto 0);
+  signal addr : unsigned(3 downto 0) := (others => '0');
+begin
+  counter : process (clk) is
+  begin
+    if rising_edge(clk) then
+      addr <= addr + 1;
+    end if;
+  end process;
+
+  read_port : process (clk) is
+    variable table : table_t;
+    variable filled : boolean := false;
+  begin
+    if not filled then
+      for i in table'range loop
+        table(i) := std_logic_vector(to_unsigned(i * 3, 8));
+      end loop;
+      filled := true;
+    end if;
+    if clk'event and clk = '1' then
+      rdata <= table(to_integer(addr));
+    end if;
+  end process;
+
+  addr_o <= std_logic_vector(addr);
+end architecture;

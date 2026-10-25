@@ -95,14 +95,14 @@ void Interpreter::Impl::StaticKernel::adopt_hosted(
         // process.
         const bool systemverilog = impl_.processes.scheduling_domain(id)
             == ProcessSchedulingDomain::systemverilog;
-        // The one SystemVerilog-domain process a VHDL kernel hosts is an
-        // implicit-signal driver (no initial run; the planner chose it).
-        const bool implicit_driver = systemverilog && vhdl_
-            && !impl_.processes.program_view(id).initialize()
+        // The SystemVerilog-domain processes a VHDL kernel hosts are
+        // Active-region ones (implicit-signal drivers and Verilog processes
+        // the planner chose); they run in its delta rounds like VHDL ones.
+        const bool active_systemverilog = systemverilog && vhdl_
             && state->execution_phase == SchedulerPhase::active;
         // A postponed VHDL process (1076-2019 11.3, 14.7.5.3) waits in the
         // postponed region list, the end of the time step (S25a).
-        if ((systemverilog == vhdl_ && !implicit_driver)
+        if ((systemverilog == vhdl_ && !active_systemverilog)
             || (!systemverilog
                 && state->execution_phase != SchedulerPhase::active
                 && state->execution_phase != SchedulerPhase::postponed)) {

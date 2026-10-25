@@ -1607,6 +1607,7 @@ void Interpreter::Impl::publish_container_alias_family(
                 } else {
                     ++revision;
                 }
+                note_signal_revision(leaf.signal);
 
                 auto& family_revision
                     = container_aggregate_current_revisions[object];

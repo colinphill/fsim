@@ -129,7 +129,7 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                         slot.time, impl_->options.max_delta_cycles,
                         impl_->pending_next_orders(), impl_->recent_signals);
                 }
-                std::swap(slot.current, slot.next_delta);
+                slot.current.swap(slot.next_delta);
                 ++slot.delta;
                 slot.phase = 0;
                 continue;

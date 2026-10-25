@@ -1400,6 +1400,20 @@ struct Interpreter::Impl : SchedulerBatchTask {
         signal_selection_transaction_pending_listed;
     std::vector<SignalId> signal_selection_pending_transaction_signals;
     std::vector<std::uint64_t> signal_value_revisions;
+    /// Signals the static kernel reads as inputs (1), and those among them
+    /// whose revision changed since the kernel last scanned them (2, listed
+    /// in static_kernel_dirty_inputs): the kernel refreshes only those.
+    std::vector<std::uint8_t> static_kernel_input_marks;
+    std::vector<SignalId> static_kernel_dirty_inputs;
+    /// Called after every bump of signal_value_revisions[signal].
+    void note_signal_revision(const SignalId signal)
+    {
+        if (signal < static_kernel_input_marks.size()
+            && static_kernel_input_marks[signal] == 1U) {
+            static_kernel_input_marks[signal] = 2U;
+            static_kernel_dirty_inputs.push_back(signal);
+        }
+    }
     std::vector<PackedLogic4> sampled_values;
     std::vector<PackedLogic4> sampled_defaults;
     // SignalId-indexed dependency mask for historical ReadSignal operations.

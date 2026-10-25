@@ -785,10 +785,52 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                 "static kernel wiring does not fit its signals");
         }
         wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
-            wire->offset, wire->width });
+            wire->offset, wire->width, 0U });
         auto& dependents = impl_.vhdl_conversion_dependents[source];
         std::erase(dependents, signal);
         impl_.vhdl_resolvers.erase(resolver);
+    }
+    // Wired actual parts: an owned signal whose conversion drivers are
+    // pure-routing programs over owned output formals (the planner owns it
+    // only then) is driven part by part by the kernel; the host runs none of
+    // them again.
+    for (const auto signal : spec.owned_signals) {
+        const auto found = impl_.vhdl_conversion_drivers.find(signal);
+        if (found == impl_.vhdl_conversion_drivers.end()) {
+            continue;
+        }
+        for (const auto& driver : found->second) {
+            const auto wire = driver.sources.size() == 1U
+                    && driver.program < impl_.processes.size()
+                ? static_kernel_wiring(
+                      impl_.processes.program_view(driver.program).operations(),
+                      driver.output, [&](const SignalId id) {
+                          return static_cast<std::uint64_t>(
+                              impl_.get_signal(id).initial_value.width());
+                      })
+                : std::nullopt;
+            const auto source = wire ? wire->source : SignalId { };
+            const auto target_offset = driver.offset.value_or(0U);
+            if (!wire || source != driver.sources.front()
+                || source >= signal_count || slot_of_signal_[source] == no_slot
+                || impl_.vhdl_resolvers.contains(signal)) {
+                throw std::invalid_argument(
+                    "static kernel wiring does not fit its signals");
+            }
+            const auto& from = slots_[slot_of_signal_[source]];
+            const auto& to = slots_[slot_of_signal_[signal]];
+            if (from.planes != to.planes || wire->offset + wire->width > from.width
+                || target_offset + wire->width > to.width
+                || (!driver.offset && wire->width != to.width)) {
+                throw std::invalid_argument(
+                    "static kernel wiring does not fit its signals");
+            }
+            wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
+                wire->offset, wire->width,
+                static_cast<std::uint32_t>(target_offset) });
+            std::erase(impl_.vhdl_conversion_dependents[source], signal);
+        }
+        impl_.vhdl_conversion_drivers.erase(found);
     }
     std::ranges::stable_sort(wires_, {}, &Wire::source);
     slot_wires_.assign(slots_.size(), { 0U, 0U });
@@ -1651,15 +1693,18 @@ bool Interpreter::Impl::StaticKernel::copy_wire(const Wire& wire)
     for (std::uint32_t plane = 0U; plane < to.planes; ++plane) {
         const auto* source = arena_.data() + from.offset + plane * from.words;
         auto* target = arena_.data() + to.offset + plane * to.words;
-        for (std::uint32_t done = 0U; done < wire.width; done += 64U) {
-            const auto chunk = std::min(64U, wire.width - done);
+        for (std::uint32_t done = 0U; done < wire.width;) {
+            // At most to the end of the target word.
+            const auto bit = wire.target_offset + done;
+            const auto chunk = std::min(64U - bit % 64U, wire.width - done);
             const auto bits = read_plane_bits(
                 source, from.words, wire.offset + done, chunk);
-            auto& out = target[done / 64U];
-            const auto mask = kernel_word::mask(chunk);
-            const auto next = (out & ~mask) | bits;
+            auto& out = target[bit / 64U];
+            const auto mask = kernel_word::mask(chunk) << (bit % 64U);
+            const auto next = (out & ~mask) | (bits << (bit % 64U));
             changed = changed || next != out;
             out = next;
+            done += chunk;
         }
     }
     return changed;
@@ -3140,6 +3185,21 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                             std::string { message }, op.severity, op.source);
                     }
                 }
+            } else if constexpr (std::is_same_v<T, Report>) {
+                // IEEE 1076-2019 10.9 (the planner keeps 2019 mode on the
+                // host): the message goes through the assertion hook.
+                if (impl_.report_hook) {
+                    impl_.report_hook(member.process, op.message.str(),
+                        op.severity, op.source, kernel_now(),
+                        warp_time_ ? 0U : impl_.scheduler.delta());
+                }
+                if (op.severity == AssertionSeverity::failure) {
+                    throw AssertionError(member.process,
+                        pc < member.origin.size() ? member.origin[pc] : pc,
+                        op.message.empty() ? std::string { "report failure" }
+                                           : op.message.str(),
+                        op.severity, op.source, true);
+                }
             } else if constexpr (std::is_same_v<T, Call>) {
                 const auto size = member.operations.size();
                 if (op.stack.capacity == 0U) {
@@ -3547,7 +3607,12 @@ void Interpreter::Impl::StaticKernel::publish(
 void Interpreter::Impl::StaticKernel::initialize()
 {
     initialized_ = true;
+    // From now on the host lists the inputs whose revision changes.
+    impl_.static_kernel_input_marks.assign(
+        impl_.signal_value_revisions.size(), 0U);
+    impl_.static_kernel_dirty_inputs.clear();
     for (auto& input : inputs_) {
+        impl_.static_kernel_input_marks[input.signal] = 1U;
         input.revision = impl_.signal_value_revisions[input.signal];
         input.event_seen = impl_.signal_events[input.signal];
         input.cached = vhdl_ ? read_signal(input.signal)
@@ -3647,12 +3712,40 @@ bool Interpreter::Impl::StaticKernel::scan_inputs(const bool all)
     bool changed = false;
     // Inputs no process writes change only between activations; within one
     // only the others are scanned.
-    const auto count = all ? inputs_.size() : written_inputs_.size();
-    for (std::size_t position = 0U; position < count; ++position) {
-        changed = refresh_input(
-                      inputs_[all ? position : written_inputs_[position]])
-            || changed;
+    if (check_inputs_ || !initialized_) {
+        const auto count = all ? inputs_.size() : written_inputs_.size();
+        for (std::size_t position = 0U; position < count; ++position) {
+            changed = refresh_input(
+                          inputs_[all ? position : written_inputs_[position]])
+                || changed;
+        }
+        return changed;
     }
+    // Only the inputs whose revision changed (Impl::note_signal_revision),
+    // in input order as a full scan visits them.
+    auto& dirty = impl_.static_kernel_dirty_inputs;
+    if (dirty.empty()) {
+        return false;
+    }
+    std::vector<std::uint32_t> order;
+    order.swap(scan_order_);
+    order.clear();
+    std::size_t kept = 0U;
+    for (const auto signal : dirty) {
+        const auto input = input_of_signal_[signal];
+        if (!all && inputs_[input].unwritten) {
+            dirty[kept++] = signal;
+            continue;
+        }
+        impl_.static_kernel_input_marks[signal] = 1U;
+        order.push_back(input);
+    }
+    dirty.resize(kept);
+    std::ranges::sort(order);
+    for (const auto input : order) {
+        changed = refresh_input(inputs_[input]) || changed;
+    }
+    order.swap(scan_order_);
     return changed;
 }
 
@@ -4177,7 +4270,7 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
     // delta limit stops a design that never settles.
     constexpr std::size_t rounds_per_host_delta = 256U;
     std::size_t rounds = 0U;
-    sv_drain();
+    sv_drain_outside_round();
     while (!stopped_) {
         if (next_round_.empty() && deferred_targets_.empty()
             && deferred_threads_.empty() && vhdl_ready_threads_.empty()
@@ -4185,7 +4278,7 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
             if (!scan_inputs(false)) {
                 break;
             }
-            sv_drain();
+            sv_drain_outside_round();
             continue;
         }
         for (const auto thread : deferred_threads_) {
@@ -4240,6 +4333,40 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
             break;
         }
     }
+    if (!held_round_.empty() || !held_threads_.empty()) {
+        next_round_.insert(next_round_.end(), held_round_.begin(), held_round_.end());
+        vhdl_ready_threads_.insert(vhdl_ready_threads_.end(),
+            held_threads_.begin(), held_threads_.end());
+        held_round_.clear();
+        held_threads_.clear();
+        yield_requested_ = yield_requested_ || !stopped_;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::sv_drain_outside_round()
+{
+    // SystemVerilog work outside a round (pending at activation, or woken by
+    // inputs after a round settled) runs in the current host delta, and a
+    // VHDL process woken by its writes runs in the next delta (1076-2019
+    // 14.7.5.3, S16). Without a host boundary the next loop iteration is
+    // that delta. With one, every round is a host delta: the hosted VHDL
+    // processes the same writes wake resume in the next host delta
+    // (queue_next_delta), so the members and threads woken here wait for it
+    // too, not for the next iteration of this activation.
+    if (!host_boundary_) {
+        sv_drain();
+        return;
+    }
+    const auto members = next_round_.size();
+    const auto threads = vhdl_ready_threads_.size();
+    sv_drain();
+    held_round_.insert(held_round_.end(),
+        next_round_.begin() + static_cast<std::ptrdiff_t>(members), next_round_.end());
+    next_round_.resize(members);
+    held_threads_.insert(held_threads_.end(),
+        vhdl_ready_threads_.begin() + static_cast<std::ptrdiff_t>(threads),
+        vhdl_ready_threads_.end());
+    vhdl_ready_threads_.resize(threads);
 }
 
 void Interpreter::Impl::StaticKernel::sort_round()

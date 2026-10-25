@@ -1359,6 +1359,10 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                                 || std::is_same_v<T, WriteUpdateDynamicPartSlice>));
                 } else if constexpr (std::is_same_v<T, ContainerRead>) {
                     generic = generic || op.string_index;
+                } else if constexpr (std::is_same_v<T, Report>) {
+                    // A VHDL report statement (IEEE 1076-2019 10.9) emits
+                    // through the reference evaluator.
+                    generic = true;
                 }
             }, operation);
             if (generic) {
@@ -1377,7 +1381,14 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 handled = true;
                 if constexpr (std::is_same_v<T, WaitSensitivity>
                     || std::is_same_v<T, Halt>) {
-                    if (pc != stop) {
+                    // A runtime check's halt never runs: its failure report
+                    // ends the simulation (the planner checks no branch
+                    // reaches it).
+                    if (pc != stop
+                        && !(pc > begin
+                            && static_kernel_halt_after_failure(
+                                member.operations[pc - 1U],
+                                member.operations[pc]))) {
                         throw reject("vhdl_suspension");
                     }
                     inst.op = KOp::jump;

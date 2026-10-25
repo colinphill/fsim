@@ -1199,15 +1199,15 @@ Lowerer::hir_vhdl_lazy_global_constant(
             instance.reset();
         }
     }
-    // A value the elaborator folds needs no run-time storage.
-    if (instance) {
-        if (specialized_hir_unit_->evaluate_integral_expression(root_id)
-            || specialized_hir_unit_->evaluate_vhdl_constant_expression(
-                root_id)) {
-            return std::nullopt;
-        }
-    } else if (specialized_hir_unit_->evaluate_vhdl_constant_expression(
-                   *declaration->initializer)) {
+    // A value the elaborator folds needs no run-time storage. The name is
+    // folded as its readers fold it (an initializer that calls a function,
+    // `b2i(USE_EUCLID /= 0)`, is folded through the elaboration-time
+    // evaluation of the constant, not as an expression of its own).
+    if (specialized_hir_unit_->evaluate_integral_expression(root_id)
+        || specialized_hir_unit_->evaluate_vhdl_constant_expression(root_id)
+        || (!instance
+            && specialized_hir_unit_->evaluate_vhdl_constant_expression(
+                *declaration->initializer))) {
         return std::nullopt;
     }
     // Neither does a constant elaborated into a read-only signal (IEEE

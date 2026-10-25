@@ -116,6 +116,54 @@ namespace fsim::runtime::simir {
             text.erase(0, first);
             return text;
         };
+    // The one, x and z bits of `count` (at most 8) bits from `offset`. A
+    // four-state value reads its aval/bval planes (bval marks x or z).
+    struct DigitBits {
+        unsigned ones { };
+        unsigned x { };
+        unsigned z { };
+    };
+    const auto digit_bits = [&value](const std::size_t offset,
+                                const std::size_t count) {
+        DigitBits result;
+        if (!value.is_logic9()) {
+            const auto field = [offset, count](
+                                   const std::span<const std::uint64_t> words) {
+                const auto word = offset / 64U;
+                const auto shift = offset % 64U;
+                auto bits = words[word] >> shift;
+                if (shift + count > 64U && word + 1U < words.size()) {
+                    bits |= words[word + 1U] << (64U - shift);
+                }
+                return static_cast<unsigned>(bits & ((1U << count) - 1U));
+            };
+            const auto aval = field(value.aval_words());
+            const auto bval = field(value.bval_words());
+            result.ones = aval & ~bval;
+            result.x = aval & bval;
+            result.z = ~aval & bval & ((1U << count) - 1U);
+            return result;
+        }
+        for (std::size_t bit = 0; bit < count; ++bit) {
+            const auto state = value.get(offset + bit);
+            result.ones |= state == Logic4::one ? 1U << bit : 0U;
+            result.x |= state == Logic4::x ? 1U << bit : 0U;
+            result.z |= state == Logic4::z ? 1U << bit : 0U;
+        }
+        return result;
+    };
+    // A digit with some x bits is X, else with some z bits Z (IEEE
+    // 1800-2017 21.2.1.3).
+    const auto digit_character = [](const DigitBits bits,
+                                     const std::size_t count,
+                                     const std::string_view digits) {
+        const auto all = (1U << count) - 1U;
+        return bits.x == all ? 'x'
+            : bits.z == all  ? 'z'
+            : bits.x != 0U   ? 'X'
+            : bits.z != 0U   ? 'Z'
+                             : digits[bits.ones];
+    };
     switch (format) {
     case OutputFormat::binary: {
         auto text = value.to_msb_string();
@@ -135,29 +183,8 @@ namespace fsim::runtime::simir {
         for (std::size_t digit = 0; digit < digit_count; ++digit) {
             const auto offset = digit * 4U;
             const auto bit_count = std::min<std::size_t>(4U, value.width() - offset);
-            unsigned known_value { };
-            bool all_x = true;
-            bool all_z = true;
-            bool has_unknown = false;
-            bool has_high_impedance = false;
-            for (std::size_t bit = 0; bit < bit_count; ++bit) {
-                const auto state = value.get(offset + bit);
-                all_x = all_x && state == Logic4::x;
-                all_z = all_z && state == Logic4::z;
-                has_unknown = has_unknown || state == Logic4::x;
-                has_high_impedance = has_high_impedance || state == Logic4::z;
-                if (state == Logic4::one) {
-                    known_value |= 1U << bit;
-                }
-            }
-            // A digit with some x bits is X, else with some z bits Z
-            // (IEEE 1800-2017 21.2.1.3).
-            const char character = all_x ? 'x'
-                : all_z                  ? 'z'
-                : has_unknown            ? 'X'
-                : has_high_impedance     ? 'Z'
-                                         : digits[known_value];
-            text[digit_count - digit - 1U] = character;
+            text[digit_count - digit - 1U] = digit_character(
+                digit_bits(offset, bit_count), bit_count, digits);
         }
         return maybe_suppress_leading_zero(std::move(text));
     }
@@ -168,29 +195,8 @@ namespace fsim::runtime::simir {
         for (std::size_t digit = 0; digit < digit_count; ++digit) {
             const auto offset = digit * 3U;
             const auto bit_count = std::min<std::size_t>(3U, value.width() - offset);
-            unsigned known_value { };
-            bool all_x = true;
-            bool all_z = true;
-            bool has_unknown = false;
-            bool has_high_impedance = false;
-            for (std::size_t bit = 0; bit < bit_count; ++bit) {
-                const auto state = value.get(offset + bit);
-                all_x = all_x && state == Logic4::x;
-                all_z = all_z && state == Logic4::z;
-                has_unknown = has_unknown || state == Logic4::x;
-                has_high_impedance = has_high_impedance || state == Logic4::z;
-                if (state == Logic4::one) {
-                    known_value |= 1U << bit;
-                }
-            }
-            // A digit with some x bits is X, else with some z bits Z
-            // (IEEE 1800-2017 21.2.1.3).
-            const char character = all_x ? 'x'
-                : all_z                  ? 'z'
-                : has_unknown            ? 'X'
-                : has_high_impedance     ? 'Z'
-                                         : digits[known_value];
-            text[digit_count - digit - 1U] = character;
+            text[digit_count - digit - 1U] = digit_character(
+                digit_bits(offset, bit_count), bit_count, digits);
         }
         return maybe_suppress_leading_zero(std::move(text));
     }
@@ -199,13 +205,11 @@ namespace fsim::runtime::simir {
         // and otherwise X if any bit is x, else Z (IEEE 1800-2017 21.2.1.4).
         std::size_t unknown { };
         std::size_t high_impedance { };
-        for (std::size_t bit = 0; bit < value.width(); ++bit) {
-            const auto state = value.get(bit);
-            if (state == Logic4::x) {
-                ++unknown;
-            } else if (state == Logic4::z) {
-                ++high_impedance;
-            }
+        for (std::size_t offset = 0; offset < value.width(); offset += 8U) {
+            const auto bits = digit_bits(
+                offset, std::min<std::size_t>(8U, value.width() - offset));
+            unknown += static_cast<std::size_t>(std::popcount(bits.x));
+            high_impedance += static_cast<std::size_t>(std::popcount(bits.z));
         }
         if (unknown != 0U || high_impedance != 0U) {
             if (unknown == value.width()) {
@@ -215,6 +219,16 @@ namespace fsim::runtime::simir {
                 return "z";
             }
             return unknown != 0U ? "X" : "Z";
+        }
+        if (value.width() != 0U && value.width() <= 64U && !value.is_logic9()) {
+            const auto mask = value.width() == 64U
+                ? ~std::uint64_t { }
+                : (std::uint64_t { 1 } << value.width()) - 1U;
+            const auto bits = value.aval_words().front() & mask;
+            if (signed_decimal && ((bits >> (value.width() - 1U)) & 1U) != 0U) {
+                return "-" + std::to_string((~bits + 1U) & mask);
+            }
+            return std::to_string(bits);
         }
         auto magnitude = value;
         bool negative = signed_decimal

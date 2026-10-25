@@ -989,6 +989,7 @@ void Interpreter::Impl::finish_aggregate_signal_batch(
         } else {
             ++value_revision;
         }
+        note_signal_revision(signal_id);
     }
     if (transaction_changed) {
         note_signal_transaction(signal_id, notify_fanout, origin);
@@ -1110,6 +1111,7 @@ void Interpreter::Impl::note_aggregate_leaf_current_change(
             aggregate_signal_last_projection_revisions[proxy] = 0U;
             if (proxy < signal_value_revisions.size()) {
                 ++signal_value_revisions[proxy];
+                note_signal_revision(proxy);
                 if (signal_value_revisions[proxy] == 0U) {
                     signal_value_revisions[proxy] = 1U;
                 }

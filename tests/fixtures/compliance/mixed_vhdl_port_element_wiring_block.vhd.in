@@ -1,0 +1,57 @@
+-- SPDX-License-Identifier: Apache-2.0
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity mixed_vhdl_port_element_wiring_inc is
+  port (a : in std_logic_vector(3 downto 0);
+        y : out std_logic_vector(3 downto 0));
+end entity;
+
+architecture rtl of mixed_vhdl_port_element_wiring_inc is
+begin
+  y <= std_logic_vector(unsigned(a) + 1);
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity mixed_vhdl_port_element_wiring_block is
+  port (go : in std_logic;
+        lane1 : out std_logic_vector(3 downto 0));
+end entity;
+
+architecture rtl of mixed_vhdl_port_element_wiring_block is
+  type nibbles is array (0 to 2) of std_logic_vector(3 downto 0);
+  signal s : nibbles := (others => x"0");
+  signal r : nibbles;
+begin
+  lanes : for i in 0 to 2 generate
+    u : entity work.mixed_vhdl_port_element_wiring_inc
+      port map (a => s(i), y => r(i));
+  end generate;
+  lane1 <= r(1);
+
+  check : process
+  begin
+    wait until go = '1';
+    assert r(0) = x"1" and r(1) = x"1" and r(2) = x"1"
+      report "FAIL wired elements did not settle" severity failure;
+    s(1) <= x"5";
+    wait for 0 ns;
+    assert s(1) = x"5" report "FAIL s(1) not updated" severity failure;
+    assert r(1) = x"1"
+      report "FAIL r(1) changed in the delta of s(1)" severity failure;
+    wait for 0 ns;
+    assert r(1) = x"6"
+      report "FAIL r(1) did not follow y in the same delta" severity failure;
+    assert r(1)'event report "FAIL r(1) has no event" severity failure;
+    assert r(0) = x"1" and r(2) = x"1"
+      report "FAIL other elements changed" severity failure;
+    wait for 0 ns;
+    assert not r(1)'event
+      report "FAIL r(1) changed again a delta later" severity failure;
+    report "PASS";
+    wait;
+  end process;
+end architecture;

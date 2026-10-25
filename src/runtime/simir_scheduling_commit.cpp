@@ -190,6 +190,7 @@ void Interpreter::Impl::initialize_package_static_signal(
     }
     if (changed) {
         ++signal_value_revisions[signal_id];
+        note_signal_revision(signal_id);
         if (signal_value_revisions[signal_id] == 0U) {
             signal_value_revisions[signal_id] = 1U;
             std::ranges::fill(
@@ -1674,9 +1675,17 @@ bool Interpreter::Impl::run_vhdl_conversion_drivers(
         process.halted = false;
         execute(driver.program);
         if (driver.offset) {
+            auto part = get_register(process, driver.output);
+            if (initializing && signal.resolution != ResolutionKind::none) {
+                // A subelement source of a resolved signal starts at its
+                // program's value; the signal's initial value resolves its
+                // sources (IEEE 1076-2008 14.7.3.2, 14.7.5.2).
+                auto& slot = driver_slot(driver.stub, signal_id);
+                slot = insert_value(slot, part, *driver.offset);
+                continue;
+            }
             // A subelement driver of an unresolved signal: its initial
             // value is part of the signal's (IEEE 1076-2008 14.7.5.2).
-            auto part = get_register(process, driver.output);
             if (initializing) {
                 auto& slot = driver_slot(driver.stub, signal_id);
                 auto whole = signals[signal_id].initial_value;
@@ -1848,9 +1857,10 @@ void Interpreter::Impl::initialize_vhdl_resolutions()
     for (const auto& [signal_id, drivers] : vhdl_conversion_drivers) {
         run_vhdl_conversion_drivers(signal_id, true);
         if (!vhdl_resolvers.contains(signal_id)
-            && !std::ranges::any_of(drivers, [](const auto& driver) {
-                   return driver.offset.has_value();
-               })) {
+            && (get_signal(signal_id).resolution != ResolutionKind::none
+                || !std::ranges::any_of(drivers, [](const auto& driver) {
+                       return driver.offset.has_value();
+                   }))) {
             publish(signal_id, resolved_driver_value(signal_id));
         }
     }

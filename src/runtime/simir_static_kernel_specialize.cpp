@@ -165,7 +165,7 @@ inline constexpr bool specialize_effect = std::is_same_v<T, ReadSignal>
     || std::is_same_v<T, WriteUpdateDynamicPartSlice>
     || std::is_same_v<T, WriteProjected> || std::is_same_v<T, WriteProjectedSlice>
     || std::is_same_v<T, WriteProjectedDynamicSlice> || std::is_same_v<T, Assert>
-    || std::is_same_v<T, ContainerRead>
+    || std::is_same_v<T, Report> || std::is_same_v<T, ContainerRead>
     || std::is_same_v<T, WriteContainerObjectElement>;
 
 /// The specialized body of one operation list. Operations flagged verbatim

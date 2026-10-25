@@ -491,6 +491,34 @@ namespace scheduler_detail {
         std::size_t reserved_entries_capacity { };
         std::size_t reserved_insertions_capacity { };
 
+        // Exchanges every member in place: the delta and region hand-offs
+        // swap queues each cycle, and std::swap's three moves would rebuild
+        // the entry storage handles and the scratch entry's task each time.
+        void swap(WorkQueue& other) noexcept
+        {
+            entries.swap(other.entries);
+            current_insertions.swap(other.current_insertions);
+            std::swap(cursor, other.cursor);
+            std::swap(pushes_since_compaction, other.pushes_since_compaction);
+            std::swap(needs_sort, other.needs_sort);
+            std::swap(prepared, other.prepared);
+            std::swap(has_cancelable, other.has_cancelable);
+            std::swap(dispatching_ticket, other.dispatching_ticket);
+            std::swap(dispatching_ticket_count, other.dispatching_ticket_count);
+            std::swap(compact_dispatch_scratch.order,
+                other.compact_dispatch_scratch.order);
+            std::swap(compact_dispatch_scratch.sequence,
+                other.compact_dispatch_scratch.sequence);
+            compact_dispatch_scratch.task.swap(other.compact_dispatch_scratch.task);
+            std::swap(compact_dispatch_scratch.cancel_slots,
+                other.compact_dispatch_scratch.cancel_slots);
+            std::swap(compact_dispatch_scratch.cancellation,
+                other.compact_dispatch_scratch.cancellation);
+            std::swap(reserved_entries_capacity, other.reserved_entries_capacity);
+            std::swap(reserved_insertions_capacity,
+                other.reserved_insertions_capacity);
+        }
+
         struct CompactionResult {
             std::size_t tickets { };
             std::size_t members { };
@@ -1217,6 +1245,12 @@ namespace scheduler_detail {
     struct Bucket {
         std::array<WorkQueue, phase_count> queues;
 
+        void swap(Bucket& other) noexcept
+        {
+            for (std::size_t index = 0; index < phase_count; ++index)
+                queues[index].swap(other.queues[index]);
+        }
+
         [[nodiscard]] std::size_t compact_cancelled() noexcept
         {
             std::size_t retained = 0;
@@ -1409,6 +1443,10 @@ struct Scheduler::Impl {
     std::vector<BatchTicket> systemverilog_batch_tickets;
     std::vector<Entry> systemverilog_batch_ticket_members;
     static constexpr std::size_t default_readiness_ticket_count = 64U;
+    // One past the highest pool index acquired since the last recycle: no
+    // ticket at or beyond it is active, so the recycle stops there.
+    std::size_t systemverilog_readiness_ticket_reach { };
+    std::size_t generic_readiness_ticket_reach { };
     std::array<BatchTicket, default_readiness_ticket_count>
         systemverilog_readiness_tickets;
     std::array<std::vector<Entry>, default_readiness_ticket_count>
@@ -1806,6 +1844,8 @@ struct Scheduler::Impl {
             ticket.pool_index = index;
             ticket.readiness_owned = true;
             ticket.active = true;
+            systemverilog_readiness_ticket_reach
+                = std::max(systemverilog_readiness_ticket_reach, index + 1U);
             return &ticket;
         }
         return nullptr;
@@ -1828,6 +1868,8 @@ struct Scheduler::Impl {
             ticket.pool_index = index;
             ticket.generic_readiness_owned = true;
             ticket.active = true;
+            generic_readiness_ticket_reach
+                = std::max(generic_readiness_ticket_reach, index + 1U);
             return &ticket;
         }
         return nullptr;
@@ -1920,16 +1962,26 @@ struct Scheduler::Impl {
 
     void recycle_exhausted_readiness_tickets() noexcept
     {
-        for (std::size_t index = 0U;
-             index < systemverilog_readiness_ticket_capacity(); ++index) {
+        std::size_t reach = 0U;
+        for (std::size_t index = 0U; index < std::min(
+                 systemverilog_readiness_ticket_reach,
+                 systemverilog_readiness_ticket_capacity()); ++index) {
             auto& ticket = systemverilog_readiness_ticket_at(index);
             recycle_exhausted_readiness_ticket(&ticket);
+            if (ticket.active)
+                reach = index + 1U;
         }
-        for (std::size_t index = 0U;
-             index < generic_readiness_ticket_capacity(); ++index) {
+        systemverilog_readiness_ticket_reach = reach;
+        reach = 0U;
+        for (std::size_t index = 0U; index < std::min(
+                 generic_readiness_ticket_reach,
+                 generic_readiness_ticket_capacity()); ++index) {
             auto& ticket = generic_readiness_ticket_at(index);
             recycle_exhausted_readiness_ticket(&ticket);
+            if (ticket.active)
+                reach = index + 1U;
         }
+        generic_readiness_ticket_reach = reach;
     }
 
     void reset_readiness_tickets() noexcept

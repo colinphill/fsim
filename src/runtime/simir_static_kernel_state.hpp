@@ -870,6 +870,8 @@ private:
     void schedule_stop_at(SimulationTick time);
     /// Inputs some process writes (scan_inputs within an activation).
     std::vector<std::uint32_t> written_inputs_;
+    /// scan_inputs' reused list of the inputs it refreshes.
+    std::vector<std::uint32_t> scan_order_;
     bool committing_round_ { };
     std::vector<std::uint32_t> next_round_;
     /// The round being run (swapped with next_round_ to keep capacity).
@@ -886,6 +888,11 @@ private:
     std::vector<Pending> parked_pending_;
     void swap_write_queues();
     void sv_drain();
+    /// sv_drain outside a round of a host-boundary mixed kernel: the VHDL
+    /// members and threads it wakes are held for the next host delta.
+    void sv_drain_outside_round();
+    std::vector<std::uint32_t> held_round_;
+    std::vector<std::uint32_t> held_threads_;
     void activate_mixed();
     /// The combinational member settle() is running (no_slot otherwise).
     std::uint32_t running_member_ { static_kernel_detail::no_slot };
@@ -1029,14 +1036,17 @@ private:
     };
     std::vector<CommitSlot> commit_slots_;
     /// Kernel wiring (static_kernel_wiring): the update phase that changes
-    /// `source` copies its bit range into `target` in the same delta cycle,
-    /// so a formal associated with an element or slice of a signal follows
-    /// it without a host round trip (IEEE 1076-2008 6.5.7.1, 14.7.3.3).
+    /// `source` copies its bits [offset, offset + width) into `target` at
+    /// `target_offset` in the same delta cycle, so an input formal
+    /// associated with an element or slice of a signal follows it, and an
+    /// output formal so associated drives that part of its actual, without
+    /// a host round trip (IEEE 1076-2008 6.5.7.1, 14.7.3.2, 14.7.3.3).
     struct Wire {
         std::uint32_t source { };
         std::uint32_t target { };
         std::uint32_t offset { };
         std::uint32_t width { };
+        std::uint32_t target_offset { };
     };
     /// Sorted by source slot; `slot_wires_` holds each slot's [begin, end).
     std::vector<Wire> wires_;

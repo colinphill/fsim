@@ -573,8 +573,8 @@ void HierarchyBuilder::compose_vhdl_output_routes()
         stub.operations.emplace_back(Halt { });
         design_.rebuild_process_record(index, std::move(stub));
     }
-    // A program reading each route's formal into its place in `signal`: the
-    // composed value is left in `output`.
+    // A program reading each route's formal into its place in the run of
+    // `signal` the routes cover: the composed value is left in `output`.
     struct RouteProgram {
         ProcessId id { };
         RegisterId input { };
@@ -630,9 +630,12 @@ void HierarchyBuilder::compose_vhdl_output_routes()
             program.operations.emplace_back(
                 CopyRegister { result.output, parts[0] });
         } else {
+            std::uint64_t width { };
+            for (const auto& route : routes) {
+                width += route.width;
+            }
             program.operations.emplace_back(Concatenate { result.output,
-                std::move(parts),
-                static_cast<std::uint32_t>(signal_width(signal)) });
+                std::move(parts), static_cast<std::uint32_t>(width) });
         }
         program.operations.emplace_back(Halt { });
         program.initialize = false;
@@ -649,10 +652,12 @@ void HierarchyBuilder::compose_vhdl_output_routes()
         resolver.sources = std::move(program.sources);
         design_.signals_[signal].vhdl_resolver = std::move(resolver);
     }
-    // An adapter that only copies its formals over the whole of resolved
-    // actuals is a source of each actual like a formal conversion (IEEE
-    // 1076-2019 14.7.3.2): its driving value follows the formals in the
-    // same simulation cycle.
+    // An adapter that only copies its formals into resolved actuals is a
+    // source of each actual like a formal conversion (IEEE 1076-2019
+    // 14.7.3.2): its driving value follows the formals in the same
+    // simulation cycle. A formal associated with an element or slice of the
+    // actual is a source of that subelement only (6.5.7.1), so each
+    // contiguous run of the routes is one subelement driver.
     for (auto& [index, routes] : adapters) {
         std::map<SignalId, std::vector<Route>> placed_by_destination;
         for (const auto& [destination, route] : routes) {
@@ -666,6 +671,7 @@ void HierarchyBuilder::compose_vhdl_output_routes()
             continue;
         }
         bool eligible = true;
+        std::map<SignalId, std::vector<std::vector<Route>>> runs_by_destination;
         for (auto& [destination, placed] : placed_by_destination) {
             const auto& info = design_.signal_info_[destination];
             const auto& runtime_signal = design_.signals_[destination];
@@ -685,19 +691,23 @@ void HierarchyBuilder::compose_vhdl_output_routes()
                 break;
             }
             std::ranges::sort(placed, {}, &Route::offset);
+            auto& runs = runs_by_destination[destination];
             std::uint64_t covered { };
             for (const auto& route : placed) {
                 const auto& formal = design_.signals_[route.formal];
-                if (route.offset != covered || route.formal == destination
-                    || formal.vhdl_resolver
+                if (route.offset < covered || route.formal == destination || formal.vhdl_resolver
                     || input_targets.contains(route.formal)
                     || formal.value_kind != runtime_signal.value_kind) {
                     eligible = false;
                     break;
                 }
-                covered += route.width;
+                if (runs.empty() || route.offset != covered) {
+                    runs.emplace_back();
+                }
+                runs.back().push_back(route);
+                covered = std::uint64_t { route.offset } + route.width;
             }
-            if (!eligible || covered != signal_width(destination)) {
+            if (!eligible || covered > signal_width(destination)) {
                 eligible = false;
                 break;
             }
@@ -705,6 +715,12 @@ void HierarchyBuilder::compose_vhdl_output_routes()
         if (!eligible) {
             continue;
         }
+        const auto whole = [&](const SignalId destination,
+                               const std::vector<Route>& run) {
+            return run.front().offset == 0U
+                && std::uint64_t { run.back().offset } + run.back().width
+                    == signal_width(destination);
+        };
         // The adapter halts and keeps its drivers, which the programs set.
         const auto stub_id = adapter.id();
         Process stub;
@@ -713,17 +729,30 @@ void HierarchyBuilder::compose_vhdl_output_routes()
         stub.language_standard = adapter.language_standard();
         stub.compatibility_profile = adapter.compatibility_profile();
         stub.initialize = false;
-        for (const auto& [destination, placed] : placed_by_destination) {
-            stub.driver_regions.push_back(
-                Process::DriverRegion { destination, 0U, 0U, true });
+        for (const auto& [destination, runs] : runs_by_destination) {
+            for (const auto& run : runs) {
+                stub.driver_regions.push_back(whole(destination, run)
+                        ? Process::DriverRegion { destination, 0U, 0U, true }
+                        : Process::DriverRegion { destination,
+                              run.front().offset,
+                              run.back().offset + run.back().width
+                                  - run.front().offset,
+                              false });
+            }
         }
         stub.operations.emplace_back(Halt { });
         design_.rebuild_process_record(index, std::move(stub));
-        for (const auto& [destination, placed] : placed_by_destination) {
-            auto program = route_program(destination, placed, "port_driver_");
-            design_.signals_[destination].vhdl_conversion_drivers.push_back(
-                VhdlConversionDriver { stub_id, program.id, program.output,
-                    std::move(program.sources) });
+        for (const auto& [destination, runs] : runs_by_destination) {
+            for (const auto& run : runs) {
+                auto program = route_program(destination, run, "port_driver_");
+                VhdlConversionDriver driver { stub_id, program.id,
+                    program.output, std::move(program.sources) };
+                if (!whole(destination, run)) {
+                    driver.offset = run.front().offset;
+                }
+                design_.signals_[destination].vhdl_conversion_drivers
+                    .push_back(std::move(driver));
+            }
         }
     }
 }
@@ -916,11 +945,6 @@ bool HierarchyBuilder::lower_compiled_vhdl_formal_conversion(
     // Only an unresolved inout formal splits its effective value from its
     // driving value; a resolved one keeps its continuous assignments.
     if (conversion->effective && resolved) {
-        return false;
-    }
-    // A subelement of an unresolved actual takes the converted value as its
-    // driver; a resolved one keeps its assignment.
-    if (conversion->slice && resolved) {
         return false;
     }
     auto& program = conversion->conversion;

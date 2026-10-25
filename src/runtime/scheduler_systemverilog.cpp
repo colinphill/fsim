@@ -69,7 +69,7 @@ bool Scheduler::Impl::begin_systemverilog_batch(bool include_postponed)
                 += static_cast<std::uint64_t>(compacted.members
                     - compacted.tickets);
         }
-        std::swap(slot.systemverilog_running, pending);
+        slot.systemverilog_running.swap(pending);
         slot.systemverilog_phase = static_cast<SchedulerPhase>(index);
         return true;
     }

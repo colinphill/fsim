@@ -447,8 +447,14 @@ state, S3):
   pure-routing port association (`static_kernel_wiring`): the kernel copies
   the source range into the formal in the update phase that changes the
   source, so the formal updates in the same delta (1076 §6.5.7.1,
-  §14.7.3.3). A wiring whose source or formal cannot be kernel-owned reverts
-  to a host program.
+  §14.7.3.3). An output formal associated with an element or slice of its
+  actual is wired the other way: when every conversion driver of the actual
+  is pure routing, the kernel copies each formal into its part of the
+  actual in the update phase that changes the formal (§14.7.3.2; each
+  element has the one driver, so the resolution is the identity, as for
+  `writers_ok`). In a mixed kernel a wiring program counts as a VHDL writer.
+  A wiring whose source, formal or actual cannot be kernel-owned reverts to
+  a host program (for a driver wiring, all of the actual's drivers do).
 - **Witness.** T-vhdl covers a wired formal indirectly. To add: a test that
   collapsing keeps `'event`-visible deltas, and one that a non-pure hop is
   never collapsed.
@@ -537,7 +543,7 @@ state, S3):
   - Logic9 storage is implemented as four planes; compiled code tracks `U`
     with a shadow mask and deoptimizes to the reference evaluator for
     `W`, `L`, `H` and `-`.
-  - Guarded signals, conversion drivers and non-pure-routing port
+  - Guarded signals, non-pure-routing conversion drivers and port
     associations keep their programs on the host and make their sources host
     signals.
 - **Witness.** T-vhdl (weak `H`/`L`, disjoint resolved drivers, X injection).
@@ -563,6 +569,15 @@ state, S3):
   - A SystemVerilog-origin wakeup stays in the current delta. A
     SystemVerilog process woken by a VHDL update runs in the next delta. A
     VHDL process woken by any change runs in the next delta.
+  - When every kernel round is a host delta (`host_boundary_`: hosted or
+    host processes at the boundary), the VHDL members and threads woken by
+    SystemVerilog work outside a round (pending at activation, or woken by
+    inputs after a round settled) are held and the kernel yields, so they
+    run in the next host delta together with the hosted VHDL processes the
+    same writes wake (`sv_drain_outside_round`). Running them in the next
+    iteration of the same activation would put them one delta ahead of the
+    hosted processes (`mixed_codec`: a hosted RAM read port saw the
+    address its native counter had already advanced).
   - Slots of Logic9 signals read by SystemVerilog code are coerced to Logic4
     (`U` becomes X); publication uses the writer's domain.
   - A SystemVerilog member of a mixed kernel does not require the host
@@ -1022,7 +1037,16 @@ state, S3):
     processes (SystemVerilog scheduling domain, no initial run). A VHDL
     kernel hosts them (S25): the wake is the host fanout's next-delta wake
     for another-domain origin (1076-2019 14.7.5.3), the writes are staged
-    host updates. `FSIM_STATIC_KERNEL_HOSTED_IMPLICIT=0` restores the host.
+    host updates. A design with no native member counts them as VHDL
+    processes when it picks its language. A VHDL or mixed kernel also hosts
+    the Active-region SystemVerilog-domain processes it cannot run natively
+    (a Verilog process with a register of a VHDL value kind, for example)
+    the same way: a wake from the other domain runs in the next delta, one
+    from its own domain in the current Active region, as on the host.
+    `FSIM_STATIC_KERNEL_HOSTED_IMPLICIT=0` restores the host for both.
+  - A design whose only processes are commit programs is admitted
+    trivially (`trivial_host_programs_only`); its programs are counted as
+    commit-program rows like those of a planned kernel.
 - **Basis.** 1076-2019 14.7.3, 14.7.5.3, 6.5.7; 1800-2023 23.3.3, 28.
 - **Status:** *partial*. Direction (b) of C5: the commit program still
   executes inside the host's update callback; the kernel does not call
@@ -1045,7 +1069,7 @@ state, S3):
 | `FSIM_STATIC_KERNEL_HOSTED=0` | keep non-member SystemVerilog processes on the host scheduler (S25) |
 | `FSIM_STATIC_KERNEL_HOSTED_REGIONS=0` | keep observed, reactive, postponed, final and package-initializer processes on the host (S25) |
 | `FSIM_STATIC_KERNEL_HOSTED_VHDL=0` | keep non-member VHDL processes on the host and refuse such designs (`vhdl_partial`, `vhdl_unowned`; S25a) |
-| `FSIM_STATIC_KERNEL_HOSTED_IMPLICIT=0` | keep implicit-signal drivers on the host in a VHDL kernel (S25b) |
+| `FSIM_STATIC_KERNEL_HOSTED_IMPLICIT=0` | keep implicit-signal drivers and other SystemVerilog-domain processes on the host in a VHDL kernel (S25b) |
 | `FSIM_STATIC_KERNEL_HOSTED_POSTPONED=0` | refuse designs with a postponed VHDL process (`vhdl_postponed`) instead of hosting it (S25a) |
 | `FSIM_STATIC_KERNEL_NATIVE=0` | no LLVM code; interpreted KIR |
 | `FSIM_STATIC_KERNEL_SPECIALIZE=0` | no VHDL body specialization |

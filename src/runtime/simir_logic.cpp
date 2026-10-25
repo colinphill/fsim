@@ -439,13 +439,19 @@ dynamic_part_write_value(
           "matching nonzero fixed width");
   }
   std::uint32_t raw{};
-  for (std::size_t bit = 0; bit < 32; ++bit) {
-    const auto value = base.get(bit);
-    if (value == Logic4::x || value == Logic4::z) {
-      return std::nullopt;
-    }
-    if (value == Logic4::one) {
-      raw |= UINT32_C(1) << bit;
+  if (const auto known = base.known_unsigned_value()) {
+    raw = static_cast<std::uint32_t>(*known);
+  } else if (!base.is_logic9()) {
+    return std::nullopt;
+  } else {
+    for (std::size_t bit = 0; bit < 32; ++bit) {
+      const auto value = base.get(bit);
+      if (value == Logic4::x || value == Logic4::z) {
+        return std::nullopt;
+      }
+      if (value == Logic4::one) {
+        raw |= UINT32_C(1) << bit;
+      }
     }
   }
   const auto signed_base =

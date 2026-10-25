@@ -138,6 +138,119 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-25 (late night): no host processes; port wiring; owner gate: nothing interpreted (sweep `v4b8`)
+
+From sweep `v4b7` (`v4a9`):
+- **Language of a design without native members.** The drivers of implicit
+  signals (`S'STABLE`, `S'QUIET`, ...) run in the SystemVerilog scheduling
+  domain but belong to the VHDL signal they observe; they now count as VHDL
+  processes when the planner picks the design's language. Eight designs with
+  one VHDL process beside such drivers had been planned in SystemVerilog
+  mode, which left the VHDL process on the host.
+- **SystemVerilog-domain processes of a VHDL kernel.** A VHDL or mixed
+  kernel hosts every Active-region SystemVerilog-domain process it cannot run
+  natively, not only implicit-signal drivers (`vlog1`, `issue1285`: a Verilog
+  process that reads a `std_logic` port into a `logic9` register). A wake from
+  the other domain runs in the next delta, one from its own domain in the
+  current Active region, as on the host.
+- **Trivial plans.** A design whose only processes are commit programs counts
+  them as commit-program rows, like a planned kernel (`bounds43`,
+  `issue1161`).
+- **Mixed kernel, out-of-round SystemVerilog work.** The G5 rerun's preflight
+  found a stimulus-parity mismatch on `mixed_codec` (fsim 117619 events,
+  Vivado 117638). The Euclid decoder's RAM read port is a hosted VHDL process
+  and its address counter a native member. An SV clock edge drained at the
+  start of an activation woke the counter for the next loop iteration, in the
+  same host delta, while the hosted read port, woken through the host
+  fanout, ran a host delta later and read the advanced address. With a host
+  boundary, the members and threads woken by SystemVerilog work outside a
+  round now wait for the next host delta (`sv_drain_outside_round`;
+  1076-2019 14.7.5.3, S16). New compliance case
+  `mixed_vhdl_delta_after_sv_write` (fails on `v4a8`, passes now).
+  `mixed_codec` had not run in the migration's campaigns before (the
+  first one stopped at the VHDL compatibility flag); this bug arrived with
+  hosted VHDL processes (`v4a5`), when the design was first admitted.
+
+Since then (`v4a10`, `v4a11`):
+- **Planner driver wiring.** A VHDL conversion driver or resolved-signal
+  stub whose program only routes bits becomes a kernel wire, copied in the
+  commit round with its target offset. The wired programs no longer count
+  as host readers of their sources. Before that, `mixed_codec` reported 1201
+  boundary outputs; it now reports 0.
+- **Element associations to resolved actuals.** A formal associated with a
+  slice or element of a resolved actual (`y => r(1 downto 0)`) is one source
+  of those elements (IEEE 1076-2019 6.5.7.1, 14.7.3.2). The resolved-actual
+  adapter used to accept whole actuals only. It now splits the placed routes
+  into contiguous runs and makes one conversion driver per run, with the
+  run's offset. Initialization inserts each run into the driver's slot.
+  Before this, such ports kept a `port_result` process and resolved one delta
+  late. New compliance cases: `vhdl_port_element_wiring`,
+  `vhdl_port_element_resolved`, `mixed_vhdl_port_element_wiring`.
+- **Runtime word paths.** `$display` formatting reads Logic4 digits word by
+  word (IEEE 1800-2017 21.2.1.3 for x/z digits), with a decimal fast path up
+  to 64 bits. `dynamic_part_write_value` takes the base from the known word.
+  Scheduler queues swap instead of moving their contents, and the
+  readiness-ticket recycler stops at the highest ticket in use.
+- **Harness note.** The perf harness's `.sim` files had passed
+  `+PERF_PREFLIGHT`, which the campaign's timed samples do not. The `1008d`
+  numbers cannot be reproduced: the pre-LRM build recompiles kernel native
+  code at simulate, and `1008d` ran the legacy JIT for non-kernel processes.
+
+Sweep `v4b8`: the frozen binary `fsim-archive/v4a11`, `--engine v4`, against
+`b96x1`.
+
+| Suite | Pass (base) | Pass (v4) | Planned | Admitted | host=0 | Host processes | Hosted processes |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ivtest | 2635 | 2642 | 2273 | 2273 | 2273 | 0 | 2592 |
+| sv-tests | 1495 | 1495 | 387 | 387 | 387 | 0 | 422 |
+| verilator | 2065 | 2070 | 2087 | 2087 | 2087 | 0 | 3647 |
+| vests | 3646 | 3646 | 1606 | 1606 | 1606 | 0 | 973 |
+| nvc | 1261 | 1261 | 1209 | 1209 | 1209 | 0 | 1059 |
+| vhdl-compliance | 65 | 65 | 65 | 65 | 65 | 0 | 86 |
+
+- **Losses against `b96x1`: 0 (G2 met).**
+- **Host processes: 0 in every suite.** Commit programs (port conversion,
+  resolvers, inout adapters) are counted as kernel-owned rows. They still
+  run inside the host's update commit.
+- Census: `.local-artifacts/v4-migration/census/v4b8/census.md`.
+
+Campaign `v4-mig-1025f` (`v4a11`, `v4_o2_aot`, CPU 9, three paired samples;
+all 40 pair verdicts pass):
+
+| Case | fsim e2e | xsim e2e | e2e ratio | fsim simulate | xsim simulate | simulate ratio | fsim elaborate |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| codex_reference_mode0_frames1 | 2.47 s | 9.99 s | 4.05x | 0.13 s | 4.04 s | 31.54x | 1.23 s |
+| codex_reference_mode0_frames2 | 2.32 s | 9.38 s | 4.05x | 0.13 s | 3.84 s | 30.07x | 1.18 s |
+| codex_reference_mode1_frames1 | 2.47 s | 9.84 s | 3.99x | 0.13 s | 3.84 s | 30.01x | 1.28 s |
+| codex_reference_mode1_frames2 | 2.47 s | 9.89 s | 4.01x | 0.13 s | 3.84 s | 30.41x | 1.28 s |
+| codex_throughput_default | 2.82 s | 10.19 s | 3.61x | 0.48 s | 3.99 s | 8.33x | 1.28 s |
+| codex_throughput_direct_syndrome | 2.62 s | 9.24 s | 3.52x | 0.43 s | 4.09 s | 9.52x | 1.03 s |
+| mixed_codec | 13.36 s | 26.64 s | 1.99x | 2.39 s | 6.80 s | 2.85x | 10.26 s |
+| mixed_throughput | 5.28 s | 13.45 s | 2.55x | 1.78 s | 6.25 s | 3.51x | 2.84 s |
+| original_codec | 16.98 s | 28.81 s | 1.70x | 2.69 s | 7.60 s | 2.83x | 14.02 s |
+| original_throughput | 5.91 s | 16.28 s | 2.76x | 1.83 s | 7.60 s | 4.14x | 3.79 s |
+
+Geomean end-to-end ratio: 3.09x
+
+G5a holds for the geomean (3.09×) but not for every simulate: `mixed_codec`
+(2.85×) and `original_codec` (2.83×) still need about 6% and 9%.
+Elaboration of the codec designs (10-14 s) is the G5b concern.
+
+**Owner direction (2026-10-25): the interpreter is never invoked in a
+compiled simulation.** This is strict. Nothing dispatches over SimIR
+operations or kernel instructions at run time:
+- no `Impl::execute`, which covers hosted processes, commit and resolver
+  programs, and startup;
+- no kernel `step_generic`, `behavioral_step` or generic instructions;
+- no kernel bytecode members;
+- no helper that switches over kernel instructions.
+
+Native code may call a dedicated helper per operation. G3 is now
+"interpreted sites 0", which implies host=0 and hosted=0. The plan is in
+`.local-artifacts/v4-migration/hosted-plan.md`. Its first step is
+instrumentation: static `static-kernel-interpreted` rows, and a dynamic
+`static-kernel-run interpreted=` line after each run.
+
 ### 2026-10-25 (night): legacy JIT gone, debugger on the kernel, perf regressions fixed (sweep `v4b6`)
 
 The legacy per-process LLVM JIT and its runtime are deleted, and the kernel

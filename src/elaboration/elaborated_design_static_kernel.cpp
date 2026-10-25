@@ -685,6 +685,39 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             const auto* jump = operation_get_if<Jump>(&operations[op]);
             return jump != nullptr && jump->target == 0U;
         };
+        // A runtime check's halt after its failure report never runs
+        // (static_kernel_halt_after_failure) unless a branch reaches it.
+        std::optional<std::vector<std::uint8_t>> targeted;
+        const auto unreachable_halt = [&](const std::size_t op) {
+            if (!vhdl || op == 0U
+                || !static_kernel_halt_after_failure(
+                    operations[op - 1U], operations[op])) {
+                return false;
+            }
+            if (!targeted) {
+                targeted.emplace(count, 0U);
+                const auto mark = [&](const std::size_t target) {
+                    if (target < count) {
+                        (*targeted)[target] = 1U;
+                    }
+                };
+                for (std::size_t at = 0U; at < count; ++at) {
+                    visit_operation([&](const auto& value) {
+                        using T = std::decay_t<decltype(value)>;
+                        if constexpr (std::is_same_v<T, Jump>) {
+                            mark(value.target);
+                        } else if constexpr (std::is_same_v<T, Branch>) {
+                            mark(value.when_true);
+                            mark(value.when_false);
+                        } else if constexpr (std::is_same_v<T, Call>) {
+                            mark(value.target);
+                            mark(value.return_target);
+                        }
+                    }, operations[at]);
+                }
+            }
+            return (*targeted)[op] == 0U;
+        };
         // Structural operations excluded from the supported-operation check.
         std::size_t structural_a = count;
         std::size_t structural_b = count;
@@ -696,7 +729,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             if (sensitivity.empty()) {
                 std::optional<std::size_t> halt;
                 for (std::size_t op = 0U; op < count && shape_ok; ++op) {
-                    if (const auto* value = operation_get_if<Halt>(&operations[op])) {
+                    if (const auto* value = operation_get_if<Halt>(&operations[op]);
+                        value != nullptr && !unreachable_halt(op)) {
                         shape_ok = !halt && !value->program_exit;
                         halt = op;
                     }
@@ -806,6 +840,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             const auto& operation = operations[op];
             const bool overridden = &operation != operations.data() + op;
             supported = (vhdl ? static_kernel_vhdl_operation_supported(operation)
+                                  || unreachable_halt(op)
                               : static_kernel_operation_supported(operation))
                 && !branch_target_outside(operation, count);
             if (supported) {
@@ -1105,13 +1140,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             bool supported = count != 0U;
             std::size_t failed_at = count;
             const char* failed_reason = "";
-            // The implicit wait of a sensitivity list wakes on any event of
-            // a whole signal (a thread has no range filter).
+            // The implicit wait of a sensitivity list: a thread's waiter
+            // filters an any-edge entry by its bit range and an edge entry
+            // (a `rising_edge(clk)` process narrowed to the edge it tests)
+            // by the transition of the signal's first bit.
             for (const auto& entry : sensitivity) {
                 if (entry.signal >= signal_count
                     || alias_signal[entry.signal] != 0U
-                    || entry.edge != EdgeKind::any || entry.offset != 0U
-                    || entry.width != 0U) {
+                    || (entry.edge != EdgeKind::any && entry.offset != 0U)) {
                     supported = false;
                     failed_reason = "sensitivity";
                     break;
@@ -1302,12 +1338,24 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // A design without a native member (no candidates of either language)
     // takes the language of its processes: its VHDL processes are hosted
     // (S25a) and its delta semantics are VHDL's (IEEE 1076-2019 14.7.5).
+    // The driver of an implicit signal (S'DELAYED, S'TRANSACTION, S'STABLE,
+    // S'QUIET; 1076-2019 16.2.4) runs in the SystemVerilog scheduling domain
+    // but belongs to the VHDL signal it observes, so it counts as VHDL.
+    const auto implicit_signal_driver = [](const ProcessProgramView& view) {
+        constexpr std::string_view suffix { ".$implicit_driver" };
+        const std::string_view name { view.name() };
+        return view.scheduling_domain() == ProcessSchedulingDomain::systemverilog
+            && !view.initialize() && !view.postponed() && !view.observed()
+            && !view.reactive() && !view.final()
+            && name.size() > suffix.size() && name.ends_with(suffix);
+    };
     std::size_t vhdl_processes = 0U;
     std::size_t sv_processes = 0U;
     for (const auto& view : views) {
         if (view.valid()) {
             ++(view.scheduling_domain()
-                    == ProcessSchedulingDomain::systemverilog
+                        == ProcessSchedulingDomain::systemverilog
+                    && !implicit_signal_driver(view)
                     ? sv_processes
                     : vhdl_processes);
         }
@@ -1352,12 +1400,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
         }
     }
+    // The programs of live wirings (below): VHDL port routing, whose formal
+    // the kernel updates in the VHDL update phase (IEEE 1076-2008 6.5.7.1).
+    std::vector<std::uint8_t> wiring_program(process_count, 0U);
     const auto vhdl_written = [&](const SignalId signal) {
         return std::ranges::all_of(graph_signals[signal].writers,
             [&](const auto& writer) {
                 return writer.process < process_count
-                    && candidates[writer.process]
-                    && candidates[writer.process]->vhdl;
+                    && ((candidates[writer.process]
+                            && candidates[writer.process]->vhdl)
+                        || wiring_program[writer.process] != 0U);
             });
     };
 
@@ -1536,14 +1588,66 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // signals (except pure routing, below). The program and the adapters it replaced (halted stubs) are
     // host programs, not VHDL processes the kernel must hold.
     std::vector<std::uint8_t> host_program(process_count, 0U);
+    const auto wiring_signal_width = [&](const SignalId signal) {
+        return static_cast<std::uint64_t>(
+            signal < signal_count ? signals_[signal].initial_value.width()
+                                  : 0U);
+    };
+    // An output formal associated with a static element or slice of its
+    // actual drives that part (IEEE 1076-2008 6.5.7.1, 14.7.3.2): a
+    // conversion driver whose program is pure routing over the formal is
+    // kernel wiring when every conversion driver of the actual is, the
+    // kernel copying the formal into the part in the update phase that
+    // changes it. Otherwise the drivers run on the host, which writes the
+    // resolved actual.
+    struct DriverWiring {
+        SignalId target { };
+        SignalId source { };
+        ProcessId stub { };
+        ProcessId program { };
+        bool live { };
+    };
+    std::vector<DriverWiring> driver_wirings;
     for (std::size_t index = 0U; index < signals_.size(); ++index) {
-        // A conversion driver's program and stub run on the host too, and
-        // the host writes the resolved actual.
-        for (const auto& driver : signals_[index].vhdl_conversion_drivers) {
+        const auto& drivers = signals_[index].vhdl_conversion_drivers;
+        std::vector<DriverWiring> wired;
+        for (const auto& driver : drivers) {
+            if (!vhdl_mode || index >= signal_count
+                || signals_[index].vhdl_resolver || driver.sources.size() != 1U
+                || driver.program >= process_count || driver.stub >= process_count
+                || !views[driver.program].valid()) {
+                break;
+            }
+            const auto wire = static_kernel_wiring(
+                views[driver.program].operations(), driver.output,
+                wiring_signal_width);
+            const auto source = driver.sources.front();
+            const auto target_width = wiring_signal_width(
+                static_cast<SignalId>(index));
+            if (!wire || wire->source != source || source >= signal_count
+                || source == index
+                || (driver.offset
+                        ? *driver.offset + std::uint64_t { wire->width }
+                            > target_width
+                        : wire->width != target_width)
+                || signals_[source].value_kind != signals_[index].value_kind) {
+                break;
+            }
+            wired.push_back({ static_cast<SignalId>(index), source,
+                driver.stub, driver.program, true });
+        }
+        if (!drivers.empty() && wired.size() == drivers.size()) {
+            driver_wirings.insert(driver_wirings.end(), wired.begin(),
+                wired.end());
+        }
+        for (const auto& driver : drivers) {
             for (const auto process : { driver.program, driver.stub }) {
                 if (process < process_count) {
                     host_program[process] = 1U;
                 }
+            }
+            if (wired.size() == drivers.size()) {
+                continue;
             }
             for (const auto source : driver.sources) {
                 if (source < signal_count) {
@@ -1554,6 +1658,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 host_touched[index] = 1U;
             }
         }
+    }
+    for (const auto& wiring : driver_wirings) {
+        wiring_program[wiring.stub] = 1U;
     }
     // A pure-routing program (a formal fed by a bit range of one signal)
     // is kernel wiring rather than a host program: the kernel copies the
@@ -1569,11 +1676,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     };
     std::vector<Wiring> wirings;
     std::vector<std::int32_t> wiring_of_target(signal_count, -1);
-    const auto wiring_signal_width = [&](const SignalId signal) {
-        return static_cast<std::uint64_t>(
-            signal < signal_count ? signals_[signal].initial_value.width()
-                                  : 0U);
-    };
     for (SignalId target = 0U; vhdl_mode && target < signal_count; ++target) {
         const auto& resolver = signals_[target].vhdl_resolver;
         if (!resolver || resolver->sources.size() != 1U
@@ -1596,6 +1698,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         wiring_of_target[target] = static_cast<std::int32_t>(wirings.size());
         wirings.push_back({ target, source, resolver->process, true });
+        wiring_program[resolver->process] = 1U;
     }
     for (SignalId index = 0U; index < signal_count; ++index) {
         const auto& signal = signals_[index];
@@ -1655,9 +1758,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     };
     const auto writers_ok = [&](const SignalId signal) {
         const auto& node = graph_signals[signal];
+        // A wired actual's parts are written by its driver wirings' stubs.
         if (std::ranges::any_of(node.writers, [&](const auto& writer) {
                 return writer.process >= process_count
-                    || !candidates[writer.process];
+                    || (!candidates[writer.process]
+                        && wiring_program[writer.process] == 0U);
             })) {
             return false;
         }
@@ -1947,11 +2052,39 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
     // A wiring needs its source and its formal kernel-owned; otherwise its
-    // program runs on the host and the source stays a host signal.
+    // program runs on the host and the source stays a host signal. A driver
+    // wiring also needs its actual owned; otherwise every conversion driver
+    // of the actual runs on the host.
+    // An actual's driver wirings are adjacent.
+    for (std::size_t begin = 0U; begin < driver_wirings.size();) {
+        auto end = begin + 1U;
+        while (end < driver_wirings.size()
+            && driver_wirings[end].target == driver_wirings[begin].target) {
+            ++end;
+        }
+        const auto target = driver_wirings[begin].target;
+        if (driver_wirings[begin].live
+            && (owned[target] == 0U
+                || std::ranges::any_of(
+                    std::span { driver_wirings }.subspan(begin, end - begin),
+                    [&](const DriverWiring& wiring) {
+                        return owned[wiring.source] == 0U;
+                    }))) {
+            for (auto at = begin; at < end; ++at) {
+                driver_wirings[at].live = false;
+                wiring_program[driver_wirings[at].stub] = 0U;
+                host_touched[driver_wirings[at].source] = 1U;
+            }
+            host_touched[target] = 1U;
+            revalidate = true;
+        }
+        begin = end;
+    }
     for (auto& wiring : wirings) {
         if (wiring.live
             && (owned[wiring.source] == 0U || owned[wiring.target] == 0U)) {
             wiring.live = false;
+            wiring_program[wiring.program] = 0U;
             host_touched[wiring.source] = 1U;
             wiring_of_target[wiring.target] = -1;
             revalidate = true;
@@ -2034,6 +2167,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 const auto& operations = views[index].operations();
                 std::cerr << "fsim-kernel-plan-dump: " << views[index].name()
                           << " candidate=" << (candidates[index] ? 1 : 0)
+                          << " kind="
+                          << (candidates[index]
+                                     ? static_cast<int>(candidates[index]->kind)
+                                     : -1)
                           << " domain="
                           << static_cast<int>(views[index].scheduling_domain())
                           << " sens=";
@@ -2327,36 +2464,36 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         hosted[index] = 1U;
     }
 
-    // Implicit-signal drivers (S25a): the driver process of S'DELAYED,
-    // S'TRANSACTION, S'STABLE and S'QUIET is a scheduled process of the
-    // SystemVerilog scheduling domain with no initial run (it is not a
-    // member: it is not initialized). The VHDL kernel hosts it like a VHDL
-    // process: it wakes in the delta after the source's update phase
-    // (queue_next_delta: a wake from another domain runs in the next delta,
-    // 1076-2019 14.7.5.3) and its assignments are the host's staged updates.
-    // FSIM_STATIC_KERNEL_HOSTED_IMPLICIT=0 keeps it on the host.
+    // SystemVerilog-domain processes of a VHDL kernel (S25a). The driver
+    // process of S'DELAYED, S'TRANSACTION, S'STABLE and S'QUIET is a
+    // scheduled process of the SystemVerilog scheduling domain with no
+    // initial run; the processes of a Verilog unit that the kernel cannot
+    // run natively (a register of a VHDL value kind read across the language
+    // boundary, for example) are SystemVerilog-domain processes too. The
+    // VHDL kernel hosts the Active-region ones like VHDL processes: a wake
+    // from the other domain runs in the next delta (queue_next_delta, as the
+    // host does; 1076-2019 14.7.5.3), one from its own domain in the current
+    // Active region, and its assignments are the host's staged updates.
+    // FSIM_STATIC_KERNEL_HOSTED_IMPLICIT=0 keeps them on the host.
     {
         const char* implicit_text
             = std::getenv("FSIM_STATIC_KERNEL_HOSTED_IMPLICIT");
         const bool implicit_enabled = hosted_vhdl_enabled
             && (implicit_text == nullptr
                 || std::string_view { implicit_text } != "0");
-        constexpr std::string_view implicit_suffix { ".$implicit_driver" };
         for (std::size_t index = 0U; implicit_enabled && index < process_count;
              ++index) {
             const auto& view = views[index];
             if (!view.valid() || candidates[index] || host_program[index] != 0U
                 || view.scheduling_domain()
                     != ProcessSchedulingDomain::systemverilog
-                || view.initialize() || view.postponed() || view.observed()
-                || view.reactive() || view.final()) {
+                || view.postponed() || view.observed() || view.reactive()
+                || view.final()
+                || view.startup_phase()
+                    == ProcessStartupPhase::package_static_initializer) {
                 continue;
             }
-            const std::string_view name { view.name() };
-            if (name.size() > implicit_suffix.size()
-                && name.ends_with(implicit_suffix)) {
-                hosted[index] = 1U;
-            }
+            hosted[index] = 1U;
         }
     }
 
@@ -2381,15 +2518,34 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         runtime_member.sensitivity = std::move(candidate.sensitivity);
         spec->members.push_back(std::move(runtime_member));
     }
+    // Commit programs (S25b): the programs of the update commit (resolvers,
+    // conversion drivers and their stubs) are not scheduled processes; the
+    // census counts them as kernel-owned rows of their program kind, never
+    // as host processes. Whatever the candidate classification said about
+    // their operations is replaced by that kind.
+    const auto census_commit_programs = [&](std::vector<std::uint8_t>& kernel_rows) {
+        for (std::size_t index = 0U; census && index < process_count; ++index) {
+            if (member[index] != 0U || host_program[index] == 0U) {
+                continue;
+            }
+            const auto& view = views[index];
+            kernel_rows[index] = 1U;
+            rejection[index] = !view.valid() ? "commit_program"
+                : view.switch_source() || view.switch_target()
+                ? "commit_program_switch"
+                : !view.initialize() && view.operations().size() == 1U
+                ? "commit_program_stub"
+                : "commit_program";
+        }
+    };
     // A design whose processes are all hosted still runs on the kernel: it
     // schedules them (engine-v4-semantics S25).
     if (spec->members.empty()
         && std::ranges::none_of(hosted, [](const auto flag) { return flag != 0U; })) {
         // Every valid process is a host program (port-association resolver,
-        // conversion driver): run inline by the host's update commit, not a
+        // conversion driver): run inline by the update commit, not a
         // scheduled process. There is nothing for the kernel to schedule, so
-        // the design is admitted trivially, as one with no processes; the
-        // census still counts the programs as host processes.
+        // the design is admitted trivially, as one with no processes.
         const bool only_host_programs = [&] {
             for (std::size_t index = 0U; index < process_count; ++index) {
                 if (views[index].valid() && host_program[index] == 0U) {
@@ -2399,14 +2555,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             return true;
         }();
         if (only_host_programs) {
-            for (std::size_t index = 0U; index < process_count; ++index) {
-                if (views[index].valid()) {
-                    reject(index, "port_program");
-                }
-            }
             StaticKernelPlan trivial;
             trivial.disabled_reason = "trivial_host_programs_only";
-            take_census(trivial, nullptr);
+            std::vector<std::uint8_t> commit_programs(process_count, 0U);
+            census_commit_programs(commit_programs);
+            take_census(trivial, &member, &commit_programs);
             return trivial;
         }
         return disable("no_members");
@@ -2440,8 +2593,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     spec->vhdl = vhdl_mode;
     spec->mixed = mixed;
     spec->import_host_writes = publish_all;
+    // A live wiring's program reads its source on the host only as the
+    // driver identity; the kernel copies the value.
     std::vector<std::uint8_t> wired_program(process_count, 0U);
     for (const auto& wiring : wirings) {
+        if (wiring.live) {
+            wired_program[wiring.program] = 1U;
+        }
+    }
+    for (const auto& wiring : driver_wirings) {
         if (wiring.live) {
             wired_program[wiring.program] = 1U;
         }
@@ -2650,22 +2810,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // inside the update phase that follows a kernel delta (IEEE 1076-2019
     // 14.7.3 for effective values, conversion functions and resolution;
     // IEEE 1800-2023 23.3.3 and 28 for port coercion and inout networks).
-    // The census therefore counts them as kernel-owned rows, not as host
-    // processes. Whatever the candidate classification said about their
-    // operations is replaced by the program's kind.
     std::vector<std::uint8_t> kernel_owned = hosted;
-    for (std::size_t index = 0U; census && index < process_count; ++index) {
-        if (member[index] != 0U || host_program[index] == 0U) {
-            continue;
-        }
-        const auto& view = views[index];
-        kernel_owned[index] = 1U;
-        rejection[index] = !view.valid()                          ? "commit_program"
-            : view.switch_source() || view.switch_target()        ? "commit_program_switch"
-            : !view.initialize() && view.operations().size() == 1U
-                ? "commit_program_stub"
-                : "commit_program";
-    }
+    census_commit_programs(kernel_owned);
     take_census(plan, &member, &kernel_owned);
     return plan;
     };
