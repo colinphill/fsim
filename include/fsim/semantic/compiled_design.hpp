@@ -310,6 +310,12 @@ public:
     [[nodiscard]] std::optional<
         std::span<const CompiledSystemVerilogScopeGenvar>>
     systemverilog_scope_genvars(ScopeId scope) const noexcept;
+    /// The `fsim_unit_` package holding the compilation-unit declarations
+    /// visible to `unit` (IEEE 1800-2017 3.12.1), or null when there is
+    /// none or more than one; disengaged when the lookup indexes are stale.
+    [[nodiscard]] std::optional<const sv::Unit*>
+    systemverilog_compilation_unit_package(
+        const sv::Unit& unit) const noexcept;
     /// Positions in `systemverilog_hir.statements()` of the statements with
     /// import items that open `scope`, in statement order; disengaged when
     /// the lookup indexes are stale.
@@ -441,6 +447,8 @@ private:
         std::unordered_set<std::uint32_t> systemverilog_genvar_unordered_scopes;
         std::vector<std::vector<std::uint32_t>>
             systemverilog_import_statements_by_scope;
+        // By unit identity: see systemverilog_compilation_unit_package.
+        std::vector<const sv::Unit*> systemverilog_compilation_unit_packages;
         std::vector<std::vector<DeclarationId>>
             vhdl_declarations_by_scope;
         using VhdlDeclarationsByName = std::unordered_map<

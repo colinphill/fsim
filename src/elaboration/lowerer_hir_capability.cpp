@@ -8242,6 +8242,35 @@ std::optional<Lowerer::HirStaticStorage> Lowerer::hir_static_storage(
     const semantic::DeclarationId declaration,
     const HirCallableFrame* frame) const
 {
+    // Static storage is materialized only for the variables and formals of
+    // SystemVerilog procedural scopes and for static function results
+    // (IEEE 1800-2017 6.21, 13.4.2); a net, a VHDL object, or an object of
+    // a module, interface or package scope has none.
+    if (specialized_hir_unit_ != nullptr) {
+        const auto view = specialized_hir_unit_->find_declaration(declaration);
+        if (view && view->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        if (view) {
+            const auto& source = *view->systemverilog;
+            if (source.form == semantic::sv::DeclarationForm::net) {
+                return std::nullopt;
+            }
+            const auto& semantics = specialized_hir_unit_->design().semantics;
+            const auto& scopes = semantics.scopes();
+            const auto& units = semantics.units();
+            if ((source.form == semantic::sv::DeclarationForm::variable
+                    || source.form == semantic::sv::DeclarationForm::port)
+                && source.scope.valid() && source.scope.value() < scopes.size()) {
+                const auto unit = scopes[source.scope.value()].unit;
+                if (unit.valid() && unit.value() < units.size()
+                    && units[unit.value()].id == unit
+                    && units[unit.value()].scope == source.scope) {
+                    return std::nullopt;
+                }
+            }
+        }
+    }
     if (frame == nullptr && active_hir_callable_) {
         frame = &hir_callable_frames_[*active_hir_callable_];
     }

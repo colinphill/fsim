@@ -877,6 +877,48 @@ void CompiledDesign::refresh_lookup_indexes()
             }
         }
     }
+    {
+        // The `fsim_unit_` packages by library and compilation unit; a key
+        // with more than one package selects none.
+        std::unordered_map<std::string, std::pair<const sv::Unit*, std::size_t>>
+            packages;
+        const auto key = [](const sv::Unit& unit) {
+            auto result = std::string {
+                support::normalized_library(unit.library) };
+            result.push_back('\0');
+            result += unit.compilation_unit_identity;
+            return result;
+        };
+        for (const auto& unit : systemverilog_hir.units()) {
+            if (unit.kind == sv::UnitKind::package
+                && unit.name.starts_with("fsim_unit_")) {
+                auto& entry = packages[key(unit)];
+                entry.first = &unit;
+                ++entry.second;
+            }
+        }
+        rebuilt.systemverilog_compilation_unit_packages.assign(
+            semantics.units().size(), nullptr);
+        for (const auto& unit : systemverilog_hir.units()) {
+            const auto owner_has_compilation_unit_scope
+                = unit.kind == sv::UnitKind::compilation_unit
+                || unit.kind == sv::UnitKind::module
+                || unit.kind == sv::UnitKind::interface
+                || unit.kind == sv::UnitKind::program;
+            if (!owner_has_compilation_unit_scope
+                || unit.compilation_unit_identity.empty() || !unit.id.valid()
+                || unit.id.value()
+                    >= rebuilt.systemverilog_compilation_unit_packages
+                           .size()) {
+                continue;
+            }
+            const auto found = packages.find(key(unit));
+            if (found != packages.end() && found->second.second == 1U) {
+                rebuilt.systemverilog_compilation_unit_packages[
+                    unit.id.value()] = found->second.first;
+            }
+        }
+    }
     rebuilt.systemverilog_import_statements_by_scope.resize(
         semantics.scopes().size());
     const auto& statements = systemverilog_hir.statements();
@@ -1445,6 +1487,20 @@ CompiledDesign::vhdl_type_positions_named(
     return found == lookup_indexes_.vhdl_type_positions_by_name.end()
         ? std::span<const std::uint32_t> { }
         : std::span<const std::uint32_t> { found->second };
+}
+
+std::optional<const sv::Unit*>
+CompiledDesign::systemverilog_compilation_unit_package(
+    const sv::Unit& unit) const noexcept
+{
+    if (!lookup_indexes_current()) {
+        return std::nullopt;
+    }
+    const auto& packages
+        = lookup_indexes_.systemverilog_compilation_unit_packages;
+    return unit.id.valid() && unit.id.value() < packages.size()
+        ? packages[unit.id.value()]
+        : nullptr;
 }
 
 std::optional<std::span<const std::uint32_t>>

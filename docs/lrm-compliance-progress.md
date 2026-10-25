@@ -253,6 +253,44 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 96 part 6: SystemVerilog name and type resolution costs
+
+Callgrind on rs_codec Verilog (pre-LRM 43.4 G, after part 5 48.4 G)
+pointed at name and type resolution, which the LRM batches made more
+exact and more expensive per call:
+
+- Integral constants in association identities that the shared constant
+  evaluator had already found non-constant were evaluated again on every
+  lookup; the specialization now keeps that answer.
+- `resolve_systemverilog_name` checks whether an enclosing import or a
+  compilation-unit declaration takes a name from its parse-time binding
+  (IEEE 1800-2017 26.3, 3.12.1) only when the name has such a binding,
+  walks import statements through the scope index without copying them,
+  finds the `fsim_unit_` package of a unit through a new index, and skips
+  generate-path and genvar-hiding work in units without generate regions.
+- Named-type resolution returns at once for the built-in type keywords
+  (`wire`, `integer`, `reg`, `logic`, ...), which are reserved words and
+  never declaration names (5.6.2); they were 99% of the named-type
+  lookups in rs_codec Verilog, each a full scope walk.
+- Static callable storage is not looked up for nets, VHDL objects, or
+  variables and ports of a module, interface or package scope.
+
+Instructions (G) and CPU seconds of `fsim elaborate --no-aot`:
+
+| Case | pre-LRM | part 5 | now | pre-LRM CPU | now CPU |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| rs_codec Verilog | 43.4 | 48.4 | 45.7 | 4.5 | 5.2 |
+| rs_param Verilog | 164.9 | 165.8 | 155.2 | | |
+| rs_symsize Verilog | 142.5 | 141.3 | 137.8 | 7.6 | 7.8 |
+| rs_thru Verilog | 13.7 | 14.9 | 14.2 | 1.6 | 1.9 |
+| rs_encoder Verilog | 12.9 | 14.2 | 13.9 | 0.85 | 1.0 |
+| rs_codec VHDL | 38.1 | 39.5 | 38.9 | 3.0 | 3.9 |
+| rs_param VHDL | 124.0 | 126.9 | 124.3 | 10.3 | 13.4 |
+
+rs_param Verilog fails elaboration in both binaries, so it has no CPU
+row. Peak memory is at the pre-LRM level in every case. The labelled
+ctest set fails only the 23 known cases.
+
 ### Batch 96 part 5: VHDL lowering caches, per-unit validation
 
 Callgrind on rs_codec VHDL (pre-LRM 43.6 G, before this part 47.7 G)

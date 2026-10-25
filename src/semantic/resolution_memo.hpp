@@ -61,8 +61,10 @@ struct ResolutionMemo {
     std::size_t effective_subtype_count { };
 
     /// Values of expressions evaluated without bindings
-    /// (SpecializedHirUnit::evaluate_integral_expression), by expression.
-    std::unordered_map<std::uint32_t, std::int64_t> integral_values;
+    /// (SpecializedHirUnit::evaluate_integral_expression), by expression;
+    /// empty for an expression found not to be constant.
+    std::unordered_map<std::uint32_t, std::optional<std::int64_t>>
+        integral_values;
 
     /// The kinds of declaration constant evaluation resolves an
     /// expression's name to.

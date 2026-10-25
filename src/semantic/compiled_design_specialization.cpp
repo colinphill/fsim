@@ -14372,15 +14372,20 @@ std::atomic<SystemVerilogConstantIntegral> shared_constant_integral_ {
 std::atomic<SystemVerilogConstantArray> shared_constant_array_ { nullptr };
 
 /// The shared constant evaluator, not re-entered from inside itself: its
-/// own use of the integral fast path must not loop back.
+/// own use of the integral fast path must not loop back. `consulted` is set
+/// when the evaluator ran, so that its answer is final.
 std::optional<std::int64_t> shared_constant_integral(
-    const SpecializedHirUnit& unit, const ExpressionId expression)
+    const SpecializedHirUnit& unit, const ExpressionId expression,
+    bool* const consulted = nullptr)
 {
     thread_local bool active { };
     const auto evaluator = shared_constant_integral_.load(
         std::memory_order_acquire);
     if (evaluator == nullptr || active) {
         return std::nullopt;
+    }
+    if (consulted != nullptr) {
+        *consulted = true;
     }
     struct Reentry {
         bool& flag;
@@ -18252,8 +18257,9 @@ std::optional<std::int64_t>
 SpecializedHirUnit::evaluate_integral_expression(
     const ExpressionId expression) const
 {
-    // A value reads only this specialization. A failure is not kept: inside
-    // the shared constant evaluator its fallback is unavailable.
+    // A value reads only this specialization. A failure is kept only when
+    // the shared constant evaluator ran: inside it, its fallback is
+    // unavailable.
     auto& values = resolution_memo().integral_values;
     if (const auto found = values.find(expression.value());
         found != values.end()) {
@@ -18268,12 +18274,12 @@ SpecializedHirUnit::evaluate_integral_expression(
         nullptr, initializer_memo_context_
     };
     auto value = evaluator.evaluate(expression);
+    bool consulted { };
     if (!value) {
-        value = shared_constant_integral(*this, expression);
+        value = shared_constant_integral(*this, expression, &consulted);
     }
-    if (value) {
-        resolution_memo().integral_values.emplace(
-            expression.value(), *value);
+    if (value || consulted) {
+        resolution_memo().integral_values.emplace(expression.value(), value);
     }
     return value;
 }

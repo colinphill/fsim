@@ -80,6 +80,10 @@ const sv::Unit* source_package_for_compilation_unit(
         || compilation_unit.compilation_unit_identity.empty()) {
         return nullptr;
     }
+    if (const auto indexed
+        = design.systemverilog_compilation_unit_package(compilation_unit)) {
+        return *indexed;
+    }
     const auto matches = [&](const sv::Unit& candidate) {
         return candidate.kind == sv::UnitKind::package
             && candidate.name.starts_with("fsim_unit_")
@@ -496,18 +500,29 @@ std::optional<SystemVerilogGenerateCandidate>
 systemverilog_generate_candidate(const CompiledDesign& design,
     const sv::Unit& unit, const DeclarationId candidate)
 {
+    // Only a declaration inside one of the unit's generate regions has a
+    // path.
+    if (unit.generates.empty()) {
+        return std::nullopt;
+    }
     std::vector<std::vector<const sv::GenerateRegion*>> paths;
+    const std::vector<const sv::GenerateRegion*>* indexed_path { };
+    std::size_t indexed_paths { };
     const auto in_unit = [&](const CompiledSystemVerilogGeneratePath& path) {
         const auto* outer = path.regions.front();
-        return path.unit == unit.id && !unit.generates.empty()
+        return path.unit == unit.id
             && outer >= unit.generates.data()
             && outer < unit.generates.data() + unit.generates.size();
     };
     if (const auto indexed = design.systemverilog_generate_paths(candidate)) {
         for (const auto& path : *indexed) {
             if (in_unit(path)) {
-                paths.push_back(path.regions);
+                indexed_path = &path.regions;
+                ++indexed_paths;
             }
+        }
+        if (indexed_paths != 1U) {
+            return std::nullopt;
         }
     } else {
         std::vector<const sv::GenerateRegion*> path;
@@ -528,12 +543,13 @@ systemverilog_generate_candidate(const CompiledDesign& design,
             visit(visit, region);
         }
     }
-    if (paths.size() != 1U) {
+    if (indexed_path == nullptr && paths.size() != 1U) {
         return std::nullopt;
     }
 
     SystemVerilogGenerateCandidate result;
-    const auto& selected_path = paths.front();
+    const auto& selected_path
+        = indexed_path != nullptr ? *indexed_path : paths.front();
     for (std::size_t index = 0; index < selected_path.size(); ++index) {
         const auto& region = *selected_path[index];
         if (region.kind == sv::GenerateKind::conditional) {
@@ -2287,50 +2303,64 @@ CompiledDesignResolver::resolve_systemverilog_name(
         : nullptr;
     const auto simple_name = name.spelling.find('.') == std::string::npos
         && name.spelling.find("::") == std::string::npos;
-    bool lexical_import_has_member { };
-    if (simple_name) {
-        auto scope = std::optional { use_scope };
+    // Whether an import in an enclosing scope or a compilation-unit
+    // declaration takes the name from the declaration selected at parse
+    // time; computed only when the name carries one.
+    std::optional<bool> shadowed;
+    const auto lexical_import_has_member = [&] {
+        if (!simple_name) {
+            return false;
+        }
         const auto owner = generate_owner != nullptr
             ? use_unit
             : design_->find_unit(selected_unit_);
-        while (scope) {
-            if (owner && owner->systemverilog != nullptr) {
-                for (const auto* statement
-                    : systemverilog_import_statements(*scope)) {
-                    for (const auto& import : statement->imports) {
-                        if (import_follows_reference(
-                                import.source_order, name.source_order)) {
-                            continue;
-                        }
-                        if (!import.wildcard
-                            && (!import.member
-                                || import.member->spelling != name.spelling)) {
-                            continue;
-                        }
-                        const auto imported
-                            = resolve_systemverilog_package_member(
-                                owner->systemverilog->library,
-                                import.package.spelling,
-                                name.spelling,
-                                predicate);
-                        if (imported.status
-                            != CompiledResolutionStatus::not_found) {
-                            lexical_import_has_member = true;
-                            break;
-                        }
-                    }
-                    if (lexical_import_has_member) {
-                        break;
-                    }
+        if (!owner || owner->systemverilog == nullptr) {
+            return false;
+        }
+        const auto provides = [&](const sv::Statement& statement) {
+            for (const auto& import : statement.imports) {
+                if (import_follows_reference(
+                        import.source_order, name.source_order)) {
+                    continue;
+                }
+                if (!import.wildcard
+                    && (!import.member
+                        || import.member->spelling != name.spelling)) {
+                    continue;
+                }
+                const auto imported = resolve_systemverilog_package_member(
+                    owner->systemverilog->library, import.package.spelling,
+                    name.spelling, predicate);
+                if (imported.status != CompiledResolutionStatus::not_found) {
+                    return true;
                 }
             }
-            if (lexical_import_has_member) {
-                break;
+            return false;
+        };
+        const auto& statements = design_->systemverilog_hir.statements();
+        auto scope = std::optional { use_scope };
+        while (scope) {
+            if (const auto positions
+                = design_->systemverilog_import_statements_in_scope(
+                    *scope)) {
+                for (const auto position : *positions) {
+                    if (provides(statements[position])) {
+                        return true;
+                    }
+                }
+            } else {
+                for (const auto* statement
+                    : systemverilog_import_statements(*scope)) {
+                    if (provides(*statement)) {
+                        return true;
+                    }
+                }
             }
             const auto* record = find_scope(*design_, *scope);
             scope = record != nullptr ? record->parent : std::nullopt;
         }
-    }
+        return false;
+    };
     const auto compilation_unit_name_is_visible = [&] {
         if (!simple_name) {
             return false;
@@ -2343,16 +2373,31 @@ CompiledDesignResolver::resolve_systemverilog_name(
         if (source_unit == nullptr) {
             return false;
         }
-        const auto visible = std::ranges::any_of(source_unit->declarations,
-            [&](const DeclarationId id) {
-                const auto declaration = find_declaration(
-                    *design_, effective_, id);
-                return declaration && declaration->systemverilog != nullptr
-                    && declaration->systemverilog->scope == source_unit->scope
-                    && declaration->systemverilog->name == name.spelling;
-            });
-        return visible;
-    }();
+        const auto declares = [&](const DeclarationId id) {
+            const auto declaration = find_declaration(
+                *design_, effective_, id);
+            return declaration && declaration->systemverilog != nullptr
+                && declaration->systemverilog->scope == source_unit->scope
+                && declaration->systemverilog->name == name.spelling;
+        };
+        // A specialization that renames declarations is not in the index.
+        if (effective_ == nullptr
+            || !effective_->renames_systemverilog_declarations()) {
+            if (const auto named
+                = design_->systemverilog_declarations_named_in_scope(
+                    source_unit->scope, name.spelling)) {
+                return std::ranges::any_of(*named, declares);
+            }
+        }
+        return std::ranges::any_of(source_unit->declarations, declares);
+    };
+    const auto name_is_shadowed = [&] {
+        if (!shadowed) {
+            shadowed = lexical_import_has_member()
+                || compilation_unit_name_is_visible();
+        }
+        return *shadowed;
+    };
     const auto retained_is_valid = [&](const DeclarationId id) {
         const auto declaration = find_declaration(
             *design_, effective_, id);
@@ -2374,13 +2419,12 @@ CompiledDesignResolver::resolve_systemverilog_name(
                   return result;
               }
               std::vector<SystemVerilogGenerateCandidate> generated;
-              generated.reserve(result.candidates.size());
               for (const auto candidate : result.candidates) {
-                  const auto path = generate_candidate(candidate);
+                  auto path = generate_candidate(candidate);
                   if (!path) {
                       return result;
                   }
-                  generated.push_back(*path);
+                  generated.push_back(std::move(*path));
               }
               if (result.candidates.size() > 1U
                   && !systemverilog_generate_candidates_are_exclusive(
@@ -2421,13 +2465,15 @@ CompiledDesignResolver::resolve_systemverilog_name(
               }
               return result;
           };
-    if (!lexical_import_has_member && !compilation_unit_name_is_visible
-        && name.selected
-        && retained_is_valid(*name.selected)) {
+    if (name.selected && retained_is_valid(*name.selected)
+        && !name_is_shadowed()) {
         const auto declaration = find_declaration(
             *design_, effective_, *name.selected);
         if (!generate_candidate(*name.selected)) {
+            // Genvars name only generate blocks of the use unit.
             if (simple_name && declaration
+                && (generate_owner == nullptr
+                    || !generate_owner->generates.empty())
                 && systemverilog_genvar_hides(*design_, use_scope,
                     declaration->systemverilog->scope, name.spelling)) {
                 return { CompiledResolutionStatus::not_found, { } };
@@ -2452,7 +2498,7 @@ CompiledDesignResolver::resolve_systemverilog_name(
                   : result;
           };
     std::vector<DeclarationId> retained;
-    if (!lexical_import_has_member && !compilation_unit_name_is_visible) {
+    if (!name.overloads.empty() && !name_is_shadowed()) {
         for (const auto candidate : name.overloads) {
             if (retained_is_valid(candidate)) {
                 retained.push_back(candidate);
@@ -2944,6 +2990,18 @@ CompiledDesignResolver::resolve_systemverilog_named_type(
     const bool same_library_fallback,
     const std::uint64_t source_order) const
 {
+    // A built-in type keyword is a reserved word and never the name of a
+    // declaration (IEEE 1800-2017 5.6.2, Annex B); a declaration that names
+    // a type needs the 1800 keywords, where all of these are reserved.
+    static constexpr std::array<std::string_view, 27> builtin_types {
+        "bit", "byte", "chandle", "event", "int", "integer", "logic",
+        "longint", "real", "realtime", "reg", "shortint", "shortreal",
+        "string", "supply0", "supply1", "time", "tri", "tri0", "tri1",
+        "triand", "trior", "trireg", "uwire", "wand", "wire", "wor",
+    };
+    if (std::ranges::binary_search(builtin_types, name)) {
+        return { CompiledResolutionStatus::not_found, { } };
+    }
     using Form = sv::DeclarationForm;
     const CompiledDeclarationPredicate named_type = [&](const auto& view) {
         return view.systemverilog != nullptr
