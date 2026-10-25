@@ -6568,9 +6568,11 @@ private:
     [[nodiscard]] std::optional<FrameMember> frame_member(
         const semantic::sv::Expression& record)
     {
+        if (record.kind != ExpressionKind::name || frames_.empty()) {
+            return std::nullopt;
+        }
         const auto separator = record.text.find('.');
-        if (record.kind != ExpressionKind::name || frames_.empty()
-            || separator == std::string::npos || separator == 0U) {
+        if (separator == std::string::npos || separator == 0U) {
             return std::nullopt;
         }
         const auto root_name

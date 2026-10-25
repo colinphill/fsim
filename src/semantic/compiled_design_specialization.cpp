@@ -14352,6 +14352,9 @@ private:
 struct GenerateSelection {
     std::vector<DeclarationId> selected;
     std::vector<InstanceId> fallback_instances;
+    // Genvars of enclosing loop generates that the specialization leaves
+    // unbound.
+    std::vector<std::string_view> loop_genvars;
 };
 
 template <typename Generate>
@@ -14498,6 +14501,37 @@ void select_systemverilog_children(
     }
 }
 
+// Whether a SystemVerilog expression names a genvar of an enclosing loop
+// generate.
+bool names_loop_genvar(const SpecializedHirUnit& unit,
+    const ExpressionId expression,
+    const std::span<const std::string_view> genvars)
+{
+    const auto view = unit.find_expression(expression);
+    if (!view || view->systemverilog == nullptr) {
+        return false;
+    }
+    const auto& record = *view->systemverilog;
+    if (record.kind == sv::ExpressionKind::name
+        && std::ranges::find(genvars, std::string_view { record.text })
+            != genvars.end()) {
+        return true;
+    }
+    const auto names = [&](const ExpressionId operand) {
+        return names_loop_genvar(unit, operand, genvars);
+    };
+    return std::ranges::any_of(record.operands, names)
+        || std::ranges::any_of(record.call_arguments,
+            [&](const sv::CallAssociation& argument) {
+                return argument.actual && names(*argument.actual);
+            })
+        || std::ranges::any_of(record.associations,
+            [&](const sv::AssignmentPatternAssociation& association) {
+                return names(association.value)
+                    || std::ranges::any_of(association.choices, names);
+            });
+}
+
 void select_systemverilog_generate(const sv::GenerateRegion& generate,
     HirIntegralEvaluator& evaluator, GenerateSelection& output)
 {
@@ -14510,11 +14544,29 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
         output.fallback_instances.insert(
             output.fallback_instances.end(),
             generate.instances.begin(), generate.instances.end());
+        // A loop occurrence's specialization binds its genvar.
+        const bool bound = std::ranges::any_of(
+            evaluator.unit().specialization().hierarchy_identities,
+            [&](const auto& identity) {
+                return identity.name == generate.iterator;
+            });
+        if (!bound) {
+            output.loop_genvars.push_back(generate.iterator);
+        }
         select_systemverilog_children(
             generate.nested, evaluator, output);
+        if (!bound) {
+            output.loop_genvars.pop_back();
+        }
         return;
     }
-    if (!generate.condition) {
+    // A condition naming a genvar of an enclosing loop depends on the
+    // iteration (IEEE 1800-2017 27.4) and is decided per iteration when the
+    // loop elaborates.
+    if (!generate.condition
+        || (!output.loop_genvars.empty()
+            && names_loop_genvar(evaluator.unit(), *generate.condition,
+                output.loop_genvars))) {
         preserve_generate_subtree(generate, output);
         return;
     }

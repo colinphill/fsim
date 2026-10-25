@@ -253,6 +253,53 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 96 part 9: generate selection in loops, declaration lookup
+
+- Specialization decides the SystemVerilog generate constructs it can
+  before elaboration and keeps the rest for the elaborator. A condition
+  that names the genvar of an enclosing loop the specialization does not
+  bind depends on the iteration (IEEE 1800-2017 27.4); it is now kept for
+  the loop without trying the evaluators on the unbound genvar. A loop
+  occurrence's own specialization binds its genvar and still decides the
+  condition for that iteration.
+- The lowerer looked up the referenced expression three times for every
+  declaration reference; it now looks once, and again only after a VHDL
+  character literal is classified.
+- The constant evaluator looks for a dotted member path only in name
+  expressions with an active frame.
+
+Instructions (G) and peak memory (MB) of `fsim elaborate --no-aot`:
+
+| Case | pre-LRM instr | now | pre-LRM MB | now |
+| --- | ---: | ---: | ---: | ---: |
+| rs_codec Verilog | 43.4 | 44.0 | 1141 | 1191 |
+| rs_symsize Verilog | 142.5 | 136.4 | 989 | 917 |
+| rs_thru Verilog | 13.7 | 13.9 | 633 | 651 |
+| rs_encoder Verilog | 12.9 | 13.6 | 257 | 275 |
+| rs_codec VHDL | 38.1 | 38.5 | 391 | 418 |
+| rs_param VHDL | 124.0 | 123.1 | 1047 | 952 |
+| rs_thru VHDL | 13.7 | 13.7 | 263 | 270 |
+
+CPU seconds, interleaved with the pre-LRM binary:
+
+| Case | pre-LRM | now |
+| --- | ---: | ---: |
+| rs_codec Verilog | 4.6 | 5.1 |
+| rs_symsize Verilog | 7.7 | 8.1 |
+| rs_thru Verilog | 1.6 | 2.0 |
+| rs_encoder Verilog | 0.87 | 1.05 |
+| rs_codec VHDL | 3.0 | 4.0 |
+| rs_param VHDL | 10.1-10.3 | 13.0-13.4 |
+
+The rs cases now execute about as many instructions as with the pre-LRM
+binary (rs_codec Verilog under callgrind: 57.2 G against 56.0 G, of which
+0.4 G is the software SHA-256 path valgrind forces). The remaining CPU
+difference is cycles per instruction: L1 instruction-cache misses rose
+from 0.17 G to 0.25 G on rs_codec Verilog while data-cache misses fell,
+which follows the growth of the elaboration library's code from 5.1 MB to
+9.1 MB. The Verilog rs simulations match the pre-LRM binary line for
+line. The labelled ctest set fails only the 23 known cases.
+
 ### Batch 96 part 8: compile memory, SystemVerilog name cache
 
 - `fsim compile` projected every compiled object of a library before

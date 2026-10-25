@@ -6291,43 +6291,40 @@ Lowerer::hir_referenced_declaration(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
-    // The design's context-typed resolution selected the overload or
-    // enumeration literal (IEEE 1076-2008 12.5). A literal it typed as a
-    // predefined CHARACTER or BIT has no retained declaration.
-    if (const auto resolved = specialized_hir_unit_->find_expression(
-            expression_id);
-        resolved && resolved->vhdl != nullptr) {
-        if (resolved->vhdl->resolved_declaration) {
-            return resolved->vhdl->resolved_declaration;
-        }
-        if (resolved->vhdl->kind
-                == semantic::vhdl::ExpressionKind::logic_literal
-            && (resolved->vhdl->resolved_builtin_type == "character"
-                || resolved->vhdl->resolved_builtin_type == "bit")) {
-            return std::nullopt;
-        }
-    }
-    // A character literal in a context of another type denotes that type's
-    // literal, not the visible user enumeration literal (9.3.2, 12.5). The
-    // classification evaluates other expressions, so it runs before any
-    // view of the expression is held.
-    if (const auto literal = specialized_hir_unit_->find_expression(
-            expression_id);
-        literal && literal->vhdl != nullptr
-        && literal->vhdl->kind
-            == semantic::vhdl::ExpressionKind::logic_literal
-        && literal->vhdl->text.size() == 3U
-        && literal->vhdl->text.front() == '\'') {
-        classify_hir_vhdl_character_literal(expression_id);
-        if (hir_vhdl_character_contexts_.foreign.contains(
-                expression_id.value())) {
-            return std::nullopt;
-        }
-    }
-    const auto expression = specialized_hir_unit_->find_expression(
-        expression_id);
+    auto expression = specialized_hir_unit_->find_expression(expression_id);
     if (!expression) {
         return std::nullopt;
+    }
+    if (expression->vhdl != nullptr) {
+        const auto& record = *expression->vhdl;
+        // The design's context-typed resolution selected the overload or
+        // enumeration literal (IEEE 1076-2008 12.5). A literal it typed as a
+        // predefined CHARACTER or BIT has no retained declaration.
+        if (record.resolved_declaration) {
+            return record.resolved_declaration;
+        }
+        if (record.kind == semantic::vhdl::ExpressionKind::logic_literal
+            && (record.resolved_builtin_type == "character"
+                || record.resolved_builtin_type == "bit")) {
+            return std::nullopt;
+        }
+        // A character literal in a context of another type denotes that
+        // type's literal, not the visible user enumeration literal (9.3.2,
+        // 12.5). The classification evaluates other expressions, so the
+        // view of the expression is taken again after it.
+        if (record.kind == semantic::vhdl::ExpressionKind::logic_literal
+            && record.text.size() == 3U && record.text.front() == '\'') {
+            classify_hir_vhdl_character_literal(expression_id);
+            if (hir_vhdl_character_contexts_.foreign.contains(
+                    expression_id.value())) {
+                return std::nullopt;
+            }
+            expression
+                = specialized_hir_unit_->find_expression(expression_id);
+            if (!expression) {
+                return std::nullopt;
+            }
+        }
     }
 
     auto resolver = hir_resolver();
