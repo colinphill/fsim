@@ -289,6 +289,18 @@ sv_multiclock_sequence_batch96_20261025 checks `##1` and `##0` with clocks
 that tick in the same time step, failures, and a handover between clocks
 of different periods.
 
+The six-suite sweep with `b96x` (`b96x1`, commit 6803a2de) against `b96u1`
+has no losses and gains the multiclock case; every in-scope case passes.
+
+| Suite | b96u1 passes / in scope | b96x1 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2635 / 2635 | 2635 / 2635 | 276 |
+| sv-tests | 1494 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2065 / 2065 | 2065 / 2065 | 350 |
+| vests | 3646 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1261 / 1261 | 1261 / 1261 | 221 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
 ### Batch 96 part 9: generate selection in loops, declaration lookup
 
 - Specialization decides the SystemVerilog generate constructs it can
