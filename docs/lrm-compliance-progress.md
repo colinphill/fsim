@@ -293,6 +293,20 @@ longer fits in L2. The top 30 functions hold only 39% of the added misses,
 so the remaining gap is code layout rather than a single algorithm;
 profile-guided layout is the general remedy and is an owner decision.
 
+The six-suite sweep with `b96r` (`b96r1`, parts 3 to 5) gains nvc
+issue620 and issue810 against `b96w1` and loses none. Every in-scope case
+now passes except the parked UVM case in sv-tests, which closes the Batch
+96 pool.
+
+| Suite | b96w1 passes / in scope | b96r1 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2635 / 2635 | 2635 / 2635 | 276 |
+| sv-tests | 1494 / 1495 | 1494 / 1495 | 2 |
+| verilator | 2065 / 2065 | 2065 / 2065 | 350 |
+| vests | 3646 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1259 / 1261 | 1261 / 1261 | 221 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
 ### Batch 96 part 3: elaboration time of the rs suite, nvc issue620
 
 Elaboration of the rs testbenches had grown well past the pre-LRM binary
