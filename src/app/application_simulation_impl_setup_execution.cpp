@@ -54,7 +54,8 @@ void Simulation::Impl::setup_execution(
                 boundary.native_handle));
     }
 #if defined(FSIM_HAS_LLVM)
-    if (engine != SimulationEngine::interpreter) {
+    if (engine != SimulationEngine::interpreter
+        && engine != SimulationEngine::v4) {
         const bool compile_all_processes
             = built.compiled_process_selection
             == BuiltProject::CompiledProcessSelection::all;

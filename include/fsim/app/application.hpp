@@ -350,6 +350,11 @@ enum class SimulationEngine : std::uint8_t {
     /// source locations. Call safe points and addressable locals remain future
     /// work.
     debug,
+    /// Engine v4 (docs/simulation-engine-v4-plan.md): the static kernel owns
+    /// every member process; the reference evaluator runs the rest. The
+    /// per-process JIT is never started. A design the kernel refuses runs
+    /// wholly on the reference evaluator, with a reason (plan §9, D5).
+    v4,
 };
 
 /// Controls whether kernel mutations are continuously mirrored into the live

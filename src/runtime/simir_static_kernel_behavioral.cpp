@@ -11,6 +11,7 @@
 
 #include "fsim/runtime/output_format.hpp"
 #include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
@@ -57,6 +58,13 @@ void Interpreter::Impl::StaticKernel::ready_thread(const std::uint32_t index)
     // A resumed thread abandons every other registration of its wait.
     ++thread.epoch;
     thread.queued = true;
+    if (members_[thread.member].vhdl) {
+        // A VHDL thread resumes in the next delta cycle, whatever woke it
+        // (IEEE 1076-2019 14.7.5.3): it runs with the VHDL members of the
+        // next round, never in a SystemVerilog Active drain.
+        vhdl_ready_threads_.push_back(index);
+        return;
+    }
     if (committing_round_) {
         // Woken by a VHDL commit: it runs in the next delta.
         deferred_threads_.push_back(index);
@@ -65,7 +73,7 @@ void Interpreter::Impl::StaticKernel::ready_thread(const std::uint32_t index)
     ready_threads_.push_back(index);
 }
 
-void Interpreter::Impl::StaticKernel::start_behavioral()
+void Interpreter::Impl::StaticKernel::prepare_behavioral()
 {
     slot_waitable_.resize(slots_.size(), 0U);
     slot_wait_seen_.assign(slots_.size(), Logic4::x);
@@ -76,12 +84,46 @@ void Interpreter::Impl::StaticKernel::start_behavioral()
             slot_wait_seen_[slot] = slot_edge_bit(slot);
         }
     }
-    // Every behavioral process starts at time zero in the Active region,
-    // like its reference process.
+    // A process that begins at its static wait is armed before any other
+    // time-zero process runs, as the host scheduler arms its processes
+    // (Interpreter::start): it then sees the changes the once members
+    // (declaration initializers, initial blocks) make. This is the one
+    // fixed order fsim uses for that time-zero race (IEEE 1800-2023 4.7,
+    // 9.2; engine-v4-semantics S18).
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
-        if (members_[index].kind == StaticKernelMemberKind::behavioral) {
+        auto& member = members_[index];
+        if (member.kind != StaticKernelMemberKind::behavioral
+            || member.vhdl || member.start_late
+            || member.wait_sensitivity.empty()
+            || member.operations.empty()
+            || !operation_holds<WaitSensitivity>(member.operations.front())) {
+            continue;
+        }
+        member.prearmed = true;
+        const auto thread = spawn_thread(index, 0U, no_slot, no_slot);
+        run_thread(thread);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::start_behavioral()
+{
+    // Every behavioral process starts at time zero in the Active region,
+    // like its reference process; one that the scheduler starts a delta late
+    // (systemverilog_late_starters) starts in the next delta.
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        if (members_[index].kind != StaticKernelMemberKind::behavioral
+            || members_[index].prearmed) {
+            continue;
+        }
+        if (members_[index].start_late) {
+            late_members_.push_back(index);
+        } else {
             ready_thread(spawn_thread(index, 0U, no_slot, no_slot));
         }
+    }
+    if (!late_members_.empty()) {
+        late_start_armed_ = true;
+        yield_requested_ = true;
     }
 }
 
@@ -92,6 +134,32 @@ bool Interpreter::Impl::StaticKernel::run_ready_threads()
     }
     auto ready = std::move(ready_threads_);
     ready_threads_.clear();
+    for (std::size_t position = 0U; position < ready.size(); ++position) {
+        const auto index = ready[position];
+        if (stopped_) {
+            // Threads not yet run stay ready for a resumed run ($stop).
+            ready_threads_.insert(ready_threads_.end(),
+                ready.begin() + static_cast<std::ptrdiff_t>(position),
+                ready.end());
+            break;
+        }
+        threads_[index].queued = false;
+        if (threads_[index].alive) {
+            run_thread(index);
+        }
+    }
+    return true;
+}
+
+bool Interpreter::Impl::StaticKernel::run_vhdl_threads()
+{
+    if (vhdl_ready_threads_.empty()) {
+        return false;
+    }
+    // Threads woken while these run (none today: a VHDL signal changes only
+    // in the update phase) belong to the next round.
+    auto ready = std::move(vhdl_ready_threads_);
+    vhdl_ready_threads_.clear();
     for (const auto index : ready) {
         threads_[index].queued = false;
         if (stopped_) {
@@ -268,13 +336,34 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
             if (!encoded) {
                 fail(member_index, pc, "SystemVerilog time query failed");
             }
-            packed_register(op.destination) = encoded.value;
+            packed_register(op.destination) = member.vhdl
+                ? Impl::coerce_value_kind(encoded.value,
+                      op.destination < member.register_kinds.size()
+                          ? member.register_kinds[op.destination]
+                          : ValueKind::logic4)
+                : encoded.value;
         } else if constexpr (std::is_same_v<T, TimeDisplay>) {
             const auto text = make_time_output(op.prefix, op.suffix,
                 kernel_now(), impl_.time_format,
                 op.use_timeformat_width, op.minimum_width, op.left_justify,
                 op.zero_pad);
             behavioral_output(member_index, text, op.newline);
+        } else if constexpr (std::is_same_v<T, Report>) {
+            // A VHDL report statement (IEEE 1076-2019 10.9, 10.8): the
+            // planner admits it only outside the 2019 mode, where the
+            // reference evaluator emits it through the same hook.
+            if (impl_.report_hook) {
+                impl_.report_hook(member.process, op.message.str(),
+                    op.severity, op.source, kernel_now(),
+                    warp_time_ ? 0U : impl_.scheduler.delta());
+            }
+            if (op.severity == AssertionSeverity::failure) {
+                throw AssertionError(member.process,
+                    pc < member.origin.size() ? member.origin[pc] : pc,
+                    op.message.empty() ? std::string { "report failure" }
+                                       : op.message.str(),
+                    op.severity, op.source, true);
+            }
         } else if constexpr (std::is_same_v<T, LoadStringConstant>) {
             if (op.value.size() > maximum_string_bytes) {
                 fail(member_index, pc, "string literal exceeds the string length limit");
@@ -287,6 +376,122 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
             string_register(op.destination) = op.value;
         } else if constexpr (std::is_same_v<T, CopyStringRegister>) {
             string_register(op.destination) = string_register(op.source);
+        } else if constexpr (std::is_same_v<T, ConcatenateStrings>) {
+            std::string result;
+            for (const auto operand : op.operands) {
+                const auto& value = string_register(operand);
+                if (value.size() > maximum_string_bytes - result.size()) {
+                    fail(member_index, pc,
+                        "string concatenation exceeds the string length limit");
+                }
+                result += value;
+            }
+            string_register(op.destination) = std::move(result);
+        } else if constexpr (std::is_same_v<T, StringMethod>) {
+            // The reference evaluator's execute_string, on the thread's
+            // registers.
+            try {
+                auto& source = string_register(op.source);
+                const bool dynamic_string_field = op.operation
+                    == StringMethodOperator::format_string_dynamic_field;
+                const bool dynamic_packed_field = op.operation
+                    == StringMethodOperator::format_packed_dynamic_field;
+                const bool string_format
+                    = op.operation == StringMethodOperator::format_string
+                    || dynamic_string_field;
+                const bool packed_format
+                    = op.operation == StringMethodOperator::format_packed
+                    || dynamic_packed_field;
+                const bool format = packed_format || string_format
+                    || op.operation == StringMethodOperator::format_time
+                    || op.operation == StringMethodOperator::format_vhdl_time;
+                if (format) {
+                    auto normalized = op;
+                    if (dynamic_string_field || dynamic_packed_field) {
+                        const auto width_register = dynamic_string_field
+                            ? op.first : op.second;
+                        normalized.minimum_width
+                            = checked_vhdl_textio_field_width(
+                                packed_register(width_register));
+                        normalized.operation = dynamic_string_field
+                            ? StringMethodOperator::format_string
+                            : StringMethodOperator::format_packed;
+                    }
+                    const auto packed = packed_format
+                            || op.operation
+                                == StringMethodOperator::format_vhdl_time
+                            || (op.operation == StringMethodOperator::format_time
+                                && op.time_unit_femtoseconds != 0U)
+                        ? packed_register(op.first)
+                        : PackedLogic4 { 1, Logic4::zero };
+                    execute_string_format(normalized, source, packed,
+                        string_format
+                            ? std::string_view { string_register(op.argument) }
+                            : std::string_view { },
+                        kernel_now(), impl_.time_format);
+                } else {
+                    const auto signed32 = [&](const RegisterId id)
+                        -> std::optional<std::int32_t> {
+                        const auto word = packed_register(id).low_word();
+                        return word.bval == 0
+                            ? std::optional<std::int32_t> {
+                                  static_cast<std::int32_t>(
+                                      static_cast<std::uint32_t>(word.aval)) }
+                            : std::nullopt;
+                    };
+                    const bool compare
+                        = op.operation == StringMethodOperator::compare
+                        || op.operation == StringMethodOperator::icompare
+                        || op.operation
+                            == StringMethodOperator::vhdl_enumeration_value
+                        || op.operation
+                            == StringMethodOperator::vhdl_physical_value;
+                    const bool element = op.operation
+                            == StringMethodOperator::vhdl_composite_element
+                        || op.operation
+                            == StringMethodOperator::vhdl_character_element
+                        || op.operation == StringMethodOperator::vhdl_string_fill;
+                    const bool has_first
+                        = op.operation == StringMethodOperator::getc
+                        || op.operation == StringMethodOperator::putc
+                        || op.operation == StringMethodOperator::substr
+                        || element
+                        || (op.operation >= StringMethodOperator::itoa
+                            && op.operation <= StringMethodOperator::realtoa);
+                    const bool has_second
+                        = op.operation == StringMethodOperator::putc
+                        || op.operation == StringMethodOperator::substr
+                        || element;
+                    const auto first_word = has_first
+                        ? std::optional { packed_register(op.first).low_word() }
+                        : std::nullopt;
+                    const auto result = execute_string_method(op.operation,
+                        source,
+                        compare ? std::string_view { string_register(op.argument) }
+                                : std::string_view { },
+                        has_first ? signed32(op.first) : std::nullopt,
+                        has_second ? signed32(op.second) : std::nullopt,
+                        op.operation == StringMethodOperator::realtoa
+                                && first_word && first_word->bval == 0
+                            ? std::optional<std::uint64_t> { first_word->aval }
+                            : std::nullopt);
+                    if (result.integer) {
+                        packed_register(op.destination)
+                            = PackedLogic4::from_aval_bval(
+                                32, *result.integer, 0);
+                    }
+                    if (result.scalar_bits) {
+                        packed_register(op.destination)
+                            = PackedLogic4::from_aval_bval(
+                                64, *result.scalar_bits, 0);
+                    }
+                    if (result.string) {
+                        string_register(op.string_destination) = *result.string;
+                    }
+                }
+            } catch (const std::exception& error) {
+                fail(member_index, pc, error.what());
+            }
         } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
             const auto selected = select_plusarg(
                 impl_.plusargs, string_register(op.query), op.format_query);
@@ -296,6 +501,20 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
             }
             packed_register(op.destination) = PackedLogic4::from_aval_bval(
                 32, selected ? 1U : 0U, 0);
+        } else if constexpr (std::is_same_v<T, RandomValue>) {
+            // $urandom, $urandom_range and $random (IEEE 1800-2023 18.13,
+            // 20.15) draw from the process's own stream, like the reference
+            // evaluator. The planner keeps processes with fork threads off
+            // the kernel: a reference fork child has its own process
+            // identity and stream.
+            const auto maximum = op.maximum
+                ? std::optional<PackedLogic4> { packed_register(*op.maximum) }
+                : std::nullopt;
+            const auto minimum = op.minimum
+                ? std::optional<PackedLogic4> { packed_register(*op.minimum) }
+                : std::nullopt;
+            packed_register(op.destination) = impl_.random_value(
+                members_[member_index].process, op.kind, maximum, minimum);
         } else if constexpr (std::is_same_v<T, CallableFramePush>) {
             if (member.private_frame(op.identity)) {
                 member.saved_array_marks.push_back(member.saved_arrays.size());
@@ -451,7 +670,23 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
                     fail(member_index, pc, error.what());
                 }
             }
-            if (delay == 0U) {
+            if (member.vhdl) {
+                // IEEE 1076-2019 10.2: the process resumes when the time
+                // expires, in the delta after that time's signal updates;
+                // `wait for 0 ns` resumes in the next delta cycle.
+                threads_[index].deadline.reset();
+                threads_[index].timeout_result.reset();
+                if (delay == 0U) {
+                    ready_thread(index);
+                } else {
+                    const auto now = kernel_now();
+                    // A wait beyond TIME'HIGH never resumes (14.7.5.1).
+                    if (delay <= std::numeric_limits<SimulationTick>::max() - now) {
+                        vhdl_timers_.push({ now + delay, timer_sequence_++,
+                            index, threads_[index].epoch });
+                    }
+                }
+            } else if (delay == 0U) {
                 // #0 resumes in the Inactive region of this time step.
                 inactive_threads_.push_back(index);
             } else {
@@ -471,9 +706,60 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
                     op.edges.empty() ? EdgeKind::any : op.edges[entry] });
             }
             wait_on(index, entries);
+            if (member.vhdl) {
+                auto& thread = threads_[index];
+                if (!op.timeout) {
+                    thread.deadline.reset();
+                    thread.timeout_result.reset();
+                } else {
+                    const auto now = kernel_now();
+                    if (op.timeout_origin) {
+                        // A re-wait of a wait-until condition keeps the
+                        // deadline its first wait established (10.2).
+                        if (!thread.deadline) {
+                            fail(member_index, pc,
+                                "WaitOn timeout rearm has no matching active deadline");
+                        }
+                    } else {
+                        auto timeout = *op.timeout;
+                        if (op.timeout_source) {
+                            // A runtime TIME timeout (10.2); the lowering
+                            // has already rejected a negative value.
+                            WaitFor scale;
+                            scale.delay = 1U;
+                            scale.source = op.timeout_source;
+                            scale.source_width = op.timeout_source_width;
+                            scale.source_signed = true;
+                            try {
+                                timeout = normalized_dynamic_wait_delay(
+                                    scale, read(*op.timeout_source));
+                            } catch (const std::exception& error) {
+                                fail(member_index, pc, error.what());
+                            }
+                        }
+                        if (timeout
+                            > std::numeric_limits<SimulationTick>::max() - now) {
+                            fail(member_index, pc,
+                                "simulation time overflow in WaitOn timeout");
+                        }
+                        thread.deadline = now + timeout;
+                    }
+                    thread.timeout_result = op.timeout_result;
+                    if (*thread.deadline <= now) {
+                        ready_thread(index);
+                    } else {
+                        vhdl_timers_.push({ *thread.deadline, timer_sequence_++,
+                            index, thread.epoch });
+                    }
+                }
+            }
             outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, WaitSensitivity>) {
             wait_on(index, member.wait_sensitivity);
+            if (member.vhdl) {
+                threads_[index].deadline.reset();
+                threads_[index].timeout_result.reset();
+            }
             outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, WaitForever>) {
             outcome = Boundary::suspend;
@@ -500,6 +786,29 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
             }
             stopped_ = true;
             outcome = Boundary::finish;
+        } else if constexpr (std::is_same_v<T, Pause>) {
+            // $stop (IEEE 1800-2023 20.2) suspends the simulation at a safe
+            // boundary: the host run ends as stopped, nothing is finished,
+            // and the process resumes after the $stop when the run
+            // continues.
+            if (op.status) {
+                const auto value = read(*op.status).known_signed_value();
+                if (!value) {
+                    fail(member_index, pc,
+                        "STD.ENV simulator status is not a known signed INTEGER");
+                }
+                impl_.simulator_status = *value;
+            } else {
+                impl_.simulator_status.reset();
+            }
+            if (warp_time_) {
+                schedule_stop_at(*warp_time_);
+            } else {
+                impl_.scheduler.request_stop();
+            }
+            stopped_ = true;
+            paused_thread_ = index;
+            outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, Fork>) {
             std::uint32_t group = no_slot;
             if (op.join != ForkJoinKind::none) {
@@ -534,6 +843,23 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
     std::swap(member.frame_bytes, threads_[index].frame_bytes);
     std::swap(member.saved_arrays, threads_[index].saved_arrays);
     std::swap(member.saved_array_marks, threads_[index].saved_array_marks);
+    if (threads_[index].timeout_result) {
+        // A VHDL wait with timeout resumed: the result register tells the
+        // timeout from an event (an event at the deadline counts as the
+        // timeout, as for the reference evaluator).
+        auto& waiting = threads_[index];
+        const auto reg = *waiting.timeout_result;
+        const bool timed_out = waiting.deadline
+            && *waiting.deadline <= kernel_now();
+        if (reg >= member.registers.size()) {
+            fail(member_index, waiting.pc, "invalid register ID");
+        }
+        member.registers[reg] = Impl::coerce_value_kind(
+            PackedLogic4::from_msb_string(timed_out ? "1" : "0"),
+            reg < member.register_kinds.size() ? member.register_kinds[reg]
+                                               : ValueKind::logic4);
+        waiting.timeout_result.reset();
+    }
     auto pc = threads_[index].pc;
     const auto size = static_cast<std::uint32_t>(member.operations.size());
     const auto park = [&](const std::uint32_t resume) {
@@ -710,6 +1036,69 @@ void Interpreter::Impl::StaticKernel::collect_timers()
             ready_thread(timer.thread);
         }
     }
+    // VHDL timers expire in the update phase of their time (vhdl_timer_due)
+    // and resume their processes in the following delta.
+    if (vhdl_timers_released_) {
+        vhdl_timers_released_ = false;
+        while (!vhdl_timers_.empty() && vhdl_timers_.top().time <= now) {
+            const auto timer = vhdl_timers_.top();
+            vhdl_timers_.pop();
+            const auto& thread = threads_[timer.thread];
+            if (thread.alive && !thread.queued && thread.epoch == timer.epoch) {
+                ready_thread(timer.thread);
+            }
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::arm_vhdl_timer()
+{
+    while (!vhdl_timers_.empty()) {
+        const auto& top = vhdl_timers_.top();
+        const auto& thread = threads_[top.thread];
+        if (thread.alive && !thread.queued && thread.epoch == top.epoch) {
+            break;
+        }
+        vhdl_timers_.pop();
+    }
+    if (vhdl_timers_.empty() || stopped_) {
+        return;
+    }
+    const auto time = vhdl_timers_.top().time;
+    if (time <= impl_.scheduler.now()) {
+        return;
+    }
+    // A task already pending at this time, or at an earlier one (which
+    // re-arms when it runs), covers the timer.
+    if (armed_vhdl_timer_ && *armed_vhdl_timer_ <= time
+        && *armed_vhdl_timer_ > impl_.scheduler.now()) {
+        return;
+    }
+    armed_vhdl_timer_ = time;
+    struct KernelVhdlTimerTask {
+        Interpreter::Impl* owner { };
+        SimulationTick time { };
+    };
+    const auto task = fsim::runtime::detail::make_scheduler_task_descriptor<
+        KernelVhdlTimerTask,
+        +[](Scheduler&, const KernelVhdlTimerTask& scheduled) {
+            if (scheduled.owner->static_kernel) {
+                scheduled.owner->static_kernel->vhdl_timer_due(scheduled.time);
+            }
+        }>(KernelVhdlTimerTask { &impl_, time });
+    // IEEE 1076-2019 14.7.5.3: the signals update first; the processes whose
+    // timeout expired run in the next delta with those the updates wake.
+    impl_.scheduler.schedule_internal_at(
+        time, SchedulerPhase::update, host_process_, task);
+}
+
+void Interpreter::Impl::StaticKernel::vhdl_timer_due(const SimulationTick time)
+{
+    if (armed_vhdl_timer_ && *armed_vhdl_timer_ == time) {
+        armed_vhdl_timer_.reset();
+    }
+    vhdl_timers_released_ = true;
+    impl_.queue_next_delta(host_process_);
 }
 
 void Interpreter::Impl::StaticKernel::arm_timer()
@@ -722,7 +1111,22 @@ void Interpreter::Impl::StaticKernel::arm_timer()
         }
         timers_.pop();
     }
-    if (timers_.empty() || stopped_) {
+    if (stopped_) {
+        return;
+    }
+    if (timers_.empty()) {
+        if (warp_time_ && *warp_time_ > impl_.scheduler.now()) {
+            // The last warped step ended the run: time must still reach it,
+            // so the run completes at the time of its last event.
+            struct KernelWarpEndTask {
+            };
+            const auto task = fsim::runtime::detail::make_scheduler_task_descriptor<
+                KernelWarpEndTask,
+                +[](Scheduler&, const KernelWarpEndTask&) { }>(
+                KernelWarpEndTask { });
+            impl_.scheduler.schedule_internal_systemverilog_at(
+                *warp_time_, SchedulerPhase::active, host_process_, task);
+        }
         return;
     }
     const auto time = timers_.top().time;

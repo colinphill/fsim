@@ -1477,6 +1477,22 @@ void Scheduler::schedule_end_of_time_slot(StableOrder order, Task task)
             std::move(entry));
 }
 
+bool Scheduler::systemverilog_active_work_pending() const noexcept
+{
+    if (!impl_->current)
+        return false;
+    const auto& slot = *impl_->current;
+    const auto running = slot.systemverilog_phase;
+    if (running
+        && (*running == SchedulerPhase::active
+            || *running == SchedulerPhase::inactive)
+        && !slot.systemverilog_running.empty())
+        return true;
+    return !slot.systemverilog.queues[phase_index(SchedulerPhase::active)].empty()
+        || !slot.systemverilog.queues[phase_index(SchedulerPhase::inactive)]
+                .empty();
+}
+
 std::uint64_t Scheduler::systemverilog_round() const noexcept
 {
     return impl_->current ? impl_->current->systemverilog_round : 0;

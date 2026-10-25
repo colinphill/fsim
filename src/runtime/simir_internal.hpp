@@ -4075,6 +4075,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<FusedConeState> fused_cones;
     std::vector<std::uint32_t> fused_cone_by_signal;
     std::vector<std::uint8_t> fusion_dormant_process;
+    /// 1 for a static kernel member whose original program had a static
+    /// sensitivity. Members are installed without it, but the signals they
+    /// drive still settle in the time-zero active region (start()).
+    std::vector<std::uint8_t> static_kernel_event_driven_process;
     bool fused_cone_materializing { };
     void materialize_fused_cone(std::size_t cone);
     // Engine v4 static kernel (simir_static_kernel.cpp). Owned signals live

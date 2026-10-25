@@ -18,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace fsim::runtime::simir {
@@ -57,6 +58,9 @@ struct StaticKernelMemberSpec {
     std::uint32_t partition { std::numeric_limits<std::uint32_t>::max() };
     /// A VHDL process (delta semantics); otherwise SystemVerilog.
     bool vhdl { };
+    /// A behavioral thread that starts one delta after time zero's other
+    /// processes (systemverilog_late_starters).
+    bool start_late { };
 };
 
 /// A kernel-owned aggregate proxy: its value is the concatenation of its
@@ -153,6 +157,10 @@ struct StaticKernelRuntimeSpec {
     /// actuals, undriven nets). They stay inputs, but host processes cannot
     /// change them between kernel rounds.
     std::vector<SignalId> unwritten_inputs;
+    /// Host signals members read whose only driver is one member process.
+    /// The host applies that member's Active-region updates unchanged, so the
+    /// kernel mirrors them as it stages them.
+    std::vector<SignalId> sole_writer_inputs;
     /// Specializations restored from an earlier run (members not listed are
     /// specialized as usual).
     std::shared_ptr<StaticKernelSpecializations> specializations;
@@ -263,6 +271,11 @@ struct StaticKernelRuntimeSpec {
                 || std::is_same_v<T, WaitForever>
                 || std::is_same_v<T, ForkEnd>
                 || std::is_same_v<T, Stop>
+                || std::is_same_v<T, Pause>
+                || std::is_same_v<T, Report>
+                || std::is_same_v<T, RandomValue>
+                || std::is_same_v<T, ConcatenateStrings>
+                || std::is_same_v<T, StringMethod>
                 || std::is_same_v<T, LoadStringConstant>
                 || std::is_same_v<T, CopyStringRegister>
                 || std::is_same_v<T, PlusArgSelect>
@@ -343,6 +356,57 @@ struct StaticKernelRuntimeSpec {
     }, operation);
 }
 
+/// Operations a VHDL behavioral member may use (IEEE 1076-2019 11.3, 10.2):
+/// the VHDL delta-mode set plus the wait statement (`wait for`, `wait on`,
+/// `wait until` lowered as a WaitOn loop, with or without a timeout, bare
+/// `wait`), reports and `std.env` stop/finish. Signal assignments stay the
+/// zero-delay inertial ones the delta-mode set already admits; delayed,
+/// transport and waveform assignments, attribute queries and string or
+/// container registers stay on the host.
+[[nodiscard]] inline bool static_kernel_vhdl_behavioral_operation_supported(
+    const Operation& operation)
+{
+    if (static_kernel_vhdl_operation_supported(operation)) {
+        return true;
+    }
+    return visit_operation([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, WaitOn>) {
+            if (value.signals.empty() && !value.timeout) {
+                return false;
+            }
+            if (!value.edges.empty()
+                && value.edges.size() != value.signals.size()) {
+                return false;
+            }
+            for (std::size_t entry = 0U; entry < value.edges.size(); ++entry) {
+                if (value.edges[entry] != EdgeKind::any) {
+                    return false;
+                }
+            }
+            // Timeout metadata requires a timeout; a rearm requires the
+            // result register (the lowering always provides both).
+            if (!value.timeout
+                && (value.timeout_result || value.timeout_origin
+                    || value.timeout_source)) {
+                return false;
+            }
+            return !value.timeout_origin || value.timeout_result.has_value();
+        } else if constexpr (std::is_same_v<T, Halt>) {
+            return !value.program_exit;
+        } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+            // `now` (IEEE 1076-2019 16.3): the time query.
+            return value.function >= SystemVerilogMathFunction::Time;
+        } else {
+            return std::is_same_v<T, WaitFor>
+                || std::is_same_v<T, WaitSensitivity>
+                || std::is_same_v<T, WaitForever>
+                || std::is_same_v<T, Report>
+                || std::is_same_v<T, Stop>;
+        }
+    }, operation);
+}
+
 /// A bit range of one signal that a port-association program copies into its
 /// formal unchanged.
 struct StaticKernelWiring {
@@ -410,6 +474,94 @@ template <typename Operations, typename SignalWidth>
     return StaticKernelWiring { result->second.signal,
         static_cast<std::uint32_t>(result->second.offset),
         static_cast<std::uint32_t>(result->second.width) };
+}
+
+/// The SystemVerilog processes that start one delta after the other
+/// processes of time zero. A process with no static sensitivity and no event
+/// wait that reads a settling signal (a net, or a signal that an
+/// event-driven process or port adapter drives) starts after time zero's
+/// continuous assignments and event controls have settled; the order within
+/// the Active region is unspecified (IEEE 1800-2023 4.7, 9.2), so this is
+/// one fixed legal order, shared by the scheduler's start and the static
+/// kernel's threads. `ignored` names processes that do not take part at all
+/// (compact constants), `excluded` those that cannot start late themselves
+/// (kernel members) but still drive settling signals, `resolved` the signals
+/// that are nets, and `event_driven` the processes whose view lost a static
+/// sensitivity they had (kernel members installed without it).
+template <typename ViewOf, typename Ignored, typename Excluded, typename Resolved,
+    typename EventDriven>
+[[nodiscard]] std::vector<bool> systemverilog_late_starters(
+    const std::size_t process_count, const std::size_t signal_count,
+    const ViewOf& view_of, const Ignored& ignored, const Excluded& excluded,
+    const Resolved& resolved, const EventDriven& event_driven)
+{
+    std::vector<bool> candidates(process_count, false);
+    bool any_candidate { };
+    for (std::size_t id = 0U; id < process_count; ++id) {
+        if (ignored(id) || excluded(id)) {
+            continue;
+        }
+        const auto& program = view_of(id);
+        candidates[id] = program.startup_phase() == ProcessStartupPhase::ordinary
+            && program.scheduling_domain()
+                == ProcessSchedulingDomain::systemverilog
+            && program.static_sensitivity().empty()
+            && program.name().find(".$declaration_initializer_")
+                == std::string::npos;
+        any_candidate = any_candidate || candidates[id];
+    }
+    std::vector<bool> late(process_count, false);
+    if (!any_candidate) {
+        return late;
+    }
+    // Settling signals: nets, and the signals that event-driven processes
+    // (continuous assignments, always_comb) and port adapters drive.
+    std::vector<bool> settling(signal_count, false);
+    for (std::size_t signal = 0U; signal < signal_count; ++signal) {
+        settling[signal] = resolved(signal);
+    }
+    for (std::size_t id = 0U; id < process_count; ++id) {
+        if (ignored(id)) {
+            continue;
+        }
+        const auto& program = view_of(id);
+        if (program.startup_phase()
+            == ProcessStartupPhase::package_static_initializer) {
+            continue;
+        }
+        if (!program.static_sensitivity().empty() || event_driven(id)
+            || program.name().find(".port_actual_") != std::string::npos) {
+            for (const auto& region : program.driver_regions()) {
+                if (region.signal < settling.size()) {
+                    settling[region.signal] = true;
+                }
+            }
+        }
+    }
+    for (std::size_t id = 0U; id < process_count; ++id) {
+        if (!candidates[id]) {
+            continue;
+        }
+        const auto& program = view_of(id);
+        const auto& operations = std::as_const(program.operations());
+        bool reads_settling { };
+        bool waits { };
+        for (std::size_t index = 0U; index < operations.size() && !waits;
+             ++index) {
+            const auto& operation = operations[index];
+            if (operation_holds<WaitOn>(operation)
+                || operation_holds<WaitOrder>(operation)
+                || operation_holds<WaitSensitivity>(operation)) {
+                waits = true;
+            } else if (const auto* read = operation_get_if<ReadSignal>(&operation);
+                       read != nullptr && read->signal < settling.size()
+                && settling[read->signal]) {
+                reads_settling = true;
+            }
+        }
+        late[id] = reads_settling && !waits;
+    }
+    return late;
 }
 
 } // namespace fsim::runtime::simir

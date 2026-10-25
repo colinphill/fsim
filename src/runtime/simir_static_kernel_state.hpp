@@ -164,6 +164,14 @@ private:
         /// A VHDL process (delta rounds); otherwise SystemVerilog.
         bool vhdl { };
         bool run_at_start { };
+        /// A behavioral thread that starts in the delta after time zero's.
+        bool start_late { };
+        /// A behavioral thread armed at its first static wait before the
+        /// once members run (prepare_behavioral).
+        bool prearmed { };
+        /// always_comb/always_latch (ProcessStartupPhase::after_procedures):
+        /// starts after the initial and always procedures.
+        bool after_procedures { };
         std::uint32_t body_begin { };
         std::uint32_t body_end { };
         std::uint32_t exit_alt { static_kernel_detail::no_slot };
@@ -299,6 +307,10 @@ private:
         /// No reader, output or edge needs to hear about writes: every reader
         /// runs later in the writers' own partition pass.
         bool silent { };
+        /// A combinational member writes the slot in the NBA region
+        /// (IEEE 1800-2023 4.5): readers see the value only after the commit,
+        /// so no reader can be ordered after the writer within one pass.
+        bool deferred_write { };
         ProcessId last_writer { };
         /// Every writer is one process, so last_writer never changes.
         bool single_writer { };
@@ -317,6 +329,9 @@ private:
         /// No process writes the signal (StaticKernelRuntimeSpec::
         /// unwritten_inputs).
         bool unwritten { };
+        /// One member process drives the signal (StaticKernelRuntimeSpec::
+        /// sole_writer_inputs).
+        bool sole_writer { };
     };
 
     struct Container {
@@ -594,9 +609,14 @@ private:
     void settle();
     void check_owned_edges();
     void commit_pending();
-    void publish();
+    void publish(bool immediate = false);
     void initialize();
     [[nodiscard]] bool scan_inputs(bool all = true);
+    /// Take one input's committed host value into its mirror and wake its
+    /// readers; false when it is unchanged.
+    bool refresh_input(Input& input);
+    /// Take a new value into an input's mirror and wake its readers.
+    void apply_input(Input& input, PackedLogic4 value);
     [[noreturn]] void fail(std::uint32_t member, InstructionIndex instruction,
         const std::string& message) const;
 
@@ -653,6 +673,12 @@ private:
         std::uint64_t epoch { };
         bool alive { };
         bool queued { };
+        /// VHDL wait with timeout (IEEE 1076-2019 10.2): the absolute
+        /// deadline of the current wait statement (kept across the re-waits
+        /// of a wait-until condition) and the register that receives
+        /// whether the resumption was the timeout.
+        std::optional<SimulationTick> deadline;
+        std::optional<RegisterId> timeout_result;
         /// Compiled members: the synthetic call stack (pointer, entries)
         /// saved while the thread is suspended.
         std::vector<Word> stack;
@@ -691,8 +717,23 @@ private:
     std::uint64_t timer_sequence_ { };
     /// The wake time of the scheduler task that will activate the kernel.
     std::optional<SimulationTick> armed_timer_;
+    /// VHDL behavioral threads (IEEE 1076-2019 14.7.5.3): threads ready to
+    /// run in the next VHDL round; their timers, which expire in the update
+    /// phase of their time and resume the process in the following delta;
+    /// the wake time of the update-phase task that releases them; and
+    /// whether that task has run (collect_timers then takes the due timers).
+    std::vector<std::uint32_t> vhdl_ready_threads_;
+    std::priority_queue<Timer, std::vector<Timer>, std::greater<>> vhdl_timers_;
+    std::optional<SimulationTick> armed_vhdl_timer_;
+    bool vhdl_timers_released_ { };
+    /// Some member is a VHDL behavioral member: kernel-owned time is off
+    /// (a VHDL time step is a sequence of host deltas).
+    bool vhdl_threads_ { };
     bool behavioral_ { };
     bool stopped_ { };
+    /// The thread that executed $stop (Pause); it resumes at the next
+    /// kernel activation, like the reference process the scheduler requeues.
+    std::uint32_t paused_thread_ { static_kernel_detail::no_slot };
     /// Mixed-language kernel state (activate_mixed): VHDL members of the
     /// next round, SystemVerilog work held until the next delta while a VHDL
     /// round commits, and the parked write queue of the inactive language.
@@ -714,6 +755,9 @@ private:
         return warp_time_ ? *warp_time_ : impl_.scheduler.now();
     }
     void activate_step();
+    /// Whether the pending NBA commit must wait for the host's NBA region;
+    /// arms the task that performs it.
+    [[nodiscard]] bool defer_nonblocking();
 
     [[nodiscard]] std::optional<SimulationTick> next_timer();
     void schedule_stop_at(SimulationTick time);
@@ -744,6 +788,10 @@ private:
     std::vector<std::uint8_t> slot_waitable_;
     std::vector<Logic4> slot_wait_seen_;
     void timer_due(SimulationTick time);
+    void vhdl_timer_due(SimulationTick time);
+    void arm_vhdl_timer();
+    /// Runs the VHDL threads of this round; false when none was ready.
+    [[nodiscard]] bool run_vhdl_threads();
 
     enum class Boundary : std::uint8_t { none, advance, suspend, finish };
     /// Behavioral: the thread and position compiled code starts at, and the
@@ -757,6 +805,8 @@ private:
     [[nodiscard]] std::optional<std::uint32_t> run_behavioral_compiled(
         std::uint32_t thread, std::uint32_t start);
     void sync_behavioral_registers(std::uint32_t member, std::uint32_t keep);
+    void prepare_behavioral();
+    [[nodiscard]] bool start_after_procedures();
     void start_behavioral();
     [[nodiscard]] std::uint32_t spawn_thread(std::uint32_t member,
         std::uint32_t pc, std::uint32_t parent, std::uint32_t group);
@@ -886,7 +936,22 @@ private:
     std::size_t queued_count_ { };
     bool initialized_ { };
     bool nonblocking_committed_ { };
+    /// This activation staged an Active update to a host signal: #0
+    /// threads (Inactive region) resume only after the host applies it.
+    bool host_active_staged_ { };
+    /// The NBA commit waits for the host's same-time Active and Inactive
+    /// work (IEEE 1800-2023 4.5): a host NBA-region task performs it.
+    bool nonblocking_deferred_ { };
+    /// Running in that task: the first NBA commit proceeds.
+    bool nonblocking_region_ { };
+    bool in_host_nonblocking_region_ { };
+    /// Members that start after the procedures (Member::after_procedures).
+    std::vector<std::uint32_t> after_procedure_members_;
     bool yield_requested_ { };
+    /// Behavioral threads waiting for the delta after time zero to start
+    /// (Member::start_late), in member order.
+    std::vector<std::uint32_t> late_members_;
+    bool late_start_armed_ { };
     bool profile_ { };
     bool trace_ { };
     std::uint64_t profile_activations_ { };

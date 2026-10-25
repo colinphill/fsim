@@ -73,7 +73,7 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--case", action="append", dest="cases",
                         help="manifest case ID; repeat for a corpus subset")
     parser.add_argument("--configuration", action="append", dest="configurations",
-                        choices=("llvm_o2", "llvm_o0", "llvm_o2_aot"),
+                        choices=("llvm_o2", "llvm_o0", "llvm_o2_aot", "v4_o2_aot"),
                         help="fsim mode; default is llvm_o2")
     parser.add_argument("--root", action="append", default=[], metavar="NAME=PATH",
                         help="override a manifest source root")
@@ -181,6 +181,9 @@ def select_configurations(manifest: dict[str, Any], requested: list[str] | None
                     "aot": False},
         "llvm_o2_aot": {"id": "llvm_o2_aot", "engine": "compiled",
                         "optimization": "O2", "aot": True},
+        # Engine v4: elaborate builds only the static kernel's code.
+        "v4_o2_aot": {"id": "v4_o2_aot", "engine": "v4",
+                      "optimization": "O2", "aot": True},
     }
     for name in ("llvm_o2", "llvm_o0"):
         declared = standard.get(name)
@@ -841,15 +844,16 @@ def fsim_phase_commands(fsim: Path, case: dict[str, Any], config: dict[str, Any]
         compile_commands.append(command)
     elaborate = [str(fsim), "elaborate", "--jobs", "1", "--optimization",
                  config["optimization"], "--seed", str(seed)]
+    v4 = config["engine"] == "v4"
     if config["aot"]:
-        elaborate.extend(["--aot", "--aot-scope", "all"])
+        elaborate.extend(["--aot", "--aot-scope", "kernel" if v4 else "all"])
     else:
         elaborate.append("--no-aot")
     elaborate.append(case["top"])
-    simulate = [str(fsim), "simulate", "--engine", "compiled",
+    simulate = [str(fsim), "simulate", "--engine", config["engine"],
                 "--optimization", config["optimization"], "--seed", str(seed),
                 "--max-deltas", str(max_deltas)]
-    if config["aot"]:
+    if config["aot"] and not v4:
         simulate.extend(["--compiled-processes", "all"])
     if plusarg is not None:
         simulate.append("+" + plusarg.lstrip("+"))

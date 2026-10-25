@@ -601,7 +601,8 @@ bool visit_known_region_accesses(
             || std::is_same_v<T, PlusArgSelect>) {
             // These operations use process-local registers, plus PlusArgSelect's
             // interpreter-owned command-line snapshot. Shared StringObjectId
-            // access remains opaque.
+            // access (ReadStringObject/WriteStringObject) is classified
+            // separately below.
             return true;
         } else if constexpr (std::is_same_v<T, Call>
             || std::is_same_v<T, Return>
@@ -621,6 +622,141 @@ bool visit_known_region_accesses(
             // program, whose fixed signal accesses are inventoried separately.
             // Fork-written signal ownership is marked uncertain by the graph
             // builder after its writer list has been assembled.
+            return true;
+        } else if constexpr (std::is_same_v<T, ReadStringObject>
+            || std::is_same_v<T, WriteStringObject>) {
+            // A StringObjectId names interpreter-owned text storage
+            // (Interpreter::Impl::string_object_storage). It is either the
+            // object's own text or, for a string port bound to a fixed
+            // string-array element, that element of the aliased container's
+            // string_elements. A string-element container can never be bound
+            // to a signal: container_signal_bridge_width() has no width for
+            // ContainerElementKind::String, and the direct, element and
+            // aggregate alias registrations all require a bridge width or a
+            // Packed/Scalar element kind (Interpreter::add_container_*_alias).
+            // The access therefore reaches no design signal. The nonblocking
+            // form only schedules a string store on the NBA queue.
+            return true;
+        } else if constexpr (std::is_same_v<T, LoadMemory>) {
+            // $readmem/$writemem: the target is this process's container
+            // register, the path a string register; the rest is the host
+            // file system plus the warning/error report callback, which is
+            // guarded like Report at its invocation boundary.
+            return true;
+        } else if constexpr (std::is_same_v<T, FileOpen>
+            || std::is_same_v<T, FileClose>
+            || std::is_same_v<T, FileWriteLiteral>
+            || std::is_same_v<T, FileWriteFormatted>
+            || std::is_same_v<T, FileWriteString>
+            || std::is_same_v<T, FileEndOfFile>
+            || std::is_same_v<T, FilePosition>
+            || std::is_same_v<T, FileFlush>) {
+            // Host file table and standard streams (simir_files.cpp
+            // execute_file): operands and results are this process's
+            // registers; no signal, string object or container object.
+            return true;
+        } else if constexpr (std::is_same_v<T, FileReadLine>) {
+            // The only non-register destination is a packed signal, which
+            // the reference evaluator writes through commit_driver.
+            if (value.target_kind == FileTextTargetKind::packed_signal) {
+                record_write(static_cast<SignalId>(value.target));
+            }
+            return true;
+        } else if constexpr (std::is_same_v<T, FileErrorStatus>) {
+            if (value.target_kind == FileTextTargetKind::packed_signal) {
+                record_write(static_cast<SignalId>(value.target));
+            }
+            return true;
+        } else if constexpr (std::is_same_v<T, FileScan>) {
+            // Conversion targets are registers, string objects (no signal
+            // access, see ReadStringObject) or packed signals written
+            // through commit_driver. The source, format and success flag are
+            // registers.
+            for (const auto& conversion : value.conversions) {
+                if (conversion.target.kind
+                    == InputScanTargetKind::packed_signal) {
+                    record_write(static_cast<SignalId>(conversion.target.id));
+                }
+            }
+            return true;
+        } else if constexpr (std::is_same_v<T, FileBinaryRead>) {
+            switch (value.target_kind) {
+            case FileBinaryTargetKind::packed_signal:
+                record_write(static_cast<SignalId>(value.target));
+                return true;
+            case FileBinaryTargetKind::container_object: {
+                // read_container_object_value, then
+                // write_container_object_value of the same object.
+                const auto* descriptor = find_container(value.target);
+                if (descriptor == nullptr) {
+                    return false;
+                }
+                for (const auto& binding : descriptor->bindings) {
+                    if (binding.readable) {
+                        observe(binding.signal, RegionObservation::none);
+                    }
+                    if (binding.writable) {
+                        record_container_write(binding);
+                    }
+                }
+                return descriptor->complete;
+            }
+            case FileBinaryTargetKind::packed_register:
+            case FileBinaryTargetKind::container_register:
+                return true;
+            }
+            return false;
+        } else if constexpr (std::is_same_v<T, ProcessSelf>
+            || std::is_same_v<T, ProcessStatusQuery>
+            || std::is_same_v<T, ProcessCompleted>) {
+            // A process handle or a read of another process's status
+            // (simir_fork.cpp handle_process_boundary): register results
+            // only. ProcessKill/Suspend/Resume/Await and the random-state
+            // setters change other processes' execution and stay opaque.
+            return true;
+        } else if constexpr (std::is_same_v<T, SvaOperation>) {
+            // The concurrent-property monitor is interpreter state keyed by
+            // (process, site) and fed by guard/start/disabled registers. The
+            // sampled signal values reach those registers through the
+            // ReadSignal operations that precede it, which are classified
+            // individually (execute_sva in simir_sva.cpp).
+            return true;
+        } else if constexpr (std::is_same_v<T, TimeFormatControl>
+            || std::is_same_v<T, RandomDistribution>
+            || std::is_same_v<T, VhdlAssertApi>
+            || std::is_same_v<T, VhdlReflectionApi>
+            || std::is_same_v<T, VhdlEnvironmentTime>
+            || std::is_same_v<T, VhdlEnvironmentTimeToString>
+            || std::is_same_v<T, VhdlEnvironmentGetenv>
+            || std::is_same_v<T, VhdlEnvironmentCallPath>
+            || std::is_same_v<T, VhdlEnvironmentGetCallPath>
+            || std::is_same_v<T, VhdlEnvironmentDirectory>
+            || std::is_same_v<T, RuntimeStringFormat>) {
+            // Register, string-register and container-register operands and
+            // results, plus interpreter-global state ($timeformat profile,
+            // VHDL assertion counters/formats, reflection mirror table) or
+            // the host environment. None names a signal, string object or
+            // container object (simir_execution_boundaries.cpp,
+            // simir_random_distribution.cpp, simir_execution_part2.cpp).
+            return true;
+        } else if constexpr (std::is_same_v<T, SignalStrengthText>) {
+            // Reads the signal's current value and the strength of every
+            // driver (Interpreter::Impl::signal_strength_text).
+            observe(value.signal,
+                RegionObservation::current | RegionObservation::drivers);
+            return true;
+        } else if constexpr (std::is_same_v<T, ClassPropertyRead>
+            || std::is_same_v<T, ClassStaticPropertyRead>
+            || std::is_same_v<T, ClassPropertyContainerRead>) {
+            // Reads of the class heap / static store only; no design signal
+            // (application_simulation_impl_setup.cpp class_property_read_hook,
+            // class_static_property_read_hook, class_property_container_hook
+            // read branch). A virtual-interface member is lowered to explicit
+            // ReadSignal operations over every candidate instance, so the
+            // handle read here is a plain value. Mutations of the heap
+            // (ClassAllocate, ClassPropertyWrite, ClassMethodCall, ...) and
+            // static calls remain opaque: they run class bodies that reach
+            // package-scope signals and toggle $sv_class_heap_change.
             return true;
         } else if constexpr (std::is_same_v<T, Assert>
             || std::is_same_v<T, Display>
@@ -2186,6 +2322,11 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 record_container_write_access);
             if (!access_known) {
                 node.dependencies_unknown = true;
+                if (node.unknown_dependency_instruction
+                    == std::numeric_limits<std::uint32_t>::max()) {
+                    node.unknown_dependency_instruction
+                        = static_cast<std::uint32_t>(instruction);
+                }
                 if (opaque_operation_counts) {
                     const auto operation_type = visit_operation(
                         [](const auto& value) {

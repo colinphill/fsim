@@ -677,7 +677,7 @@ namespace {
             << "      --link-library ARG   SystemC link library/path; repeatable\n"
             << "      --aot                Populate native code after elaborate\n"
             << "      --no-aot             Disable post-elaboration native compilation\n"
-            << "      --aot-scope selected|all\n"
+            << "      --aot-scope selected|all|kernel\n"
             << "                           Select filtered or every capable HDL process\n"
             << "\n"
             << "Elaboration and simulation options:\n"
@@ -701,7 +701,7 @@ namespace {
             << "                           Bound detailed trace report entries\n"
             << "      --cache PATH         Override the managed .fsim/cache native cache\n"
             << "      --file-root PATH     File-I/O root for snapshot simulation\n"
-            << "      --engine interpreter|compiled|debug\n"
+            << "      --engine interpreter|compiled|debug|v4\n"
             << "      --compiled-processes auto|selected|all\n"
             << "                           Auto-consume matching forced-all AOT receipts\n"
             << "      --seed COUNT|random\n"
@@ -1329,9 +1329,11 @@ std::optional<Invocation> parse_arguments(
                     invocation.aot_scope = AotScope::selected;
                 } else if (normalized == "all") {
                     invocation.aot_scope = AotScope::all;
+                } else if (normalized == "kernel") {
+                    invocation.aot_scope = AotScope::kernel;
                 } else {
-                    argument_error(
-                        diagnostics, "--aot-scope must be selected or all");
+                    argument_error(diagnostics,
+                        "--aot-scope must be selected, all, or kernel");
                     return std::nullopt;
                 }
             } else if (is_option(argument, "", "--compiled-processes")) {
@@ -1602,10 +1604,10 @@ std::optional<Invocation> parse_arguments(
                     index, argc, argv, argument, "--engine", diagnostics);
                 if (!value.has_value()
                     || (*value != "interpreter" && *value != "compiled"
-                        && *value != "debug")) {
+                        && *value != "debug" && *value != "v4")) {
                     argument_error(
                         diagnostics,
-                        "--engine must be interpreter, compiled, or debug");
+                        "--engine must be interpreter, compiled, debug, or v4");
                     return std::nullopt;
                 }
                 invocation.engine = std::string { *value };

@@ -499,18 +499,37 @@ restore_specializations(const std::string_view bytes)
 }
 #endif
 
+} // namespace
+
+bool application_detail::static_kernel_requested(
+    const SimulationEngine engine) noexcept
+{
+    if (engine == SimulationEngine::v4) {
+        return true;
+    }
+    const char* requested = std::getenv("FSIM_STATIC_KERNEL");
+    return requested != nullptr && std::string_view { requested } == "1";
+}
+
+namespace {
+
 std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
-    BuiltProject& built, const std::uint64_t max_deltas)
+    BuiltProject& built, const std::uint64_t max_deltas,
+    const SimulationEngine engine)
 {
     const application_detail::ScopedPhaseProfile profile {
         "create_simulation_interpreter"
     };
     const runtime::SchedulerOptions options { max_deltas, 32 };
-    // Engine v4 static kernel (docs/simulation-engine-v4-plan.md); opt-in
-    // while Phase 1 is in progress. It has the same observability limits as
-    // cone fusion.
-    if (built.cone_fusion && std::getenv("FSIM_STATIC_KERNEL") != nullptr
-        && std::string_view { std::getenv("FSIM_STATIC_KERNEL") } == "1") {
+    // Engine v4 static kernel (docs/simulation-engine-v4-plan.md):
+    // `--engine v4` or FSIM_STATIC_KERNEL=1, and always in an AOT
+    // elaboration, which builds the kernel's code. It has the same
+    // observability limits as cone fusion.
+    bool kernel = application_detail::static_kernel_requested(engine);
+#if defined(FSIM_HAS_LLVM)
+    kernel = kernel || compiler::StaticKernelAheadOfTimeScope::active();
+#endif
+    if (built.cone_fusion && kernel) {
         auto plan = [&] {
             const application_detail::ScopedPhaseProfile planning {
                 "static_kernel_plan"
@@ -555,7 +574,14 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                       << " outputs=" << plan.boundary_outputs
                       << " inputs=" << plan.boundary_inputs
                       << " containers=" << plan.owned_containers
+                      << " processes=" << plan.processes
+                      << " host=" << plan.host_processes
                       << '\n';
+            for (const auto& row : plan.host_reasons) {
+                std::cerr << "fsim-profile: static-kernel-host reason="
+                          << row.reason << " count=" << row.count
+                          << " example=" << row.example << '\n';
+            }
         }
         if (!plan.disabled) {
             // Partition combinational members by module instance.
@@ -853,7 +879,7 @@ Simulation::Impl::Impl(
           built.compiled_systemverilog_class_specializations,
           built.systemverilog_hir,
           class_heap)
-    , interpreter(create_simulation_interpreter(built, max_deltas))
+    , interpreter(create_simulation_interpreter(built, max_deltas, engine))
 {
     if (interpreter) {
         interpreter->retain_state_until_exit();
@@ -1345,6 +1371,7 @@ Simulation::Impl::Impl(
             std::vector<std::uint64_t>(counter_count));
     }
     coverage_execution_mode = engine == SimulationEngine::interpreter
+            || engine == SimulationEngine::v4
         ? frontend::SystemVerilogCoverageExecutionMode::Interpreter
         : built.optimization == fsim::project::Optimization::o0
         ? frontend::SystemVerilogCoverageExecutionMode::LlvmO0

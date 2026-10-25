@@ -2170,6 +2170,10 @@ enum class SimulationOutputSink {
     builtin_stdout
 };
 
+/// Engine v4 is asked for: `--engine v4`, or FSIM_STATIC_KERNEL=1 with any
+/// engine. The kernel then runs whenever cone fusion is on.
+[[nodiscard]] bool static_kernel_requested(SimulationEngine engine) noexcept;
+
 int run_built_project(
     BuiltProject project,
     SimulationEngine engine,

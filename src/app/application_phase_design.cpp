@@ -1713,11 +1713,13 @@ int elaborate_built_workspace(
         const auto receipt_context = aot_receipt_context(*reloaded);
         const auto receipt_cache_path = reloaded->cache_path;
         // As a simulation without trace output or coverage sets up: the
-        // static kernel then builds its code here (in the cache).
+        // static kernel then builds its code here (in the cache). The
+        // kernel scope builds only that code, as `--engine v4` sets up.
+        const bool kernel_only = scope == cli::AotScope::kernel;
         reloaded->cone_fusion = !reloaded->code_coverage_enabled;
         const compiler::StaticKernelAheadOfTimeScope static_kernel_aot;
         Simulation simulation { std::move(*reloaded), config.run.max_deltas,
-            SimulationEngine::compiled,
+            kernel_only ? SimulationEngine::v4 : SimulationEngine::compiled,
             SystemVerilogVpiRuntimeUpdates::omitted };
         simulation.await_all_native_compilation();
         const auto statistics = simulation.native_cache_statistics(false);
@@ -1733,7 +1735,8 @@ int elaborate_built_workspace(
             diagnostics.warning("FSIM-AOT-002",
                 "native AOT recovered from cache read or pruning failures");
         }
-        if (!store_aot_receipt(receipt_context, receipt_cache_path, scope,
+        if (!kernel_only
+            && !store_aot_receipt(receipt_context, receipt_cache_path, scope,
                 simulation.compiled_process_count(),
                 simulation.compiled_module_count(), diagnostics)) {
             return 1;
@@ -1741,7 +1744,9 @@ int elaborate_built_workspace(
         output << "AOT populated " << simulation.compiled_process_count()
                << " process(es) in " << simulation.compiled_module_count()
                << " module(s), scope="
-               << (scope == cli::AotScope::all ? "all" : "selected")
+               << (scope == cli::AotScope::all  ? "all"
+                      : kernel_only             ? "kernel"
+                                                : "selected")
                << ", cache="
                << support::path_to_utf8(receipt_cache_path)
                << ", hits=" << statistics.hits
@@ -1846,6 +1851,7 @@ static int handle_simulate_impl(
     const auto simulation_engine = engine == "interpreter"
         ? SimulationEngine::interpreter
         : engine == "debug" ? SimulationEngine::debug
+        : engine == "v4"    ? SimulationEngine::v4
                             : SimulationEngine::compiled;
     if (simulation_engine == SimulationEngine::compiled) {
         const auto policy = invocation.compiled_processes.value_or(

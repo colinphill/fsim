@@ -131,6 +131,69 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-25 (later): M1 — no losses on `--engine v4` (sweep `v4b3`)
+
+`--engine v4` selects the static kernel with no per-process JIT. Every
+gate sweep now runs on it; the runner and the suite tools take
+`--engine v4`/`ENGINE=v4`. The planner logs a census under
+`FSIM_PROFILE_PHASES`, one `static-kernel-host reason=` row per reason that
+keeps processes on the host. The kernel-on fixes:
+- **Package initializers.** Package static initializers run before the
+  kernel's first activation.
+- **Dynamic indices.** Out-of-range dynamic indices follow the LRM default
+  values.
+- **Behavioral divergences.**
+  - Pause, Report and string operations in the behavioral tier.
+  - Access completeness checks.
+  - Gold-file output ordering.
+- **VHDL behavioral tier.** VHDL processes may run as behavioral members
+  (`FSIM_STATIC_KERNEL_VHDL_BEHAVIORAL=0` turns this off).
+- **Kernel NBA commit.** While the host still has Active or Inactive work in
+  the slot, the kernel's NBA commit waits for a host update-region task
+  (IEEE 1800-2023 4.4.2.4); inside that task kernel updates commit at once.
+- **Levelization.**
+  - Combinational members are ordered by every signal they read, not only
+    by their sensitivity.
+  - Writers of one signal are ordered by process id.
+- **Host inputs.**
+  - A host signal whose only writer is one kernel member is mirrored into
+    the kernel when the write is staged.
+  - Designs with force/release do not use this mirror.
+
+Sweep `v4b3`: the frozen binary `fsim-archive/v4a3`, `--engine v4`, against
+`b96x1`. In the table below, "Pass (base)" is the `b96x1` count.
+
+| Suite | Pass (base) | Pass (v4) | Planned | Admitted | host=0 | no_members | vhdl_partial | unknown_dependencies | gate | other refusals | Host processes |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ivtest | 2635 | 2640 | 2273 | 1738 | 1367 | 321 | 0 | 102 | 79 | 33 | 3343 |
+| sv-tests | 1495 | 1495 | 387 | 234 | 130 | 77 | 0 | 74 | 0 | 2 | 684 |
+| verilator | 2065 | 2071 | 2087 | 1508 | 1032 | 35 | 0 | 484 | 54 | 6 | 4929 |
+| vests | 3646 | 3646 | 1606 | 937 | 937 | 507 | 98 | 11 | 0 | 53 | 4838 |
+| nvc | 1261 | 1261 | 1209 | 646 | 578 | 372 | 145 | 5 | 29 | 12 | 2974 |
+| vhdl-compliance | 65 | 65 | 65 | 0 | 0 | 59 | 6 | 0 | 0 | 0 | 96 |
+
+- **Losses against `b96x1`: 0 (M1 met).**
+- **Top host reasons.**
+
+  | Reason | Cases | Processes |
+  |---|---:|---:|
+  | `opaque_access:ClassAllocate` | 587 | 633 |
+  | `behavioral_string_register` | 563 | 726 |
+  | `design_unknown_dependencies` | 442 | 1139 |
+  | `SystemVerilogScalarBinary` | 339 | 598 |
+  | `behavioral_not_initialized` | 290 | 2796 |
+  | `shape_vhdl_once` | 201 | 317 |
+  | `design_vhdl_partial` | 162 | 3127 |
+
+- **Next (M2/M3).**
+  - Design: processes the kernel cannot run natively become "hosted
+    members". The kernel schedules them in its own regions and runs them
+    with the reference operation semantics.
+  - Opaque processes stop refusing the design: the kernel publishes every
+    owned signal and imports host writes to it.
+  - Coverage, trace, foreign-library, specify and `vcd_control` stop being
+    gates; an access plan takes their place.
+
 ### 2026-10-25: resumption after the LRM closure; corpus census
 
 The migration resumes after the LRM closure (Batch 96, `d7dfa257`). The owner's

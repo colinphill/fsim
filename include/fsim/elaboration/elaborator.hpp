@@ -845,6 +845,13 @@ struct ConeFusionPlan {
     std::size_t internal_nets { };
 };
 
+/// One census row: how many processes stay on the host for one reason.
+struct StaticKernelHostReason {
+    std::string reason;
+    std::size_t count { };
+    std::string example;
+};
+
 /// Engine v4 static kernel plan (docs/simulation-engine-v4-plan.md). The
 /// runtime specification is opaque to callers; the counts are diagnostics.
 struct StaticKernelPlan {
@@ -859,6 +866,12 @@ struct StaticKernelPlan {
     std::size_t boundary_inputs { };
     std::size_t boundary_outputs { };
     std::size_t owned_containers { };
+    /// Census, planned with FSIM_PROFILE_PHASES only: the valid processes,
+    /// those outside the kernel (`host`), and the first reason each of them
+    /// stays on the host, aggregated.
+    std::size_t processes { };
+    std::size_t host_processes { };
+    std::vector<StaticKernelHostReason> host_reasons;
 };
 
 class ElaboratedDesign final {

@@ -1115,12 +1115,83 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
 void Interpreter::Impl::StaticKernel::build_partitions(
     const std::vector<std::vector<std::uint32_t>>& successors)
 {
+    // Members on a combinational feedback cycle (strongly connected
+    // components of more than one member) are not partitioned. A partition
+    // runs its members in one fixed order per pass and reruns when a member
+    // writes a signal an earlier member reads; around a cycle a member that
+    // writes a signal transiently (a_r = 0; ...; a_r = c in one block)
+    // invalidates its own cycle on every pass and the partition never
+    // settles. As separate levelized members they wake only on a net value
+    // change and converge like any event-driven evaluation (IEEE 1800-2023
+    // 4.7; 9.2.2.2.2 gives always_comb the same re-evaluation rule).
+    std::vector<std::uint8_t> on_cycle(members_.size(), 0U);
+    {
+        constexpr auto unvisited = std::numeric_limits<std::uint32_t>::max();
+        const auto node_total = static_cast<std::uint32_t>(members_.size());
+        std::vector<std::uint32_t> order(node_total, unvisited);
+        std::vector<std::uint32_t> low(node_total, 0U);
+        std::vector<std::uint8_t> stacked(node_total, 0U);
+        std::vector<std::uint32_t> stack;
+        std::uint32_t counter = 0U;
+        struct Frame {
+            std::uint32_t node;
+            std::size_t next;
+        };
+        for (std::uint32_t root = 0U; root < node_total; ++root) {
+            if (order[root] != unvisited || successors[root].empty()) {
+                continue;
+            }
+            std::vector<Frame> frames { { root, 0U } };
+            order[root] = low[root] = counter++;
+            stack.push_back(root);
+            stacked[root] = 1U;
+            while (!frames.empty()) {
+                auto& frame = frames.back();
+                const auto node = frame.node;
+                if (frame.next < successors[node].size()) {
+                    const auto successor = successors[node][frame.next++];
+                    if (order[successor] == unvisited) {
+                        order[successor] = low[successor] = counter++;
+                        stack.push_back(successor);
+                        stacked[successor] = 1U;
+                        frames.push_back({ successor, 0U });
+                    } else if (stacked[successor] != 0U) {
+                        low[node] = std::min(low[node], order[successor]);
+                    }
+                    continue;
+                }
+                if (low[node] == order[node]) {
+                    std::vector<std::uint32_t> component;
+                    for (;;) {
+                        const auto top = stack.back();
+                        stack.pop_back();
+                        stacked[top] = 0U;
+                        component.push_back(top);
+                        if (top == node) {
+                            break;
+                        }
+                    }
+                    if (component.size() > 1U) {
+                        for (const auto member : component) {
+                            on_cycle[member] = 1U;
+                        }
+                    }
+                }
+                frames.pop_back();
+                if (!frames.empty()) {
+                    low[frames.back().node]
+                        = std::min(low[frames.back().node], low[node]);
+                }
+            }
+        }
+    }
     // Group compiled combinational members by key.
     std::map<std::uint32_t, std::vector<std::uint32_t>> groups;
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         const auto& member = members_[index];
         if (member.kind == StaticKernelMemberKind::combinational && !member.vhdl
-            && member.compiled && member.partition_key != no_slot) {
+            && member.compiled && member.partition_key != no_slot
+            && on_cycle[index] == 0U) {
             groups[member.partition_key].push_back(index);
         }
     }
@@ -1649,7 +1720,7 @@ void Interpreter::Impl::StaticKernel::build_partitions(
             slot.silent = true;
             continue;
         }
-        if (slot.writers.empty()) {
+        if (slot.writers.empty() || slot.deferred_write) {
             continue;
         }
         std::uint32_t partition = no_slot;

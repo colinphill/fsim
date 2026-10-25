@@ -821,6 +821,10 @@ public:
   void reset();
 
   [[nodiscard]] bool has_pending() const noexcept;
+  /// True while same-time SystemVerilog Active or Inactive work remains
+  /// besides the running callback: the NBA region starts only once both have
+  /// drained (IEEE 1800-2023 4.5).
+  [[nodiscard]] bool systemverilog_active_work_pending() const noexcept;
   [[nodiscard]] std::optional<SimulationTick>
   next_pending_time() const noexcept;
   [[nodiscard]] bool running() const noexcept;

@@ -3628,7 +3628,7 @@ def main(argv: list[str] | None = None) -> int:
     add_selection(p_run)
     p_run.add_argument("--fsim", type=Path, default=DEFAULT_FSIM)
     p_run.add_argument("--engine", default="interpreter",
-                       choices=("interpreter", "compiled"))
+                       choices=("interpreter", "compiled", "v4"))
     p_run.add_argument("-j", "--jobs", type=int, default=8)
     p_run.add_argument("--timeout", type=float, default=60.0)
     p_run.add_argument("--out", type=Path)

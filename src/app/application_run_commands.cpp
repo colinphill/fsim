@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <iostream>
 #if defined(_WIN32)
 #  include <io.h>
 #else
@@ -278,10 +279,23 @@ int run_built_project(
     const bool vhpi_modules = !config.run.vhpi_modules.empty();
     const bool foreign = vpi_modules || vhpi_modules
         || !config.run.sv_libs.empty();
+    const bool trace_output
+        = trace_config.run.trace_file && trace_config.run.trace_enabled;
     built.cone_fusion = engine != SimulationEngine::debug
-        && !built.code_coverage_enabled
-        && !(trace_config.run.trace_file && trace_config.run.trace_enabled)
-        && !foreign;
+        && !built.code_coverage_enabled && !trace_output && !foreign;
+    if (profile_phases && !built.cone_fusion
+        && static_kernel_requested(engine)) {
+        // The census counts these runs as kernel-off, by gate.
+        const auto* gate = engine == SimulationEngine::debug ? "gate_debug"
+            : built.code_coverage_enabled                    ? "gate_coverage"
+            : trace_output                                   ? "gate_trace"
+            : vpi_modules                                    ? "gate_vpi"
+            : vhpi_modules                                   ? "gate_vhpi"
+                                                             : "gate_dpi";
+        std::cerr << "fsim-profile: static-kernel disabled=1 reason=" << gate
+                  << " members=0 processes=" << design_process_count
+                  << " host=" << design_process_count << '\n';
+    }
     Simulation simulation(
         std::move(built),
         config.run.max_deltas,

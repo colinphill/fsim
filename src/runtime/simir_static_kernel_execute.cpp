@@ -1194,8 +1194,13 @@ void Interpreter::Impl::StaticKernel::effect_slow(const CompiledBody& body,
     case KOp::store_slot_dynamic: {
         const auto offset = kw::dynamic_index(y, body.indices[inst.aux]);
         if (!offset) {
-            fail_at("dynamic packed index contains an unknown or "
-                    "high-impedance value or is outside the declared range");
+            if ((inst.flags & flag_strict) != 0U) {
+                fail_at("dynamic packed index contains an unknown or "
+                        "high-impedance value or is outside the declared "
+                        "range");
+            }
+            // IEEE 1800-2023 11.5.1: the write has no effect.
+            return;
         }
         const auto& slot = slots_[resolved];
         if (*offset > slot.width || inst.width > slot.width - *offset) {

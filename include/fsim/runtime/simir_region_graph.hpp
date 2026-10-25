@@ -188,6 +188,11 @@ struct RegionProcessNode {
     /// True only when at least one instruction has an unclassified or opaque
     /// signal-access effect. This is independent of `pure`.
     bool dependencies_unknown { };
+    /// The first instruction whose access is opaque, when one is
+    /// (diagnostics).
+    std::uint32_t unknown_dependency_instruction {
+        std::numeric_limits<std::uint32_t>::max()
+    };
     /// Cycle classification within the pure scheduling/publication domain.
     /// Cross-domain or non-pure dependencies remain in the signal inventory.
     bool cyclic_or_dependent_on_cycle { };

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_internal.hpp"
+#include "simir_static_kernel.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -3392,75 +3393,26 @@ void Interpreter::start()
     // signal starts one delta after the other processes, so time-zero
     // continuous assignments and event controls settle before it reads them
     // (the order within the active region is unspecified, IEEE 1800-2017
-    // 4.7).
-    const auto late_candidate = [&](const ProcessId id) {
-        if (impl_->processes.is_compact_constant(id)) {
-            return false;
-        }
-        const auto program = impl_->processes.program_view(id);
-        return program.startup_phase() == ProcessStartupPhase::ordinary
-            && program.scheduling_domain()
-                == ProcessSchedulingDomain::systemverilog
-            && program.static_sensitivity().empty()
-            && program.name().find(".$declaration_initializer_")
-                == std::string::npos;
-    };
-    std::vector<bool> candidates(impl_->processes.size(), false);
-    bool any_candidate { };
-    for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
-        candidates[id] = !inert(id) && late_candidate(id);
-        any_candidate = any_candidate || candidates[id];
-    }
-    // Settling signals: nets, and the signals that event-driven processes
-    // (continuous assignments, always_comb) and port adapters drive.
-    std::vector<bool> settling;
-    if (any_candidate) {
-        settling.assign(impl_->signals.size(), false);
-        for (SignalId signal = 0; signal < impl_->signals.size(); ++signal) {
-            settling[signal]
-                = impl_->signals[signal].resolution != ResolutionKind::none;
-        }
-        for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
-            if (impl_->processes.is_compact_constant(id)) {
-                continue;
-            }
-            const auto program = impl_->processes.program_view(id);
-            if (program.startup_phase()
-                == ProcessStartupPhase::package_static_initializer) {
-                continue;
-            }
-            if (!program.static_sensitivity().empty()
-                || program.name().find(".port_actual_")
-                    != std::string::npos) {
-                for (const auto& region : program.driver_regions()) {
-                    if (region.signal < settling.size()) {
-                        settling[region.signal] = true;
-                    }
-                }
-            }
-        }
-    }
+    // 4.7). The static kernel's threads follow the same rule.
+    const auto late_start = systemverilog_late_starters(
+        impl_->processes.size(), impl_->signals.size(),
+        [&](const std::size_t id) {
+            return impl_->processes.program_view(static_cast<ProcessId>(id));
+        },
+        [&](const std::size_t id) {
+            return impl_->processes.is_compact_constant(
+                static_cast<ProcessId>(id));
+        },
+        [&](const std::size_t id) { return inert(static_cast<ProcessId>(id)); },
+        [&](const std::size_t signal) {
+            return impl_->signals[signal].resolution != ResolutionKind::none;
+        },
+        [&](const std::size_t id) {
+            return id < impl_->static_kernel_event_driven_process.size()
+                && impl_->static_kernel_event_driven_process[id] != 0U;
+        });
     const auto starts_late = [&](const ProcessId id) {
-        if (!candidates[id]) {
-            return false;
-        }
-        const auto program = impl_->processes.program_view(id);
-        const auto& operations = std::as_const(program.operations());
-        bool reads_settling { };
-        for (std::size_t index = 0U; index < operations.size(); ++index) {
-            const auto& operation = operations[index];
-            if (operation_holds<WaitOn>(operation)
-                || operation_holds<WaitOrder>(operation)
-                || operation_holds<WaitSensitivity>(operation)) {
-                return false;
-            }
-            if (const auto* read = operation_get_if<ReadSignal>(&operation);
-                read != nullptr && read->signal < settling.size()
-                && settling[read->signal]) {
-                reads_settling = true;
-            }
-        }
-        return reads_settling;
+        return static_cast<bool>(late_start[id]);
     };
     for (const bool late : { false, true }) {
         // Processes of the after_procedures phase start once every other

@@ -50,6 +50,8 @@ enum class Verbosity {
 enum class AotScope {
   selected,
   all,
+  /// Engine v4 only: the static kernel's code, no per-process JIT objects.
+  kernel,
 };
 
 enum class CompiledProcessPolicy {

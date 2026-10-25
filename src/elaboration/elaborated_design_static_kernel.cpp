@@ -24,10 +24,12 @@
 #include <iostream>
 #include <map>
 #include <set>
+#include <tuple>
 #include <string>
 #include <string_view>
 #include <limits>
 #include <optional>
+#include <ranges>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -96,6 +98,9 @@ struct Candidate {
     std::uint8_t kind { };
     bool run_at_start { };
     bool vhdl { };
+    /// Behavioral members: starts one delta after time zero's other
+    /// processes, as the scheduler starts the same program.
+    bool start_late { };
     std::uint32_t body_begin { };
     std::uint32_t body_end { };
     std::uint32_t exit_alt { std::numeric_limits<std::uint32_t>::max() };
@@ -154,10 +159,54 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     bool mixed_planned = false;
     const auto plan_for = [&](const bool allow_mixed) -> StaticKernelPlan {
     StaticKernelPlan plan;
+    // Census (FSIM_PROFILE_PHASES): the first reason each process stays on
+    // the host. Opaque accesses come first: they refuse the whole design.
+    // That refusal is then deferred until the processes are classified.
+    const bool census = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    std::vector<std::string> rejection(census ? this->process_count() : 0U);
+    std::vector<std::string> opaque(rejection.size());
+    std::vector<std::uint8_t> census_valid(rejection.size(), 1U);
+    std::vector<std::string> census_names(rejection.size());
+    const auto reject = [&](const std::size_t index, const char* reason) {
+        if (census && rejection[index].empty()) {
+            rejection[index] = reason;
+        }
+    };
+    const auto take_census = [&](StaticKernelPlan& result,
+                                 const std::vector<std::uint8_t>* members) {
+        if (!census) {
+            return;
+        }
+        std::map<std::string, StaticKernelHostReason> rows;
+        for (std::size_t index = 0U; index < rejection.size(); ++index) {
+            if (census_valid[index] == 0U) {
+                continue;
+            }
+            ++result.processes;
+            if (members != nullptr && (*members)[index] != 0U) {
+                continue;
+            }
+            ++result.host_processes;
+            auto reason = !opaque[index].empty() ? opaque[index]
+                : !rejection[index].empty()      ? rejection[index]
+                : result.disabled
+                    ? std::string { "design_" } + result.disabled_reason
+                    : std::string { "planner_drop" };
+            auto& row = rows[reason];
+            if (row.count++ == 0U) {
+                row.reason = std::move(reason);
+                row.example = census_names[index];
+            }
+        }
+        for (auto& [reason, row] : rows) {
+            result.host_reasons.push_back(std::move(row));
+        }
+    };
     const auto disable = [&](const char* reason) {
         StaticKernelPlan disabled;
         disabled.disabled = true;
         disabled.disabled_reason = reason;
+        take_census(disabled, nullptr);
         return disabled;
     };
     if (code_coverage_inventory_) {
@@ -177,6 +226,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     for (std::size_t index = 0U; index < process_count; ++index) {
         views.push_back(detail::ElaboratedDesignProcessAccess::process_view(
             *this, index));
+        if (census) {
+            census_valid[index] = views.back().valid() ? 1U : 0U;
+            census_names[index] = views.back().valid()
+                ? std::string { views.back().name() } : std::string { };
+        }
     }
     for (const auto& view : views) {
         const auto& operations = view.operations();
@@ -197,11 +251,112 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     const auto& graph = *graph_owner;
     const auto graph_signals = graph.signals();
     const auto graph_processes = graph.processes();
+    const char* deferred_refusal = nullptr;
     if (std::ranges::any_of(graph_processes,
             &RegionProcessNode::dependencies_unknown)) {
         // Fail closed: an opaque access could read kernel-owned state.
-        return disable("unknown_dependencies");
+        if (!census) {
+            return disable("unknown_dependencies");
+        }
+        deferred_refusal = "unknown_dependencies";
+        for (std::size_t index = 0U;
+             index < graph_processes.size() && index < process_count; ++index) {
+            const auto& node = graph_processes[index];
+            if (!node.dependencies_unknown) {
+                continue;
+            }
+            const auto& operations = views[index].operations();
+            opaque[index] = node.unknown_dependency_instruction
+                    < operations.size()
+                ? "opaque_access:"
+                    + operation_type_name(operations.expanded(
+                        node.unknown_dependency_instruction))
+                : std::string { "opaque_access" };
+        }
     }
+    // The first property that keeps a process off the kernel whatever its
+    // body, or nullptr; `behavioral` applies the behavioral tier's rules.
+    const auto flag_rejection = [&](const ProcessProgramView& view,
+                                    const bool vhdl,
+                                    const bool behavioral) -> const char* {
+        const auto non_logic4 = std::ranges::any_of(view.register_value_kinds(),
+            [](const ValueKind kind) { return kind != ValueKind::logic4; });
+        if (view.observed()) {
+            return "observed";
+        }
+        if (view.reactive()) {
+            return "reactive";
+        }
+        if (view.postponed()) {
+            return "postponed";
+        }
+        if (view.final()) {
+            return "final";
+        }
+        if (!view.initialize()) {
+            return "not_initialized";
+        }
+        // Package static initializers run once, before time zero, in the
+        // host's startup order (IEEE 1800-2023 6.21, 26.3); the host owns
+        // their startup metadata and a synchronous finish.
+        if (view.startup_phase()
+            == ProcessStartupPhase::package_static_initializer) {
+            return "package_static_initializer";
+        }
+        if (view.switch_source() || view.switch_target()
+            || view.switch_control() || view.switch_bidirectional()
+            || view.switch_resistive()) {
+            return "switch";
+        }
+        if (view.drive_strength() != DriveStrength { }) {
+            return "drive_strength";
+        }
+        if (behavioral) {
+            if (!view.static_trigger_regions().empty()) {
+                return "static_trigger_regions";
+            }
+            if (vhdl) {
+                // VHDL behavioral threads keep their registers in the
+                // member's reference-format file (any value kind); strings,
+                // containers and the 2019 report semantics stay on the host.
+                if (view.string_register_count() != 0U) {
+                    return "string_register";
+                }
+                if (view.container_register_count() != 0U) {
+                    return "vhdl_container_register";
+                }
+                if (view.language_standard() == "2019") {
+                    return "vhdl_2019";
+                }
+            } else if (non_logic4) {
+                return "register_kind";
+            }
+            if (std::ranges::any_of(view.static_sensitivity(),
+                    [&](const Sensitivity& entry) {
+                        return entry.signal >= signal_count
+                            || signals_[entry.signal].event_variable;
+                    })) {
+                return "event_sensitivity";
+            }
+            return nullptr;
+        }
+        if (view.string_register_count() != 0U) {
+            return "string_register";
+        }
+        if (vhdl && view.container_register_count() != 0U) {
+            return "vhdl_container_register";
+        }
+        if (vhdl && view.language_standard() == "2019") {
+            return "vhdl_2019";
+        }
+        if (!vhdl && non_logic4) {
+            return "register_kind";
+        }
+        if (view.operations().size() < 2U) {
+            return "trivial";
+        }
+        return nullptr;
+    };
     std::vector<std::uint8_t> alias_signal(signal_count, 0U);
     for (const auto& family : graph.signal_alias_families()) {
         if (family.proxy < signal_count) {
@@ -251,18 +406,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             container_uses[index].end()), container_uses[index].end());
         const bool vhdl = view.scheduling_domain()
             != ProcessSchedulingDomain::systemverilog;
-        if (view.observed() || view.reactive() || view.postponed()
-            || view.final() || !view.initialize()
-            || view.switch_source() || view.switch_target()
-            || view.switch_control() || view.switch_bidirectional()
-            || view.switch_resistive()
-            || view.drive_strength() != DriveStrength { }
-            || view.string_register_count() != 0U
-            || (vhdl && view.container_register_count() != 0U)
-            || (vhdl && view.language_standard() == "2019")
-            || (!vhdl && std::ranges::any_of(view.register_value_kinds(),
-                [](const ValueKind kind) { return kind != ValueKind::logic4; }))
-            || count < 2U) {
+        if (const char* flag = flag_rejection(view, vhdl, false)) {
+            reject(index, flag);
             continue;
         }
         Candidate member;
@@ -280,6 +425,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             }
         }
         if (!shape_ok) {
+            reject(index, "shape_waits");
             continue;
         }
         const auto loop_jump = [&](const std::size_t op) {
@@ -306,6 +452,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                     }
                 }
                 if (wait || !halt || !shape_ok) {
+                    reject(index, "shape_vhdl_once");
                     continue;
                 }
                 member.kind = 2U;
@@ -327,6 +474,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                         [&](const Sensitivity& entry) {
                             return entry.signal >= signal_count;
                         })) {
+                    reject(index, "shape_vhdl_sensitivity");
                     continue;
                 }
                 member.kind = any ? 0U : 1U;
@@ -339,6 +487,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         } else if (sensitivity.empty()) {
             const auto* halt = operation_get_if<Halt>(&operations[count - 1U]);
             if (wait || halt == nullptr || halt->program_exit) {
+                reject(index, "shape_once");
                 continue;
             }
             member.kind = 2U;
@@ -347,6 +496,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             structural_a = count - 1U;
         } else {
             if (!wait) {
+                reject(index, "shape_no_wait");
                 continue;
             }
             const bool any = std::ranges::all_of(sensitivity,
@@ -375,6 +525,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                     ++jump;
                 }
                 if (jump == count || (!vhdl && jump != count - 1U)) {
+                    reject(index, "shape_loop");
                     continue;
                 }
                 member.kind = any ? 0U : 1U;
@@ -384,20 +535,24 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 structural_a = 0U;
                 structural_b = jump;
             } else {
+                reject(index, "shape_wait");
                 continue;
             }
             if (std::ranges::any_of(sensitivity, [&](const Sensitivity& entry) {
                     return entry.signal >= signal_count;
                 })) {
+                reject(index, "shape_sensitivity");
                 continue;
             }
             member.sensitivity = sensitivity;
         }
         bool supported = true;
+        std::size_t unsupported_at = count;
         for (std::size_t op = 0U; op < count && supported; ++op) {
             if (op == structural_a || op == structural_b) {
                 continue;
             }
+            unsupported_at = op;
             const auto& operation = operations[op];
             const bool overridden = &operation != operations.data() + op;
             supported = (vhdl ? static_kernel_vhdl_operation_supported(operation)
@@ -423,9 +578,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             }
         }
         if (!supported) {
+            if (census && rejection[index].empty()) {
+                rejection[index] = unsupported_at < count
+                    ? "operation:"
+                        + operation_type_name(operations.expanded(unsupported_at))
+                    : std::string { "operation" };
+            }
             continue;
         }
         candidates[index] = std::move(member);
+        if (census) {
+            rejection[index].clear();
+        }
     }
     // Behavioral members: SystemVerilog testbench processes that run as
     // resumable kernel threads (plan §3.5). FSIM_STATIC_KERNEL_BEHAVIORAL=0
@@ -435,21 +599,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         for (std::size_t index = 0U; index < process_count; ++index) {
             const auto& view = views[index];
             if (candidates[index] || !view.valid()
-                || view.scheduling_domain() != ProcessSchedulingDomain::systemverilog
-                || view.observed() || view.reactive() || view.postponed()
-                || view.final() || !view.initialize()
-                || view.switch_source() || view.switch_target()
-                || view.switch_control() || view.switch_bidirectional()
-                || view.switch_resistive()
-                || view.drive_strength() != DriveStrength { }
-                || !view.static_trigger_regions().empty()
-                || std::ranges::any_of(view.register_value_kinds(),
-                    [](const ValueKind kind) { return kind != ValueKind::logic4; })
-                || std::ranges::any_of(view.static_sensitivity(),
-                    [&](const Sensitivity& entry) {
-                        return entry.signal >= signal_count
-                            || signals_[entry.signal].event_variable;
-                    })) {
+                || view.scheduling_domain()
+                    != ProcessSchedulingDomain::systemverilog) {
+                continue;
+            }
+            // The behavioral tier is the general one: its reason replaces
+            // the static tiers'.
+            if (const char* flag = flag_rejection(view, false, true)) {
+                if (census) {
+                    rejection[index] = std::string { "behavioral_" } + flag;
+                }
                 continue;
             }
             const auto& operations = view.operations();
@@ -469,6 +628,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             // and saved by automatic frames.
             std::set<ContainerRegisterId> bound_containers;
             std::set<ContainerRegisterId> private_containers;
+            bool has_fork = false;
+            bool has_frame_push = false;
+            bool has_random = false;
             for (std::size_t op = 0U; op < count && supported; ++op) {
                 const auto operation = operations.expanded(op);
                 failed_at = op;
@@ -501,7 +663,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                         private_containers.insert(value.source);
                     } else if constexpr (std::is_same_v<T, ContainerWrite>) {
                         private_containers.insert(value.target);
+                    } else if constexpr (std::is_same_v<T, CallableFramePush>) {
+                        has_frame_push = true;
+                    } else if constexpr (std::is_same_v<T, RandomValue>) {
+                        has_random = true;
                     } else if constexpr (std::is_same_v<T, Fork>) {
+                        has_fork = true;
                         supported = supported
                             && std::ranges::all_of(value.branches,
                                 [&](const InstructionIndex branch) {
@@ -527,6 +694,30 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                     }
                 }, operation);
             }
+            if (supported && has_fork && has_random) {
+                // A fork child is a reference process with its own identity
+                // and random stream (IEEE 1800-2023 18.14); kernel threads
+                // have neither.
+                supported = false;
+                failed_at = count;
+                failed_reason = "fork_random";
+            }
+            if (supported && has_fork && has_frame_push) {
+                // Fork children and the activation that joins them observe
+                // the automatic variables of the enclosing callable frames
+                // (IEEE 1800-2023 6.21, 9.3.2), and concurrent activations of
+                // one automatic task each own their arguments and locals
+                // (13.4.2). The reference evaluator gives every thread its
+                // own callable context (escaping contexts, suspended
+                // contexts); kernel threads share one register file with a
+                // single frame stack per thread, so a thread suspended inside
+                // a callable would see a sibling's values on resume. Such
+                // processes stay on the host until the kernel's behavioral
+                // tier gains per-thread callable contexts.
+                supported = false;
+                failed_at = count;
+                failed_reason = "fork_callable_frames";
+            }
             if (supported) {
                 // A register both bound and written would alias the design
                 // memory, which the interpreter copies. Private storage must
@@ -550,8 +741,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                     }
                 }
             }
+            if (!supported && census) {
+                rejection[index] = std::string { "behavioral_" } + failed_reason
+                    + (failed_at < count
+                            ? ":" + operation_type_name(
+                                  operations.expanded(failed_at))
+                            : std::string { });
+            }
             if (supported) {
                 candidates[index] = std::move(member);
+                if (census) {
+                    rejection[index].clear();
+                }
             } else if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
                 std::cerr << "fsim-kernel-plan: behavioral rejected process="
                           << view.name() << " op=" << failed_at
@@ -576,6 +777,217 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             }
         }
     }
+    // VHDL behavioral members: processes that fail the static VHDL shapes
+    // (wait for, wait on, wait until, several waits, waits in procedures,
+    // bare wait) run as resumable kernel threads (IEEE 1076-2019 11.3,
+    // 10.2). Their signal assignments are the delta-mode ones: queued in the
+    // thread's round and applied in the round's update phase (14.7.3.4); a
+    // wait resumes in the delta after the event or timeout (14.7.5.3). Any
+    // operation outside the supported set keeps the process on the host (and,
+    // through the vhdl_partial rule, the whole VHDL design).
+    // FSIM_STATIC_KERNEL_VHDL_BEHAVIORAL=0 disables this tier.
+    if (const char* behavioral = std::getenv("FSIM_STATIC_KERNEL_BEHAVIORAL");
+        behavioral == nullptr || std::string_view { behavioral } != "0") {
+        const char* vhdl_text = std::getenv("FSIM_STATIC_KERNEL_VHDL_BEHAVIORAL");
+        const bool vhdl_enabled
+            = vhdl_text == nullptr || std::string_view { vhdl_text } != "0";
+        for (std::size_t index = 0U; vhdl_enabled && index < process_count;
+             ++index) {
+            const auto& view = views[index];
+            if (candidates[index] || !view.valid()
+                || view.scheduling_domain()
+                    == ProcessSchedulingDomain::systemverilog) {
+                continue;
+            }
+            if (const char* flag = flag_rejection(view, true, true)) {
+                if (census) {
+                    rejection[index] = std::string { "behavioral_" } + flag;
+                }
+                continue;
+            }
+            const auto& operations = view.operations();
+            const auto count = operations.size();
+            Candidate member;
+            member.process = static_cast<ProcessId>(index);
+            member.kind = behavioral_kind;
+            member.vhdl = true;
+            member.run_at_start = false;
+            member.body_begin = 0U;
+            member.body_end = static_cast<std::uint32_t>(count);
+            const auto& sensitivity = view.static_sensitivity();
+            bool supported = count != 0U;
+            std::size_t failed_at = count;
+            const char* failed_reason = "";
+            // The implicit wait of a sensitivity list wakes on any event of
+            // a whole signal (a thread has no range filter).
+            for (const auto& entry : sensitivity) {
+                if (entry.signal >= signal_count
+                    || alias_signal[entry.signal] != 0U
+                    || entry.edge != EdgeKind::any || entry.offset != 0U
+                    || entry.width != 0U) {
+                    supported = false;
+                    failed_reason = "sensitivity";
+                    break;
+                }
+            }
+            member.sensitivity = sensitivity;
+            for (std::size_t op = 0U; op < count && supported; ++op) {
+                const auto operation = operations.expanded(op);
+                failed_at = op;
+                if (!static_kernel_vhdl_behavioral_operation_supported(
+                        operation)) {
+                    supported = false;
+                    failed_reason = "operation";
+                    break;
+                }
+                if (branch_target_outside(operation, count)) {
+                    supported = false;
+                    failed_reason = "branch_target";
+                    break;
+                }
+                failed_reason = "operand";
+                visit_operation([&](const auto& value) {
+                    using T = std::decay_t<decltype(value)>;
+                    if constexpr (requires { value.signal; }) {
+                        if constexpr (std::is_same_v<
+                                          std::decay_t<decltype(value.signal)>,
+                                          SignalId>) {
+                            supported = supported && value.signal < signal_count;
+                        }
+                    }
+                    if constexpr (std::is_same_v<T, Call>) {
+                        supported = supported && value.target < count
+                            && value.return_target < count;
+                    } else if constexpr (std::is_same_v<T, WaitSensitivity>) {
+                        supported = supported && !sensitivity.empty();
+                    } else if constexpr (std::is_same_v<T, WaitOn>) {
+                        for (std::size_t entry = 0U;
+                             entry < value.signals.size() && supported; ++entry) {
+                            const auto signal = value.signals[entry];
+                            supported = signal < signal_count
+                                && alias_signal[signal] == 0U
+                                && !signals_[signal].event_variable;
+                            if (supported) {
+                                member.waited.push_back(signal);
+                            }
+                        }
+                    }
+                }, operation);
+            }
+            if (!supported && census) {
+                rejection[index] = std::string { "behavioral_" } + failed_reason
+                    + (failed_at < count
+                            ? ":" + operation_type_name(
+                                  operations.expanded(failed_at))
+                            : std::string { });
+            }
+            if (supported) {
+                candidates[index] = std::move(member);
+            } else if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
+                std::cerr << "fsim-kernel-plan: vhdl behavioral rejected process="
+                          << view.name() << " op=" << failed_at
+                          << " reason=" << failed_reason;
+                if (failed_at < count) {
+                    std::cerr << " kind="
+                              << operation_type_name(
+                                     operations.expanded(failed_at));
+                }
+                std::cerr << '\n';
+            }
+        }
+    }
+    if (deferred_refusal != nullptr) {
+        return disable(deferred_refusal);
+    }
+    // A named block or task that a disable statement of another process
+    // names (IEEE 1800-2023 9.6.2) is terminated through the host scheduler's
+    // process records, which a kernel member does not have: a member holding
+    // such a block would keep running. The process stays on the host until
+    // the kernel itself can terminate a named scope (breadth workstream C3,
+    // SystemVerilog breadth: disable and process control).
+    {
+        std::set<std::string> disabled_scopes;
+        for (const auto& view : views) {
+            if (!view.valid()) {
+                continue;
+            }
+            const auto& operations = view.operations();
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                if (!operation_holds<DisableBlock>(operations[op])) {
+                    continue;
+                }
+                const auto expanded = operations.expanded(op);
+                if (const auto* statement
+                    = operation_get_if<DisableBlock>(&expanded)) {
+                    disabled_scopes.insert(
+                        statement->scopes.begin(), statement->scopes.end());
+                }
+            }
+        }
+        if (!disabled_scopes.empty()) {
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                if (!candidates[index]) {
+                    continue;
+                }
+                const auto& operations = views[index].operations();
+                std::string named;
+                for (std::size_t op = 0U; op < operations.size() && named.empty();
+                     ++op) {
+                    const auto* point
+                        = operation_get_if<DebugPoint>(&operations[op]);
+                    if (point == nullptr
+                        || point->kind != DebugPointKind::block_entry) {
+                        continue;
+                    }
+                    const auto& actual = operations.debug_point(op, *point);
+                    const auto& scope
+                        = operations.debug_scope(actual.scope).str();
+                    if (disabled_scopes.contains(scope)) {
+                        named = scope;
+                    }
+                }
+                if (!named.empty()) {
+                    if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
+                        std::cerr << "fsim-kernel-plan: rejected process="
+                                  << views[index].name()
+                                  << " reason=disabled_scope scope=" << named
+                                  << '\n';
+                    }
+                    candidates[index].reset();
+                    reject(index, "disabled_scope");
+                }
+            }
+        }
+    }
+    // A thread that the scheduler would start one delta late (a process that
+    // reads a settling signal and waits only on time, or not at all) starts
+    // late in the kernel too, after time zero's continuous assignments and
+    // event controls have settled.
+    if (std::ranges::any_of(candidates, [](const auto& candidate) {
+            return candidate && candidate->kind == behavioral_kind
+                && !candidate->vhdl;
+        })) {
+        const auto late = runtime::simir::systemverilog_late_starters(
+            process_count, signal_count,
+            [&](const std::size_t id) -> const ProcessProgramView& {
+                return views[id];
+            },
+            [&](const std::size_t id) { return !views[id].valid(); },
+            [&](const std::size_t id) {
+                return !(candidates[id] && candidates[id]->kind == behavioral_kind
+                    && !candidates[id]->vhdl);
+            },
+            [&](const std::size_t signal) {
+                return signals_[signal].resolution != ResolutionKind::none;
+            },
+            [](const std::size_t) { return false; });
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            if (candidates[index] && candidates[index]->kind == behavioral_kind
+                && !candidates[index]->vhdl) {
+                candidates[index]->start_late = late[index];
+            }
+        }
+    }
     // VHDL members follow exact delta semantics, SystemVerilog members the
     // levelized Active-region schedule. A design with both runs one mixed
     // kernel that keeps both schedules (FSIM_STATIC_KERNEL_MIXED=0 instead
@@ -593,9 +1005,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         && vhdl_candidates != 0U && sv_candidates != 0U;
     mixed_planned = mixed;
     const bool vhdl_mode = mixed || vhdl_candidates > sv_candidates;
-    for (auto& candidate : candidates) {
+    for (std::size_t index = 0U; index < process_count; ++index) {
+        auto& candidate = candidates[index];
         if (!mixed && candidate && candidate->vhdl != vhdl_mode) {
             candidate.reset();
+            reject(index, "language_mode");
         }
     }
     const auto vhdl_written = [&](const SignalId signal) {
@@ -704,6 +1118,22 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                     }
                 }
             }, operations.expanded(op));
+        }
+    }
+    // The endpoints and controls of a switch or inout alias network take
+    // their values from the host's network solution, which merges the
+    // drivers of every joined net (IEEE 1800-2023 28.3, 23.3.3.1 and 6.6.1):
+    // a kernel slot would hold only its own members' drivers. The signals
+    // stay host signals; members read the solved value as an input.
+    for (std::size_t index = 0U; index < process_count; ++index) {
+        if (!views[index].valid()) {
+            continue;
+        }
+        for (const auto& signal : { views[index].switch_source(),
+                 views[index].switch_target(), views[index].switch_control() }) {
+            if (signal && *signal < signal_count) {
+                host_touched[*signal] = 1U;
+            }
         }
     }
     // A port-association program (a resolver with sources) runs on the
@@ -883,6 +1313,50 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             }
             return resolution != ResolutionKind::std_logic || covered == width;
         }
+        if (!vhdl_mode && resolution == ResolutionKind::none) {
+            // Combinational members settle in dependency order, so which of
+            // two members assigning the same bits of a variable writes last
+            // is not the order the host scheduler gives them (process
+            // order within a time step; IEEE 1800-2023 9.2.2.2.2 makes such
+            // a variable an error for always_comb, and 4.7 leaves the
+            // order of other processes unspecified). Such a variable stays
+            // on the host, where the reference order applies.
+            std::vector<ProcessId> combinational;
+            for (const auto& writer : node.writers) {
+                if (candidates[writer.process]->kind == 0U
+                    && std::ranges::find(combinational, writer.process)
+                        == combinational.end()) {
+                    combinational.push_back(writer.process);
+                }
+            }
+            if (combinational.size() > 1U) {
+                std::vector<std::tuple<std::uint32_t, std::uint32_t, ProcessId>>
+                    spans;
+                for (const auto process : combinational) {
+                    for (const auto& region : views[process].driver_regions()) {
+                        if (region.signal == signal) {
+                            const auto begin = region.whole ? 0U : region.offset;
+                            spans.emplace_back(begin,
+                                begin + (region.whole ? width : region.width),
+                                process);
+                        }
+                    }
+                }
+                std::ranges::sort(spans);
+                std::uint32_t reach = 0U;
+                ProcessId reach_process = 0U;
+                for (std::size_t index = 0U; index < spans.size(); ++index) {
+                    const auto& [begin, end, process] = spans[index];
+                    if (index != 0U && begin < reach && process != reach_process) {
+                        return false;
+                    }
+                    if (end > reach) {
+                        reach = end;
+                        reach_process = process;
+                    }
+                }
+            }
+        }
         if (resolution == ResolutionKind::sv_wire) {
             // A resolved net may be kernel-owned only when its drivers cover
             // pairwise-disjoint bits, so no resolution is needed.
@@ -918,8 +1392,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     const auto signal_ok = [&](const SignalId signal) {
         return signal < signal_count && basic_ok(signal) && writers_ok(signal);
     };
-    // Signals some candidate is edge-sensitive to; recomputed for each
-    // fixpoint pass (candidates only drop out between passes).
+    // Signals some candidate is edge-sensitive to, or a behavioral thread
+    // waits on (the kernel gives a thread no wait on an alias proxy);
+    // recomputed for each fixpoint pass (candidates only drop out between
+    // passes).
     std::vector<std::uint8_t> edge_sensitive(signal_count, 0U);
     const auto mark_edge_sensitive = [&] {
         std::ranges::fill(edge_sensitive, 0U);
@@ -927,9 +1403,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             if (!candidates[index]) {
                 continue;
             }
+            const bool thread = candidates[index]->kind == behavioral_kind;
             for (const auto& entry : candidates[index]->sensitivity) {
-                if (entry.edge != EdgeKind::any && entry.signal < signal_count) {
+                if ((thread || entry.edge != EdgeKind::any)
+                    && entry.signal < signal_count) {
                     edge_sensitive[entry.signal] = 1U;
+                }
+            }
+            if (thread) {
+                for (const auto signal : candidates[index]->waited) {
+                    if (signal < signal_count) {
+                        edge_sensitive[signal] = 1U;
+                    }
                 }
             }
         }
@@ -1053,6 +1538,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                               << views[index].name() << '\n';
                 }
                 candidates[index].reset();
+                reject(index, "container_unowned");
                 changed = true;
             }
         }
@@ -1269,6 +1755,20 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 return disable("vhdl_partial");
             }
         }
+        // Signals a VHDL behavioral thread waits on (its wait statements
+        // and implicit sensitivity wait): a wait is a read for this rule.
+        std::vector<std::uint8_t> vhdl_waited(signal_count, 0U);
+        for (const auto& candidate : candidates) {
+            if (candidate && candidate->vhdl
+                && candidate->kind == behavioral_kind) {
+                for (const auto signal : candidate->waited) {
+                    vhdl_waited[signal] = 1U;
+                }
+                for (const auto& entry : candidate->sensitivity) {
+                    vhdl_waited[entry.signal] = 1U;
+                }
+            }
+        }
         for (SignalId signal = 0U; signal < signal_count; ++signal) {
             if (owned[signal] != 0U) {
                 continue;
@@ -1290,9 +1790,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                         && candidates[access.process]->vhdl;
                 });
             };
-            if (member_access(node.writers) && member_access(node.readers)
+            if (member_access(node.writers)
+                && (member_access(node.readers) || vhdl_waited[signal] != 0U)
                 && (!mixed || vhdl_access(node.writers)
-                    || vhdl_access(node.readers))) {
+                    || vhdl_access(node.readers)
+                    || vhdl_waited[signal] != 0U)) {
                 if (diagnose) {
                     const auto& info = signals_[signal];
                     std::cerr << "fsim-kernel-plan: vhdl_unowned signal="
@@ -1330,6 +1832,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         runtime_member.process = candidate.process;
         runtime_member.kind = static_cast<StaticKernelMemberKind>(candidate.kind);
         runtime_member.run_at_start = candidate.run_at_start;
+        runtime_member.start_late = candidate.start_late;
         runtime_member.body_begin = candidate.body_begin;
         runtime_member.body_end = candidate.body_end;
         runtime_member.exit_alt = candidate.exit_alt;
@@ -1463,6 +1966,25 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             }
         }
     }
+    // A forced value hides the driver's (IEEE 1800-2023 10.6.2); a port
+    // segment force reaches nets by another name, so any force in the design
+    // turns the mirroring below off.
+    const bool forces = std::ranges::any_of(
+        std::views::iota(std::size_t { 0U }, process_count),
+        [&](const std::size_t index) {
+            if (!views[index].valid()) {
+                return false;
+            }
+            const auto& operations = views[index].operations();
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                const auto& operation = operations.expanded(op);
+                if (operation_get_if<ForceSignalSlice>(&operation) != nullptr
+                    || operation_get_if<ReleaseSignalSlice>(&operation) != nullptr) {
+                    return true;
+                }
+            }
+            return false;
+        });
     for (SignalId signal = 0U; signal < signal_count; ++signal) {
         const auto& node = graph_signals[signal];
         if (owned[signal] == 0U && virtual_owned[signal] == 0U
@@ -1472,6 +1994,28 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                })) {
             spec->unwritten_inputs.push_back(signal);
         }
+        // A blocking or continuous write is visible to the members that run
+        // after it (IEEE 1800-2023 4.7, 10.3.2, 10.4.1). A host signal with
+        // one driving member process takes that driver's value, so the
+        // kernel can mirror its staged Active updates at once.
+        if (!forces && owned[signal] == 0U && virtual_owned[signal] == 0U
+            && !node.writers.empty()
+            // One driver of an unresolved variable or a plain net (no pull,
+            // no charge storage) resolves to that driver's value.
+            && (signals_[signal].resolution == ResolutionKind::none
+                || (signals_[signal].resolution == ResolutionKind::sv_wire
+                    && !signals_[signal].implicit_driver
+                    && !signals_[signal].charge_strength))
+            && std::ranges::all_of(node.writers, [&](const auto& writer) {
+                   return writer.process == node.writers.front().process
+                       && writer.process < process_count
+                       && member[writer.process] != 0U;
+               })
+            && std::ranges::any_of(node.readers, [&](const auto& reader) {
+                   return reader.process < process_count && member[reader.process] != 0U;
+               })) {
+            spec->sole_writer_inputs.push_back(signal);
+        }
     }
     plan.host = spec->members.front().process;
     plan.host_program = host_stub(views[plan.host], std::move(host_sensitivity));
@@ -1480,6 +2024,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     plan.boundary_outputs = spec->boundary_outputs.size();
     plan.owned_containers = spec->containers.size();
     plan.spec = std::move(spec);
+    for (std::size_t index = 0U; census && index < process_count; ++index) {
+        if (member[index] == 0U && host_program[index] != 0U) {
+            reject(index, "port_program");
+        }
+    }
+    take_census(plan, &member);
     return plan;
     };
     auto plan = plan_for(true);
@@ -1493,7 +2043,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
 namespace detail {
 namespace {
 
-constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v1" };
+constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v3" };
 
 class PlanWriter {
 public:
@@ -1632,6 +2182,7 @@ std::string serialize_static_kernel_plan(const StaticKernelPlan& plan)
         out.sensitivities(member.sensitivity);
         out.put(member.partition);
         out.put(member.vhdl);
+        out.put(member.start_late);
     });
     out.list(spec.owned_signals, [&](const auto signal) { out.put(signal); });
     out.list(spec.boundary_outputs, [&](const auto signal) { out.put(signal); });
@@ -1659,6 +2210,7 @@ std::string serialize_static_kernel_plan(const StaticKernelPlan& plan)
         out.put(region.width);
     });
     out.list(spec.unwritten_inputs, [&](const auto signal) { out.put(signal); });
+    out.list(spec.sole_writer_inputs, [&](const auto signal) { out.put(signal); });
     out.put(plan.boundary_inputs);
     return std::move(out.bytes);
 }
@@ -1698,7 +2250,8 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
                    && in.get(member.exit_alt) && in.get(member.run_at_start)
                    && in.sensitivities(member.sensitivity)
                    && sensitivity_ok(member.sensitivity)
-                   && in.get(member.partition) && in.get(member.vhdl);
+                   && in.get(member.partition) && in.get(member.vhdl)
+                   && in.get(member.start_late);
            })
         && signal_list(spec->owned_signals) && signal_list(spec->boundary_outputs)
         && in.list(spec->families, [&](StaticKernelAliasFamily& family) {
@@ -1723,6 +2276,7 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
                    && in.get(region.offset) && in.get(region.width);
            })
         && signal_list(spec->unwritten_inputs)
+        && signal_list(spec->sole_writer_inputs)
         && in.get(plan.boundary_inputs) && in.done();
     if (!read || spec->members.empty() || spec->members.front().process != plan.host) {
         return std::nullopt;

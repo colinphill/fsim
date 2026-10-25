@@ -28,7 +28,7 @@ template <typename T>
 inline constexpr bool behavioral_suspension = std::is_same_v<T, WaitFor>
     || std::is_same_v<T, WaitOn> || std::is_same_v<T, WaitForever>
     || std::is_same_v<T, Fork> || std::is_same_v<T, ForkEnd>
-    || std::is_same_v<T, Stop>;
+    || std::is_same_v<T, Stop> || std::is_same_v<T, Pause>;
 
 [[nodiscard]] inline bool comparison(const BinaryOperator operation) noexcept
 {
@@ -121,6 +121,14 @@ inline void operation_registers(const Operation& operation,
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
             reads.push_back(op.source);
         } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, RandomValue>) {
+            if (op.maximum) {
+                reads.push_back(*op.maximum);
+            }
+            if (op.minimum) {
+                reads.push_back(*op.minimum);
+            }
             write = op.destination;
         } else if constexpr (std::is_same_v<T, Assert>) {
             reads.push_back(op.condition);

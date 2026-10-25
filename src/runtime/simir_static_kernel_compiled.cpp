@@ -106,6 +106,13 @@ void Interpreter::Impl::StaticKernel::compile_members()
         if (!compile_once && members_[index].kind == StaticKernelMemberKind::once) {
             continue;
         }
+        // VHDL behavioral threads (IEEE 1076-2019 11.3) run on the
+        // interpreter tier: neither specialization nor the compiled
+        // behavioral bodies know VHDL waits, timeouts or delta commits.
+        if (members_[index].kind == StaticKernelMemberKind::behavioral
+            && members_[index].vhdl) {
+            continue;
+        }
         if (only != nullptr || skip != nullptr) {
             const auto name
                 = impl_.processes.program_view(members_[index].process).name();
@@ -590,8 +597,13 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     define(op.destination, of(op.lhs));
                 } else if constexpr (std::is_same_v<T, IntegerUnary>) {
                     define(op.destination, of(op.source));
-                } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
+                } else if constexpr (std::is_same_v<T, PlusArgSelect>
+                    || std::is_same_v<T, RandomValue>) {
                     define(op.destination, 32U);
+                } else if constexpr (std::is_same_v<T, StringMethod>) {
+                    // Operand registers depend on the method; the member
+                    // runs uncompiled on the reference operation semantics.
+                    throw reject("string_method");
                 } else if constexpr (std::is_same_v<T, Call>) {
                     if (op.stack.capacity != 0U) {
                         define(op.stack.pointer, 32U);
@@ -1151,6 +1163,9 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     || std::is_same_v<T, FormatDisplay>
                     || std::is_same_v<T, StringDisplay>
                     || std::is_same_v<T, TimeDisplay>
+                    || std::is_same_v<T, Report>
+                    || std::is_same_v<T, RandomValue>
+                    || std::is_same_v<T, ConcatenateStrings>
                     || std::is_same_v<T, LoadStringConstant>
                     || std::is_same_v<T, CopyStringRegister>
                     || std::is_same_v<T, PlusArgSelect>) {
@@ -1897,9 +1912,14 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.width = w(op.source);
                 inst.aux = static_cast<std::uint32_t>(body.indices.size());
                 body.indices.push_back(op.selection);
+                // A strict (VHDL) index is checked; a SystemVerilog write
+                // through an unknown or out-of-range index does nothing
+                // (IEEE 1800-2023 11.5.1), as in the reference evaluator.
+                inst.flags = op.selection.strict ? flag_strict : 0U;
                 if constexpr (!blocking) {
-                    inst.flags = op.domain == SignalUpdateDomain::systemverilog_nba
-                        ? flag_nba : 0U;
+                    inst.flags = static_cast<std::uint8_t>(inst.flags
+                        | (op.domain == SignalUpdateDomain::systemverilog_nba
+                            ? flag_nba : 0U));
                 }
             } else if constexpr (std::is_same_v<T, WriteBlockingDynamicPartSlice>
                 || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {

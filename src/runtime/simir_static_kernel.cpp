@@ -391,6 +391,9 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.process = member_spec.process;
         member.kind = member_spec.kind;
         member.run_at_start = member_spec.run_at_start;
+        member.start_late = member_spec.start_late;
+        member.after_procedures = program.startup_phase()
+            == ProcessStartupPhase::after_procedures;
         member.partition_key = member_spec.partition;
         member.body_begin = member_spec.body_begin;
         member.prologue_end = member_spec.body_begin;
@@ -454,6 +457,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             // Threads wait on these signals dynamically: kernel slots stay
             // observable (never silent), host signals become inputs.
             behavioral_ = true;
+            vhdl_threads_ = vhdl_threads_ || member.vhdl;
             member.strings.assign(program.string_register_count(), std::string { });
             member.wait_sensitivity = member_spec.sensitivity;
             const auto waitable = [&](const SignalId signal) {
@@ -548,6 +552,56 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     member_process_.reserve(members_.size());
     for (const auto& member : members_) {
         member_process_.push_back(member.process);
+    }
+    {
+        // A partition runs all of its members on any trigger of the
+        // partition. That is unobservable only for a member that is the sole
+        // writer of what it writes: running it again writes its own values
+        // again. A member sharing a written signal with another process (two
+        // always_comb blocks assigning one variable, a host signal with
+        // several drivers) would overwrite the other's later value although
+        // none of its own events occurred (IEEE 1800-2023 9.4.2), so it runs
+        // alone.
+        constexpr auto none = std::numeric_limits<ProcessId>::max();
+        std::vector<ProcessId> writer_of(signal_count, none);
+        std::vector<std::uint8_t> shared(signal_count, 0U);
+        const auto note = [&](const ProcessProgramView& program,
+                              const ProcessId process) {
+            if (!program.valid()) {
+                return;
+            }
+            for (const auto& region : program.driver_regions()) {
+                if (region.signal >= signal_count) {
+                    continue;
+                }
+                auto& writer = writer_of[region.signal];
+                if (writer == none) {
+                    writer = process;
+                } else if (writer != process) {
+                    shared[region.signal] = 1U;
+                }
+            }
+        };
+        for (ProcessId process = 0U; process < impl_.processes.size(); ++process) {
+            note(process == spec.host ? ProcessProgramView { spec.host_original }
+                                      : impl_.processes.program_view(process),
+                process);
+        }
+        for (auto& member : members_) {
+            if (member.partition_key == no_slot) {
+                continue;
+            }
+            const ProcessProgramView program = member.process == spec.host
+                ? ProcessProgramView { spec.host_original }
+                : impl_.processes.program_view(member.process);
+            if (std::ranges::any_of(program.driver_regions(),
+                    [&](const auto& region) {
+                        return region.signal < signal_count
+                            && shared[region.signal] != 0U;
+                    })) {
+                member.partition_key = no_slot;
+            }
+        }
     }
     fast_runs_.assign(members_.size(), FastRun { });
     for (const auto& region : spec.writer_regions) {
@@ -717,6 +771,36 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     const auto count = members_.size();
     std::vector<std::vector<std::uint32_t>> successors(count);
     std::vector<std::uint32_t> indegree(count, 0U);
+    std::unordered_map<SignalId, std::vector<std::uint32_t>> signal_writers;
+    // A combinational member may read more than it is sensitive to (`@(d iff
+    // enable)`, an incomplete event list): only its sensitivity wakes it, but
+    // it runs after the members that settle everything it reads.
+    std::vector<std::vector<std::uint32_t>> slot_readers(slots_.size());
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        if (members_[index].kind != StaticKernelMemberKind::combinational) {
+            continue;
+        }
+        for (const auto& operation : members_[index].operations) {
+            const auto* read = operation_get_if<ReadSignal>(&operation);
+            if (read == nullptr || read->signal >= signal_count) {
+                continue;
+            }
+            const auto add = [&](const std::uint32_t slot) {
+                auto& readers = slot_readers[slot];
+                if (readers.empty() || readers.back() != index) {
+                    readers.push_back(index);
+                }
+            };
+            if (slot_of_signal_[read->signal] != no_slot) {
+                add(slot_of_signal_[read->signal]);
+            } else if (family_of_signal_[read->signal] != no_slot) {
+                for (const auto& leaf :
+                    families_[family_of_signal_[read->signal]].leaves) {
+                    add(leaf.slot);
+                }
+            }
+        }
+    }
     for (std::uint32_t index = 0U; index < count; ++index) {
         const auto& member = members_[index];
         if (member.kind != StaticKernelMemberKind::combinational) {
@@ -724,29 +808,49 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
         std::vector<std::uint32_t> written;
         for (const auto& operation : member.operations) {
-            const auto signal = visit_operation([](const auto& op)
+            // A write in the NBA region lands after the Active region has
+            // drained, so it orders nothing within a pass: its readers wake
+            // when the commit changes the slot.
+            bool deferred = false;
+            const auto signal = visit_operation([&deferred](const auto& op)
                 -> std::optional<SignalId> {
                 using T = std::decay_t<decltype(op)>;
                 if constexpr (std::is_same_v<T, WriteBlocking>
                     || std::is_same_v<T, WriteBlockingSlice>
                     || std::is_same_v<T, WriteBlockingDynamicSlice>
-                    || std::is_same_v<T, WriteBlockingDynamicPartSlice>
-                    || std::is_same_v<T, WriteUpdate>
+                    || std::is_same_v<T, WriteBlockingDynamicPartSlice>) {
+                    return op.signal;
+                } else if constexpr (std::is_same_v<T, WriteUpdate>
                     || std::is_same_v<T, WriteUpdateSlice>
                     || std::is_same_v<T, WriteUpdateDynamicSlice>
                     || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
+                    deferred = op.domain == SignalUpdateDomain::systemverilog_nba;
                     return op.signal;
                 } else {
                     return std::nullopt;
                 }
             }, operation);
             if (signal && *signal < signal_count) {
+                if (!deferred) {
+                    auto& writers = signal_writers[*signal];
+                    if (writers.empty() || writers.back() != index) {
+                        writers.push_back(index);
+                    }
+                }
                 if (slot_of_signal_[*signal] != no_slot) {
-                    written.push_back(slot_of_signal_[*signal]);
+                    if (deferred) {
+                        slots_[slot_of_signal_[*signal]].deferred_write = true;
+                    } else {
+                        written.push_back(slot_of_signal_[*signal]);
+                    }
                 } else if (family_of_signal_[*signal] != no_slot) {
                     for (const auto& leaf :
                         families_[family_of_signal_[*signal]].leaves) {
-                        written.push_back(leaf.slot);
+                        if (deferred) {
+                            slots_[leaf.slot].deferred_write = true;
+                        } else {
+                            written.push_back(leaf.slot);
+                        }
                     }
                 }
             }
@@ -763,6 +867,53 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     ++indegree[reader.member];
                 }
             }
+            for (const auto reader : slot_readers[slot]) {
+                if (reader != index) {
+                    successors[index].push_back(reader);
+                    ++indegree[reader];
+                }
+            }
+        }
+    }
+    // Members assigning the same variable run in process order, the order
+    // the host scheduler gives processes woken together, so the last writer
+    // is the reference's (IEEE 1800-2023 4.7 leaves it unspecified).
+    // Host signals the kernel writes and reads back: writer before reader.
+    std::unordered_map<SignalId, std::vector<std::uint32_t>> host_readers;
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        if (members_[index].kind != StaticKernelMemberKind::combinational) {
+            continue;
+        }
+        for (const auto& operation : members_[index].operations) {
+            const auto* read = operation_get_if<ReadSignal>(&operation);
+            if (read != nullptr && read->signal < signal_count
+                && slot_of_signal_[read->signal] == no_slot
+                && family_of_signal_[read->signal] == no_slot
+                && signal_writers.contains(read->signal)) {
+                auto& readers = host_readers[read->signal];
+                if (readers.empty() || readers.back() != index) {
+                    readers.push_back(index);
+                }
+            }
+        }
+    }
+    for (const auto& [signal, readers] : host_readers) {
+        for (const auto writer : signal_writers[signal]) {
+            for (const auto reader : readers) {
+                if (reader != writer) {
+                    successors[writer].push_back(reader);
+                    ++indegree[reader];
+                }
+            }
+        }
+    }
+    for (auto& [signal, writers] : signal_writers) {
+        std::ranges::sort(writers, { }, [&](const std::uint32_t member) {
+            return members_[member].process;
+        });
+        for (std::size_t position = 1U; position < writers.size(); ++position) {
+            successors[writers[position - 1U]].push_back(writers[position]);
+            ++indegree[writers[position]];
         }
     }
     std::vector<std::uint32_t> ready;
@@ -824,6 +975,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     for (const auto signal : spec.unwritten_inputs) {
         if (signal < input_of_signal_.size() && input_of_signal_[signal] != no_slot) {
             inputs_[input_of_signal_[signal]].unwritten = true;
+        }
+    }
+    for (const auto signal : spec.sole_writer_inputs) {
+        if (signal < input_of_signal_.size() && input_of_signal_[signal] != no_slot) {
+            inputs_[input_of_signal_[signal]].sole_writer = !vhdl_;
         }
     }
     for (std::uint32_t index = 0U; index < inputs_.size(); ++index) {
@@ -1141,7 +1297,10 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
             slot.publish_nba = false;
             output_queue_.push_back(slot_index);
         }
-        slot.publish_nba = slot.publish_nba || nonblocking_committed_;
+        // Inside the host's NBA region (the deferred commit) an Active update
+        // is the next region.
+        slot.publish_nba = slot.publish_nba
+            || (nonblocking_committed_ && !in_host_nonblocking_region_);
     }
     if (slot_index < slot_wait_seen_.size() && slot_waitable_[slot_index] != 0U) {
         const auto seen = slot_wait_seen_[slot_index];
@@ -1572,11 +1731,28 @@ void Interpreter::Impl::StaticKernel::write_host(const std::uint32_t member,
     const SignalUpdateDomain domain)
 {
     const auto process = members_[member].process;
+    if (trace_) {
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
+                  << " host-write " << impl_.get_signal_cold(signal).name
+                  << (blocking ? " blocking " : " staged ")
+                  << value.to_msb_string() << '\n';
+    }
+    if (!blocking && domain == SignalUpdateDomain::systemverilog_active) {
+        // An Active event behind this activation: #0 threads (Inactive
+        // region) wait for it (IEEE 1800-2023 4.5).
+        host_active_staged_ = true;
+    }
     if (blocking) {
         if (offset) {
             impl_.commit_driver_slice(process, signal, std::move(value), *offset);
         } else {
             impl_.commit_driver(process, signal, std::move(value));
+        }
+        // A blocking write is visible to the statements and members that
+        // follow it (IEEE 1800-2023 10.4.1), including kernel readers of the
+        // host signal.
+        if (const auto input = input_of_signal_[signal]; input != no_slot) {
+            (void)refresh_input(inputs_[input]);
         }
         return;
     }
@@ -1586,6 +1762,27 @@ void Interpreter::Impl::StaticKernel::write_host(const std::uint32_t member,
         // A process does not wake on its own updates; run again once they
         // commit. (Mirror-only inputs have no readers to wake.)
         yield_requested_ = true;
+    }
+    if (const auto input = input_of_signal_[signal];
+        input != no_slot && inputs_[input].sole_writer
+        && domain == SignalUpdateDomain::systemverilog_active) {
+        // The host applies this update unchanged; members that run after
+        // this write read it (see sole_writer_inputs).
+        auto& mirrored = inputs_[input];
+        auto next = mirrored.cached;
+        if (offset) {
+            if (*offset <= next.width() && value.width() <= next.width() - *offset) {
+                for (std::uint32_t bit = 0U; bit < value.width(); ++bit) {
+                    next.set(*offset + bit, value.get(bit));
+                }
+                apply_input(mirrored, Impl::coerce_value_kind(
+                    impl_.normalize_signal_value(signal, std::move(next)),
+                    ValueKind::logic4));
+            }
+        } else if (value.width() == next.width()) {
+            apply_input(mirrored, Impl::coerce_value_kind(
+                impl_.normalize_signal_value(signal, value), ValueKind::logic4));
+        }
     }
     if (offset) {
         impl_.stage_update_slice(process, signal, std::move(value), *offset,
@@ -3128,7 +3325,7 @@ void Interpreter::Impl::StaticKernel::commit_pending()
     }
 }
 
-void Interpreter::Impl::StaticKernel::publish()
+void Interpreter::Impl::StaticKernel::publish(const bool immediate)
 {
     auto queue = std::move(output_queue_);
     output_queue_.clear();
@@ -3148,17 +3345,34 @@ void Interpreter::Impl::StaticKernel::publish()
         }
         profile_publishes_ += profile_ ? 1U : 0U;
         const auto value = slot_value(slot_index);
+        // A blocking Active-region write of an initializing member commits
+        // at once, as the reference process does, so that the host
+        // processes that start after it observe the value (IEEE 1800-2023
+        // 6.8 and 10.5: declaration initializers take effect before any
+        // initial or always procedure starts).
+        const bool commit_now = immediate
+            && domain == SignalUpdateDomain::systemverilog_active;
         if (slot.disjoint_writers && !slot.writers.empty()) {
             for (const auto& writer : slot.writers) {
                 if (writer.offset == 0U && writer.width == slot.width) {
-                    impl_.stage_update(writer.process, slot.signal, value,
-                        domain);
+                    if (commit_now) {
+                        impl_.commit_driver(writer.process, slot.signal, value);
+                    } else {
+                        impl_.stage_update(writer.process, slot.signal, value,
+                            domain);
+                    }
+                } else if (commit_now) {
+                    impl_.commit_driver_slice(writer.process, slot.signal,
+                        extract_value(value, writer.offset, writer.width),
+                        writer.offset);
                 } else {
                     impl_.stage_update_slice(writer.process, slot.signal,
                         extract_value(value, writer.offset, writer.width),
                         writer.offset, domain);
                 }
             }
+        } else if (commit_now) {
+            impl_.commit_driver(slot.last_writer, slot.signal, value);
         } else {
             impl_.stage_update(slot.last_writer, slot.signal, value, domain);
         }
@@ -3198,16 +3412,35 @@ void Interpreter::Impl::StaticKernel::initialize()
             output_queue_.push_back(index);
         }
     }
+    // An always_comb or always_latch starts after every initial and always
+    // procedure has started (IEEE 1800-2023 9.2.2.2.2); such members run
+    // once the threads have (start_after_procedures).
+    const auto after_procedures = [&](const Member& member) {
+        return member.after_procedures && !member.vhdl && behavioral_
+            && ((member.kind == StaticKernelMemberKind::combinational
+                    && member.run_at_start)
+                || member.kind == StaticKernelMemberKind::once);
+    };
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         const auto& member = members_[index];
+        if (after_procedures(member)) {
+            after_procedure_members_.push_back(index);
+            continue;
+        }
         if (member.run_at_start
             && (member.kind == StaticKernelMemberKind::combinational
                 || (member.vhdl && member.kind == StaticKernelMemberKind::sequential))) {
             schedule(index);
         }
     }
+    if (behavioral_) {
+        prepare_behavioral();
+    }
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         if (members_[index].kind == StaticKernelMemberKind::once) {
+            if (after_procedures(members_[index])) {
+                continue;
+            }
             if (mixed_ && members_[index].vhdl) {
                 // Its assignments belong to the first VHDL round.
                 auto& state = member_schedule_[index];
@@ -3220,6 +3453,9 @@ void Interpreter::Impl::StaticKernel::initialize()
             run(index);
         }
     }
+    // Initializing members have run to completion; later host processes
+    // read what they wrote.
+    publish(true);
     if (behavioral_) {
         start_behavioral();
     }
@@ -3249,74 +3485,103 @@ bool Interpreter::Impl::StaticKernel::scan_inputs(const bool all)
     // only the others are scanned.
     const auto count = all ? inputs_.size() : written_inputs_.size();
     for (std::size_t position = 0U; position < count; ++position) {
-        auto& input = inputs_[all ? position : written_inputs_[position]];
-        // Every committed host value change bumps the signal's revision.
-        const auto revision = impl_.signal_value_revisions[input.signal];
-        if (revision == input.revision && !check_inputs_) {
-            continue;
-        }
-        const auto& current = impl_.logical_signal_value(input.signal);
-        if (check_inputs_ && revision == input.revision
-            && !(current == input.cached)
-            && !(Impl::coerce_value_kind(current, ValueKind::logic4)
-                == input.cached)) {
-            std::cerr << "fsim-kernel-check: input "
-                      << impl_.get_signal_cold(input.signal).name
-                      << " changed without a revision bump\n";
-        }
-        input.revision = revision;
-        if (current == input.cached) {
-            continue;
-        }
-        changed = true;
-        auto value = vhdl_ ? current
-                           : Impl::coerce_value_kind(current, ValueKind::logic4);
-        profile_input_changes_ += profile_ ? 1U : 0U;
-        if (trace_) {
-            std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
-                      << " input " << impl_.get_signal_cold(input.signal).name
-                      << " " << input.cached.to_msb_string() << " -> "
-                      << value.to_msb_string() << '\n';
-        }
-        const auto before = std::exchange(input.cached, std::move(value));
-        write_mirror(input);
-        if (behavioral_) {
-            const auto input_index = static_cast<std::size_t>(&input - inputs_.data());
-            if (input_index < input_waiters_.size()
-                && !input_waiters_[input_index].empty()) {
-                wake_waiters(input_waiters_[input_index], edge_bit(before),
-                    edge_bit(input.cached));
-            }
-        }
-        for (const auto& reader : input.readers) {
-            bool differs = reader.width == 0U
-                || before.width() != input.cached.width()
-                || reader.offset + reader.width > input.cached.width();
-            for (std::uint32_t bit = reader.offset;
-                 !differs && bit < reader.offset + reader.width; ++bit) {
-                differs = vhdl_
-                    ? before.get_logic9(bit) != input.cached.get_logic9(bit)
-                    : before.get(bit) != input.cached.get(bit);
-            }
-            if (differs) {
-                schedule(reader.member);
-            }
-        }
-        if (!input.edges.empty()) {
-            const auto old_bit = edge_bit(before);
-            const auto new_bit = edge_bit(input.cached);
-            for (const auto& reader : input.edges) {
-                if (edge_matches(reader.edge, old_bit, new_bit)) {
-                    schedule(reader.member);
-                }
-            }
-        }
+        changed = refresh_input(
+                      inputs_[all ? position : written_inputs_[position]])
+            || changed;
     }
     return changed;
 }
 
+bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
+{
+    // Every committed host value change bumps the signal's revision.
+    const auto revision = impl_.signal_value_revisions[input.signal];
+    if (revision == input.revision && !check_inputs_) {
+        return false;
+    }
+    const auto& current = impl_.logical_signal_value(input.signal);
+    if (check_inputs_ && revision == input.revision
+        && !(current == input.cached)
+        && !(Impl::coerce_value_kind(current, ValueKind::logic4)
+            == input.cached)) {
+        std::cerr << "fsim-kernel-check: input "
+                  << impl_.get_signal_cold(input.signal).name
+                  << " changed without a revision bump\n";
+    }
+    input.revision = revision;
+    if (current == input.cached) {
+        return false;
+    }
+    auto value = vhdl_ ? current
+                       : Impl::coerce_value_kind(current, ValueKind::logic4);
+    profile_input_changes_ += profile_ ? 1U : 0U;
+    if (trace_) {
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
+                  << " input " << impl_.get_signal_cold(input.signal).name
+                  << " " << input.cached.to_msb_string() << " -> "
+                  << value.to_msb_string() << '\n';
+    }
+    apply_input(input, std::move(value));
+    return true;
+}
+
+void Interpreter::Impl::StaticKernel::apply_input(Input& input, PackedLogic4 value)
+{
+    const auto before = std::exchange(input.cached, std::move(value));
+    write_mirror(input);
+    if (behavioral_) {
+        const auto input_index = static_cast<std::size_t>(&input - inputs_.data());
+        if (input_index < input_waiters_.size()
+            && !input_waiters_[input_index].empty()) {
+            wake_waiters(input_waiters_[input_index], edge_bit(before),
+                edge_bit(input.cached));
+        }
+    }
+    for (const auto& reader : input.readers) {
+        bool differs = reader.width == 0U
+            || before.width() != input.cached.width()
+            || reader.offset + reader.width > input.cached.width();
+        for (std::uint32_t bit = reader.offset;
+             !differs && bit < reader.offset + reader.width; ++bit) {
+            differs = vhdl_
+                ? before.get_logic9(bit) != input.cached.get_logic9(bit)
+                : before.get(bit) != input.cached.get(bit);
+        }
+        if (differs) {
+            schedule(reader.member);
+        }
+    }
+    if (!input.edges.empty()) {
+        const auto old_bit = edge_bit(before);
+        const auto new_bit = edge_bit(input.cached);
+        for (const auto& reader : input.edges) {
+            if (edge_matches(reader.edge, old_bit, new_bit)) {
+                schedule(reader.member);
+            }
+        }
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::start_after_procedures()
+{
+    if (after_procedure_members_.empty()) {
+        return false;
+    }
+    auto members = std::move(after_procedure_members_);
+    after_procedure_members_.clear();
+    for (const auto index : members) {
+        if (members_[index].kind == StaticKernelMemberKind::once) {
+            run(index);
+        } else {
+            schedule(index);
+        }
+    }
+    return true;
+}
+
 bool Interpreter::Impl::StaticKernel::activate()
 {
+    host_active_staged_ = false;
     const auto activation_started = profile_ ? std::chrono::steady_clock::now()
                                   : std::chrono::steady_clock::time_point { };
     struct ActivationTimer {
@@ -3336,10 +3601,28 @@ bool Interpreter::Impl::StaticKernel::activate()
     nonblocking_committed_ = false;
     yield_requested_ = false;
     profile_activations_ += profile_ ? 1U : 0U;
-    if (!initialized_) {
+    if (paused_thread_ != no_slot) {
+        // The run continues after a $stop: the pausing thread resumes first.
+        stopped_ = false;
+        const auto paused = std::exchange(paused_thread_, no_slot);
+        if (threads_[paused].alive) {
+            ready_thread(paused);
+        }
+    }
+    const bool first_activation = !initialized_;
+    if (first_activation) {
         initialize();
     } else {
         (void)scan_inputs();
+    }
+    if (late_start_armed_ && !first_activation) {
+        // The delta after time zero: continuous assignments and event
+        // controls of time zero have settled (see start_behavioral).
+        late_start_armed_ = false;
+        for (const auto index : std::exchange(late_members_,
+                 std::vector<std::uint32_t> { })) {
+            ready_thread(spawn_thread(index, 0U, no_slot, no_slot));
+        }
     }
     activate_step();
     // A closed kernel (no host process, output or host-written input) whose
@@ -3354,7 +3637,7 @@ bool Interpreter::Impl::StaticKernel::activate()
         || static_cast<bool>(impl_.container_object_change_hook)
         || static_cast<bool>(impl_.container_element_change_hook);
     for (std::size_t step = 0U; time_warp_ && closed_ && !observed && behavioral_
-         && !stopped_
+         && !vhdl_threads_ && !stopped_ && !nonblocking_deferred_
          && !yield_requested_ && step < max_warp_steps; ++step) {
         const auto next = next_timer();
         if (!next) {
@@ -3371,8 +3654,18 @@ bool Interpreter::Impl::StaticKernel::activate()
     }
     if (behavioral_) {
         arm_timer();
+        if (vhdl_threads_) {
+            arm_vhdl_timer();
+        }
     }
-    publish();
+    // The initializing activation runs the time-zero Active work of the
+    // processes it replaces (declaration initializers, continuous
+    // assignments), whose blocking writes host processes that start after
+    // it see (IEEE 1800-2023 6.8, 10.3, 4.7): commit them at once.
+    // In the host's NBA region (the deferred commit) the kernel's updates
+    // belong to that region and apply with the host's own (IEEE 1800-2023
+    // 4.5), before the processes they wake run.
+    publish((first_activation && !warp_time_) || in_host_nonblocking_region_);
     return yield_requested_;
 }
 
@@ -3401,11 +3694,20 @@ void Interpreter::Impl::StaticKernel::activate_step()
         settle();
         check_owned_edges();
         if (vhdl_) {
-            if (!triggered_.empty() || writes_.count != 0U) {
+            if (!triggered_.empty() || writes_.count != 0U
+                || !vhdl_ready_threads_.empty()) {
                 run_triggered();
+                // Behavioral processes resumed for this delta run with the
+                // members (1076-2019 14.7.5.3); their assignments commit
+                // with the round.
+                (void)run_vhdl_threads();
+                if (stopped_) {
+                    break;
+                }
                 commit_round();
                 if (queued_count_ != 0U || !triggered_.empty()
-                    || !trigger_queue_.empty()) {
+                    || !trigger_queue_.empty()
+                    || !vhdl_ready_threads_.empty()) {
                     // One round is one VHDL delta. Resume in the host's next
                     // delta so host processes see and drive each delta at its
                     // reference position.
@@ -3425,12 +3727,22 @@ void Interpreter::Impl::StaticKernel::activate_step()
                 if (stopped_) {
                     break;
                 }
+                active = start_after_procedures() || active;
                 // The Active region drains (combinational settling included)
                 // before #0 resumptions (Inactive) and before the NBA region.
                 if (active) {
                     continue;
                 }
                 if (!inactive_threads_.empty()) {
+                    if (host_active_staged_ || !output_queue_.empty()) {
+                        // The host's Active events (staged updates, and the
+                        // processes changed outputs wake) come first; the #0
+                        // threads resume in the next delta of this time step
+                        // (IEEE 1800-2023 4.5).
+                        publish();
+                        yield_requested_ = true;
+                        break;
+                    }
                     for (const auto thread : inactive_threads_) {
                         ready_thread(thread);
                     }
@@ -3439,6 +3751,9 @@ void Interpreter::Impl::StaticKernel::activate_step()
                 }
             }
             if (writes_.count != 0U) {
+                if (defer_nonblocking()) {
+                    break;
+                }
                 nonblocking_committed_ = true;
                 commit_pending();
                 continue;
@@ -3453,6 +3768,60 @@ void Interpreter::Impl::StaticKernel::activate_step()
             break;
         }
     }
+}
+
+bool Interpreter::Impl::StaticKernel::defer_nonblocking()
+{
+    // The kernel runs the Active, NBA and following Active iterations of an
+    // activation in one host callback. Its NBA region begins only after the
+    // host's same-time Active and Inactive events, including the processes
+    // this activation's outputs and staged updates wake (IEEE 1800-2023 4.5),
+    // or host processes would observe the writes that follow the commit.
+    if (std::exchange(nonblocking_region_, false)) {
+        return false;
+    }
+    static const bool enabled = [] {
+        const char* value = std::getenv("FSIM_STATIC_KERNEL_NBA_DEFER");
+        return value == nullptr || std::string_view { value } != "0";
+    }();
+    if (!enabled || closed_ || warp_time_
+        || (!host_active_staged_ && output_queue_.empty()
+            && !impl_.scheduler.systemverilog_active_work_pending())) {
+        return false;
+    }
+    publish();
+    if (nonblocking_deferred_) {
+        return true;
+    }
+    nonblocking_deferred_ = true;
+    struct KernelNonblockingTask {
+        Interpreter::Impl* owner { };
+        ProcessId host { };
+    };
+    const auto task = fsim::runtime::detail::make_scheduler_task_descriptor<
+        KernelNonblockingTask,
+        +[](Scheduler&, const KernelNonblockingTask& scheduled) {
+            auto& kernel = *scheduled.owner->static_kernel;
+            kernel.nonblocking_deferred_ = false;
+            kernel.nonblocking_region_ = true;
+            kernel.in_host_nonblocking_region_ = true;
+            bool yielded { };
+            try {
+                yielded = kernel.activate();
+            } catch (...) {
+                kernel.nonblocking_region_ = false;
+                kernel.in_host_nonblocking_region_ = false;
+                throw;
+            }
+            kernel.nonblocking_region_ = false;
+            kernel.in_host_nonblocking_region_ = false;
+            if (yielded) {
+                scheduled.owner->queue_next_delta(scheduled.host);
+            }
+        }>(KernelNonblockingTask { &impl_, host_process_ });
+    impl_.scheduler.schedule_internal_systemverilog_at(impl_.scheduler.now(),
+        SchedulerPhase::update, host_process_, task);
+    return true;
 }
 
 void Interpreter::Impl::StaticKernel::swap_write_queues()
@@ -3488,10 +3857,16 @@ void Interpreter::Impl::StaticKernel::sv_drain()
             if (stopped_) {
                 return;
             }
+            active = start_after_procedures() || active;
             if (active) {
                 continue;
             }
             if (!inactive_threads_.empty()) {
+                if (host_active_staged_ || !output_queue_.empty()) {
+                    publish();
+                    yield_requested_ = true;
+                    return;
+                }
                 for (const auto thread : inactive_threads_) {
                     ready_thread(thread);
                 }
@@ -3525,7 +3900,7 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
     sv_drain();
     while (!stopped_) {
         if (next_round_.empty() && deferred_targets_.empty()
-            && deferred_threads_.empty()) {
+            && deferred_threads_.empty() && vhdl_ready_threads_.empty()) {
             if (!scan_inputs(false)) {
                 break;
             }
@@ -3554,6 +3929,9 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
             member_schedule_[member].round = false;
             run(member);
         }
+        // VHDL behavioral processes resumed for this delta run with the
+        // round's members, their assignments in the round's queue.
+        (void)run_vhdl_threads();
         swap_write_queues();
         sv_drain();
         if (stopped_) {
@@ -3567,7 +3945,8 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
         swap_write_queues();
         if ((host_boundary_ || ++rounds == rounds_per_host_delta)
             && (!next_round_.empty() || !deferred_targets_.empty()
-                || !deferred_threads_.empty())) {
+                || !deferred_threads_.empty()
+                || !vhdl_ready_threads_.empty())) {
             yield_requested_ = true;
             break;
         }
@@ -3706,6 +4085,16 @@ void InterpreterProgramAccess::install_static_kernel(
         // final on the host); 2 the host, which runs the kernel.
         impl.fusion_dormant_process[member.process]
             = member.process == spec.host ? 2U : 1U;
+        // Installed without their sensitivity, members still drive the
+        // signals the host's time-zero start treats as settling.
+        if (!member.sensitivity.empty()) {
+            if (impl.static_kernel_event_driven_process.size()
+                != impl.processes.size()) {
+                impl.static_kernel_event_driven_process.assign(
+                    impl.processes.size(), 0U);
+            }
+            impl.static_kernel_event_driven_process[member.process] = 1U;
+        }
     }
     impl.static_kernel_owned_signal.assign(impl.signals.size(), 0U);
     for (const auto signal : spec.owned_signals) {

@@ -186,6 +186,7 @@ docs/code-coverage.md
 docs/cross-language-semantics.md
 docs/design-specific-jit-scheduling.md
 docs/diagnostics.md
+docs/engine-v4-semantics.md
 docs/feature-matrix.md
 docs/hierarchy-path-audit-disposition.md
 docs/hierarchy-path-migration.md
