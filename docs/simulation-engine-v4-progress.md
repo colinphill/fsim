@@ -164,6 +164,13 @@ evaluator.
   census, kernel-on correctness, admission, full ownership, then switch and
   retirement. Gates G1–G5 are the definition of done. The plan is in the
   local handoff `.local-artifacts/v4-migration/HANDOFF.md`.
+- **Owner decisions (2026-10-25).**
+  - Every process runs inside the v4 engine; no host processes remain.
+  - `--engine compiled` becomes an alias of v4.
+  - Excluded race cases stay excluded, even where the kernel happens to pass
+    them.
+  - Gate sweeps run on `--engine v4`; the interpreter sweep becomes a
+    periodic oracle check.
 
 ### 2026-10-08 (later): exit criteria met — campaign `v4-corpus-1008d`
 
