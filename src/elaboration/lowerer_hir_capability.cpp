@@ -6331,10 +6331,24 @@ Lowerer::hir_referenced_declaration(
     }
 
     auto resolver = hir_resolver();
+    // Resolutions are cached per expression and binding-frame state in
+    // both languages.
+    std::optional<semantic::CompiledDeclarationResolution>
+        uncached_resolution;
+    const auto cached_resolution = [&](const auto& resolve)
+        -> const semantic::CompiledDeclarationResolution& {
+        if (const auto* cached
+            = find_hir_expression_resolution_cache(expression_id)) {
+            return *cached;
+        }
+        uncached_resolution.emplace(resolve());
+        cache_hir_expression_resolution(expression_id, *uncached_resolution);
+        return *uncached_resolution;
+    };
     if (expression->systemverilog != nullptr) {
-        const auto declaration
-            = resolver.resolve_systemverilog_expression(expression_id)
-                  .unique();
+        const auto declaration = cached_resolution([&] {
+            return resolver.resolve_systemverilog_expression(expression_id);
+        }).unique();
         if (!declaration) {
             return std::nullopt;
         }
@@ -6400,17 +6414,9 @@ Lowerer::hir_referenced_declaration(
     }
     const auto reference_name = reference.text();
     const auto overloaded = !reference.overloads.empty();
-    std::optional<semantic::CompiledDeclarationResolution>
-        uncached_resolution;
-    const semantic::CompiledDeclarationResolution* resolved
-        = find_hir_expression_resolution_cache(expression_id);
-    if (resolved == nullptr) {
-        uncached_resolution.emplace(
-            resolver.resolve_expression_name(expression_id));
-        cache_hir_expression_resolution(
-            expression_id, *uncached_resolution);
-        resolved = &*uncached_resolution;
-    }
+    const auto* resolved = &cached_resolution([&] {
+        return resolver.resolve_expression_name(expression_id);
+    });
     if (const auto declaration = resolved->unique()) {
         // Callable input formals with constant actuals also participate in
         // the generic-binding overlay so dependent subtype expressions can

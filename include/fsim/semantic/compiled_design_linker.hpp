@@ -3,6 +3,8 @@
 
 #include "fsim/semantic/compiled_design.hpp"
 
+#include <cstddef>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -109,12 +111,18 @@ struct CompiledObjectSelection {
     std::span<const CompiledUdpIdentity> udp_identities;
 };
 
+/// Receives the projection of selection `index`; returns false to stop.
+using CompiledObjectConsumer
+    = std::function<bool(std::size_t index, CompiledLinkResult projection)>;
+
 /// extract_compiled_objects() for several objects of one design. The input
-/// design's structure is checked once rather than once per object.
-[[nodiscard]] std::vector<CompiledLinkResult> extract_compiled_object_set(
-    const CompiledDesign& design,
+/// design's structure is checked once rather than once per object, and each
+/// projection is handed to `consume` before the next is built, so only one
+/// is alive at a time. Returns false when `consume` stopped the walk.
+bool extract_compiled_object_set(const CompiledDesign& design,
     std::span<const CompiledObjectSelection> selections,
-    std::span<const std::string> supporting_libraries = {});
+    std::span<const std::string> supporting_libraries,
+    const CompiledObjectConsumer& consume);
 
 /// Project every logical library except the named libraries into a
 /// self-contained bundle. This is used when decoded compiled libraries must

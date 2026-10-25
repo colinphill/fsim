@@ -699,29 +699,30 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
     for (const auto& group : *groups) {
         selections.push_back({ group.units, group.classes, group.primitives });
     }
-    auto projections = semantic::extract_compiled_object_set(checked, selections, supporting);
     std::vector<workspace::ArtifactRecord> records;
     records.reserve(groups->size());
-    for (std::size_t group_index = 0; group_index < groups->size(); ++group_index) {
+    // Each object is published before the next is projected, so only one
+    // projection is held beside the checked design.
+    const auto published = semantic::extract_compiled_object_set(checked, selections, supporting,
+        [&](const std::size_t group_index, semantic::CompiledLinkResult projection) {
         const auto& group = (*groups)[group_index];
-        auto& projection = projections[group_index];
         if (!projection.ok()) {
             workspace_error(diagnostics, "cannot select compiled object: " + projection.error);
-            return 1;
+            return false;
         }
         auto record = transaction->allocate_artifact(workspace::ArtifactKind::Hdl, error);
         if (!record) {
             workspace_error(diagnostics, std::move(error));
-            return 1;
+            return false;
         }
         const auto path = transaction->artifact_path(*record);
         if (!publish_workspace_object(config, checked, std::move(*projection.design),
                 path, diagnostics)) {
-            return 1;
+            return false;
         }
         const auto metadata = artifact::load_object_metadata(path, diagnostics);
         if (!metadata) {
-            return 1;
+            return false;
         }
         record->sources = group.sources;
         record->fingerprint = metadata->compilation_digest;
@@ -730,7 +731,7 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
             if (owner == group.unit_sources.end()) {
                 workspace_error(diagnostics, "compiled object lost source ownership for '"
                     + unit.name + "'");
-                return 1;
+                return false;
             }
             record->units.push_back({ unit, owner->second });
             if (invocation.verbosity == cli::Verbosity::verbose) {
@@ -739,6 +740,10 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
             }
         }
         records.push_back(std::move(*record));
+        return true;
+    });
+    if (!published) {
+        return 1;
     }
     if (sources.language == project::Language::vhdl
         && !check_vhdl_analysis_elaboration(checked, *groups, sources, diagnostics)) {

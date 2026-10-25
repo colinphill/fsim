@@ -3631,27 +3631,30 @@ CompiledLinkResult extract_compiled_objects(
         udp_identities, supporting_libraries, false);
 }
 
-std::vector<CompiledLinkResult> extract_compiled_object_set(
-    const CompiledDesign& design,
+bool extract_compiled_object_set(const CompiledDesign& design,
     const std::span<const CompiledObjectSelection> selections,
-    const std::span<const std::string> supporting_libraries)
+    const std::span<const std::string> supporting_libraries,
+    const CompiledObjectConsumer& consume)
 {
-    std::vector<CompiledLinkResult> results;
-    results.reserve(selections.size());
     if (const auto error = checked_structural_hir_error(design); !error.empty()) {
         for (std::size_t index = 0; index < selections.size(); ++index) {
-            results.push_back({ std::nullopt,
-                "cannot project a structurally invalid compiled-HIR design: "
-                    + error });
+            if (!consume(index, { std::nullopt,
+                    "cannot project a structurally invalid compiled-HIR design: "
+                        + error })) {
+                return false;
+            }
         }
-        return results;
+        return true;
     }
-    for (const auto& selection : selections) {
-        results.push_back(extract_compiled_objects_impl(design,
-            selection.units, selection.class_identities,
-            selection.udp_identities, supporting_libraries, true));
+    for (std::size_t index = 0; index < selections.size(); ++index) {
+        const auto& selection = selections[index];
+        if (!consume(index, extract_compiled_objects_impl(design,
+                selection.units, selection.class_identities,
+                selection.udp_identities, supporting_libraries, true))) {
+            return false;
+        }
     }
-    return results;
+    return true;
 }
 
 CompiledLinkResult exclude_compiled_libraries(

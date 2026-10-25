@@ -253,6 +253,43 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 96 part 8: compile memory, SystemVerilog name cache
+
+- `fsim compile` projected every compiled object of a library before
+  publishing the first, so all projections were held beside the checked
+  design at once. `extract_compiled_object_set` now hands each projection
+  to a consumer that publishes it before the next is built.
+- The lowerer cached the resolution of VHDL names per expression and
+  binding-frame state, but resolved SystemVerilog names again on every
+  query (about 1.15 million queries in rs_codec Verilog). Both languages
+  now share the cache.
+
+Peak memory (MB) of `fsim compile` is now below the pre-LRM binary:
+
+| Job | pre-LRM | part 7 | now |
+| --- | ---: | ---: | ---: |
+| rs VHDL | 570 | 589 | 270 |
+| rs Verilog | 269 | 292 | 184 |
+| rs Verilog + testbenches | 813 | 902 | 268 |
+| LDPC | 185 | 202 | 182 |
+
+Instructions (G) and CPU seconds of `fsim elaborate --no-aot`:
+
+| Case | pre-LRM | now | pre-LRM CPU | now CPU |
+| --- | ---: | ---: | ---: | ---: |
+| rs_codec Verilog | 43.4 | 44.2 | 4.3 | 5.1 |
+| rs_symsize Verilog | 142.5 | 136.4 | 7.7 | 8.0 |
+| rs_thru Verilog | 13.7 | 13.9 | 1.6 | 1.9 |
+| rs_encoder Verilog | 12.9 | 13.6 | 0.87 | 1.0 |
+| rs_codec VHDL | 38.1 | 38.7 | 3.0 | 3.9 |
+| rs_param VHDL | 124.0 | 124.0 | 10.2 | 13.1 |
+
+The remaining CPU difference is in cycles per instruction, not in
+instruction count. A BOLT layout trial, with profiles from instrumented
+training runs, recovered 7-13% of elaboration CPU (rs_param VHDL 11.4 s,
+not in the training set); it is not adopted. The labelled ctest set fails
+only the 23 known cases.
+
 ### Batch 96 part 7: frontend compile costs
 
 `fsim compile` was compared with the pre-LRM binary on the rs VHDL and
@@ -298,6 +335,18 @@ and analysis elaboration). The pre-LRM binary does not compile either UVM
 library, so UVM has no baseline (now 4.0 s and 1.68 GB for UVM 1.2,
 4.8 s and 1.83 GB for 2020.3.1). The labelled ctest set fails only the
 23 known cases.
+
+The six-suite sweeps with `b96s` (`b96s1`, part 6) and `b96t` (`b96t1`,
+part 7) match `b96r1` case for case: no losses and no gains.
+
+| Suite | b96r1 passes / in scope | b96t1 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2635 / 2635 | 2635 / 2635 | 276 |
+| sv-tests | 1494 / 1495 | 1494 / 1495 | 2 |
+| verilator | 2065 / 2065 | 2065 / 2065 | 350 |
+| vests | 3646 / 3646 | 3646 / 3646 | 2 |
+| nvc | 1261 / 1261 | 1261 / 1261 | 221 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
 
 ### Batch 96 part 6: SystemVerilog name and type resolution costs
 
