@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/semantic/model.hpp"
+#include "fsim/support/rare_vector.hpp"
 
 #include <charconv>
 #include <cstddef>
@@ -636,7 +637,10 @@ struct TypeReference {
     // Keep the identity reference for existing consumers and carry the full
     // scalar shape separately for queries that need index width/sign details.
     std::optional<semantic::TypeReference> associative_index;
-    std::optional<AssociativeIndexTypeReference> associative_index_metadata;
+    // Only associative arrays carry it; out of line, it keeps every other
+    // type reference (declarations, members, profiles) small.
+    support::RareOptional<AssociativeIndexTypeReference>
+        associative_index_metadata;
     std::vector<PackedRange> unpacked_dimensions;
     std::vector<TypeReference> container_element_types;
     std::optional<std::uint64_t> executable_width;

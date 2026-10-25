@@ -84,6 +84,9 @@ template <typename T>
 struct IsOptional<std::optional<T>> : std::true_type { };
 
 template <typename T>
+struct IsOptional<support::RareOptional<T>> : std::true_type { };
+
+template <typename T>
 struct IsPair : std::false_type { };
 
 template <typename First, typename Second>

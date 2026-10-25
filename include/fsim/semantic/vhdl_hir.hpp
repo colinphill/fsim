@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/semantic/model.hpp"
+#include "fsim/support/rare_vector.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
@@ -795,7 +796,9 @@ struct Declaration {
     // so the target is retained independently from the optional subtype.
     std::optional<Name> alias_target;
     // Present for an alias of a subprogram.
-    std::optional<AliasSignature> alias_signature;
+    // Only subprogram aliases carry one (IEEE 1076-2008 6.6.3); out of
+    // line, it keeps every other declaration small.
+    support::RareOptional<AliasSignature> alias_signature;
     std::optional<ScopeId> nested_scope;
     std::optional<CallableProfile> callable;
     std::optional<ComponentProfile> component;

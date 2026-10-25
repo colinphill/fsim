@@ -253,6 +253,52 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 96 part 7: frontend compile costs
+
+`fsim compile` was compared with the pre-LRM binary on the rs VHDL and
+Verilog sources, the rs testbenches, the LDPC codec and the UVM 1.2 and
+2020.3.1 libraries. SystemVerilog compiles used fewer instructions than
+pre-LRM but more memory; the VHDL compile used 37% more instructions.
+
+- VHDL function and procedure lookup by name collected the visible
+  overloads again on every call; the resolver now keeps the list per
+  name and kind.
+- Executable-HIR name resolution searched the design units and overload
+  sets linearly for each name. It now indexes overload sets by scope and
+  name (the first declaration wins, as before), design units by id, and
+  remembers the primary, package and context unit of each owner.
+- The associative-array index type of a SystemVerilog type reference and
+  the alias signature of a VHDL declaration (IEEE 1076-2008 6.6.3) are
+  present on few records but were stored inline in every one. They are
+  now held out of line when present, which shrinks the records:
+
+| Record | pre-LRM bytes | part 6 | now |
+| --- | ---: | ---: | ---: |
+| SystemVerilog type reference | 440 | 904 | 528 |
+| SystemVerilog declaration | 2232 | 3632 | 2504 |
+| SystemVerilog type definition | 1080 | 2008 | 1256 |
+| VHDL declaration | 2928 | 3464 | 3096 |
+
+The artifact encoding is unchanged: an out-of-line value encodes as the
+optional it replaces.
+
+Instructions (G) and peak memory (MB) of `fsim compile`:
+
+| Job | pre-LRM instr | part 6 | now | pre-LRM MB | part 6 | now |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| rs VHDL | 2.93 | 4.00 | 3.16 | 573 | 599 | 589 |
+| rs Verilog | 1.67 | 1.22 | 1.22 | 269 | 318 | 292 |
+| rs Verilog + testbenches | 4.83 | 3.57 | 3.57 | 813 | 965 | 902 |
+| LDPC | 2.32 | 0.88 | 0.88 | 185 | 214 | 202 |
+
+CPU time of the rs VHDL compile is now within noise of pre-LRM
+(0.49 s against 0.42-0.51 s). The remaining VHDL instructions are the
+analysis checks added by the LRM batches (architecture name validation
+and analysis elaboration). The pre-LRM binary does not compile either UVM
+library, so UVM has no baseline (now 4.0 s and 1.68 GB for UVM 1.2,
+4.8 s and 1.83 GB for 2020.3.1). The labelled ctest set fails only the
+23 known cases.
+
 ### Batch 96 part 6: SystemVerilog name and type resolution costs
 
 Callgrind on rs_codec Verilog (pre-LRM 43.4 G, after part 5 48.4 G)

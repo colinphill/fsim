@@ -2,6 +2,11 @@
 #include "application_internal.hpp"
 #include "application_vhdl_hir_internal.hpp"
 
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+
 namespace fsim::app::application_detail {
 namespace {
 
@@ -1048,15 +1053,72 @@ class VhdlExecutableBuilder final {
   }
 
   void resolve_expression_names() {
+    // Resolution rewrites only expression names; the units, scopes and
+    // overload sets it looks names up in are fixed, so they are indexed
+    // once. Each index keeps the first record of a key, as a linear search
+    // would find.
+    std::unordered_map<std::uint32_t,
+        std::unordered_map<std::string_view, const vh::OverloadSet*>>
+        overloads_by_scope;
+    for (const auto& overload : hir_.overload_sets()) {
+      overloads_by_scope[overload.scope.value()].try_emplace(
+          overload.canonical_name, &overload);
+    }
+    std::unordered_map<std::uint32_t, const vh::Unit*> units_by_id;
+    for (const auto& unit : hir_.units()) {
+      units_by_id.try_emplace(unit.id.value(), &unit);
+    }
     const auto overload_in_scope = [&](const semantic::ScopeId scope,
                                        const std::string_view name)
         -> const vh::OverloadSet* {
-      const auto found = std::ranges::find_if(
-          hir_.overload_sets(), [&](const vh::OverloadSet& overload) {
-            return overload.scope == scope
-                && overload.canonical_name == name;
+      const auto in_scope = overloads_by_scope.find(scope.value());
+      if (in_scope == overloads_by_scope.end()) {
+        return nullptr;
+      }
+      const auto found = in_scope->second.find(name);
+      return found == in_scope->second.end() ? nullptr : found->second;
+    };
+    const auto owner_unit = [&](const semantic::ScopeId scope)
+        -> const vh::Unit* {
+      const auto& scopes = model_.scopes();
+      if (!scope.valid() || scope.value() >= scopes.size()
+          || scopes[scope.value()].id != scope) {
+        return nullptr;
+      }
+      const auto unit = units_by_id.find(scopes[scope.value()].unit.value());
+      return unit == units_by_id.end() ? nullptr : unit->second;
+    };
+    // The entity of an architecture, or the package of a package body.
+    std::unordered_map<std::uint32_t, const vh::Unit*> primaries;
+    const auto primary_unit = [&](const vh::Unit& owner) -> const vh::Unit* {
+      if (owner.kind != vh::UnitKind::architecture
+          && (owner.kind != vh::UnitKind::package
+              || owner.primary_name.empty())) {
+        return nullptr;
+      }
+      if (const auto known = primaries.find(owner.id.value());
+          known != primaries.end()) {
+        return known->second;
+      }
+      const auto expected_kind = owner.kind == vh::UnitKind::architecture
+          ? vh::UnitKind::entity
+          : vh::UnitKind::package;
+      const auto library = support::canonical_vhdl_spelling(owner.library);
+      const auto primary_name
+          = support::canonical_vhdl_spelling(owner.primary_name);
+      const auto primary = std::ranges::find_if(
+          hir_.units(), [&](const vh::Unit& unit) {
+            return unit.kind == expected_kind
+                && (expected_kind != vh::UnitKind::package
+                    || unit.primary_name.empty())
+                && support::canonical_vhdl_spelling(unit.library) == library
+                && support::canonical_vhdl_spelling(unit.name)
+                    == primary_name;
           });
-      return found == hir_.overload_sets().end() ? nullptr : &*found;
+      const auto* result
+          = primary == hir_.units().end() ? nullptr : &*primary;
+      primaries.emplace(owner.id.value(), result);
+      return result;
     };
     const auto lexical_declaration = [&](const semantic::ScopeId scope,
                                          const std::string_view name)
@@ -1071,43 +1133,26 @@ class VhdlExecutableBuilder final {
         }
         visible_scope = parent_scope(*visible_scope);
       }
-      const auto semantic_scope = std::ranges::find(
-          model_.scopes(), scope, &semantic::Scope::id);
-      const auto owner = semantic_scope == model_.scopes().end()
-          ? hir_.units().end()
-          : std::ranges::find(
-                hir_.units(), semantic_scope->unit, &vh::Unit::id);
-      if (owner != hir_.units().end()
-          && (owner->kind == vh::UnitKind::architecture
-              || (owner->kind == vh::UnitKind::package
-                  && !owner->primary_name.empty()))) {
-        const auto primary = std::ranges::find_if(
-            hir_.units(), [&](const vh::Unit& unit) {
-              const auto expected_kind
-                  = owner->kind == vh::UnitKind::architecture
-                  ? vh::UnitKind::entity
-                  : vh::UnitKind::package;
-              return unit.kind == expected_kind
-                  && (expected_kind != vh::UnitKind::package
-                      || unit.primary_name.empty())
-                  && support::canonical_vhdl_spelling(unit.library)
-                      == support::canonical_vhdl_spelling(owner->library)
-                  && support::canonical_vhdl_spelling(unit.name)
-                      == support::canonical_vhdl_spelling(owner->primary_name);
-            });
-        if (primary != hir_.units().end()) {
-          if (const auto* found = overload_in_scope(primary->scope, name);
-              found != nullptr && found->declarations.size() == 1U) {
-            return found->declarations.front();
-          }
+      const auto* owner = owner_unit(scope);
+      if (const auto* primary
+          = owner != nullptr ? primary_unit(*owner) : nullptr) {
+        if (const auto* found = overload_in_scope(primary->scope, name);
+            found != nullptr && found->declarations.size() == 1U) {
+          return found->declarations.front();
         }
       }
       return std::nullopt;
     };
+    std::unordered_map<std::string, const vh::Unit*> packages;
     const auto package_unit = [&](std::string_view selected)
         -> const vh::Unit* {
       if (selected.ends_with(".all")) {
         selected.remove_suffix(4U);
+      }
+      const auto [known, inserted]
+          = packages.try_emplace(std::string { selected }, nullptr);
+      if (!inserted) {
+        return known->second;
       }
       auto library = std::string_view { "work" };
       auto package = selected;
@@ -1116,19 +1161,30 @@ class VhdlExecutableBuilder final {
         library = selected.substr(0U, separator);
         package = selected.substr(separator + 1U);
       }
+      const auto library_name
+          = support::canonical_vhdl_spelling(std::string { library });
+      const auto package_name
+          = support::canonical_vhdl_spelling(std::string { package });
       const auto found = std::ranges::find_if(
           hir_.units(), [&](const vh::Unit& unit) {
               return unit.kind == vh::UnitKind::package
                   && unit.primary_name.empty()
                   && support::canonical_vhdl_spelling(unit.library)
-                  == support::canonical_vhdl_spelling(std::string { library })
+                      == library_name
                   && support::canonical_vhdl_spelling(unit.name)
-                  == support::canonical_vhdl_spelling(std::string { package });
+                      == package_name;
           });
-      return found == hir_.units().end() ? nullptr : &*found;
+      known->second = found == hir_.units().end() ? nullptr : &*found;
+      return known->second;
     };
+    std::unordered_map<std::string, const vh::Unit*> contexts;
     const auto context_unit = [&](const std::string_view selected)
         -> const vh::Unit* {
+      const auto [known, inserted]
+          = contexts.try_emplace(std::string { selected }, nullptr);
+      if (!inserted) {
+        return known->second;
+      }
       const auto parts = support::split_vhdl_selected_name(selected);
       if (parts.empty()) {
         return nullptr;
@@ -1137,14 +1193,17 @@ class VhdlExecutableBuilder final {
           ? parts[parts.size() - 2U]
           : std::string_view { "work" };
       const auto context = parts.back();
+      const auto library_name
+          = support::canonical_vhdl_spelling(std::string { library });
       const auto found = std::ranges::find_if(
           hir_.units(), [&](const vh::Unit& unit) {
             return unit.kind == vh::UnitKind::context
                 && support::canonical_vhdl_spelling(unit.library)
-                    == support::canonical_vhdl_spelling(std::string { library })
+                    == library_name
                 && vh::unit_name_matches(unit, context);
           });
-      return found == hir_.units().end() ? nullptr : &*found;
+      known->second = found == hir_.units().end() ? nullptr : &*found;
+      return known->second;
     };
     const auto package_from_prefix = [&](const semantic::ScopeId scope,
                                          const std::string_view prefix)
@@ -1158,17 +1217,6 @@ class VhdlExecutableBuilder final {
         }
       }
       return package_unit(prefix);
-    };
-    const auto owner_unit = [&](const semantic::ScopeId scope)
-        -> const vh::Unit* {
-      const auto semantic_scope = std::ranges::find(
-          model_.scopes(), scope, &semantic::Scope::id);
-      if (semantic_scope == model_.scopes().end()) {
-        return nullptr;
-      }
-      const auto unit = std::ranges::find(
-          hir_.units(), semantic_scope->unit, &vh::Unit::id);
-      return unit == hir_.units().end() ? nullptr : &*unit;
     };
     const auto append_package_member = [&](vh::Name& name,
                                            const vh::Unit& package,
@@ -1360,27 +1408,9 @@ class VhdlExecutableBuilder final {
         };
         const auto primary_scope = [&]() -> std::optional<semantic::ScopeId> {
           const auto* unit = owner_unit(scope);
-          if (unit == nullptr
-              || (unit->kind != vh::UnitKind::architecture
-                  && (unit->kind != vh::UnitKind::package
-                      || unit->primary_name.empty()))) {
-            return std::nullopt;
-          }
-          const auto expected_kind = unit->kind == vh::UnitKind::architecture
-              ? vh::UnitKind::entity
-              : vh::UnitKind::package;
-          const auto primary = std::ranges::find_if(
-              hir_.units(), [&](const vh::Unit& candidate) {
-                return candidate.kind == expected_kind
-                    && (expected_kind != vh::UnitKind::package
-                        || candidate.primary_name.empty())
-                    && support::canonical_vhdl_spelling(candidate.library)
-                        == support::canonical_vhdl_spelling(unit->library)
-                    && support::canonical_vhdl_spelling(candidate.name)
-                        == support::canonical_vhdl_spelling(
-                            unit->primary_name);
-              });
-          return primary == hir_.units().end()
+          const auto* primary
+              = unit != nullptr ? primary_unit(*unit) : nullptr;
+          return primary == nullptr
               ? std::nullopt
               : std::optional { primary->scope };
         };
@@ -1509,27 +1539,8 @@ class VhdlExecutableBuilder final {
               }
             };
             append_context(*unit);
-            if (unit->kind == vh::UnitKind::architecture
-                || (unit->kind == vh::UnitKind::package
-                    && !unit->primary_name.empty())) {
-              const auto primary_kind
-                  = unit->kind == vh::UnitKind::architecture
-                  ? vh::UnitKind::entity
-                  : vh::UnitKind::package;
-              const auto primary = std::ranges::find_if(
-                  hir_.units(), [&](const vh::Unit& candidate) {
-                      return candidate.kind == primary_kind
-                          && (primary_kind != vh::UnitKind::package
-                              || candidate.primary_name.empty())
-                          && support::canonical_vhdl_spelling(candidate.library)
-                          == support::canonical_vhdl_spelling(unit->library)
-                          && support::canonical_vhdl_spelling(candidate.name)
-                          == support::canonical_vhdl_spelling(
-                              unit->primary_name);
-                  });
-              if (primary != hir_.units().end()) {
-                append_context(*primary);
-              }
+            if (const auto* primary = primary_unit(*unit)) {
+              append_context(*primary);
             }
           }
         }

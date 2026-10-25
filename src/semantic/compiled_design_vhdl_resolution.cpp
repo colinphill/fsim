@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <map>
 #include <optional>
 #include <span>
@@ -680,9 +681,28 @@ private:
         return Callable { candidate.key, profile, instance };
     }
 
-    /// The visible functions a call or name may denote (12.3, 12.4).
-    [[nodiscard]] std::vector<Callable> functions(
+    /// The visible functions a call or name may denote (12.3, 12.4); they
+    /// depend only on the expression's name and scope, so each expression
+    /// looks them up once per pass.
+    [[nodiscard]] const std::vector<Callable>& functions(
         const vhdl::Expression& record, const bool procedures = false)
+    {
+        const auto key = (static_cast<std::uint64_t>(record.id.value()) << 1U)
+            | (procedures ? 1U : 0U);
+        if (!record.id.valid()) {
+            return uncached_functions_.emplace_back(
+                visible_functions(record, procedures));
+        }
+        if (const auto found = functions_.find(key);
+            found != functions_.end()) {
+            return found->second;
+        }
+        return functions_.emplace(key, visible_functions(record, procedures))
+            .first->second;
+    }
+
+    [[nodiscard]] std::vector<Callable> visible_functions(
+        const vhdl::Expression& record, const bool procedures)
     {
         std::vector<Callable> result;
         if (!record.referenced_name) {
@@ -1964,6 +1984,8 @@ private:
     std::unordered_map<std::string, TypeId> physical_units_;
     std::map<std::uint32_t, CompiledDesignResolver> resolvers_;
     std::unordered_map<std::uint32_t, std::vector<TypeKey>> candidates_;
+    std::unordered_map<std::uint64_t, std::vector<Callable>> functions_;
+    std::deque<std::vector<Callable>> uncached_functions_;
     std::unordered_set<std::uint32_t> visited_;
 };
 
