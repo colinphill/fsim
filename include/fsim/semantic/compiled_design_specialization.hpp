@@ -748,6 +748,13 @@ public:
 
     [[nodiscard]] std::span<const sv::Declaration>
     systemverilog_declarations() const noexcept;
+    /// Whether a replacement SystemVerilog declaration has another name
+    /// than the declaration it replaces; name lookups by the compiled
+    /// design's scope and name index then also scan the replacements.
+    [[nodiscard]] bool renames_systemverilog_declarations() const noexcept
+    {
+        return renames_systemverilog_declarations_;
+    }
     [[nodiscard]] std::span<const vhdl::Declaration>
     vhdl_declarations() const noexcept;
     [[nodiscard]] std::span<const sv::TypeDefinition>
@@ -808,6 +815,7 @@ private:
     std::vector<GenerateInstances> generate_instances_;
     std::vector<InstanceId> selected_generate_instance_ids_;
     std::vector<sv::Declaration> systemverilog_declarations_;
+    bool renames_systemverilog_declarations_ { };
     std::vector<vhdl::Declaration> vhdl_declarations_;
     std::vector<sv::TypeDefinition> systemverilog_types_;
     std::vector<vhdl::TypeDefinition> vhdl_types_;

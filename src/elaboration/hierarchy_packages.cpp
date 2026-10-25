@@ -2772,7 +2772,11 @@ namespace {
                 auto record_domain = frontend::ValueDomain::Unknown;
                 bool valid = true;
                 for (const auto& element : definition.record_elements) {
-                    const auto layout = resolve_subtype(element.subtype);
+                    // The object's element constraints complete an open
+                    // element subtype (IEEE 1076-2008 5.3.3, 6.4.2.3).
+                    const auto layout = resolve_subtype(
+                        semantic::vhdl::constrained_element_subtype(
+                            subtype, element.name, element.subtype));
                     const auto merged = layout
                         ? merge_domain(record_domain, layout->domain)
                         : std::nullopt;
@@ -23256,11 +23260,12 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         || (!declaration.subtype && alias_info == nullptr);
     if ((unsupported_subtype
             || (alias_info == nullptr && !subtype_executable))
-        && declaration.form == Form::signal && alias_info == nullptr
-        && declaration.subtype) {
+        && (declaration.form == Form::signal || declaration.form == Form::port)
+        && alias_info == nullptr && declaration.subtype) {
         // Index bounds that do not fold, such as an element of a constant
         // given by a function, are evaluated when the declaration is
-        // elaborated (IEEE 1076-2008 14.4.2.1).
+        // elaborated (IEEE 1076-2008 14.4.2.1); a top-level port (6.5.6.3) of
+        // such a subtype is elaborated the same way.
         auto evaluated = declaration;
         bool changed { };
         bool complete = true;
@@ -23294,8 +23299,14 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 }.effective_vhdl_subtype(*evaluated.subtype,
                     declaration.scope);
                 effective
-                && std::ranges::any_of(
-                    effective->constraints, residual_bound)) {
+                && (std::ranges::any_of(
+                        effective->constraints, residual_bound)
+                    || std::ranges::any_of(effective->element_constraints,
+                        [&](const semantic::vhdl::ElementConstraint&
+                                element) {
+                            return std::ranges::any_of(
+                                element.constraints, residual_bound);
+                        }))) {
                 evaluated.subtype = std::move(*effective);
             }
         }

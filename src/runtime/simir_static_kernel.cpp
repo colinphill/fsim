@@ -699,6 +699,19 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         slot_wires_[wires_[index].source] = { index, end };
         index = end;
     }
+    // A wired formal starts at its source's initial value (IEEE 1076-2008
+    // 14.7.5.2); wires chain, so repeat until the values settle. This runs
+    // before any activation, so a value deposited on the formal before the
+    // first cycle (a VHPI start-of-simulation callback) is kept.
+    for (std::size_t pass = 0U; pass <= wires_.size(); ++pass) {
+        bool changed = false;
+        for (const auto& wire : wires_) {
+            changed = copy_wire(wire) || changed;
+        }
+        if (!changed) {
+            break;
+        }
+    }
 
     // Level combinational members: writer before reader, cycles last.
     const auto count = members_.size();
@@ -3157,17 +3170,6 @@ void Interpreter::Impl::StaticKernel::publish()
 void Interpreter::Impl::StaticKernel::initialize()
 {
     initialized_ = true;
-    // A wired formal starts at its source's initial value (IEEE 1076-2008
-    // 14.7.5.2); wires chain, so repeat until the values settle.
-    for (std::size_t pass = 0U; pass <= wires_.size(); ++pass) {
-        bool changed = false;
-        for (const auto& wire : wires_) {
-            changed = copy_wire(wire) || changed;
-        }
-        if (!changed) {
-            break;
-        }
-    }
     for (auto& input : inputs_) {
         input.revision = impl_.signal_value_revisions[input.signal];
         input.cached = vhdl_ ? read_signal(input.signal)

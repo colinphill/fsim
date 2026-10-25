@@ -297,6 +297,26 @@ actual signal is a wire to that part (IEEE 1076-2008 6.5.6.3, 14.7.3.3);
 the static kernel drives such a formal in the update phase that changes
 its source, so it has the part's value in the same cycle.
 
+The part 3 sweep (`b96p1` against `b96w1`) gained issue620 and lost nvc
+issue1505 (ivtest pow_reg_signed timed out under load and passes alone).
+issue1505 deposits on such a formal from a VHPI start-of-simulation
+callback; the initial resolution then replaced the deposit with the
+source's value. A value deposited before the first cycle now survives
+initialization until a source changes, as it does on a driven signal, and
+the kernel settles wired formals when it is built rather than at its first
+activation.
+
+nvc issue810 (fixed in a worktree):
+
+- a generic constant's actual subtype that has no type identity takes the
+  formal's type (6.5.6.2), and `obj(i)'left` walks an element step (8.4);
+- integer literal arithmetic folds when only composite user operators such
+  as FIXED_PKG's `"*"` are visible: a type the compiler owns without a
+  retained definition counts as composite (5.3.2, 9.2.1);
+- record signals take their element constraints into the layout (5.3.3),
+  and a residual bound in an element constraint, also on a top-level port,
+  is evaluated at elaboration (14.4.2.1).
+
 ### Batch 96 part 2: sweep losses fixed, catalog entries
 
 The part 1 sweep with the frozen binary `b96z`, against `b95c` (VHDL) and

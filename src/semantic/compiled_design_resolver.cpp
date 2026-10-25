@@ -342,16 +342,21 @@ void visit_systemverilog_declarations_in_scope(
     }
 }
 
-// Declarations named `name` in one scope; a specialization never renames a
-// declaration it replaces (SpecializedHirUnit::replace).
+// Declarations named `name` in one scope. The design's index is by compiled
+// name, so a specialization that renames a declaration it replaces is
+// scanned instead.
 template <typename Visitor>
 void visit_systemverilog_declarations_named_in_scope(
     const CompiledDesign& design,
     const SpecializedHirUnit* const effective, const ScopeId scope,
     const std::string_view name, Visitor&& visitor)
 {
-    if (const auto indexed
-        = design.systemverilog_declarations_named_in_scope(scope, name)) {
+    const auto indexed
+        = effective == nullptr
+            || !effective->renames_systemverilog_declarations()
+        ? design.systemverilog_declarations_named_in_scope(scope, name)
+        : std::nullopt;
+    if (indexed) {
         for (const auto id : *indexed) {
             const auto declaration = find_declaration(
                 design, effective, id);
@@ -4575,10 +4580,19 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         }
         // `obj'element.e'left`: the selected element's range (IEEE
         // 1076-2008 16.2.3, 8.3) under the object's element constraints.
+        // An indexed name `obj(i)'left` denotes an element of the array
+        // object in the same way (IEEE 1076-2008 8.4).
         const auto selection_steps = [&](ExpressionId id) {
             std::vector<std::string> steps;
             for (std::size_t depth { }; depth < 16U; ++depth) {
                 const auto selected = find_expression(*design_, effective_, id);
+                if (selected && selected->vhdl != nullptr
+                    && selected->vhdl->kind == vhdl::ExpressionKind::index
+                    && selected->vhdl->operands.size() >= 2U) {
+                    steps.insert(steps.begin(), "'element");
+                    id = selected->vhdl->operands.front();
+                    continue;
+                }
                 if (!selected || selected->vhdl == nullptr
                     || selected->vhdl->kind != vhdl::ExpressionKind::call
                     || selected->vhdl->operands.size() != 1U
@@ -4785,6 +4799,15 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         if (actual_shape_is_authoritative) {
             if (auto actual_subtype = bound_type(
                     *declaration_id, active, true)) {
+                // A generic constant's actual has the formal's type (IEEE
+                // 1076-2008 6.5.6.2), so an actual subtype that names its
+                // mark without an identity denotes the formal's type.
+                if (!actual_subtype->type_mark.target.valid()
+                    && source_subtype
+                    && source_subtype->type_mark.target.valid()) {
+                    actual_subtype->type_mark.target
+                        = source_subtype->type_mark.target;
+                }
                 source_subtype = std::move(actual_subtype);
             }
         }

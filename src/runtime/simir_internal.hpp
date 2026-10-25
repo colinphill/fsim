@@ -2041,6 +2041,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     mutable std::vector<SignalId> pending_vhdl_resolutions;
     mutable std::unordered_set<SignalId> pending_vhdl_resolution_set;
     bool running_vhdl_resolvers { };
+    // Signals given a value before the first cycle (a VHPI start-of-
+    // simulation deposit); initialization keeps that value, as it does for
+    // a driven signal, until a source of the signal changes.
+    std::unordered_set<SignalId> vhdl_deposited_before_start;
     std::vector<DriverTable> driver_values;
     // Certified disjoint owners use this as their raw-driver authority.
     // Their DriverRecord values are restored on cold demotion.

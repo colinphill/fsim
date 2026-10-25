@@ -5502,7 +5502,18 @@ private:
             const auto root = base_type(subtype, scope);
             const auto type = root ? unit_.find_type(*root) : std::nullopt;
             if (!type || type->vhdl == nullptr) {
-                return false;
+                // An array type the compiler owns, such as NUMERIC_STD's
+                // SIGNED or FIXED_PKG's SFIXED, has no retained definition
+                // but is open or indexed (IEEE 1076-2008 5.3.2).
+                const auto effective
+                    = resolver.effective_vhdl_subtype(subtype, scope);
+                return effective && !effective->type_mark.target.valid()
+                    && (effective->unconstrained
+                        || std::ranges::any_of(effective->constraints,
+                            [](const vhdl::RangeConstraint& range) {
+                                return range.kind
+                                    == vhdl::RangeKind::array_index;
+                            }));
             }
             const auto form = type->vhdl->form;
             return form == vhdl::TypeForm::array
@@ -18994,6 +19005,8 @@ SpecializedHirUnit SpecializedHirUnit::with_overlay(
                                  detail::VhdlInitializerMemoContext> { }
     };
     result.systemverilog_declarations_ = systemverilog_declarations_;
+    result.renames_systemverilog_declarations_
+        = renames_systemverilog_declarations_;
     result.vhdl_declarations_ = vhdl_declarations_;
     result.systemverilog_types_ = systemverilog_types_;
     result.vhdl_types_ = vhdl_types_;
@@ -19084,15 +19097,19 @@ bool SpecializedHirUnit::replace(sv::Declaration replacement)
         return false;
     }
     const auto original = design_->find_declaration(replacement.id);
-    // The resolver finds declarations by their compiled scope and name.
     if (!original || !valid_scoped_replacement(*design_,
             replacement_units_, replacement, original->systemverilog,
-            design_->semantics.declarations())
-        || replacement.name != original->systemverilog->name) {
+            design_->semantics.declarations())) {
         return false;
     }
-    return insert_replacement(
-        systemverilog_declarations_, std::move(replacement));
+    const bool renamed = replacement.name != original->systemverilog->name;
+    if (!insert_replacement(
+            systemverilog_declarations_, std::move(replacement))) {
+        return false;
+    }
+    renames_systemverilog_declarations_
+        = renames_systemverilog_declarations_ || renamed;
+    return true;
 }
 
 bool SpecializedHirUnit::replace(vhdl::Declaration replacement)

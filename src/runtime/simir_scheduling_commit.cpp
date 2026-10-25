@@ -1923,11 +1923,17 @@ void Interpreter::Impl::initialize_vhdl_resolutions()
         }
     }
     for (const auto& [signal_id, resolver] : vhdl_resolvers) {
+        if (vhdl_deposited_before_start.contains(signal_id)) {
+            vhdl_resolved_values.insert_or_assign(
+                signal_id, logical_signal_value(signal_id));
+            continue;
+        }
         publish(signal_id, run_vhdl_resolver(signal_id));
         if (!resolver.sources.empty()) {
             converted.push_back(signal_id);
         }
     }
+    vhdl_deposited_before_start.clear();
     // A conversion may read another converted signal (nested port
     // associations); repeat them until the chain's initial values settle.
     for (std::size_t pass { }; pass < converted.size(); ++pass) {

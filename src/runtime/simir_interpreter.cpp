@@ -3585,6 +3585,9 @@ void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
 {
     impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     impl_->invalidate_fused_static_cohorts();
+    if (!impl_->started) {
+        impl_->vhdl_deposited_before_start.insert(signal);
+    }
     // A net joined by bidirectional switches takes its value from the whole
     // network, so a deposit there persists as an external driver that the
     // network resolves through to every endpoint (IEEE 1800-2017 38.34).
