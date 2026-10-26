@@ -434,7 +434,7 @@ void verify_revision_environments(const std::filesystem::path& directory)
              Expected { "2000", 16, 36, 30, 14 },
              Expected { "2002", 16, 36, 30, 14 },
              Expected { "2008", 20, 45, 32, 17 },
-             Expected { "2019", 20, 45, 34, 17 } }) {
+             Expected { "2019", 21, 45, 35, 17 } }) {
         const auto source = directory / ("environment-" + std::string { expected.year } + ".vhd");
         const auto unit_name = "environment_" + std::string { expected.year };
         {
@@ -495,6 +495,14 @@ void verify_revision_environments(const std::filesystem::path& directory)
             == std::vector<std::string> { "std", "work" }));
         assert((environment.implicit_packages
             == std::vector<std::string> { "std.standard.all" }));
+        if (environment.declarations.size() != expected.declarations
+            || environment.operator_profiles.size() != expected.operators) {
+            std::cerr << "VHDL-" << expected.year << " declarations: observed "
+                      << environment.declarations.size() << ", expected "
+                      << expected.declarations << "; operators: observed "
+                      << environment.operator_profiles.size() << ", expected "
+                      << expected.operators << '\n';
+        }
         assert(environment.declarations.size() == expected.declarations);
         assert(environment.operator_profiles.size() == expected.operators);
         if (environment.attributes.size() != expected.attributes) {

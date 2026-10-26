@@ -145,7 +145,7 @@ fsim_require_schema_tokens(include/fsim/library/artifact.hpp
 fsim_require_schema_tokens(include/fsim/artifact/design.hpp
   "kDesignFormatVersion = 14")
 fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
-  "kRuntimeStateSchema = 85"
+  "kRuntimeStateSchema = 90"
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 5"
   "kCompiledHirBundleSchema = 3"
@@ -158,4 +158,4 @@ fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
 
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 message(STATUS
-  "v3 schema freeze passed: domains=6 owner-rows=268 manifest=3 object=9/16/3 design=14/85 checkpoint=2/1/2 cache=v169 digest=${FSIM_LEDGER_DIGEST}")
+  "v3 schema freeze passed: domains=6 owner-rows=268 manifest=3 object=9/16/3 design=14/90 checkpoint=2/1/2 cache=v169 digest=${FSIM_LEDGER_DIGEST}")

@@ -316,6 +316,14 @@ struct SystemCInstanceDescription {
     // aggregate descriptions produced by existing plug-in bridges.
     std::vector<std::pair<std::string, std::string>>
         construction_identity_values;
+    // A native child that stands for an HDL design unit (SystemC source
+    // instantiating SystemVerilog or VHDL): the unit, spelled like a
+    // project top, and its integer parameter or generic actuals.
+    struct HdlChild {
+        std::string unit;
+        std::vector<std::pair<std::string, std::int64_t>> actuals;
+    };
+    std::optional<HdlChild> hdl;
 };
 
 struct SystemCConstructionParameter {

@@ -129,6 +129,16 @@ architecture rtl of procedure_top is
     destination := temporary + 1;
     accumulator := accumulator + destination;
   end procedure;
+  -- The box default of boxed_leaf names the SELECTED directly visible at
+  -- its generic association list (IEEE 1076-2019 6.5.6.2).
+  procedure selected(
+    source : in integer;
+    variable destination : out integer;
+    variable accumulator : inout integer) is
+  begin
+    destination := source + 2;
+    accumulator := accumulator + destination;
+  end procedure;
   signal direct_input : integer;
   signal direct_output : integer;
   signal direct_total : integer;

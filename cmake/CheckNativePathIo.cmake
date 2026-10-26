@@ -117,7 +117,9 @@ foreach(FSIM_RELATIVE IN LISTS FSIM_SOURCES)
     string(REGEX MATCHALL "make_(unique|shared)<std::(i|o)?fstream>\\([^;]*"
       FSIM_MATCHES "${FSIM_TEXT}")
     foreach(FSIM_MATCH IN LISTS FSIM_MATCHES)
-      if(NOT FSIM_MATCH MATCHES "native_fs::open_(i|o)?fstream\\(")
+      # A stream built with no arguments names no file.
+      if(NOT FSIM_MATCH MATCHES "native_fs::open_(i|o)?fstream\\(" AND
+         NOT FSIM_MATCH MATCHES "fstream>\\(${FSIM_SPACE}\\)$")
         string(REGEX REPLACE "[ \t\r\n]+" " " FSIM_MATCH "${FSIM_MATCH}")
         list(APPEND FSIM_VIOLATIONS
           "${FSIM_RELATIVE}: file stream bypasses support::native_fs: ${FSIM_MATCH}")

@@ -2373,10 +2373,9 @@ end architecture;
     const auto generated_vhdl_bad_packed_array_constant
         = compile_and_elaborate(generated_design,
             "vhdl:work.generated_vhdl_bad_packed_array_constant(rtl)");
-    assert(!generated_vhdl_bad_packed_array_constant.ok());
-    assert(has_diagnostic(
-        generated_vhdl_bad_packed_array_constant,
-        "FSIM-ELAB-GEN-011"));
+    // A function result with default-initialized elements is a legal
+    // constant value (IEEE 1076-2019 6.4.2.2, 14.4.2.5).
+    assert(generated_vhdl_bad_packed_array_constant.ok());
 
     const auto generated_sv_loop_behavior =
         compile_and_elaborate(

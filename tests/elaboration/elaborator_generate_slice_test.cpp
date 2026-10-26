@@ -451,8 +451,13 @@ endmodule
               && std::ranges::any_of(
                   process.operations,
                   [](const auto& operation) {
+                    // A method whose target is statically known lowers to
+                    // a direct SimIR call (class function lowering).
                     return fsim::runtime::simir::operation_holds<
-                        fsim::runtime::simir::ClassMethodCall>(operation);
+                               fsim::runtime::simir::ClassMethodCall>(
+                               operation)
+                        || fsim::runtime::simir::operation_holds<
+                            fsim::runtime::simir::Call>(operation);
                   });
         }));
 }

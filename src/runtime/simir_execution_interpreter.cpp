@@ -11,12 +11,15 @@
 #include "simir_internal.hpp"
 #include "simir_signal_attributes.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <numeric>
+#include <stdexcept>
+#include <string_view>
 
 #include <boost/multiprecision/cpp_int.hpp>
 
@@ -359,6 +362,17 @@ void Interpreter::Impl::execute_compact_startup_write(
 void Interpreter::Impl::note_interpreted_execute(const ProcessId id)
 {
     ++interpreted_executes;
+    // FSIM_V4_STRICT=1: a v4 run must never interpret a process (the
+    // kernel's members, hosted steps and process executors are native).
+    static const bool strict = [] {
+        const char* text = std::getenv("FSIM_V4_STRICT");
+        return text != nullptr && std::string_view { text } == "1";
+    }();
+    if (strict && static_kernel) {
+        throw std::runtime_error { "FSIM_V4_STRICT: process '"
+            + std::string { get_process(id).program().name() }
+            + "' ran on the reference interpreter in a v4 run" };
+    }
     static const bool profile = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
     if (profile) {
         ++interpreted_programs[id];
@@ -482,6 +496,11 @@ void Interpreter::Impl::execute(ProcessId id)
     if (run_hosted_tier(process)) {
         return;
     }
+    // A finished process has nothing left to interpret (a wake queued
+    // before it halted reaches it after).
+    if (process.halted) {
+        return;
+    }
     note_interpreted_execute(id);
     while (!process.halted) {
         if (process.pc >= process.program().operations().size()) {
@@ -499,7 +518,62 @@ void Interpreter::Impl::execute(ProcessId id)
             = std::as_const(process.program().operations())[instruction];
         const bool boundary = fsim::runtime::simir::visit_operation(
             [&](const auto& op) {
-                return execute_operation(process, instruction, op);
+                if (operation_budget) {
+                    if (*operation_budget == 0U) {
+                        fail(process,
+                            "the evaluation exceeded its operation budget");
+                    }
+                    --*operation_budget;
+                }
+                const bool boundary
+                    = execute_operation(process, instruction, op);
+                if constexpr (requires { RegisterId { op.destination }; }) {
+                    if (operation_budget && !boundary && process.frame
+                        && op.destination
+                            < process.frame->registers.size()) {
+                        // A bounded evaluation (elaboration-time folding)
+                        // also pays for the words an operation produces, so
+                        // a loop over huge values exhausts it as surely as
+                        // a long one. An insert into its own target updates
+                        // the inserted part in place.
+                        auto produced = op.destination;
+                        if constexpr (requires {
+                                          RegisterId { op.target };
+                                          RegisterId { op.source };
+                                      }) {
+                            if (op.target == op.destination
+                                && op.source
+                                    < process.frame->registers.size()) {
+                                produced = op.source;
+                            }
+                        }
+                        auto work = static_cast<std::uint64_t>(
+                            process.frame->registers[produced].width())
+                            / 64U;
+                        if constexpr (std::is_same_v<
+                                          std::decay_t<decltype(op)>,
+                                          Binary>) {
+                            // An operator over values wider than a word
+                            // visits each bit, at about the cost of eight
+                            // copied words.
+                            const auto& registers = process.frame->registers;
+                            const auto width = std::max(
+                                op.lhs < registers.size()
+                                    ? registers[op.lhs].width()
+                                    : std::size_t { },
+                                op.rhs < registers.size()
+                                    ? registers[op.rhs].width()
+                                    : std::size_t { });
+                            if (width > 64U) {
+                                work = std::max(work,
+                                    static_cast<std::uint64_t>(width) * 8U);
+                            }
+                        }
+                        *operation_budget
+                            -= std::min(*operation_budget, work);
+                    }
+                }
+                return boundary;
             },
             operation);
         if (boundary && !continue_after_boundary(process, operation, instruction)) {

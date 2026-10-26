@@ -14,7 +14,7 @@ Exclusions never count as closures.
 | verilator | 63 | 296 |
 | ivtest | 7 | 301 |
 | vests | 2 | 0 |
-| nvc | 221 | 0 |
+| nvc | 223 | 0 |
 | vhdl-compliance | 7 | 0 |
 
 ## sv-tests
@@ -719,6 +719,7 @@ Exclusions never count as closures.
 | `attr16` | not run | applies scalar bound attributes to A'RANGE; RANGE denotes a range, not a scalar type or subtype (IEEE 1076-2008 16.2.2/16.2.3) |
 | `attr21` | not run | names a character literal as an attribute prefix, which IEEE 1076-2008 8.1 added; the test runs as VHDL-2002 |
 | `binary8` | not run | uses ~& and ~\| as binary operators |
+| `case11` | not run | a case? statement with overlapping matching choices ("111" and "1--"); for a STD_ULOGIC matching case it is an error if the predefined ?= of two distinct choices gives '1' (IEEE 1076-2019 10.9) |
 | `cmdline1` | not run | nvc-specific test kind shell |
 | `cmdline11` | not run | nvc-specific test kind shell |
 | `cmdline12` | not run | nvc-specific test kind shell |
@@ -832,6 +833,7 @@ Exclusions never count as closures.
 | `issue677` | not run | uses UNAFFECTED in a sequential signal assignment, which needs VHDL-2008 (IEEE 1076-2008 10.5.2.1); the test runs as VHDL-1993 |
 | `issue703` | not run | nvc-specific test kind wave |
 | `issue704` | not run | nvc-specific test kind wave |
+| `issue705` | not run | selects with overlapping matching choices ("111" and "1--"); for a STD_ULOGIC matching selection it is an error if the predefined ?= of two distinct choices gives '1' (IEEE 1076-2019 10.9, 11.6) |
 | `issue715` | not run | nvc-specific test kind shell |
 | `issue752` | not run | nvc-specific test kind shell |
 | `issue769` | not run | nvc-specific test kind shell |

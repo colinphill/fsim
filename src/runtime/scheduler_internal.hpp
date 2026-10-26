@@ -1181,6 +1181,54 @@ namespace scheduler_detail {
                 current_insertions[index].complete();
         }
 
+        [[nodiscard]] bool has_order_at_most(
+            const StableOrder limit, const StableOrder excluded) const noexcept
+        {
+            const auto counts = [&](const StableOrder order) {
+                return order <= limit && order != excluded;
+            };
+            const auto entry_ahead = [&](const Entry& entry) {
+                if (entry.is_cancelled())
+                    return false;
+                if (entry.is_batch_ticket()) {
+                    const auto* ticket
+                        = std::get<BatchTicketEntry>(entry.task).ticket;
+                    const auto first_member = ticket == dispatching_ticket
+                        ? ticket->cursor + dispatching_ticket_count
+                        : ticket->cursor;
+                    for (auto member = first_member; member < ticket->count
+                         && ticket->member_order(member) <= limit;
+                         ++member) {
+                        if (counts(ticket->member_order(member)))
+                            return true;
+                    }
+                    return false;
+                }
+                if (entry.is_ordered_systemverilog_ticket()) {
+                    const auto* ticket
+                        = std::get_if<OrderedSystemVerilogTicketEntry>(
+                            &entry.task);
+                    const auto& members = ticket->storage->members;
+                    for (auto member = ticket->storage->cursor;
+                         member < members.size()
+                         && members[member].order <= limit;
+                         ++member) {
+                        if (counts(members[member].order))
+                            return true;
+                    }
+                    return false;
+                }
+                return counts(entry.order);
+            };
+            // The bulk queue stays sorted by each entry's next key.
+            for (auto index = cursor; index < entries.size()
+                 && entries[index].order <= limit; ++index) {
+                if (entry_ahead(entries[index]))
+                    return true;
+            }
+            return std::ranges::any_of(current_insertions, entry_ahead);
+        }
+
         [[nodiscard]] std::vector<StableOrder> pending_orders() const
         {
             std::vector<StableOrder> result;

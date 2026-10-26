@@ -828,8 +828,10 @@ end architecture;
         ambiguous.design,
         "vhdl:work.numeric_bit_subtype_ambiguous_import_negative(rtl)");
     assert(!rejected_ambiguous.ok());
+    // UNSIGNED from both numeric packages is not directly visible (IEEE
+    // 1076-2019 12.4).
     assert(has_diagnostic(
-        rejected_ambiguous, "FSIM-ELAB-VHSUBTYPE-003"));
+        rejected_ambiguous, "FSIM-ELAB-VHTYPE-006"));
 }
 
 } // namespace fsim::tests::elaboration

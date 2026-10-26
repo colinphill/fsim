@@ -442,9 +442,12 @@ struct RuntimePathViews {
 class SystemCProcessExecutor final
     : public runtime::simir::ProcessExecutor {
 public:
+    // `boundary_inputs`: the process's elaborated static sensitivity, which
+    // a wait for boundary input or native activity waits on.
     SystemCProcessExecutor(
         std::shared_ptr<systemc::HierarchyRegistry> hierarchy,
-        const std::uint64_t process);
+        const std::uint64_t process,
+        std::vector<runtime::simir::Sensitivity> boundary_inputs);
 
     [[nodiscard]] runtime::simir::ProcessResumeResult resume(
         runtime::simir::ProcessExecutionContext& context,
@@ -453,6 +456,7 @@ public:
 private:
     std::shared_ptr<systemc::HierarchyRegistry> hierarchy_;
     std::uint64_t process_ { };
+    std::vector<runtime::simir::Sensitivity> boundary_inputs_;
 };
 
 struct DebugCodeCoverageObservation {

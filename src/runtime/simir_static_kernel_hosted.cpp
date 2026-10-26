@@ -31,6 +31,8 @@
 #include "fsim/runtime/scheduler.hpp"
 
 #include <algorithm>
+#include <functional>
+#include <iostream>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -50,6 +52,11 @@ void sort_hosted(std::vector<Ready>& ready)
 }
 
 } // namespace
+
+bool Interpreter::Impl::static_kernel_host(const ProcessId id) const noexcept
+{
+    return static_kernel && static_kernel->is_host(id);
+}
 
 void Interpreter::Impl::static_kernel_enqueue_hosted(const ProcessId id,
     const StaticKernelHostedWake wake, const SimulationTick time,
@@ -370,6 +377,20 @@ void Interpreter::Impl::StaticKernel::discard_hosted()
     hosted_timers_ = decltype(hosted_timers_) { };
     armed_hosted_timer_.reset();
     hosted_inactive_deferred_ = false;
+    // The native threads' pending resumptions are discarded with the host's
+    // events: after $finish or $stop only the final blocks run (IEEE
+    // 1800-2023 9.2.3), and a round left to resume behind host work has
+    // no host work left to follow.
+    for (auto* threads : { &ready_threads_, &batch_threads_,
+             &inactive_threads_ }) {
+        for (const auto thread : *threads) {
+            threads_[thread].queued = false;
+        }
+        threads->clear();
+    }
+    batch_hosted_.clear();
+    host_batch_resume_.reset();
+    batch_resume_queued_ = false;
     nonblocking_deferred_ = false;
     nonblocking_region_ = false;
     in_host_nonblocking_region_ = false;
@@ -452,9 +473,246 @@ bool Interpreter::Impl::StaticKernel::run_hosted_active()
                 ready.end());
             break;
         }
+        if (host_batch_ahead(ready[position].order)) {
+            // run_merged_active resumes the rest after the host's tasks.
+            batch_hosted_.assign(
+                ready.begin() + static_cast<std::ptrdiff_t>(position),
+                ready.end());
+            host_batch_resume_ = ready[position].order;
+            break;
+        }
         run_hosted(ready[position]);
     }
     return true;
+}
+
+bool Interpreter::Impl::StaticKernel::hosted_systemverilog(
+    const ProcessId process) const
+{
+    return impl_.processes.scheduling_domain(process)
+        == ProcessSchedulingDomain::systemverilog;
+}
+
+bool Interpreter::Impl::StaticKernel::hosted_systemverilog_pending() const
+{
+    return mixed_ && !in_host_nonblocking_region_ && !hosted_inactive_task_
+        && std::ranges::any_of(hosted_active_, [&](const HostedReady& ready) {
+               return hosted_systemverilog(ready.process);
+           });
+}
+
+bool Interpreter::Impl::StaticKernel::run_hosted_active_domain(
+    const bool systemverilog)
+{
+    // A mixed kernel runs its hosted processes by domain: SystemVerilog ones
+    // in the delta's SystemVerilog Active region, VHDL ones in its round.
+    if (!mixed_) {
+        return run_hosted_active();
+    }
+    if (hosted_active_.empty() || in_host_nonblocking_region_
+        || hosted_inactive_task_) {
+        return false;
+    }
+    std::vector<HostedReady> ready;
+    std::size_t kept = 0U;
+    for (std::size_t index = 0U; index < hosted_active_.size(); ++index) {
+        if (hosted_systemverilog(hosted_active_[index].process) == systemverilog) {
+            ready.push_back(hosted_active_[index]);
+        } else {
+            hosted_active_[kept++] = hosted_active_[index];
+        }
+    }
+    hosted_active_.resize(kept);
+    if (ready.empty()) {
+        return false;
+    }
+    sort_hosted(ready);
+    for (std::size_t position = 0U; position < ready.size(); ++position) {
+        if (impl_.scheduler.stop_requested()) {
+            // $stop or $finish: the rest is kept for a resumed run.
+            hosted_active_.insert(hosted_active_.end(),
+                ready.begin() + static_cast<std::ptrdiff_t>(position),
+                ready.end());
+            break;
+        }
+        run_hosted(ready[position]);
+    }
+    return true;
+}
+
+bool Interpreter::Impl::StaticKernel::yield_to_host_active()
+{
+    // The reference runs an Active region as batches in stable order: what
+    // its processes queue while one batch runs (the rest of that batch, a
+    // zero-delay update maturing) runs before the processes the batch woke,
+    // which wait for the next one (IEEE 1800-2023 4.5, 4.7). After an
+    // iteration that ran hosted processes, host Active work left pending
+    // runs first; the kernel resumes after it in the same region.
+    if (in_host_nonblocking_region_ || hosted_inactive_task_
+        || impl_.scheduler.current_phase() != SchedulerPhase::active
+        || !impl_.scheduler.systemverilog_active_region_pending()) {
+        return false;
+    }
+    host_active_yield_ = true;
+    return true;
+}
+
+bool Interpreter::Impl::StaticKernel::host_batch_ahead(
+    const StableOrder order) const
+{
+    // The host runs an Active batch in stable order, first-queued first
+    // among equal orders (IEEE 1800-2023 4.7): its tasks left in the batch
+    // ahead of the kernel's next process run before it.
+    // The kernel's own activations (at its host process's order) are not
+    // host work: an earlier one finds nothing left to do.
+    if (mixed_ || vhdl_ || in_host_nonblocking_region_
+        || hosted_inactive_task_) {
+        return false;
+    }
+    return impl_.scheduler.systemverilog_running_active_ahead(
+        order, host_process_);
+}
+
+void Interpreter::Impl::StaticKernel::queue_batch_resume(
+    const StableOrder order)
+{
+    // One resumption at a time: an activation that finds the round's rest
+    // still behind host work leaves it to the queued one.
+    if (batch_resume_queued_) {
+        return;
+    }
+    batch_resume_queued_ = true;
+    struct BatchResumeTask {
+        Interpreter::Impl* owner { };
+    };
+    const auto task = fsim::runtime::detail::make_scheduler_task_descriptor<
+        BatchResumeTask,
+        +[](Scheduler&, const BatchResumeTask& scheduled) {
+            if (auto& kernel = scheduled.owner->static_kernel) {
+                kernel->batch_resume_queued_ = false;
+                if (kernel->activate()) {
+                    scheduled.owner->queue_next_delta(kernel->host_process_);
+                }
+            }
+        }>(BatchResumeTask { &impl_ });
+    impl_.scheduler.schedule_internal_systemverilog_running_active(
+        order, task);
+}
+
+StableOrder Interpreter::Impl::StaticKernel::host_resume_order() const
+{
+    if (mixed_ || vhdl_) {
+        return host_process_;
+    }
+    std::optional<StableOrder> order;
+    const auto consider = [&](const StableOrder candidate) {
+        if (!order || candidate < *order) {
+            order = candidate;
+        }
+    };
+    for (const auto& ready : hosted_active_) {
+        consider(ready.order);
+    }
+    for (const auto thread : ready_threads_) {
+        consider(threads_[thread].order);
+    }
+    return order.value_or(host_process_);
+}
+
+void Interpreter::Impl::StaticKernel::requeue_host_active()
+{
+    // The kernel's Active work resumes in the host's batch at the stable
+    // order of its first process, so the host tasks queued before it
+    // (zero-delay updates maturing, processes woken earlier) keep their
+    // place ahead of or behind it.
+    impl_.queue_active_current_at(host_process_, host_resume_order());
+}
+
+void Interpreter::Impl::StaticKernel::run_merged_active()
+{
+    // The reference scheduler runs a round's Active processes in their
+    // stable order (S18). A hosted process reads the host's copy of the
+    // kernel's outputs, so the blocking writes made before it are published
+    // first, and its own blocking writes are events for the native processes
+    // after it (IEEE 1800-2023 4.7, 9.4.2). What the round wakes runs in the
+    // next one.
+    // A round stopped for host tasks ahead of it in the running batch
+    // resumes first; what it woke waits for the next round.
+    std::vector<HostedReady> hosted;
+    std::vector<std::uint32_t> threads;
+    if (!batch_hosted_.empty() || !batch_threads_.empty()) {
+        hosted = std::move(batch_hosted_);
+        batch_hosted_.clear();
+        threads = std::move(batch_threads_);
+        batch_threads_.clear();
+    } else if (mixed_) {
+        // A mixed kernel's hosted VHDL processes wait for its round.
+        std::size_t kept = 0U;
+        for (std::size_t index = 0U; index < hosted_active_.size(); ++index) {
+            if (hosted_systemverilog(hosted_active_[index].process)) {
+                hosted.push_back(hosted_active_[index]);
+            } else {
+                hosted_active_[kept++] = hosted_active_[index];
+            }
+        }
+        hosted_active_.resize(kept);
+        threads = std::move(ready_threads_);
+        ready_threads_.clear();
+    } else {
+        hosted = std::move(hosted_active_);
+        hosted_active_.clear();
+        threads = std::move(ready_threads_);
+        ready_threads_.clear();
+    }
+    sort_hosted(hosted);
+    const auto thread_order = [&](const std::uint32_t thread) {
+        return StableOrder { threads_[thread].order };
+    };
+    std::ranges::stable_sort(threads, std::less { }, thread_order);
+    std::size_t next_hosted = 0U;
+    std::size_t next_thread = 0U;
+    while (next_hosted < hosted.size() || next_thread < threads.size()) {
+        if (impl_.scheduler.stop_requested() || stopped_) {
+            // $stop or $finish: the rest is kept for a resumed run, ahead of
+            // what this round woke.
+            hosted_active_.insert(hosted_active_.end(),
+                hosted.begin() + static_cast<std::ptrdiff_t>(next_hosted),
+                hosted.end());
+            ready_threads_.insert(ready_threads_.begin(),
+                threads.begin() + static_cast<std::ptrdiff_t>(next_thread),
+                threads.end());
+            return;
+        }
+        const bool take_hosted = next_thread == threads.size()
+            || (next_hosted < hosted.size()
+                && hosted[next_hosted].order
+                    <= thread_order(threads[next_thread]));
+        const auto order = take_hosted ? hosted[next_hosted].order
+                                       : thread_order(threads[next_thread]);
+        if (host_batch_ahead(order)) {
+            batch_hosted_.assign(
+                hosted.begin() + static_cast<std::ptrdiff_t>(next_hosted),
+                hosted.end());
+            batch_threads_.assign(
+                threads.begin() + static_cast<std::ptrdiff_t>(next_thread),
+                threads.end());
+            host_batch_resume_ = order;
+            return;
+        }
+        if (take_hosted) {
+            if (!output_queue_.empty()) {
+                publish(true);
+            }
+            run_hosted(hosted[next_hosted++]);
+            (void)scan_inputs(false);
+            continue;
+        }
+        const auto index = threads[next_thread++];
+        threads_[index].queued = false;
+        if (threads_[index].alive) {
+            run_thread(index);
+        }
+    }
 }
 
 bool Interpreter::Impl::StaticKernel::run_hosted_inactive()
@@ -525,6 +783,11 @@ void Interpreter::Impl::StaticKernel::run_hosted(const HostedReady& ready)
     auto& state = impl_.get_process(ready.process);
     if (ready.timer && state.timer_epoch != ready.epoch) {
         return;
+    }
+    if (trace_) {
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
+                  << " hosted " << impl_.processes.program_view(ready.process).name()
+                  << '\n';
     }
     // What the host scheduler's task for this wake does before it executes the
     // process (queue_next_delta, queue_at).
@@ -619,9 +882,7 @@ void Interpreter::Impl::StaticKernel::hosted_timer_due(
     if (armed_hosted_timer_ && *armed_hosted_timer_ == time) {
         armed_hosted_timer_.reset();
     }
-    // The kernel runs as its host process; due timers are collected when it
-    // activates.
-    impl_.queue_active_current(host_process_);
+    activate_for_due_timer();
 }
 
 void Interpreter::Impl::StaticKernel::finish_hosted()
@@ -633,11 +894,11 @@ void Interpreter::Impl::StaticKernel::finish_hosted()
     if (!hosted_next_delta_.empty()) {
         yield_requested_ = true;
     }
-    if (!hosted_active_.empty() && !yielding) {
+    if (!hosted_active_.empty() && !yielding && !vhdl_round_deferred_) {
         // Woken by this activation's publication, left behind by $stop or
         // $finish, or held back in a host Inactive or NBA task: the host's
         // Active region runs it (before the NBA region, 4.4).
-        impl_.queue_active_current(host_process_);
+        requeue_host_active();
     }
     if (!hosted_inactive_.empty() && !hosted_inactive_deferred_) {
         defer_hosted_inactive();

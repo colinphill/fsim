@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "change_mismatch_report.hpp"
 #include "fsim/app/application.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -1877,6 +1878,8 @@ end architecture;
         assert(actual->result.status == reference.result.status);
         assert(actual->result.time == reference.result.time);
         assert(actual->result.delta == reference.result.delta);
+        fsim::test::report_change_mismatch(
+            "verify_boundary_delays", reference.changes, actual->changes);
         assert(actual->changes == reference.changes);
         assert(actual->outputs == reference.outputs);
         assert(actual->final_values == reference.final_values);

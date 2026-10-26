@@ -76,6 +76,17 @@ void skip_length_framed_bytes(
     offset += static_cast<std::size_t>(count) * element_width;
 }
 
+// Runtime state writes strings through its string table: 0 introduces a
+// new length-framed string, n refers to string n - 1.
+void skip_table_string(const std::string_view bytes, std::size_t& offset)
+{
+    const auto reference = read_little_endian(
+        bytes, offset, sizeof(std::uint64_t));
+    if (reference == 0U) {
+        skip_length_framed_bytes(bytes, offset);
+    }
+}
+
 std::size_t runtime_roots_count_offset(const std::string_view bytes)
 {
     constexpr std::string_view magic = "FSIMRUN1";
@@ -90,9 +101,9 @@ std::size_t runtime_roots_count_offset(const std::string_view bytes)
     const auto path_mode = read_little_endian(
         bytes, offset, sizeof(std::uint8_t));
     assert(path_mode == 0U);
-    skip_length_framed_bytes(bytes, offset); // Inline path table.
+    skip_table_string(bytes, offset); // Inline path table.
     skip_length_framed_bytes(bytes, offset, sizeof(std::uint32_t));
-    skip_length_framed_bytes(bytes, offset); // Top path placeholder.
+    skip_table_string(bytes, offset); // Top path placeholder.
     const auto roots_count_offset = offset;
     const auto roots_count = read_little_endian(
         bytes, offset, sizeof(std::uint64_t));
@@ -343,6 +354,29 @@ void compare(const Capture& reference, const Capture& candidate)
     assert(reference.forced_result == candidate.forced_result);
     assert(reference.released_result == candidate.released_result);
     assert(reference.reports == candidate.reports);
+    if (reference.changes != candidate.changes) {
+        // Say where the engines diverged before the assert below fires.
+        std::size_t first = 0U;
+        while (first < reference.changes.size()
+            && first < candidate.changes.size()
+            && reference.changes[first] == candidate.changes[first]) {
+            ++first;
+        }
+        std::cerr << "specify: changes differ at " << first << '\n';
+        const auto last = first + 6U;
+        for (auto index = first > 2U ? first - 2U : 0U; index < last;
+             ++index) {
+            const auto describe = [index](const auto& changes) {
+                if (index >= changes.size())
+                    return std::string { "-" };
+                const auto& [signal, value, time] = changes[index];
+                return std::to_string(signal) + '=' + value + " @"
+                    + std::to_string(time);
+            };
+            std::cerr << "  [" << index << "] " << describe(reference.changes)
+                      << " | " << describe(candidate.changes) << '\n';
+        }
+    }
     assert(reference.changes == candidate.changes);
     assert(reference.vcd == candidate.vcd);
     assert(reference.path_identities == candidate.path_identities);

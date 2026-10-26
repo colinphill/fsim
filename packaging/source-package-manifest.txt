@@ -1440,6 +1440,7 @@ tests/app/assertion_application_controls_coverage.cpp
 tests/app/assertion_application_support.hpp
 tests/app/assertion_application_test.cpp
 tests/app/call_safe_point_application_test.cpp
+tests/app/change_mismatch_report.hpp
 tests/app/cli_diagnostic_color_test.cpp
 tests/app/code_coverage_application_test.cpp
 tests/app/code_coverage_control_test.cpp
@@ -2069,6 +2070,7 @@ tests/fixtures/compliance/vhdl_package_bitvector_scope_20261013.vhd
 tests/fixtures/compliance/vhdl_package_instances_and_blocks.vhd
 tests/fixtures/compliance/vhdl_package_shared_variables.vhd
 tests/fixtures/compliance/vhdl_package_signals.vhd
+tests/fixtures/compliance/vhdl_port_conversion_slice.vhd
 tests/fixtures/compliance/vhdl_port_element_resolved.vhd
 tests/fixtures/compliance/vhdl_port_element_wiring.vhd
 tests/fixtures/compliance/vhdl_predefined_min_max_to_string.vhd

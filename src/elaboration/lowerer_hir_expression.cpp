@@ -2694,7 +2694,15 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
     }
     const auto value = lower_hir_expression(
         *attribute->value, attribute->value_width);
-    if (!value || register_width(*value) != attribute->value_width) {
+    // A BOOLEAN loop parameter is held in its integer loop counter, which
+    // is the position (IEEE 1076-2008 10.10).
+    const bool loop_counter = value
+        && hir_vhdl_boolean_loop_parameter(*attribute->value)
+        && register_domain(*value) == frontend::ValueDomain::Integer
+        && (register_width(*value) == 32U || register_width(*value) == 64U);
+    if (!value
+        || (register_width(*value) != attribute->value_width
+            && !loop_counter)) {
         return std::nullopt;
     }
     const auto value_domain = hir_expression_domain(
@@ -2707,8 +2715,9 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
         ordinal_source = convert_to_two_state(ordinal_source);
     }
     const auto ordinal_source_width = register_width(ordinal_source);
-    const auto integer_storage = value_domain
-            == std::optional { frontend::ValueDomain::Integer }
+    const auto integer_storage = (loop_counter
+            || value_domain
+                == std::optional { frontend::ValueDomain::Integer })
         && (ordinal_source_width == 32U || ordinal_source_width == 64U);
     auto ordinal = integer_storage
         ? ordinal_source
@@ -3004,6 +3013,32 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
     generated_processes_.push_back(std::move(driver));
     record_implicit_signal_dependency(derived);
     return derived;
+}
+
+
+const semantic::vhdl::Expression*
+Lowerer::hir_vhdl_indexed_scalar_signal_attribute(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return nullptr;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::index
+        || expression->vhdl->operands.empty()) {
+        return nullptr;
+    }
+    const auto prefix = specialized_hir_unit_->find_expression(
+        expression->vhdl->operands.front());
+    if (!prefix || prefix->vhdl == nullptr
+        || prefix->vhdl->kind != semantic::vhdl::ExpressionKind::call
+        || (prefix->vhdl->text != "'stable" && prefix->vhdl->text != "'quiet"
+            && prefix->vhdl->text != "'transaction")) {
+        return nullptr;
+    }
+    return prefix->vhdl;
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
@@ -13327,26 +13362,9 @@ std::optional<SignalId> Lowerer::hir_vhdl_external_signal(
     // An unconstrained array subtype (no static width, so no profile) takes
     // the shape of the object denoted.
     const bool unprofiled = !profile.starts_with(profile_prefix);
-    const bool declared_unconstrained = [&] {
-        if (external.operands.size() != 2U) {
-            return false;
-        }
-        const auto subtype_expression = specialized_hir_unit_->find_expression(
-            external.operands.back());
-        constexpr auto subtype_prefix = std::string_view { "@vhdl-subtype:" };
-        if (!subtype_expression || subtype_expression->vhdl == nullptr
-            || !subtype_expression->vhdl->text.starts_with(subtype_prefix)) {
-            return false;
-        }
-        semantic::vhdl::SubtypeIndication declared;
-        declared.type_mark.spelling
-            = subtype_expression->vhdl->text.substr(subtype_prefix.size());
-        const auto effective = hir_effective_vhdl_subtype(declared);
-        return effective && effective->unconstrained;
-    }();
     if ((!valid_profile && !unprofiled)
         || !found_signal
-        || (declared_width != 0U && !unprofiled && !declared_unconstrained
+        || (declared_width != 0U && !unprofiled
             && (design_.signal_info_[*found_signal].width != declared_width
                 || design_.signal_info_[*found_signal].source_domain
                     != profile_domain))) {
@@ -16902,6 +16920,18 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                   resize_register(destination, expected_width, false)
               }
             : std::optional { destination };
+    } else if (const auto indexed_attribute
+        = hir_vhdl_indexed_scalar_signal_attribute(expression_id)) {
+        // S'STABLE, S'QUIET and S'TRANSACTION are scalar signals, so a
+        // parenthesized suffix after them is an index, not an argument
+        // (IEEE 1076-2019 16.2.4): the attribute is misused.
+        report(
+            std::string { *vhdl_signal_attribute_diagnostic_code(
+                indexed_attribute->text) },
+            "VHDL signal attribute '" + indexed_attribute->text
+                + "' has an invalid signal prefix or argument",
+            hir_source_span(indexed_attribute->source));
+        return std::nullopt;
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
@@ -21951,7 +21981,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 if ((target_record || operand_record)
                     && target_root != operand_root) {
                     conversion_compatible = false;
-                    record_conversion = target_record && operand_record;
+                    // Record types are closely related from IEEE 1076-2019
+                    // 9.3.6; 1076-2008 9.3.6 relates only numeric and
+                    // array types.
+                    record_conversion = target_record && operand_record
+                        && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019;
                 }
                 if ((target_enumeration || operand_enumeration)
                     && target_root != operand_root) {

@@ -5715,6 +5715,13 @@ Lowerer::hir_vhdl_loop_parameter_enumeration(
         && (range.text == "'range" || range.text == "'reverse_range")) {
         const auto prefix = range.operands.front();
         auto subtype = hir_vhdl_type_actual(prefix);
+        // A discrete type mark as the loop range (`for d in T loop`, kept
+        // as `T'range`) iterates T itself (IEEE 1076-2008 10.10).
+        if (range.operands.size() == 1U) {
+            if (const auto enumeration = enumeration_of(subtype)) {
+                return enumeration;
+            }
+        }
         if (!subtype) {
             subtype = hir_vhdl_expression_subtype(prefix);
         }
@@ -22868,6 +22875,28 @@ Lowerer::hir_vhdl_conversion_profile(
         && composite_definition != nullptr
         && composite_definition->form == semantic::vhdl::TypeForm::array
         && !std::string_view { source.text }.starts_with(qualified_prefix)) {
+        // Only an array operand supplies the index range; a scalar operand
+        // is not closely related and leaves the target indefinite (IEEE
+        // 1076-2019 9.3.6).
+        const auto operand_subtype
+            = hir_vhdl_expression_subtype(source.operands.front());
+        const auto* operand_base = operand_subtype
+                && operand_subtype->type_mark.target.valid()
+            ? semantic::vhdl_base_type_definition(
+                  *specialized_hir_unit_, operand_subtype->type_mark.target)
+            : nullptr;
+        const auto operand_scalar = operand_base != nullptr
+            ? operand_base->form != semantic::vhdl::TypeForm::array
+            : operand_subtype && operand_subtype->constraints.empty()
+                && hir_resolver()
+                        .resolve_vhdl_type_identity(
+                            operand_subtype->type_mark.spelling,
+                            source.scope)
+                        .standard_scalar_type
+                    != semantic::CompiledVhdlStandardScalarIdentity::none;
+        if (operand_scalar) {
+            return std::nullopt;
+        }
         width = hir_expression_width(source.operands.front(), source.scope);
         // A qualified positional aggregate of an unconstrained array type,
         // `t'(1, 2)`, has one element per association (9.3.3.3).
@@ -23208,6 +23237,19 @@ Lowerer::hir_vhdl_standard_function_profile(
         };
     }
     if (numeric_to_integer) {
+        // The standard TO_INTEGER and CONV_INTEGER take their packages' own
+        // vector types; an actual of a user type that merely shares a type
+        // name matches none of them (IEEE 1076-2019 12.5).
+        if (const auto operand_subtype
+            = hir_vhdl_expression_subtype(source.operands.front());
+            operand_subtype && operand_subtype->type_mark.resolved()) {
+            const auto* base = semantic::vhdl_base_type_definition(
+                *specialized_hir_unit_, operand_subtype->type_mark.target);
+            if (base != nullptr && base->declaration.valid()
+                && !standard_declaration(base->declaration)) {
+                return std::nullopt;
+            }
+        }
         return HirVhdlStandardFunctionProfile {
             HirVhdlStandardFunctionKind::numeric_to_integer,
             name,

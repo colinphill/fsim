@@ -433,7 +433,8 @@ void Interpreter::Impl::stage_update_slice(
     const SignalId signal_id,
     PackedLogic4 value,
     const std::size_t offset,
-    const SignalUpdateDomain domain)
+    const SignalUpdateDomain domain,
+    const std::optional<StableOrder> order)
 {
     if (domain != SignalUpdateDomain::generic) {
         (void)get_signal(signal_id);
@@ -452,7 +453,7 @@ void Interpreter::Impl::stage_update_slice(
         value = coerce_value_kind(
             std::move(value), get_signal(signal_id).value_kind);
         schedule_systemverilog_update(
-            process, signal_id, std::move(value), offset, domain);
+            process, signal_id, std::move(value), offset, domain, 0, order);
         return;
     }
     stage_update_slice(

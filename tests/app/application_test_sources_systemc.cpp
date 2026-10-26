@@ -994,6 +994,254 @@ SC_MODULE(AccelleraThreads) {
 
 )";
   output << R"(
+// SystemC instances of HDL units (fsim::systemc::hdl_module). The unit
+// index selects the HDL child so one wrapper shape serves every language.
+inline const char* hdl_child_unit(const int unit) {
+  switch (unit) {
+  case 0: return "sv:work.systemc_hdl_inverter";
+  // \x29 is ')': the source is written from a raw string literal.
+  case 1: return "vhdl:work.systemc_hdl_inverter_vhdl(rtl\x29";
+  case 2: return "sv:work.systemc_hdl_sc_inverter";
+  case 3: return "sv:work.systemc_hdl_param_inverter";
+  case 4: return "vhdl:work.systemc_hdl_generic_inverter(rtl\x29";
+  case 5: return "vhdl:work.systemc_hdl_sc_inverter_vhdl(rtl\x29";
+  default: return "sv:work.systemc_no_such_unit";
+  }
+}
+
+struct HdlInverterInstance : fsim::systemc::hdl_module {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+
+  HdlInverterInstance(sc_core::sc_module_name name, const int unit)
+      : fsim::systemc::hdl_module{name, hdl_child_unit(unit)} {
+    // The parameterized units pass their input through unless told to
+    // invert.
+    if (unit == 3) {
+      set_actual("INVERT", 1);
+    } else if (unit == 4) {
+      set_actual("invert", 1);
+    }
+  }
+};
+
+// SystemC processes move the value through SystemC channels to the HDL
+// child and back.
+struct HdlChildWrapperBase : sc_core::sc_module {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  sc_core::sc_signal<sc_dt::sc_logic> request{
+      "request", sc_dt::sc_logic{'0'}};
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> response{
+      "response", sc_dt::sc_logic{'X'}};
+  HdlInverterInstance inner;
+
+  HdlChildWrapperBase(sc_core::sc_module_name name, const int unit)
+      : sc_core::sc_module{name}, inner{"inner", unit} {
+    inner.value(request);
+    inner.inverted(response);
+    SC_METHOD(forward);
+    sensitive << value;
+    dont_initialize();
+    SC_METHOD(backward);
+    sensitive << response;
+    dont_initialize();
+  }
+
+  void forward() { request.write(value.read()); }
+  void backward() { inverted.write(response.read()); }
+};
+
+template <int Unit>
+struct HdlChildWrapper : HdlChildWrapperBase {
+  explicit HdlChildWrapper(sc_core::sc_module_name name)
+      : HdlChildWrapperBase{name, Unit} {}
+};
+
+// The HDL child's ports bind the wrapper's own ports.
+template <int Unit>
+struct HdlPassthroughWrapper : sc_core::sc_module {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  HdlInverterInstance inner;
+
+  explicit HdlPassthroughWrapper(sc_core::sc_module_name name)
+      : sc_core::sc_module{name}, inner{"inner", Unit} {
+    inner.value(value);
+    inner.inverted(inverted);
+  }
+};
+
+// HDL under a native SystemC child.
+template <int Unit>
+struct HdlNestedWrapper : sc_core::sc_module {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  sc_core::sc_signal<sc_dt::sc_logic> value_channel{
+      "value_channel", sc_dt::sc_logic{'0'}};
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS>
+      inverted_channel{"inverted_channel", sc_dt::sc_logic{'X'}};
+  HdlChildWrapper<Unit> middle;
+
+  explicit HdlNestedWrapper(sc_core::sc_module_name name)
+      : sc_core::sc_module{name}, middle{"middle"} {
+    value(value_channel);
+    inverted(inverted_channel);
+    middle.value(value_channel);
+    middle.inverted(inverted_channel);
+  }
+};
+
+// Two HDL children in series (SystemVerilog then VHDL): two inversions.
+struct HdlTwinWrapper : sc_core::sc_module {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  sc_core::sc_signal<sc_dt::sc_logic> first_input{
+      "first_input", sc_dt::sc_logic{'0'}};
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> middle{
+      "middle", sc_dt::sc_logic{'X'}};
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> second_output{
+      "second_output", sc_dt::sc_logic{'X'}};
+  HdlInverterInstance first;
+  HdlInverterInstance second;
+
+  explicit HdlTwinWrapper(sc_core::sc_module_name name)
+      : sc_core::sc_module{name}, first{"first", 0}, second{"second", 1} {
+    value(first_input);
+    inverted(second_output);
+    first.value(first_input);
+    first.inverted(middle);
+    second.value(middle);
+    second.inverted(second_output);
+  }
+};
+
+// A SystemC top whose thread drives an HDL child.
+template <int Unit>
+struct HdlChildTop : sc_core::sc_module {
+  sc_core::sc_signal<sc_dt::sc_logic> request{
+      "request", sc_dt::sc_logic{'0'}};
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> response{
+      "response", sc_dt::sc_logic{'X'}};
+  sc_core::sc_signal<sc_dt::sc_logic> observed{
+      "observed", sc_dt::sc_logic{'X'}};
+  HdlInverterInstance inner;
+
+  explicit HdlChildTop(sc_core::sc_module_name name)
+      : sc_core::sc_module{name}, inner{"inner", Unit} {
+    inner.value(request);
+    inner.inverted(response);
+    SC_THREAD(stimulus);
+    SC_METHOD(observe);
+    sensitive << response;
+    dont_initialize();
+  }
+
+  void stimulus() {
+    sc_core::wait(sc_core::sc_time{1, sc_core::SC_NS});
+    request.write(sc_dt::sc_logic{'1'});
+  }
+
+  void observe() { observed.write(response.read()); }
+};
+
+// A SystemC top over a native SystemC child that holds the HDL child.
+template <int Unit>
+struct HdlChildNestedTop : sc_core::sc_module {
+  sc_core::sc_signal<sc_dt::sc_logic> request{
+      "request", sc_dt::sc_logic{'0'}};
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> observed{
+      "observed", sc_dt::sc_logic{'X'}};
+  HdlChildWrapper<Unit> middle;
+
+  explicit HdlChildNestedTop(sc_core::sc_module_name name)
+      : sc_core::sc_module{name}, middle{"middle"} {
+    middle.value(request);
+    middle.inverted(observed);
+    SC_THREAD(stimulus);
+  }
+
+  void stimulus() {
+    sc_core::wait(sc_core::sc_time{1, sc_core::SC_NS});
+    request.write(sc_dt::sc_logic{'1'});
+  }
+};
+
+// Invalid HDL instances, one per elaboration rule.
+struct HdlInstanceWithSignal : HdlInverterInstance {
+  sc_core::sc_signal<sc_dt::sc_logic> own{"own", sc_dt::sc_logic{'0'}};
+  explicit HdlInstanceWithSignal(sc_core::sc_module_name name)
+      : HdlInverterInstance{name, 0} {}
+};
+
+struct HdlInstanceUnknownActual : fsim::systemc::hdl_module {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  explicit HdlInstanceUnknownActual(sc_core::sc_module_name name)
+      : fsim::systemc::hdl_module{name, hdl_child_unit(0)} {
+    set_actual("NO_SUCH_PARAMETER", 1);
+  }
+};
+
+struct HdlInstanceUnknownPort : fsim::systemc::hdl_module {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> other{"other"};
+  explicit HdlInstanceUnknownPort(sc_core::sc_module_name name)
+      : fsim::systemc::hdl_module{name, hdl_child_unit(0)} {}
+};
+
+struct HdlInstanceWrongDirection : fsim::systemc::hdl_module {
+  sc_core::sc_out<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  explicit HdlInstanceWrongDirection(sc_core::sc_module_name name)
+      : fsim::systemc::hdl_module{name, hdl_child_unit(0)} {}
+};
+
+template <typename Instance>
+struct HdlInvalidWrapper : sc_core::sc_module {
+  sc_core::sc_in<sc_dt::sc_logic> value{"value"};
+  sc_core::sc_out<sc_dt::sc_logic> inverted{"inverted"};
+  sc_core::sc_signal<sc_dt::sc_logic> first{"first", sc_dt::sc_logic{'0'}};
+  sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> second{
+      "second", sc_dt::sc_logic{'X'}};
+  Instance inner;
+
+  explicit HdlInvalidWrapper(sc_core::sc_module_name name)
+      : sc_core::sc_module{name}, inner{"inner"} {
+    value(first);
+    inverted(second);
+    bind(inner);
+  }
+
+  void bind(HdlInverterInstance& instance) {
+    instance.value(first);
+    instance.inverted(second);
+  }
+  void bind(HdlInstanceUnknownActual& instance) {
+    instance.value(first);
+    instance.inverted(second);
+  }
+  void bind(HdlInstanceUnknownPort& instance) {
+    instance.value(first);
+    instance.other(second);
+  }
+  void bind(HdlInstanceWrongDirection& instance) {
+    instance.value(first);
+    instance.inverted(second);
+  }
+};
+
+// An HDL instance port left unbound.
+struct HdlUnboundWrapper : sc_core::sc_module {
+  sc_core::sc_signal<sc_dt::sc_logic> first{"first", sc_dt::sc_logic{'0'}};
+  HdlInverterInstance inner;
+
+  explicit HdlUnboundWrapper(sc_core::sc_module_name name)
+      : sc_core::sc_module{name}, inner{"inner", 0} {
+    inner.value(first);
+  }
+};
+
 extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
     const fsim_sc_host_v1* host,
     fsim_sc_registrar_v1* registrar) {
@@ -1195,6 +1443,50 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
   if (delayed_failure_status != FSIM_SC_OK) {
     return delayed_failure_status;
   }
+  const auto register_hdl = [&]<typename Module>(const char* name) {
+    return fsim::systemc::register_module_factory<Module>(
+        host, registrar, name);
+  };
+  for (const auto status : {
+           register_hdl.operator()<HdlChildWrapper<0>>("hdl_child_sv"),
+           register_hdl.operator()<HdlChildWrapper<1>>("hdl_child_vhdl"),
+           register_hdl.operator()<HdlChildWrapper<2>>("hdl_child_sv_sc"),
+           register_hdl.operator()<HdlChildWrapper<3>>("hdl_child_sv_param"),
+           register_hdl.operator()<HdlChildWrapper<4>>(
+               "hdl_child_vhdl_generic"),
+           register_hdl.operator()<HdlChildWrapper<99>>("hdl_child_missing"),
+           register_hdl.operator()<HdlPassthroughWrapper<0>>(
+               "hdl_passthrough_sv"),
+           register_hdl.operator()<HdlPassthroughWrapper<1>>(
+               "hdl_passthrough_vhdl"),
+           register_hdl.operator()<HdlChildWrapper<5>>("hdl_child_vhdl_sc"),
+           register_hdl.operator()<HdlNestedWrapper<0>>("hdl_nested"),
+           register_hdl.operator()<HdlNestedWrapper<1>>("hdl_nested_vhdl"),
+           register_hdl.operator()<HdlTwinWrapper>("hdl_twin"),
+           register_hdl.operator()<HdlChildTop<0>>("hdl_top_sv"),
+           register_hdl.operator()<HdlChildTop<1>>("hdl_top_vhdl"),
+           register_hdl.operator()<HdlChildTop<2>>("hdl_top_sv_sc"),
+           register_hdl.operator()<HdlChildTop<5>>("hdl_top_vhdl_sc"),
+           register_hdl.operator()<HdlChildNestedTop<0>>("hdl_top_nested"),
+           register_hdl.operator()<HdlChildNestedTop<1>>(
+               "hdl_top_nested_vhdl"),
+           register_hdl.operator()<HdlInvalidWrapper<HdlInstanceWithSignal>>(
+               "hdl_invalid_signal"),
+           register_hdl.operator()<
+               HdlInvalidWrapper<HdlInstanceUnknownActual>>(
+               "hdl_invalid_actual"),
+           register_hdl.operator()<
+               HdlInvalidWrapper<HdlInstanceUnknownPort>>(
+               "hdl_invalid_port"),
+           register_hdl.operator()<
+               HdlInvalidWrapper<HdlInstanceWrongDirection>>(
+               "hdl_invalid_direction"),
+           register_hdl.operator()<HdlUnboundWrapper>("hdl_unbound"),
+       }) {
+    if (status != FSIM_SC_OK) {
+      return status;
+    }
+  }
   return fsim::systemc::register_module_factory<NamedObjectMatrix>(
       host, registrar, "named_object_matrix");
 }
@@ -1262,6 +1554,37 @@ module systemc_bound_port_host;
   logic value;
   logic inverted;
   bound_ports_placeholder u_bound(
+      .value(value),
+      .inverted(inverted));
+  initial begin
+    value = 1'b0;
+    #1 value = 1'b1;
+    #1 $finish;
+  end
+endmodule
+
+module systemc_hdl_inverter(input logic value, output logic inverted);
+  assign inverted = ~value;
+endmodule
+
+module systemc_hdl_param_inverter #(parameter int INVERT = 0)
+    (input logic value, output logic inverted);
+  assign inverted = INVERT != 0 ? ~value : value;
+endmodule
+
+// SystemVerilog under SystemC that instantiates SystemC again.
+module systemc_hdl_sc_inverter(input logic value, output logic inverted);
+  bridge_placeholder #(
+      .CHILD_INVERT(1)
+  ) u_bridge(
+      .value(value),
+      .inverted(inverted));
+endmodule
+
+module systemc_hdl_child_host;
+  logic value;
+  logic inverted;
+  hdl_child_wrapper_placeholder u_wrapper(
       .value(value),
       .inverted(inverted));
   initial begin
@@ -1408,6 +1731,78 @@ systemc_method_vhdl_source =
 {
   std::ofstream output(systemc_method_vhdl_source);
   output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity systemc_hdl_inverter_vhdl is
+  port (
+    value : in std_logic;
+    inverted : out std_logic);
+end entity systemc_hdl_inverter_vhdl;
+
+architecture rtl of systemc_hdl_inverter_vhdl is
+begin
+  inverted <= not value;
+end architecture rtl;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity systemc_hdl_generic_inverter is
+  generic (invert : integer := 0);
+  port (
+    value : in std_logic;
+    inverted : out std_logic);
+end entity systemc_hdl_generic_inverter;
+
+architecture rtl of systemc_hdl_generic_inverter is
+begin
+  inverted <= not value when invert /= 0 else value;
+end architecture rtl;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+-- VHDL under SystemC that instantiates SystemC again.
+entity systemc_hdl_sc_inverter_vhdl is
+  port (
+    value : in std_logic;
+    inverted : out std_logic);
+end entity systemc_hdl_sc_inverter_vhdl;
+
+architecture rtl of systemc_hdl_sc_inverter_vhdl is
+  component bridge_placeholder is
+    generic (child_invert : boolean);
+    port (
+      value : in std_logic;
+      inverted : out std_logic);
+  end component bridge_placeholder;
+begin
+  u_bridge: bridge_placeholder
+    generic map (child_invert => true)
+    port map (value => value, inverted => inverted);
+end architecture rtl;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity systemc_hdl_child_vhdl_host is
+end entity systemc_hdl_child_vhdl_host;
+
+architecture rtl of systemc_hdl_child_vhdl_host is
+  signal value : std_logic := '0';
+  signal inverted : std_logic;
+  component hdl_child_vhdl_wrapper_placeholder is
+    port (
+      value : in std_logic;
+      inverted : out std_logic);
+  end component hdl_child_vhdl_wrapper_placeholder;
+begin
+  value <= '1' after 1 ns;
+  u_wrapper: hdl_child_vhdl_wrapper_placeholder
+    port map (value => value, inverted => inverted);
+end architecture rtl;
+
 library ieee;
 use ieee.std_logic_1164.all;
 

@@ -252,6 +252,9 @@ const std::vector<std::string> internal_paths {
 
 int main()
 {
+    // FSIM-CONFORMANCE CF-COMMON-LLVM-001 source=SRC-LLVM expectation=execute
+    // FSIM-CONFORMANCE CF-COMMON-CACHE-001 source=SRC-LLVM expectation=execute
+    // FSIM-CONFORMANCE CF-COMMON-LLVM-N01 source=SRC-LLVM expectation=reject
     const auto root = std::filesystem::temp_directory_path()
         / ("fsim-static-kernel-test-"
             + std::to_string(std::chrono::steady_clock::now()

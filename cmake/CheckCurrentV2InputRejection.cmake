@@ -66,9 +66,9 @@ foreach(FSIM_ROW IN LISTS FSIM_ROWS)
      OR FSIM_ID IN_LIST FSIM_IDS OR FSIM_V2 STREQUAL ""
      OR FSIM_V3 STREQUAL "" OR FSIM_OWNER STREQUAL ""
      OR NOT FSIM_FAMILY MATCHES
-       "^(manifest|object|design|checkpoint|cache|plugin)$"
+       "^(manifest|object|design|checkpoint|plugin)$"
      OR NOT FSIM_CONTAINMENT MATCHES
-       "^(exact-diagnostic-no-config|header-first-exact-diagnostic|header-first-no-unit|metadata-first-exact-diagnostic|header-first-no-state|namespace-miss-no-fallback|abi-error-no-metadata)$")
+       "^(exact-diagnostic-no-config|header-first-exact-diagnostic|header-first-no-unit|metadata-first-exact-diagnostic|header-first-no-state|abi-error-no-metadata)$")
     message(FATAL_ERROR "invalid v2-input identity/containment: ${FSIM_ID}")
   endif()
   fsim_current_evidence_file("${FSIM_PATH}")
@@ -79,12 +79,7 @@ foreach(FSIM_ROW IN LISTS FSIM_ROWS)
   if(NOT FSIM_TEST IN_LIST FSIM_REGISTERED_TESTS)
     message(FATAL_ERROR "v2-input owner is unregistered: ${FSIM_ID}")
   endif()
-  if(FSIM_FAMILY STREQUAL "cache")
-    # The per-process JIT native cache schema was removed in the engine-v4
-    # migration; its V3REJECT-CACHE inventory row must be dropped too.
-    message(FATAL_ERROR
-      "native cache row ${FSIM_ID} is obsolete: the per-process JIT cache was removed")
-  elseif(NOT FSIM_EVIDENCE_${FSIM_ID} STREQUAL FSIM_PATH)
+  if(NOT FSIM_EVIDENCE_${FSIM_ID} STREQUAL FSIM_PATH)
     message(FATAL_ERROR "v2-input evidence/owner path differs: ${FSIM_ID}")
   endif()
   list(APPEND FSIM_IDS "${FSIM_ID}")
@@ -100,7 +95,7 @@ foreach(FSIM_ID IN LISTS FSIM_REQUIRED_IDS)
     message(FATAL_ERROR "required v2-input rejection ID is missing: ${FSIM_ID}")
   endif()
 endforeach()
-foreach(FSIM_FAMILY IN ITEMS manifest object design checkpoint cache plugin)
+foreach(FSIM_FAMILY IN ITEMS manifest object design checkpoint plugin)
   if(NOT FSIM_FAMILY IN_LIST FSIM_FAMILIES)
     message(FATAL_ERROR "v2-input rejection family has no owner: ${FSIM_FAMILY}")
   endif()

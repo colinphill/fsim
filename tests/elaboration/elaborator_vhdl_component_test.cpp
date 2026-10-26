@@ -635,6 +635,25 @@ architecture rtl of nonvalue_component_top is
   begin
     value := value * 2;
   end procedure;
+  -- A box default names the subprogram of its designator directly visible
+  -- at the generic association list (IEEE 1076-2019 6.5.6.2): the
+  -- component's for configured_child, the entity's for omitted_child.
+  function component_function(value : integer) return integer is
+  begin
+    return value + 1;
+  end function;
+  procedure component_procedure(variable value : inout integer) is
+  begin
+    value := value * 2;
+  end procedure;
+  function entity_function(value : integer) return integer is
+  begin
+    return value + 1;
+  end function;
+  procedure entity_procedure(variable value : inout integer) is
+  begin
+    value := value * 2;
+  end procedure;
   package helper_instance is new work.nonvalue_component_template
     generic map (seed => 3);
   signal input_value : integer;

@@ -461,10 +461,23 @@ end architecture;
 )",
         frontend::Language::Vhdl2008);
     assert(unresolved_bound.ok());
+    // A local's bounds may depend on a parameter; they are evaluated when
+    // the call elaborates the declaration (IEEE 1076-2019 14.6).
     const auto unresolved_bound_result = compile_and_elaborate(
         unresolved_bound.design,
         "vhdl:work.unresolved_formal_bound(rtl)");
-    assert(!unresolved_bound_result.ok());
+    assert(unresolved_bound_result.ok());
+    auto unresolved_bound_interpreter
+        = unresolved_bound_result.design->create_interpreter();
+    assert(unresolved_bound_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto unresolved_bound_value
+        = unresolved_bound_result.design->find_signal("result");
+    assert(unresolved_bound_value);
+    const auto unresolved_bound_integer
+        = unresolved_bound_interpreter->signal_value(*unresolved_bound_value)
+              .known_signed_value();
+    assert(unresolved_bound_integer && *unresolved_bound_integer == 1);
 
     const auto mixed_parent = frontend::parse_text(
         "mixed_vhdl_callable_profile.sv",

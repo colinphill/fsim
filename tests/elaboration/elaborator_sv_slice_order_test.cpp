@@ -203,7 +203,9 @@ endmodule
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVSLICE-002"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVSLICE-003"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVORDER-001"));
-  assert(has_diagnostic(rejected, "FSIM-ELAB-SVORDER-006"));
+  // sort() with an expression of the element is legal (IEEE 1800-2023
+  // 7.12.2).
+  assert(!has_diagnostic(rejected, "FSIM-ELAB-SVORDER-006"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVORDER-008"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVPORT-009"));
 }

@@ -119,7 +119,9 @@ void test_generic_crossings_and_end_of_slot()
         });
     });
     static_cast<void>(scheduler.run());
-    require(events == "abBcdef", "foreign postponed observations remain per-cycle");
+    // Postponed work of every cycle runs once, after the slot's last delta
+    // (IEEE 1800-2023 4.4.2.9, IEEE 1076-2019 14.7.5.3), in stable order.
+    require(events == "acebfdB", "foreign postponed observations wait for the end of the slot");
 }
 
 struct RuntimeSlotQuietState {

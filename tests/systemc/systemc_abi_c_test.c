@@ -35,7 +35,7 @@ FSIM_SC_OFFSET(fsim_sc_value_view_v1, width, 8u);
 FSIM_SC_OFFSET(fsim_sc_value_view_v1, data, 16u);
 FSIM_SC_OFFSET(fsim_sc_value_view_v1, data_size, 24u);
 
-FSIM_SC_LAYOUT(fsim_sc_host_v1, 152u, 8u);
+FSIM_SC_LAYOUT(fsim_sc_host_v1, 168u, 8u);
 FSIM_SC_OFFSET(fsim_sc_host_v1, abi_version, 0u);
 FSIM_SC_OFFSET(fsim_sc_host_v1, struct_size, 4u);
 FSIM_SC_OFFSET(fsim_sc_host_v1, context, 8u);
@@ -56,6 +56,8 @@ FSIM_SC_OFFSET(fsim_sc_host_v1, set_export_writable, 120u);
 FSIM_SC_OFFSET(fsim_sc_host_v1, wait_for_input_or_native_activity, 128u);
 FSIM_SC_OFFSET(fsim_sc_host_v1, current_time_femtoseconds, 136u);
 FSIM_SC_OFFSET(fsim_sc_host_v1, scv_compatibility_identity, 144u);
+FSIM_SC_OFFSET(fsim_sc_host_v1, mark_hdl_module, 152u);
+FSIM_SC_OFFSET(fsim_sc_host_v1, set_hdl_module_actual, 160u);
 
 FSIM_SC_LAYOUT(fsim_sc_registrar_v1, 32u, 8u);
 FSIM_SC_OFFSET(fsim_sc_registrar_v1, abi_version, 0u);

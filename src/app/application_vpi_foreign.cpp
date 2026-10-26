@@ -7,6 +7,7 @@
 #include "fsim/platform/dynamic_library.hpp"
 #include "fsim/runtime/vpi_bridge.h"
 #include "fsim/runtime/vpi_system.hpp"
+#include "fsim/support/native_filesystem.hpp"
 
 #include "sv_vpi_user.h"
 
@@ -176,17 +177,17 @@ struct ModuleSpec {
     }
     spec.path = std::filesystem::path { std::string { text } };
     std::error_code error;
-    if (!std::filesystem::exists(spec.path, error)) {
+    if (!support::native_fs::exists(spec.path, error)) {
         for (const auto* extension : { ".vpi", ".so" }) {
             auto candidate = spec.path;
             candidate += extension;
-            if (std::filesystem::exists(candidate, error)) {
+            if (support::native_fs::exists(candidate, error)) {
                 spec.path = std::move(candidate);
                 break;
             }
         }
     }
-    if (std::filesystem::exists(spec.path, error)) {
+    if (support::native_fs::exists(spec.path, error)) {
         spec.path = std::filesystem::absolute(spec.path, error);
     }
     return spec;

@@ -177,9 +177,7 @@ fsim_require_native_producer_order("${FSIM_DPI_LOADER}"
   "load_systemverilog_dpi_plugin(" "validate_systemverilog_dpi_plugin_descriptor(" "resolve(manifest.imported_symbols")
 
 fsim_require_native_producer_tokens("${FSIM_APPLICATION_TEST}"
-  "mapped-native-incompatible"
-  "mapped-systemc-incompatible"
-  "incompatible_cache_has_file")
+  "mapped-systemc-incompatible")
 fsim_require_native_producer_tokens("${FSIM_INCREMENTAL_TEST}"
   "stale-object-producer"
   "stale-plugin-producer"

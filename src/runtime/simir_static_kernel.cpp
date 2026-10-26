@@ -1830,7 +1830,7 @@ void Interpreter::Impl::StaticKernel::commit_round()
         }
         if (!same) {
             if (trace_) {
-                std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
+                std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
                           << " commit "
                           << impl_.get_signal_cold(slots_[slot_index].signal).name
                           << " = " << slot_value(slot_index).to_msb_string()
@@ -1840,7 +1840,7 @@ void Interpreter::Impl::StaticKernel::commit_round()
         }
     }
     if (trace_) {
-        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
                   << " end-of-round\n";
     }
     touched_.clear();
@@ -1881,9 +1881,15 @@ void Interpreter::Impl::StaticKernel::write_host(const std::uint32_t member,
     const std::optional<std::uint32_t> offset, const bool blocking,
     const SignalUpdateDomain domain)
 {
+    // A fork child's updates are its own process's (Interpreter::
+    // spawn_fork): the host orders the region's updates by process.
     const auto process = members_[member].process;
+    const auto order = running_thread_ != no_slot
+            && threads_[running_thread_].member == member
+        ? StableOrder { threads_[running_thread_].order }
+        : StableOrder { process };
     if (trace_) {
-        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
                   << " host-write " << impl_.get_signal_cold(signal).name
                   << (blocking ? " blocking " : " staged ")
                   << value.to_msb_string() << '\n';
@@ -1937,9 +1943,9 @@ void Interpreter::Impl::StaticKernel::write_host(const std::uint32_t member,
     }
     if (offset) {
         impl_.stage_update_slice(process, signal, std::move(value), *offset,
-            domain);
+            domain, order);
     } else {
-        impl_.stage_update(process, signal, std::move(value), domain);
+        impl_.stage_update(process, signal, std::move(value), domain, order);
     }
 }
 
@@ -2493,7 +2499,7 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
 {
     auto& member = members_[member_index];
     if (trace_) {
-        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
                   << " d=" << impl_.scheduler.delta() << " run "
                   << profile_names_[member_index]
                   << (member.fresh ? " fresh" : "")
@@ -3278,6 +3284,22 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                                            : op.message.str(),
                         op.severity, op.source, true);
                 }
+            } else if constexpr (std::is_same_v<T, CodeCoverageHit>) {
+                // The member's expanded operation carries its instance's
+                // counter; the update rules are the reference evaluator's.
+                const auto update
+                    = impl_.code_coverage_counters.record(op.counter);
+                if (update == CodeCoverageCounterUpdate::Unavailable) {
+                    fail(member_index, pc,
+                        "code coverage counter service is unavailable");
+                }
+                if (update == CodeCoverageCounterUpdate::OutOfRange) {
+                    fail(member_index, pc, "code coverage counter is out of range");
+                }
+                if (update == CodeCoverageCounterUpdate::FirstOverflow
+                    && impl_.code_coverage_overflow_hook) {
+                    impl_.code_coverage_overflow_hook(op.counter);
+                }
             } else if constexpr (std::is_same_v<T, Call>) {
                 const auto size = member.operations.size();
                 if (op.stack.capacity == 0U) {
@@ -3721,9 +3743,10 @@ void Interpreter::Impl::StaticKernel::initialize()
     }
     // An always_comb or always_latch starts after every initial and always
     // procedure has started (IEEE 1800-2023 9.2.2.2.2); such members run
-    // once the threads have (start_after_procedures).
+    // once the threads and hosted procedures have (start_after_procedures).
     const auto after_procedures = [&](const Member& member) {
-        return member.after_procedures && !member.vhdl && behavioral_
+        return member.after_procedures && !member.vhdl
+            && (behavioral_ || (has_hosted_ && !mixed_))
             && ((member.kind == StaticKernelMemberKind::combinational
                     && member.run_at_start)
                 || member.kind == StaticKernelMemberKind::once);
@@ -3846,6 +3869,27 @@ bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
     input.revision = revision;
     const auto seen = std::exchange(
         input.event_seen, impl_.signal_events[input.signal]);
+    // An event of the current delta (SystemVerilog work of this delta, which
+    // the host stamps for the next one) wakes VHDL processes in the next
+    // delta (IEEE 1076-2019 14.7.5.3, S16); one the previous delta's update
+    // phase made wakes them in this one.
+    const bool next_delta = mixed_ && host_boundary_ && input.event_seen
+        && *input.event_seen
+            == std::pair { impl_.scheduler.now(), impl_.scheduler.delta() + 1U };
+    const auto members = next_round_.size();
+    const auto threads = vhdl_ready_threads_.size();
+    struct HoldWoken {
+        StaticKernel& kernel;
+        bool hold;
+        std::size_t members;
+        std::size_t threads;
+        ~HoldWoken()
+        {
+            if (hold) {
+                kernel.hold_woken(members, threads);
+            }
+        }
+    } hold_woken_scope { *this, next_delta, members, threads };
     if (current == input.cached) {
         // A VHDL signal can change and return to the scanned value inside one
         // update phase (two force assignments of one cycle apply one after
@@ -3861,7 +3905,7 @@ bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
             return false;
         }
         if (trace_) {
-            std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
+            std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
                       << " input " << impl_.get_signal_cold(input.signal).name
                       << " event without net change\n";
         }
@@ -3873,7 +3917,7 @@ bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
                        : Impl::coerce_value_kind(current, ValueKind::logic4);
     profile_input_changes_ += profile_ ? 1U : 0U;
     if (trace_) {
-        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
                   << " input " << impl_.get_signal_cold(input.signal).name
                   << " " << input.cached.to_msb_string() << " -> "
                   << value.to_msb_string() << '\n';
@@ -4006,14 +4050,11 @@ bool Interpreter::Impl::StaticKernel::activate()
     } else {
         (void)scan_inputs();
     }
-    if (late_start_armed_ && !first_activation) {
+    if (late_start_armed_
+        && (late_start_due_ || (!first_activation && (mixed_ || vhdl_)))) {
         // The delta after time zero: continuous assignments and event
         // controls of time zero have settled (see start_behavioral).
-        late_start_armed_ = false;
-        for (const auto index : std::exchange(late_members_,
-                 std::vector<std::uint32_t> { })) {
-            ready_thread(spawn_thread(index, 0U, no_slot, no_slot));
-        }
+        start_late_members();
     }
     activate_step();
     // A closed kernel (no host process, output or host-written input) whose
@@ -4030,7 +4071,8 @@ bool Interpreter::Impl::StaticKernel::activate()
     for (std::size_t step = 0U; time_warp_ && closed_ && !has_hosted_
          && !observed && behavioral_
          && !vhdl_threads_ && !stopped_ && !nonblocking_deferred_
-         && !yield_requested_ && step < max_warp_steps; ++step) {
+         && !yield_requested_ && !late_start_armed_
+         && step < max_warp_steps; ++step) {
         const auto next = next_timer();
         if (!next) {
             break;
@@ -4061,6 +4103,14 @@ bool Interpreter::Impl::StaticKernel::activate()
     if (has_hosted_) {
         // After the publication: its commits may wake hosted processes.
         finish_hosted();
+    }
+    if (const auto order = std::exchange(host_batch_resume_, std::nullopt)) {
+        // The round resumes in the running batch, after the host's tasks
+        // ahead of its next process.
+        host_active_yield_ = false;
+        queue_batch_resume(*order);
+    } else if (std::exchange(host_active_yield_, false)) {
+        requeue_host_active();
     }
     return yield_requested_;
 }
@@ -4127,9 +4177,44 @@ void Interpreter::Impl::StaticKernel::activate_step()
             }
         } else {
             bool active = false;
+            bool ran_hosted = false;
             if (!triggered_.empty()) {
                 run_triggered();
                 active = true;
+            }
+            // A host task of the running Active batch ahead of a ready
+            // thread (a delayed gate or continuous update maturing in this
+            // time step) runs before it (IEEE 1800-2023 4.7): the threads
+            // then run in order with the host's tasks.
+            const auto threads_behind_host = [&] {
+                if (!behavioral_ || ready_threads_.empty()) {
+                    return false;
+                }
+                auto last = threads_[ready_threads_.front()].order;
+                for (const auto thread : ready_threads_) {
+                    last = std::max(last, threads_[thread].order);
+                }
+                return host_batch_ahead(StableOrder { last });
+            };
+            if (has_hosted_ && !in_host_nonblocking_region_
+                && !hosted_inactive_task_
+                && (!batch_hosted_.empty() || !batch_threads_.empty()
+                    || (behavioral_ && !ready_threads_.empty()
+                        && !hosted_active_.empty())
+                    || threads_behind_host())) {
+                // Hosted and native processes ready in the same round run
+                // in process order (IEEE 1800-2023 6.8: declaration
+                // initializers before any procedure).
+                run_merged_active();
+                if (impl_.scheduler.stop_requested() || stopped_
+                    || host_batch_resume_) {
+                    break;
+                }
+                (void)start_after_procedures();
+                if (yield_to_host_active()) {
+                    break;
+                }
+                continue;
             }
             if (has_hosted_) {
                 // Hosted processes run in the Active region with the members
@@ -4144,12 +4229,13 @@ void Interpreter::Impl::StaticKernel::activate_step()
                 }
                 if (run_hosted_active()) {
                     active = true;
+                    ran_hosted = true;
                     // Their blocking writes are events now: the threads and
                     // members that run next, or wait next, see the new
                     // values (IEEE 1800-2023 4.7, 9.4.2), not a later edge.
                     (void)scan_inputs(false);
                 }
-                if (impl_.scheduler.stop_requested()) {
+                if (impl_.scheduler.stop_requested() || host_batch_resume_) {
                     break;
                 }
             }
@@ -4158,7 +4244,10 @@ void Interpreter::Impl::StaticKernel::activate_step()
                 if (stopped_) {
                     break;
                 }
-                active = start_after_procedures() || active;
+            }
+            active = start_after_procedures() || active;
+            if (ran_hosted && yield_to_host_active()) {
+                break;
             }
             // The Active region drains (combinational settling included)
             // before #0 resumptions (Inactive) and before the NBA region.
@@ -4275,6 +4364,54 @@ bool Interpreter::Impl::StaticKernel::defer_nonblocking()
     return true;
 }
 
+bool Interpreter::Impl::StaticKernel::vhdl_round_waits_for_host() const
+{
+    // The reference runs a delta's VHDL processes in its generic Active
+    // queue, after the delta's SystemVerilog regions up to Postponed (S16):
+    // the VHDL members, threads and hosted processes read what that work
+    // writes (this activation's staged and unpublished updates, host and
+    // hosted SystemVerilog processes, their nonblocking updates). Once that
+    // queue has run, the delta's VHDL work has already run in the reference
+    // without the SystemVerilog work queued after it, so the round does not
+    // wait for that work.
+    return host_boundary_ && !vhdl_round_task_
+        && impl_.scheduler.generic_active_phase_open()
+        && (host_active_staged_ || !output_queue_.empty()
+            || hosted_systemverilog_pending()
+            || impl_.scheduler.systemverilog_work_pending());
+}
+
+void Interpreter::Impl::StaticKernel::defer_vhdl_round()
+{
+    if (std::exchange(vhdl_round_deferred_, true)) {
+        return;
+    }
+    struct KernelVhdlRoundTask {
+        Interpreter::Impl* owner { };
+        ProcessId host { };
+    };
+    const auto task = fsim::runtime::detail::make_scheduler_task_descriptor<
+        KernelVhdlRoundTask,
+        +[](Scheduler&, const KernelVhdlRoundTask& scheduled) {
+            auto& kernel = *scheduled.owner->static_kernel;
+            kernel.vhdl_round_deferred_ = false;
+            kernel.vhdl_round_task_ = true;
+            bool yielded { };
+            try {
+                yielded = kernel.activate();
+            } catch (...) {
+                kernel.vhdl_round_task_ = false;
+                throw;
+            }
+            kernel.vhdl_round_task_ = false;
+            if (yielded) {
+                scheduled.owner->queue_next_delta(scheduled.host);
+            }
+        }>(KernelVhdlRoundTask { &impl_, host_process_ });
+    impl_.scheduler.schedule_internal(
+        SchedulerPhase::active, host_process_, task);
+}
+
 void Interpreter::Impl::StaticKernel::swap_write_queues()
 {
     std::swap(writes_, parked_writes_);
@@ -4303,6 +4440,30 @@ void Interpreter::Impl::StaticKernel::sv_drain()
             }
             active = true;
         }
+        if (has_hosted_ && hosted_systemverilog_pending()) {
+            // Hosted SystemVerilog-domain processes run in the Active region,
+            // before the delta's VHDL work, as the reference runs them. They
+            // read the host's copy of the kernel's outputs, so the members'
+            // Active writes commit first; their own blocking writes are
+            // events for what runs next.
+            if (!output_queue_.empty()) {
+                publish(true);
+            }
+            if (behavioral_ && !ready_threads_.empty()) {
+                // With threads ready too, the round runs them all in stable
+                // order (IEEE 1800-2023 4.7), as the reference round does.
+                run_merged_active();
+                if (stopped_) {
+                    return;
+                }
+            } else if (run_hosted_active_domain(true)) {
+                (void)scan_inputs(false);
+            }
+            if (impl_.scheduler.stop_requested()) {
+                return;
+            }
+            continue;
+        }
         if (behavioral_) {
             active = run_ready_threads() || active;
             if (stopped_) {
@@ -4312,18 +4473,26 @@ void Interpreter::Impl::StaticKernel::sv_drain()
             if (active) {
                 continue;
             }
-            if (!inactive_threads_.empty()) {
-                if (host_active_staged_ || !output_queue_.empty()) {
-                    publish();
-                    yield_requested_ = true;
-                    return;
-                }
-                for (const auto thread : inactive_threads_) {
-                    ready_thread(thread);
-                }
-                inactive_threads_.clear();
-                continue;
+        }
+        if (!inactive_threads_.empty() || !hosted_inactive_.empty()) {
+            // The Inactive region (#0) of the kernel's threads and hosted
+            // processes follows the Active region (IEEE 1800-2023 4.4.2.3).
+            if (host_active_staged_ || !output_queue_.empty()) {
+                publish();
+                yield_requested_ = true;
+                return;
             }
+            for (const auto thread : inactive_threads_) {
+                ready_thread(thread);
+            }
+            inactive_threads_.clear();
+            if (run_hosted_inactive()) {
+                (void)scan_inputs(false);
+            }
+            if (impl_.scheduler.stop_requested()) {
+                return;
+            }
+            continue;
         }
         if (writes_.count != 0U) {
             nonblocking_committed_ = true;
@@ -4359,6 +4528,19 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
             sv_drain_outside_round();
             continue;
         }
+        if (trace_) {
+            std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
+                      << " round-check boundary=" << host_boundary_
+                      << " task=" << vhdl_round_task_
+                      << " staged=" << host_active_staged_
+                      << " outputs=" << output_queue_.size() << " sv-work="
+                      << impl_.scheduler.systemverilog_work_pending()
+                      << '\n';
+        }
+        if (vhdl_round_waits_for_host()) {
+            defer_vhdl_round();
+            break;
+        }
         for (const auto thread : deferred_threads_) {
             ready_threads_.push_back(thread);
         }
@@ -4385,14 +4567,23 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
         // round's members, their assignments in the round's queue.
         (void)run_vhdl_threads();
         if (has_hosted_) {
-            // Hosted VHDL processes resumed for this delta (S25a).
-            (void)run_hosted_active();
+            // Hosted VHDL processes resumed for this delta (S25a); the
+            // SystemVerilog-domain ones ran in the delta's SystemVerilog
+            // regions (sv_drain).
+            (void)run_hosted_active_domain(false);
             if (impl_.scheduler.stop_requested()) {
                 swap_write_queues();
                 break;
             }
         }
         swap_write_queues();
+        if (late_start_armed_) {
+            // The reference starts its late SystemVerilog processes in the
+            // generic pass of the first delta, with that delta's VHDL
+            // processes (Interpreter::start): they run in this round's
+            // SystemVerilog drain, after time zero's Active work.
+            start_late_members();
+        }
         sv_drain();
         if (stopped_) {
             break;
@@ -4411,7 +4602,10 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
             break;
         }
     }
-    if (!held_round_.empty() || !held_threads_.empty()) {
+    // Held wakes belong to the next delta: a round deferred to this delta's
+    // VHDL work (defer_vhdl_round) runs without them, then requeues them.
+    if (!vhdl_round_deferred_
+        && (!held_round_.empty() || !held_threads_.empty())) {
         next_round_.insert(next_round_.end(), held_round_.begin(), held_round_.end());
         vhdl_ready_threads_.insert(vhdl_ready_threads_.end(),
             held_threads_.begin(), held_threads_.end());
@@ -4438,6 +4632,14 @@ void Interpreter::Impl::StaticKernel::sv_drain_outside_round()
     const auto members = next_round_.size();
     const auto threads = vhdl_ready_threads_.size();
     sv_drain();
+    hold_woken(members, threads);
+}
+
+void Interpreter::Impl::StaticKernel::hold_woken(
+    const std::size_t members, const std::size_t threads)
+{
+    // The VHDL members and threads woken past these marks run in the next
+    // delta (activate_mixed requeues them).
     held_round_.insert(held_round_.end(),
         next_round_.begin() + static_cast<std::ptrdiff_t>(members), next_round_.end());
     next_round_.resize(members);
@@ -4553,7 +4755,7 @@ void Interpreter::Impl::StaticKernel::import_host_write(
         return;
     }
     if (trace_) {
-        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
                   << " import " << impl_.get_signal_cold(signal).name << " "
                   << value.to_msb_string() << '\n';
     }

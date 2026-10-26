@@ -948,6 +948,13 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
                         *source.initializer, &element_type)) {
                     continue;
                 }
+            } else if (frontend::is_real_scalar_kind(
+                           frontend::systemverilog_scalar_kind(
+                               source.type->target.spelling))) {
+                // A real variable holds its IEEE payload, which the typed
+                // constant (an integer conversion) is not (IEEE 1800-2023
+                // 6.12): the callable initialization path stores it.
+                continue;
             } else {
                 std::string error;
                 packed_initializer = evaluate_hir_systemverilog_typed_constant(

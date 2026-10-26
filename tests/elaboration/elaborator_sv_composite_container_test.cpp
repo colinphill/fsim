@@ -109,7 +109,9 @@ endmodule
       unsupported.design,
       "composite_container_operations_invalid");
   assert(!rejected.ok());
-  assert(has_diagnostic(rejected, "FSIM-ELAB-SVSLICE-006"));
+  // Copying between equal-shape unpacked slices is legal (IEEE 1800-2023
+  // 7.4.6, 7.6); the method calls are what this module gets wrong.
+  assert(!has_diagnostic(rejected, "FSIM-ELAB-SVSLICE-006"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVREDUCE-006"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVORDER-008"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVLOCATOR-008"));

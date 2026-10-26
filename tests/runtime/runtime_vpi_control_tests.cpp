@@ -111,18 +111,19 @@ void test_systemverilog_vpi_control() {
               == SystemVerilogVpiControlState::Running,
       "VPI control accepts ordered force/release requests in one simulation");
   (void)fixture.scheduler.run();
+  // A released variable keeps its forced value until its next assignment
+  // (IEEE 1800-2023 10.6.2).
   require_vpi_control(
       fixture.control.status(force.value).status
               == SystemVerilogVpiControlStatus::Applied
           && fixture.control.status(release.value).status
               == SystemVerilogVpiControlStatus::Applied
           && changes
-              == std::vector<SystemVerilogVpiStoredValue>{
-                  fixture.one, fixture.zero}
+              == std::vector<SystemVerilogVpiStoredValue>{fixture.one}
           && fixture.registry.read_value(
                  fixture.object,
                  SystemVerilogVpiValueFormat::Scalar).scalar
-              == Logic9::zero,
+              == Logic9::one,
       "VPI force/release controls execute in update order and publish exact reactive values");
 
   ControlFixture foreign_fixture{905};

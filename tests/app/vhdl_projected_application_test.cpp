@@ -527,6 +527,8 @@ end architecture;
     auto config = make_config(block_directory, source, optimization);
     config.project.name = "vhdl-2019-sequential-block-runtime";
     config.project.top = "vhdl:work.sequential_block_runtime(rtl)";
+    // The expected times count nanoseconds; "auto" resolves to 1 fs.
+    config.project.time_resolution = "1ns";
     config.source_sets.front().standard = "2019";
     config.build.cache_path = block_directory
         / (optimization == fsim::project::Optimization::o0
@@ -963,6 +965,8 @@ end architecture;
                          const fsim::app::SimulationEngine engine) {
       auto config = make_config(case_directory, source, optimization);
       config.project.top = "vhdl:work.projected_cancel(rtl)";
+      // The delays count picoseconds; "auto" resolves to 1 fs for VHDL.
+      config.project.time_resolution = "1ps";
       config.build.cache_path = case_directory
           / (optimization == fsim::project::Optimization::o0
                  ? "cache-o0"
@@ -1244,14 +1248,17 @@ begin
     wait for 2 ps;
     forced_output <= force in '1';
     forced_driver_output <= force out '1';
-    assert forced_driver_output'driving_value = '1'
-      report "force out must update driving_value"
+    -- A force is only scheduled; the update applies it (IEEE 1076-2019
+    -- 14.7.3.2), so this process's driver (16.2.4) still reads 'Z'.
+    assert forced_driver_output'driving_value = 'Z'
+      report "force out must take effect in the update"
       severity failure;
     wait for 2 ps;
     forced_output <= '0';
     wait for 2 ps;
     forced_output <= release in;
     forced_driver_output <= release out;
+    wait for 0 ps;
     assert forced_driver_output'driving_value = 'Z'
       report "release out must restore driving_value"
       severity failure;
@@ -1279,8 +1286,9 @@ end architecture;
   for (const auto optimization : {
            fsim::project::Optimization::o0,
            fsim::project::Optimization::o2}) {
-    const auto config =
-        make_config(directory.path, source, optimization);
+    // "auto" resolves to 1 fs for a VHDL design; the expectations are in ps.
+    auto config = make_config(directory.path, source, optimization);
+    config.project.time_resolution = "1ps";
     const auto reference =
         run_once(config, fsim::app::SimulationEngine::interpreter);
     const auto cold =

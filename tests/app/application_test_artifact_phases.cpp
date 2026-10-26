@@ -317,15 +317,15 @@ begin
   attribute_stimulus: process
   begin
     attribute_source <= '0';
-    wait for 1 ns;
+    wait for 1 fs;
     attribute_source <= '1';
     wait;
   end process;
   attribute_probe: process
   begin
-    wait for 3 ns;
+    wait for 3 fs;
     wait for 0 ns;
-    stable_probe <= attribute_source'stable(1 ns);
+    stable_probe <= attribute_source'stable(1 fs);
     wait;
   end process;
 end architecture;

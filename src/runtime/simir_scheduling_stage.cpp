@@ -124,6 +124,12 @@ void Interpreter::Impl::schedule_update_commit()
     // callable stable after its first initialization.
     if (!update_commit_callback) {
         update_commit_callback = [this](Scheduler&) {
+            update_commit_running = true;
+            const auto clear_running = [this](void*) noexcept {
+                update_commit_running = false;
+            };
+            const std::unique_ptr<void, decltype(clear_running)>
+                clear_running_on_exit(this, clear_running);
             const auto clear_provenance = [this](void*) noexcept {
                 clear_unresolved_update_owner_provenance();
             };
@@ -1227,7 +1233,8 @@ void Interpreter::Impl::schedule_systemverilog_update(
     PackedLogic4 value,
     const std::optional<std::size_t> offset,
     const SignalUpdateDomain update_domain,
-    const SimulationTick delay)
+    const SimulationTick delay,
+    const std::optional<StableOrder> order)
 {
     if (update_domain == SignalUpdateDomain::generic) {
         throw std::invalid_argument {
@@ -1253,7 +1260,7 @@ void Interpreter::Impl::schedule_systemverilog_update(
                 SystemVerilogUpdateToken,
                 &Interpreter::Impl::dispatch_systemverilog_update>(token);
         scheduler.schedule_internal_systemverilog_at(
-            time, origin.phase, process, descriptor);
+            time, origin.phase, order.value_or(process), descriptor);
     } catch (...) {
         release_systemverilog_update(token);
         throw;
@@ -1484,7 +1491,8 @@ void Interpreter::Impl::stage_update(
     const std::optional<ProcessId> driver,
     SignalId signal_id,
     PackedLogic4 staged_value,
-    const SignalUpdateDomain domain)
+    const SignalUpdateDomain domain,
+    const std::optional<StableOrder> order)
 {
     (void)get_signal(signal_id);
     if (driven_values[signal_id].width() != staged_value.width()) {
@@ -1505,7 +1513,7 @@ void Interpreter::Impl::stage_update(
         }
         schedule_systemverilog_update(
             *driver, signal_id, std::move(staged_value), std::nullopt,
-            domain);
+            domain, 0, order);
         return;
     }
     if (driver
@@ -1529,13 +1537,15 @@ void Interpreter::Impl::stage_update(
     const ProcessId process,
     const SignalId signal_id,
     PackedLogic4 staged_value,
-    const SignalUpdateDomain domain)
+    const SignalUpdateDomain domain,
+    const std::optional<StableOrder> order)
 {
     stage_update(
         std::optional<ProcessId> { process },
         signal_id,
         std::move(staged_value),
-        domain);
+        domain,
+        order);
 }
 
 void Interpreter::Impl::stage_update_slice(

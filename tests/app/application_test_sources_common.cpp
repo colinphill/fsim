@@ -263,9 +263,6 @@ class BrokenPostDerived extends AppDerived;
   endfunction
 endclass
 
-class uvm_object_wrapper;
-endclass
-
 `define uvm_object_utils(TYPE) \
   static function uvm_object_wrapper get_type(); \
     return null; \
@@ -275,6 +272,11 @@ endclass
   endfunction
 `define uvm_object_param_utils(TYPE) `uvm_object_utils(TYPE)
 `define uvm_component_utils(TYPE) `uvm_object_utils(TYPE)
+
+// The UVM library's declarations live in uvm_pkg (IEEE 1800.2).
+package uvm_pkg;
+class uvm_object_wrapper;
+endclass
 
 class uvm_object;
   virtual function uvm_object_wrapper get_object_type();
@@ -294,21 +296,6 @@ class uvm_object;
   endfunction
   function void record(input uvm_object recorder = null);
   endfunction
-endclass
-
-class UvmItem extends uvm_object;
-  logic [15:0] value;
-  UvmItem child;
-  `uvm_object_utils(UvmItem)
-endclass
-
-class UvmParamItem #(int WIDTH = 8) extends uvm_object;
-  logic [WIDTH-1:0] value;
-  `uvm_object_param_utils(UvmParamItem)
-endclass
-
-class UvmFactoryItem extends uvm_object;
-  `uvm_object_utils(UvmFactoryItem)
 endclass
 
 class uvm_factory extends uvm_object;
@@ -388,6 +375,24 @@ class uvm_component extends uvm_object;
   virtual task post_shutdown_phase();
   endtask
 endclass
+endpackage
+import uvm_pkg::*;
+
+class UvmItem extends uvm_object;
+  logic [15:0] value;
+  UvmItem child;
+  `uvm_object_utils(UvmItem)
+endclass
+
+class UvmParamItem #(int WIDTH = 8) extends uvm_object;
+  logic [WIDTH-1:0] value;
+  `uvm_object_param_utils(UvmParamItem)
+endclass
+
+class UvmFactoryItem extends uvm_object;
+  `uvm_object_utils(UvmFactoryItem)
+endclass
+
 
 class UvmComponent extends uvm_component;
   int phase_callbacks;

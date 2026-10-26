@@ -93,7 +93,6 @@ fsim_require_toolchain_tokens(tests/systemc/incremental_compiler_test.cpp
   "fake clang-cl object" "toolchain == \"msvc\""
   "compiler_fingerprint" "stale_target_plugin")
 fsim_require_toolchain_tokens(src/app/application_library_import.cpp
-  "mapped LLVM native object producer"
   "mapped SystemC native plug-in producer" "read_payload(")
 fsim_require_toolchain_tokens(cmake/CheckInstalledPublicContract.cmake
   "relocated install é" "CMAKE_PREFIX_PATH" "file(CHMOD_RECURSE")

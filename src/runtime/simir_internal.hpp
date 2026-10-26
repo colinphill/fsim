@@ -1307,6 +1307,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::uint64_t>
         aggregate_signal_last_projection_revisions;
     std::filesystem::path file_root;
+    /// Operations left to interpret (Interpreter::set_operation_budget).
+    std::optional<std::uint64_t> operation_budget;
     // STD.ENV DIR_WORKINGDIR is simulator-local state. Never mutate the host
     // process working directory, which would race parallel simulation.
     std::filesystem::path vhdl_working_directory;
@@ -1664,6 +1666,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         monitor_publication;
     std::optional<SimulationTick> monitor_systemverilog_publication;
     bool update_commit_scheduled { };
+    // The update commit callback is running; it drains conversions last.
+    bool update_commit_running { };
     bool has_bidirectional_switches { };
     bool switch_refreshing { };
     bool started { };
@@ -1781,6 +1785,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         return id < static_kernel_hosted_process.size()
             && static_kernel_hosted_process[id] != 0U;
     }
+    /// The static kernel runs as `id` (its host process).
+    [[nodiscard]] bool static_kernel_host(ProcessId id) const noexcept;
     void static_kernel_enqueue_hosted(ProcessId id,
         StaticKernelHostedWake wake, SimulationTick time = 0U,
         StableOrder order = 0U);
@@ -2527,6 +2533,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void queue_active_current(ProcessId id);
 
+    /// queue_active_current at an explicit stable order.
+    void queue_active_current_at(ProcessId id, StableOrder order);
+
     void queue_static_active_current(ProcessId id);
 
     void register_static_sensitivity_cohort(ProcessId id);
@@ -2921,6 +2930,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void schedule_vhdl_disconnect(
         ProcessId process, SignalId signal, SimulationTick delay);
     void drain_vhdl_resolutions();
+    // Queue a port conversion whose source was active; the conversion runs
+    // in this cycle's update (IEEE 1076-2008 14.7.3.3), so an update commit
+    // is scheduled when none will drain it.
+    void queue_vhdl_conversion(SignalId target);
     void initialize_vhdl_resolutions();
 
     [[nodiscard]] DriveStrength resolved_signal_strength(
@@ -2982,13 +2995,16 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process,
         SignalUpdateDomain update_domain = SignalUpdateDomain::generic) const;
 
+    /// `order` places the update among the region's others (by default the
+    /// process's own stable order; a kernel fork child has its own).
     void schedule_systemverilog_update(
         ProcessId process,
         SignalId signal,
         PackedLogic4 value,
         std::optional<std::size_t> offset,
         SignalUpdateDomain update_domain,
-        SimulationTick delay = 0);
+        SimulationTick delay = 0,
+        std::optional<StableOrder> order = std::nullopt);
 
     void schedule_update_commit();
     void block_native_logic9_update_before_generic(SignalId signal);
@@ -3022,7 +3038,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const std::optional<ProcessId> driver,
         SignalId signal_id,
         PackedLogic4 staged_value,
-        SignalUpdateDomain domain = SignalUpdateDomain::generic);
+        SignalUpdateDomain domain = SignalUpdateDomain::generic,
+        std::optional<StableOrder> order = std::nullopt);
 
     void stage_update(
         const SignalId signal_id,
@@ -3032,7 +3049,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const ProcessId process,
         const SignalId signal_id,
         PackedLogic4 staged_value,
-        SignalUpdateDomain domain = SignalUpdateDomain::generic);
+        SignalUpdateDomain domain = SignalUpdateDomain::generic,
+        std::optional<StableOrder> order = std::nullopt);
 
     void stage_update_slice(
         const std::optional<ProcessId> driver,
@@ -3050,7 +3068,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const SignalId signal_id,
         PackedLogic4 value,
         const std::size_t offset,
-        SignalUpdateDomain domain = SignalUpdateDomain::generic);
+        SignalUpdateDomain domain = SignalUpdateDomain::generic,
+        std::optional<StableOrder> order = std::nullopt);
 
     void stage_update_words(
         ProcessId process,

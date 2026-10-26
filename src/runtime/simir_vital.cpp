@@ -1849,6 +1849,15 @@ void Interpreter::Impl::execute_vital_delay(
     output = values.output_map[ordinal];
   }
   const auto now = scheduler.now();
+  // VitalPathDelay schedules nothing when no transaction is pending and the
+  // new value is the one last scheduled (initially 'U', so the
+  // initialization call with an all-'U' result schedules nothing).
+  if (operation.kind == VitalDelayKind::path && state.scheduled_time <= now
+      && output == state.scheduled_value) {
+    state.initialized = true;
+    state.last_value = values.source;
+    return;
+  }
   const auto target = now + delay;
   const bool glitch = operation.kind == VitalDelayKind::path
       && state.initialized && output != state.scheduled_value

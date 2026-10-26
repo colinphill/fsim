@@ -308,8 +308,9 @@ module type_operator_top;
     type_results[5] = type(enum_a_one) != type(enum_b_one);
     type_results[6] = type(values) == type(values_copy);
     type_results[7] = type(byte_value) == type(signed_byte_vector);
+    // Fixed-size packed ranges must have the same bounds (6.22.1 f).
     type_results[8] = type(signed_byte_vector)
-        == type(reversed_signed_byte_vector);
+        != type(reversed_signed_byte_vector);
     type_results[9] = type(int_value) == type(signed_int_vector);
     type_results[10] = type(integer_value) == type(signed_integer_vector);
     type_results[11] = type(time_value) == type(time_vector);

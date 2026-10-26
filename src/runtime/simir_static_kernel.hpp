@@ -224,6 +224,8 @@ struct StaticKernelRuntimeSpec {
             return !value.transaction_signal;
         } else {
             return std::is_same_v<T, DebugPoint>
+                // A code coverage counter bump (host data, no registers).
+                || std::is_same_v<T, CodeCoverageHit>
                 || std::is_same_v<T, LoadConstant>
                 || std::is_same_v<T, CopyRegister>
                 || std::is_same_v<T, Binary>
@@ -352,6 +354,8 @@ struct StaticKernelRuntimeSpec {
                 && value.preserve_containers.empty();
         } else {
             return std::is_same_v<T, DebugPoint>
+                // A code coverage counter bump (host data, no registers).
+                || std::is_same_v<T, CodeCoverageHit>
                 || std::is_same_v<T, LoadConstant>
                 || std::is_same_v<T, CopyRegister>
                 || std::is_same_v<T, Binary>

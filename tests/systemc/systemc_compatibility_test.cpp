@@ -28,7 +28,7 @@ static_assert(TLM_VERSION_MAJOR == 2);
 static_assert(TLM_VERSION_MINOR == 0);
 static_assert(TLM_VERSION_PATCH == 6);
 static_assert(fsim::systemc::accellera_version == "3.0.2");
-static_assert(fsim::systemc::accellera_bridge_revision == 2u);
+static_assert(fsim::systemc::accellera_bridge_revision == 3u);
 static_assert(
     fsim::systemc::accellera_source_sha256
     == "9b3693ed286aab958b9e5d79bb0ad3bc523bbc46931100553275352038f4a0c4");
@@ -46,7 +46,7 @@ static_assert(
 
 static_assert(sizeof(fsim_sc_value_view_v1) == 32U);
 static_assert(alignof(fsim_sc_value_view_v1) == 8U);
-static_assert(sizeof(fsim_sc_host_v1) == 152U);
+static_assert(sizeof(fsim_sc_host_v1) == 168U);
 static_assert(alignof(fsim_sc_host_v1) == 8U);
 static_assert(sizeof(fsim_sc_registrar_v1) == 32U);
 static_assert(alignof(fsim_sc_registrar_v1) == 8U);
@@ -129,7 +129,7 @@ int main()
     assert(compatibility_identity.starts_with(runtime_identity));
     assert(compatibility_identity.find(FSIM_SYSTEMC_ACCELERA_SOURCE_SHA256)
         != std::string::npos);
-    assert(compatibility_identity.find("|bridge=2|stdlib=")
+    assert(compatibility_identity.find("|bridge=3|stdlib=")
         != std::string::npos);
     assert(!compatibility_identity.ends_with("unknown-stdlib"));
     assert(fsim_systemc_accellera_accepts_compatibility_identity(
@@ -137,10 +137,10 @@ int main()
     assert(!fsim_systemc_accellera_accepts_compatibility_identity(nullptr));
 
     auto wrong_bridge = compatibility_identity;
-    const auto bridge = wrong_bridge.find("|bridge=2|");
+    const auto bridge = wrong_bridge.find("|bridge=3|");
     assert(bridge != std::string::npos);
-    wrong_bridge.replace(bridge, std::string_view { "|bridge=2|" }.size(),
-        "|bridge=3|");
+    wrong_bridge.replace(bridge, std::string_view { "|bridge=3|" }.size(),
+        "|bridge=4|");
     assert(!fsim_systemc_accellera_accepts_compatibility_identity(
         wrong_bridge.c_str()));
 

@@ -7,6 +7,7 @@
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/preprocessor.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
@@ -684,7 +685,8 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
     auto checked = release_compiled_project(std::move(*checked_workspace));
     checked_workspace.reset();
     if (invocation.dpi_header) {
-        std::ofstream header { *invocation.dpi_header, std::ios::binary };
+        auto header = support::native_fs::open_ofstream(
+            *invocation.dpi_header, std::ios::binary);
         header << elaboration::systemverilog_dpi_header(
             checked.systemverilog_hir);
         if (!header) {

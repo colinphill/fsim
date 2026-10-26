@@ -662,6 +662,28 @@ public:
   /// besides the running callback: the NBA region starts only once both have
   /// drained (IEEE 1800-2023 4.5).
   [[nodiscard]] bool systemverilog_active_work_pending() const noexcept;
+  /// True while same-time SystemVerilog work of any region before Postponed
+  /// remains besides the running callback. The generic (VHDL) Active work of
+  /// a delta runs only once that work has drained.
+  [[nodiscard]] bool systemverilog_work_pending() const noexcept;
+  /// True while same-time SystemVerilog Active-region work remains besides
+  /// the running callback: the rest of the running Active batch, or work
+  /// queued for the next one.
+  [[nodiscard]] bool systemverilog_active_region_pending() const noexcept;
+  /// True while the running SystemVerilog Active batch has a task left
+  /// (the running callback excluded) at a stable order up to `order`,
+  /// tasks at the `excluded` order aside.
+  [[nodiscard]] bool systemverilog_running_active_ahead(
+      StableOrder order, StableOrder excluded) const noexcept;
+  /// Queues an internal task into the running SystemVerilog Active batch,
+  /// where it runs at its stable order among the batch's remaining tasks;
+  /// outside such a batch it is queued as schedule_internal_systemverilog
+  /// queues an Active task.
+  void schedule_internal_systemverilog_running_active(StableOrder stable_order,
+      detail::SchedulerTaskDescriptor task);
+  /// True while the current delta's generic (VHDL) Active queue has yet to
+  /// finish: work scheduled there now still runs in this delta.
+  [[nodiscard]] bool generic_active_phase_open() const noexcept;
   [[nodiscard]] std::optional<SimulationTick>
   next_pending_time() const noexcept;
   [[nodiscard]] bool running() const noexcept;

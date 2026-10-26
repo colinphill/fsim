@@ -211,8 +211,6 @@ foreach(FSIM_C_EVIDENCE IN ITEMS
   endif()
 endforeach()
 foreach(FSIM_REMOVED_LEGACY_TOKEN IN ITEMS
-    "mark_hdl_module"
-    "set_hdl_module_actual"
     "set_hdl_module_implementation"
     "SC_FSIM_HDL_MODULE")
   foreach(FSIM_REMOVED_LEGACY_PATH IN ITEMS

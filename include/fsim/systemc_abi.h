@@ -204,6 +204,26 @@ typedef struct fsim_sc_host_v1 {
 
     /* Complete SCV/SystemC/TLM/compiler producer identity for this process. */
     const char* scv_compatibility_identity;
+
+    /*
+     * Append-only HDL children of SystemC (present when struct_size covers
+     * them). A native module registered with register_native_module becomes
+     * an instance of the SystemVerilog or VHDL design unit `unit`, spelled
+     * like a project top ("sv:lib.module", "vhdl:lib.entity(arch)"). Its
+     * ports, registered and bound as for any native child, connect to the
+     * unit's ports of the same name; it has no processes or signals of its
+     * own. set_hdl_module_actual gives a parameter or generic an integer
+     * actual.
+     */
+    fsim_sc_status_v1 (*mark_hdl_module)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        const char* unit);
+    fsim_sc_status_v1 (*set_hdl_module_actual)(
+        void* context,
+        fsim_sc_handle_v1 module,
+        const char* name,
+        int64_t value);
 } fsim_sc_host_v1;
 
 typedef struct fsim_sc_registrar_v1 {

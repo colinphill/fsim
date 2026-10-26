@@ -146,7 +146,15 @@ void test_simir_runtime_value_delays() {
       admission_wait,
       Halt{},
   };
-  expect_failure(std::move(admission), "simulation time overflow");
+  // A wait that would end beyond the last representable time never resumes:
+  // simulation stops at TIME'HIGH (IEEE 1076-2008 14.7.5.1).
+  Interpreter admission_interpreter;
+  (void)admission_interpreter.add_process(std::move(admission));
+  const auto admission_result = admission_interpreter.run();
+  require(
+      admission_result.status == RunStatus::completed
+          && admission_result.time == 1,
+      "a wait beyond the last representable time never resumes");
 }
 
 void test_simir_inertial_transition_writes() {
@@ -246,9 +254,11 @@ void test_simir_inertial_transition_writes() {
       packed_result.status == RunStatus::completed
           && packed.signal_value(vector_output)
               == PackedLogic4::from_msb_string("1110")
+          // The whole new value selects the delay (IEEE 1800-2023
+          // 10.3.3): 1Z00 and the slice's 11 both rise.
           && packed_changes
-              == std::vector<SimulationTick>{3, 6},
-      "packed whole/slice writes use the shortest changed transition");
+              == std::vector<SimulationTick>{5, 6},
+      "packed whole/slice writes use the new value's transition");
 }
 
 void test_simir_projected_writes() {

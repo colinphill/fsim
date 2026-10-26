@@ -442,10 +442,10 @@ class NativeCacheGateTests(unittest.TestCase):
         group = {"language": "verilog", "standard": None, "includes": [],
                  "defines": [], "sources": ["fixture.v"]}
         base = campaign.fsim_phase_commands(
-            Path("fsim"), case, {"optimization": "O2", "aot": False},
+            Path("fsim"), case, {"engine": "v4", "optimization": "O2", "aot": False},
             [group], 123, 1000)
         aot = campaign.fsim_phase_commands(
-            Path("fsim"), case, {"optimization": "O2", "aot": True},
+            Path("fsim"), case, {"engine": "v4", "optimization": "O2", "aot": True},
             [group], 123, 1000)
         for commands in (base, aot):
             self.assertNotIn("--cache", commands[1])

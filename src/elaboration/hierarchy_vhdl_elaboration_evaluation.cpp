@@ -126,8 +126,11 @@ std::optional<PackedLogic4> HierarchyBuilder::evaluate_compiled_vhdl_value(
     }
     auto process = lowerer.lower_hir_input_actual(expression, destination,
         frontend::Language::Vhdl2008, path, 0U, subtype);
+    // A part of the program that could not be lowered (a callable body
+    // reports and is left out) leaves no value to evaluate.
     if (!process || lowerer.has_generated_processes()
-        || design_.process_count() != processes_before) {
+        || design_.process_count() != processes_before
+        || diagnostics_.size() != diagnostics_before) {
         for (auto index = diagnostics_before; index < diagnostics_.size();
              ++index) {
             trace_evaluation("lowering", diagnostics_[index].message);
@@ -256,6 +259,10 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
                 auto candidate = compacted;
                 if (runtime::simir::share_process_operations(
                         entry.program, candidate, signals)) {
+                    if (entry.failure) {
+                        trace_evaluation("memo", "an earlier run's failure");
+                        throw std::runtime_error { *entry.failure };
+                    }
                     trace_evaluation("memo", "an earlier run's value");
                     *value = entry.value;
                     return result_image;
@@ -266,7 +273,8 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
     std::optional<VhdlElaborationProgramMemo> memo_entry;
     if (memoize) {
         memo_entry = VhdlElaborationProgramMemo {
-            compacted, sequence, { }, *result_image, PackedLogic4 { } };
+            compacted, sequence, { }, *result_image, PackedLogic4 { },
+            std::nullopt };
         memo_entry->inputs.reserve(named_signals);
         for (std::size_t index = 0; index < named_signals; ++index) {
             memo_entry->inputs.emplace_back(
@@ -293,13 +301,32 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
         static_cast<void>(interpreter.add_container_object(std::move(object)));
     }
     static_cast<void>(interpreter.add_process(std::move(process)));
-    interpreter.start();
-    static_cast<void>(interpreter.run());
+    // A value too costly to compute at elaboration is rejected, not
+    // computed indefinitely. The budget counts operations and their work
+    // (the interpreter's charge): a few seconds, so a large memory's
+    // initializer (some 10^8 words of copies) is elaborated.
+    constexpr std::uint64_t maximum_elaboration_operations
+        = std::uint64_t { 1024U } * 1024U * 1024U;
+    interpreter.set_operation_budget(maximum_elaboration_operations);
+    constexpr std::size_t maximum_memo_entries { 4096U };
+    try {
+        interpreter.start();
+        static_cast<void>(interpreter.run());
+    } catch (const std::exception& error) {
+        if (memo_entry
+            && vhdl_elaboration_program_memo_entries_
+                < maximum_memo_entries) {
+            memo_entry->failure = error.what();
+            vhdl_elaboration_program_memo_[memo_key].push_back(
+                std::move(*memo_entry));
+            ++vhdl_elaboration_program_memo_entries_;
+        }
+        throw;
+    }
     keep_compiled_vhdl_elaboration_state(
         interpreter, compact ? &images : nullptr);
     if (value != nullptr && result_image) {
         *value = interpreter.signal_value_snapshot(*result_image);
-        constexpr std::size_t maximum_memo_entries { 4096U };
         if (memo_entry
             && vhdl_elaboration_program_memo_entries_
                 < maximum_memo_entries) {
@@ -458,7 +485,8 @@ std::optional<std::string> HierarchyBuilder::evaluate_compiled_vhdl_string(
     auto process = lowerer.lower_hir_elaboration_string(
         expression, scratch, path);
     if (!process || lowerer.has_generated_processes()
-        || design_.process_count() != processes_before) {
+        || design_.process_count() != processes_before
+        || diagnostics_.size() != diagnostics_before) {
         for (auto index = diagnostics_before; index < diagnostics_.size();
              ++index) {
             trace_evaluation("string lowering", diagnostics_[index].message);

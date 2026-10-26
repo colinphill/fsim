@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <stdexcept>
 #include <charconv>
 #include <limits>
 
@@ -564,6 +565,32 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
 #if defined(FSIM_HAS_LLVM)
     kernel = kernel || compiler::StaticKernelAheadOfTimeScope::active();
 #endif
+    // A simulation built without a run's access plan (the library API, an
+    // embedding client) may read, write or observe any object through the
+    // Simulation interface at any time: the kernel runs with every signal a
+    // host object (docs/engine-v4-semantics.md S19).
+    // Such a client may also install execution-point hooks, read process
+    // locals and request stops, so the plan is the debugger's: every member
+    // a stoppable thread with its debug points and registers retained.
+    if (kernel && !built.cone_fusion && !built.kernel_access.admit) {
+        application_detail::plan_kernel_access(built, engine, true, true);
+        built.kernel_access.debug = built.kernel_access.admit;
+    }
+    // FSIM_V4_STRICT=1: a kernel run that would leave any process to the
+    // reference interpreter fails instead, naming the gate, so the tests
+    // list every feature v4 does not yet own (HANDOFF G3).
+    const char* strict_switch = std::getenv("FSIM_V4_STRICT");
+    const bool strict = kernel && strict_switch != nullptr
+        && std::string_view { strict_switch } == "1";
+    const auto refuse = [&](const std::string_view reason) {
+        if (strict) {
+            throw std::runtime_error { "FSIM_V4_STRICT: the v4 kernel "
+                "refused the design (" + std::string { reason } + ")" };
+        }
+    };
+    if (kernel && !built.cone_fusion && !built.kernel_access.admit) {
+        refuse("access_gate");
+    }
     if ((built.cone_fusion || built.kernel_access.admit) && kernel) {
         auto plan = [&] {
             const application_detail::ScopedPhaseProfile planning {
@@ -630,6 +657,11 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                           << row.reason << " count=" << row.count
                           << " example=" << row.example << '\n';
             }
+        }
+        // A process left to the reference interpreter is refused when it
+        // first runs (Impl::note_interpreted_execute).
+        if (plan.disabled) {
+            refuse(plan.disabled_reason);
         }
         // A trivial plan (no processes, no specification) runs on the
         // ordinary path: there is nothing for the kernel to schedule.

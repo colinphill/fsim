@@ -203,6 +203,28 @@ public:
     /// scheduler discarded (`discarded`) and schedules the hosted final
     /// blocks. Final blocks the kernel does not host are the caller's.
     void run_finals(bool discarded);
+    /// Debugger plan: members stop at their debug points.
+    [[nodiscard]] bool debug_points() const noexcept { return debug_points_; }
+    /// A mixed kernel with a host boundary: its first round, the VHDL
+    /// initialization, runs in the first delta after the host's time-zero
+    /// SystemVerilog work it reads (vhdl_round_waits_for_host), so
+    /// Interpreter::start queues its first activation instead of running it.
+    [[nodiscard]] bool queues_first_activation() const noexcept
+    {
+        return mixed_ && host_boundary_;
+    }
+    /// The host process the kernel runs as, a member's or the synthetic one
+    /// of a design whose processes are all hosted.
+    [[nodiscard]] bool is_host(const ProcessId process) const noexcept
+    {
+        return process == host_process_;
+    }
+    /// A SystemVerilog kernel's first member that starts a delta late
+    /// (Member::start_late): Interpreter::start queues the late activation
+    /// (queue_late_start) at that process's place among the late starters.
+    [[nodiscard]] std::optional<ProcessId> first_late_process() const;
+    void queue_late_start(ProcessId order);
+    void start_late_members();
     /// Debugger: whether `process` is a native (thread) member, and the
     /// values of its registers. The registers are shared by the member's
     /// threads; a compiled member keeps them in its kernel register file.
@@ -350,6 +372,9 @@ private:
         /// of the member reached, and the registers that may have been
         /// written before it (debug_register_defined).
         std::uint32_t debug_pc { static_kernel_detail::no_slot };
+        /// The debug points (by operation) some thread of the member has
+        /// reached.
+        std::vector<std::uint8_t> debug_hit;
         mutable std::vector<std::uint64_t> debug_defined;
         mutable std::uint32_t debug_defined_pc { static_kernel_detail::no_slot };
     };
@@ -859,6 +884,10 @@ private:
         /// Debugger plan: the process id of a fork child (as the reference
         /// evaluator numbers them); no_slot for a member's own threads.
         std::uint32_t debug_process { static_kernel_detail::no_slot };
+        /// The thread's stable order as a reference process: its member's
+        /// process, or for a fork child the number the reference evaluator
+        /// gives the child it spawns, after the processes that exist.
+        ProcessId order { };
     };
     struct ForkGroup {
         std::uint32_t parent { };
@@ -991,6 +1020,9 @@ private:
     std::vector<std::uint8_t> slot_waitable_;
     std::vector<Logic4> slot_wait_seen_;
     void timer_due(SimulationTick time);
+    // Activates the kernel from a due timer's host task (its own and its
+    // hosted processes'), in that task's Active round.
+    void activate_for_due_timer();
     void vhdl_timer_due(SimulationTick time);
     void arm_vhdl_timer();
     /// Runs the VHDL threads of this round; false when none was ready.
@@ -1162,7 +1194,10 @@ private:
     /// Debugger plan: fork children by their reference-style process id, and
     /// the next id to hand out.
     std::unordered_map<ProcessId, std::uint32_t> debug_children_;
-    std::size_t debug_next_child_ { };
+    std::size_t next_child_process_ { };
+    /// The thread running now (no_slot outside one): its host updates are
+    /// its process's (write_host).
+    std::uint32_t running_thread_ { static_kernel_detail::no_slot };
     /// Whether the interpreter would show `reg` of `member` as written at the
     /// member's last debug point (else its debug local is <uninitialized>).
     [[nodiscard]] bool debug_register_defined(
@@ -1310,6 +1345,13 @@ private:
     std::uint32_t scan_level_ { };
     std::size_t queued_count_ { };
     bool initialized_ { };
+    /// Mixed kernels with a host boundary: a round's VHDL work waits in the
+    /// delta's generic Active queue for its SystemVerilog Active work
+    /// (defer_vhdl_round); the activation that runs it.
+    bool vhdl_round_deferred_ { };
+    bool vhdl_round_task_ { };
+    [[nodiscard]] bool vhdl_round_waits_for_host() const;
+    void defer_vhdl_round();
     bool nonblocking_committed_ { };
     /// This activation staged an Active update to a host signal: #0
     /// threads (Inactive region) resume only after the host applies it.
@@ -1327,6 +1369,8 @@ private:
     /// (Member::start_late), in member order.
     std::vector<std::uint32_t> late_members_;
     bool late_start_armed_ { };
+    /// The running activation is the late-start task of queue_late_start.
+    bool late_start_due_ { };
 
     // Hosted tier (simir_static_kernel_hosted.cpp). A hosted process keeps
     // its own ProcessState and runs on the reference evaluator
@@ -1374,6 +1418,16 @@ private:
     /// This activation runs in a host Inactive-region task (or the NBA one):
     /// hosted Active work waits for the host's Active region.
     bool hosted_inactive_task_ { };
+    /// The activation stopped for host Active-region work its hosted
+    /// processes queued (yield_to_host_active); it resumes in that region.
+    bool host_active_yield_ { };
+    /// The rest of an Active round stopped for host tasks of the running
+    /// Active batch that come first in stable order; the kernel resumes it
+    /// in that batch at host_batch_resume_ (run_merged_active).
+    std::vector<HostedReady> batch_hosted_;
+    std::vector<std::uint32_t> batch_threads_;
+    std::optional<StableOrder> host_batch_resume_;
+    bool batch_resume_queued_ { };
     /// The one-shot token that lets the activation run hosted #0 resumptions.
     bool hosted_inactive_region_ { };
     bool hosted_inactive_deferred_ { };
@@ -1401,6 +1455,24 @@ private:
     void collect_hosted();
     /// Runs one round of the hosted Active region; false when none was ready.
     [[nodiscard]] bool run_hosted_active();
+    void hold_woken(std::size_t members, std::size_t threads);
+    /// Mixed kernels: the hosted processes of one scheduling domain.
+    [[nodiscard]] bool run_hosted_active_domain(bool systemverilog);
+    [[nodiscard]] bool yield_to_host_active();
+    /// The running host Active batch has a task to run before the kernel's
+    /// process at this stable order.
+    [[nodiscard]] bool host_batch_ahead(StableOrder order) const;
+    /// The stable order the kernel resumes at in a later host Active batch:
+    /// that of its first ready process.
+    [[nodiscard]] StableOrder host_resume_order() const;
+    void requeue_host_active();
+    /// Queues the kernel's resumption into the running host Active batch.
+    void queue_batch_resume(StableOrder order);
+    [[nodiscard]] bool hosted_systemverilog(ProcessId process) const;
+    [[nodiscard]] bool hosted_systemverilog_pending() const;
+    /// One Active round with both hosted and native processes ready: they
+    /// run interleaved in process order, as the reference round runs them.
+    void run_merged_active();
     /// Runs the hosted #0 resumptions; false when none was ready.
     [[nodiscard]] bool run_hosted_inactive();
     void run_hosted(const HostedReady& ready);

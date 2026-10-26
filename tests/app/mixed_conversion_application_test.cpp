@@ -378,6 +378,11 @@ void compare_captures(
   assert(reference.result.delta == compiled.result.delta);
   assert(reference.values == compiled.values);
   assert(reference.debug_local == compiled.debug_local);
+  if (reference.vcd != compiled.vcd) {
+    std::cerr << "mixed conversion reference VCD:\n" << reference.vcd
+              << "\nmixed conversion compiled VCD:\n" << compiled.vcd
+              << '\n';
+  }
   assert(reference.vcd == compiled.vcd);
   assert(reference.keys == compiled.keys);
   assert(reference.conversion_count == compiled.conversion_count);
@@ -385,6 +390,9 @@ void compare_captures(
 }
 
 void verify_capture(const Capture& capture, const bool edited) {
+  for (const auto& value : capture.values) {
+    std::cerr << "verify_capture value " << value << '\n';
+  }
   assert(capture.result.status == fsim::runtime::RunStatus::stopped);
   assert(capture.result.time == 1);
   assert((capture.values == std::vector<std::string>{

@@ -68,8 +68,29 @@ A VHDL, Verilog, or SystemVerilog instance may resolve a SystemC factory from
 the compiled library catalog. An elaboration top can use `LIBRARY.FACTORY`;
 add the `systemc:` prefix when a name is ambiguous across languages. Ports use
 ordinary official
-Accellera typed construction and binding syntax. SystemC source does not
-declare HDL proxy children; compose such children in the owning HDL hierarchy.
+Accellera typed construction and binding syntax.
+
+SystemC source instantiates a SystemVerilog module or VHDL entity with
+`fsim::systemc::hdl_module`, at any depth of a SystemC hierarchy (a SystemC
+top, a SystemC instance under HDL, or a native child of either). Derive from
+it, declare the HDL ports as `sc_in`/`sc_out`/`sc_inout` members of the same
+names and directions, and pass the unit spelled like a project top:
+
+```cpp
+struct Adder : fsim::systemc::hdl_module {
+  sc_core::sc_in<sc_dt::sc_lv<8>> a{"a"};
+  sc_core::sc_out<sc_dt::sc_lv<8>> sum{"sum"};
+  Adder(sc_core::sc_module_name name)
+      : hdl_module{name, "sv:work.adder"} { set_actual("WIDTH", 8); }
+};
+```
+
+Bind the ports to the parent's channels (or to the parent's ports of the same
+name). `set_actual` gives an integer actual to a parameter or generic. The
+module has no processes, signals or children of its own; the HDL instance
+lives at the module's hierarchical path and may itself instantiate further
+HDL or SystemC. Elaboration reports `FSIM-ELAB-BIND-066` to `-068` for an
+instance that breaks these rules.
 
 The bridge validates direction, encoding, width, hierarchy ownership, and
 complete binding before simulation. Supported port, signal-interface, and

@@ -135,10 +135,20 @@ std::optional<std::uint64_t> SystemVerilogTypeDescriptor::total_bits() const
 std::string SystemVerilogTypeDescriptor::canonical() const
 {
     std::string result;
+    // An integer atom of predefined width matches the simple bit vector of
+    // the same state count, signedness and [width-1:0] range (IEEE
+    // 1800-2023 6.22.1 e), so both spell that vector; reg is logic (6.11.2).
+    const bool atom_vector = kind == Kind::integer_atom && bits
+        && packed.empty()
+        && (keyword == "byte" || keyword == "shortint" || keyword == "int"
+            || keyword == "longint" || keyword == "integer"
+            || keyword == "time");
     switch (kind) {
     case Kind::integer_atom:
     case Kind::integer_vector:
-        result = keyword;
+        result = atom_vector ? (four_state ? "logic" : "bit")
+            : keyword == "reg" ? std::string { "logic" }
+                               : keyword;
         break;
     case Kind::real:
         result = "real";
@@ -187,6 +197,9 @@ std::string SystemVerilogTypeDescriptor::canonical() const
             result += ']';
         }
     };
+    if (atom_vector) {
+        result += '[' + std::to_string(*bits - 1U) + ":0]";
+    }
     append(packed);
     if (!unpacked.empty()) {
         result += " $";

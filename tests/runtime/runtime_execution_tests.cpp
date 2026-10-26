@@ -1054,16 +1054,21 @@ void test_simir_postponed_process_ordering()
     using namespace fsim::runtime;
     using namespace fsim::runtime::simir;
 
+    // SystemVerilog regions (IEEE 1800-2023 4.4); a generic-domain postponed
+    // process runs during initialization like a VHDL one (IEEE 1076-2019
+    // 14.7.5.2).
     Interpreter interpreter;
     Process active;
     active.id = 0;
     active.name = "active";
+    active.scheduling_domain = ProcessSchedulingDomain::systemverilog;
     active.operations = { Display { "active", true }, Halt { } };
     (void)interpreter.add_process(std::move(active));
 
     Process observed;
     observed.id = 1;
     observed.name = "observed";
+    observed.scheduling_domain = ProcessSchedulingDomain::systemverilog;
     observed.observed = true;
     observed.operations = { Display { "observed", true }, Halt { } };
     (void)interpreter.add_process(std::move(observed));
@@ -1071,6 +1076,7 @@ void test_simir_postponed_process_ordering()
     Process reactive;
     reactive.id = 2;
     reactive.name = "reactive";
+    reactive.scheduling_domain = ProcessSchedulingDomain::systemverilog;
     reactive.reactive = true;
     reactive.operations = { Display { "reactive", true }, Halt { } };
     (void)interpreter.add_process(std::move(reactive));
@@ -1078,6 +1084,7 @@ void test_simir_postponed_process_ordering()
     Process postponed;
     postponed.id = 3;
     postponed.name = "postponed";
+    postponed.scheduling_domain = ProcessSchedulingDomain::systemverilog;
     postponed.postponed = true;
     postponed.operations = { Display { "postponed", true }, Halt { } };
     (void)interpreter.add_process(std::move(postponed));

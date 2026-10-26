@@ -182,27 +182,33 @@ namespace {
     {
         ScvNativeSmartPtrRegistry registry;
         diagnostic::Engine setup_diagnostics;
-        const auto aggregate = registry.create(ScvNativeValueKind::aggregate,
-            { 0x173U, 0xe001U }, "resource.constraints", 17318U,
+        const auto first = registry.create(ScvNativeValueKind::aggregate,
+            { 0x173U, 0xe001U }, "resource.constraints.first", 17318U,
             setup_diagnostics);
-        if (!aggregate || setup_diagnostics.has_error())
+        const auto second = registry.create(ScvNativeValueKind::aggregate,
+            { 0x173U, 0xe002U }, "resource.constraints.second", 17319U,
+            setup_diagnostics);
+        if (!first || !second || setup_diagnostics.has_error())
             return false;
 
         const std::vector<ScvNativeExtensionStep> path {
             { ScvNativeExtensionStepKind::field, 0U }
         };
-        if (!registry.assign_signed(*aggregate, path, 0, setup_diagnostics))
+        if (!registry.assign_signed(*first, path, 0, setup_diagnostics)
+            || !registry.assign_signed(*second, path, 0, setup_diagnostics))
             return false;
 
+        // A satisfiable relation between two variables: no single-variable
+        // pruning settles it, so the search needs more than one step and
+        // stops at the step budget.
         ScvConstraintRequest request;
         request.variables = {
-            { "resource.constraints.value", *aggregate, path, { 1, 2, 3 } },
+            { "resource.constraints.first", *first, path, { 1, 2, 3 } },
+            { "resource.constraints.second", *second, path, { 1, 2, 3 } },
         };
         request.clauses = {
-            { "value-is-one", { { 0U, 1 } },
-                ScvConstraintRelation::equal, 1, false },
-            { "value-is-three", { { 0U, 1 } },
-                ScvConstraintRelation::equal, 3, false },
+            { "sum-is-six", { { 0U, 1 }, { 1U, 1 } },
+                ScvConstraintRelation::equal, 6, false },
         };
         request.limits.max_search_steps = std::min<std::uint64_t>(
             search_limit, 1U);
@@ -211,7 +217,8 @@ namespace {
             registry, request, expected_diagnostics);
         diagnostic::Engine release_diagnostics;
         const bool released
-            = registry.release(*aggregate, release_diagnostics);
+            = registry.release(*first, release_diagnostics)
+            && registry.release(*second, release_diagnostics);
         return result.status == ScvConstraintStatus::resource_exhausted
             && result.assignments.empty() && expected_diagnostics.has_error()
             && released && !release_diagnostics.has_error()

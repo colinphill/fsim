@@ -56,23 +56,27 @@ fsim_require_tokens(include/fsim/systemc/accellera.hpp
   "#include <systemc.h>"
   "FSIM_SYSTEMC_ACCELERA_VERSION \"3.0.2\""
   "9b3693ed286aab958b9e5d79bb0ad3bc523bbc46931100553275352038f4a0c4"
-  "FSIM_SYSTEMC_BRIDGE_REVISION 2u"
+  "FSIM_SYSTEMC_BRIDGE_REVISION 3u"
   "fsim_systemc_accellera_compatibility_identity"
   "backend_bindable_endpoint"
   "backend_port"
   "SC_FSIM_EXPORT_AS")
+# HDL children of SystemC are the appended host entries and the
+# fsim::systemc::hdl_module base; the pre-Accellera facade's macro, type
+# registry and implementation selector stay removed.
 fsim_require_tokens(include/fsim/systemc_abi.h
-  "FSIM_SYSTEMC_ABI_VERSION 4u")
+  "FSIM_SYSTEMC_ABI_VERSION 4u"
+  "(*mark_hdl_module)("
+  "(*set_hdl_module_actual)(")
 fsim_forbid_tokens(include/fsim/systemc_abi.h
   "fsim_sc_module_factory_v1"
   "(*register_factory)("
-  "mark_hdl_module"
-  "set_hdl_module_actual"
   "set_hdl_module_implementation")
+fsim_require_tokens(include/fsim/systemc/accellera.hpp
+  "class hdl_module : public sc_core::sc_module")
 fsim_forbid_tokens(include/fsim/systemc/accellera.hpp
   "SC_FSIM_HDL_MODULE"
-  "hdl_module_type"
-  "class hdl_module")
+  "hdl_module_type")
 fsim_forbid_tokens(include/fsim/systemc/hierarchy.hpp
   "ForeignChildDescription"
   "foreign_children")

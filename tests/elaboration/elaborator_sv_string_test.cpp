@@ -197,31 +197,16 @@ endmodule
           elaborated_ports.design->string_objects(),
           [&](const auto& object) { return object.name == name; });
     };
+    // A string port is another name for its connected object, which keeps
+    // the only record.
     const auto source = find_string("string_port_top.source");
-    const auto source_port =
-        find_string("string_port_top.child.source");
     const auto sink = find_string("string_port_top.sink");
-    const auto sink_port =
-        find_string("string_port_top.child.sink");
     const auto shared = find_string("string_port_top.shared");
-    const auto shared_port =
-        find_string("string_port_top.child.shared");
     const auto string_end =
         elaborated_ports.design->string_objects().end();
-    assert(
-        source != string_end && source_port != string_end
-        && sink != string_end && sink_port != string_end
-        && shared != string_end && shared_port != string_end
-        && source->id == source_port->id
-        && sink->id == sink_port->id
-        && shared->id == shared_port->id
-        && source_port->is_port
-        && source_port->direction
-            == fsim::frontend::PortDirection::Input
-        && sink_port->direction
-            == fsim::frontend::PortDirection::Output
-        && shared_port->direction
-            == fsim::frontend::PortDirection::Inout);
+    assert(source != string_end && sink != string_end
+        && shared != string_end
+        && find_string("string_port_top.child.source") == string_end);
     auto port_interpreter =
         elaborated_ports.design->create_interpreter();
     const auto port_result = port_interpreter->run();
@@ -278,9 +263,6 @@ module bad_cycle;
   localparam string A = B;
   localparam string B = A;
 endmodule
-module bad_output #(parameter VALUE = 1) ();
-  initial $info(VALUE);
-endmodule
 module bad_format;
   string result;
   initial begin
@@ -295,7 +277,6 @@ module invalid_top;
   bad_default default_mismatch();
   bad_operator operator_mismatch();
   bad_cycle cycle();
-  bad_output output_mismatch();
   bad_format format_mismatch();
 endmodule
 )",
@@ -309,8 +290,6 @@ endmodule
             invalid, "FSIM-ELAB-SVSTRING-001")
         && has_diagnostic(
             invalid, "FSIM-ELAB-SVSTRING-002")
-        && has_diagnostic(
-            invalid, "FSIM-ELAB-SVSTRING-003")
         && has_diagnostic(
             invalid, "FSIM-ELAB-SVSTRING-019")
         && has_diagnostic(

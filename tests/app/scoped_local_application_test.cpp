@@ -211,35 +211,35 @@ module scoped_local_app;
   logic [1:0] count;
   logic [7:0] value;
   initial begin : root_scope
-    logic [7:0] value = 8'd1;
+    automatic logic [7:0] value = 8'd1;
     result = 8'd0;
     count = 2'd0;
     begin : inner_scope
-      logic [7:0] value = 8'd4;
+      automatic logic [7:0] value = 8'd4;
       result = result + value;
     end : inner_scope
     result = result + value;
     begin
-      logic [7:0] anonymous = 8'd1;
+      automatic logic [7:0] anonymous = 8'd1;
       result = result + anonymous;
     end
     for (int lane = 0; lane < 2; lane++) begin : each
-      logic [7:0] scratch = 8'd2;
+      automatic logic [7:0] scratch = 8'd2;
       result = result + scratch;
       scratch = 8'd9;
     end : each
     while (count < 2) begin : dynamic
-      logic [7:0] scratch = 8'd3;
+      automatic logic [7:0] scratch = 8'd3;
       result = result + scratch;
       scratch = 8'd7;
       count++;
     end : dynamic
     if (count == 2) begin : selected
-      logic [7:0] branch = 8'd5;
+      automatic logic [7:0] branch = 8'd5;
       result = result + branch;
     end : selected
     else begin : alternate
-      logic [7:0] branch = 8'd8;
+      automatic logic [7:0] branch = 8'd8;
       result = result + branch;
     end : alternate
   end : root_scope

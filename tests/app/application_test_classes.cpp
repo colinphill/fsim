@@ -1061,9 +1061,14 @@ endmodule
         const auto package_iterator = startup_vpi.iterate_objects(
             fsim::runtime::SystemVerilogVpiObjectKind::Package);
         assert(package_iterator);
-        const auto first_package = startup_vpi.scan(package_iterator.value);
-        assert(first_package
-            && first_package.value == startup_vpi_package.value->handle);
+        // The compilation unit's `$unit` package comes first (IEEE
+        // 1800-2023 3.12.1), then the named package.
+        const auto unit_package = startup_vpi.scan(package_iterator.value);
+        assert(unit_package
+            && unit_package.value != startup_vpi_package.value->handle);
+        const auto named_package = startup_vpi.scan(package_iterator.value);
+        assert(named_package
+            && named_package.value == startup_vpi_package.value->handle);
         assert(startup_vpi.scan(package_iterator.value).error
             == fsim::runtime::SystemVerilogVpiIteratorError::End);
         assert(startup_vpi.release_iterator(package_iterator.value)
@@ -1162,7 +1167,7 @@ endmodule
         auto& direct_run_vpi
             = direct_run_simulation.systemverilog_vpi_objects();
         const auto direct_run_package_count = direct_run_vpi.find(
-            "package_static_notification_pkg.package_count");
+            "package_static_notification_pkg::package_count");
         assert(direct_run_package_count);
         std::size_t direct_run_vpi_value_events { };
         const auto direct_run_vpi_observer = direct_run_vpi.add_value_observer(
@@ -2150,7 +2155,22 @@ void ApplicationTestFixture::test_class_simulation_integration()
             test_uvm_component_specialization);
         const auto param_item_wrapper = uvm_registry.wrapper_by_specialization(uvm_param_item_specialization);
         const auto factory_item_wrapper = uvm_registry.wrapper_by_specialization(uvm_factory_item_specialization);
-        assert(uvm_registry.size() == 4 && item_wrapper != 0 && component_wrapper != 0 && param_item_wrapper != 0 && factory_item_wrapper != 0 && item_wrapper != component_wrapper && param_item_wrapper != item_wrapper && param_item_wrapper != component_wrapper && uvm_registry.wrapper_by_name("UvmItem") == item_wrapper && uvm_registry.wrapper_by_name("UvmParamItem#(WIDTH=8)") == param_item_wrapper && uvm_registry.wrapper_by_name("UvmFactoryItem") == factory_item_wrapper && uvm_registry.wrapper_by_name("UvmComponent") == component_wrapper && uvm_registry.snapshot(item_wrapper).kind == fsim::runtime::SystemVerilogUvmRegisteredKind::Object && uvm_registry.snapshot(component_wrapper).kind == fsim::runtime::SystemVerilogUvmRegisteredKind::Component && uvm_registry.snapshot(param_item_wrapper).parameterized);
+        if (uvm_registry.size() != 4) {
+            for (const auto& type : uvm_registry.types()) {
+                std::cerr << "uvm registry: " << type.type_name << " "
+                          << type.specialization_identity << '\n';
+            }
+        }
+        assert(uvm_registry.size() == 4);
+        assert(item_wrapper != 0 && component_wrapper != 0 && param_item_wrapper != 0 && factory_item_wrapper != 0);
+        assert(item_wrapper != component_wrapper && param_item_wrapper != item_wrapper && param_item_wrapper != component_wrapper);
+        assert(uvm_registry.wrapper_by_name("UvmItem") == item_wrapper);
+        assert(uvm_registry.wrapper_by_name("UvmParamItem#(WIDTH=8)") == param_item_wrapper);
+        assert(uvm_registry.wrapper_by_name("UvmFactoryItem") == factory_item_wrapper);
+        assert(uvm_registry.wrapper_by_name("UvmComponent") == component_wrapper);
+        assert(uvm_registry.snapshot(item_wrapper).kind == fsim::runtime::SystemVerilogUvmRegisteredKind::Object);
+        assert(uvm_registry.snapshot(component_wrapper).kind == fsim::runtime::SystemVerilogUvmRegisteredKind::Component);
+        assert(uvm_registry.snapshot(param_item_wrapper).parameterized);
         const auto registered_object = simulation.uvm_registry().create_object_by_type(item_wrapper,
             "registered_object");
         const auto registered_component = simulation.uvm_registry().create_component_by_name(

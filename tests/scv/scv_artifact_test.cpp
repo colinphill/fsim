@@ -77,7 +77,8 @@ int main()
         { }, { }, { } });
 
     const auto serialized = fsim::library::serialize_metadata(metadata);
-    assert(serialized.starts_with("format = 6\n"));
+    assert(serialized.starts_with(
+        "format = " + std::to_string(fsim::library::kFormatVersion) + "\n"));
     assert(serialized.find("scv_compatibility = \"") != std::string::npos);
     fsim::diagnostic::Engine parse_diagnostics;
     const auto parsed = fsim::library::parse_metadata(

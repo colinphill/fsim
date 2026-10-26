@@ -359,7 +359,12 @@ ScalarSurfaceCapture verify_scalar_surfaces(
         debugger.execute({ "chandle", std::to_string(foreign) });
         debugger.execute({ "deposit", "scalar_surfaces.foreign", std::to_string(foreign) });
         const auto snapshots = simulation.scalar_signal_snapshots();
-        assert(snapshots.size() == 7);
+        // The static function accumulate_real adds its own static
+        // variables (IEEE 1800-2017 6.21); seven belong to the module.
+        assert(std::ranges::count_if(snapshots, [&](const auto& snapshot) {
+            return !snapshot.name.starts_with(
+                "scalar_surfaces.accumulate_real");
+        }) == 7);
         assert(
             std::ranges::any_of(snapshots, [&](const auto& snapshot) {
                 return snapshot.signal == *time_signal

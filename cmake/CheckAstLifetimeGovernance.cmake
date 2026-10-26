@@ -604,7 +604,7 @@ fsim_require_ast_lifetime_tokens("${FSIM_APPLICATION_BUILD}"
   "std::optional<BuiltProject> build_checked_project("
   "release_compiled_project(std::move(*workspace))"
   "workspace.reset();"
-  "auto elaborated = elaboration::elaborate("
+  "return elaboration::elaborate("
   "auto design_ir = build_design_ir(")
 file(READ "${FSIM_APPLICATION_BUILD}" FSIM_APPLICATION_BUILD_TEXT)
 string(FIND "${FSIM_APPLICATION_BUILD_TEXT}"
@@ -612,7 +612,7 @@ string(FIND "${FSIM_APPLICATION_BUILD_TEXT}"
 string(FIND "${FSIM_APPLICATION_BUILD_TEXT}"
   "workspace.reset();" FSIM_DESTROY_OFFSET)
 string(FIND "${FSIM_APPLICATION_BUILD_TEXT}"
-  "auto elaborated = elaboration::elaborate(" FSIM_ELABORATE_OFFSET)
+  "return elaboration::elaborate(" FSIM_ELABORATE_OFFSET)
 if(FSIM_RELEASE_OFFSET EQUAL -1 OR FSIM_DESTROY_OFFSET EQUAL -1 OR
    FSIM_ELABORATE_OFFSET EQUAL -1 OR
    NOT FSIM_RELEASE_OFFSET LESS FSIM_DESTROY_OFFSET OR

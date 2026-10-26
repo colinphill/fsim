@@ -8,6 +8,7 @@
 
 #include <boost/pfr/core.hpp>
 
+#include <map>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -1077,6 +1078,10 @@ compiled_cache_source_mappings(
     // One canonical identity per producer instead of comparing every pair
     // of producers on the file system.
     std::set<std::string> canonical_producers;
+    // Hard links share no canonical path: producers of one size are
+    // compared as files.
+    std::map<std::uintmax_t, std::vector<std::filesystem::path>>
+        producers_by_size;
     std::set<std::string> logical_names;
     bool valid = true;
     const auto add = [&](const std::filesystem::path& path,
@@ -1095,6 +1100,20 @@ compiled_cache_source_mappings(
             ? producer_key : source_path_key(canonical);
         if (!canonical_producers.insert(canonical_key).second) {
             return;
+        }
+        std::error_code size_error;
+        const auto size = support::native_fs::file_size(path, size_error);
+        if (!size_error) {
+            auto& peers = producers_by_size[size];
+            if (std::ranges::any_of(peers, [&](const auto& peer) {
+                    std::error_code equivalent_error;
+                    return support::native_fs::equivalent(
+                               path, peer, equivalent_error)
+                        && !equivalent_error;
+                })) {
+                return;
+            }
+            peers.push_back(path);
         }
         const auto producer = support::path_to_utf8(path.lexically_normal());
         producer_keys.insert(producer_key);

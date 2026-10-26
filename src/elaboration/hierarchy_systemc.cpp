@@ -805,6 +805,11 @@ HierarchyBuilder::construct_systemc_instance(const std::string& path,
         }
         design_.systemc_instances_.push_back(std::move(info));
 
+        // The Accellera bridge's kernel process ($accellera_kernel) of a
+        // SystemC root also wakes on the signals its HDL children drive
+        // (`wakes`), so it imports them into the native kernel; such a root
+        // emits its processes after its children.
+        const auto emit_processes = [&](const std::vector<SignalId>& wakes) {
         for (const auto& external : instance.processes) {
             runtime::simir::Process process;
             process.id = static_cast<ProcessId>(
@@ -862,6 +867,12 @@ HierarchyBuilder::construct_systemc_instance(const std::string& path,
                 process.static_sensitivity.push_back(
                     {signal->second, edge});
             }
+            if (external.name == "$accellera_kernel") {
+                for (const auto wake : wakes) {
+                    process.static_sensitivity.push_back(
+                        {wake, runtime::simir::EdgeKind::any});
+                }
+            }
             std::sort(
                 process.static_sensitivity.begin(),
                 process.static_sensitivity.end(),
@@ -896,6 +907,25 @@ HierarchyBuilder::construct_systemc_instance(const std::string& path,
                 {}});
             design_.append_process_record(std::move(process));
         }
+        };
+        const auto has_hdl_child = [](const auto& self,
+                                      const SystemCInstanceDescription& module)
+            -> bool {
+            return std::ranges::any_of(module.native_children,
+                [&](const SystemCInstanceDescription& child) {
+                    return child.hdl || self(self, child);
+                });
+        };
+        const bool defer_processes
+            = !native_child && has_hdl_child(has_hdl_child, instance);
+        std::vector<SignalId> hdl_wakes;
+        auto* const saved_hdl_wakes = systemc_hdl_wakes_;
+        if (!native_child) {
+            systemc_hdl_wakes_ = &hdl_wakes;
+        }
+        if (!defer_processes) {
+            emit_processes({});
+        }
 
         for (const auto& child : instance.native_children) {
             const auto prefix = path + ".";
@@ -909,6 +939,10 @@ HierarchyBuilder::construct_systemc_instance(const std::string& path,
                     "native SystemC child under '" + path
                         + "' has inconsistent hierarchy metadata",
                     {});
+                continue;
+            }
+            if (child.hdl) {
+                instantiate_systemc_hdl_child(child, objects);
                 continue;
             }
             SignalMap child_aliases;
@@ -1018,6 +1052,12 @@ HierarchyBuilder::construct_systemc_instance(const std::string& path,
                 std::move(child_aliases),
                 std::move(child_objects),
                 true);
+        }
+        if (defer_processes) {
+            emit_processes(hdl_wakes);
+        }
+        if (!native_child) {
+            systemc_hdl_wakes_ = saved_hdl_wakes;
         }
 
         stack_.pop_back();

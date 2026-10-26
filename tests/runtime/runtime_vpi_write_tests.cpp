@@ -230,15 +230,17 @@ void test_systemverilog_vpi_checked_writes() {
                  variable.value,
                  SystemVerilogVpiWriteKind::Release)
               == SystemVerilogVpiValueError::None
+          // A released variable keeps its forced value until its next
+          // assignment (IEEE 1800-2023 10.6.2, 38.34).
           && registry.read_value(
                  variable.value,
                  SystemVerilogVpiValueFormat::Scalar).scalar
-              == Logic9::zero
+              == Logic9::x
           && control.apply(
                  variable.value,
                  SystemVerilogVpiWriteKind::Release)
               == SystemVerilogVpiValueError::NotForced,
-      "VPI force masks deposits and release reveals the latest underlying value");
+      "VPI force masks deposits and a released variable keeps the forced value");
 
   require_vpi_write(
       control.apply(
@@ -328,8 +330,8 @@ void test_systemverilog_vpi_checked_writes() {
           && registry.read_value(
                  variable.value,
                  SystemVerilogVpiValueFormat::Scalar).scalar
-              == Logic9::one,
-      "VPI delayed release reveals the deposited underlying value");
+              == Logic9::x,
+      "VPI delayed release keeps the variable's forced value");
 
   const auto superseded = control.schedule(
       variable.value,

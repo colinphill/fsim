@@ -784,12 +784,14 @@ static bool publish_design_artifact_impl(
         metadata.systemc_plugins.push_back(record);
         const auto metadata_path = embedded / systemc::kIncrementalPluginMetadataFilename;
         const auto native_path = embedded / plugin->library;
-        add_payload(
+        // A plug-in is a library object: its payloads keep the SHA-256
+        // identities its provenance record names, which the index repeats.
+        metadata.payloads.push_back({
             "systemc-plugin-metadata:" + plugin->logical_library,
-            metadata_path, metadata_bytes);
-        add_payload(
+            metadata_path, record.metadata_checksum });
+        metadata.payloads.push_back({
             "systemc-plugin-native:" + plugin->logical_library,
-            native_path, *native_bytes);
+            native_path, record.library_checksum });
         payloads.push_back({ metadata_path, metadata_bytes,
             record.metadata_checksum });
         payloads.push_back({ native_path, std::move(*native_bytes),

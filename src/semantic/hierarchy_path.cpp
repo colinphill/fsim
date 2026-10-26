@@ -93,7 +93,8 @@ struct HierarchyPathTable::Storage final {
         if (path.size() > kChunkBytes - chunk_used) {
             const auto size = std::max(kChunkBytes, path.size());
             chunks.push_back(std::make_unique<char[]>(size));
-            chunk_used = size == kChunkBytes ? 0U : size;
+            // An oversized path owns its chunk: the next path starts a new one.
+            chunk_used = size == kChunkBytes ? 0U : kChunkBytes;
             if (size != kChunkBytes) {
                 std::memcpy(chunks.back().get(), path.data(), path.size());
                 return { chunks.back().get(), path.size() };

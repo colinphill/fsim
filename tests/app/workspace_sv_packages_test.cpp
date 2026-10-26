@@ -252,7 +252,9 @@ void transitive_package(const std::filesystem::path& directory)
     const auto facade = compile_and_discard_source(directory / "facade.sv", R"(
 package facade;
   import values::*;
-  export values::*;
+  // A wildcard export exports only the names the package references (IEEE
+  // 1800-2023 26.6); a named export is such a reference.
+  export values::word_t, values::Box, values::increment;
 endpackage
 )", "work", &provider);
     const auto consumer = compile_and_discard_source(directory / "consumer.sv", R"(

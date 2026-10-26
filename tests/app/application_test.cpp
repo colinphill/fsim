@@ -45,6 +45,61 @@ int fsim_application_case_core_non_project_cli() {
       &fsim::test::ApplicationTestFixture::test_non_project_cli);
 }
 
+int fsim_application_case_systemc_matrix_core() {
+  return run_application_case("systemc matrix core",
+      &fsim::test::ApplicationTestFixture::test_systemc_matrix_core);
+}
+
+int fsim_application_case_systemc_matrix_hierarchy_1() {
+  return run_application_case("systemc matrix hierarchy 1",
+      &fsim::test::ApplicationTestFixture::test_systemc_matrix_hierarchy_1);
+}
+
+int fsim_application_case_systemc_matrix_hierarchy_2() {
+  return run_application_case("systemc matrix hierarchy 2",
+      &fsim::test::ApplicationTestFixture::test_systemc_matrix_hierarchy_2);
+}
+
+int fsim_application_case_systemc_matrix_hierarchy_3() {
+  return run_application_case("systemc matrix hierarchy 3",
+      &fsim::test::ApplicationTestFixture::test_systemc_matrix_hierarchy_3);
+}
+
+int fsim_application_case_systemc_matrix_hierarchy_4() {
+  return run_application_case("systemc matrix hierarchy 4",
+      &fsim::test::ApplicationTestFixture::test_systemc_matrix_hierarchy_4);
+}
+
+int fsim_application_case_systemc_matrix_lifecycle() {
+  return run_application_case("systemc matrix lifecycle",
+      &fsim::test::ApplicationTestFixture::test_systemc_matrix_lifecycle);
+}
+
+int fsim_application_case_systemc_matrix_named_objects() {
+  return run_application_case("systemc matrix named objects",
+      &fsim::test::ApplicationTestFixture::test_systemc_matrix_named_objects);
+}
+
+int fsim_application_case_systemc_matrix_threads_methods() {
+  return run_application_case("systemc matrix threads and methods",
+      &fsim::test::ApplicationTestFixture::test_systemc_matrix_threads_methods);
+}
+
+int fsim_application_case_systemc_matrix_method_tops() {
+  return run_application_case("systemc matrix method tops",
+      &fsim::test::ApplicationTestFixture::test_systemc_matrix_method_tops);
+}
+
+int fsim_application_case_systemc_matrix_event_channels() {
+  return run_application_case("systemc matrix event channels",
+      &fsim::test::ApplicationTestFixture::test_systemc_matrix_event_channels);
+}
+
+int fsim_application_case_systemc_matrix_scheduling() {
+  return run_application_case("systemc matrix scheduling",
+      &fsim::test::ApplicationTestFixture::test_systemc_scheduling_matrix);
+}
+
 #if defined(FSIM_MERGED_APPLICATION_TESTS)
 int main() {
   // Each phase below is registered as its own selectable CTest case in merged

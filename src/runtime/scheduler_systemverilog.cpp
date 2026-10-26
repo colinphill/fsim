@@ -1044,6 +1044,67 @@ bool Scheduler::systemverilog_active_work_pending() const noexcept
                 .empty();
 }
 
+bool Scheduler::systemverilog_active_region_pending() const noexcept
+{
+    if (!impl_->current)
+        return false;
+    const auto& slot = *impl_->current;
+    const auto running = slot.systemverilog_phase;
+    if (running && *running == SchedulerPhase::active
+        && !slot.systemverilog_running.empty())
+        return true;
+    return !slot.systemverilog.queues[phase_index(SchedulerPhase::active)].empty();
+}
+
+bool Scheduler::systemverilog_running_active_ahead(
+    StableOrder order, StableOrder excluded) const noexcept
+{
+    if (!impl_->current)
+        return false;
+    const auto& slot = *impl_->current;
+    if (slot.systemverilog_phase != SchedulerPhase::active)
+        return false;
+    return slot.systemverilog_running.has_order_at_most(order, excluded);
+}
+
+void Scheduler::schedule_internal_systemverilog_running_active(
+    StableOrder order, detail::SchedulerTaskDescriptor task)
+{
+    if (impl_->discarding)
+        return;
+    if (!impl_->current
+        || impl_->current->systemverilog_phase != SchedulerPhase::active) {
+        schedule_internal_systemverilog(
+            SchedulerPhase::active, order, std::move(task));
+        return;
+    }
+    impl_->push_entry(impl_->current->systemverilog_running,
+        impl_->make_internal_entry(order, std::move(task)));
+}
+
+bool Scheduler::generic_active_phase_open() const noexcept
+{
+    return impl_->current
+        && impl_->current->phase <= phase_index(SchedulerPhase::active);
+}
+
+bool Scheduler::systemverilog_work_pending() const noexcept
+{
+    if (!impl_->current)
+        return false;
+    const auto& slot = *impl_->current;
+    const auto running = slot.systemverilog_phase;
+    if (running && *running != SchedulerPhase::postponed
+        && !slot.systemverilog_running.empty())
+        return true;
+    for (std::size_t index = 0; index < phase_index(SchedulerPhase::postponed);
+         ++index) {
+        if (!slot.systemverilog.queues[index].empty())
+            return true;
+    }
+    return false;
+}
+
 std::uint64_t Scheduler::systemverilog_round() const noexcept
 {
     return impl_->current ? impl_->current->systemverilog_round : 0;

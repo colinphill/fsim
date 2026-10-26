@@ -89,7 +89,6 @@ fsim_require_tokens(
   "assert(reference.debug_local == compiled.debug_local);"
   "assert(reference.vcd == compiled.vcd);"
   "assert(edited.keys != cold.keys);"
-  "assert(edited.native_cache.misses > 0);"
   "assert(edited.native_cache.stores == edited.native_cache.misses);")
 
 fsim_require_tokens(

@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "change_mismatch_report.hpp"
 #include "path_test_support.hpp"
 
 #include "fsim/app/application.hpp"
 #include "fsim/runtime/vcd_writer.hpp"
 
 #include <csignal>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <source_location>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -72,6 +75,17 @@ class ApplicationTestFixture {
   ApplicationTestFixture& operator=(const ApplicationTestFixture&) = delete;
 
   void test_systemc_integration();
+  // The parts of test_systemc_integration(), each runnable on its own.
+  void test_systemc_matrix_core();
+  void test_systemc_matrix_hierarchy_1();
+  void test_systemc_matrix_hierarchy_2();
+  void test_systemc_matrix_hierarchy_3();
+  void test_systemc_matrix_hierarchy_4();
+  void test_systemc_matrix_lifecycle();
+  void test_systemc_matrix_named_objects();
+  void test_systemc_matrix_threads_methods();
+  void test_systemc_matrix_method_tops();
+  void test_systemc_matrix_event_channels();
   void test_systemc_scheduling_matrix();
   void test_simulation_semantics();
   void test_hir_first_class_visibility();
@@ -91,6 +105,12 @@ class ApplicationTestFixture {
   void create_common_sources();
   void create_mixed_language_sources();
   void create_systemc_sources();
+  [[nodiscard]] project::Config systemc_hdl_config() const;
+  [[nodiscard]] project::Config systemc_method_host_config() const;
+  [[nodiscard]] project::Config systemc_hdl_mixed_config() const;
+  void run_systemc_hdl_hierarchy_cases(
+      std::size_t first, std::size_t last) const;
+  void run_systemc_hdl_hierarchy_failures() const;
   void write_provenance_source(std::string_view comment);
   void write_unused_source(std::string_view comment);
   void write_parameter_top(std::uint64_t narrow_value);
@@ -104,7 +124,8 @@ class ApplicationTestFixture {
       std::optional<runtime::SimulationTick> until = std::nullopt) const;
   static void compare_captures(
       const CapturedSimulation& reference,
-      const CapturedSimulation& hybrid);
+      const CapturedSimulation& hybrid,
+      std::source_location location = std::source_location::current());
 
   std::filesystem::path directory;
   std::filesystem::path source;

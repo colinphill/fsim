@@ -696,6 +696,17 @@ void compare_capture(const Capture& reference, const Capture& actual)
                   << actual.wide_value << '\n';
     }
     assert(reference.wide_value == actual.wide_value);
+    if (reference.changes != actual.changes) {
+        for (const auto& [label, changes] : {
+                 std::pair { "reference", &reference.changes },
+                 std::pair { "compiled", &actual.changes } }) {
+            std::cerr << "typed boundary " << label << " changes:";
+            for (const auto& change : *changes) {
+                std::cerr << ' ' << change;
+            }
+            std::cerr << '\n';
+        }
+    }
     assert(reference.changes == actual.changes);
     assert(reference.debugger == actual.debugger);
     assert(reference.vcd == actual.vcd);

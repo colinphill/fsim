@@ -664,7 +664,9 @@ endmodule
   const auto invalid_result = compile_and_elaborate(
       invalid_clocking.design, "sv:work.invalid_host");
   assert(!invalid_result.ok());
-  assert(std::ranges::any_of(
+  // A clocking signal may name an expression (IEEE 1800-2023 14.5); the
+  // cycle delay without a default clocking is the error.
+  assert(std::ranges::none_of(
       invalid_result.diagnostics,
       [](const auto& diagnostic) {
         return diagnostic.code == "FSIM-ELAB-CLOCK-003";

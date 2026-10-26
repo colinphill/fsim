@@ -8,9 +8,11 @@ namespace fsim::app::application_detail {
 
 SystemCProcessExecutor::SystemCProcessExecutor(
     std::shared_ptr<systemc::HierarchyRegistry> hierarchy,
-    const std::uint64_t process)
+    const std::uint64_t process,
+    std::vector<runtime::simir::Sensitivity> boundary_inputs)
     : hierarchy_(std::move(hierarchy))
     , process_(process)
+    , boundary_inputs_(std::move(boundary_inputs))
 {
     if (!hierarchy_) {
         throw std::invalid_argument {
@@ -27,7 +29,12 @@ runtime::simir::ProcessResumeResult SystemCProcessExecutor::resume(
     runtime::simir::ProcessResumeResult result { 0, 1 };
     switch (suspension.kind) {
     case systemc::MethodSuspendKind::halt:
-        result.external.kind = runtime::simir::ExternalSuspendKind::halt;
+        // The registry knows only the SystemC sensitivity; a process with
+        // elaborated boundary inputs (the channels its HDL children drive)
+        // waits on them.
+        result.external.kind = boundary_inputs_.empty()
+            ? runtime::simir::ExternalSuspendKind::halt
+            : runtime::simir::ExternalSuspendKind::wait_sensitivity;
         break;
     case systemc::MethodSuspendKind::static_sensitivity:
         result.external.kind = runtime::simir::ExternalSuspendKind::wait_sensitivity;
@@ -39,7 +46,21 @@ runtime::simir::ProcessResumeResult SystemCProcessExecutor::resume(
         result.external.delay = suspension.delay_ticks;
         break;
     case systemc::MethodSuspendKind::wait_event:
+        if (suspension.boundary_inputs && boundary_inputs_.empty()) {
+            result.external.kind = !suspension.timeout_ticks
+                ? runtime::simir::ExternalSuspendKind::halt
+                : *suspension.timeout_ticks == 0
+                ? runtime::simir::ExternalSuspendKind::yield
+                : runtime::simir::ExternalSuspendKind::wait_for;
+            result.external.delay = suspension.timeout_ticks.value_or(0);
+            break;
+        }
         result.external.kind = runtime::simir::ExternalSuspendKind::wait_on;
+        if (suspension.boundary_inputs) {
+            result.external.timeout = suspension.timeout_ticks;
+            result.external.sensitivity = boundary_inputs_;
+            break;
+        }
         result.external.wait_all = suspension.wait_all;
         result.external.timeout = suspension.timeout_ticks;
         result.external.sensitivity.reserve(
@@ -116,7 +137,10 @@ void Simulation::Impl::setup_execution(
             process,
             std::make_unique<SystemCProcessExecutor>(
                 std::move(owner),
-                boundary.native_handle));
+                boundary.native_handle,
+                interpreter->process_program(
+                    static_cast<runtime::simir::ProcessId>(process))
+                    .static_sensitivity));
     }
     (void)engine;
 }

@@ -2384,6 +2384,20 @@ void HierarchyBuilder::validate_process_drivers()
             }
         }
     }
+    // Signals that hold a whole fixed array, elements packed leftmost
+    // first.
+    std::unordered_map<ContainerObjectId, std::vector<SignalId>>
+        writable_aggregate_signals;
+    for (const auto& alias : design_.container_signal_aliases_) {
+        if (alias.writable) {
+            writable_aggregate_signals[alias.object].push_back(alias.signal);
+        }
+    }
+    for (const auto& alias : design_.container_aggregate_signal_aliases_) {
+        if (alias.writable) {
+            writable_aggregate_signals[alias.object].push_back(alias.signal);
+        }
+    }
     std::map<std::pair<ContainerObjectId, std::uint32_t>,
         std::vector<SignalId>>
         writable_element_signals;
@@ -2545,8 +2559,7 @@ void HierarchyBuilder::validate_process_drivers()
             [&](const ContainerObjectId object,
                 const std::optional<std::uint32_t> element = std::nullopt) {
                 if (element) {
-                    // Only the element's own alias is claimed; the
-                    // aggregate aliases cannot tell elements apart.
+                    // The element's own alias is claimed whole.
                     const auto found
                         = writable_element_signals.find({ object, *element });
                     if (found != writable_element_signals.end()) {
@@ -2564,6 +2577,45 @@ void HierarchyBuilder::validate_process_drivers()
                                     signal, 0U, 0U, true });
                             }
                         }
+                    }
+                    // In an aggregate alias the element is its own bit
+                    // range, leftmost element most significant, as a
+                    // continuous assignment to it drives that range: the
+                    // element is the longest static prefix of both
+                    // (IEEE 1800-2023 6.5).
+                    const auto aggregates
+                        = writable_aggregate_signals.find(object);
+                    if (aggregates == writable_aggregate_signals.end()) {
+                        return;
+                    }
+                    const auto& type
+                        = design_.container_objects_[object]
+                              .initial_value.type;
+                    const auto count = static_cast<std::uint64_t>(
+                        type.index_left <= type.index_right
+                            ? static_cast<std::int64_t>(type.index_right)
+                                - type.index_left
+                            : static_cast<std::int64_t>(type.index_left)
+                                - type.index_right) + 1U;
+                    for (const auto signal : aggregates->second) {
+                        if (signal >= design_.signals_.size()
+                            || (variable_container_signals.contains(signal)
+                                && !continuous_signals.contains(signal))) {
+                            continue;
+                        }
+                        const auto width = static_cast<std::uint64_t>(
+                            design_.signals_[signal].initial_value.width());
+                        if (count == 0U || *element >= count
+                            || width % count != 0U) {
+                            continue;
+                        }
+                        const auto element_width = width / count;
+                        process_outputs[signal].push_back(DriverRegion {
+                            signal,
+                            static_cast<std::uint32_t>(
+                                (count - 1U - *element) * element_width),
+                            static_cast<std::uint32_t>(element_width),
+                            false });
                     }
                     return;
                 }

@@ -89,7 +89,7 @@ module sv_class_handle_fixed_array_range_index_20261015;
   initial begin
     dut = new;
     if (!dut.check_ranges()) $fatal(1, "fixed array range index mapping");
-    $display("CLASS_FIXED_ARRAY_RANGE_INDEX_PASS");
+    $display("PASS");
     $finish;
   end
 endmodule

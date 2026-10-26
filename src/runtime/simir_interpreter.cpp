@@ -27,6 +27,11 @@ void Interpreter::set_file_root(std::filesystem::path root)
     impl_->set_file_root(std::move(root));
 }
 
+void Interpreter::set_operation_budget(const std::uint64_t operations)
+{
+    impl_->operation_budget = operations;
+}
+
 void Interpreter::set_plusargs(const std::span<const std::string> plusargs)
 {
     if (impl_->started) {
@@ -3216,10 +3221,15 @@ void Interpreter::start()
     };
     // A VHDL or mixed kernel with hosted VHDL processes: the initial run of
     // a hosted process belongs to the kernel's first round, which is the
-    // initialization delta (S25a).
+    // initialization delta (S25a). Under the debugger the first activation
+    // is likewise queued, so it runs where the debugger can stop it.
     const bool kernel_runs_after_hosted_start = [&] {
         if (!impl_->static_kernel) {
             return false;
+        }
+        if (impl_->static_kernel->debug_points()
+            || impl_->static_kernel->queues_first_activation()) {
+            return true;
         }
         for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
             if (impl_->static_kernel_hosts(id)
@@ -3291,12 +3301,21 @@ void Interpreter::start()
     const auto starts_late = [&](const ProcessId id) {
         return static_cast<bool>(late_start[id]);
     };
+    const auto kernel_late = impl_->static_kernel
+        ? impl_->static_kernel->first_late_process()
+        : std::nullopt;
     for (const bool late : { false, true }) {
         // Processes of the after_procedures phase start once every other
         // ordinary process of time zero has been queued.
         for (const auto phase : { ProcessStartupPhase::ordinary,
                  ProcessStartupPhase::after_procedures }) {
             for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+                if (late && phase == ProcessStartupPhase::ordinary
+                    && kernel_late == std::optional { id }) {
+                    // The kernel's late members start in its late activation
+                    // (start_behavioral).
+                    impl_->static_kernel->queue_late_start(id);
+                }
                 if (inert(id)) {
                     continue;
                 }

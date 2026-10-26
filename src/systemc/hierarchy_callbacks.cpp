@@ -648,6 +648,60 @@ extern "C" fsim_sc_status_v1 registry_register_native_module(
     }
 }
 
+extern "C" fsim_sc_status_v1 registry_mark_hdl_module(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const char* unit) noexcept {
+    if (context == nullptr || module == 0 || unit == nullptr
+        || *unit == '\0') {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.pending.find(module);
+        // Only a native child stands for an HDL unit: a factory root is the
+        // SystemC module an HDL instance names.
+        if (found == registry.pending.end() || found->second.parent == 0
+            || found->second.hdl) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        found->second.hdl = HdlChildDescription{unit, {}};
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
+extern "C" fsim_sc_status_v1 registry_set_hdl_module_actual(
+    void* context,
+    const fsim_sc_handle_v1 module,
+    const char* name,
+    const std::int64_t value) noexcept {
+    if (context == nullptr || module == 0 || name == nullptr
+        || *name == '\0') {
+        return FSIM_SC_INVALID_ARGUMENT;
+    }
+    try {
+        auto& registry =
+            *static_cast<HierarchyRegistry::Impl*>(context);
+        const auto found = registry.pending.find(module);
+        if (found == registry.pending.end() || !found->second.hdl) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        auto& actuals = found->second.hdl->actuals;
+        if (std::ranges::any_of(actuals, [&](const auto& actual) {
+                return actual.first == name;
+            })) {
+            return FSIM_SC_INVALID_ARGUMENT;
+        }
+        actuals.emplace_back(name, value);
+        return FSIM_SC_OK;
+    } catch (...) {
+        return FSIM_SC_RUNTIME_ERROR;
+    }
+}
+
 extern "C" fsim_sc_status_v1 registry_register_lifecycle(
     void* context,
     const fsim_sc_handle_v1 module,
@@ -849,7 +903,8 @@ registry_wait_for_input_or_native_activity(
             0,
             {},
             false,
-            ticks};
+            ticks,
+            true};
         return FSIM_SC_OK;
     } catch (...) {
         active_invocation->failure =

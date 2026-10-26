@@ -2155,6 +2155,12 @@ void Interpreter::Impl::queue_active_current(ProcessId id)
         static_kernel_enqueue_hosted(id, StaticKernelHostedWake::active);
         return;
     }
+    queue_active_current_at(id, id);
+}
+
+void Interpreter::Impl::queue_active_current_at(
+    const ProcessId id, const StableOrder order)
+{
     auto& process = get_process(id);
     if (process.halted || process.queued) {
         return;
@@ -2179,9 +2185,9 @@ void Interpreter::Impl::queue_active_current(ProcessId id)
             }>(ProcessQueueTask { this, id });
     if (process.program().scheduling_domain()
         == ProcessSchedulingDomain::systemverilog) {
-        scheduler.schedule_internal_systemverilog(phase, id, task);
+        scheduler.schedule_internal_systemverilog(phase, order, task);
     } else {
-        scheduler.schedule_internal(phase, id, task);
+        scheduler.schedule_internal(phase, order, task);
     }
 }
 
@@ -2736,8 +2742,10 @@ void Interpreter::Impl::notify_execution_point(
     // The static kernel's host process runs a stub program that is not part
     // of the design: it raises no execution points. (Its members do, through
     // the ProcessId overload.)
-    if (static_kernel && process.id < fusion_dormant_process.size()
-        && fusion_dormant_process[process.id] == 2U) {
+    if (static_kernel
+        && ((process.id < fusion_dormant_process.size()
+                && fusion_dormant_process[process.id] == 2U)
+            || static_kernel_host(process.id))) {
         return;
     }
     notify_execution_point(
@@ -3785,9 +3793,7 @@ void Interpreter::Impl::note_signal_transaction(
         if (const auto found = vhdl_conversion_dependents.find(signal_id);
             found != vhdl_conversion_dependents.end()) {
             for (const auto target : found->second) {
-                if (pending_vhdl_resolution_set.insert(target).second) {
-                    pending_vhdl_resolutions.push_back(target);
-                }
+                queue_vhdl_conversion(target);
             }
         }
     }
@@ -3995,9 +4001,7 @@ void Interpreter::Impl::publish_value_change(
         if (const auto found = vhdl_conversion_dependents.find(signal_id);
             found != vhdl_conversion_dependents.end()) {
             for (const auto target : found->second) {
-                if (pending_vhdl_resolution_set.insert(target).second) {
-                    pending_vhdl_resolutions.push_back(target);
-                }
+                queue_vhdl_conversion(target);
             }
         }
     }

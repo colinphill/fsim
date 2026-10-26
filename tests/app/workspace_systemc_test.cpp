@@ -197,6 +197,67 @@ namespace {
         assert(simulation.read_signal(value).to_msb_string() == "1");
     }
 
+    // A SystemC top over a SystemVerilog child (fsim::systemc::hdl_module):
+    // the workspace selects HDL units that only SystemC source names.
+    void verify_hdl_child(const workspace::Store& store)
+    {
+        write_file("hdl/inverter.sv",
+            "module workspace_inverter(input logic value, output logic inverted);\n"
+            "  assign inverted = ~value;\n"
+            "endmodule\n");
+        write_file("hdl/top.cpp",
+            "#include \"fsim/systemc.hpp\"\n"
+            "struct Inverter : fsim::systemc::hdl_module {\n"
+            "    sc_core::sc_in<sc_dt::sc_logic> value{\"value\"};\n"
+            "    sc_core::sc_out<sc_dt::sc_logic> inverted{\"inverted\"};\n"
+            "    explicit Inverter(sc_core::sc_module_name name)\n"
+            "        : hdl_module{name, \"sv:work.workspace_inverter\"} {}\n"
+            "};\n"
+            "SC_MODULE(HdlTop) {\n"
+            "    sc_core::sc_signal<sc_dt::sc_logic> request{\"request\", sc_dt::SC_LOGIC_0};\n"
+            "    sc_core::sc_signal<sc_dt::sc_logic, sc_core::SC_MANY_WRITERS> response{\"response\"};\n"
+            "    sc_core::sc_signal<sc_dt::sc_logic> observed{\"observed\"};\n"
+            "    Inverter inner{\"inner\"};\n"
+            "    void stimulus() {\n"
+            "        sc_core::wait(sc_core::sc_time{1, sc_core::SC_NS});\n"
+            "        request.write(sc_dt::SC_LOGIC_1);\n"
+            "    }\n"
+            "    void observe() { observed.write(response.read()); }\n"
+            "    SC_CTOR(HdlTop) {\n"
+            "        inner.value(request);\n"
+            "        inner.inverted(response);\n"
+            "        SC_THREAD(stimulus);\n"
+            "        SC_METHOD(observe);\n"
+            "        sensitive << response;\n"
+            "        dont_initialize();\n"
+            "    }\n"
+            "};\n"
+            "SC_FSIM_EXPORT_AS(HdlTop, \"hdl_top\");\n");
+        run_workspace_command({ "fsim", "compile", "hdl/inverter.sv", "--quiet" });
+        run_workspace_command({ "fsim", "systemc", "compile", "hdl/top.cpp",
+            "--library", "models", "--quiet" });
+        run_workspace_command({ "fsim", "systemc", "link", "--library", "models",
+            "--quiet" });
+        run_workspace_command({ "fsim", "elaborate", "--top", "systemc:models.hdl_top",
+            "--snapshot", "hdl_child", "--quiet" });
+        std::string error;
+        const auto snapshot = store.read_snapshot("hdl_child", error);
+        assert(snapshot);
+        for (const auto engine : { fsim::app::SimulationEngine::interpreter,
+                 fsim::app::SimulationEngine::compiled }) {
+            fsim::diagnostic::Engine diagnostics;
+            auto built = fsim::app::load_design_artifact(snapshot->path, diagnostics);
+            assert(built && !diagnostics.has_error());
+            const auto observed = built->design.find_signal("hdl_top.observed");
+            assert(observed);
+            assert(built->design.find_signal("hdl_top.inner.inverted"));
+            fsim::app::Simulation simulation { std::move(*built), 1000, engine };
+            const auto result = simulation.run();
+            assert(result.status == fsim::runtime::RunStatus::completed);
+            assert(simulation.read_signal(*observed).to_msb_string() == "0");
+        }
+    }
+
 } // namespace
 
 int main()
@@ -302,4 +363,5 @@ int main()
     run_workspace_command({ "fsim", "simulate", "--engine", "interpreter" });
     run_workspace_command({ "fsim", "simulate", "--snapshot", "named", "--engine", "interpreter" });
     verify_snapshot(snapshot);
+    verify_hdl_child(store);
 }

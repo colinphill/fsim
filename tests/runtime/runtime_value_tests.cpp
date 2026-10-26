@@ -156,10 +156,12 @@ void test_scheduler_phase_order() {
   const auto result = scheduler.run();
   require(result.status == RunStatus::completed, "scheduler must complete");
   require(result.time == 4, "scheduler must advance to future event");
+  // Postponed ends the time slot, after its last delta (IEEE 1800-2023
+  // 4.4.2.9).
   const std::vector<std::string> expected = {
       "active-1", "active-2", "inactive", "update",
       "observed", "reactive", "re-inactive", "re-update",
-      "postponed", "next-delta", "time-4"
+      "next-delta", "postponed", "time-4"
   };
   require(events == expected, "scheduler phase ordering");
 
@@ -218,7 +220,10 @@ void test_scheduler_phase_order() {
       const auto phase_index = static_cast<unsigned>(phase);
       runtime.schedule_next_delta(phase, phase_index,
           [&, wave, phase, phase_index](Scheduler &scheduled) {
-            require(scheduled.delta() == wave
+            // Postponed work runs once, after the slot's last delta
+            // (IEEE 1800-2023 4.4.2.9).
+            require((scheduled.delta() == wave
+                        || phase == SchedulerPhase::postponed)
                         && scheduled.current_phase() == phase,
                     "rotated region queue retains its phase and delta");
             delta_events.push_back(
@@ -235,10 +240,17 @@ void test_scheduler_phase_order() {
   std::vector<std::string> expected_delta_events;
   for (std::uint64_t wave = 0; wave <= 2U; ++wave) {
     for (const auto phase : phases) {
-      expected_delta_events.push_back(
-          std::to_string(wave) + ":"
-          + std::to_string(static_cast<unsigned>(phase)));
+      if (phase != SchedulerPhase::postponed) {
+        expected_delta_events.push_back(
+            std::to_string(wave) + ":"
+            + std::to_string(static_cast<unsigned>(phase)));
+      }
     }
+  }
+  for (std::uint64_t wave = 0; wave <= 2U; ++wave) {
+    expected_delta_events.push_back(
+        std::to_string(wave) + ":"
+        + std::to_string(static_cast<unsigned>(SchedulerPhase::postponed)));
   }
   require(delta_result.status == RunStatus::completed
               && delta_result.callbacks_executed == 24U

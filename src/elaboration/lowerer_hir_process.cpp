@@ -3581,12 +3581,21 @@ Lowerer::lower_hir_vhdl_formal_conversion(
         : specialized_hir_unit_->find_expression(
               expression->vhdl->operands.front());
     const auto target = specialized_hir_unit_->find_expression(*input.target);
+    // The actual is a name, or a static element or slice of one, which the
+    // member selection below resolves (IEEE 1076-2008 6.5.7.1).
+    const auto target_kind = target && target->vhdl != nullptr
+        ? target->vhdl->kind
+        : semantic::vhdl::ExpressionKind::invalid;
     if (!operand || operand->vhdl == nullptr
         || (!effective
             && operand->vhdl->kind != semantic::vhdl::ExpressionKind::name)
         || !input.label.starts_with(implicit_prefix)
-        || !target || target->vhdl == nullptr
-        || target->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
+        || (target_kind != semantic::vhdl::ExpressionKind::name
+            && (effective
+                || (target_kind != semantic::vhdl::ExpressionKind::index
+                    && target_kind != semantic::vhdl::ExpressionKind::slice
+                    && target_kind
+                        != semantic::vhdl::ExpressionKind::call)))) {
         return std::nullopt;
     }
     const auto declaration = hir_target_declaration(*input.target);
@@ -3596,8 +3605,8 @@ Lowerer::lower_hir_vhdl_formal_conversion(
     if (!binding || !binding->signal) {
         return std::nullopt;
     }
-    // A static record subelement target (`r.inner`) takes the program's
-    // value as the driver of that subelement.
+    // A static subelement target (`r.inner`, `v(3 downto 2)`) takes the
+    // program's value as the driver of that subelement.
     std::optional<std::pair<std::uint32_t, std::uint32_t>> slice;
     std::optional<HirInputActualMember> member;
     std::optional<semantic::vhdl::SubtypeIndication> context;
@@ -3605,11 +3614,34 @@ Lowerer::lower_hir_vhdl_formal_conversion(
             *declaration);
         !record || record->vhdl == nullptr) {
         return std::nullopt;
-    } else if (!equal_ignoring_ascii_case(
-                   target->vhdl->text, record->vhdl->name)) {
-        const auto selection = effective
+    } else if (target_kind != semantic::vhdl::ExpressionKind::name
+        || !equal_ignoring_ascii_case(
+            target->vhdl->text, record->vhdl->name)) {
+        auto selection = effective
             ? std::nullopt
             : hir_vhdl_member_selection(*input.target);
+        // A static slice of the actual signal itself (`v(3 downto 2)`) has
+        // the signal's element type (IEEE 1076-2008 8.5).
+        if (!selection && !effective
+            && target_kind == semantic::vhdl::ExpressionKind::slice
+            && !target->vhdl->operands.empty()) {
+            const auto prefix = specialized_hir_unit_->find_expression(
+                target->vhdl->operands.front());
+            const auto range
+                = hir_constant_selection(*input.target, semantic::ScopeId { });
+            const auto subtype = hir_vhdl_expression_subtype(*input.target);
+            if (prefix && prefix->vhdl != nullptr
+                && prefix->vhdl->kind == semantic::vhdl::ExpressionKind::name
+                && hir_target_declaration(target->vhdl->operands.front())
+                    == declaration
+                && range && subtype) {
+                const auto& actual = design_.signal_info_[*binding->signal];
+                selection = HirVhdlMemberSelection { *declaration,
+                    semantic::ExpressionId { }, *subtype, range->offset,
+                    range->width, actual.source_domain, actual.is_signed,
+                    std::nullopt, 0U };
+            }
+        }
         if (!selection || selection->declaration != *declaration
             || selection->index || selection->access_object_root
             || binding->signal_selection || selection->width == 0U

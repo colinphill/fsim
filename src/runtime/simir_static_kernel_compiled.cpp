@@ -1271,7 +1271,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     || std::is_same_v<T, ConcatenateStrings>
                     || std::is_same_v<T, LoadStringConstant>
                     || std::is_same_v<T, CopyStringRegister>
-                    || std::is_same_v<T, PlusArgSelect>) {
+                    || std::is_same_v<T, PlusArgSelect>
+                    || std::is_same_v<T, CodeCoverageHit>) {
                     inst.op = KOp::generic;
                     inst.x = pc;
                     inst.y = 0U;
@@ -1458,9 +1459,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                                 || std::is_same_v<T, WriteUpdateDynamicPartSlice>));
                 } else if constexpr (std::is_same_v<T, ContainerRead>) {
                     generic = generic || op.string_index;
-                } else if constexpr (std::is_same_v<T, Report>) {
-                    // A VHDL report statement (IEEE 1076-2019 10.9) emits
-                    // through the reference evaluator.
+                } else if constexpr (std::is_same_v<T, Report>
+                    || std::is_same_v<T, CodeCoverageHit>) {
+                    // A VHDL report statement (IEEE 1076-2019 10.9) emits,
+                    // and a coverage hit bumps its host counter, through the
+                    // kernel's operation step.
                     generic = true;
                 }
             }, operation);

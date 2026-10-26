@@ -2498,6 +2498,7 @@ scheduler.
 | `FSIM-ELAB-VHENUM-002` | error | Assignment or comparison mixes values from different nominal VHDL enumeration types. |
 | `FSIM-ELAB-VHENUM-003` | error | An operator that is not defined for VHDL enumeration values was applied to an enumeration object. |
 | `FSIM-ELAB-VHINIT-001` | error | A VHDL signal initializer is not a statically foldable value compatible with the signal subtype. |
+| `FSIM-ELAB-VHINIT-002` | error | The initial value of a VHDL signal, variable or constant is of another nominal composite type than the object, or of a statically constrained array subtype whose lengths differ from the object's (IEEE 1076-2019 14.4.2.5). |
 | `FSIM-ELAB-VHENUMATTR-001` | error | A VHDL enumeration scalar attribute has an invalid prefix, arity, argument type, result context, or executable ordinal range. |
 | `FSIM-ELAB-VHENUMATTR-002` | error | A locally static or executable VHDL enumeration scalar attribute argument is outside the type's declaration range or has no predecessor/successor. |
 | `FSIM-ELAB-VHSCALARATTR-001` | error | A non-enumeration VHDL scalar attribute has an invalid type-mark prefix, arity, argument type, or executable range. |
@@ -2816,7 +2817,7 @@ scheduler.
 | `FSIM-ELAB-GENERIC-005` | error | A VHDL generic default constant expression cannot be evaluated. |
 | `FSIM-ELAB-GENERIC-006` | error | A generic-dependent packed range cannot be evaluated. |
 | `FSIM-ELAB-GENERIC-007` | error | A generic-dependent packed range width overflows the supported range. |
-| `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
+| `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint, or a composite actual does not have the length of its constrained array formal. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
 | `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves outside the supported scalar, physical-time, packed, or statically constrained composite value set. |
 | `FSIM-ELAB-GENERIC-011` | error | A top-level generic or parameter override (`--generic NAME=VALUE`) is not a STRING, integer or BOOLEAN value for a VHDL generic, or an integer or quoted string for a SystemVerilog parameter. |
@@ -2900,6 +2901,9 @@ scheduler.
 | `FSIM-ELAB-BIND-063` | error | An ordinary module instance uses syntax reserved for a UDP propagation delay. |
 | `FSIM-ELAB-BIND-064` | error | A user-defined primitive instance-array terminal is neither scalar nor width-matched to the array. |
 | `FSIM-ELAB-BIND-065` | error | An ordinary module instance uses syntax reserved for a UDP drive strength. |
+| `FSIM-ELAB-BIND-066` | error | A SystemC module marked as an HDL instance (`fsim::systemc::hdl_module`) has SystemC processes, signals, exports or child modules of its own. |
+| `FSIM-ELAB-BIND-067` | error | A SystemC HDL instance names no SystemVerilog module or VHDL entity of the compiled design. |
+| `FSIM-ELAB-BIND-068` | error | A SystemC HDL instance gives an actual to a name that is not a parameter or generic of its unit, or has a port the unit does not declare or declares with another direction. |
 
 ## Time, runtime, trace, and design cache
 

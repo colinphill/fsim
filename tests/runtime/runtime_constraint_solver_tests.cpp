@@ -95,7 +95,9 @@ void test_systemverilog_constraint_solver()
             && solved.values[bits].low_word().aval == 2
             && solved.values[enumeration].low_word().aval == 1
             && solved.values[integer].low_word().aval == 9
-            && solved.search_steps == 7
+            // Unary clauses prune each domain before the search, which
+            // then assigns one value per variable.
+            && solved.search_steps == 3
             && replayed.status == solved.status
             && replayed.values == solved.values
             && replayed.search_steps == solved.search_steps
@@ -123,15 +125,31 @@ void test_systemverilog_constraint_solver()
         no_solution.status
                 == SystemVerilogConstraintSolveStatus::Unsatisfiable
             && no_solution.values.empty()
-            && no_solution.search_steps == 2,
+            // Pruning empties the domain before any search step.
+            && no_solution.search_steps == 0,
         "an unsatisfiable finite domain must terminate without publishing values");
 
+    // A clause over two variables survives domain pruning, so the search
+    // needs a step per variable and the one-step budget runs out.
     SystemVerilogConstraintSolver search_limited { { 10, 10, 10, 1 } };
     const auto limited = search_limited.add_variable(variable(
         "limited", SystemVerilogConstraintDomainKind::Integer,
         64, "integer", { 0, 1 }));
+    const auto partner = search_limited.add_variable(variable(
+        "partner", SystemVerilogConstraintDomainKind::Integer,
+        64, "integer", { 0, 1 }));
     search_limited.add_clause(
-        { "requires-one", { limited }, equals(limited, 1) });
+        { "both-one", { limited, partner },
+            [=](const SystemVerilogConstraintAssignment& assignment) {
+                if (!assignment.assigned(limited)
+                    || !assignment.assigned(partner)) {
+                    return SystemVerilogConstraintClauseState::Undetermined;
+                }
+                return assignment.value(limited).low_word().aval == 1
+                        && assignment.value(partner).low_word().aval == 1
+                    ? SystemVerilogConstraintClauseState::Satisfied
+                    : SystemVerilogConstraintClauseState::Violated;
+            } });
     const auto search_exhausted = search_limited.solve();
     require(
         search_exhausted.status
@@ -362,15 +380,14 @@ void test_systemverilog_constraint_solver()
     illegal_four_state.add_clause(systemverilog_constraint_expression_clause(
         "illegal-four-state", { },
         std::move(illegal_builder).finish(illegal_equal)));
-    bool illegal_result = false;
-    try {
-        (void)illegal_four_state.solve();
-    } catch (const std::invalid_argument&) {
-        illegal_result = true;
-    }
+    // An unknown predicate is not true, so no candidate satisfies it (IEEE
+    // 1800-2023 18.5, 11.4.5).
+    const auto illegal_result = illegal_four_state.solve();
     require(
-        illegal_result,
-        "a four-state predicate that remains unknown must be rejected explicitly");
+        illegal_result.status
+                == SystemVerilogConstraintSolveStatus::Unsatisfiable
+            && illegal_result.values.empty(),
+        "a four-state predicate that remains unknown is never satisfied");
 
     SystemVerilogConstraintSolver soft_solver;
     const auto soft_value = soft_solver.add_variable(variable(
@@ -382,7 +399,8 @@ void test_systemverilog_constraint_solver()
     require(
         soft_result.status == SystemVerilogConstraintSolveStatus::Satisfied
             && soft_result.values[soft_value].low_word().aval == 1
-            && soft_result.search_steps == 2,
+            // The hard search, then the soft relaxation passes.
+            && soft_result.search_steps == 5,
         "conflicting soft constraints must resolve deterministically in later declaration priority");
 
     SystemVerilogConstraintSolver hard_over_soft;

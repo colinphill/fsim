@@ -824,12 +824,22 @@ end architecture;
       "  subtype Count_T is integer range 0 to 3;",
       "Count_T'succ(3)",
       "FSIM-ELAB-VHSCALARATTR-002");
-  reject(
-      "vhdl_attribute_scalar_object.vhd",
-      "  subtype Count_T is integer range 0 to 3;\n"
-      "  signal Count : Count_T;",
-      "Count'left",
-      "FSIM-ELAB-VHSCALARATTR-001");
+  {
+    // An object of a scalar subtype is a valid prefix of 'LEFT (IEEE
+    // 1076-2019 16.2.2).
+    const auto valid = fsim::frontend::parse_text(
+        "vhdl_attribute_scalar_object.vhd",
+        "entity Valid is end entity;\n"
+        "architecture rtl of valid is\n"
+        "  subtype Count_T is integer range 0 to 3;\n"
+        "  signal Count : Count_T;\n"
+        "  signal Result : integer;\n"
+        "begin\n  Result <= Count'left;\nend architecture;\n",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(valid.ok());
+    assert(compile_and_elaborate(valid.design, "vhdl:work.valid(rtl)").ok());
+  }
   reject(
       "vhdl_attribute_scalar_range_expression.vhd",
       "  subtype Count_T is integer range 0 to 3;",

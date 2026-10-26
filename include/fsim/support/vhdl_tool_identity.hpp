@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/version.hpp"
 
 #include <array>
@@ -60,7 +61,7 @@ namespace fsim::support {
     if (error) {
         resolved = source;
     }
-    if (auto canonical = std::filesystem::weakly_canonical(resolved, error);
+    if (auto canonical = native_fs::weakly_canonical(resolved, error);
         !error) {
         resolved = std::move(canonical);
     }

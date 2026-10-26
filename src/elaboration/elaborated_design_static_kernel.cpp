@@ -331,8 +331,15 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
 } // namespace
 
 StaticKernelPlan ElaboratedDesign::plan_static_kernel(
-    const StaticKernelAccessPlan& access) const
+    const StaticKernelAccessPlan& requested_access) const
 {
+    // SystemC co-simulation (engine-v4-semantics S26): the SystemC kernel
+    // reads and writes HDL signals through the boundary context, outside any
+    // SimIR operation, like a foreign library (S19). Every signal stays a
+    // host signal, and each SystemC process runs in its process executor.
+    const bool systemc = !systemc_processes_.empty() || !systemc_objects_.empty();
+    auto access = requested_access;
+    access.foreign = access.foreign || systemc;
     // The access plan replaces the whole-design coverage, specify and
     // VCD-control gates (docs/engine-v4-semantics.md S19, S21);
     // FSIM_STATIC_KERNEL_ACCESS_PLAN=0 restores them.
@@ -413,19 +420,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         take_census(disabled, nullptr);
         return disabled;
     };
-    // Coverage: the counters are host data bumped by CodeCoverageHit
-    // operations, which the kernel does not evaluate, so the processes that
-    // carry them are not members (they stay host processes with an
-    // unsupported-operation reason) and the rest run as usual.
+    // Coverage: the counters are host data that CodeCoverageHit operations
+    // bump; members run them through the generic step (S20). Without access
+    // plans the whole design stays off the kernel.
     if (code_coverage_inventory_ && !access_plans) {
         return disable("coverage");
     }
     if ((!verilog_specify_paths_.empty() || !verilog_timing_checks_.empty())
         && !access_plans) {
         return disable("specify");
-    }
-    if (!systemc_processes_.empty() || !systemc_objects_.empty()) {
-        return disable("systemc");
     }
 
     const auto process_count = this->process_count();
@@ -1308,6 +1311,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     reject(index, "disabled_scope");
                 }
             }
+        }
+    }
+    // A SystemC process is neither a member nor a hosted step: its body is
+    // native SystemC code that its process executor resumes (S26).
+    std::vector<std::uint8_t> systemc_process(process_count, 0U);
+    for (const auto& entry : systemc_processes_) {
+        if (entry.process < process_count) {
+            systemc_process[entry.process] = 1U;
+            candidates[entry.process].reset();
+            reject(entry.process, "systemc_process");
         }
     }
     // A thread that the scheduler would start one delta late (a process that
@@ -2438,6 +2451,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
              ++index) {
             const auto& view = views[index];
             if (!view.valid() || candidates[index] || host_program[index] != 0U
+                || systemc_process[index] != 0U
                 || view.scheduling_domain()
                     != ProcessSchedulingDomain::systemverilog) {
                 continue;
@@ -2476,6 +2490,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
          ++index) {
         const auto& view = views[index];
         if (!view.valid() || candidates[index] || host_program[index] != 0U
+            || systemc_process[index] != 0U
             || view.scheduling_domain()
                 == ProcessSchedulingDomain::systemverilog
             || (view.postponed() && !hosted_postponed_enabled)) {
@@ -2505,6 +2520,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
              ++index) {
             const auto& view = views[index];
             if (!view.valid() || candidates[index] || host_program[index] != 0U
+                || systemc_process[index] != 0U
                 || view.scheduling_domain()
                     != ProcessSchedulingDomain::systemverilog
                 || view.postponed() || view.observed() || view.reactive()
@@ -2563,13 +2579,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     if (spec->members.empty()
         && std::ranges::none_of(hosted, [](const auto flag) { return flag != 0U; })) {
         // Every valid process is a host program (port-association resolver,
-        // conversion driver): run inline by the update commit, not a
-        // scheduled process. The kernel still runs, with nothing to schedule:
-        // its update commit runs the programs natively.
+        // conversion driver), run inline by the update commit, or a SystemC
+        // process, run by the SystemC kernel: none is a scheduled HDL
+        // process. The kernel still runs, with nothing to schedule: its
+        // update commit runs the programs natively.
         const bool only_host_programs = [&] {
             bool any = false;
             for (std::size_t index = 0U; index < process_count; ++index) {
-                if (views[index].valid() && host_program[index] == 0U) {
+                if (views[index].valid() && host_program[index] == 0U
+                    && systemc_process[index] == 0U) {
                     return false;
                 }
                 any = any || views[index].valid();

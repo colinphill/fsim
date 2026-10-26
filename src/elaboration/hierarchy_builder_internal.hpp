@@ -1944,6 +1944,23 @@ private:
         bool systemverilog_net { };
     };
 
+    std::optional<CompiledBoundaryPort>
+    compiled_systemverilog_formal_boundary_port(
+        const semantic::SpecializedHirUnit& child,
+        const semantic::sv::Declaration& formal_declaration);
+    std::optional<CompiledBoundaryPort> compiled_vhdl_formal_boundary_port(
+        const semantic::SpecializedHirUnit& child,
+        const semantic::vhdl::Declaration& declaration,
+        frontend::PortDirection direction);
+
+    // A native SystemC child marked as an HDL instance (mark_hdl_module):
+    // instantiate its unit with the child's ports as the port map.
+    void instantiate_systemc_hdl_child(
+        const SystemCInstanceDescription& child,
+        const ObjectMap& objects);
+    // While a SystemC root is built, the channels its HDL descendants drive.
+    std::vector<SignalId>* systemc_hdl_wakes_ { };
+
     std::optional<SignalId> connect_compiled_boundary_port(
         const CompiledBoundaryPort& port,
         SignalId actual,
@@ -2142,6 +2159,9 @@ private:
         std::vector<std::pair<PackedLogic4, runtime::simir::ValueKind>> inputs;
         SignalId result { };
         PackedLogic4 value;
+        // The error of a run that failed (its operation budget exhausted):
+        // the same program on the same inputs fails again.
+        std::optional<std::string> failure;
     };
     // By operation count, signal count and register count.
     std::map<std::tuple<std::size_t, std::size_t, std::size_t>,

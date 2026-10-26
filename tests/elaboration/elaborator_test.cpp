@@ -43,11 +43,23 @@ int main()
     if (std::getenv("FSIM_MERGE_CONSTANT_DRIVERS") == nullptr) {
         set_merge_constant_drivers(false);
     }
+    // The lowerer reads its rejection-trace switch once per process; the
+    // HIR lowering tests capture that trace, so it is on from the start.
+#if defined(_WIN32)
+    (void)::_putenv_s("FSIM_HIR_LOWER_TRACE_FAILURES", "1");
+#else
+    (void)::setenv("FSIM_HIR_LOWER_TRACE_FAILURES", "1", 1);
+#endif
     const auto* selected = std::getenv("FSIM_ELABORATION_TEST");
+    const bool progress
+        = std::getenv("FSIM_ELABORATION_TEST_PROGRESS") != nullptr;
     std::size_t executed { };
     const auto run = [&](const std::string_view name, const auto function) {
         if (selected == nullptr || name == selected) {
             ++executed;
+            if (progress) {
+                std::cerr << "fsim-elaboration-test: " << name << std::endl;
+            }
             function();
         }
     };

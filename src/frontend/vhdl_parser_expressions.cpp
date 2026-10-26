@@ -1036,7 +1036,12 @@ Expression VhdlParser::parse_primary()
             { },
             cover(first.span, previous().span)
         };
-        subtype.call_result_width = external_type.width().value_or(0);
+        // Only a written constraint fixes the width; a bare unconstrained
+        // mark takes the shape of the object denoted.
+        subtype.call_result_width
+            = external_type.packed_range || external_type.packed_range_expression
+            ? external_type.width().value_or(0)
+            : 0U;
         subtype.call_result_domain = external_type.domain;
         subtype.call_result_signed = external_type.is_signed;
         subtype.nominal_type = external_type.nominal_type;

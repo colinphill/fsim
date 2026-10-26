@@ -355,7 +355,7 @@ void test_systemverilog_vpi_recursive_type_descriptors()
                                    root.value,
                                    "bad_memory",
                                    std::nullopt,
-                                   descriptor_type(queue) })
+                                   descriptor_type(associative) })
                     .error
                 == SystemVerilogVpiObjectError::InvalidType,
         "VPI descriptors reject excessive recursion and object-kind mismatches");

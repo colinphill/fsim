@@ -5,6 +5,7 @@
 #include "fsim/frontend/diagnostic.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -18,6 +19,13 @@ namespace fsim::frontend {
 [[nodiscard]] bool resolve_systemverilog_classes(
     ParsedDesign& design,
     std::vector<Diagnostic>& diagnostics);
+
+/// The owner of a class scope selection `C#(...)::m` (IEEE 1800-2017
+/// 8.25.1): the parameterized selection bound to class `C`'s canonical
+/// declaration identity. Consumers outside the frontend obtain the owner
+/// type here rather than reconstructing frontend types themselves.
+[[nodiscard]] std::shared_ptr<const Type> systemverilog_class_scope_owner(
+    const Type& selection, std::string declaration_identity);
 
 namespace generate_class_detail {
 

@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "application_test_support.hpp"
-
 #include <iostream>
 
 int main() {
-  fsim::test::ApplicationTestFixture fixture;
-  std::cerr << "systemc matrix: integration\n";
-  fixture.test_systemc_integration();
-  std::cerr << "systemc matrix: scheduling\n";
-  fixture.test_systemc_scheduling_matrix();
-  std::cerr << "systemc matrix: complete\n";
-  std::cout << "SystemC application matrix passed\n";
+  // The SystemC matrix runs as the separate fsim.application.systemc_matrix_*
+  // CTest cases so that its parts schedule in parallel. This name stays as a
+  // cheap sentinel without executing the same coverage twice.
+  std::cerr << "systemc matrix: partitioned cases registered separately\n";
+  std::cout << "SystemC application matrix parts are registered separately\n";
   return 0;
 }

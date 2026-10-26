@@ -240,6 +240,8 @@ std::unique_ptr<HierarchyRegistry> HierarchyRegistry::load(
     host.current_time_femtoseconds =
         registry_current_time_femtoseconds;
     host.scv_compatibility_identity = fsim_scv_compatibility_identity();
+    host.mark_hdl_module = registry_mark_hdl_module;
+    host.set_hdl_module_actual = registry_set_hdl_module_actual;
 
     Impl staged_registrations;
     fsim_sc_registrar_v1 registrar{};
@@ -793,7 +795,8 @@ MethodSuspendResult HierarchyRegistry::invoke_process(
     if (invocation.suspension) {
         auto suspension = std::move(*invocation.suspension);
         if (suspension.kind == MethodSuspendKind::wait_event
-            && suspension.event_signals.empty()) {
+            && suspension.event_signals.empty()
+            && !suspension.boundary_inputs) {
             for (const auto& sensitivity : description->sensitivity) {
                 const auto binding =
                     impl_->runtime_objects.find(sensitivity.object);

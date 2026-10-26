@@ -22,6 +22,17 @@ int fsim_application_case_classes();
 int fsim_application_case_class_hir_failure_routes();
 int fsim_application_case_class_hir_reports();
 int fsim_application_case_systemc_matrix();
+int fsim_application_case_systemc_matrix_core();
+int fsim_application_case_systemc_matrix_hierarchy_1();
+int fsim_application_case_systemc_matrix_hierarchy_2();
+int fsim_application_case_systemc_matrix_hierarchy_3();
+int fsim_application_case_systemc_matrix_hierarchy_4();
+int fsim_application_case_systemc_matrix_lifecycle();
+int fsim_application_case_systemc_matrix_named_objects();
+int fsim_application_case_systemc_matrix_threads_methods();
+int fsim_application_case_systemc_matrix_method_tops();
+int fsim_application_case_systemc_matrix_event_channels();
+int fsim_application_case_systemc_matrix_scheduling();
 int fsim_application_case_expressions();
 int fsim_application_case_sv_hierarchy();
 int fsim_application_case_scoped_locals();
@@ -60,6 +71,28 @@ constexpr NamedApplicationCase application_cases[] = {
         fsim_application_case_class_hir_failure_routes },
     { "class_hir_reports", fsim_application_case_class_hir_reports },
     { "systemc_matrix", fsim_application_case_systemc_matrix },
+    { "systemc_matrix_core",
+        fsim_application_case_systemc_matrix_core },
+    { "systemc_matrix_hierarchy_1",
+        fsim_application_case_systemc_matrix_hierarchy_1 },
+    { "systemc_matrix_hierarchy_2",
+        fsim_application_case_systemc_matrix_hierarchy_2 },
+    { "systemc_matrix_hierarchy_3",
+        fsim_application_case_systemc_matrix_hierarchy_3 },
+    { "systemc_matrix_hierarchy_4",
+        fsim_application_case_systemc_matrix_hierarchy_4 },
+    { "systemc_matrix_lifecycle",
+        fsim_application_case_systemc_matrix_lifecycle },
+    { "systemc_matrix_named_objects",
+        fsim_application_case_systemc_matrix_named_objects },
+    { "systemc_matrix_threads_methods",
+        fsim_application_case_systemc_matrix_threads_methods },
+    { "systemc_matrix_method_tops",
+        fsim_application_case_systemc_matrix_method_tops },
+    { "systemc_matrix_event_channels",
+        fsim_application_case_systemc_matrix_event_channels },
+    { "systemc_matrix_scheduling",
+        fsim_application_case_systemc_matrix_scheduling },
     { "expressions", fsim_application_case_expressions },
     { "sv_hierarchy", fsim_application_case_sv_hierarchy },
     { "scoped_locals", fsim_application_case_scoped_locals },

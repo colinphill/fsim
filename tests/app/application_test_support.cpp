@@ -78,12 +78,19 @@ CapturedSimulation ApplicationTestFixture::capture_simulation(
 
 void ApplicationTestFixture::compare_captures(
     const CapturedSimulation& reference,
-    const CapturedSimulation& hybrid) {
+    const CapturedSimulation& hybrid,
+    const std::source_location location) {
+      if (reference.changes != hybrid.changes) {
+        std::cerr << "compare_captures called at " << location.file_name()
+                  << ':' << location.line() << '\n';
+      }
       assert(reference.result.status == hybrid.result.status);
       assert(reference.result.time == hybrid.result.time);
       assert(reference.result.delta == hybrid.result.delta);
       // The v4 kernel may execute fewer internal scheduler callbacks while
       // preserving the same time, delta, signal changes, and final state.
+      report_change_mismatch(
+          "compare_captures", reference.changes, hybrid.changes);
       assert(reference.changes == hybrid.changes);
       assert(reference.final_values == hybrid.final_values);
       assert(reference.normalized_vcd == hybrid.normalized_vcd);

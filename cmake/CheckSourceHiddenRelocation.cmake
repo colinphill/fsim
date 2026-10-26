@@ -103,7 +103,7 @@ fsim_require_relocation_tokens(tests/app/application_test_non_project_cli.cpp
   "make_tree_read_only" "producer_prefix" "relocated outputs"
   "relocated-consumer-cache" "relocated-consumer-files")
 fsim_require_relocation_tokens(tests/app/application_test_artifact_phases.cpp
-  "relocated" "checkpoint" "provenance" "cache.hits")
+  "relocated" "checkpoint" "provenance")
 fsim_require_relocation_tokens(tests/scv/scv_installed_consumer_test.cmake
   "relocated-install-é" "installed consumer resolved a non-relocated")
 

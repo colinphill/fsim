@@ -1758,7 +1758,8 @@ endmodule
               fsim::runtime::PackedLogic4::from_msb_string("0")}},
             {},
             {},
-            {}};
+            {},
+            std::nullopt};
     const std::vector<fsim::elaboration::Binding>
         conflicting_systemc_bindings{
             {"conflict_host.u_conflict",

@@ -2,6 +2,7 @@
 #include "application_compiled_environment_sv.hpp"
 #include "application_compiled_source.hpp"
 
+#include "fsim/frontend/class_resolution.hpp"
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/support/uvm_identity.hpp"
@@ -955,10 +956,8 @@ private:
                 auto result = bind_method(input, { nullptr, nullptr, owner->canonical_identity },
                     member, scope, true);
                 if (hash != std::string_view::npos && input.systemverilog_class_selection) {
-                    auto selection = *input.systemverilog_class_selection;
-                    selection.systemverilog_class_declaration = owner->canonical_identity;
-                    input.systemverilog_class_owner
-                        = std::make_shared<const frontend::Type>(std::move(selection));
+                    input.systemverilog_class_owner = frontend::systemverilog_class_scope_owner(
+                        *input.systemverilog_class_selection, owner->canonical_identity);
                 }
                 return result;
             }
@@ -1080,10 +1079,7 @@ private:
     }
 
     // `run_test(name)` of the UVM library runs on the native UVM services
-    // (IEEE 1800.2-2020 F.3.1.2). The phases before and after run are native
-    // calls; the run phase forks each component's run_phase as a process of
-    // the calling thread, which ends the simulation when the phase ends. The
-    // block is parsed onto the call's source line, so it reports there.
+    // (IEEE 1800.2-2020 F.3.1.2); the frontend builds its statement.
     void expand_uvm_run_test(frontend::Statement& input, const SourceScope& scope)
     {
         if (input.kind != frontend::StatementKind::TaskCall
@@ -1094,106 +1090,21 @@ private:
         if (declaration == nullptr || !declaration->callable
             || declaration->callable->function)
             return;
-        std::string text(input.span.begin.line > 1U ? input.span.begin.line - 1U : 0U, '\n');
-        const bool named = !input.task_arguments.empty() && input.task_arguments.front().valid();
-        // Each function phase calls its method on the components in the
-        // order next() hands them out; run_phase runs as one process per
-        // component (IEEE 1800.2-2020 9.8).
-        const auto function_phase = [](const int kind, const std::string_view method) {
-            return "__fsim_uvm_phase = __fsim_uvm_run_test_function_phase(" + std::to_string(kind)
-                + "); __fsim_uvm_component = __fsim_uvm_run_test_next(); "
-                  "while (__fsim_uvm_component != null) begin __fsim_uvm_component."
-                + std::string { method }
-                + "(__fsim_uvm_phase); __fsim_uvm_component = __fsim_uvm_run_test_next(); end ";
-        };
-        text += "module __fsim_uvm_run_test; initial begin begin : __fsim_uvm_run_test "
-                "int __fsim_uvm_count; uvm_pkg::uvm_phase __fsim_uvm_phase; "
-                "uvm_pkg::uvm_component __fsim_uvm_component; "
-                "__fsim_uvm_count = __fsim_uvm_run_test_begin(";
-        text += named ? "\"__fsim_uvm_test_name\"" : "";
-        text += "); ";
-        text += function_phase(0, "build_phase");
-        text += function_phase(1, "connect_phase");
-        text += function_phase(2, "end_of_elaboration_phase");
-        text += function_phase(3, "start_of_simulation_phase");
-        text += "__fsim_uvm_count = __fsim_uvm_run_test_components(); "
-                "__fsim_uvm_phase = __fsim_uvm_run_test_phase(); "
-                "for (int __fsim_uvm_index = 0; __fsim_uvm_index < __fsim_uvm_count; "
-                "__fsim_uvm_index++) fork automatic uvm_pkg::uvm_component "
-                "__fsim_uvm_task_component = __fsim_uvm_run_test_component(__fsim_uvm_index); "
-                "__fsim_uvm_task_component.run_phase(__fsim_uvm_phase); join_none "
-                "__fsim_uvm_run_test_wait(); ";
-        text += function_phase(4, "extract_phase");
-        text += function_phase(5, "check_phase");
-        text += function_phase(6, "report_phase");
-        text += function_phase(7, "final_phase");
-        text += "__fsim_uvm_run_test_end(); $finish; end end endmodule\n";
-        auto parsed = frontend::parse_verilog(
-            frontend::SourceText { std::string { input.span.source_name.str() }, std::move(text) },
+        std::optional<frontend::Expression> name;
+        if (!input.task_arguments.empty() && input.task_arguments.front().valid())
+            name = std::move(input.task_arguments.front());
+        std::string diagnostic;
+        auto statement = frontend::uvm_run_test_statement(input.span, std::move(name),
             scope.unit != nullptr ? scope.unit->standard_revision
-                                  : frontend::StandardRevision::SystemVerilog2017);
-        frontend::Statement* block { };
-        const auto find = [&](auto& self, auto& items) -> void {
-            for (auto& item : items) {
-                if (block != nullptr)
-                    return;
-                if (item.label == "__fsim_uvm_run_test")
-                    block = &item;
-                else
-                    self(self, item.statements);
-            }
-        };
-        for (auto& unit : parsed.design.units)
-            for (auto& process : unit.processes)
-                find(find, process.statements);
-        if (!parsed.ok() || block == nullptr) {
+                                  : frontend::StandardRevision::SystemVerilog2017,
+            diagnostic);
+        if (!statement) {
             error("FSIM-SV-CLASS-013", "UVM run_test could not be prepared"
-                + (parsed.diagnostics.empty() ? std::string { }
-                                              : ": " + parsed.diagnostics.front().message),
+                + (diagnostic.empty() ? std::string { } : ": " + diagnostic),
                 input.span);
             return;
         }
-        auto name = named ? std::move(input.task_arguments.front()) : frontend::Expression { };
-        // The placeholder names are the native calls of the run.
-        const auto rewrite = [&](auto& self, frontend::Expression& expression) -> void {
-            for (auto& operand : expression.operands)
-                self(self, operand);
-            if (expression.kind == frontend::ExpressionKind::StringLiteral
-                && expression.text.find("__fsim_uvm_test_name") != std::string::npos) {
-                expression = name;
-            } else if (expression.kind == frontend::ExpressionKind::Call
-                && expression.text.starts_with("__fsim_uvm_run_test_")) {
-                auto member = expression.text.substr(std::string_view { "__fsim_uvm_run_test_" }.size());
-                std::ranges::replace(member, '_', '-');
-                expression.text = "@sv-static-method:@uvm-run-test-" + member;
-                const bool count = member == "begin" || member == "components";
-                expression.call_result_width = count ? 32U : 64U;
-                expression.call_result_signed = count;
-                expression.call_result_domain = frontend::ValueDomain::Bit2;
-            }
-        };
-        const auto walk = [&](auto& self, frontend::Statement& statement) -> void {
-            for (auto* expression : { &statement.target, &statement.value, &statement.condition,
-                     &statement.loop_initial, &statement.loop_limit, &statement.loop_update_target })
-                rewrite(rewrite, *expression);
-            for (auto& argument : statement.task_arguments)
-                rewrite(rewrite, argument);
-            for (auto& declaration : statement.declarations)
-                if (declaration.initializer)
-                    rewrite(rewrite, *declaration.initializer);
-            if (statement.kind == frontend::StatementKind::TaskCall
-                && statement.task_name.starts_with("__fsim_uvm_run_test_")) {
-                statement.task_name = "@sv-static-task:@uvm-run-test-"
-                    + statement.task_name.substr(std::string_view { "__fsim_uvm_run_test_" }.size());
-            }
-            for (auto* nested : { &statement.statements, &statement.loop_updates,
-                     &statement.else_statements })
-                for (auto& item : *nested)
-                    self(self, item);
-        };
-        walk(walk, *block);
-        block->label.clear();
-        input = std::move(*block);
+        input = std::move(*statement);
     }
 
     void prepare_statement(frontend::Statement& input, SourceScope scope,

@@ -4647,6 +4647,32 @@ if(TARGET fsim_application)
       0 systemc_matrix app/application_systemc_matrix_test.cpp
       fsim.application.systemc_matrix
       systemc compiler cache lifecycle threads llvm debug portability)
+    # The SystemC matrix runs as parallel parts; the fixture methods live in
+    # app/application_test.cpp, which dispatches each part by case name.
+    set(fsim_systemc_matrix_parts
+      core
+      hierarchy_1
+      hierarchy_2
+      hierarchy_3
+      hierarchy_4
+      lifecycle
+      named_objects
+      threads_methods
+      method_tops
+      event_channels
+      scheduling)
+    foreach(matrix_part IN LISTS fsim_systemc_matrix_parts)
+      add_test(
+        NAME fsim.application.systemc_matrix_${matrix_part}
+        COMMAND fsim_application_tests systemc_matrix_${matrix_part}
+      )
+      set_tests_properties(
+        fsim.application.systemc_matrix_${matrix_part}
+        PROPERTIES
+          LABELS "systemc;compiler;cache;lifecycle;threads;llvm;debug;portability"
+          TIMEOUT 1800
+      )
+    endforeach()
     target_sources(
       fsim_application_tests
       PRIVATE
@@ -4958,7 +4984,7 @@ if(TARGET fsim_application)
     )
     set_tests_properties(
       fsim.application.systemc_matrix
-      PROPERTIES TIMEOUT 7200
+      PROPERTIES TIMEOUT 60
     )
     set_tests_properties(
       fsim.application.sv_containers
@@ -6426,7 +6452,7 @@ endfunction()
 
 fsim_require_fixture_regex(
   fsim.systemc.accellera_closure fsim_systemc_accellera_closure_witnesses
-  "^fsim\\.(systemc\\.(accellera_corpus|upstream\\.(simple_fifo|event_list|tlm_fifo)|shared_runtime|compatibility|kernel_backend_.*|tlm[12]_backend|shared-runtime-contract|abi-c|plugin|compiler|incremental|matrix)|systemc-accellera-(inventory|portability-contract)|systemc-upstream-provenance|systemc-portability-contract|installed-public-contract|contract\\.systemc-resources|application\\.(systemc_trace|systemc_matrix|systemc_datatypes|systemc_tlm1|typed_boundaries|artifact_phases))$")
+  "^fsim\\.(systemc\\.(accellera_corpus|upstream\\.(simple_fifo|event_list|tlm_fifo)|shared_runtime|compatibility|kernel_backend_.*|tlm[12]_backend|shared-runtime-contract|abi-c|plugin|compiler|incremental|matrix)|systemc-accellera-(inventory|portability-contract)|systemc-upstream-provenance|systemc-portability-contract|installed-public-contract|contract\\.systemc-resources|application\\.(systemc_trace|systemc_matrix(_[a-z0-9_]+)?|systemc_datatypes|systemc_tlm1|typed_boundaries|artifact_phases))$")
 fsim_require_fixture_regex(
   fsim.offline-producer-consumer-closure
   fsim_offline_producer_consumer_closure_witnesses
@@ -6434,7 +6460,7 @@ fsim_require_fixture_regex(
 fsim_require_fixture_regex(
   fsim.clean-machine-install-closure
   fsim_clean_machine_install_closure_witnesses
-  "^fsim\\.(binary-install-ownership|installed-public-contract|installed-pkg-config-consumer|application|non-project-restartability-contract|library\\.artifact|sdf-application-inventory|sdf-vital-inventory|application\\.(sdf_control|sdf_vital_corpus|systemc_matrix)|artifact\\.(object|design)|application\\.artifact_phases|source-hidden-relocation-contract|application\\.(trace_control|fst_corpus|vcd_control)|tool-portability-contract)$")
+  "^fsim\\.(binary-install-ownership|installed-public-contract|installed-pkg-config-consumer|application|non-project-restartability-contract|library\\.artifact|sdf-application-inventory|sdf-vital-inventory|application\\.(sdf_control|sdf_vital_corpus|systemc_matrix(_[a-z0-9_]+)?)|artifact\\.(object|design)|application\\.artifact_phases|source-hidden-relocation-contract|application\\.(trace_control|fst_corpus|vcd_control)|tool-portability-contract)$")
 fsim_require_fixture_regex(
   fsim.compatibility-smoke-closure
   fsim_compatibility_smoke_closure_witnesses

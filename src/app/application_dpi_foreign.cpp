@@ -4,6 +4,7 @@
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/platform/dynamic_library.hpp"
 #include "fsim/runtime/svdpi_bridge.h"
+#include "fsim/support/native_filesystem.hpp"
 
 #include "vpi_user.h"
 
@@ -637,14 +638,14 @@ public:
         for (const auto& name : libraries) {
             std::filesystem::path path { name };
             std::error_code error_code;
-            if (!std::filesystem::exists(path, error_code)) {
+            if (!support::native_fs::exists(path, error_code)) {
                 const auto shared = std::filesystem::path { name + ".so" };
-                if (std::filesystem::exists(shared, error_code)) {
+                if (support::native_fs::exists(shared, error_code)) {
                     path = shared;
                 }
             }
             // dlopen searches the loader path for a bare name.
-            if (std::filesystem::exists(path, error_code)) {
+            if (support::native_fs::exists(path, error_code)) {
                 path = std::filesystem::absolute(path, error_code);
             }
             std::string error;

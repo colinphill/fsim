@@ -427,7 +427,7 @@ void test_invalid_unbounded(
         output << text;
     };
     write_source(R"(
-module invalid_typed #(parameter int P = $);
+module invalid_typed #(parameter real P = $);
 endmodule
 )");
     auto config = unbounded_config(
@@ -439,7 +439,7 @@ endmodule
     assert(std::ranges::any_of(
         diagnostics.diagnostics(), [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ELAB-SVCONST-001"
-                && diagnostic.message.find("implicit parameter type")
+                && diagnostic.message.find("simple bit vector type")
                     != std::string::npos;
         }));
 

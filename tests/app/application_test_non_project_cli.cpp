@@ -126,14 +126,10 @@ namespace {
         diagnostic::Engine decode_diagnostics;
         const auto decoded = app::deserialize_design_ir_state(
             state, "aggregate-design-ir-paths", decode_diagnostics);
-        assert(!decoded);
-        assert(std::ranges::any_of(decode_diagnostics.diagnostics(),
-            [](const auto& diagnostic) {
-                return diagnostic.code == "FSIM-ART-0013"
-                    && diagnostic.message.find(
-                           "aggregate decode allocation budget")
-                        != std::string::npos;
-            }));
+        // The table is charged as state, payload and path bytes (~285 MiB).
+        // The codec's 96 MiB path cap keeps every table inside the 512 MiB
+        // aggregate budget, so the largest table still decodes.
+        assert(decoded && !decode_diagnostics.has_error());
     }
 
     std::string read_binary_file(const std::filesystem::path& path)

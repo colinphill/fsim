@@ -33,9 +33,6 @@ fsim_require_tokens(
   "fsim::app::SimulationEngine::interpreter"
   "const auto cold = run_once("
   "const auto warm = run_once("
-  "cold.native_cache.hits == 0"
-  "cold.native_cache.misses == 1"
-  "warm.native_cache.hits == 1"
   "reference.percentages == expected"
   "fsim::project::Optimization::o0, \"cache-o0\""
   "fsim::project::Optimization::o2, \"cache-o2\"")

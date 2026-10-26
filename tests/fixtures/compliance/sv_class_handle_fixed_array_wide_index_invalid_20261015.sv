@@ -67,7 +67,7 @@ module sv_class_handle_fixed_array_wide_index_invalid_20261015;
   initial begin
     dut = new;
     if (!dut.check_invalid_indices()) $fatal(1, "wide invalid index write");
-    $display("CLASS_FIXED_ARRAY_WIDE_INVALID_INDEX_PASS");
+    $display("PASS");
     $finish;
   end
 endmodule

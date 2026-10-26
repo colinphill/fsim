@@ -2311,9 +2311,11 @@ private:
             auto* is_zero = builder_.CreateAnd(builder_.CreateNot(a0),
                 builder_.CreateNot(b0));
             auto* m = constant(mask_of(inst.width));
+            // Only equal known bits survive an ambiguous condition; equal X
+            // or Z bits produce X (IEEE 1800-2023 11.4.11, Table 11-20).
             auto* same = builder_.CreateAnd(
                 bit_not(builder_.CreateOr(builder_.CreateXor(when_true.a, when_false.a),
-                    builder_.CreateXor(when_true.b, when_false.b))),
+                    builder_.CreateOr(when_true.b, when_false.b))),
                 m);
             auto* differ = builder_.CreateAnd(bit_not(same), m);
             const Pair merged { builder_.CreateOr(builder_.CreateAnd(when_true.a, same),

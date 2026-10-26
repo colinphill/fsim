@@ -354,9 +354,9 @@ end architecture;
 library ieee;
 use ieee.std_logic_1164.all;
 use work.local_integer_array_pkg.all;
-entity local_integer_alias_array_rejected is
+entity local_integer_alias_array_fold is
 end entity;
-architecture rtl of local_integer_alias_array_rejected is
+architecture rtl of local_integer_alias_array_fold is
   constant init : std_logic_vector(7 downto 0) := alias_array_tail(8);
 begin
   child: entity work.local_integer_array_leaf(rtl)
@@ -366,9 +366,9 @@ end architecture;
 library ieee;
 use ieee.std_logic_1164.all;
 use work.local_integer_array_pkg.all;
-entity local_integer_constrained_array_rejected is
+entity local_integer_constrained_array_fold is
 end entity;
-architecture rtl of local_integer_constrained_array_rejected is
+architecture rtl of local_integer_constrained_array_fold is
   constant init : std_logic_vector(7 downto 0)
     := constrained_array_tail(8);
 begin
@@ -379,9 +379,9 @@ end architecture;
 library ieee;
 use ieee.std_logic_1164.all;
 use work.local_integer_array_pkg.all;
-entity local_integer_unknown_slice_rejected is
+entity local_integer_unknown_slice_fold is
 end entity;
-architecture rtl of local_integer_unknown_slice_rejected is
+architecture rtl of local_integer_unknown_slice_fold is
   constant init : std_logic_vector(7 downto 0) := unknown_array_tail(8);
 begin
   child: entity work.local_integer_array_leaf(rtl)
@@ -652,24 +652,42 @@ end architecture;
             == expected_table_bytes[sample]);
     }
 
-    const auto rejected = fsim::elaboration::elaborate(
-        *linked.design,
-        "vhdl:work.local_integer_alias_array_rejected(rtl)");
-    assert(!rejected.ok());
-    assert(has_diagnostic(rejected, "FSIM-ELAB-GENERIC-004"));
-
-    const auto rejected_constrained = fsim::elaboration::elaborate(
-        *linked.design,
-        "vhdl:work.local_integer_constrained_array_rejected(rtl)");
-    assert(!rejected_constrained.ok());
-    assert(has_diagnostic(
-        rejected_constrained, "FSIM-ELAB-GENERIC-004"));
-
-    const auto rejected_unknown = fsim::elaboration::elaborate(
-        *linked.design,
-        "vhdl:work.local_integer_unknown_slice_rejected(rtl)");
-    assert(!rejected_unknown.ok());
-    assert(has_diagnostic(rejected_unknown, "FSIM-ELAB-GENERIC-004"));
+    // A generic's actual is a globally static expression that elaboration
+    // evaluates (IEEE 1076-2019 9.4.3, 14.4.2.1): local arrays of an integer
+    // subtype, a constrained element subtype the values stay within, and a
+    // metavalue argument (to_integer warns and returns 0) all fold.
+    const auto expect_folded_init = [&](const std::string_view unit,
+                                        const std::string_view value) {
+        const auto result = fsim::elaboration::elaborate(
+            *linked.design, "vhdl:work." + std::string { unit } + "(rtl)");
+        if (!result.ok()) {
+            for (const auto& diagnostic : result.diagnostics) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(result.ok());
+        const auto instance = std::string { unit } + ".child";
+        const auto specialization = std::ranges::find_if(
+            result.design->specializations(), [&](const auto& candidate) {
+                return candidate.instance == instance;
+            });
+        assert(specialization != result.design->specializations().end());
+        const auto init = std::ranges::find_if(
+            specialization->parameter_identity_values,
+            [](const auto& parameter) { return parameter.first == "init"; });
+        assert(init != specialization->parameter_identity_values.end());
+        // A folded call's identity records the elaborated value.
+        const auto folded_value = init->second.find(
+            ";elaborated=" + std::string { value });
+        if (folded_value == std::string::npos) {
+            std::cerr << unit << " init: " << init->second << '\n';
+        }
+        assert(folded_value != std::string::npos);
+    };
+    expect_folded_init("local_integer_alias_array_fold", "00001000");
+    expect_folded_init("local_integer_constrained_array_fold", "00001000");
+    expect_folded_init("local_integer_unknown_slice_fold", "00000000");
 
     const auto find_package_call = [&](const std::string_view package_name)
         -> const fsim::semantic::vhdl::Expression& {
@@ -796,7 +814,7 @@ end architecture;
         "vhdl:work.local_integer_pattern8_constrained_mismatch(rtl)");
     assert(!rejected_constrained_width_mismatch.ok());
     assert(has_diagnostic(
-        rejected_constrained_width_mismatch, "FSIM-ELAB-GENERIC-004"));
+        rejected_constrained_width_mismatch, "FSIM-ELAB-GENERIC-008"));
 }
 
 void test_vhdl_constant_initializer_preserves_mismatched_packed_bounds()
@@ -969,7 +987,7 @@ end architecture;
         distinct_nominal.design,
         "vhdl:work.distinct_rom_initializer(rtl)");
     assert(!rejected_nominal.ok());
-    assert(has_diagnostic(rejected_nominal, "FSIM-ELAB-HIR-001"));
+    assert(has_diagnostic(rejected_nominal, "FSIM-ELAB-VHINIT-002"));
 
     const auto constrained_mismatch = fsim::frontend::parse_text(
         "vhdl-packed-array-signal-initializer-bounds-negative.vhd",
@@ -1006,7 +1024,7 @@ end architecture;
         constrained_mismatch.design,
         "vhdl:work.constrained_rom_initializer(rtl)");
     assert(!rejected_bounds.ok());
-    assert(has_diagnostic(rejected_bounds, "FSIM-ELAB-HIR-001"));
+    assert(has_diagnostic(rejected_bounds, "FSIM-ELAB-VHINIT-002"));
 
     const auto wrong_element_width = fsim::frontend::parse_text(
         "vhdl-packed-array-signal-initializer-width-negative.vhd",
@@ -3069,7 +3087,7 @@ begin
     end loop;
     short_count <= short_total;
 
-    -- Attribute-range loops remain on their existing static path.
+    -- An attribute-range loop over a static range.
     for i in fallback_source'range loop
       fallback_value(i) := fallback_source(i);
     end loop;
@@ -3152,10 +3170,11 @@ end architecture;
             }
         }
     }
-    // The seven-trip and attribute loops expand, while eligible loops
-    // retain one emitted body and jump back to it at runtime.
+    // The seven-trip loop expands, while eligible loops (the attribute-range
+    // loop among them) retain one emitted body and jump back to it at
+    // runtime.
     const std::array<std::size_t, 6U> expected_body_points {
-        7U, 1U, 1U, 1U, 8U, 1U,
+        7U, 1U, 1U, 1U, 1U, 1U,
     };
     assert(emitted_body_points == expected_body_points);
     assert(redundant_cap_reports == 0U);
@@ -3732,6 +3751,12 @@ architecture rtl of function_top is
   function increment(value : integer) return integer is
   begin
     return value + 1;
+  end function;
+  -- The box default of boxed_leaf names the TRANSFORM directly visible
+  -- at its generic association list (IEEE 1076-2019 6.5.6.2).
+  function transform(value : integer) return integer is
+  begin
+    return value + 2;
   end function;
   signal direct_input : integer;
   signal direct_output : integer;

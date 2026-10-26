@@ -320,7 +320,140 @@ struct SystemCBridgeTestAccess {
 
 namespace fsim::test {
 
+namespace {
+
+const std::string sv_host = "systemc_hdl_child_host";
+const std::string vhdl_host = "systemc_hdl_child_vhdl_host";
+
+void print_diagnostics(const fsim::diagnostic::Engine& engine) {
+  for (const auto& diagnostic : engine.diagnostics()) {
+    std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+  }
+}
+
+struct HdlHierarchyCase {
+  std::string_view name;
+  bool vhdl_host{};
+  // The factory bound below the HDL host, or the SystemC top.
+  std::string factory;
+  bool systemc_top{};
+  std::string expected{"0"};
+  // Further bindings, and paths that must name elaborated objects.
+  std::vector<std::pair<std::string, std::string>> bindings{};
+  std::vector<std::string> signals{};
+  std::vector<std::string> systemc_instances{};
+};
+
+std::vector<HdlHierarchyCase> hdl_hierarchy_cases() {
+  return {
+    {"sv/systemc/sv", false, "hdl_child_sv", false, "0", {},
+     {sv_host + ".u_wrapper.inner.inverted"}},
+    {"sv/systemc/vhdl", false, "hdl_child_vhdl", false, "0", {},
+     {sv_host + ".u_wrapper.inner.inverted"}},
+    {"vhdl/systemc/vhdl", true, "hdl_child_vhdl", false, "0", {},
+     {vhdl_host + ".u_wrapper.inner.inverted"}},
+    {"vhdl/systemc/sv", true, "hdl_child_sv", false, "0", {},
+     {vhdl_host + ".u_wrapper.inner.inverted"}},
+    {"sv/systemc/sv/systemc", false, "hdl_child_sv_sc", false, "0",
+     {{sv_host + ".u_wrapper.inner.u_bridge", "systemc:models.bridge"}}, {},
+     {sv_host + ".u_wrapper", sv_host + ".u_wrapper.inner.u_bridge"}},
+    {"sv/systemc/sv parameter", false, "hdl_child_sv_param"},
+    {"sv/systemc/vhdl generic", false, "hdl_child_vhdl_generic"},
+    {"sv/systemc passthrough/sv", false, "hdl_passthrough_sv"},
+    {"vhdl/systemc passthrough/vhdl", true, "hdl_passthrough_vhdl"},
+    {"vhdl/systemc/vhdl/systemc", true, "hdl_child_vhdl_sc", false, "0",
+     {{vhdl_host + ".u_wrapper.inner.u_bridge", "systemc:models.bridge"}},
+     {}, {vhdl_host + ".u_wrapper", vhdl_host + ".u_wrapper.inner.u_bridge"}},
+    {"sv/systemc/systemc/sv", false, "hdl_nested", false, "0", {},
+     {sv_host + ".u_wrapper.middle.inner.inverted"},
+     {sv_host + ".u_wrapper", sv_host + ".u_wrapper.middle"}},
+    {"vhdl/systemc/systemc/vhdl", true, "hdl_nested_vhdl", false, "0", {},
+     {vhdl_host + ".u_wrapper.middle.inner.inverted"},
+     {vhdl_host + ".u_wrapper", vhdl_host + ".u_wrapper.middle"}},
+    {"sv/systemc/{sv,vhdl}", false, "hdl_twin", false, "1", {},
+     {sv_host + ".u_wrapper.first.inverted",
+      sv_host + ".u_wrapper.second.inverted"}},
+    {"systemc/sv", false, "hdl_top_sv", true, "0", {},
+     {"hdl_top_sv.inner.inverted"}},
+    {"systemc/vhdl", false, "hdl_top_vhdl", true, "0", {},
+     {"hdl_top_vhdl.inner.inverted"}},
+    {"systemc/sv/systemc", false, "hdl_top_sv_sc", true, "0",
+     {{"hdl_top_sv_sc.inner.u_bridge", "systemc:models.bridge"}}, {},
+     {"hdl_top_sv_sc", "hdl_top_sv_sc.inner.u_bridge"}},
+    {"systemc/vhdl/systemc", false, "hdl_top_vhdl_sc", true, "0",
+     {{"hdl_top_vhdl_sc.inner.u_bridge", "systemc:models.bridge"}}, {},
+     {"hdl_top_vhdl_sc", "hdl_top_vhdl_sc.inner.u_bridge"}},
+    {"systemc/systemc/sv", false, "hdl_top_nested", true, "0", {},
+     {"hdl_top_nested.middle.inner.inverted"}},
+    {"systemc/systemc/vhdl", false, "hdl_top_nested_vhdl", true, "0", {},
+     {"hdl_top_nested_vhdl.middle.inner.inverted"}},
+  };
+}
+
+struct HdlHierarchyFailure {
+  std::string factory;
+  bool systemc_top{};
+  std::string_view code;
+  std::string_view message;
+};
+
+}  // namespace
+
+// The SystemC matrix runs as independent parts so that CTest can schedule them
+// concurrently. Every part rebuilds the configurations it needs from these
+// helpers and from its own fixture directory.
+project::Config ApplicationTestFixture::systemc_hdl_config() const {
+auto hdl_systemc_config = base_config();
+hdl_systemc_config.project.top = "sv:work.systemc_host";
+hdl_systemc_config.source_sets.front().files = {
+    systemc_boundary_source};
+hdl_systemc_config.bindings = {
+    {"systemc_host.u_bridge",
+     "systemc:models.bridge",
+     std::nullopt},
+};
+  return hdl_systemc_config;
+}
+
+project::Config ApplicationTestFixture::systemc_method_host_config() const {
+auto systemc_method_config = systemc_hdl_config();
+systemc_method_config.project.top =
+    "sv:work.systemc_method_host";
+systemc_method_config.bindings = {
+    {"systemc_method_host.u_method",
+     "systemc:models.method_bridge",
+     std::nullopt},
+};
+  return systemc_method_config;
+}
+
+project::Config ApplicationTestFixture::systemc_hdl_mixed_config() const {
+  auto hdl_mixed_config = systemc_hdl_config();
+{
+  auto vhdl_sources = hdl_mixed_config.source_sets.front();
+  vhdl_sources.language = fsim::project::Language::vhdl;
+  vhdl_sources.standard = "2008";
+  vhdl_sources.files = {systemc_method_vhdl_source};
+  hdl_mixed_config.source_sets.insert(
+      hdl_mixed_config.source_sets.begin() + 1, std::move(vhdl_sources));
+}
+  return hdl_mixed_config;
+}
+
 void ApplicationTestFixture::test_systemc_integration() {
+  test_systemc_matrix_core();
+  test_systemc_matrix_hierarchy_1();
+  test_systemc_matrix_hierarchy_2();
+  test_systemc_matrix_hierarchy_3();
+  test_systemc_matrix_hierarchy_4();
+  test_systemc_matrix_lifecycle();
+  test_systemc_matrix_named_objects();
+  test_systemc_matrix_threads_methods();
+  test_systemc_matrix_method_tops();
+  test_systemc_matrix_event_channels();
+}
+
+void ApplicationTestFixture::test_systemc_matrix_core() {
   auto config = base_config();
 fsim::diagnostic::Engine diagnostics;
 auto checked = fsim::app::check_project(config, diagnostics);
@@ -757,6 +890,149 @@ assert(
 assert(native_reference.first.time == native_compiled.first.time);
 assert(native_reference.second == native_compiled.second);
 
+  run_systemc_hdl_hierarchy_failures();
+}
+
+// SystemC instantiating HDL (fsim::systemc::hdl_module) in every hierarchy
+// shape: HDL hosts of both languages over SystemC over HDL children of both
+// languages, SystemC tops, HDL under a native SystemC child, SystemC under
+// an HDL child of SystemC, port passthrough, two HDL children, parameter
+// and generic actuals, and each elaboration rule.
+void ApplicationTestFixture::run_systemc_hdl_hierarchy_cases(
+    const std::size_t first, const std::size_t last) const {
+  const auto hdl_mixed_config = systemc_hdl_mixed_config();
+  const auto cases = hdl_hierarchy_cases();
+  for (std::size_t index = first;
+       index < std::min(last, cases.size()); ++index) {
+    const auto& hierarchy = cases[index];
+    auto case_config = hdl_mixed_config;
+    const auto& host = hierarchy.vhdl_host ? vhdl_host : sv_host;
+    case_config.bindings.clear();
+    if (hierarchy.systemc_top) {
+      case_config.project.top = "systemc:models." + hierarchy.factory;
+    } else {
+      case_config.project.top = hierarchy.vhdl_host
+          ? "vhdl:work." + vhdl_host + "(rtl)"
+          : "sv:work." + sv_host;
+      case_config.bindings.push_back(
+          {host + ".u_wrapper", "systemc:models." + hierarchy.factory,
+           std::nullopt});
+    }
+    for (const auto& [instance, target] : hierarchy.bindings) {
+      case_config.bindings.push_back({instance, target, std::nullopt});
+    }
+    const auto output = hierarchy.systemc_top
+        ? hierarchy.factory + ".observed"
+        : std::string{"inverted"};
+    for (const auto engine :
+         {fsim::app::SimulationEngine::interpreter,
+          fsim::app::SimulationEngine::compiled,
+          fsim::app::SimulationEngine::debug}) {
+      fsim::diagnostic::Engine case_diagnostics;
+      auto project = fsim::app::build_project(case_config, case_diagnostics);
+      if (!project) {
+        std::cerr << "SystemC hierarchy " << hierarchy.name << ":\n";
+        print_diagnostics(case_diagnostics);
+      }
+      assert(project);
+      for (const auto& signal : hierarchy.signals) {
+        if (!project->design.find_signal(signal)) {
+          std::cerr << "SystemC hierarchy " << hierarchy.name
+                    << ": no signal " << signal << '\n';
+        }
+        assert(project->design.find_signal(signal));
+      }
+      for (const auto& instance : hierarchy.systemc_instances) {
+        assert(std::ranges::any_of(
+            project->design.systemc_instances(),
+            [&](const fsim::elaboration::SystemCInstanceInfo& info) {
+              return info.instance == instance;
+            }));
+      }
+      const auto output_signal = project->design.find_signal(output);
+      assert(output_signal);
+      fsim::app::Simulation simulation{
+          std::move(*project), case_config.run.max_deltas, engine};
+      const auto result = simulation.run();
+      const auto value =
+          simulation.read_signal(*output_signal).to_msb_string();
+      if (value != hierarchy.expected) {
+        std::cerr << "SystemC hierarchy " << hierarchy.name << ": "
+                  << output << " = " << value << ", expected "
+                  << hierarchy.expected << '\n';
+      }
+      assert(value == hierarchy.expected);
+      if (!hierarchy.systemc_top && !hierarchy.vhdl_host) {
+        assert(result.status == fsim::runtime::RunStatus::stopped);
+        assert(result.time == 2);
+      } else {
+        assert(result.status == fsim::runtime::RunStatus::completed);
+      }
+    }
+  }
+}
+
+void ApplicationTestFixture::run_systemc_hdl_hierarchy_failures() const {
+  const auto hdl_mixed_config = systemc_hdl_mixed_config();
+for (const auto& failure : std::vector<HdlHierarchyFailure>{
+         {"hdl_child_missing", false, "FSIM-ELAB-BIND-067",
+          "names no SystemVerilog module or VHDL entity"},
+         {"hdl_invalid_signal", false, "FSIM-ELAB-BIND-066",
+          "has SystemC processes, signals, exports or modules"},
+         {"hdl_invalid_actual", false, "FSIM-ELAB-BIND-068",
+          "'NO_SUCH_PARAMETER'"},
+         {"hdl_invalid_port", false, "FSIM-ELAB-BIND-068",
+          "has port 'other'"},
+         {"hdl_invalid_direction", false, "FSIM-ELAB-BIND-068",
+          "does not have the direction"},
+         {"hdl_unbound", true, "", "is not bound to a channel"},
+     }) {
+  auto failure_config = hdl_mixed_config;
+  failure_config.bindings.clear();
+  if (failure.systemc_top) {
+    failure_config.project.top = "systemc:models." + failure.factory;
+  } else {
+    failure_config.project.top = "sv:work." + sv_host;
+    failure_config.bindings.push_back(
+        {sv_host + ".u_wrapper", "systemc:models." + failure.factory,
+         std::nullopt});
+  }
+  fsim::diagnostic::Engine failure_diagnostics;
+  const auto failed =
+      fsim::app::build_project(failure_config, failure_diagnostics);
+  const bool reported = std::ranges::any_of(
+      failure_diagnostics.diagnostics(), [&](const auto& diagnostic) {
+        return (failure.code.empty() || diagnostic.code == failure.code)
+            && diagnostic.message.find(failure.message) != std::string::npos;
+      });
+  if (failed || !reported) {
+    std::cerr << "SystemC hierarchy failure " << failure.factory << ":\n";
+    print_diagnostics(failure_diagnostics);
+  }
+  assert(!failed);
+  assert(reported);
+}
+}
+
+void ApplicationTestFixture::test_systemc_matrix_hierarchy_1() {
+  run_systemc_hdl_hierarchy_cases(0, 5);
+}
+
+void ApplicationTestFixture::test_systemc_matrix_hierarchy_2() {
+  run_systemc_hdl_hierarchy_cases(5, 10);
+}
+
+void ApplicationTestFixture::test_systemc_matrix_hierarchy_3() {
+  run_systemc_hdl_hierarchy_cases(10, 15);
+}
+
+void ApplicationTestFixture::test_systemc_matrix_hierarchy_4() {
+  run_systemc_hdl_hierarchy_cases(15, std::numeric_limits<std::size_t>::max());
+}
+
+void ApplicationTestFixture::test_systemc_matrix_lifecycle() {
+  const auto hdl_systemc_config = systemc_hdl_config();
+
 auto lifecycle_config = hdl_systemc_config;
 lifecycle_config.project.top =
     "sv:work.systemc_lifecycle_host";
@@ -1064,6 +1340,11 @@ assert(std::any_of(
     [](const fsim::diagnostic::Diagnostic& diagnostic) {
       return diagnostic.code == "FSIM-ELAB-BIND-058";
     }));
+
+}
+
+void ApplicationTestFixture::test_systemc_matrix_named_objects() {
+  const auto hdl_systemc_config = systemc_hdl_config();
 
 auto named_matrix_config = hdl_systemc_config;
 named_matrix_config.project.top =
@@ -1377,6 +1658,11 @@ assert(
         .to_msb_string()
     == "1");
 
+}
+
+void ApplicationTestFixture::test_systemc_matrix_threads_methods() {
+  const auto hdl_systemc_config = systemc_hdl_config();
+
 auto systemc_thread_config = hdl_systemc_config;
 systemc_thread_config.project.top =
     "sv:work.systemc_thread_host";
@@ -1517,14 +1803,7 @@ for (const auto& [signal, expected] : {
       == expected);
 }
 
-auto systemc_method_config = hdl_systemc_config;
-systemc_method_config.project.top =
-    "sv:work.systemc_method_host";
-systemc_method_config.bindings = {
-    {"systemc_method_host.u_method",
-     "systemc:models.method_bridge",
-     std::nullopt},
-};
+auto systemc_method_config = systemc_method_host_config();
 auto systemc_method_o0_config = systemc_method_config;
 systemc_method_o0_config.build.optimization =
     fsim::project::Optimization::o0;
@@ -1723,6 +2002,11 @@ assert(
         .to_msb_string()
     == "1");
 
+}
+
+void ApplicationTestFixture::test_systemc_matrix_method_tops() {
+  const auto systemc_method_config = systemc_method_host_config();
+
 auto systemc_method_top_config = systemc_method_config;
 systemc_method_top_config.project.top =
     "systemc:models.method_bridge";
@@ -1900,6 +2184,14 @@ assert(dynamic_reference.second == "00000100");
 assert(dynamic_reference.first.status == dynamic_compiled.first.status);
 assert(dynamic_reference.first.time == dynamic_compiled.first.time);
 assert(dynamic_reference.second == dynamic_compiled.second);
+
+}
+
+void ApplicationTestFixture::test_systemc_matrix_event_channels() {
+  auto systemc_method_top_config = systemc_method_host_config();
+  systemc_method_top_config.project.top =
+      "systemc:models.method_bridge";
+  systemc_method_top_config.bindings.clear();
 
 auto event_list_config = systemc_method_top_config;
 event_list_config.project.top =
@@ -2157,7 +2449,6 @@ assert(
 assert(
     std::get<4>(internal_reference)
     == std::get<4>(internal_compiled));
-
 }
 
 }  // namespace fsim::test

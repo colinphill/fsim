@@ -172,4 +172,14 @@ using VhdlConditionalIdentifiers
     std::string_view compatibility_profile,
     SystemVerilogPackageMemberLookup package_member_lookup);
 
+// The statement `run_test(name)` of the UVM library expanded onto the native
+// UVM services (IEEE 1800.2-2020 F.3.1.2): the phases before and after run
+// are native calls; the run phase forks each component's run_phase as a
+// process of the calling thread, which ends the simulation when the phase
+// ends. The block is parsed onto the call's source line, so it reports
+// there. On failure `diagnostic` holds the parser's first message.
+[[nodiscard]] std::optional<Statement> uvm_run_test_statement(
+    const SourceSpan& call, std::optional<Expression> test_name,
+    StandardRevision standard_revision, std::string& diagnostic);
+
 }  // namespace fsim::frontend

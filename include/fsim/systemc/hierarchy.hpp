@@ -73,6 +73,13 @@ struct LifecycleDescription {
     void* user{};
 };
 
+/// A native module that stands for an HDL design unit (mark_hdl_module):
+/// the unit as a project top spells it and its integer actuals.
+struct HdlChildDescription {
+    std::string unit;
+    std::vector<std::pair<std::string, std::int64_t>> actuals;
+};
+
 struct ModuleDescription {
     fsim_sc_handle_v1 handle{};
     fsim_sc_handle_v1 parent{};
@@ -86,6 +93,7 @@ struct ModuleDescription {
     std::vector<ExportDescription> exports;
     std::vector<ModuleDescription> native_children;
     LifecycleDescription lifecycle;
+    std::optional<HdlChildDescription> hdl;
 };
 
 enum class HierarchyObjectKind : std::uint8_t {
@@ -118,6 +126,11 @@ struct MethodSuspendResult {
     std::vector<std::uint32_t> event_signals;
     bool wait_all{};
     std::optional<std::uint64_t> timeout_ticks;
+    // wait_for_input_or_native_activity: the process waits for any of its
+    // boundary inputs, which are its elaborated static sensitivity (the
+    // bridge's input ports and the channels its HDL children drive), or
+    // for timeout_ticks.
+    bool boundary_inputs{};
 };
 
 /// Owns one loaded SystemC plug-in and every module object constructed from

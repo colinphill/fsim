@@ -758,11 +758,11 @@ std::int32_t Interpreter::Impl::position_vhdl_file(
     // A typed file holds one element per line; other files one per byte.
     std::vector<std::int64_t> starts;
     std::error_code error;
-    const auto size_bytes = std::filesystem::file_size(file.path, error);
+    const auto size_bytes = support::native_fs::file_size(file.path, error);
     if (error)
         fail("failed to query VHDL file size");
     if (lines) {
-        std::ifstream content { file.path, std::ios::binary };
+        auto content = support::native_fs::open_ifstream(file.path, std::ios::binary);
         std::int64_t at { };
         bool line_open { };
         for (char character; content.get(character); ++at) {
@@ -817,7 +817,7 @@ std::int32_t Interpreter::Impl::position_vhdl_file(
     if (lines && target > size)
         fail("FILE_TRUNCATE cannot add elements to a typed file");
     const auto resized = byte_of(target);
-    std::filesystem::resize_file(
+    support::native_fs::resize_file(
         file.path, static_cast<std::uintmax_t>(resized), error);
     if (error)
         fail("failed to resize VHDL file");

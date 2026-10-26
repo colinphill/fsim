@@ -87,7 +87,7 @@ fsim_require_restart_tokens(tests/app/application_test_cli.cpp
   "\"fsim\", \"run\"" "\"fsim\", \"debug\"" "debug_trace")
 fsim_require_restart_tokens(tests/app/application_test_artifact_verilog.cpp
   "checkpoint" "relocated_interpreted" "relocated_compiled"
-  "provenance" "cache.hits")
+  "provenance")
 fsim_require_restart_tokens(tests/app/application_test_multiple_roots.cpp
   "\"source\"" "\"sink\"" "design.roots()")
 fsim_require_restart_tokens(tests/app/application_test_source_updates.cpp

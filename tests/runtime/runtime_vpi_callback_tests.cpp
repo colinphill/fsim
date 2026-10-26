@@ -548,10 +548,15 @@ void test_systemverilog_vpi_callbacks()
             std::nullopt,
             1,
             collect });
+    // cbNextSimTime waits for the next time slot to start; that slot need
+    // not be queued yet (IEEE 1800-2023 38.36.2).
     require_vpi_callback(
-        no_future.error == SystemVerilogVpiCallbackError::NoFutureTime
-            && manager.registrations() == 2,
-        "VPI next-time registration rejects an absent future scheduler time transactionally");
+        no_future && manager.registrations() == 3
+            && manager.remove_callback(no_future.value)
+                == SystemVerilogVpiCallbackError::None
+            && manager.status(no_future.value).status
+                == SystemVerilogVpiCallbackStatus::Removed,
+        "VPI next-time registration waits for a slot that is not yet queued");
 
     const auto value_a_first = manager.register_callback(
         { SystemVerilogVpiCallbackKind::ValueChange,
@@ -571,12 +576,15 @@ void test_systemverilog_vpi_callbacks()
             std::nullopt,
             13,
             collect });
+    // Registered as vpi_register_cb registers cbAfterDelay: before any
+    // event of its slot, like cbNextSimTime (IEEE 1800-2023 38.36.2).
     const auto after_delay = manager.register_callback(
         { SystemVerilogVpiCallbackKind::AfterDelay,
             std::nullopt,
             callback_delay(5),
             14,
-            collect });
+            collect,
+            true });
     const auto next_time = manager.register_callback(
         { SystemVerilogVpiCallbackKind::NextTime,
             std::nullopt,
@@ -604,7 +612,7 @@ void test_systemverilog_vpi_callbacks()
     require_vpi_callback(
         value_a_first && value_a_second && value_b && after_delay
             && next_time && read_write && read_only && synchronization
-            && manager.registrations() == 10,
+            && manager.registrations() == 11,
         "VPI callback manager accepts every supported callback kind with retained registration identity");
 
     SystemVerilogVpiObjectRegistry other_registry { 902 };
@@ -622,7 +630,7 @@ void test_systemverilog_vpi_callbacks()
                 == SystemVerilogVpiCallbackError::CrossSimulation
             && foreign.object_error
                 == SystemVerilogVpiObjectError::CrossSimulation
-            && manager.registrations() == 10,
+            && manager.registrations() == 11,
         "VPI callback registration rejects cross-simulation object handles before publication");
 
     bool observer_reentered { };
@@ -710,18 +718,17 @@ void test_systemverilog_vpi_callbacks()
                 == SystemVerilogVpiValueError::None,
         "VPI callback force fixture publishes visible changes and hides deposits beneath force");
     (void)scheduler.run();
+    // A released variable keeps its forced value until its next assignment
+    // (IEEE 1800-2023 10.6.2): the deposit made beneath the force does not
+    // reappear, so the release changes nothing.
     require_vpi_callback(
-        events.size() == first_count + 4
+        events.size() == first_count + 2
             && events[first_count].registration
                 == value_a_first.value
             && events[first_count + 1].registration
                 == value_a_second.value
             && events[first_count].value == unknown
-            && events[first_count + 2].registration
-                == value_a_first.value
-            && events[first_count + 3].registration
-                == value_a_second.value
-            && events[first_count + 2].value == zero,
+            && events[first_count + 1].value == unknown,
         "VPI value-change dispatch preserves change sequence and registration order across force, hidden deposit, and release");
 
     SystemVerilogVpiCallbackManager other_manager {

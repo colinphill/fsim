@@ -378,12 +378,14 @@ begin
       end procedure process_drive;
       variable process_value : local_word_t;
       alias process_alias : local_word_t is process_value;
+      variable process_out : generated_word_t;
     begin
       process_drive(process_alias, generated_value + local_offset);
-      mapped_drive(observed, process_alias);
+      mapped_drive(process_out, process_alias);
+      observed <= process_out;
     end process;
   else generate
-    observed <= 1;
+    observed <= "0001";
 end generate chosen;
 end architecture;
 
@@ -438,7 +440,7 @@ architecture rtl of generated_range_behavior_vhdl is
 begin
   selection: case mode generate
     zero: when 0 =>
-      observed <= 1;
+      observed <= "0001";
     selected: when 1 to 2 | 7 downto 5 =>
       constant base_value : natural := 8;
       type choice_bits_t is array (0 to base_value / 2 - 1) of bit;
@@ -448,9 +450,9 @@ begin
       selected_value <= "1001";
       observed <= selected_value;
     empty_choice: when 4 to 3 =>
-      observed <= 15;
+      observed <= "1111";
     fallback: when others =>
-      observed <= 3;
+      observed <= "0011";
   end generate selection;
 end architecture;
 )";
@@ -472,16 +474,16 @@ architecture rtl of generated_enum_behavior_vhdl is
 begin
   selection: case mode generate
     idle_choice: when idle =>
-      observed <= 1;
+      observed <= "0001";
     selected: when ready | 'Z' to done =>
       signal selected_value : unsigned(3 downto 0);
     begin
-      selected_value <= 9;
+      selected_value <= "1001";
       observed <= selected_value;
     empty_range: when 'Z' downto done =>
-      observed <= 15;
+      observed <= "1111";
     fallback: when others =>
-      observed <= 3;
+      observed <= "0011";
   end generate selection;
 end architecture;
 )";
@@ -593,6 +595,8 @@ generated_block_behavior_vhdl_source =
 {
   std::ofstream output(generated_block_behavior_vhdl_source);
   output << R"(
+library ieee;
+use ieee.numeric_std.all;
 entity generated_block_behavior_vhdl is
   port (
     observed : out unsigned(3 downto 0)
@@ -606,7 +610,7 @@ begin
     constant local_value : natural := base_value + 1;
     signal generated_value : unsigned(3 downto 0);
   begin
-    generated_value <= local_value;
+    generated_value <= to_unsigned(local_value, 4);
     worker: process(generated_value)
     begin
       observed <= generated_value + 1;
@@ -624,7 +628,7 @@ end entity;
 architecture rtl of generated_block_interface_vhdl is
   signal source_value : unsigned(3 downto 0);
 begin
-  source_value <= 5;
+  source_value <= "0101";
   interface_scope: block is
     generic (
       width : natural := 4;

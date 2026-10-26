@@ -15,6 +15,7 @@
 #include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -46,14 +47,19 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     thread.group = group;
     thread.epoch = epoch;
     thread.alive = true;
-    if (debug_points_ && parent != no_slot) {
-        // A fork child is a process of its own for the debugger, numbered
-        // after the processes that exist (Interpreter::execute_fork).
+    thread.order = members_[member].process;
+    if (parent != no_slot) {
+        // A fork child is a process of its own, numbered after the processes
+        // that exist (Interpreter::spawn_fork): its updates and its place in
+        // a round follow that number.
         const auto id = static_cast<ProcessId>(
-            std::max(impl_.processes.size(), debug_next_child_));
-        debug_next_child_ = static_cast<std::size_t>(id) + 1U;
-        thread.debug_process = id;
-        debug_children_[id] = member;
+            std::max(impl_.processes.size(), next_child_process_));
+        next_child_process_ = static_cast<std::size_t>(id) + 1U;
+        thread.order = id;
+        if (debug_points_) {
+            thread.debug_process = id;
+            debug_children_[id] = member;
+        }
     }
     return index;
 }
@@ -98,11 +104,14 @@ void Interpreter::Impl::StaticKernel::prepare_behavioral()
     // (Interpreter::start): it then sees the changes the once members
     // (declaration initializers, initial blocks) make. This is the one
     // fixed order fsim uses for that time-zero race (IEEE 1800-2023 4.7,
-    // 9.2; engine-v4-semantics S18).
+    // 9.2; engine-v4-semantics S18). A VHDL process that begins at its wait
+    // (a port conversion that is not evaluated at initialization) is armed
+    // the same way, so an SV update of time zero reaches it (IEEE 1076-2019
+    // 14.7.5.2: initialization runs every process until it suspends).
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         auto& member = members_[index];
         if (member.kind != StaticKernelMemberKind::behavioral
-            || member.vhdl || member.start_late
+            || member.start_late
             || member.wait_sensitivity.empty()
             || member.operations.empty()
             || !operation_holds<WaitSensitivity>(member.operations.front())) {
@@ -118,22 +127,86 @@ void Interpreter::Impl::StaticKernel::start_behavioral()
 {
     // Every behavioral process starts at time zero in the Active region,
     // like its reference process; one that the scheduler starts a delta late
-    // (systemverilog_late_starters) starts in the next delta.
-    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
-        if (members_[index].kind != StaticKernelMemberKind::behavioral
-            || members_[index].prearmed) {
-            continue;
-        }
-        if (members_[index].start_late) {
-            late_members_.push_back(index);
-        } else {
-            ready_thread(spawn_thread(index, 0U, no_slot, no_slot));
+    // (systemverilog_late_starters) starts in the next delta. An always_comb
+    // or always_latch starts after every other procedure has started (IEEE
+    // 1800-2023 9.2.2.2.2), as the scheduler orders it (queue_at).
+    for (const bool after_procedures : { false, true }) {
+        for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+            const auto& member = members_[index];
+            if (member.kind != StaticKernelMemberKind::behavioral
+                || member.prearmed
+                || (member.after_procedures && !member.vhdl)
+                    != after_procedures) {
+                continue;
+            }
+            if (member.start_late) {
+                late_members_.push_back(index);
+            } else {
+                ready_thread(spawn_thread(index, 0U, no_slot, no_slot));
+            }
         }
     }
     if (!late_members_.empty()) {
         late_start_armed_ = true;
-        yield_requested_ = true;
+        // A SystemVerilog kernel's late activation is queued by
+        // Interpreter::start like the reference's late starters, in the
+        // generic pass of the first delta (queue_late_start).
+        yield_requested_ = yield_requested_ || mixed_ || vhdl_;
     }
+}
+
+void Interpreter::Impl::StaticKernel::start_late_members()
+{
+    late_start_armed_ = false;
+    for (const auto index : std::exchange(late_members_,
+             std::vector<std::uint32_t> { })) {
+        ready_thread(spawn_thread(index, 0U, no_slot, no_slot));
+    }
+}
+
+void Interpreter::Impl::StaticKernel::queue_late_start(const ProcessId order)
+{
+    // The reference queues each late starter for the next delta before the
+    // run (Interpreter::start), which is the generic pass of the first delta.
+    struct KernelLateStartTask {
+        Interpreter::Impl* owner { };
+        ProcessId host { };
+    };
+    const auto task = fsim::runtime::detail::make_scheduler_task_descriptor<
+        KernelLateStartTask,
+        +[](Scheduler&, const KernelLateStartTask& scheduled) {
+            auto& kernel = *scheduled.owner->static_kernel;
+            kernel.late_start_due_ = true;
+            bool yielded { };
+            try {
+                yielded = kernel.activate();
+            } catch (...) {
+                kernel.late_start_due_ = false;
+                throw;
+            }
+            kernel.late_start_due_ = false;
+            if (yielded) {
+                scheduled.owner->queue_next_delta(scheduled.host);
+            }
+        }>(KernelLateStartTask { &impl_, host_process_ });
+    impl_.scheduler.schedule_internal_next_delta(
+        SchedulerPhase::active, StableOrder { order }, task);
+}
+
+std::optional<ProcessId>
+Interpreter::Impl::StaticKernel::first_late_process() const
+{
+    if (mixed_ || vhdl_) {
+        return std::nullopt;
+    }
+    std::optional<ProcessId> first;
+    for (const auto& member : members_) {
+        if (member.kind == StaticKernelMemberKind::behavioral
+            && member.start_late && (!first || member.process < *first)) {
+            first = member.process;
+        }
+    }
+    return first;
 }
 
 bool Interpreter::Impl::StaticKernel::run_ready_threads()
@@ -903,6 +976,10 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                 schedule_stop_at(*warp_time_);
             } else {
                 impl_.scheduler.request_stop();
+                // As debug_stop: the host is requeued in this region so the
+                // continued run activates the kernel and the paused thread
+                // resumes there.
+                impl_.queue_current(host_process_);
             }
             stopped_ = true;
             paused_thread_ = index;
@@ -942,6 +1019,13 @@ bool Interpreter::Impl::StaticKernel::debug_point(
     thread.last_point = pc;
     auto& member = members_[thread.member];
     member.debug_pc = pc;
+    if (member.debug_hit.size() != member.operations.size()) {
+        member.debug_hit.assign(member.operations.size(), 0U);
+    }
+    if (std::exchange(member.debug_hit[pc], std::uint8_t { 1 }) == 0U) {
+        // A newly reached statement may have made more registers written.
+        member.debug_defined_pc = no_slot;
+    }
     if (!impl_.execution_point_hook) {
         return false;
     }
@@ -1168,6 +1252,27 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
 {
     const auto member_index = threads_[index].member;
     auto& member = members_[member_index];
+    if (trace_) {
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta();
+        if (warp_time_) {
+            std::cerr << " warp=" << *warp_time_;
+        }
+        std::cerr << " thread " << impl_.processes.program_view(member.process).name()
+                  << '\n';
+    }
+    struct RunningThread {
+        std::uint32_t& running;
+        std::uint32_t saved;
+        RunningThread(std::uint32_t& value, const std::uint32_t thread) noexcept
+            : running(value)
+            , saved(value)
+        {
+            running = thread;
+        }
+        ~RunningThread() { running = saved; }
+        RunningThread(const RunningThread&) = delete;
+        RunningThread& operator=(const RunningThread&) = delete;
+    } running { running_thread_, index };
     // The member's call stack and automatic frames belong to the running
     // thread; registers and strings are shared by all of its threads.
     std::swap(member.call_stack, threads_[index].call_stack);
@@ -1546,9 +1651,26 @@ void Interpreter::Impl::StaticKernel::timer_due(const SimulationTick time)
     if (armed_timer_ && *armed_timer_ == time) {
         armed_timer_.reset();
     }
-    // The kernel runs as its host process; due timers are collected when it
-    // activates.
-    impl_.queue_active_current(host_process_);
+    activate_for_due_timer();
+}
+
+void Interpreter::Impl::StaticKernel::activate_for_due_timer()
+{
+    // A process whose delay expired runs in the Active round its time step
+    // starts with (IEEE 1800-2023 4.4.2.2, 9.4.1), as on the reference
+    // scheduler: the timer task activates the kernel itself, which collects
+    // the due timers, as the host Inactive and NBA tasks do. Queueing the
+    // host process instead would run them a round later, behind every other
+    // process of the step.
+    if (mixed_ || vhdl_) {
+        // A VHDL or mixed kernel's rounds are deltas interleaved with the
+        // host's (S16): it runs as its host process.
+        impl_.queue_active_current(host_process_);
+        return;
+    }
+    if (activate()) {
+        impl_.queue_next_delta(host_process_);
+    }
 }
 
 } // namespace fsim::runtime::simir

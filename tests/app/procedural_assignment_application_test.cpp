@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "change_mismatch_report.hpp"
 #include "fsim/app/application.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
@@ -484,6 +485,8 @@ void verify_mode(
     assert(reference.result.status == actual->result.status);
     assert(reference.result.time == actual->result.time);
     assert(reference.result.delta == actual->result.delta);
+    fsim::test::report_change_mismatch(
+        "verify_mode", reference.changes, actual->changes);
     assert(reference.changes == actual->changes);
     assert(reference.final_values == actual->final_values);
     assert(reference.vcd == actual->vcd);

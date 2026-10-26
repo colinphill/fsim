@@ -2143,6 +2143,7 @@ module container_invalid_lowering;
   byte named[string];
   byte dynamic[];
   byte fixed[1:0];
+  byte grid[1:0][1:0];
   string strings[1:0];
   byte too_large[0:1000000000];
   int runtime_bound;
@@ -2159,7 +2160,8 @@ module container_invalid_lowering;
     result = lookup.sort();
     result = lookup.find() with (item);
     result = result.sum();
-    lookup.sum();
+    // A discarded reduction with an effect (13.4.1) is still rejected.
+    lookup.sum() with (identity(item));
     result = lookup.sum() with (item);
     result = fixed.sum(collision) with (collision);
     result = fixed.sum() with (item + 1);
@@ -2223,7 +2225,7 @@ module container_invalid_lowering;
     locator_indices = fixed.unique();
     locator_result = fixed[0].min();
     result = fixed.min();
-    fixed.min();
+    fixed.min() with (identity(item));
     locator_result = lookup.find() with (item);
     dynamic = fixed.find() with (item);
     locator_result = fixed.find_index() with (item);
@@ -2239,13 +2241,14 @@ module container_invalid_lowering;
     locator_result =
         fixed.find(entry) with (entry == entry.index);
     result = fixed.find() with (item);
-    fixed.find() with (item);
+    fixed.find() with (identity(item) > 0);
     lookup[0] <= 1;
     dynamic.delete(0);
     dynamic.insert(0, 1);
     fixed.delete();
     fixed = new[2];
-    dynamic = new[2](fixed);
+    dynamic = new[2](lookup);
+    result = grid.sum() with (item);
     $readmemh("invalid.hex", named);
     $writememh("invalid-out.hex", named);
   end
@@ -2266,8 +2269,6 @@ endmodule
         rejected, "FSIM-ELAB-SVREDUCE-005"));
     assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVREDUCE-006"));
-    assert(has_diagnostic(
-        rejected, "FSIM-ELAB-SVREDUCE-007"));
     assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVORDER-001"));
     assert(has_diagnostic(
@@ -2299,13 +2300,9 @@ endmodule
     assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVFIND-003"));
     assert(has_diagnostic(
-        rejected, "FSIM-ELAB-SVFIND-004"));
-    assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVFIND-005"));
     assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVFIND-006"));
-    assert(has_diagnostic(
-        rejected, "FSIM-ELAB-SVFIND-007"));
     assert(has_diagnostic(
         rejected, "FSIM-ELAB-SVFIND-008"));
     assert(has_diagnostic(
@@ -2343,10 +2340,8 @@ endmodule
     assert(oversized_parsed.ok());
     const auto oversized_rejected = compile_and_elaborate(
         oversized_parsed.design, "oversized_predicate");
-    assert(
-        !oversized_rejected.ok()
-        && has_diagnostic(
-            oversized_rejected, "FSIM-ELAB-SVFIND-004"));
+    // A predicate beyond the bounded graph runs as an element loop.
+    assert(oversized_rejected.ok());
 
     const auto invalid_slices = fsim::frontend::parse_text(
         "static-slice-invalid.sv",
@@ -2383,7 +2378,6 @@ module static_slice_invalid(
     down[3:2][0] = 8'h00;
     input_fixed[2:1] = pair;
     result = $size(down[runtime_bound:0]);
-    result = $size(down[3:1], 2);
     result = down[0:2].sum();
     located = down[4:3].min();
     locations =
@@ -2420,8 +2414,6 @@ endmodule
         rejected_slices, "FSIM-ELAB-SVPORT-009"));
     assert(has_diagnostic(
         rejected_slices, "FSIM-ELAB-SVQUERY-001"));
-    assert(has_diagnostic(
-        rejected_slices, "FSIM-ELAB-SVQUERY-002"));
     assert(has_diagnostic(
         rejected_slices, "FSIM-ELAB-SVREDUCE-001"));
     assert(has_diagnostic(

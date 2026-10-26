@@ -186,8 +186,8 @@ rejected directly.
 
 The compiled-HIR bundle is schema 3 and embeds semantic schema 4,
 SystemVerilog HIR schema 14, and VHDL HIR schema 8. The standalone design's
-other current state schemas are runtime 85, DesignIR 5, coverage 7, and UVM 3.
-The standalone `FSIMSVCH` constraint-HIR state is schema 14. Runtime schema 85
+other current state schemas are runtime 90, DesignIR 5, coverage 7, and UVM 3.
+The standalone `FSIMSVCH` constraint-HIR state is schema 14. Runtime schema 90
 carries opaque design-local package owner IDs on package
 string/container objects and initializer process rows. Elaboration derives the
 same token as `UnitId.value() + 1` for both sides, reserving zero for unowned

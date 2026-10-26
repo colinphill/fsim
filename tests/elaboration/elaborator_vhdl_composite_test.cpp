@@ -1678,13 +1678,37 @@ architecture rtl of physical_invalid_scale is
   type Distance is range 0 to 2147483647 units
     tick;
     huge = 2147483647 tick;
-    overflow = 2 huge;
+    giant = 2147483647 huge;
+    overflow = 4 giant;
   end units Distance;
 begin
 end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(invalid_scale.ok());
+    // A unit's position number need not lie within the range constraint
+    // (IEEE 1076-2019 5.2.4.1); one beyond 2**63 - 1 (overflow, at about
+    // 1.8E19 ticks) is not supported (Annex D).
+    const auto outside_range = fsim::frontend::parse_text(
+        "vhdl_physical_outside_range.vhd",
+        R"(
+entity Physical_Outside_Range is
+end entity;
+architecture rtl of physical_outside_range is
+  type Distance is range 0 to 2147483647 units
+    tick;
+    huge = 2147483647 tick;
+    double_huge = 2 huge;
+  end units Distance;
+begin
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(outside_range.ok());
+    assert(compile_and_elaborate(
+               outside_range.design,
+               "vhdl:work.physical_outside_range(rtl)")
+               .ok());
     const auto invalid_scale_result = compile_and_elaborate(
         invalid_scale.design,
         "vhdl:work.physical_invalid_scale(rtl)");

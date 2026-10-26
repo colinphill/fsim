@@ -2371,6 +2371,14 @@ NVC_NONSTANDARD = {
         "function whose parameter subtype is unconstrained; it shall define "
         "the index constraint (IEEE 1076-2008 5.3.2.2)"
        for name in ("conv20", "conv21")},
+    "issue705": "selects with overlapping matching choices (\"111\" and "
+        "\"1--\"); for a STD_ULOGIC matching selection it is an error if the "
+        "predefined ?= of two distinct choices gives '1' (IEEE 1076-2019 "
+        "10.9, 11.6)",
+    "case11": "a case? statement with overlapping matching choices (\"111\" "
+        "and \"1--\"); for a STD_ULOGIC matching case it is an error if the "
+        "predefined ?= of two distinct choices gives '1' (IEEE 1076-2019 "
+        "10.9)",
     "image2": "asserts the 'IMAGE of a record with a REAL element as "
         "\"((42,-5),true,2.5)\"; the image of a floating-point value has "
         "implementation-defined digits and notation (IEEE 1076-2019 16.2.2, "

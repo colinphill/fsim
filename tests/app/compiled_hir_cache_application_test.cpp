@@ -1892,10 +1892,12 @@ void run_systemverilog_child_hierarchy_handoff_test(
     assert(child->origin == leaf_origin);
     assert(has_specialization_parameter(
         *elaborated.design, "dut.child", "width", "7"));
-    assert(child->parameter_identity_values.size() == 1U);
-    assert(child->parameter_identity_values.front().first == "width");
-    assert(child->parameter_identity_values.front().second.starts_with(
-        "svconst-v3:b=0:w=32:s=1:"));
+    // Package parameters of the compilation unit are identity inputs too.
+    const auto sv_width = std::ranges::find(
+        child->parameter_identity_values, "width",
+        &std::pair<std::string, std::string>::first);
+    assert(sv_width != child->parameter_identity_values.end());
+    assert(sv_width->second.starts_with("svconst-v3:b=0:w=32:s=1:"));
 
     const auto value = elaborated.design->find_signal("dut.value");
     const auto input
@@ -2006,10 +2008,11 @@ void run_vhdl_child_hierarchy_handoff_test(
     assert(child->origin == leaf_origin);
     assert(has_specialization_parameter(
         *elaborated.design, "dut.child", "width", "9"));
-    assert(child->parameter_identity_values.size() == 1U);
-    assert(child->parameter_identity_values.front().first == "width");
-    const auto& width_identity
-        = child->parameter_identity_values.front().second;
+    const auto vhdl_width = std::ranges::find(
+        child->parameter_identity_values, "width",
+        &std::pair<std::string, std::string>::first);
+    assert(vhdl_width != child->parameter_identity_values.end());
+    const auto& width_identity = vhdl_width->second;
     assert(width_identity.starts_with("vhdlconst-v1;"));
     assert(width_identity.find(";type=integer;")
         != std::string::npos);

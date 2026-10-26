@@ -30,6 +30,10 @@ struct Capture {
     fsim::runtime::SimulationTick time{};
     std::uint64_t delta{};
     std::string value;
+    // Order among all captured changes: a waiter resumed by `->` runs in
+    // the same Active region (IEEE 1800-2017 15.5.1), so only order, not a
+    // delta count, distinguishes it from the trigger.
+    std::size_t sequence{};
   };
 
   fsim::runtime::RunResult result;
@@ -162,7 +166,10 @@ Capture execute(
         if (changes != nullptr) {
           changes->push_back(
               Capture::Change{
-                  time, delta, value.to_msb_string()});
+                  time, delta, value.to_msb_string(),
+                  capture.event_changes.size()
+                      + capture.observed_changes.size()
+                      + capture.triple_changes.size()});
         }
       });
   capture.result = simulation.run();
@@ -345,7 +352,9 @@ void test_named_events(
     assert(capture->task_observed == "1");
     assert(capture->expression_observed == "01");
     assert(capture->controlled == "11");
-    assert(capture->body_clock == "0");
+    // body_clock toggles at t=1, 2 and 3; the t=4 toggle and $finish are
+    // Active events of the same time in either order (IEEE 1800-2023 4.7).
+    assert(capture->body_clock == "0" || capture->body_clock == "1");
     assert(capture->repeat_count_calls == "01");
     assert(capture->blocking_missed == "0");
     assert(capture->blocking_caught == "1");
@@ -370,13 +379,13 @@ void test_named_events(
     assert(capture->observed_changes[1].time == 1);
     assert(capture->observed_changes[1].value == "01");
     assert(
-        capture->observed_changes[1].delta
-        > capture->event_changes[0].delta);
+        capture->observed_changes[1].sequence
+        > capture->event_changes[0].sequence);
     assert(capture->observed_changes[2].time == 3);
     assert(capture->observed_changes[2].value == "10");
     assert(
-        capture->observed_changes[2].delta
-        > capture->event_changes[1].delta);
+        capture->observed_changes[2].sequence
+        > capture->event_changes[1].sequence);
     assert(capture->triple_changes.size() == 1);
     assert(capture->triple_changes[0].time == 2);
     assert(capture->triple_changes[0].value == "1");

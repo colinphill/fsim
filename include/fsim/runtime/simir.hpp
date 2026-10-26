@@ -2370,6 +2370,11 @@ public:
     /// before start; an empty root leaves file operations disabled.
     void set_file_root(std::filesystem::path root);
 
+    /// Bound the operations interpreted from now on; past the bound the
+    /// running process fails. Elaboration-time evaluation uses it so that a
+    /// computation too large to elaborate is rejected rather than run.
+    void set_operation_budget(std::uint64_t operations);
+
     /// Replace the ordered, simulation-owned Verilog/SystemVerilog plusargs.
     /// Arguments may include their conventional leading '+'. Must be set
     /// before start.

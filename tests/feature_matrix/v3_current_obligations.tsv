@@ -234,7 +234,6 @@ V3REJECT-CONSTRAINT	tests/app/application_test_classes.cpp	fsim.application.clas
 V3REJECT-COVERAGE	tests/app/application_test_artifact_phases.cpp	fsim.application.artifact_phases
 V3REJECT-UVM	tests/app/application_test_artifact_phases.cpp	fsim.application.artifact_phases
 V3REJECT-VHDL-HIR	tests/app/application_test_artifact_phases.cpp	fsim.application.artifact_phases
-V3REJECT-CACHE	tests/compiler/cache_test.cpp	fsim.cache
 V3REJECT-PLUGIN	tests/runtime/native_plugin_abi_test.cpp	fsim.runtime.native_plugin_abi
 FST-C02	tests/runtime/trace_model_tests.cpp	fsim.runtime.trace_model
 FST-C03	tests/runtime/fst_writer_tests.cpp	fsim.runtime.fst_writer

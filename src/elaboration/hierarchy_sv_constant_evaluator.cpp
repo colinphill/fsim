@@ -1189,7 +1189,7 @@ void append_packed(Value& destination, const Value& operand)
     const bool unbounded = value.unbounded;
     if (unbounded && type.value_form
         && *type.value_form != semantic::sv::TypeForm::packed_integral) {
-        error = "symbolic unbounded '$' requires an implicit parameter type";
+        error = "symbolic unbounded '$' requires a parameter of a simple bit vector type";
         return std::nullopt;
     }
     if (!width || *width == 0U || *width > maximum_constant_width) {
@@ -2519,6 +2519,39 @@ private:
                 error_ = "SystemVerilog name '" + record.text
                     + "' is not a constant";
                 return std::nullopt;
+            }
+            // A parameter is declared before it is referenced in its scope
+            // (IEEE 1800-2017 6.20.2, 23.10): a same-scope parameter written
+            // after the reference is a forward reference. Only a use written
+            // inside that scope can be one: a class parameter's actual
+            // substituted into the class body keeps the body's source.
+            const auto& semantics = specialization_.design().semantics;
+            const auto& spans = semantics.source_spans();
+            const auto& scopes = semantics.scopes();
+            const auto valid_span = [&](const semantic::SourceSpanId id) {
+                return id.valid() && id.value() < spans.size();
+            };
+            if (view && view->systemverilog != nullptr
+                && (view->systemverilog->form == Form::parameter
+                    || view->systemverilog->form == Form::local_parameter)
+                && view->systemverilog->scope == record.scope
+                && record.scope.valid() && record.scope.value() < scopes.size()
+                && valid_span(record.source)
+                && valid_span(view->systemverilog->source)
+                && valid_span(scopes[record.scope.value()].source)) {
+                const auto& use = spans[record.source.value()];
+                const auto& declaration
+                    = spans[view->systemverilog->source.value()];
+                const auto& scope
+                    = spans[scopes[record.scope.value()].source.value()];
+                if (use.file == declaration.file && use.file == scope.file
+                    && !use.expansion && !declaration.expansion
+                    && use.begin.offset >= scope.begin.offset
+                    && declaration.begin.offset > use.begin.offset) {
+                    error_ = "parameter '" + record.text
+                        + "' is referenced before its declaration";
+                    return std::nullopt;
+                }
             }
         }
         auto result = value_for_declaration(*selected);

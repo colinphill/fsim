@@ -5,6 +5,7 @@
 #include "fsim/platform/dynamic_library.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/vhpi_bridge.h"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 
 #include <algorithm>
@@ -321,17 +322,17 @@ struct ModuleSpec {
     }
     spec.path = std::filesystem::path { std::string { text } };
     std::error_code error;
-    if (!std::filesystem::exists(spec.path, error)) {
+    if (!support::native_fs::exists(spec.path, error)) {
         for (const auto* extension : { ".vhpi", ".so" }) {
             auto candidate = spec.path;
             candidate += extension;
-            if (std::filesystem::exists(candidate, error)) {
+            if (support::native_fs::exists(candidate, error)) {
                 spec.path = std::move(candidate);
                 break;
             }
         }
     }
-    if (std::filesystem::exists(spec.path, error)) {
+    if (support::native_fs::exists(spec.path, error)) {
         spec.path = std::filesystem::absolute(spec.path, error);
     }
     return spec;

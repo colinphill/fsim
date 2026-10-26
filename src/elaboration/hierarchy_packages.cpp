@@ -11773,8 +11773,8 @@ namespace {
                     && parameter.type->target.spelling != "int"
                     && parameter.type->target.spelling != "integer") {
                     append("FSIM-ELAB-SVCONST-001",
-                        "symbolic unbounded '$' requires an implicit "
-                        "parameter type",
+                        "symbolic unbounded '$' requires a parameter of a "
+                        "simple bit vector type",
                         parameter.source);
                     continue;
                 }
@@ -25468,6 +25468,64 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
         }
         return std::pair { std::move(*subtype), std::move(*value) };
     };
+    // A composite generic actual is converted to the formal's subtype, and
+    // it is an error if its value does not belong to it (IEEE 1076-2019
+    // 14.3.3.2): a constrained array formal takes only a value of its length.
+    const auto elaborated_composite_fits = [&](const auto& formal,
+                                               const PackedLogic4& value) {
+        if (!formal || formal->vhdl == nullptr || !formal->vhdl->subtype) {
+            return true;
+        }
+        const auto layout = compiled_vhdl_named_signal_layout(
+            working_specialization, *formal->vhdl->subtype,
+            formal->vhdl->scope);
+        return !layout || layout->width == 0U
+            || layout->width == value.width();
+    };
+    const auto report_composite_length = [&](const std::string& name,
+                                             const auto& source) {
+        report("FSIM-ELAB-GENERIC-008",
+            "compiled VHDL generic association for '" + name
+                + "' does not have the length of the formal's constrained"
+                  " array subtype",
+            compiled_source_span(*compiled_, source));
+    };
+    // An actual naming an object of a constrained array subtype keeps that
+    // subtype; it converts to a constrained formal only with the same
+    // length in each dimension (IEEE 1076-2019 14.3.3.2).
+    const auto named_actual_fits = [&](const auto& binding,
+                                       const auto& formal) {
+        if (!formal || formal->vhdl == nullptr || !formal->vhdl->subtype
+            || !binding.expression) {
+            return true;
+        }
+        const auto expression = working_specialization.find_expression(
+            *binding.expression);
+        const auto named = expression && expression->vhdl != nullptr
+                && expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::name
+                && expression->vhdl->referenced_name
+                && expression->vhdl->referenced_name->selected
+            ? working_specialization.find_declaration(
+                  *expression->vhdl->referenced_name->selected)
+            : std::nullopt;
+        if (!named || named->vhdl == nullptr || !named->vhdl->subtype) {
+            return true;
+        }
+        const semantic::CompiledDesignResolver resolver {
+            working_specialization
+        };
+        const auto declared = resolver.effective_vhdl_subtype(
+            *formal->vhdl->subtype, formal->vhdl->scope);
+        const auto object = resolver.effective_vhdl_subtype(
+            *named->vhdl->subtype, named->vhdl->scope);
+        return !declared || !object || declared->unconstrained
+            || object->unconstrained
+            || resolver
+                   .vhdl_array_lengths_match(*declared, formal->vhdl->scope,
+                       *object, named->vhdl->scope)
+                   .value_or(true);
+    };
     const auto apply_elaborated_composite = [&](auto& actual,
         const PackedLogic4& value,
         std::optional<semantic::vhdl::SubtypeIndication> subtype
@@ -25643,7 +25701,7 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
             || formal->vhdl->form
                 != semantic::vhdl::DeclarationForm::generic_constant
             || !formal->vhdl->subtype || !binding.expression) {
-            return;
+            return true;
         }
         const auto expression = working_specialization.find_expression(
             *binding.expression);
@@ -25659,14 +25717,27 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
             || (named->vhdl->form != semantic::vhdl::DeclarationForm::constant
                 && named->vhdl->form
                     != semantic::vhdl::DeclarationForm::generic_constant)) {
-            return;
+            return true;
         }
-        const auto declared = semantic::CompiledDesignResolver {
+        const semantic::CompiledDesignResolver resolver {
             working_specialization
-        }.effective_vhdl_subtype(*formal->vhdl->subtype, formal->vhdl->scope);
+        };
+        const auto declared = resolver.effective_vhdl_subtype(
+            *formal->vhdl->subtype, formal->vhdl->scope);
         if (!declared) {
-            return;
+            return true;
         }
+        // A constrained formal keeps its index ranges; the actual converts
+        // to them only with the same length in each dimension (IEEE
+        // 1076-2019 14.3.3.2).
+        const auto lengths_match
+            = [&](const semantic::vhdl::SubtypeIndication& source,
+                  const semantic::ScopeId scope) {
+                  return declared->unconstrained
+                      || resolver.vhdl_array_lengths_match(*declared,
+                              formal->vhdl->scope, source, scope)
+                          .value_or(true);
+              };
         auto signals = *evaluation->signals;
         auto read_only = evaluation->read_only_signals != nullptr
             ? *evaluation->read_only_signals
@@ -25687,7 +25758,10 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                 [&](const semantic::vhdl::ElementConstraint& element) {
                     return std::ranges::all_of(element.constraints, concrete);
                 })) {
-            return;
+            return true;
+        }
+        if (!lengths_match(*shaped, formal->vhdl->scope)) {
+            return false;
         }
         const auto ranges = [](std::string& identity,
                                 const std::vector<
@@ -25710,6 +25784,7 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
             ranges(actual.actual.identity, element.constraints);
         }
         actual.actual.vhdl_elaborated_subtype = std::move(*shaped);
+        return true;
     };
     std::vector<semantic::SpecializedHirActualIdentity>
         child_actuals;
@@ -26014,6 +26089,11 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                 { },
             };
         }
+        if (!named_actual_fits(binding, formal)) {
+            report_composite_length(record.name, binding.source);
+            child_actuals_valid = false;
+            continue;
+        }
         auto actual = compiled_vhdl_specialization_actual(
             *compiled_, working_specialization, binding);
         if (const auto constant = elaborated_constant_value(binding)) {
@@ -26049,6 +26129,10 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                 actual.actual.actual_expression.reset();
                 actual.actual.actual_declaration.reset();
                 actual.requires_static_value = false;
+            } else if (!elaborated_composite_fits(formal, *constant)) {
+                report_composite_length(record.name, binding.source);
+                child_actuals_valid = false;
+                continue;
             } else {
                 apply_elaborated_composite(actual, *constant);
             }
@@ -26069,6 +26153,11 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
         }
         if (actual.requires_static_value) {
             if (auto composite = elaborated_composite(binding, formal)) {
+                if (!elaborated_composite_fits(formal, composite->second)) {
+                    report_composite_length(record.name, binding.source);
+                    child_actuals_valid = false;
+                    continue;
+                }
                 apply_elaborated_composite(actual, composite->second,
                     std::move(composite->first));
             }
@@ -26140,6 +26229,12 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                 && !actual.actual.vhdl_elaborated_bits) {
                 if (auto composite
                     = elaborated_composite(binding, formal)) {
+                    if (!elaborated_composite_fits(
+                            formal, composite->second)) {
+                        report_composite_length(record.name, binding.source);
+                        child_actuals_valid = false;
+                        continue;
+                    }
                     apply_elaborated_composite(actual, composite->second,
                         std::move(composite->first));
                     child_actuals.push_back(std::move(actual.actual));
@@ -26193,7 +26288,11 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                 }
             }
         }
-        apply_named_constant_shape(actual, binding, formal);
+        if (!apply_named_constant_shape(actual, binding, formal)) {
+            report_composite_length(record.name, binding.source);
+            child_actuals_valid = false;
+            continue;
+        }
         child_actuals.push_back(std::move(actual.actual));
     }
     // A generic left out of the map takes its default (IEEE 1076-2008
@@ -29432,6 +29531,388 @@ HierarchyBuilder::prepare_compiled_vhdl_systemverilog_parameters(
     return result;
 }
 
+// The boundary port of a SystemVerilog formal of an instance whose actual
+// comes from another language: its layout in the child's specialization.
+std::optional<HierarchyBuilder::CompiledBoundaryPort>
+HierarchyBuilder::compiled_systemverilog_formal_boundary_port(
+    const semantic::SpecializedHirUnit& child,
+    const semantic::sv::Declaration& formal_declaration)
+{
+    const auto boundary = [&](const auto& value,
+                              const auto& boundary_expression) {
+        return boundary_expression
+            ? child.evaluate_integral_expression(
+                  *boundary_expression)
+            : value;
+    };
+    const semantic::CompiledDesignResolver type_resolver {
+        child
+    };
+    const auto resolve_type = [&](const semantic::sv::TypeReference& reference)
+        -> std::optional<std::pair<std::size_t,
+            semantic::sv::TypeReference>> {
+        auto effective
+            = type_resolver.underlying_systemverilog_type(
+                               reference, formal_declaration.scope)
+                  .value_or(reference);
+        std::optional<std::size_t> width;
+        if (effective.packed_range) {
+            const auto left = boundary(
+                effective.packed_range->left,
+                effective.packed_range->left_expression);
+            const auto right = boundary(
+                effective.packed_range->right,
+                effective.packed_range->right_expression);
+            if (left && right) {
+                const auto distance = index_distance(*left, *right);
+                if (distance
+                    < std::numeric_limits<std::size_t>::max()) {
+                    width = static_cast<std::size_t>(distance + 1U);
+                }
+            }
+        } else if (effective.executable_width
+            && *effective.executable_width > 0U
+            && *effective.executable_width
+                <= std::numeric_limits<std::size_t>::max()) {
+            width = static_cast<std::size_t>(
+                *effective.executable_width);
+        } else if (!effective.target.target.valid()) {
+            width = 1U;
+        }
+        return width
+            ? std::optional { std::pair {
+                  *width, std::move(effective) } }
+            : std::nullopt;
+    };
+    const auto layout = resolve_type(*formal_declaration.type);
+    if (!layout) {
+        report(
+            "FSIM-ELAB-HIR-001",
+            "mixed-language SystemVerilog port '"
+                + formal_declaration.name
+                + "' has no executable scalar layout",
+            compiled_source_span(
+                *compiled_, formal_declaration.source));
+        return std::nullopt;
+    }
+    CompiledBoundaryPort port;
+    port.name = formal_declaration.name;
+    port.type_name = formal_declaration.type->target.spelling;
+    port.width = layout->first;
+    port.domain
+        = formal_declaration.type->four_state
+            || layout->second.four_state
+        ? frontend::ValueDomain::Logic4
+        : frontend::ValueDomain::Bit2;
+    port.systemverilog_scalar = frontend::systemverilog_scalar_kind(
+        layout->second.target.spelling);
+    if (port.systemverilog_scalar
+        == frontend::SystemVerilogScalarKind::None) {
+        port.systemverilog_scalar = frontend::systemverilog_scalar_kind(
+            formal_declaration.type->target.spelling);
+    }
+    port.signed_value
+        = formal_declaration.type->signed_value
+        || layout->second.signed_value;
+    const auto* packed_type = formal_declaration.type->packed_range
+        ? &*formal_declaration.type
+        : &layout->second;
+    if (packed_type->packed_range) {
+        const auto& range = *packed_type->packed_range;
+        const auto left = boundary(
+            range.left, range.left_expression);
+        const auto right = boundary(
+            range.right, range.right_expression);
+        if (left && right) {
+            port.packed_range = frontend::PackedRange {
+                *left, *right, range.descending
+            };
+        }
+    }
+    port.direction = compiled_port_direction(
+        formal_declaration.direction);
+    port.variable_output = hierarchy_sv_ports_detail::
+        is_simple_variable_output_port(
+            formal_declaration, layout->second);
+    port.systemverilog_net = !port.variable_output;
+    port.declaration_source = compiled_source_span(
+        *compiled_, formal_declaration.source);
+    port.initial = PackedLogic4 {
+        port.width,
+        is_two_state_domain(port.domain)
+            ? Logic4::zero
+            : Logic4::x,
+    };
+    return port;
+}
+
+// The boundary port of a VHDL formal of an instance whose actual comes from
+// another language: its layout in the child's specialization.
+std::optional<HierarchyBuilder::CompiledBoundaryPort>
+HierarchyBuilder::compiled_vhdl_formal_boundary_port(
+    const semantic::SpecializedHirUnit& child,
+    const semantic::vhdl::Declaration& declaration,
+    const frontend::PortDirection direction)
+{
+    std::optional<std::size_t> width;
+    auto domain = frontend::ValueDomain::Unknown;
+    if (const auto layout = compiled_vhdl_named_signal_layout(
+            child,
+            *declaration.subtype,
+            declaration.scope)) {
+        width = layout->width;
+        domain = layout->domain;
+    } else {
+        width = compiled_vhdl_signal_width(
+            *declaration.subtype);
+        domain = vhdl_value_domain(
+            declaration.subtype->domain);
+    }
+    if (!width || !compiled_vhdl_scalar_domain(domain)) {
+        report(
+            "FSIM-ELAB-HIR-001",
+            "mixed-language VHDL port '"
+                + declaration.name
+                + "' has no executable scalar layout",
+            compiled_source_span(
+                *compiled_, declaration.source));
+        return std::nullopt;
+    }
+    CompiledBoundaryPort port;
+    port.name = declaration.name;
+    port.type_name = declaration.subtype->type_mark.spelling;
+    port.width = *width;
+    port.domain = domain;
+    if (const auto type = compiled_vhdl_signal_type(
+            child,
+            *declaration.subtype,
+            declaration.scope)) {
+        port.packed_aggregate = !type->packed_members.empty();
+        port.vhdl_array = type->vhdl_array;
+    }
+    port.signed_value = declaration.subtype->signed_value
+        || domain == frontend::ValueDomain::Integer;
+    port.packed_range = compiled_packed_range(
+        *declaration.subtype);
+    port.integer_range = compiled_integer_range(
+        *declaration.subtype);
+    port.direction = direction;
+    port.declaration_source = compiled_source_span(
+        *compiled_, declaration.source);
+    port.initial = compiled_vhdl_initial_value(
+        *declaration.subtype, domain, *width);
+    return port;
+}
+
+void HierarchyBuilder::instantiate_systemc_hdl_child(
+    const SystemCInstanceDescription& child,
+    const ObjectMap& objects)
+{
+    const auto& hdl = *child.hdl;
+    const auto where = "SystemC HDL instance '" + child.path + "' of '"
+        + hdl.unit + "'";
+    // The native module only stands for the HDL instance: its ports are the
+    // instance's port map, and it contributes no SystemC behavior.
+    if (!child.processes.empty() || !child.internal_signals.empty()
+        || !child.exports.empty() || !child.native_children.empty()) {
+        report(
+            "FSIM-ELAB-BIND-066",
+            where
+                + " has SystemC processes, signals, exports or modules",
+            {});
+        return;
+    }
+    const auto unit = compiled_ != nullptr
+            && hdl.unit.find(':') != std::string::npos
+        ? choose_top_unit(*compiled_, hdl.unit)
+        : std::optional<semantic::CompiledUnitView> { };
+    const bool systemverilog = unit && unit->systemverilog != nullptr
+        && unit->systemverilog->kind != semantic::sv::UnitKind::configuration;
+    const bool vhdl = unit && unit->vhdl != nullptr
+        && unit->vhdl->kind != semantic::vhdl::UnitKind::configuration;
+    if ((!systemverilog && !vhdl) || !unit->identity) {
+        report(
+            "FSIM-ELAB-BIND-067",
+            where + " names no SystemVerilog module or VHDL entity",
+            {});
+        return;
+    }
+
+    // Integer actuals take the path of tool-specified top-level values.
+    auto saved_overrides = std::move(root_generic_overrides_);
+    root_generic_overrides_.clear();
+    for (const auto& [name, value] : hdl.actuals) {
+        root_generic_overrides_.emplace_back(name, std::to_string(value));
+    }
+    auto actuals = systemverilog
+        ? compiled_systemverilog_root_parameter_actuals(*unit->systemverilog)
+        : compiled_vhdl_root_generic_actuals(*unit->vhdl);
+    root_generic_overrides_ = std::move(saved_overrides);
+    bool valid = true;
+    for (const auto& [name, value] : hdl.actuals) {
+        const bool matched = std::ranges::any_of(actuals,
+            [&](const semantic::SpecializedHirActualIdentity& actual) {
+                const auto declaration
+                    = compiled_->find_declaration(actual.declaration);
+                if (!declaration) {
+                    return false;
+                }
+                return declaration->systemverilog != nullptr
+                    ? declaration->systemverilog->name == name
+                    : declaration->vhdl != nullptr
+                        && compiled_vhdl_name_equal(
+                            declaration->vhdl->name, name);
+            });
+        if (!matched) {
+            report(
+                "FSIM-ELAB-BIND-068",
+                where + " gives '" + name
+                    + "' an actual, but it is not a parameter or generic "
+                      "of the unit",
+                {});
+            valid = false;
+        }
+    }
+    std::vector<CompiledSpecializationFailure> failures;
+    auto specialization = compiled_specialization(
+        validated_compiled_, unit->identity->id, actuals, &failures);
+    for (const auto& failure : failures) {
+        report(failure.code, failure.message,
+            compiled_source_span(*compiled_, failure.source));
+    }
+    const auto ports = unit_ports(*compiled_, *unit);
+    if (!specialization || !ports) {
+        report(
+            "FSIM-ELAB-HIR-001",
+            "cannot construct the specialization of " + where,
+            {});
+        return;
+    }
+
+    // Each proxy port connects the formal of the same name (IEEE 1666-2011
+    // 4.1.3 binds the proxy's ports to the parent's channels; the HDL
+    // association is then by name as in IEEE 1800-2017 23.3.2.2 and IEEE
+    // 1076-2008 6.5.7.1).
+    SignalMap aliases;
+    for (const auto& port : child.ports) {
+        const auto formal = std::ranges::find_if(*ports,
+            [&](const CompiledPortView& candidate) {
+                return systemverilog
+                    ? candidate.name() == port.name
+                    : compiled_vhdl_name_equal(candidate.name(), port.name);
+            });
+        if (formal == ports->end()) {
+            report(
+                "FSIM-ELAB-BIND-068",
+                where + " has port '" + port.name
+                    + "', which the unit does not declare",
+                {});
+            valid = false;
+            continue;
+        }
+        const auto direction = [&] {
+            switch (formal->mode()) {
+            case CompiledPortMode::input:
+                return frontend::PortDirection::Input;
+            case CompiledPortMode::output:
+            case CompiledPortMode::buffer:
+                return frontend::PortDirection::Output;
+            case CompiledPortMode::inout:
+                return frontend::PortDirection::Inout;
+            default:
+                return frontend::PortDirection::Unknown;
+            }
+        }();
+        if (direction == frontend::PortDirection::Unknown
+            || direction != port.direction) {
+            report(
+                "FSIM-ELAB-BIND-068",
+                where + " port '" + port.name
+                    + "' does not have the direction of the unit's port",
+                {});
+            valid = false;
+            continue;
+        }
+        if (port.bound_object == 0) {
+            report(
+                "FSIM-ELAB-BIND-058",
+                "native SystemC child port '" + child.path + "."
+                    + port.name + "' is unbound",
+                {});
+            valid = false;
+            continue;
+        }
+        const auto actual = objects.find(port.bound_object);
+        if (actual == objects.end()) {
+            continue;
+        }
+        const auto declaration
+            = specialization->find_declaration(formal->declaration());
+        std::optional<CompiledBoundaryPort> boundary;
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->type) {
+            boundary = compiled_systemverilog_formal_boundary_port(
+                *specialization, *declaration->systemverilog);
+        } else if (declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->subtype) {
+            boundary = compiled_vhdl_formal_boundary_port(
+                *specialization, *declaration->vhdl, direction);
+        } else {
+            report(
+                "FSIM-ELAB-HIR-001",
+                where + " port '" + port.name
+                    + "' has no executable scalar layout",
+                {});
+        }
+        if (!boundary) {
+            valid = false;
+            continue;
+        }
+        const auto formal_signal = connect_compiled_boundary_port(
+            *boundary, actual->second, child.path, { },
+            binding_for(child.path));
+        if (!formal_signal) {
+            valid = false;
+            continue;
+        }
+        aliases.emplace(std::string { formal->name() }, *formal_signal);
+        // The bridge reads what the HDL instance drives into the SystemC
+        // channel, so the Accellera kernel process wakes on it.
+        if (direction != frontend::PortDirection::Input
+            && systemc_hdl_wakes_ != nullptr) {
+            systemc_hdl_wakes_->push_back(actual->second);
+        }
+    }
+    if (!valid) {
+        return;
+    }
+    if (systemverilog) {
+        static_cast<void>(instantiate_compiled_systemverilog_unit(
+            CompiledSystemVerilogInstantiationContext {
+                .unit = *unit,
+                .path = child.path,
+                .actuals = std::move(actuals),
+                .port_aliases = std::move(aliases),
+                .string_port_aliases = { },
+                .container_port_aliases = { },
+                .source_instance = std::nullopt,
+                .prepared_specialization = std::move(specialization),
+                .type_owner_contexts = { },
+            }));
+        return;
+    }
+    static_cast<void>(instantiate_compiled_vhdl_unit(
+        CompiledVhdlInstantiationContext {
+            .unit = *unit,
+            .path = child.path,
+            .actuals = std::move(actuals),
+            .port_aliases = std::move(aliases),
+            .source_instance = std::nullopt,
+            .prepared_specialization = std::move(specialization),
+            .vhdl_types_validated = false,
+        }));
+}
+
 bool HierarchyBuilder::instantiate_systemc_ports(
     const SystemCInstanceDescription& description,
     const std::span<const SystemCPortAssociation> associations,
@@ -30560,113 +31041,13 @@ HierarchyBuilder::materialize_compiled_vhdl_systemverilog_port_mappings(
                     *compiled_, formal_declaration.source));
             return result;
         }
-        const auto boundary = [&](const auto& value,
-                                  const auto& boundary_expression) {
-            return boundary_expression
-                ? context.child_specialization.evaluate_integral_expression(
-                      *boundary_expression)
-                : value;
-        };
-        const semantic::CompiledDesignResolver type_resolver {
-            context.child_specialization
-        };
-        const auto resolve_type = [&](const semantic::sv::TypeReference& reference)
-            -> std::optional<std::pair<std::size_t,
-                semantic::sv::TypeReference>> {
-            auto effective
-                = type_resolver.underlying_systemverilog_type(
-                                   reference, formal_declaration.scope)
-                      .value_or(reference);
-            std::optional<std::size_t> width;
-            if (effective.packed_range) {
-                const auto left = boundary(
-                    effective.packed_range->left,
-                    effective.packed_range->left_expression);
-                const auto right = boundary(
-                    effective.packed_range->right,
-                    effective.packed_range->right_expression);
-                if (left && right) {
-                    const auto distance = index_distance(*left, *right);
-                    if (distance
-                        < std::numeric_limits<std::size_t>::max()) {
-                        width = static_cast<std::size_t>(distance + 1U);
-                    }
-                }
-            } else if (effective.executable_width
-                && *effective.executable_width > 0U
-                && *effective.executable_width
-                    <= std::numeric_limits<std::size_t>::max()) {
-                width = static_cast<std::size_t>(
-                    *effective.executable_width);
-            } else if (!effective.target.target.valid()) {
-                width = 1U;
-            }
-            return width
-                ? std::optional { std::pair {
-                      *width, std::move(effective) } }
-                : std::nullopt;
-        };
-        const auto layout = resolve_type(*formal_declaration.type);
-        if (!layout) {
-            report(
-                "FSIM-ELAB-HIR-001",
-                "mixed-language SystemVerilog port '"
-                    + formal_declaration.name
-                    + "' has no executable scalar layout",
-                compiled_source_span(
-                    *compiled_, formal_declaration.source));
+        const auto port = compiled_systemverilog_formal_boundary_port(
+            context.child_specialization, formal_declaration);
+        if (!port) {
             return result;
         }
-        CompiledBoundaryPort port;
-        port.name = formal_declaration.name;
-        port.type_name = formal_declaration.type->target.spelling;
-        port.width = layout->first;
-        port.domain
-            = formal_declaration.type->four_state
-                || layout->second.four_state
-            ? frontend::ValueDomain::Logic4
-            : frontend::ValueDomain::Bit2;
-        port.systemverilog_scalar = frontend::systemverilog_scalar_kind(
-            layout->second.target.spelling);
-        if (port.systemverilog_scalar
-            == frontend::SystemVerilogScalarKind::None) {
-            port.systemverilog_scalar = frontend::systemverilog_scalar_kind(
-                formal_declaration.type->target.spelling);
-        }
-        port.signed_value
-            = formal_declaration.type->signed_value
-            || layout->second.signed_value;
-        const auto* packed_type = formal_declaration.type->packed_range
-            ? &*formal_declaration.type
-            : &layout->second;
-        if (packed_type->packed_range) {
-            const auto& range = *packed_type->packed_range;
-            const auto left = boundary(
-                range.left, range.left_expression);
-            const auto right = boundary(
-                range.right, range.right_expression);
-            if (left && right) {
-                port.packed_range = frontend::PackedRange {
-                    *left, *right, range.descending
-                };
-            }
-        }
-        port.direction = compiled_port_direction(
-            formal_declaration.direction);
-        port.variable_output = hierarchy_sv_ports_detail::
-            is_simple_variable_output_port(
-                formal_declaration, layout->second);
-        port.systemverilog_net = !port.variable_output;
-        port.declaration_source = compiled_source_span(
-            *compiled_, formal_declaration.source);
-        port.initial = PackedLogic4 {
-            port.width,
-            is_two_state_domain(port.domain)
-                ? Logic4::zero
-                : Logic4::x,
-        };
         const auto formal_signal = connect_compiled_boundary_port(
-            port,
+            *port,
             *actual,
             context.child_path,
             compiled_source_span(*compiled_, association.source),
@@ -34703,55 +35084,13 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_vhdl_child(
                     compiled_source_span(*compiled_, binding.source));
                 return false;
             }
-            std::optional<std::size_t> width;
-            auto domain = frontend::ValueDomain::Unknown;
-            if (const auto layout = compiled_vhdl_named_signal_layout(
-                    *child_specialization,
-                    *declaration.subtype,
-                    declaration.scope)) {
-                width = layout->width;
-                domain = layout->domain;
-            } else {
-                width = compiled_vhdl_signal_width(
-                    *declaration.subtype);
-                domain = vhdl_value_domain(
-                    declaration.subtype->domain);
-            }
-            if (!width || !compiled_vhdl_scalar_domain(domain)) {
-                report(
-                    "FSIM-ELAB-HIR-001",
-                    "mixed-language VHDL port '"
-                        + declaration.name
-                        + "' has no executable scalar layout",
-                    compiled_source_span(
-                        *compiled_, declaration.source));
+            const auto port = compiled_vhdl_formal_boundary_port(
+                *child_specialization, declaration, direction);
+            if (!port) {
                 return false;
             }
-            CompiledBoundaryPort port;
-            port.name = declaration.name;
-            port.type_name = declaration.subtype->type_mark.spelling;
-            port.width = *width;
-            port.domain = domain;
-            if (const auto type = compiled_vhdl_signal_type(
-                    *child_specialization,
-                    *declaration.subtype,
-                    declaration.scope)) {
-                port.packed_aggregate = !type->packed_members.empty();
-                port.vhdl_array = type->vhdl_array;
-            }
-            port.signed_value = declaration.subtype->signed_value
-                || domain == frontend::ValueDomain::Integer;
-            port.packed_range = compiled_packed_range(
-                *declaration.subtype);
-            port.integer_range = compiled_integer_range(
-                *declaration.subtype);
-            port.direction = direction;
-            port.declaration_source = compiled_source_span(
-                *compiled_, declaration.source);
-            port.initial = compiled_vhdl_initial_value(
-                *declaration.subtype, domain, *width);
             const auto formal_signal = connect_compiled_boundary_port(
-                port,
+                *port,
                 *actual_signal,
                 child_path,
                 compiled_source_span(*compiled_, binding.source),

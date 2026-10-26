@@ -851,11 +851,17 @@ endmodule
   assert(std::ranges::all_of(
       logic9_vhdl_conversions,
       [](const auto& conversion) {
+        // A variable output port is the single source of a resolved
+        // (std_logic) actual, so it drives it through an adapter process
+        // (IEEE 1076-2019 14.7.3.2); unresolved actuals stay aliases.
+        const bool resolved_output =
+            conversion.path == "logic9_vhdl_parent.child.scalar_result";
         return conversion.kind
                 == fsim::elaboration::BoundaryConversionKind::state_domain_alias
             && conversion.state_domain_changed
-            && conversion.formal_signal == conversion.actual_signal
-            && !conversion.process;
+            && (conversion.formal_signal == conversion.actual_signal)
+                != resolved_output
+            && conversion.process.has_value() == resolved_output;
       }));
   auto logic9_vhdl_interpreter =
       elaborated_logic9_vhdl.design->create_interpreter();

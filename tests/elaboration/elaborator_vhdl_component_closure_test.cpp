@@ -101,11 +101,17 @@ end architecture;
           return value.first == "__component"
               && value.second.find("configuration=")
                   != std::string::npos
+              // The formal bound to an unassociated local port is open
+              // (IEEE 1076-2019 6.5.6.3); the local port's default
+              // supplies its value.
               && value.second.find(
-                     "mapped-port=entity_input:state=1")
+                     "mapped-port=entity_input:state=2")
                   != std::string::npos
               && value.second.find(
                      "mapped-port=entity_output:state=2")
+                  != std::string::npos
+              && value.second.find(
+                     "mapped-port=component_input:state=2")
                   != std::string::npos;
         }));
 

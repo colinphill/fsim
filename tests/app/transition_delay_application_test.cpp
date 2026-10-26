@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "change_mismatch_report.hpp"
 #include "fsim/app/application.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -461,6 +462,8 @@ void verify_mode(
     for (const auto* actual : { &cold, &warm }) {
         assert(reference.result.status == actual->result.status);
         assert(reference.result.time == actual->result.time);
+        fsim::test::report_change_mismatch(
+            "verify_mode", reference.changes, actual->changes);
         assert(reference.changes == actual->changes);
         assert(reference.final_values == actual->final_values);
         assert(actual->zero_delay_driver_before_initializer);
@@ -702,6 +705,8 @@ endmodule
         for (const auto* actual : { &cold, &warm }) {
             assert(reference.result.status == actual->result.status);
             assert(reference.result.time == actual->result.time);
+            fsim::test::report_change_mismatch(
+                "verify_mode", reference.changes, actual->changes);
             assert(reference.changes == actual->changes);
             assert(reference.final_values == actual->final_values);
             assert(reference.vcd == actual->vcd);

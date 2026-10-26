@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <ranges>
 #include <set>
 #include <tuple>
 #include <vector>
@@ -120,13 +121,47 @@ namespace {
                     select_target(parse_target(*binding.target), library);
                 }
             }
-            for (std::size_t index = 0; index < pending_.size(); ++index) {
-                const auto record = pending_[index];
-                select_dependencies(record);
-                if (stale_dependency_) {
-                    continue;
+            std::size_t scanned { };
+            const auto drain = [&] {
+                for (; scanned < pending_.size(); ++scanned) {
+                    const auto record = pending_[scanned];
+                    select_dependencies(record);
+                    if (stale_dependency_) {
+                        continue;
+                    }
+                    if (!scan_record(record)) {
+                        return false;
+                    }
                 }
-                if (!scan_record(record)) {
+                return true;
+            };
+            if (!drain()) {
+                return std::nullopt;
+            }
+            // SystemC source names the HDL units it instantiates
+            // (fsim::systemc::hdl_module) only when its factories run, so a
+            // design with SystemC also takes the design units of the
+            // workspace's own libraries.
+            const bool systemc = std::ranges::any_of(
+                std::views::iota(std::size_t { }, records_.size()),
+                [&](const std::size_t index) {
+                    return selected_[index]
+                        && artifact(index).kind
+                            == workspace::ArtifactKind::SystemCPlugin;
+                });
+            if (systemc) {
+                for (std::size_t index = 0; index < records_.size(); ++index) {
+                    if (!location(index).mapped
+                        && artifact(index).kind == workspace::ArtifactKind::Hdl
+                        && std::ranges::any_of(artifact(index).units,
+                            [&](const auto& owned) {
+                                return hierarchy_unit(owned.unit)
+                                    || owned.unit.kind == "architecture";
+                            })) {
+                        select_record(index);
+                    }
+                }
+                if (!drain()) {
                     return std::nullopt;
                 }
             }
@@ -486,12 +521,22 @@ namespace {
                             = reference.kind == Kind::context
                             ? unit.kind == "context"
                             : unit.kind == "package" && unit.primary_name.empty();
+                        // A reference to a package outside the object has no
+                        // resolved target: it names the package.
                         const bool unit_matches_form = unit.language == "vhdl"
-                            ? target_unit && target_unit->vhdl
-                                && vhdl_identifier_matches(unit.name,
-                                    unit.name_form, target_unit->vhdl->name,
-                                    vhdl_identifier_form(
-                                        target_unit->vhdl->extended_name))
+                            ? (target_unit && target_unit->vhdl
+                                    ? vhdl_identifier_matches(unit.name,
+                                          unit.name_form,
+                                          target_unit->vhdl->name,
+                                          vhdl_identifier_form(
+                                              target_unit->vhdl->extended_name))
+                                    : vhdl_identifier_matches(unit.name,
+                                          unit.name_form,
+                                          support::decode_vhdl_identifier(
+                                              reference.name),
+                                          vhdl_identifier_form(
+                                              support::is_extended_vhdl_identifier(
+                                                  reference.name))))
                             : workspace_name_equal(
                                   unit.name, reference.name, unit.language);
                         const bool matches = reference.kind == Kind::class_declaration
@@ -522,13 +567,21 @@ namespace {
                             : library::VhdlIdentifierForm::basic);
                 }
             } else if (reference.kind == Kind::entity) {
+                // An architecture's reference to its own entity never pulls
+                // the sibling architectures, whether or not the entity is
+                // in this object.
                 const bool architecture_owner = owner && owner->vhdl
                     && owner->vhdl->kind == semantic::vhdl::UnitKind::architecture
-                    && target_unit && target_unit->vhdl
-                    && owner->vhdl->primary_name == target_unit->vhdl->name
-                    && owner->vhdl->extended_primary_name
-                        == target_unit->vhdl->extended_name
-                    && reference.source == owner->vhdl->source;
+                    && reference.source == owner->vhdl->source
+                    && (target_unit && target_unit->vhdl
+                            ? owner->vhdl->primary_name == target_unit->vhdl->name
+                                && owner->vhdl->extended_primary_name
+                                    == target_unit->vhdl->extended_name
+                            : owner->vhdl->primary_name
+                                    == support::decode_vhdl_identifier(reference.name)
+                                && owner->vhdl->extended_primary_name
+                                    == support::is_extended_vhdl_identifier(
+                                        reference.name));
                 target.language = "vhdl";
                 if (target_unit && target_unit->vhdl) {
                     target.name = target_unit->vhdl->name;

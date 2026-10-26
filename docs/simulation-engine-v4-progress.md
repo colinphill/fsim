@@ -138,6 +138,98 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-26 (night): every feature on v4; full ctest clean, strict included (sweep `v4c8`)
+
+Owner gate (2026-10-26): every feature runs on v4 (SystemC, coverage, the
+library API, the debugger), and the whole ctest passes with no known-failure
+allowance.
+
+- **SystemC on v4.**
+  - SystemC processes stay with the Accellera kernel. A design whose only
+    processes are SystemC keeps its static kernel, with nothing to schedule.
+  - SystemC can instantiate HDL at any level: top, nested, and with HDL
+    instances below it. A native module marked with
+    `fsim::systemc::hdl_module` stands for an HDL instance, and its ports are
+    that instance's port map (IEEE 1666-2011 4.1.3; association by name).
+  - The ABI host struct gains `mark_hdl_module` and `set_hdl_module_actual`.
+    The bridge is at revision 3, and diagnostics are `FSIM-BIND-066`..`068`.
+  - The root kernel process waits on the channels its HDL descendants drive.
+  - The SystemC hierarchy matrix covers every placement.
+- **Coverage** runs as a kernel operation. The library API and the Tcl
+  debugger plan kernel access through `plan_kernel_access`, with debug points
+  and locals.
+- **Strict mode.** `FSIM_V4_STRICT=1` throws when a process runs on the
+  reference interpreter in a v4 run, or when the kernel refuses a design.
+  - The full ctest passes under it.
+  - A halted process is no longer counted as interpreted.
+- **Kernel scheduling.**
+  - Hosted and native processes that are ready in the same Active round run
+    in process order (`run_merged_active`).
+  - A host task of the running batch that is ahead of a ready thread runs
+    first. Example: a delayed gate update maturing in the time step, as in
+    `t_risefall_delay` (IEEE 1800-2023 4.7).
+  - SystemVerilog late starters run from their own task (`queue_late_start`).
+  - After `$finish`/`$stop`, the final blocks run and the kernel's pending
+    threads are discarded.
+- **LRM fixes that ctest and the sweep found.**
+  - A constrained generic actual must match the formal's length
+    (1076-2019 14.3.3.2; `FSIM-ELAB-GENERIC-008`).
+  - An object's initial value must have its type and its subtype's length
+    (14.4.2.5; new `FSIM-ELAB-VHINIT-002`).
+  - Element subtypes resolve in the type's own declaration scope (12.3).
+  - String literal actuals take a constrained formal's length.
+  - SystemVerilog forward parameter references are rejected (1800-2017
+    6.20.2), but only for a use written inside the declaring scope. A class
+    parameter's actual, substituted into the class body, keeps the body's
+    source.
+  - The matching-case overlap rule is read strictly (1076-2019 10.9). nvc
+    `issue705` and `case11` are excluded as non-LRM.
+- **Elaboration-time evaluation budget.** A function evaluated at elaboration
+  runs within a budget of 2^30 units, so a value too costly to fold is
+  rejected rather than run indefinitely.
+  - Each operation costs one unit, plus the 64-bit words it produces.
+  - An operator over values wider than a word costs 8 units per bit, because
+    it visits each bit.
+  - A run that exhausts the budget is memoized as a failure.
+  - Lowering that reports errors leaves no value.
+  - nvc `elab35` (a 64 K-entry memory initializer) elaborates in 1.1 s; the
+    2 M-element rejection test trips in 2 s, and `fsim_elaboration_tests`
+    takes 4.7 s.
+- **ctest closure.** Stale expectations and governance pins were updated.
+  Examples: the 1 fs auto resolution, the XXH64 payload index
+  (plug-in payloads keep their SHA-256 provenance), schema pins, and the
+  removed native cache. Each update was checked against the LRM, and product
+  bugs were fixed:
+  - the hierarchy path table overran on a path longer than a chunk;
+  - hard-linked producers were deduplicated;
+  - a VHDL package reference had no resolved target;
+  - an external name's subtype width was not checked;
+  - BOOLEAN loop parameters were wrong in `'pos`.
+  - The diagnostic catalog is 2975.
+
+Full ctest: 1085/1085, and 1085/1085 with `FSIM_V4_STRICT=1`.
+
+Sweep `v4c8`: the frozen binary `fsim-archive/v4c8`, `--engine v4`, against
+`b96x1`.
+
+| Suite | Pass (base) | Pass (v4) | Planned | Admitted | host=0 | Host processes | Hosted processes | interpreted=0 | Runs interpreted>0 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ivtest | 2635 | 2640 | 2273 | 2273 | 2273 | 0 | 2592 | 2263 | 0 |
+| sv-tests | 1495 | 1495 | 387 | 387 | 387 | 0 | 422 | 386 | 0 |
+| verilator | 2065 | 2070 | 2087 | 2087 | 2087 | 0 | 3647 | 2072 | 0 |
+| vests | 3646 | 3646 | 1606 | 1606 | 1606 | 0 | 973 | 1596 | 0 |
+| nvc | 1261 | 1259 | 1208 | 1208 | 1208 | 0 | 1059 | 1148 | 0 |
+| vhdl-compliance | 65 | 65 | 65 | 65 | 65 | 0 | 86 | 65 | 0 |
+
+- **Losses against `b96x1`: 0 (G2 met).** The two nvc cases that `b96x1`
+  passed, `issue705` and `case11`, are now excluded as non-LRM (strict 10.9
+  reading, owner decision 2026-10-26). Every in-scope case passes in all six
+  suites.
+- **No run interprets (G3).** The run-time counters left are `kernel_deopts`
+  (14 cases, 48 deopts) and `specialize_folding` (131 cases).
+- **G4 met:** full ctest, normal and strict.
+- Census: `.local-artifacts/v4-migration/census/v4c8/census.md`.
+
 ### 2026-10-26: no interpreted runs; XXH64 snapshot checksums; ctest (sweep `v4c6`)
 
 - **Designs whose only programs are commit programs** (port conversion,

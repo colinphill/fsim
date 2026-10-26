@@ -40,20 +40,37 @@ void test_transition_delay_selection()
             delays)
             == 7,
         "a rising transition selects the rise delay");
+    // The whole new value selects the delay of a vector (IEEE 1800-2023
+    // 10.3.3): all 0 falls, all z turns off, and any other value without x
+    // rises.
     require(
         transition_delay(
             PackedLogic4::from_msb_string("1111"),
-            PackedLogic4::from_msb_string("1011"),
+            PackedLogic4::from_msb_string("0000"),
             delays)
             == 11,
         "a falling transition selects the fall delay");
     require(
         transition_delay(
             PackedLogic4::from_msb_string("1111"),
-            PackedLogic4::from_msb_string("11Z1"),
+            PackedLogic4::from_msb_string("1011"),
+            delays)
+            == 7,
+        "a change to a nonzero value selects the rise delay");
+    require(
+        transition_delay(
+            PackedLogic4::from_msb_string("1111"),
+            PackedLogic4::from_msb_string("ZZZZ"),
             delays)
             == 13,
         "a high-impedance transition selects the turnoff delay");
+    require(
+        transition_delay(
+            PackedLogic4::from_msb_string("1111"),
+            PackedLogic4::from_msb_string("11Z1"),
+            delays)
+            == 7,
+        "a partly high-impedance value selects the rise delay");
     require(
         transition_delay(
             PackedLogic4::from_msb_string("0000"),

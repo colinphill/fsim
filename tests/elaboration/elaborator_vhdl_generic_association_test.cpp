@@ -210,9 +210,11 @@ end architecture;
     const auto mismatched_packed_actual = compile_and_elaborate(
         mismatched_packed_fixture,
         "vhdl:work.packed_generic_top(rtl)");
+    // A constant of another length does not convert to the formal's
+    // constrained subtype (IEEE 1076-2019 14.3.3.2).
     assert(!mismatched_packed_actual.ok());
     assert(has_diagnostic(
-        mismatched_packed_actual, "FSIM-ELAB-GENERIC-004"));
+        mismatched_packed_actual, "FSIM-ELAB-GENERIC-008"));
 
     const auto invalid_boundaries = frontend::parse_text(
         "invalid_dependent_boundaries.vhd",

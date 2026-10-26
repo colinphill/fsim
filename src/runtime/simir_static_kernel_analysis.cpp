@@ -27,13 +27,45 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
     // point: registers written on some path from the entry to it. A member
     // with a fork also counts the writes of earlier operations (fork
     // branches run in order until they wait, and share the registers).
+    // Under the debugger plan every statement is a debug point, so a write
+    // whose statement's next point was never reached (an untaken branch)
+    // did not run; one followed by a control transfer first still counts.
     const auto size = static_cast<std::uint32_t>(member.operations.size());
     const auto registers = member.registers.size();
+    if (member.debug_pc == no_slot && debug_points_) {
+        // Under the debugger plan every statement is a debug point: a member
+        // that has reached none has not run, so it has written nothing.
+        return false;
+    }
     if (member.debug_pc == no_slot || member.debug_pc >= size
         || reg >= registers) {
         return true;
     }
     const auto words = (registers + 63U) / 64U;
+    const auto executed = [&](const std::uint32_t pc) {
+        if (member.debug_hit.size() != size) {
+            return true;
+        }
+        for (auto next = pc + 1U; next < size; ++next) {
+            const auto& operation = member.operations[next];
+            if (const auto* point = operation_get_if<DebugPoint>(&operation)) {
+                if (debug_point_executable(point->kind)) {
+                    return member.debug_hit[next] != 0U;
+                }
+                continue;
+            }
+            if (operation_holds<Jump>(operation)
+                || operation_holds<Branch>(operation)
+                || operation_holds<Call>(operation)
+                || operation_holds<Return>(operation)
+                || operation_holds<Halt>(operation)
+                || operation_holds<Fork>(operation)
+                || operation_holds<ForkEnd>(operation)) {
+                return true;
+            }
+        }
+        return true;
+    };
     if (member.debug_defined_pc != member.debug_pc) {
         std::vector<std::uint64_t> in(static_cast<std::size_t>(size) * words, 0U);
         std::vector<std::uint8_t> seen(size, 0U);
@@ -58,7 +90,7 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
             std::copy_n(in.begin() + static_cast<std::ptrdiff_t>(pc * words),
                 words, out.begin());
             operation_registers(member.operations[pc], reads, write);
-            if (write && *write < registers) {
+            if (write && *write < registers && executed(pc)) {
                 out[*write / 64U] |= std::uint64_t { 1 } << (*write % 64U);
             }
             next.clear();
@@ -108,7 +140,7 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
         if (has_fork) {
             for (std::uint32_t pc = 0U; pc < member.debug_pc; ++pc) {
                 operation_registers(member.operations[pc], reads, write);
-                if (write && *write < registers) {
+                if (write && *write < registers && executed(pc)) {
                     member.debug_defined[*write / 64U]
                         |= std::uint64_t { 1 } << (*write % 64U);
                 }

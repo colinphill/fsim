@@ -1103,4 +1103,11 @@ bool resolve_systemverilog_classes(
       });
 }
 
+std::shared_ptr<const Type> systemverilog_class_scope_owner(
+    const Type& selection, std::string declaration_identity) {
+  auto owner = selection;
+  owner.systemverilog_class_declaration = std::move(declaration_identity);
+  return std::make_shared<const Type>(std::move(owner));
+}
+
 }  // namespace fsim::frontend

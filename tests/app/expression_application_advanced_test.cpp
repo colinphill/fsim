@@ -429,11 +429,14 @@ void test_vhdl_falling_edge(
             "0",
             // The t=2 ns zero-time wait resumes after the 1 ns delayed fall.
             "0",
+            // S'TRANSACTION starts at '1' (its initial value is not defined,
+            // IEEE 1076-2019 16.2.4); four transactions on redundant, one on
+            // single.
+            "1",
             "0",
             "1",
             "1",
             "1",
-            "0",
             "1" }));
     assert(compiled.compiled_processes == 0);
     assert(compiled.compiled_modules == 0);
@@ -490,6 +493,14 @@ void test_verilog_stop(
     assert(reference.resumed.status == compiled.resumed.status);
     assert(reference.resumed.time == compiled.resumed.time);
     assert(reference.resumed.delta == compiled.resumed.delta);
+    if (reference.resumed_values != compiled.resumed_values) {
+        for (std::size_t index = 0; index < reference.resumed_values.size();
+             ++index) {
+            std::cerr << "resumed[" << index << "] reference "
+                      << reference.resumed_values[index] << " compiled "
+                      << compiled.resumed_values[index] << '\n';
+        }
+    }
     assert(reference.resumed_values == compiled.resumed_values);
     assert((
         compiled.resumed_values

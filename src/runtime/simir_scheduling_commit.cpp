@@ -1792,6 +1792,17 @@ bool Interpreter::Impl::publish_vhdl_formal_driving_value(
     return true;
 }
 
+void Interpreter::Impl::queue_vhdl_conversion(const SignalId target)
+{
+    if (!pending_vhdl_resolution_set.insert(target).second) {
+        return;
+    }
+    pending_vhdl_resolutions.push_back(target);
+    if (started && !running_vhdl_resolvers && !update_commit_running) {
+        schedule_update_commit();
+    }
+}
+
 void Interpreter::Impl::drain_vhdl_resolutions()
 {
     if (running_vhdl_resolvers || pending_vhdl_resolutions.empty()) {

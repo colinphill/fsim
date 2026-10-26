@@ -586,8 +586,10 @@ begin
     variable file_deleted : std.env.file_delete_status;
   begin
     assert std.env.dir_separator = std.env.dir_separator severity failure;
-    opened := std.env.dir_open(dir, "../outside");
+    opened := std.env.dir_open(dir, "..");
     assert opened = status_access_denied severity failure;
+    opened := std.env.dir_open(dir, "../outside");
+    assert opened = status_not_found severity failure;
     opened := std.env.dir_open(dir, "missing");
     assert opened = status_not_found severity failure;
     opened := std.env.dir_open(dir, "fixture/a.txt");
@@ -840,9 +842,9 @@ begin
         "FSIM_VHDL2019_ENVIRONMENT_API_MISSING") = "" severity failure;
     assert std.env.vhdl_version = "2019" severity failure;
     assert std.env.tool_type = "SIMULATION" severity failure;
-    assert std.env.tool_vendor = "fsim project" severity failure;
-    assert std.env.tool_name = "fsim" severity failure;
-    assert std.env.tool_edition = "community" severity failure;
+    assert std.env.tool_vendor = "FSIM PROJECT" severity failure;
+    assert std.env.tool_name = "FSIM" severity failure;
+    assert std.env.tool_edition = "COMMUNITY" severity failure;
     assert std.env.tool_version = ")FSIM" }
         + std::string { fsim::version }
         + R"FSIM(" severity failure;
@@ -1039,7 +1041,8 @@ end architecture;
         fsim::project::Optimization::o2);
 
     const ScopedEnvironment oversized_environment {
-        std::string { oversized_name }, std::string(4097U, 'x') };
+        std::string { oversized_name },
+        std::string(fsim::runtime::simir::maximum_string_bytes + 1U, 'x') };
     const auto oversized_source = directory / "environment-api-oversized.vhd";
     {
         std::ofstream output { oversized_source, std::ios::binary };

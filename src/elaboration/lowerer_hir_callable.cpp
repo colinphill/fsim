@@ -11414,7 +11414,12 @@ bool Lowerer::hir_vhdl_actual_lengths_fit(
                     != semantic::vhdl::ExpressionKind::string_literal)) {
             continue;
         }
-        const auto width = hir_expression_width(actuals[index], process_scope);
+        // A string literal has as many elements as characters, each of the
+        // formal's element type (IEEE 1076-2019 9.3.2).
+        const auto width = actual->vhdl->kind
+                == semantic::vhdl::ExpressionKind::string_literal
+            ? hir_expression_width(actuals[index], process_scope, &*subtype)
+            : hir_expression_width(actuals[index], process_scope);
         if (width && *width != *subtype->executable_width) {
             return false;
         }
@@ -15905,6 +15910,13 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
                   ? actual->vhdl->scope
                   : process_scope)
         : std::optional<bool> { };
+    // A string literal has as many elements as characters (IEEE 1076-2019
+    // 9.3.2); it does not belong to a constrained formal of another length
+    // (4.2.2.1), whatever its nominal type.
+    const bool constrained_literal_actual = actual_kind
+            == semantic::vhdl::ExpressionKind::string_literal
+        && formal_subtype && !formal_subtype->unconstrained
+        && !formal_subtype->constraints.empty();
     const bool rejects_actual
         = !actual_width || !actual_domain || !domain_matches
         || !same_nominal_type
@@ -15912,7 +15924,8 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
         || unresolved_function_array_profile
         || (array_shapes_match && !*array_shapes_match)
         || (formal->domain != frontend::ValueDomain::Integer
-            && *actual_width != formal->width && !same_nominal_array)
+            && *actual_width != formal->width
+            && (!same_nominal_array || constrained_literal_actual))
         || (formal_record && !aggregate_actual
             && *actual_width != formal->width);
     if (rejects_actual) {

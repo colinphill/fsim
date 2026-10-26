@@ -246,6 +246,15 @@ registry_wait_for_input_or_native_activity(
 extern "C" void registry_report(
     void* context, const int severity, const char* message) noexcept;
 
+extern "C" fsim_sc_status_v1 registry_mark_hdl_module(
+    void* context, fsim_sc_handle_v1 module, const char* unit) noexcept;
+
+extern "C" fsim_sc_status_v1 registry_set_hdl_module_actual(
+    void* context,
+    fsim_sc_handle_v1 module,
+    const char* name,
+    std::int64_t value) noexcept;
+
 extern "C" fsim_sc_status_v1 registry_register_elaboration_factory(
     void* context,
     const char* name,

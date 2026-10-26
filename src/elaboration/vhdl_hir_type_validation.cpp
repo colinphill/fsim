@@ -2728,7 +2728,11 @@ private:
                 type.source);
             return;
         }
-        const auto element = profile(*type.element_subtype);
+        // The element subtype names what is visible at the type
+        // declaration, not in the unit that uses the type (IEEE 1076-2019
+        // 12.3).
+        const auto element = profile(
+            *type.element_subtype, type_declaration_scope(type));
         // VHDL-2008 permits an unbounded element subtype that object
         // declarations constrain (IEEE 1076-2008 5.3.2.1).
         const bool unbounded_elements
@@ -2774,6 +2778,147 @@ private:
         }
     }
 
+    // The initial value of an object is of the object's type (IEEE
+    // 1076-2019 6.4.2.1, 6.4.2.3, 6.4.2.4): a value of another nominal
+    // composite type, even one with the same structure, is not.
+    void validate_composite_initializer(
+        const semantic::vhdl::Declaration& declaration,
+        const SubtypeIndication& subtype)
+    {
+        using Form = semantic::vhdl::DeclarationForm;
+        if (!declaration.initializer
+            || (declaration.form != Form::signal
+                && declaration.form != Form::variable
+                && declaration.form != Form::constant)) {
+            return;
+        }
+        const auto composite = [](const OperandType& type) {
+            return (type.kind == OperandClass::array
+                       || type.kind == OperandClass::record)
+                && !type.root.empty() && type.root != "@literal";
+        };
+        const auto target = subtype_operand_type(subtype, 0U);
+        if (!composite(target)) {
+            return;
+        }
+        // A function call has its function's result type (9.3.4); a name
+        // that may denote any of several functions conflicts only when
+        // every one of them returns another type.
+        const auto expression
+            = specialization_.find_expression(*declaration.initializer);
+        std::vector<semantic::DeclarationId> candidates;
+        // An operator symbol may denote a predefined operator that is not
+        // retained as a declaration.
+        if (expression && expression->vhdl != nullptr
+            && expression->vhdl->referenced_name
+            && !expression->vhdl->referenced_name->spelling.starts_with('"')
+            && (expression->vhdl->kind == semantic::vhdl::ExpressionKind::name
+                || expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::index
+                || expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::call)) {
+            const auto& name = *expression->vhdl->referenced_name;
+            if (name.selected) {
+                candidates.push_back(*name.selected);
+            } else if (!name.overloads.empty()) {
+                candidates = name.overloads;
+            } else {
+                for (const auto& candidate :
+                    semantic::CompiledDesignResolver { specialization_ }
+                        .resolve_vhdl_callables(name, expression->vhdl->scope)
+                        .candidates) {
+                    candidates.push_back(candidate.key);
+                }
+            }
+        }
+        const auto result_conflicts = [&](const semantic::DeclarationId id) {
+            const auto function = specialization_.find_declaration(id);
+            if (!function || function->vhdl == nullptr
+                || !function->vhdl->callable
+                || !function->vhdl->callable->function
+                || !function->vhdl->callable->return_type) {
+                return false;
+            }
+            const auto result = subtype_operand_type(
+                *function->vhdl->callable->return_type, 0U);
+            return composite(result) && types_conflict(target, result);
+        };
+        const auto callable = [&](const semantic::DeclarationId id) {
+            const auto function = specialization_.find_declaration(id);
+            return function && function->vhdl != nullptr
+                && function->vhdl->callable;
+        };
+        const bool conflicts = !candidates.empty()
+                && std::ranges::all_of(candidates, callable)
+            ? std::ranges::all_of(candidates, result_conflicts)
+            : [&] {
+                  const auto value = operand_type(*declaration.initializer);
+                  return composite(value) && types_conflict(target, value);
+              }();
+        const auto source = expression && expression->vhdl != nullptr
+            ? expression->vhdl->source
+            : declaration.source;
+        if (conflicts) {
+            report("FSIM-ELAB-VHINIT-002",
+                "the initial value of VHDL object '" + declaration.name
+                    + "' does not have the object's type",
+                source);
+            return;
+        }
+        // The value converts to a constrained array subtype only with its
+        // lengths (14.4.2.5, 9.3.6): a function result or an object of
+        // another statically constrained length does not belong to it.
+        if (target.kind != OperandClass::array) {
+            return;
+        }
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        const auto value_subtype = [&]()
+            -> std::optional<std::pair<SubtypeIndication, semantic::ScopeId>> {
+            if (candidates.size() != 1U) {
+                return std::nullopt;
+            }
+            const auto named = specialization_.find_declaration(
+                candidates.front());
+            if (!named || named->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            if (named->vhdl->callable) {
+                if (!named->vhdl->callable->function
+                    || !named->vhdl->callable->return_type) {
+                    return std::nullopt;
+                }
+                return std::pair { *named->vhdl->callable->return_type,
+                    named->vhdl->scope };
+            }
+            if (named->vhdl->subtype
+                && semantic::vhdl::is_value_object_form(named->vhdl->form)
+                && expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::name) {
+                return std::pair { *named->vhdl->subtype, named->vhdl->scope };
+            }
+            return std::nullopt;
+        }();
+        const auto constrained = [&](const SubtypeIndication& indication,
+                                     const semantic::ScopeId scope) {
+            const auto effective
+                = resolver.effective_vhdl_subtype(indication, scope);
+            return effective && !effective->unconstrained;
+        };
+        if (value_subtype
+            && constrained(*declaration.subtype, declaration.scope)
+            && constrained(value_subtype->first, value_subtype->second)
+            && !resolver
+                    .vhdl_array_lengths_match(*declaration.subtype,
+                        declaration.scope, value_subtype->first,
+                        value_subtype->second)
+                    .value_or(true)) {
+            report("FSIM-ELAB-VHINIT-002",
+                "the initial value of VHDL object '" + declaration.name
+                    + "' does not have the length of the object's subtype",
+                source);
+        }
+    }
+
     void validate_object(
         const semantic::vhdl::Declaration& declaration)
     {
@@ -2791,6 +2936,7 @@ private:
         validate_constraints(
             *declaration.subtype, declaration.source,
             declaration.scope);
+        validate_composite_initializer(declaration, subtype);
         const auto object = profile(subtype, declaration.scope);
         if (object.kind != ProfileKind::array) {
             return;

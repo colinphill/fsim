@@ -468,6 +468,21 @@ private:
         if (predefined_name(name)) {
             return builtin(name);
         }
+        // A selected name of an STD.TEXTIO type that is not retained denotes
+        // that package's type, distinct from any other type of its simple
+        // name (IEEE 1076-2019 5.1, 16.4).
+        if (const auto text = lowered(spelling);
+            text.size() > name.size()
+            && (text == "std.textio." + name || text == "textio." + name)) {
+            static constexpr std::array textio_types {
+                std::string_view { "line" }, std::string_view { "line_vector" },
+                std::string_view { "text" }, std::string_view { "side" },
+                std::string_view { "width" },
+            };
+            if (std::ranges::find(textio_types, name) != textio_types.end()) {
+                return builtin("std.textio." + name);
+            }
+        }
         // A type declared in an enclosing declarative region (12.1).
         std::unordered_set<std::uint32_t> seen;
         for (auto current = std::optional { scope };

@@ -41,7 +41,7 @@
 #define FSIM_SYSTEMC_ACCELERA_VERSION "3.0.2"
 #define FSIM_SYSTEMC_ACCELERA_SOURCE_SHA256 \
     "9b3693ed286aab958b9e5d79bb0ad3bc523bbc46931100553275352038f4a0c4"
-#define FSIM_SYSTEMC_BRIDGE_REVISION 2u
+#define FSIM_SYSTEMC_BRIDGE_REVISION 3u
 
 #if defined(_WIN32)
 #if defined(fsim_systemc_accellera_runtime_EXPORTS)
@@ -291,6 +291,37 @@ template <typename... Parameters>
     };
 }
 
+// A SystemC instance of a SystemVerilog module or VHDL entity. The design
+// unit is spelled like a project top ("sv:work.adder",
+// "vhdl:work.fifo(rtl)"); the module's sc_in/sc_out/sc_inout ports, bound to
+// the parent's channels as usual, connect to the unit's ports of the same
+// name. It declares no processes, signals or child modules of its own.
+class hdl_module : public sc_core::sc_module {
+public:
+    hdl_module(const sc_core::sc_module_name& name, std::string unit)
+        : sc_core::sc_module { name }
+        , unit_ { std::move(unit) }
+    {
+    }
+
+    // An integer actual for one of the unit's parameters or generics.
+    void set_actual(std::string name, const std::int64_t value)
+    {
+        actuals_.emplace_back(std::move(name), value);
+    }
+
+    [[nodiscard]] const std::string& unit() const noexcept { return unit_; }
+    [[nodiscard]] const std::vector<std::pair<std::string, std::int64_t>>&
+    actuals() const noexcept
+    {
+        return actuals_;
+    }
+
+private:
+    std::string unit_;
+    std::vector<std::pair<std::string, std::int64_t>> actuals_;
+};
+
 namespace detail {
 
     struct factory_context {
@@ -523,14 +554,20 @@ namespace detail {
         [[nodiscard]] virtual bool input() const noexcept = 0;
         virtual void read_host() = 0;
         virtual void write_host() = 0;
+        // An HDL instance drives the port's channel: the bridge only reads it.
+        void drive_from_host() noexcept { host_driven = true; }
         fsim_sc_handle_v1 handle { };
         fsim_sc_handle_v1 module { };
+
+    protected:
+        bool host_driven { };
     };
 
     class application_signal_bridge {
     public:
         virtual ~application_signal_bridge() = default;
-        virtual void add_port_direction(fsim_sc_port_direction_v1 direction) = 0;
+        // An HDL instance drives the channel: the bridge only reads it.
+        virtual void drive_from_host() = 0;
         virtual void read_host() = 0;
         virtual void write_host() = 0;
     };
@@ -546,26 +583,18 @@ namespace detail {
             : host_ { host }
             , signal_ { signal }
             , handle_ { handle }
+            , exchanged_ { application_bridge_codec<T>::encode(signal.read()) }
         {
         }
 
-        void add_port_direction(
-            const fsim_sc_port_direction_v1 direction) override
-        {
-            if (!has_port_direction_) {
-                read_enabled_ = false;
-                write_enabled_ = false;
-                has_port_direction_ = true;
-            }
-            read_enabled_ = read_enabled_ || direction != FSIM_SC_OUTPUT;
-            write_enabled_ = write_enabled_ || direction != FSIM_SC_INPUT;
-        }
+        void drive_from_host() override { host_driven_ = true; }
 
+        // The channel mirrors both ways: each side's change since the last
+        // exchange crosses over, so SystemC writers and host writers (an
+        // export, a deposit) both reach the other side without either one
+        // replaying a stale value.
         void read_host() override
         {
-            if (!read_enabled_) {
-                return;
-            }
             fsim_sc_value_view_v1 view { };
             view.struct_size = sizeof(view);
             if (host_->read_value(host_->context, handle_, &view) != FSIM_SC_OK
@@ -576,15 +605,24 @@ namespace detail {
                     "cannot read an Accellera internal signal"
                 };
             }
+            if (!host_driven_
+                && std::equal(exchanged_.begin(), exchanged_.end(), view.data,
+                    view.data + view.data_size)) {
+                return;
+            }
+            exchanged_.assign(view.data, view.data + view.data_size);
             signal_.write(application_bridge_codec<T>::decode(view));
         }
 
         void write_host() override
         {
-            if (!write_enabled_) {
+            if (host_driven_) {
                 return;
             }
-            const auto bytes = application_bridge_codec<T>::encode(signal_.read());
+            auto bytes = application_bridge_codec<T>::encode(signal_.read());
+            if (bytes == exchanged_) {
+                return;
+            }
             const fsim_sc_value_view_v1 view { sizeof(fsim_sc_value_view_v1),
                 application_bridge_codec<T>::encoding,
                 application_bridge_codec<T>::width, bytes.data(), bytes.size() };
@@ -593,15 +631,16 @@ namespace detail {
                     "cannot write an Accellera internal signal"
                 };
             }
+            exchanged_ = std::move(bytes);
         }
 
     private:
         const fsim_sc_host_v1* host_;
         sc_core::sc_signal<T, WriterPolicy>& signal_;
         fsim_sc_handle_v1 handle_;
-        bool has_port_direction_ { };
-        bool read_enabled_ { };
-        bool write_enabled_ { true };
+        // The value both sides last agreed on, in host encoding.
+        std::vector<std::uint8_t> exchanged_;
+        bool host_driven_ { };
     };
 
     template <typename T>
@@ -624,7 +663,7 @@ namespace detail {
 
         void read_host() override
         {
-            if (!input()) {
+            if (!input() && !host_driven) {
                 return;
             }
             fsim_sc_value_view_v1 view { };
@@ -640,7 +679,7 @@ namespace detail {
 
         void write_host() override
         {
-            if (direction_ == FSIM_SC_INPUT) {
+            if (direction_ == FSIM_SC_INPUT || host_driven) {
                 return;
             }
             const auto bytes = application_bridge_codec<T>::encode(signal_.read());
@@ -677,6 +716,12 @@ namespace detail {
             interface_handles;
         std::unordered_map<const sc_core::sc_interface*, application_signal_bridge*>
             interface_bridges;
+        // The bridge serving each registered port's channel, inherited by a
+        // child port bound to its parent's port.
+        std::unordered_map<fsim_sc_handle_v1, application_signal_bridge*>
+            port_signal_bridges;
+        std::unordered_map<fsim_sc_handle_v1, application_port_bridge*>
+            port_bridges;
         std::unordered_map<const sc_core::sc_module*,
             std::unordered_map<std::string, fsim_sc_handle_v1>>
             port_handles;
@@ -899,6 +944,21 @@ namespace detail {
             const fsim_sc_handle_v1 module_handle)
         {
             fsim_sc_port_direction_v1 direction;
+            const bool hdl_owner = dynamic_cast<hdl_module*>(&owner) != nullptr;
+            // An HDL instance's input reads the channel the SystemC side
+            // drives; its output drives the channel the SystemC side reads.
+            const auto connect_hdl_port = [&](const fsim_sc_handle_v1 handle) {
+                if (const auto bridge = port_signal_bridges.find(handle);
+                    bridge != port_signal_bridges.end()
+                    && direction == FSIM_SC_OUTPUT) {
+                    bridge->second->drive_from_host();
+                }
+                if (const auto bridge = port_bridges.find(handle);
+                    bridge != port_bridges.end()
+                    && direction == FSIM_SC_OUTPUT) {
+                    bridge->second->drive_from_host();
+                }
+            };
             auto bind = [&](auto& port) {
                 fsim_sc_handle_v1 handle { };
                 if (host->register_port(host->context, module_handle,
@@ -925,9 +985,30 @@ namespace detail {
                                 && host->bind_port(host->context, handle,
                                        parent_port->second)
                                     == FSIM_SC_OK) {
+                                if (const auto inherited = port_signal_bridges.find(
+                                        parent_port->second);
+                                    inherited != port_signal_bridges.end()) {
+                                    port_signal_bridges.emplace(
+                                        handle, inherited->second);
+                                }
+                                if (const auto inherited = port_bridges.find(
+                                        parent_port->second);
+                                    inherited != port_bridges.end()) {
+                                    port_bridges.emplace(
+                                        handle, inherited->second);
+                                }
+                                if (hdl_owner) {
+                                    connect_hdl_port(handle);
+                                }
                                 return;
                             }
                         }
+                    }
+                    if (hdl_owner) {
+                        throw std::runtime_error {
+                            "HDL instance port '" + std::string { base.name() }
+                            + "' is not bound to a channel of its parent"
+                        };
                     }
                     auto bridge
                         = std::make_unique<application_typed_port_bridge<T>>(
@@ -936,6 +1017,7 @@ namespace detail {
                     bridge->handle = handle;
                     bridge->module = module_handle;
                     interface_handles.emplace(&bridge->signal(), handle);
+                    port_bridges.emplace(handle, bridge.get());
                     ports.push_back(std::move(bridge));
                     return;
                 }
@@ -950,7 +1032,10 @@ namespace detail {
                 if (const auto bridge =
                         interface_bridges.find(base.get_interface());
                     bridge != interface_bridges.end()) {
-                    bridge->second->add_port_direction(direction);
+                    port_signal_bridges.emplace(handle, bridge->second);
+                }
+                if (hdl_owner) {
+                    connect_hdl_port(handle);
                 }
             };
             if (auto* port = dynamic_cast<sc_core::sc_in<T>*>(&base)) {
@@ -969,6 +1054,39 @@ namespace detail {
                 return true;
             }
             return false;
+        }
+
+        void mark_hdl_module(const hdl_module& instance,
+            const fsim_sc_handle_v1 module_handle)
+        {
+            constexpr auto required
+                = offsetof(fsim_sc_host_v1, set_hdl_module_actual)
+                + sizeof(fsim_sc_host_v1::set_hdl_module_actual);
+            if (host->struct_size < required || host->mark_hdl_module == nullptr
+                || host->set_hdl_module_actual == nullptr) {
+                throw std::runtime_error {
+                    "the fsim host does not support HDL instances in SystemC"
+                };
+            }
+            if (host->mark_hdl_module(host->context, module_handle,
+                    instance.unit().c_str())
+                != FSIM_SC_OK) {
+                throw std::runtime_error {
+                    "cannot register HDL instance '"
+                    + std::string { instance.name() } + "' of '" + instance.unit()
+                    + "'"
+                };
+            }
+            for (const auto& [name, value] : instance.actuals()) {
+                if (host->set_hdl_module_actual(host->context, module_handle,
+                        name.c_str(), value)
+                    != FSIM_SC_OK) {
+                    throw std::runtime_error {
+                        "cannot set actual '" + name + "' of HDL instance '"
+                        + std::string { instance.name() } + "'"
+                    };
+                }
+            }
         }
 
         void connect_module(
@@ -1043,6 +1161,9 @@ namespace detail {
                         };
                     }
                     module_handles.emplace(child, child_handle);
+                    if (const auto* hdl = dynamic_cast<hdl_module*>(child)) {
+                        mark_hdl_module(*hdl, child_handle);
+                    }
                 } else {
                     child_handle = found->second;
                 }

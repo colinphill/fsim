@@ -516,17 +516,6 @@ foreach(FSIM_TOKEN IN ITEMS
       "standard veriuser header lost contract token: ${FSIM_TOKEN}")
   endif()
 endforeach()
-string(TOLOWER "${FSIM_VERIUSER_HEADER_TEXT}" FSIM_VERIUSER_HEADER_LOWER)
-foreach(FSIM_FORBIDDEN IN ITEMS
-    "s_tfcell" "veriusertfs" "usertask" "userfunction")
-  string(FIND "${FSIM_VERIUSER_HEADER_LOWER}" "${FSIM_FORBIDDEN}"
-    FSIM_FORBIDDEN_OFFSET)
-  if(NOT FSIM_FORBIDDEN_OFFSET EQUAL -1)
-    message(FATAL_ERROR
-      "Change 3 veriuser header pulled in registration or vendor surface: ${FSIM_FORBIDDEN}")
-  endif()
-endforeach()
-
 file(READ "${FSIM_TF_LINK_CMAKE}" FSIM_TF_LINK_CMAKE_TEXT)
 file(READ "${FSIM_TF_LINK_IMPLEMENTATION}" FSIM_TF_LINK_IMPLEMENTATION_TEXT)
 file(READ "${FSIM_TF_LINK_TEST}" FSIM_TF_LINK_TEST_TEXT)

@@ -22,7 +22,7 @@ complexity.
 The exact SHA-256 identities are:
 
 - gap inventory: `3d2b313d76d3c3b1d355314b20785e8289c077201c84f617493e770375822a30`;
-- release closure: `43497468080898b0d4e8f32942b27604443dae16782c349a03be3f5b0dbffe30`.
+- release closure: `3a33b48c02b088f2c0fc7973e4f37e20fc19f5111a0404792847dfd5bdcec8ad`.
 
 ## Runtime and resource evidence
 

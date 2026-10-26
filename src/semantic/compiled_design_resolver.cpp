@@ -3512,6 +3512,19 @@ CompiledDesignResolver::compute_vhdl_type_identity(
     if (owner_vhdl == nullptr) {
         return { };
     }
+    // SIGNED and UNSIGNED imported by use clauses from both IEEE numeric
+    // packages, neither retained, are homographs: neither is directly
+    // visible (IEEE 1076-2019 12.4).
+    if ((same_vhdl_identifier(spelling, "signed")
+            || same_vhdl_identifier(spelling, "unsigned"))
+        && vhdl_builtin_package_member_imported(
+            "ieee", "numeric_std", spelling, *lookup_scope)
+        && vhdl_builtin_package_member_imported(
+            "ieee", "numeric_bit", spelling, *lookup_scope)) {
+        return { CompiledResolutionStatus::ambiguous, std::nullopt,
+            vhdl::BuiltinTypeIdentity::none,
+            CompiledVhdlStandardScalarIdentity::none };
+    }
     // Do not turn a same-spelled source declaration of another class into a
     // compiler-owned type. This check intentionally uses the unfiltered
     // scoped resolver: the filtered lookup above has already preserved source

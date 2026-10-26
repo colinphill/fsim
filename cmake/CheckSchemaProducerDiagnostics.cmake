@@ -189,13 +189,9 @@ fsim_require_schema_diagnostic_tokens("${FSIM_INCREMENTAL_COMPILER}"
   "\"SystemC plug-in compiler producer\""
   "\"SystemC plug-in producer\"")
 fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY_IMPORT}"
-  "\"mapped LLVM native object producer\""
-  "features SHA-256"
   "\"mapped SystemC native plug-in SCV producer\""
   "\"mapped SystemC native plug-in producer\""
   "\".fsimlib native payload\"")
-fsim_require_schema_diagnostic_order("${FSIM_LIBRARY_IMPORT}"
-  "bool admit_llvm_artifact(" "unsupported_artifact_identity(" "read_payload(")
 fsim_require_schema_diagnostic_order("${FSIM_LIBRARY_IMPORT}"
   "bool admit_systemc_artifact(" "unsupported_artifact_identity(" "read_payload(")
 fsim_require_schema_diagnostic_order("${FSIM_INCREMENTAL_COMPILER}"
@@ -240,7 +236,6 @@ fsim_require_schema_diagnostic_tokens("${FSIM_APPLICATION_TEST}"
 fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY_IMPORT_TEST}"
   "identity: found"
   "regenerate .fsimlib native payload with this fsim build"
-  "incompatible_cache_has_file"
   "stale_cache_has_file")
 fsim_require_schema_diagnostic_tokens("${FSIM_INCREMENTAL_TEST}"
   "has_identity_diagnostic"

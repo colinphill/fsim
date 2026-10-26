@@ -42,7 +42,8 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL time_callback(
                 tf_gettimeprecision() == -12 &&
                 tf_getnextlongtime(&next_low, &next_high) == 1 &&
                 next_low == 4 && next_high == 0 &&
-                std::string_view{tf_strgettime()} == "2" &&
+                // In simulation time units, like tf_getlongsimtime.
+                std::string_view{tf_strgettime()} == "750" &&
                 tf_igettime(instance) == 2 &&
                 tf_igetrealtime(instance) == 1.5 &&
                 tf_igettimeunit(instance) == -9 &&

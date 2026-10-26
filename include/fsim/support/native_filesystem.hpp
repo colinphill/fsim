@@ -235,6 +235,11 @@ recursive_directory_iterator(
 #endif
 }
 
+inline void resize_file(const std::filesystem::path& path,
+    const std::uintmax_t size, std::error_code& error) noexcept {
+  std::filesystem::resize_file(path_for_native_io(path), size, error);
+}
+
 /// Open file streams; each stream constructor's own mode rules apply.
 [[nodiscard]] inline std::ifstream open_ifstream(
     const std::filesystem::path& path,

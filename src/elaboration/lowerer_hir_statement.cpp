@@ -14902,15 +14902,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             valid = false;
                             continue;
                         }
-                        // Wildcard choices may overlap; only a value that
-                        // matches two choices when the statement executes
-                        // is an error (IEEE 1076-2008 10.9). An identical
-                        // choice repeats a value.
+                        // It is an error if the predefined ?= of two
+                        // distinct choices gives '1' (IEEE 1076-2019 10.9).
                         if (std::ranges::any_of(
                                 prior_patterns,
                                 [&](const std::string& prior) {
-                                    return prior == *pattern
-                                        && patterns_overlap(prior, *pattern);
+                                    return patterns_overlap(prior, *pattern);
                                 })) {
                             report(
                                 "FSIM-ELAB-VHDLMATCH-003",

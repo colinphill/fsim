@@ -1483,6 +1483,10 @@ elaboration::SystemCInstanceDescription systemc_description(
     result.native_children.push_back(
         systemc_description(child_path, target, child));
   }
+  if (module.hdl) {
+    result.hdl = elaboration::SystemCInstanceDescription::HdlChild{
+        module.hdl->unit, module.hdl->actuals};
+  }
   return result;
 }
 

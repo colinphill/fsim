@@ -2068,6 +2068,11 @@ private:
     [[nodiscard]] std::optional<std::uint64_t>
     hir_vhdl_character_literal_code(
         semantic::ExpressionId expression, std::size_t expected_width) const;
+    // The S'STABLE, S'QUIET or S'TRANSACTION prefix of an index expression:
+    // those attributes are scalar signals, so the index is a misuse.
+    [[nodiscard]] const semantic::vhdl::Expression*
+    hir_vhdl_indexed_scalar_signal_attribute(
+        semantic::ExpressionId expression) const;
     // The field width of a SystemVerilog decimal conversion: without an
     // explicit width or %0d, a value is padded to the width of its largest
     // magnitude (IEEE 1800-2017 21.2.1.3).

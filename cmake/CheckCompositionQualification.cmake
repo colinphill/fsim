@@ -70,8 +70,7 @@ fsim_require_tokens(
   "checkpoint"
   "relocated_interpreted"
   "relocated_compiled"
-  "provenance"
-  "cache.hits")
+  "provenance")
 
 fsim_require_tokens(
   tests/app/compiled_hir_cache_application_test.cpp

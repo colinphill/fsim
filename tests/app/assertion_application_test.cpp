@@ -6,6 +6,7 @@
 #include "application_workflow_test_support.hpp"
 #include "assertion_application_support.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -316,6 +317,15 @@ void test_cli_failure_reporting(
         != std::string::npos);
 }
 
+// The v4 kernel may run several Active rounds in one scheduler callback, so
+// it reaches fewer repeated safe points; the order of phases is the same.
+[[nodiscard]] std::vector<fsim::runtime::SchedulerPhase> phase_shape(
+    std::vector<fsim::runtime::SchedulerPhase> phases)
+{
+    phases.erase(std::ranges::unique(phases).begin(), phases.end());
+    return phases;
+}
+
 struct DeferredCapture {
     fsim::runtime::Logic4Word marker { };
     std::vector<ReportCapture> reports;
@@ -329,7 +339,7 @@ struct DeferredCapture {
     {
         return left.marker == right.marker
             && left.reports == right.reports
-            && left.phases == right.phases
+            && phase_shape(left.phases) == phase_shape(right.phases)
             && left.targeted_cancellation_suspends
                 == right.targeted_cancellation_suspends;
     }

@@ -722,7 +722,6 @@ state, S3):
   | Any VPI or VHPI module, or any `--sv-lib` (DPI) | same (`foreign`) | foreign interface may read and write any object |
   | `$dumpvars` and other `VcdControl` operations | planner `vcd_control` | tracing control in the design |
   | Specify paths, timing checks (SDF) | planner `specify` | timing |
-  | SystemC | planner `systemc` | co-simulation |
   | Unresolvable accesses | planner `unknown_dependencies` | fail closed |
   | Wide signals (> 2^32 - 1 bits) | planner `signal_width` | representation |
 
@@ -733,10 +732,17 @@ state, S3):
   (members write it through the host commit path, read it as a boundary
   input; no unwritten or sole-writer input shortcuts for foreign). Module
   paths and timing checks mark their terminals, conditions, notifiers and
-  delayed copies host signals. Coverage leaves processes with
-  `CodeCoverageHit` as host processes. The debug engine, `systemc` and
+  delayed copies host signals. `CodeCoverageHit` is a kernel operation (a
+  host counter bump with no signal access; static, behavioral and VHDL
+  members run it through the generic step), so coverage keeps processes on
+  the kernel. SystemC is no longer a gate (S26). The debug engine and
   `signal_width` rows stay gates. The run reports
   `fsim-profile: static-kernel-access ...`.
+- **Strict mode.** `FSIM_V4_STRICT=1` makes a v4 run fail instead of
+  falling back: a design-level refusal or access gate throws at setup, and
+  any process that reaches the reference interpreter's operation loop
+  (`Impl::execute` without an executor or hosted tier) throws when it first
+  runs, naming the process.
 
   The gate profile line cannot yet distinguish a kernel-off run caused by
   these flags from one with no simulate step (stage A of the handoff adds it).
@@ -1058,6 +1064,38 @@ state, S3):
 - **Witness.** Census of the nvc port cases (`elab8`, `elab19`, `issue112`,
   `issue405`, `conv2`), the vests port cases, ivtest `inout2`, `br965`;
   `implicit1..3`; every output equal to `--engine interpreter`.
+
+## S26. SystemC co-simulation
+
+- **Guarantee.** A design with SystemC modules at any level of the
+  hierarchy (SystemC top, SystemC under SystemVerilog or VHDL, HDL under
+  SystemC) runs on the v4 kernel. No SimIR operation is interpreted.
+- **Rule.** The SystemC kernel reads and writes HDL signals through the
+  boundary context, outside any SimIR operation, so a design with SystemC
+  processes or named SystemC objects is planned as if a foreign library
+  were attached (S19): every signal and container is a host object. Each
+  SystemC process keeps its SimIR stub (one `Halt` or `WaitSensitivity`)
+  and is never a member or a hosted step: it is a host process whose
+  process executor (`SystemCProcessExecutor`) resumes the native SystemC
+  body. Its reads see host values, its writes are staged host updates, and
+  its waits map onto host waits as before; the kernel's members reach the
+  same signals through the host commit path. The census reports these
+  processes with the reason `systemc_process`. Cone fusion and time warp
+  stay off for SystemC designs (they assume every reader is a SimIR
+  process).
+- **Basis.** IEEE 1666-2023 4.2 (scheduler), 5.2 (processes); the
+  co-simulation contract in `include/fsim/systemc/hierarchy.hpp`.
+- **HDL under SystemC.** A native SystemC child marked as an HDL instance
+  (`fsim::systemc::hdl_module`, `mark_hdl_module`) is elaborated as an
+  ordinary SystemVerilog or VHDL instance whose ports alias the SystemC
+  channels they bind; its processes plan like any HDL process. The
+  SystemC root's Accellera kernel process is created after its children and
+  also waits on every channel an HDL descendant drives, so the native
+  kernel imports those values in the same time step.
+- **Status:** *implemented* (feature row SC-020).
+- **Witness.** `fsim.application.systemc_*`, `fsim.systemc.*`,
+  `fsim.application.typed_boundaries`, `fsim.application.vhdl_psl` under
+  `FSIM_V4_STRICT=1`.
 
 ## Appendix A. Environment switches that affect semantics
 
