@@ -7,6 +7,7 @@
 #include "fsim/support/bounded_bytes.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -672,7 +673,7 @@ bool validate(
         || !payload_kinds.insert(payload.kind).second
         || !safe_relative_path(payload.artifact)
         || !payload_paths.insert(path).second
-        || !checksum_spelling(payload.checksum)) {
+        || !support::payload_checksum_spelling(payload.checksum)) {
       report(
           diagnostics, kValueCode,
           "design payloads require unique current kinds and contained "
@@ -801,8 +802,9 @@ bool write_file(
   return true;
 }
 
-std::optional<std::string> file_checksum(
+std::optional<bool> file_checksum_matches(
     const std::filesystem::path& path,
+    const std::string_view expected,
     diagnostic::Engine& diagnostics) {
   auto input = support::native_fs::open_ifstream(path, std::ios::binary);
   if (!input) {
@@ -810,7 +812,7 @@ std::optional<std::string> file_checksum(
         support::path_to_utf8(path));
     return std::nullopt;
   }
-  support::Sha256 checksum;
+  support::PayloadChecksumVerifier checksum{expected};
   std::array<char, 64 * 1024> buffer{};
   while (input) {
     input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
@@ -825,7 +827,7 @@ std::optional<std::string> file_checksum(
         support::path_to_utf8(path));
     return std::nullopt;
   }
-  return support::Sha256::hex(checksum.finish());
+  return checksum.matches();
 }
 
 bool make_read_only(
@@ -1295,12 +1297,11 @@ bool publish_design(
   for (const auto& payload : payloads) {
     const auto path = support::path_to_utf8(payload.path);
     const auto found = expected.find(path);
-    const auto checksum = payload.trusted_checksum
-        ? *payload.trusted_checksum
-        : support::Sha256::hex(support::Sha256::digest(payload.bytes));
     if (!safe_relative_path(payload.path) || found == expected.end()
         || !supplied.insert(path).second
-        || found->second != checksum) {
+        || !(payload.trusted_checksum
+                ? *payload.trusted_checksum == found->second
+                : support::payload_checksum_matches(payload.bytes, found->second))) {
       report(
           diagnostics, kIoCode,
           "design payload is unsafe, duplicate, unindexed, or has a checksum "
@@ -1362,8 +1363,8 @@ bool publish_design(
       }
       return false;
     }
-    const auto checksum = file_checksum(path, diagnostics);
-    if (!checksum || *checksum != payload.checksum) {
+    const auto checksum = file_checksum_matches(path, payload.checksum, diagnostics);
+    if (!checksum || !*checksum) {
       if (checksum) {
         report(diagnostics, kIoCode,
             "generated design payload checksum mismatch",

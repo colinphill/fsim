@@ -138,6 +138,66 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-26: no interpreted runs; XXH64 snapshot checksums; ctest (sweep `v4c6`)
+
+- **Designs whose only programs are commit programs** (port conversion,
+  resolvers: `nvc_issue1161`, `bounds43`) now get a kernel without members.
+  Its host process is shaped from the first valid process (`host_shape`), and
+  the kernel's hosted tier runs the commit programs natively. Before, the
+  plan was trivial, there was no kernel, and the commit programs ran in
+  `Impl::execute`.
+- **Snapshot payload checksums** (owner decision 2026-10-26): `.fsimdesign`
+  payloads (runtime, DesignIR, hierarchy paths, HIR, coverage, UVM) are
+  checksummed with XXH64, spelled `xxh64:<16 hex>`
+  (`support/payload_checksum`). The verifier and the design validator still
+  accept SHA-256 hex. Library objects and source identities stay SHA-256.
+  Simulate had spent 70–100 ms re-hashing about 130 MB with SHA-256.
+- **Warm-tier codegen knobs** for experiments: `FSIM_STATIC_KERNEL_WARM_LEVEL`,
+  `FSIM_STATIC_KERNEL_WARM_FAST_ISEL`. The hot threshold is now part of the
+  codegen identity. The ahead-of-time experiments on the codec cases (CPU 9,
+  three samples each):
+
+  | Setting | mixed build | mixed simulate | original build | original simulate |
+  |---|---:|---:|---:|---:|
+  | default | 10.6 s | 2.32 s | 11.4 s | 2.61 s |
+  | `CODEGEN_LEVEL=1` (all templates) | 34.6 s | 2.07 s | 22.9 s | 2.40 s |
+  | warm level 1, `OPT_MAX_SIZE=4096` | 18.1 s | 2.04 s | 17.0 s | 2.40 s |
+  | full instruction selection at O0 | 11.8 s | 2.36 s | 14.0 s | 2.57 s |
+  | `instcombine` in the cold pipeline | 21.4 s | 2.32 s | 20.9 s | 2.58 s |
+
+  Greedy register allocation is the only setting that pays, and it costs
+  6–23 s of elaboration (the e2e geomean would drop below 3×). The defaults
+  are unchanged.
+- **Test expectation.** `vhdl_logic9`'s slice-sharing design has 641
+  elaborated processes since `v4a11`. Each indexed output formal is now a
+  source stub of the resolved actual plus one conversion driver for its
+  element run (IEEE 1076-2008 6.5.7.1, 14.7.3.2).
+
+Sweep `v4c6`: the frozen binary `fsim-archive/v4c6`, `--engine v4`, against
+`b96x1`.
+
+| Suite | Pass (base) | Pass (v4) | Planned | Admitted | host=0 | Host processes | Hosted processes | interpreted=0 | Runs interpreted>0 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ivtest | 2635 | 2642 | 2273 | 2273 | 2273 | 0 | 2592 | 2263 | 0 |
+| sv-tests | 1495 | 1495 | 387 | 387 | 387 | 0 | 422 | 386 | 0 |
+| verilator | 2065 | 2070 | 2087 | 2087 | 2087 | 0 | 3647 | 2072 | 0 |
+| vests | 3646 | 3646 | 1606 | 1606 | 1606 | 0 | 973 | 1596 | 0 |
+| nvc | 1261 | 1261 | 1209 | 1209 | 1209 | 0 | 1059 | 1149 | 0 |
+| vhdl-compliance | 65 | 65 | 65 | 65 | 65 | 0 | 86 | 65 | 0 |
+
+- **Losses against `b96x1`: 0 (G2 met).**
+- **No run interprets (G3).** Run-time counters left:
+  - `kernel_deopts` (14 cases, 48 deopts), which resume in the operation
+    tier;
+  - `specialize_folding` (133 cases). That is constant folding while the
+    kernel is built. The corpus elaborates with `--no-aot`, so the folding
+    runs in the simulate process; ahead of time it runs at elaborate.
+- **G4 met:** the labelled ctest fails only the 18 known tests
+  (`.local-artifacts/v4-migration/tools/ctest-known-v4.txt`).
+  `fsim.scv.artifact` (unlabelled) fails on a library metadata format
+  expectation that predates this work.
+- Census: `.local-artifacts/v4-migration/census/v4c6/census.md`.
+
 ### 2026-10-25 (late night, later): nothing interpreted at run time; hosted tier (sweep `v4c5`)
 
 Toward the owner gate (no interpretation in a compiled simulation), from `v4b8`:

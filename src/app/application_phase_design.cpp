@@ -18,6 +18,7 @@
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/support/teardown.hpp"
 #include "fsim/systemc/scv_artifact.hpp"
@@ -85,8 +86,7 @@ namespace {
                     + support::path_to_utf8(path));
             return std::nullopt;
         }
-        if (support::Sha256::hex(support::Sha256::digest(*payload.bytes))
-            != checksum) {
+        if (!support::payload_checksum_matches(*payload.bytes, checksum)) {
             diagnostics.error(
                 "FSIM-ART-0014",
                 ".fsimdesign payload checksum mismatch: "
@@ -112,7 +112,7 @@ namespace {
                     + support::path_to_utf8(path));
             return std::nullopt;
         }
-        support::Sha256 digest;
+        support::PayloadChecksumVerifier digest { checksum };
         std::array<char, 64 * 1024> buffer { };
         std::uint64_t total { };
         while (input) {
@@ -131,7 +131,7 @@ namespace {
                     + support::path_to_utf8(path));
             return std::nullopt;
         }
-        if (support::Sha256::hex(digest.finish()) != checksum) {
+        if (!digest.matches()) {
             diagnostics.error("FSIM-ART-0014",
                 ".fsimdesign payload checksum mismatch: "
                     + support::path_to_utf8(path));
@@ -702,14 +702,13 @@ static bool publish_design_artifact_impl(
     if (!runtime) {
         return false;
     }
-    const auto runtime_checksum = support::Sha256::hex(
-        support::Sha256::digest(*runtime));
+    const auto runtime_checksum = support::payload_checksum(*runtime);
     const auto add_payload = [&](
                                  const std::string_view kind,
                                  const std::filesystem::path& path,
                                  const std::string& bytes) {
         metadata.payloads.push_back({ std::string { kind }, path,
-            support::Sha256::hex(support::Sha256::digest(bytes)) });
+            support::payload_checksum(bytes) });
     };
     metadata.payloads.push_back(
         { "runtime", "state/runtime.bin", runtime_checksum });
@@ -846,8 +845,7 @@ static bool publish_design_artifact_impl(
                 "standalone design publication lost its UVM state index");
             return false;
         }
-        uvm_index->checksum = support::Sha256::hex(
-            support::Sha256::digest(*updated_uvm_state));
+        uvm_index->checksum = support::payload_checksum(*updated_uvm_state);
         const auto uvm_artifact = uvm_index->artifact;
         const auto payload = std::ranges::find(
             payloads, uvm_artifact, &library::PortablePayload::path);

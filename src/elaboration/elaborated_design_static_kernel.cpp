@@ -274,6 +274,26 @@ runtime::simir::Process synthetic_host(runtime::simir::Process stub)
     return host;
 }
 
+/// The process the kernel's host stub is shaped from: the first member, else
+/// the first hosted process, else (a design whose only programs are commit
+/// programs) the first valid process.
+template <typename Valid>
+ProcessId host_shape(const runtime::simir::StaticKernelRuntimeSpec& spec,
+    const std::size_t process_count, Valid valid)
+{
+    if (!spec.members.empty()) {
+        return spec.members.front().process;
+    }
+    if (!spec.hosted.empty()) {
+        return spec.hosted.front().process;
+    }
+    ProcessId id = 0U;
+    while (id < process_count && !valid(id)) {
+        ++id;
+    }
+    return id;
+}
+
 /// The program the scheduler runs for the kernel's host process: it wakes
 /// on the boundary inputs and activates the kernel.
 runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host,
@@ -2544,25 +2564,21 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         && std::ranges::none_of(hosted, [](const auto flag) { return flag != 0U; })) {
         // Every valid process is a host program (port-association resolver,
         // conversion driver): run inline by the update commit, not a
-        // scheduled process. There is nothing for the kernel to schedule, so
-        // the design is admitted trivially, as one with no processes.
+        // scheduled process. The kernel still runs, with nothing to schedule:
+        // its update commit runs the programs natively.
         const bool only_host_programs = [&] {
+            bool any = false;
             for (std::size_t index = 0U; index < process_count; ++index) {
                 if (views[index].valid() && host_program[index] == 0U) {
                     return false;
                 }
+                any = any || views[index].valid();
             }
-            return true;
+            return any;
         }();
-        if (only_host_programs) {
-            StaticKernelPlan trivial;
-            trivial.disabled_reason = "trivial_host_programs_only";
-            std::vector<std::uint8_t> commit_programs(process_count, 0U);
-            census_commit_programs(commit_programs);
-            take_census(trivial, &member, &commit_programs);
-            return trivial;
+        if (!only_host_programs) {
+            return disable("no_members");
         }
-        return disable("no_members");
     }
     for (std::size_t index = 0U; index < process_count; ++index) {
         if (hosted[index] != 0U) {
@@ -2784,17 +2800,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
     // The kernel runs as a host process whose stub replaces the first
-    // member's program. A design of hosted processes only has no member to
-    // replace: the stub then runs as a process of its own, appended after
-    // the design's processes (plan.host == process_count; create_interpreter
-    // adds it), shaped from the first hosted process.
-    if (spec->members.empty() && spec->hosted.empty()) {
-        return disable("no_members");
-    }
+    // member's program. A design of hosted processes or commit programs only
+    // has no member to replace: the stub then runs as a process of its own,
+    // appended after the design's processes (plan.host == process_count;
+    // create_interpreter adds it), shaped by host_shape.
     plan.host = spec->members.empty() ? static_cast<ProcessId>(process_count)
                                       : spec->members.front().process;
     plan.host_program = host_stub(
-        views[spec->members.empty() ? spec->hosted.front().process : plan.host],
+        views[host_shape(*spec, process_count,
+            [&](const ProcessId id) { return views[id].valid(); })],
         std::move(host_sensitivity));
     if (spec->members.empty()) {
         plan.host_program = synthetic_host(std::move(plan.host_program));
@@ -3075,18 +3089,23 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
         && signal_list(spec->sole_writer_inputs)
         && in.get(plan.boundary_inputs) && in.done();
     // The host is the first member, or a process of its own after the
-    // design's processes when every process is hosted (plan_static_kernel).
+    // design's processes when there is no member (plan_static_kernel).
     const bool synthetic_host_process = spec->members.empty();
     if (!read
         || (synthetic_host_process
-                ? plan.host != processes || spec->hosted.empty()
+                ? plan.host != processes
                 : plan.host == processes
                     || spec->members.front().process != plan.host)) {
         return std::nullopt;
     }
+    const auto shape = host_shape(*spec, processes, [&](const ProcessId id) {
+        return ElaboratedDesignProcessAccess::process_view(design, id).valid();
+    });
+    if (shape >= processes) {
+        return std::nullopt;
+    }
     plan.host_program = host_stub(
-        ElaboratedDesignProcessAccess::process_view(design,
-            synthetic_host_process ? spec->hosted.front().process : plan.host),
+        ElaboratedDesignProcessAccess::process_view(design, shape),
         std::move(host_sensitivity));
     if (synthetic_host_process) {
         plan.host_program = synthetic_host(std::move(plan.host_program));

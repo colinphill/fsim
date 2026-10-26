@@ -948,12 +948,12 @@ ElaboratedDesign::create_interpreter(
     const std::uint64_t seed,
     const StaticKernelPlan& plan) &&
 {
-    if (plan.disabled || !plan.spec
-        || (plan.spec->members.empty() && plan.spec->hosted.empty())) {
+    if (plan.disabled || !plan.spec) {
         throw std::invalid_argument("static kernel plan is empty");
     }
-    // A design of hosted processes only: the kernel's host is a process of
-    // its own, added after the design's processes (plan_static_kernel).
+    // A design without members (hosted processes or commit programs only):
+    // the kernel's host is a process of its own, added after the design's
+    // processes (plan_static_kernel).
     const bool synthetic_host = plan.spec->members.empty();
     if (synthetic_host && plan.host != process_count()) {
         throw std::invalid_argument("static kernel host is not a new process");

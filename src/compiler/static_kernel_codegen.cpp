@@ -3099,8 +3099,12 @@ public:
             hot_fast_isel == nullptr ? !ahead_of_time_
                                      : std::string_view { hot_fast_isel } != "0");
         // Warm templates: full instruction selection without the optimizing
-        // backend's cost.
-        warm_jit_ = make_jit(capture_, 0, false);
+        // backend's cost (FSIM_STATIC_KERNEL_WARM_LEVEL,
+        // FSIM_STATIC_KERNEL_WARM_FAST_ISEL=0/1).
+        const char* warm_level = std::getenv("FSIM_STATIC_KERNEL_WARM_LEVEL");
+        const char* warm_fast_isel = std::getenv("FSIM_STATIC_KERNEL_WARM_FAST_ISEL");
+        warm_jit_ = make_jit(capture_, warm_level == nullptr ? 0 : std::atoi(warm_level),
+            warm_fast_isel != nullptr && std::string_view { warm_fast_isel } != "0");
         if (const char* limit = std::getenv("FSIM_STATIC_KERNEL_OPT_MAX_SIZE")) {
             opt_max_size_ = static_cast<std::size_t>(std::strtoull(limit, nullptr, 10));
             const char* opt_level = std::getenv("FSIM_STATIC_KERNEL_OPT_LEVEL");
@@ -3537,6 +3541,8 @@ private:
                  "FSIM_STATIC_KERNEL_OPT_LEVEL",
                  "FSIM_STATIC_KERNEL_CODEGEN_LEVEL", "FSIM_STATIC_KERNEL_NO_FAST_ISEL",
                  "FSIM_STATIC_KERNEL_HOT_LEVEL", "FSIM_STATIC_KERNEL_HOT_FAST_ISEL",
+                 "FSIM_STATIC_KERNEL_WARM_LEVEL", "FSIM_STATIC_KERNEL_WARM_FAST_ISEL",
+                 "FSIM_STATIC_KERNEL_HOT_THRESHOLD",
                  "FSIM_STATIC_KERNEL_PIPELINE", "FSIM_STATIC_KERNEL_HOT_PIPELINE",
                  "FSIM_STATIC_KERNEL_LLVM_ARGS" }) {
             const char* value = std::getenv(name);

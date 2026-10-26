@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../../src/app/application_hierarchy_path_codec.hpp"
 
-#include "fsim/support/sha256.hpp"
+#include "fsim/support/payload_checksum.hpp"
 
 #include <cassert>
 #include <cstddef>
@@ -80,8 +80,8 @@ void test_canonical_union_and_inline_roundtrip()
         == "zeta");
     assert(first.payload->paths.view(HierarchyPathId::from_index(3U))
         == "\xC3\xA9");
-    assert(first.payload->digest == fsim::support::Sha256::hex(
-        fsim::support::Sha256::digest(first.payload->bytes)));
+    assert(first.payload->digest
+        == fsim::support::payload_checksum(first.payload->bytes));
 
     const auto inline_payload = codec::encode_inline_hierarchy_paths(
         table({ "beta", "", "alpha" }));
@@ -146,8 +146,8 @@ void test_high_cardinality_canonical_union()
         expected_bytes.append(path);
     }
     assert(first.payload->bytes == expected_bytes);
-    const auto expected_digest = fsim::support::Sha256::hex(
-        fsim::support::Sha256::digest(expected_bytes));
+    const auto expected_digest
+        = fsim::support::payload_checksum(expected_bytes);
     assert(first.payload->digest == expected_digest);
 
     const auto decoded = codec::decode_hierarchy_paths(first.payload->bytes);

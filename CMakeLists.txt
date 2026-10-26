@@ -521,6 +521,7 @@ add_library(
   src/project/project_language.cpp
   src/support/allocation_hooks.cpp
   src/support/environment.cpp
+  src/support/payload_checksum.cpp
   src/support/sha256.cpp
   src/support/teardown.cpp
 )

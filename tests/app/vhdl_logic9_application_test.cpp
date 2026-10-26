@@ -513,11 +513,13 @@ void verify_dynamic_part_insert_template_sharing(
         // one indexed output actual. Elaboration materializes one adapter
         // process for each of those three actuals; the clock name actual
         // aliases directly. `results` has resolved STD_LOGIC elements, so
-        // each output adapter is one of its sources (IEEE 1076-2008
-        // 14.7.3.2). The 513 processes are therefore 128 leaf writers, 384
-        // actual adapters, and the top stimulus process.
-        assert(compiled.elaborated_processes == 513U);
-        assert(uniform.elaborated_processes == 513U);
+        // each output formal is one source of the elements it is associated
+        // with (IEEE 1076-2008 6.5.7.1, 14.7.3.2): a source stub of the
+        // resolved signal plus one conversion driver for the element run
+        // it places. The 641 processes are therefore 128 leaf writers, 384
+        // actual adapters, 128 source stubs, and the top stimulus process.
+        assert(compiled.elaborated_processes == 641U);
+        assert(uniform.elaborated_processes == 641U);
         // DynamicPartInsert is emitted for the local dynamic-slice write in
         // each leaf writer. The top stimulus and port adapters use signal
         // element operations, not this local-register operation.
