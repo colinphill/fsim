@@ -3,6 +3,9 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
+#include <map>
+#include <mutex>
+
 namespace fsim::systemc::plugin_detail {
 
 [[nodiscard]] bool is_clang_cl_compiler(
@@ -73,6 +76,122 @@ create_dependency_scratch_directory(
     }
     error = std::make_error_code(std::errc::file_exists);
     return std::nullopt;
+}
+
+namespace {
+
+struct PathStamp {
+    std::filesystem::path path;
+    std::uintmax_t size { };
+    std::filesystem::file_time_type written { };
+    bool directory { };
+
+    [[nodiscard]] bool operator==(const PathStamp&) const = default;
+};
+
+[[nodiscard]] std::optional<PathStamp> stamp_path(
+    const std::filesystem::path& path, const bool directory) {
+    std::error_code error;
+    PathStamp result { path, 0U, { }, directory };
+    result.written = support::native_fs::last_write_time(path, error);
+    if (error) {
+        return std::nullopt;
+    }
+    if (!directory) {
+        result.size = support::native_fs::file_size(path, error);
+        if (error) {
+            return std::nullopt;
+        }
+    }
+    return result;
+}
+
+struct RememberedDependencyScan {
+    std::vector<std::filesystem::path> dependencies;
+    std::vector<PathStamp> stamps;
+};
+
+std::mutex dependency_scan_mutex;
+std::map<std::pair<std::vector<std::string>, std::string>,
+    RememberedDependencyScan>
+    dependency_scans;
+
+// The directories a scan's result depends on: those the command searches
+// for headers and those its dependencies were found in.
+[[nodiscard]] std::set<std::filesystem::path> searched_directories(
+    const std::vector<std::string>& command,
+    const std::filesystem::path& working_directory,
+    const std::vector<std::filesystem::path>& dependencies) {
+    std::set<std::filesystem::path> result;
+    for (std::size_t index = 0; index < command.size(); ++index) {
+        const auto& argument = command[index];
+        for (const std::string_view option : { "-I", "-isystem", "-iquote" }) {
+            if (!argument.starts_with(option)) {
+                continue;
+            }
+            const auto value = argument.size() > option.size()
+                ? argument.substr(option.size())
+                : index + 1U < command.size() ? command[index + 1U]
+                                              : std::string { };
+            if (!value.empty()) {
+                result.insert(make_absolute(
+                    support::path_from_utf8(value), working_directory));
+            }
+            break;
+        }
+    }
+    for (const auto& dependency : dependencies) {
+        result.insert(dependency.parent_path());
+    }
+    return result;
+}
+
+} // namespace
+
+[[nodiscard]] std::optional<std::vector<std::filesystem::path>>
+remembered_dependency_scan(
+    const std::vector<std::string>& command,
+    const std::filesystem::path& working_directory) {
+    const std::lock_guard lock { dependency_scan_mutex };
+    const auto found = dependency_scans.find(
+        { command, working_directory.generic_string() });
+    if (found == dependency_scans.end()) {
+        return std::nullopt;
+    }
+    for (const auto& stamp : found->second.stamps) {
+        if (stamp_path(stamp.path, stamp.directory) != stamp) {
+            dependency_scans.erase(found);
+            return std::nullopt;
+        }
+    }
+    return found->second.dependencies;
+}
+
+void remember_dependency_scan(
+    const std::vector<std::string>& command,
+    const std::filesystem::path& working_directory,
+    const std::vector<std::filesystem::path>& dependencies) {
+    RememberedDependencyScan scan { dependencies, { } };
+    for (const auto& dependency : dependencies) {
+        auto stamp = stamp_path(dependency, false);
+        if (!stamp) {
+            return;
+        }
+        scan.stamps.push_back(std::move(*stamp));
+    }
+    for (const auto& directory :
+         searched_directories(command, working_directory, dependencies)) {
+        // A search directory that does not exist yet would shadow nothing;
+        // one created later changes no stamp, so the scan is not kept.
+        auto stamp = stamp_path(directory, true);
+        if (!stamp) {
+            return;
+        }
+        scan.stamps.push_back(std::move(*stamp));
+    }
+    const std::lock_guard lock { dependency_scan_mutex };
+    dependency_scans.insert_or_assign(
+        { command, working_directory.generic_string() }, std::move(scan));
 }
 
 void report_dependency_cache_disabled(
@@ -689,6 +808,19 @@ parse_msvc_source_dependencies(const std::string_view contents) {
             resolved_compiler,
             includes,
             settings);
+        auto scan_command = argv;
+        scan_command.push_back(path_argument(sources[index]));
+        if (!clang_cl) {
+            if (auto remembered =
+                    remembered_dependency_scan(scan_command, working_directory)) {
+                dependencies.insert(
+                    dependencies.end(),
+                    std::make_move_iterator(remembered->begin()),
+                    std::make_move_iterator(remembered->end()));
+                continue;
+            }
+        }
+        const auto first_dependency = dependencies.size();
         if (clang_cl) {
             argv.emplace_back("/c");
             argv.push_back(path_argument(sources[index]));
@@ -758,6 +890,14 @@ parse_msvc_source_dependencies(const std::string_view contents) {
                 return true;
             }
             dependencies.push_back(std::move(dependency));
+        }
+        if (!clang_cl) {
+            remember_dependency_scan(
+                scan_command,
+                working_directory,
+                { dependencies.begin()
+                      + static_cast<std::ptrdiff_t>(first_dependency),
+                  dependencies.end() });
         }
     }
 

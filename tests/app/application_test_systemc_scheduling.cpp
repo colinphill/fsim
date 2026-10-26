@@ -137,11 +137,14 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
         assert(actual.values == reference.values);
       };
 
+  // Every case binds the same SystemC models, so the cases share a cache and
+  // compile the plug-in once. The interpreter references keep a cache of
+  // their own: the compiled pairs' cold builds must not hit their designs.
   const auto run_reference = [&](const bool vhdl) {
     const auto config = make_config(
         vhdl,
         fsim::project::Optimization::o0,
-        vhdl ? "schedule-vhdl-reference" : "schedule-sv-reference");
+        "schedule-reference");
     fsim::diagnostic::Engine diagnostics;
     auto project = fsim::app::build_project(config, diagnostics);
     assert(project && !diagnostics.has_error());
@@ -183,29 +186,29 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
   run_compiled_pair(
       false,
       fsim::project::Optimization::o0,
-      "schedule-sv-o0",
+      "schedule-compiled",
       sv_reference);
   run_compiled_pair(
       false,
       fsim::project::Optimization::o2,
-      "schedule-sv-o2",
+      "schedule-compiled",
       sv_reference);
   run_compiled_pair(
       true,
       fsim::project::Optimization::o0,
-      "schedule-vhdl-o0",
+      "schedule-compiled",
       vhdl_reference);
   run_compiled_pair(
       true,
       fsim::project::Optimization::o2,
-      "schedule-vhdl-o2",
+      "schedule-compiled",
       vhdl_reference);
 
   const auto trace = directory / "systemc-scheduling-matrix.vcd";
   auto debug_config = make_config(
       false,
       fsim::project::Optimization::o0,
-      "schedule-debug");
+      "schedule-compiled");
   debug_config.run.trace_file = trace;
   fsim::diagnostic::Engine debug_diagnostics;
   auto debug_project = fsim::app::build_project(
@@ -272,7 +275,7 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
         auto config = make_config(
             false,
             fsim::project::Optimization::o2,
-            "schedule-negative");
+            "schedule-compiled");
         config.project.top = std::string{target};
         config.bindings.clear();
         fsim::diagnostic::Engine diagnostics;
@@ -317,7 +320,7 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
   const auto edited_config = make_config(
       false,
       fsim::project::Optimization::o2,
-      "schedule-sv-o2");
+      "schedule-compiled");
   fsim::diagnostic::Engine edited_diagnostics;
   auto edited_project = fsim::app::build_project(
       edited_config, edited_diagnostics);
@@ -334,7 +337,7 @@ void ApplicationTestFixture::test_systemc_scheduling_matrix() {
   const auto teardown_config = make_config(
       false,
       fsim::project::Optimization::o0,
-      "schedule-teardown");
+      "schedule-compiled");
   fsim::diagnostic::Engine teardown_diagnostics;
   auto teardown_project = fsim::app::build_project(
       teardown_config, teardown_diagnostics);

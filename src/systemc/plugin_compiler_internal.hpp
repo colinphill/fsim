@@ -312,6 +312,22 @@ find_volatile_macro_input(
 [[nodiscard]] std::optional<std::vector<std::string>>
 parse_makefile_dependencies(const std::string_view contents);
 
+// The dependency closure a gcc-like compiler reported (`-M`) for the source
+// that ends `command` (the compile command without its dependency output),
+// kept for the process: a build asks for one translation unit's closure for
+// its cache key, its input digest and its compile, and the compiler runs
+// once. An entry holds while every dependency and every directory the
+// compiler searched (the include directories and the dependencies' own) is
+// unchanged; a new header that would shadow one, or an edited one, rescans.
+[[nodiscard]] std::optional<std::vector<std::filesystem::path>>
+remembered_dependency_scan(
+    const std::vector<std::string>& command,
+    const std::filesystem::path& working_directory);
+void remember_dependency_scan(
+    const std::vector<std::string>& command,
+    const std::filesystem::path& working_directory,
+    const std::vector<std::filesystem::path>& dependencies);
+
 [[nodiscard]] std::optional<std::vector<std::filesystem::path>>
 parse_msvc_source_dependencies(const std::string_view contents);
 

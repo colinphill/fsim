@@ -383,6 +383,11 @@ namespace {
         const auto dependency_file = scratch / "translation-unit.d";
         auto argv = common_compile_argv(
             HostToolchain::gcc_like, compiler, resolved, includes, settings);
+        auto scan_command = argv;
+        scan_command.push_back(path_argument(source));
+        if (auto remembered = remembered_dependency_scan(scan_command, base)) {
+            return remembered;
+        }
         argv.emplace_back("-M");
         argv.emplace_back("-MF");
         argv.push_back(path_argument(dependency_file));
@@ -421,6 +426,7 @@ namespace {
             }
             dependencies.push_back(std::move(path));
         }
+        remember_dependency_scan(scan_command, base, dependencies);
         return dependencies;
     }
 

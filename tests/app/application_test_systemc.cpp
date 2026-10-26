@@ -1137,8 +1137,6 @@ multiple_systemc_config.project.top.clear();
 multiple_systemc_config.project.tops = {
     {"lifecycle_module", "native_left"},
     {"lifecycle_module", "native_right"}};
-multiple_systemc_config.build.cache_path =
-    directory / "multiple-systemc-root-cache";
 fsim::diagnostic::Engine multiple_systemc_diagnostics;
 auto multiple_systemc_project = fsim::app::build_project(
     multiple_systemc_config, multiple_systemc_diagnostics);
@@ -1177,8 +1175,6 @@ mixed_root_config.project.top.clear();
 mixed_root_config.project.tops = {
     {"sv:work.systemc_independent_root", "hdl_root"},
     {"lifecycle_module", "native_root"}};
-mixed_root_config.build.cache_path =
-    directory / "mixed-hdl-systemc-root-cache";
 fsim::diagnostic::Engine mixed_root_diagnostics;
 auto mixed_root_project = fsim::app::build_project(
     mixed_root_config, mixed_root_diagnostics);
@@ -1420,6 +1416,8 @@ assert(
 assert(std::get<0>(matrix_reference_capture).time == 2);
 assert(std::get<1>(matrix_reference_capture) == "0");
 
+// The compiled pairs and the debug run share one cache, so the SystemC
+// plug-in compiles once; the reference keeps its own so the cold builds miss.
 const auto run_named_matrix_compiled_pair =
     [&](const fsim::project::Optimization optimization,
         const std::string_view cache_name) {
@@ -1453,15 +1451,15 @@ const auto run_named_matrix_compiled_pair =
       return cold_capture;
     };
 (void)run_named_matrix_compiled_pair(
-    fsim::project::Optimization::o0, "named-matrix-o0");
+    fsim::project::Optimization::o0, "named-matrix-compiled");
 (void)run_named_matrix_compiled_pair(
-    fsim::project::Optimization::o2, "named-matrix-o2-compiled");
+    fsim::project::Optimization::o2, "named-matrix-compiled");
 
 const auto matrix_trace = directory / "named-matrix.vcd";
 auto matrix_debug_config = named_matrix_config;
 matrix_debug_config.build.optimization =
     fsim::project::Optimization::o0;
-matrix_debug_config.build.cache_path = directory / "named-matrix-debug";
+matrix_debug_config.build.cache_path = directory / "named-matrix-compiled";
 matrix_debug_config.run.trace_file = matrix_trace;
 fsim::diagnostic::Engine matrix_debug_diagnostics;
 auto matrix_debug_project = fsim::app::build_project(
@@ -1506,9 +1504,13 @@ assert(matrix_trace_text.find(" value_endpoint $end")
   std::ofstream edited_source(systemc_source, std::ios::app);
   edited_source << "\n// named-object matrix cache edit\n";
 }
+// Build the edit in the shared cache: the cases below bind the edited
+// models too, so they reuse its plug-in.
+auto matrix_edited_config = named_matrix_config;
+matrix_edited_config.build.cache_path = hdl_systemc_config.build.cache_path;
 fsim::diagnostic::Engine matrix_edit_diagnostics;
 auto matrix_edited_project = fsim::app::build_project(
-    named_matrix_config, matrix_edit_diagnostics);
+    matrix_edited_config, matrix_edit_diagnostics);
 assert(matrix_edited_project && !matrix_edited_project->cache_hit);
 const auto matrix_edited_capture = run_named_matrix(
     std::move(*matrix_edited_project),
@@ -1807,13 +1809,9 @@ auto systemc_method_config = systemc_method_host_config();
 auto systemc_method_o0_config = systemc_method_config;
 systemc_method_o0_config.build.optimization =
     fsim::project::Optimization::o0;
-systemc_method_o0_config.build.cache_path =
-    directory / "systemc-method-o0-cache";
 auto systemc_method_o2_config = systemc_method_config;
 systemc_method_o2_config.build.optimization =
     fsim::project::Optimization::o2;
-systemc_method_o2_config.build.cache_path =
-    directory / "systemc-method-o2-cache";
 fsim::diagnostic::Engine systemc_method_diagnostics;
 auto systemc_method_reference = fsim::app::build_project(
     systemc_method_o0_config, systemc_method_diagnostics);
