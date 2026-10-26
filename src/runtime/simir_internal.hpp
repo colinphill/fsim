@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bitset>
 #include <cstddef>
 #include <cctype>
 #include <exception>
@@ -1477,6 +1478,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::unordered_map<const void*,
         std::shared_ptr<ProcessStartupWriteBodyCache>>
         startup_write_body_caches;
+    // Operation kinds present in each shared body, so registration scans a
+    // body once rather than once per instance. The copied list pins the body
+    // until start; instances with operation overrides scan themselves.
+    struct OperationBodyKinds {
+        OperationList body;
+        std::bitset<static_kernel_detail::operation_kind_count> kinds;
+        bool sampled_read { };
+        bool transaction_wait { };
+    };
+    std::unordered_map<const void*, OperationBodyKinds> operation_body_kinds;
+    [[nodiscard]] const OperationBodyKinds* body_kinds(
+        const OperationList& operations);
     // Index by the original ProcessId. Eligible constant continuous
     // assignments keep their process identity and startup literal, while
     // startup execution stages the write without materializing a register

@@ -154,7 +154,7 @@ type information.
 | Workspace library catalog | SQLite schema 2 | artifact and dependency indexes with VHDL identifier-form columns |
 | `.fsimscobj` | `FSIMSCO\0`, format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
-| Object cache envelope | `FSIM-OBJECT-CACHE-V1`; LLVM key schema `fsim-llvm-native-object-v169`; ordinary payload compiled-HIR bundle 3 | checksum-framed payload used by native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB read/write ceiling |
+| Object cache envelope | `FSIM-OBJECT-CACHE-V2` (`xxh64:<16 hex>` payload checksum; older envelopes miss and are rebuilt); LLVM key schema `fsim-llvm-native-object-v169`; ordinary payload compiled-HIR bundle 3 | checksum-framed payload used by native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB read/write ceiling |
 
 `UnitIndexEntry` is a public C++ metadata record. Appending the two
 `VhdlIdentifierForm` members changes its object layout. The public C++

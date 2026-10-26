@@ -2,6 +2,7 @@
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/cache_support.hpp"
 #include "fsim/support/native_filesystem.hpp"
+#include "fsim/support/payload_checksum.hpp"
 
 #include <algorithm>
 #include <array>
@@ -33,11 +34,18 @@
 namespace fsim::compiler {
 namespace {
 
-constexpr std::string_view kMagic = "FSIM-OBJECT-CACHE-V1\n";
+// V2 frames the payload with its integrity checksum, "xxh64:" and sixteen
+// hex digits. Older envelopes do not load; they miss and are rebuilt.
+constexpr std::string_view kMagic = "FSIM-OBJECT-CACHE-V2\n";
+constexpr std::size_t kChecksumBytes = 22U;
 constexpr std::uintmax_t kMaximumCacheEntryBytes =
     256U * 1024U * 1024U;
 constexpr std::uintmax_t kCacheEnvelopeBytes
-    = kMagic.size() + 64U + 1U;
+    = kMagic.size() + kChecksumBytes + 1U;
+
+std::string_view payload_text(const std::span<const std::byte> payload) noexcept {
+    return {reinterpret_cast<const char*>(payload.data()), payload.size()};
+}
 std::atomic_uint64_t temp_counter{};
 std::atomic_uint64_t lock_counter{};
 
@@ -527,23 +535,18 @@ std::optional<std::vector<std::byte>> ObjectCache::load(
         return std::nullopt;
     }
 
+    const std::string_view raw{
+        reinterpret_cast<const char*>(encoded->data()), encoded->size()};
     const auto header_size = static_cast<std::size_t>(kCacheEnvelopeBytes);
-    if (encoded->size() < header_size) {
-        error = std::make_error_code(std::errc::illegal_byte_sequence);
-        return std::nullopt;
-    }
-    const auto* raw = reinterpret_cast<const char*>(encoded->data());
-    if (std::string_view{raw, kMagic.size()} != kMagic
-        || raw[kMagic.size() + 64U] != '\n') {
+    if (raw.size() < header_size || !raw.starts_with(kMagic)
+        || raw[header_size - 1U] != '\n') {
         error = std::make_error_code(std::errc::illegal_byte_sequence);
         return std::nullopt;
     }
 
-    const std::string_view expected { raw + kMagic.size(), 64U };
-    const std::span<const std::byte> payload{
-        encoded->data() + static_cast<std::ptrdiff_t>(header_size),
-        encoded->size() - header_size};
-    if (support::Sha256::hex(support::Sha256::digest(payload)) != expected) {
+    const auto expected = raw.substr(kMagic.size(), kChecksumBytes);
+    if (!support::payload_checksum_spelling(expected)
+        || !support::payload_checksum_matches(raw.substr(header_size), expected)) {
         error = std::make_error_code(std::errc::illegal_byte_sequence);
         return std::nullopt;
     }
@@ -552,7 +555,9 @@ std::optional<std::vector<std::byte>> ObjectCache::load(
     std::error_code ignored;
     support::native_fs::last_write_time(
         path, std::filesystem::file_time_type::clock::now(), ignored);
-    return std::vector<std::byte>{payload.begin(), payload.end()};
+    encoded->erase(encoded->begin(),
+        encoded->begin() + static_cast<std::ptrdiff_t>(header_size));
+    return encoded;
 }
 
 bool ObjectCache::store(
@@ -596,7 +601,7 @@ bool ObjectCache::store(
             error = std::make_error_code(std::errc::io_error);
             return false;
         }
-        const auto checksum = support::Sha256::hex(support::Sha256::digest(payload));
+        const auto checksum = support::payload_checksum(payload_text(payload));
         stream.write(kMagic.data(), static_cast<std::streamsize>(kMagic.size()));
         stream.write(checksum.data(), static_cast<std::streamsize>(checksum.size()));
         stream.put('\n');

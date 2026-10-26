@@ -51,11 +51,11 @@ int main()
     std::error_code error;
     assert(cache.store(key, payload, error) && !error);
 
-    // Freeze the complete V1 envelope, including byte order, checksum text,
+    // Freeze the complete V2 envelope, including byte order, checksum text,
     // delimiter, and payload, before migrating persistence primitives.
     constexpr std::string_view expected =
-        "FSIM-OBJECT-CACHE-V1\n"
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"
+        "FSIM-OBJECT-CACHE-V2\n"
+        "xxh64:44bc2cf5ad770999\n"
         "abc";
     const auto path = cache.path_for(key);
     assert(read_bytes(path) == expected);
@@ -74,6 +74,13 @@ int main()
     corrupt[21U] = '0';
     reject(corrupt);
     reject(std::string { expected } + "x");
+
+    // V1 entries, framed with SHA-256 hex, miss.
+    reject(
+        "FSIM-OBJECT-CACHE-V1\n"
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"
+        "abc");
+    reject("FSIM-OBJECT-CACHE-V1\nxxh64:44bc2cf5ad770999\nabc");
 
     write_bytes(path, expected);
     assert(cache.load(key, error) && !error);

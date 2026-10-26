@@ -1102,8 +1102,10 @@ void ElaboratedDesign::populate_interpreter(
         }
     } else if (consumed_processes != nullptr) {
         for (auto& process : *consumed_processes) {
+            // The consumed process is discarded after substitution, so a
+            // dormant member or fused sink takes it without a copy.
             if (auto replacement = substitute(process.id,
-                    [&] { return process; })) {
+                    [&] { return std::move(process); })) {
                 (void)interpreter->add_process(std::move(*replacement));
                 continue;
             }

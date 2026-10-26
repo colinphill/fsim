@@ -30,7 +30,7 @@ line accounting as LF while physical byte offsets remain source-accurate.
 
 The severity column is the severity assigned by the current emitter. All
 entries are errors unless explicitly marked as warnings. The four strings
-`FSIM-OBJECT-CACHE-V1`, `FSIM-CACHE-LOCK-V1`, `FSIM-DESIGN-CACHE-V1`, and
+`FSIM-OBJECT-CACHE-V2`, `FSIM-CACHE-LOCK-V1`, `FSIM-DESIGN-CACHE-V1`, and
 `FSIM-DESIGN-CACHE-V3` are persistent-format markers, not diagnostics, and
 are therefore excluded.
 

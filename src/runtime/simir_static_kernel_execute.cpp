@@ -539,26 +539,32 @@ void Interpreter::Impl::StaticKernel::handle_deopt(const std::uint32_t member_in
 
 bool Interpreter::Impl::StaticKernel::wide_part_insert(CompiledBody& body,
     const Word* registers, const DynamicPartInsert& insert,
-    const std::uint32_t base)
+    const std::uint32_t base, const bool logic9_source)
 {
-    // A narrow, known field written into a wide Logic4 register in place
-    // (the reference path copies the whole value twice). Anything else -
-    // 'U' tracking, Logic9, a write outside the target - takes that path.
+    // A narrow, known field written into a wide register in place (the
+    // reference path copies the whole value twice). A field without
+    // unknown ('U'-tracked) bits holds its Logic4 value, which insert_word
+    // promotes into a Logic9 target as the reference operand would be.
+    // Anything else - unknown bits, mixed kinds, a write outside the
+    // target - takes that path.
     const auto destination = base + insert.destination;
     const auto target = base + insert.target;
     const auto source = base + insert.source;
     const auto index = base + insert.selection.base;
     const auto& widths = body.register_widths;
-    const auto tracked = [&](const std::uint32_t reg) {
+    const auto unknown = [&](const std::uint32_t reg) -> std::uint64_t {
         return body.shadow_base != 0U && reg < body.tracked.size()
-            && body.tracked[reg] != 0U;
+                && body.tracked[reg] != 0U
+            ? registers[body.shadow_base + reg].a
+            : 0U;
     };
     if (destination >= widths.size() || target >= widths.size()
         || source >= widths.size() || index >= widths.size()
         || widths[destination] <= 64U || widths[target] != widths[destination]
         || widths[source] > 64U || widths[source] != insert.selection.width
-        || widths[index] != 32U || tracked(source) || tracked(index)
-        || body.wide_registers[target].is_logic9()) {
+        || widths[index] != 32U || unknown(source) != 0U
+        || unknown(index) != 0U
+        || body.wide_registers[target].is_logic9() != logic9_source) {
         return false;
     }
     const auto write = kw::dynamic_part_write(registers[source],
@@ -682,9 +688,9 @@ bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
     }
     if (const auto* insert = operation_get_if<DynamicPartInsert>(&operation);
         insert != nullptr
-        && (insert->source >= member.register_kinds.size()
-            || member.register_kinds[insert->source] == ValueKind::logic4)
-        && wide_part_insert(body, registers, *insert, inst.y)) {
+        && wide_part_insert(body, registers, *insert, inst.y,
+            insert->source < member.register_kinds.size()
+                && member.register_kinds[insert->source] == ValueKind::logic9)) {
         return false;
     }
     generic_load_operands(body, registers, inst, member_index, reads);
@@ -714,9 +720,9 @@ bool Interpreter::Impl::StaticKernel::execute_generic_kind(CompiledBody& body,
             write);
     }
     if constexpr (std::is_same_v<T, DynamicPartInsert>) {
-        if ((op.source >= member.register_kinds.size()
-                || member.register_kinds[op.source] == ValueKind::logic4)
-            && wide_part_insert(body, registers, op, inst.y)) {
+        if (wide_part_insert(body, registers, op, inst.y,
+                op.source < member.register_kinds.size()
+                    && member.register_kinds[op.source] == ValueKind::logic9)) {
             return false;
         }
     }

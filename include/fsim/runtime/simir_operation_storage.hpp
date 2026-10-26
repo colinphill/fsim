@@ -603,6 +603,9 @@ public:
 
     [[nodiscard]] bool shares_body_with(
         const OperationList& other) const noexcept;
+    /// True when some instruction of this instance replaces its shared-body
+    /// operation, so the body alone does not determine operation kinds.
+    [[nodiscard]] bool has_operation_overrides() const noexcept;
     [[nodiscard]] const std::vector<std::pair<SignalId, SignalId>>&
     signal_remap() const noexcept;
 

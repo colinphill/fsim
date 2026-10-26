@@ -638,6 +638,11 @@ bool OperationList::shares_body_with(const OperationList& other) const noexcept
     return storage_ == other.storage_;
 }
 
+bool OperationList::has_operation_overrides() const noexcept
+{
+    return !operation_overrides().empty();
+}
+
 const std::vector<std::pair<SignalId, SignalId>>&
 OperationList::signal_remap() const noexcept
 {

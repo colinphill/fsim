@@ -162,12 +162,16 @@ copy_package_static_class_startup_initializers(const BuiltProject& built)
 collect_package_static_startup_signal_ids(const BuiltProject& built)
 {
     std::vector<runtime::simir::SignalId> result;
-    for (const auto& process : built.design.processes()) {
-        if (process.startup_phase
+    // Process views keep artifact-backed rows unmaterialized for the
+    // interpreter, which registers them from their shared templates.
+    using Access = elaboration::detail::ElaboratedDesignProcessAccess;
+    for (std::size_t index = 0U; index < built.design.process_count(); ++index) {
+        const auto process = Access::process_view(built.design, index);
+        if (process.startup_phase()
             != runtime::simir::ProcessStartupPhase::package_static_initializer) {
             continue;
         }
-        for (const auto& region : process.driver_regions) {
+        for (const auto& region : process.driver_regions()) {
             result.push_back(region.signal);
         }
     }

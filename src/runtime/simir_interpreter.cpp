@@ -1359,6 +1359,36 @@ ProcessId Interpreter::add_process_impl(
         owned_process != nullptr);
 }
 
+const Interpreter::Impl::OperationBodyKinds* Interpreter::Impl::body_kinds(
+    const OperationList& operations)
+{
+    if (operations.empty() || operations.has_operation_overrides()) {
+        return nullptr;
+    }
+    const auto [entry, inserted]
+        = operation_body_kinds.try_emplace(operations.body_identity());
+    auto& summary = entry->second;
+    if (inserted) {
+        summary.body = operations;
+        const auto* const body = operations.data();
+        for (std::size_t index = 0U; index < operations.size(); ++index) {
+            const auto& operation = body[index];
+            summary.kinds.set(
+                static_kernel_detail::operation_kind_ordinal(operation));
+            if (const auto* read = operation_get_if<ReadSignal>(&operation)) {
+                summary.sampled_read = summary.sampled_read
+                    || read->kind != SignalReadKind::current;
+            } else if (const auto* wait
+                       = operation_get_if<WaitOn>(&operation)) {
+                summary.transaction_wait = summary.transaction_wait
+                    || std::ranges::find(wait->edges, EdgeKind::transaction)
+                        != wait->edges.end();
+            }
+        }
+    }
+    return &summary;
+}
+
 ProcessId Interpreter::Impl::add_process_program_impl(
     ProcessProgramView process,
     std::shared_ptr<const ProcessProgramTemplate> common_program,
@@ -1664,11 +1694,25 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             observe_signal_transaction(signal.signal);
         }
     }
+    // Instances of one body share a kinds summary; a body without the
+    // operations below skips each per-instruction scan.
+    const auto* const kinds = body_kinds(process.operations());
+    const auto has_kind = [&]<typename... Kinds>() {
+        return kinds == nullptr
+            || (kinds->kinds.test(static_kernel_detail::operation_kind_of<Kinds>)
+                || ...);
+    };
+    const bool scan_registration = kinds == nullptr
+        || kinds->transaction_wait
+        || has_kind.template operator()<MailboxCreate, MailboxPut, MailboxGet,
+            MailboxNum, DynamicEvent, SignalActive, SignalLastActive,
+            SignalEvent, SignalLastValue, SignalLastEvent, SignalDriving,
+            SignalDrivingValue>();
     // Resolve only the signal operands here. Expanding a WaitOn copies its
     // edge vectors during registration, while OperationList::signal is
     // allocation-free and preserves per-instance signal identities.
     for (std::size_t instruction = 0U;
-         instruction < process.operations().size();
+         scan_registration && instruction < process.operations().size();
          ++instruction) {
         const auto& operation = process.operations()[instruction];
         const auto valid_mailbox_kind = [](const MailboxElementKind kind) {
@@ -1853,12 +1897,17 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     // A delayed continuous assignment or gate drives X until its first
     // delayed value matures (see register_driver).
     bool delayed_writer = false;
-    for (std::size_t instruction = 0;
-         instruction < process.operations().size() && !delayed_writer;
-         ++instruction) {
-        const auto& operation = process.operations()[instruction];
-        delayed_writer = operation_holds<WriteInertial>(operation)
-            || operation_holds<WriteInertialSlice>(operation);
+    if (kinds != nullptr) {
+        delayed_writer
+            = has_kind.template operator()<WriteInertial, WriteInertialSlice>();
+    } else {
+        for (std::size_t instruction = 0;
+             instruction < process.operations().size() && !delayed_writer;
+             ++instruction) {
+            const auto& operation = process.operations()[instruction];
+            delayed_writer = operation_holds<WriteInertial>(operation)
+                || operation_holds<WriteInertialSlice>(operation);
+        }
     }
     for (const auto& [signal, regions] : outputs) {
         if (!switch_connection && !package_static_initializer) {
@@ -1904,7 +1953,8 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     // Like transaction observation above, map just the IDs that contribute
     // to the sampled-value mask without copying expanded operation payloads.
     for (std::size_t instruction = 0U;
-         instruction < process.operations().size();
+         (kinds == nullptr || kinds->sampled_read)
+         && instruction < process.operations().size();
          ++instruction) {
         const auto& operation = process.operations()[instruction];
         const auto* read = operation_get_if<ReadSignal>(&operation);
@@ -2070,10 +2120,12 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         Impl::ProcessState state;
         state.generation = process_generation;
         state.id = id;
-        state.has_callable_frame_push = std::ranges::any_of(
-            std::as_const(program.operations()), [](const Operation& operation) {
-                return operation_holds<CallableFramePush>(operation);
-            });
+        state.has_callable_frame_push = kinds != nullptr
+            ? has_kind.template operator()<CallableFramePush>()
+            : std::ranges::any_of(std::as_const(program.operations()),
+                  [](const Operation& operation) {
+                      return operation_holds<CallableFramePush>(operation);
+                  });
         state.cold().random_state = Impl::initial_random_state(
             root_seed, id);
         state.cold().design_process = id;
@@ -3165,6 +3217,7 @@ void Interpreter::start()
         entry.second->release_registration_identity();
     }
     impl_->startup_write_body_caches.clear();
+    impl_->operation_body_kinds.clear();
     if (impl_->native_process_count_profile_enabled) {
         impl_->native_process_resume_counts.assign(
             impl_->processes.size(), std::uint64_t { });

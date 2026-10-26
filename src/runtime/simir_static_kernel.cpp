@@ -267,8 +267,9 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         const auto& operations = program.operations();
         std::vector<std::uint8_t> bound(program.container_register_count(), 0U);
         std::vector<std::uint8_t> used(program.container_register_count(), 0U);
+        // Register operands are body fields: no instance expansion needed.
         for (std::size_t op = 0U; op < operations.size(); ++op) {
-            const auto operation = operations.expanded(op);
+            const auto& operation = operations[op];
             if (const auto* read = operation_get_if<ReadContainerObject>(&operation)) {
                 if (read->destination < bound.size()) {
                     bound[read->destination] = 1U;
