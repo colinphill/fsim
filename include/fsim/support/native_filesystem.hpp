@@ -3,12 +3,14 @@
 
 #include "fsim/support/path.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <ios>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 /// Filesystem operations that accept paths longer than Windows' MAX_PATH.
@@ -122,6 +124,31 @@ inline void rename(
     std::error_code& error) {
   std::filesystem::rename(
       path_for_native_io(from), path_for_native_io(to), error);
+}
+
+/// Renames a staging directory this process just wrote onto its final path.
+/// On Windows, endpoint scanners briefly hold newly written files, which
+/// denies the rename; as the object cache does for its files, the rename is
+/// retried for up to five seconds while such a lock clears.
+inline void install_staged_directory(
+    const std::filesystem::path& staging,
+    const std::filesystem::path& destination, std::error_code& error) {
+  native_fs::rename(staging, destination, error);
+#if defined(_WIN32)
+  const auto transient = [&] {
+    // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION.
+    return (error.category() == std::system_category()
+               && (error.value() == 5 || error.value() == 32
+                   || error.value() == 33))
+        || error == std::errc::permission_denied
+        || error == std::errc::device_or_resource_busy;
+  };
+  for (int attempt = 0; attempt < 1000 && error && transient(); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    error.clear();
+    native_fs::rename(staging, destination, error);
+  }
+#endif
 }
 
 [[nodiscard]] inline bool equivalent(

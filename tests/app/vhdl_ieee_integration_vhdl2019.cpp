@@ -1040,6 +1040,9 @@ end architecture;
     run(fsim::app::SimulationEngine::compiled,
         fsim::project::Optimization::o2);
 
+#if !defined(_WIN32)
+    // A Windows environment variable holds at most 32767 characters, far
+    // below the bounded string limit, so only other hosts can exceed it.
     const ScopedEnvironment oversized_environment {
         std::string { oversized_name },
         std::string(fsim::runtime::simir::maximum_string_bytes + 1U, 'x') };
@@ -1094,6 +1097,9 @@ end architecture;
             }
         }
     }
+#else
+    (void)oversized_name;
+#endif
 }
 
 struct AssertApiCapture {

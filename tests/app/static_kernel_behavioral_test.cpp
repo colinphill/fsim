@@ -22,6 +22,16 @@
 
 namespace {
 
+// Sets, or with a null value unsets, a variable of this process.
+void set_environment(const char* const name, const char* const value)
+{
+#if defined(_WIN32)
+    (void)::_putenv_s(name, value == nullptr ? "" : value);
+#else
+    (void)(value == nullptr ? ::unsetenv(name) : ::setenv(name, value, 1));
+#endif
+}
+
 using fsim::app::BuiltProject;
 using fsim::app::Simulation;
 using fsim::app::SimulationEngine;
@@ -173,7 +183,7 @@ endmodule
 {
     auto project = build(root);
     if (kernel) {
-        ::setenv("FSIM_STATIC_KERNEL_BEHAVIORAL", "1", 1);
+        set_environment("FSIM_STATIC_KERNEL_BEHAVIORAL", "1");
         const auto plan = project.design.plan_static_kernel();
         if (plan.disabled) {
             std::cerr << "kernel disabled: " << plan.disabled_reason << '\n';
@@ -189,7 +199,7 @@ endmodule
             "the testbench processes must be behavioral kernel members");
     }
     project.cone_fusion = kernel;
-    ::setenv("FSIM_STATIC_KERNEL", kernel ? "1" : "0", 1);
+    set_environment("FSIM_STATIC_KERNEL", kernel ? "1" : "0");
     Simulation simulation(std::move(project), 100'000U, engine,
         SystemVerilogVpiRuntimeUpdates::omitted);
     std::vector<std::string> lines;
@@ -206,7 +216,7 @@ endmodule
         });
     (void)simulation.run();
     require(simulation.finished(), "the testbench must reach $finish");
-    ::unsetenv("FSIM_STATIC_KERNEL_BEHAVIORAL");
+    set_environment("FSIM_STATIC_KERNEL_BEHAVIORAL", nullptr);
     return lines;
 }
 

@@ -76,7 +76,11 @@ extern "C" {
 /* Use to export a symbol */
 #if defined (_MSC_VER) || defined (__MINGW32__) || defined (__CYGWIN__)
 #ifndef PLI_DLLISPEC
+#if defined(FSIM_VHPI_LINK_SURFACE_BUILD)
+#define PLI_DLLISPEC __declspec(dllexport)
+#else
 #define PLI_DLLISPEC __declspec(dllimport)
+#endif
 #define VHPI_USER_DEFINED_DLLISPEC 1
 #endif
 #else

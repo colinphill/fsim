@@ -40,6 +40,7 @@ include(cmake/FsimUvmSources.cmake)
 include(cmake/FsimSystemCAccellera.cmake)
 include(cmake/FsimScv.cmake)
 include(cmake/FsimSqlite.cmake)
+include(cmake/FsimLibffi.cmake)
 include(cmake/FsimMimalloc.cmake)
 include(cmake/FsimWindowsRuntime.cmake)
 fsim_configure_windows_toolchain()
@@ -459,6 +460,15 @@ function(fsim_configure_command_entrypoint target)
     # links embed the long-path manifest as a resource.
     target_sources(${target} PRIVATE
       "${PROJECT_SOURCE_DIR}/src/platform/windows_long_paths.rc")
+  endif()
+  # Elaboration recurses on the main thread. Reserve the 8 MiB stack Linux
+  # gives it instead of Windows' 1 MiB default.
+  if(WIN32)
+    if(MSVC OR CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+      target_link_options(${target} PRIVATE /STACK:8388608)
+    else()
+      target_link_options(${target} PRIVATE "LINKER:--stack,8388608")
+    endif()
   endif()
 endfunction()
 
@@ -1443,11 +1453,8 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
     PRIVATE fsim_boost_pfr_headers
   )
   # DPI-C imports call foreign functions through libffi.
-  find_path(FSIM_FFI_INCLUDE_DIR ffi.h PATH_SUFFIXES ffi)
-  find_library(FSIM_FFI_LIBRARY NAMES ffi_pic ffi)
-  if(FSIM_FFI_INCLUDE_DIR AND FSIM_FFI_LIBRARY)
-    target_include_directories(fsim_simulation PRIVATE "${FSIM_FFI_INCLUDE_DIR}")
-    target_link_libraries(fsim_simulation PRIVATE "${FSIM_FFI_LIBRARY}")
+  if(TARGET libffi)
+    target_link_libraries(fsim_simulation PRIVATE libffi)
     set_source_files_properties(
       src/app/application_dpi_foreign.cpp
       PROPERTIES COMPILE_DEFINITIONS FSIM_HAS_LIBFFI=1)
@@ -1595,6 +1602,13 @@ if(FSIM_WITH_BUNDLED_TCL)
     FILES "${FSIM_FETCHED_TCL_LICENSE_FILE}"
     DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party"
     RENAME "tcl-license.terms"
+  )
+endif()
+if(FSIM_WITH_BUNDLED_LIBFFI)
+  install(
+    FILES "${FSIM_BUNDLED_LIBFFI_LICENSE_FILE}"
+    DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party"
+    RENAME "libffi-license.txt"
   )
 endif()
 if(FSIM_WITH_TCL)

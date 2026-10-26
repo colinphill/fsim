@@ -100,14 +100,36 @@ function(fsim_use_mimalloc executable)
     if(WIN32)
       # Windows overrides through a DLL loaded before the C runtime's heap is
       # used, with the upstream redirection module; MSVC builds it as C++.
+      # The redirection module finds its target only by the upstream DLL
+      # names, so the DLL must be called mimalloc.dll.
       add_library(fsim_mimalloc SHARED "${source}")
+      # Drop the directory's default SystemC runtime link: the C++ runtime it
+      # imports would then load before, and unload after, the allocator.
+      set_property(TARGET fsim_mimalloc PROPERTY LINK_LIBRARIES "")
       set_target_properties(fsim_mimalloc PROPERTIES
-        OUTPUT_NAME "fsim-mimalloc"
+        OUTPUT_NAME "mimalloc"
+        PREFIX ""
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
       target_compile_definitions(fsim_mimalloc PRIVATE
         MI_SHARED_LIB MI_SHARED_LIB_EXPORT MI_MALLOC_OVERRIDE)
       if(MSVC OR CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
         set_source_files_properties("${source}" PROPERTIES LANGUAGE CXX)
+      endif()
+      # Upstream defines MI_MINGW_UCRT64 only under an MSYS2 UCRT64 shell.
+      # Without it a UCRT MinGW build initializes the process from both its
+      # TLS callback and a constructor, and debug builds stop on the second.
+      if(MINGW)
+        include(CheckCSourceCompiles)
+        check_c_source_compiles([[
+#include <stdio.h>
+#if !defined(_UCRT)
+#error not UCRT
+#endif
+int main(void) { return 0; }
+]] FSIM_MINGW_UCRT)
+        if(FSIM_MINGW_UCRT)
+          target_compile_definitions(fsim_mimalloc PRIVATE MI_MINGW_UCRT64=1)
+        endif()
       endif()
       target_link_libraries(fsim_mimalloc PRIVATE
         "${source_root}/bin/mimalloc-redirect.lib")

@@ -135,13 +135,21 @@ def main():
     if os.environ.get("KEEP_WORKSPACE") == "1":
         print(f"Sensitivity witness workspace: {workspace}")
     else:
-        # Compiled library snapshots contain read-only directories. Restore
-        # write access only inside this runner's temporary workspace so their
-        # entries can be removed without modifying the packaged source cache.
-        for directory, _, _ in os.walk(workspace):
+        # Compiled library snapshots contain read-only directories and files
+        # (Windows refuses to delete a read-only file). Restore write access
+        # only inside this runner's temporary workspace so their entries can
+        # be removed without modifying the packaged source cache. Artifact
+        # paths can exceed Windows' MAX_PATH, so use the extended-length form.
+        root = workspace.resolve()
+        if os.name == "nt":
+            root = Path("\\\\?\\" + str(root))
+        for directory, _, files in os.walk(root):
             path = Path(directory)
             path.chmod(path.stat().st_mode | stat.S_IWUSR | stat.S_IXUSR)
-        shutil.rmtree(workspace)
+            for name in files:
+                file = path / name
+                file.chmod(file.stat().st_mode | stat.S_IWUSR)
+        shutil.rmtree(root)
 
 
 if __name__ == "__main__":

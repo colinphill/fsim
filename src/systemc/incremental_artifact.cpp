@@ -631,7 +631,7 @@ bool publish(
       || !make_read_only(staging, diagnostics)) {
     return false;
   }
-  support::native_fs::rename(staging, destination, error);
+  support::native_fs::install_staged_directory(staging, destination, error);
   if (error) {
     report(
         diagnostics, kIoCode,

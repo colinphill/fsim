@@ -26,10 +26,14 @@ elaboration and simulation.
   the executable with `MI_MALLOC_OVERRIDE`, so `malloc`, `free` and the C++
   allocation operators of the executable and its shared libraries resolve to
   mimalloc.
-- On Windows, the same file is built as `fsim-mimalloc.dll` with the upstream
+- On Windows, the same file is built as `mimalloc.dll` with the upstream
   prebuilt redirection module (`bin/mimalloc-redirect.dll` and its import
   library), installed next to `fsim.exe`, as described in the upstream
-  `bin/readme.md`. This path is not yet qualified on a Windows host.
+  `bin/readme.md`. The redirection module finds the DLL only by its upstream
+  name. `fsim.exe` calls `mi_version` so that `mimalloc.dll` is its first
+  import, and the DLL imports nothing but the C runtime, so it loads before
+  and unloads after every other DLL. UCRT MinGW builds define
+  `MI_MINGW_UCRT64`, as upstream does in an MSYS2 UCRT64 shell.
 
 `FSIM_MIMALLOC=OFF` keeps the platform allocator. It is off automatically for
 sanitizer builds and for builds with `FSIM_ENABLE_ALLOCATION_PROFILING`, which

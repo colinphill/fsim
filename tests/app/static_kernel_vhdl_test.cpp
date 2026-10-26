@@ -27,6 +27,16 @@
 
 namespace {
 
+// Sets, or with a null value unsets, a variable of this process.
+void set_environment(const char* const name, const char* const value)
+{
+#if defined(_WIN32)
+    (void)::_putenv_s(name, value == nullptr ? "" : value);
+#else
+    (void)(value == nullptr ? ::unsetenv(name) : ::setenv(name, value, 1));
+#endif
+}
+
 using fsim::app::BuiltProject;
 using fsim::app::Simulation;
 using fsim::app::SimulationEngine;
@@ -415,7 +425,7 @@ const std::vector<std::string> internal_paths {
             "the kernel must own the VHDL design");
     }
     project.cone_fusion = kernel;
-    ::setenv("FSIM_STATIC_KERNEL", kernel ? "1" : "0", 1);
+    set_environment("FSIM_STATIC_KERNEL", kernel ? "1" : "0");
     std::optional<fsim::compiler::StaticKernelAheadOfTimeScope> aot;
     if (ahead_of_time) {
         aot.emplace();

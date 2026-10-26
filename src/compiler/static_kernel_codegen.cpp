@@ -55,6 +55,12 @@
 #include <utility>
 #include <vector>
 
+#if defined(__MINGW32__)
+// LLVM emits GNU Windows stack probes for large JIT frames. Referencing the
+// compiler-rt implementation keeps it in the host for the absolute binding.
+extern "C" void ___chkstk_ms();
+#endif
+
 namespace fsim::compiler {
 
 namespace {
@@ -3291,6 +3297,9 @@ private:
         add("fsim_sk_binary", helpers.binary);
         add("fsim_sk_notify_field", helpers.notify_field);
         add("fsim_sk_fail", helpers.fail);
+#if defined(__MINGW32__)
+        add("___chkstk_ms", &___chkstk_ms);
+#endif
         for (std::size_t kind = 0U; kind < helpers.generic_ops.size(); ++kind) {
             if (helpers.generic_ops[kind] != nullptr) {
                 add(("fsim_sk_generic_" + std::to_string(kind)).c_str(),

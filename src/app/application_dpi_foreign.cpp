@@ -32,6 +32,8 @@ namespace fsim::app::application_detail {
 
 namespace {
 
+#if defined(FSIM_HAS_LIBFFI)
+
 using runtime::Logic4;
 using runtime::PackedLogic4;
 
@@ -249,8 +251,6 @@ struct LogicWord {
     std::uint32_t aval { };
     std::uint32_t bval { };
 };
-
-#if defined(FSIM_HAS_LIBFFI)
 
 [[nodiscard]] ffi_type* scalar_type(const char code)
 {

@@ -746,6 +746,11 @@ function(fsim_systemc_write_runtime_target_manifest output_path)
     if(target STREQUAL "fsim_tf")
       continue()
     endif()
+    # The Windows allocator DLL must depend on nothing but the C runtime, so
+    # that it loads first and unloads last.
+    if(target STREQUAL "fsim_mimalloc")
+      continue()
+    endif()
     get_target_property(imported "${target}" IMPORTED)
     if(imported)
       continue()

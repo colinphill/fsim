@@ -888,7 +888,8 @@ bool publish_object(
     return false;
   }
   std::error_code install_error;
-  support::native_fs::rename(staging, destination, install_error);
+  support::native_fs::install_staged_directory(
+      staging, destination, install_error);
   if (install_error) {
     error(
         diagnostics, kIoCode,

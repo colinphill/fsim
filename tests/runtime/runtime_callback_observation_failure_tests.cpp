@@ -145,6 +145,16 @@ void test_callback_preparation_failure_does_not_enter_user_hook()
             reached_user_hook = true;
         }
     }
+#if defined(_WIN32)
+    // libc++ instantiates std::string inside its DLL, which allocates with
+    // its own operator new that this test cannot replace. When callback
+    // preparation allocates only there, no failure can be injected into it.
+    if (reached_user_hook && !saw_preparation_failure) {
+        std::cerr << "callback preparation allocates only inside the C++ "
+                     "runtime DLL; its failure injection is not checked\n";
+        return;
+    }
+#endif
     if (!saw_preparation_failure || !reached_user_hook) {
         throw std::runtime_error {
             "the checked fallback sweep reached callback preparation failure "

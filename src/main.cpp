@@ -12,6 +12,13 @@
 #  include <string>
 #  include <vector>
 
+#  if defined(FSIM_USES_MIMALLOC)
+// mimalloc's redirection module must initialize before the C runtime, so
+// mimalloc.dll has to head the import table. A call from this first object
+// file makes the linker import it before every other DLL.
+extern "C" __declspec(dllimport) int mi_version(void) noexcept;
+#  endif
+
 namespace {
 
 [[nodiscard]] bool append_utf8_argument(
@@ -41,6 +48,9 @@ namespace {
 }  // namespace
 
 int wmain(const int argc, wchar_t** wide_argv) {
+#  if defined(FSIM_USES_MIMALLOC)
+  (void)mi_version();
+#  endif
   try {
     std::vector<std::string> storage;
     storage.reserve(static_cast<std::size_t>(argc));

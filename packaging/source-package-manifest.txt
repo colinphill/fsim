@@ -141,6 +141,7 @@ cmake/CreateDeterministicArchive.cmake
 cmake/CurrentEvidenceOwners.cmake
 cmake/FsimDebugFootprint.cmake
 cmake/FsimDependencies.cmake
+cmake/FsimLibffi.cmake
 cmake/FsimMimalloc.cmake
 cmake/FsimNativePlugin.cmake
 cmake/FsimScv.cmake
