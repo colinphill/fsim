@@ -1024,6 +1024,15 @@ std::optional<DecodedRuntimeProgramState> read_runtime_state(
             return std::nullopt;
         }
         path_payload = std::move(decoded.payload);
+    } else if (!external_paths->canonical_digest().empty()) {
+        // A table decoded from its canonical payload: its IDs are canonical
+        // and its digest known, so it is used in place.
+        if (path_binding != external_paths->canonical_digest()) {
+            report_error(diagnostics,
+                "runtime state path-table digest does not match the "
+                "enclosing artifact", source_name);
+            return std::nullopt;
+        }
     } else {
         path_payload = canonical_payload_for_table(
             *external_paths, diagnostics, source_name);
@@ -1051,7 +1060,7 @@ std::optional<DecodedRuntimeProgramState> read_runtime_state(
             return std::nullopt;
         }
     }
-    path_table = &path_payload->paths;
+    path_table = path_payload ? &path_payload->paths : external_paths;
 
     RuntimeStatePathWireDto dto;
     std::shared_ptr<elaboration::detail::RuntimeProcessProgramTable>

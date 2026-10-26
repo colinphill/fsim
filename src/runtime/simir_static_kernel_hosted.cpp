@@ -71,6 +71,18 @@ void Interpreter::Impl::static_kernel_adopt_fork_child(
     static_kernel_hosted_process[child] = 1U;
 }
 
+bool Interpreter::Impl::run_hosted_tier(ProcessState& process)
+{
+    // A compiled simulation runs every process on native code: the
+    // evaluator's loop is left for the diagnostic modes that count its
+    // operations.
+    if (!static_kernel || process_profile_enabled
+        || process.cold().track_interpreter_operations) {
+        return false;
+    }
+    return static_kernel->run_hosted_tier(process);
+}
+
 void Interpreter::Impl::StaticKernel::adopt_hosted(
     const std::vector<StaticKernelMemberSpec>& hosted)
 {
@@ -114,6 +126,7 @@ void Interpreter::Impl::StaticKernel::adopt_hosted(
         impl_.static_kernel_hosted_process[id] = 1U;
         has_hosted_ = true;
     }
+    build_hosted_tiers();
 }
 
 void Interpreter::Impl::StaticKernel::enqueue_hosted(const ProcessId id,

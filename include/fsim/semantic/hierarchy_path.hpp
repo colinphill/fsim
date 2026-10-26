@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace fsim::semantic {
@@ -66,10 +67,19 @@ public:
     [[nodiscard]] std::string_view view(HierarchyPathId id) const;
     [[nodiscard]] std::size_t size() const noexcept;
 
+    /// The digest of the canonical encoding this table was built from or
+    /// decoded from (the hierarchy-path codec); empty for a table assembled
+    /// otherwise. Such a table's IDs are the canonical positions, so a reader
+    /// bound to that digest uses the table as it is instead of re-encoding
+    /// it.
+    [[nodiscard]] std::string_view canonical_digest() const noexcept;
+    void set_canonical_digest(std::string digest);
+
 private:
     explicit HierarchyPathTable(std::shared_ptr<const Storage> storage);
 
     std::shared_ptr<const Storage> storage_;
+    std::shared_ptr<const std::string> canonical_digest_;
 };
 
 } // namespace fsim::semantic

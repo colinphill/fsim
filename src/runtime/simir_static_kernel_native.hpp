@@ -11,6 +11,7 @@
 
 #include "simir_static_kernel_ir.hpp"
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -96,21 +97,32 @@ struct StaticKernelNativeFrame {
     StaticKernelWriteQueue* writes { };
     /// Indexed by memory binding values.
     const StaticKernelContainerInfo* containers { };
+    /// A behavioral thread's suspension: the boundary helper of the
+    /// operation it stopped at (`fsim_sk_boundary_<ordinal>`), stored by
+    /// native code and called by the thread runner.
+    void* boundary { };
 };
 
-/// Runtime helpers called by generated code. `evaluate` executes template
-/// instruction `at` on the given operand words (the registers named by its
-/// x, y and z fields) and writes the result word pair to `out`; `effect`
-/// executes a store, memory or host access instruction the same way. `notify`
-/// reports that an inline store changed a non-silent slot. `fail` records the
-/// reference error for instruction `at` with the given reason code.
+/// A helper for one kind of template instruction: it executes instruction
+/// `at` on the given operand words (the registers named by its x, y and z
+/// fields) and writes the result word pair to `out`.
+using StaticKernelInstructionHelper = void (*)(StaticKernelNativeFrame*,
+    std::uint32_t at, std::uint64_t xa, std::uint64_t xb, std::uint64_t ya,
+    std::uint64_t yb, std::uint64_t za, std::uint64_t zb, std::uint64_t* out);
+
+/// Runtime helpers called by generated code. `evaluate_ops[op]` evaluates an
+/// instruction of kind `op` that generated code does not inline;
+/// `effect_ops[op]` executes a store, memory or host access instruction of
+/// kind `op` the same way (generated code calls `fsim_sk_evaluate_<op>` and
+/// `fsim_sk_effect_<op>`: no helper dispatches over instruction kinds).
+/// `notify` reports that an inline store changed a non-silent slot. `fail`
+/// records the reference error for instruction `at` with the given reason
+/// code.
 struct StaticKernelNativeHelpers {
-    void (*evaluate)(StaticKernelNativeFrame*, std::uint32_t at,
-        std::uint64_t xa, std::uint64_t xb, std::uint64_t ya, std::uint64_t yb,
-        std::uint64_t za, std::uint64_t zb, std::uint64_t* out) { };
-    void (*effect)(StaticKernelNativeFrame*, std::uint32_t at,
-        std::uint64_t xa, std::uint64_t xb, std::uint64_t ya, std::uint64_t yb,
-        std::uint64_t za, std::uint64_t zb, std::uint64_t* out) { };
+    std::array<StaticKernelInstructionHelper,
+        static_kernel_detail::kernel_op_count> evaluate_ops { };
+    std::array<StaticKernelInstructionHelper,
+        static_kernel_detail::kernel_op_count> effect_ops { };
     void (*notify)(StaticKernelNativeFrame*, std::uint32_t slot,
         std::uint64_t changed) { };
     /// Pure kernel_word::binary for operators generated code does not
@@ -124,12 +136,37 @@ struct StaticKernelNativeHelpers {
         std::uint64_t changed, std::uint32_t field_offset) { };
     void (*fail)(StaticKernelNativeFrame*, std::uint32_t at,
         std::uint32_t reason) { };
-    /// Executes a generic instruction against the caller's registers.
-    void (*generic)(StaticKernelNativeFrame*, kernel_word::Word* registers,
-        std::uint32_t at) { };
+    /// Executes a generic instruction against the caller's registers, one
+    /// helper per operation kind (the instruction's `sub`; generated code
+    /// calls `fsim_sk_generic_<sub>`).
+    std::array<void (*)(StaticKernelNativeFrame*, kernel_word::Word* registers,
+                   std::uint32_t at),
+        256> generic_ops { };
+    /// Operation tier: runs operation `pc` of the frame's member and returns
+    /// the next position, one helper per operation kind
+    /// (`fsim_sk_step_<ordinal>`; threads `fsim_sk_thread_step_<ordinal>`;
+    /// processes `fsim_sk_hosted_step_<ordinal>`).
+    std::array<std::uint32_t (*)(StaticKernelNativeFrame*, std::uint32_t pc), 256>
+        step_ops { };
+    std::array<std::uint32_t (*)(StaticKernelNativeFrame*, std::uint32_t pc), 256>
+        thread_step_ops { };
+    /// Hosted tier (`fsim_sk_hosted_step_<ordinal>`): the frame's instance is
+    /// the process the step runs.
+    std::array<std::uint32_t (*)(StaticKernelNativeFrame*, std::uint32_t pc), 256>
+        hosted_step_ops { };
+    /// A thread suspension's boundary by operation kind
+    /// (`fsim_sk_boundary_<ordinal>`; StaticKernelNativeFrame::boundary):
+    /// (kernel, thread, pc) -> StaticKernel::Boundary.
+    std::array<std::uint32_t (*)(void* kernel, std::uint32_t thread, std::uint32_t pc),
+        256>
+        boundary_ops { };
 };
 // `evaluate` writes three words: the result pair and, for 'U'-aware
 // instructions, the result's 'U' mask.
+
+/// `reserved` at the entry of a VHDL process's first run: its code starts at
+/// operation 0 (the process prologue) instead of the activation entry.
+inline constexpr std::uint32_t static_kernel_prologue_entry = 0xfffffffeU;
 
 enum class StaticKernelNativeFailure : std::uint32_t {
     unknown_branch = 1U,

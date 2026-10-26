@@ -140,6 +140,7 @@ void append_u32(std::string& bytes, const std::uint32_t value)
     };
     payload.digest = support::Sha256::hex(
         support::Sha256::digest(payload.bytes));
+    payload.paths.set_canonical_digest(payload.digest);
     return { std::move(payload), Error::none };
 }
 

@@ -774,6 +774,16 @@ deserialize_design_ir_with_paths(
         }
         paths = std::move(payload.payload->paths);
     } else if (records->path_mode == kExternalPaths
+        && external_paths != nullptr
+        && !external_paths->canonical_digest().empty()) {
+        // A table decoded from its canonical payload: bound by its digest.
+        if (records->path_binding != external_paths->canonical_digest()) {
+            diagnostics.error(std::string { kCode },
+                "DesignIR external hierarchy path table digest is invalid");
+            return std::nullopt;
+        }
+        paths = *external_paths;
+    } else if (records->path_mode == kExternalPaths
         && external_paths != nullptr) {
         auto payload = hierarchy_path_codec::encode_inline_hierarchy_paths(
             *external_paths);

@@ -706,6 +706,8 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
             member.registers[reg] = find(state, reg)->value;
         }
         try {
+            const InterpretingScope scope { *this,
+                InterpretedCause::specialize };
             return step_generic(member_index, pc);
         } catch (...) {
             return std::nullopt;

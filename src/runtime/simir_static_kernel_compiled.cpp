@@ -13,7 +13,9 @@
 // simir_static_kernel_*.cpp units.
 #include "simir_static_kernel_compiled_internal.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cxxabi.h>
 #include <iostream>
 #include <limits>
@@ -47,6 +49,7 @@ std::string static_kernel_compiler_identity()
 void Interpreter::Impl::StaticKernel::compile_members()
 {
     std::map<std::string, std::size_t> failures;
+    not_compiled_reason_.assign(members_.size(), nullptr);
     const char* dump = std::getenv("FSIM_KERNEL_DUMP");
     std::size_t dumped = 0U;
     // Diagnostics: compile only members whose name contains
@@ -57,9 +60,12 @@ void Interpreter::Impl::StaticKernel::compile_members()
     const char* specialize_text = std::getenv("FSIM_STATIC_KERNEL_SPECIALIZE");
     const bool specialize = specialize_text == nullptr
         || std::string_view { specialize_text } != "0";
-    // Members that run once (constant drivers, mostly) run on the reference
-    // evaluator at start; compiling them would cost more than running them.
-    const bool compile_once = std::getenv("FSIM_STATIC_KERNEL_COMPILE_ONCE") != nullptr;
+    // Members that run once (constant drivers, mostly) are compiled like
+    // the others: a compiled simulation runs no operation on the reference
+    // evaluator. FSIM_STATIC_KERNEL_COMPILE_ONCE=0 runs them there instead.
+    const char* compile_once_text = std::getenv("FSIM_STATIC_KERNEL_COMPILE_ONCE");
+    const bool compile_once = compile_once_text == nullptr
+        || std::string_view { compile_once_text } != "0";
     // Restored bodies, by member: (process, operation count, body).
     struct RestoredBody {
         bool present { };
@@ -104,6 +110,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
     }
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         if (!compile_once && members_[index].kind == StaticKernelMemberKind::once) {
+            not_compiled_reason_[index] = "once";
             continue;
         }
         // VHDL behavioral threads (IEEE 1076-2019 11.3) run on the
@@ -111,6 +118,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
         // behavioral bodies know VHDL waits, timeouts or delta commits.
         if (members_[index].kind == StaticKernelMemberKind::behavioral
             && members_[index].vhdl) {
+            not_compiled_reason_[index] = "vhdl_behavioral";
             continue;
         }
         if (only != nullptr || skip != nullptr) {
@@ -118,6 +126,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
                 = impl_.processes.program_view(members_[index].process).name();
             if ((only != nullptr && name.find(only) == std::string::npos)
                 || (skip != nullptr && name.find(skip) != std::string::npos)) {
+                not_compiled_reason_[index] = "filtered";
                 continue;
             }
         }
@@ -295,6 +304,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
                 }
             }
         } catch (const CompileFailure& failure) {
+            not_compiled_reason_[index] = failure.reason;
             if (failures[failure.reason]++ == 0U && profile_
                 && index < profile_names_.size()) {
                 std::size_t widest = 0U;
@@ -356,6 +366,91 @@ void Interpreter::Impl::StaticKernel::compile_members()
                       << " count=" << count << '\n';
         }
     }
+}
+
+void Interpreter::Impl::StaticKernel::report_interpreted_sites() const
+{
+    // Rows by reason: compiled members without native code (kernel
+    // bytecode). Listed apart: instructions lowered to an operation's helper
+    // (generic), which native code calls by kind, and members or first runs
+    // that run operation-tier code (tier:), which calls one helper per
+    // operation.
+    std::map<std::string, std::pair<std::size_t, std::uint32_t>> sites;
+    std::map<std::string, std::pair<std::size_t, std::uint32_t>> helpers;
+    const auto note = [&](std::string reason, const std::uint32_t member) {
+        auto& rows = reason.starts_with("generic") || reason.starts_with("tier:")
+            ? helpers : sites;
+        rows.try_emplace(std::move(reason), 0U, member).first->second.first++;
+    };
+    const auto note_generic = [&](const CompiledBody& code,
+                                  const std::uint32_t member) {
+        for (const auto& inst : code.code) {
+            if (inst.op != KOp::generic
+                || inst.x >= members_[member].operations.size()) {
+                continue;
+            }
+            visit_operation([&](const auto& op) {
+                int status = 0;
+                char* name = abi::__cxa_demangle(typeid(op).name(), nullptr,
+                    nullptr, &status);
+                std::string key = name != nullptr ? name : "?";
+                std::free(name);
+                note("generic:" + key.substr(key.rfind(':') + 1U), member);
+            }, members_[member].operations[inst.x]);
+        }
+    };
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        const auto& member = members_[index];
+        const char* reason = index < not_compiled_reason_.size()
+            ? not_compiled_reason_[index] : nullptr;
+        if (!member.compiled) {
+            // Partition members run in their partition's program (below).
+            if (reason == nullptr || std::string_view { reason } != "partitioned") {
+                note(std::string { "tier:not_compiled:" }
+                        + (reason != nullptr ? reason : "none"),
+                    index);
+            }
+            continue;
+        }
+        if (member.native.entry == nullptr
+            && member.native.lazy_template == static_kernel_detail::no_slot) {
+            note("bytecode", index);
+        }
+        if (member.vhdl && !first_run_is_activation(member)
+            && (member.native.entry == nullptr
+                || !has_prologue_entry(*member.compiled, member.vhdl))) {
+            note("tier:vhdl_prologue", index);
+        }
+        note_generic(*member.compiled, index);
+    }
+    for (const auto& partition : partitions_) {
+        if (partition.members.empty()) {
+            continue;
+        }
+        if (partition.native.entry == nullptr
+            && partition.native.lazy_template == static_kernel_detail::no_slot) {
+            note("bytecode_partition", partition.members.front());
+        }
+        // Generic instructions name their operation by the first member's
+        // stream only when the partition has one member; count them by
+        // instruction kind otherwise.
+        for (const auto& inst : partition.program.code) {
+            if (inst.op == KOp::generic) {
+                note("generic_partition", partition.members.front());
+            }
+        }
+    }
+    const auto print = [&](const char* row, const auto& rows) {
+        for (const auto& [reason, site] : rows) {
+            auto example = impl_.processes.program_view(members_[site.second].process)
+                               .name();
+            std::ranges::replace(example, ' ', '_');
+            std::cerr << "fsim-profile: static-kernel-" << row << " reason=" << reason
+                      << " count=" << site.first << " example=" << example << '\n';
+        }
+    };
+    print("interpreted", sites);
+    print("helper", helpers);
 }
 
 std::optional<Interpreter::Impl::StaticKernel::CompiledBody>
@@ -1165,6 +1260,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     || std::is_same_v<T, Halt>) {
                     inst.op = KOp::suspend;
                     inst.x = pc;
+                    inst.sub = static_cast<std::uint8_t>(operation_kind_of<T>);
+                    inst.aux = 1U;
                 } else if constexpr (std::is_same_v<T, Display>
                     || std::is_same_v<T, FormatDisplay>
                     || std::is_same_v<T, StringDisplay>
@@ -1194,6 +1291,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     if (debug_points_ && debug_point_executable(op.kind)) {
                         inst.op = KOp::suspend;
                         inst.x = pc;
+                        inst.sub = static_cast<std::uint8_t>(operation_kind_of<T>);
+                        inst.aux = 1U;
                     } else {
                         inst.op = KOp::nop;
                     }
@@ -2155,6 +2254,14 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             body.return_targets.end());
     }
     if (vhdl) {
+        if (native_prologue(member) && member.prologue_end != member.body_begin
+            && member.prologue_end < body.code.size()) {
+            // The first run leaves the prologue for the specialized body.
+            KInst jump;
+            jump.op = KOp::jump;
+            jump.d = member.body_begin;
+            body.code[member.prologue_end] = jump;
+        }
         eliminate_dead_constants(body, member_index);
         track_unknowns(body, member_index);
         body.entry = member.body_begin;
@@ -2166,6 +2273,14 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     }
     if (has_wide) {
         body.wide_registers.assign(register_count, PackedLogic4 { });
+    }
+    // Generated code calls each generic instruction's operation helper by
+    // the operation's ordinal.
+    for (auto& inst : body.code) {
+        if (inst.op == KOp::generic && inst.x < member.operations.size()) {
+            inst.sub = static_cast<std::uint8_t>(
+                operation_kind_ordinal(member.operations[inst.x]));
+        }
     }
     return body;
 }

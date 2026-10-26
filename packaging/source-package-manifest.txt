@@ -1184,6 +1184,7 @@ src/runtime/simir_kernel_word_ops.hpp
 src/runtime/simir_logic.cpp
 src/runtime/simir_module_path.cpp
 src/runtime/simir_observation.cpp
+src/runtime/simir_operation_kinds.hpp
 src/runtime/simir_operation_list_sharing.hpp
 src/runtime/simir_process_execution_context.cpp
 src/runtime/simir_process_program.cpp

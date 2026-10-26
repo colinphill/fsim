@@ -9,6 +9,7 @@
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -282,6 +283,30 @@ runtime::RunResult Simulation::run(
                       << " interpreter_ms="
                       << milliseconds(interpreter_end - interpreter_begin)
                       << '\n';
+            // Engine v4 gate: a compiled simulation interprets nothing.
+            const auto counts = runtime::simir::InterpreterProgramAccess::
+                interpretation_counts(*impl_->interpreter);
+            // A deoptimization continues in operation-tier code: it counts
+            // as interpretation only through the operations it runs.
+            std::cerr << "fsim-profile: static-kernel-run interpreted="
+                      << (counts.executes + counts.kernel_bytecode_runs
+                             + counts.kernel_operations)
+                      << " executes=" << counts.executes
+                      << " kernel_bytecode_runs=" << counts.kernel_bytecode_runs
+                      << " kernel_operations=" << counts.kernel_operations
+                      << " kernel_deopts=" << counts.kernel_deopts
+                      << " constant_drivers=" << counts.constant_drivers
+                      << " kernel_operations_by=";
+            for (const auto& [cause, count] : counts.kernel_operations_by) {
+                std::cerr << cause << ':' << count << ',';
+            }
+            std::cerr << '\n';
+            for (const auto& [program, count] : counts.executed_programs) {
+                auto name = program;
+                std::ranges::replace(name, ' ', '_');
+                std::cerr << "fsim-profile: static-kernel-executed program=" << name
+                          << " count=" << count << '\n';
+            }
         }
         if (impl_->vpi_control->state()
             == runtime::SystemVerilogVpiControlState::Finished) {

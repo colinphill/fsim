@@ -6,9 +6,12 @@
 #include "fsim/support/atomic_shared_ptr.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace fsim::runtime::simir {
@@ -281,6 +284,28 @@ namespace process_program_detail {
 
 } // namespace process_program_detail
 
+/// Interpretive work done so far. Engine v4 goal: every count is zero in a
+/// compiled simulation (no SimIR operation is interpreted at run time).
+struct InterpretationCounts {
+    /// SimIR processes and programs run by the reference evaluator (host and
+    /// hosted processes, VHDL resolver/conversion programs, startup).
+    std::uint64_t executes { };
+    /// Static kernel members run as kernel bytecode instead of native code.
+    std::uint64_t kernel_bytecode_runs { };
+    /// Operations the kernel ran on its reference evaluator (generic runs,
+    /// generic instructions, behavioral runtime-library steps), without
+    /// specialization's constant folding at kernel construction.
+    std::uint64_t kernel_operations { };
+    std::uint64_t kernel_deopts { };
+    /// The reference evaluator's operations by cause (including folding).
+    std::vector<std::pair<const char*, std::uint64_t>> kernel_operations_by;
+    /// FSIM_PROFILE_PHASES: `executes` by program name.
+    std::vector<std::pair<std::string, std::uint64_t>> executed_programs;
+    /// Compact constant drivers run (Impl::execute_compact_constant): one
+    /// fixed routine per driver shape, which does not interpret operations.
+    std::uint64_t constant_drivers { };
+};
+
 /// Internal bridge for app/runtime code that needs a stable view without
 /// materializing the public Process facade.
 class InterpreterProgramAccess {
@@ -333,6 +358,8 @@ public:
     /// run limit) needs to see each step through the scheduler.
     static void set_static_kernel_time_warp(Interpreter& interpreter,
         bool allowed);
+    [[nodiscard]] static InterpretationCounts interpretation_counts(
+        const Interpreter& interpreter);
 };
 
 /// Startup-only interner. Operation-body identity narrows likely matches;

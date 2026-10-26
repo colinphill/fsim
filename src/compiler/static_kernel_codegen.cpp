@@ -31,6 +31,7 @@
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Support/xxhash.h>
 
 #include <algorithm>
 #include <array>
@@ -63,12 +64,20 @@ using runtime::simir::StaticKernelNativeEntry;
 using runtime::simir::StaticKernelNativeFrame;
 using runtime::simir::StaticKernelNativeHelpers;
 using runtime::simir::StaticKernelTemplate;
+using runtime::simir::static_kernel_prologue_entry;
 using runtime::simir::BinaryOperator;
 using runtime::simir::LogicalBinaryOperator;
 using runtime::simir::ReductionOperator;
 namespace detail = runtime::simir::static_kernel_detail;
 using detail::KInst;
 using detail::KOp;
+
+/// The symbol of the runtime helper for instructions of kind `op`.
+[[nodiscard]] std::string instruction_helper_name(const char* prefix,
+    const KOp op)
+{
+    return prefix + std::to_string(static_cast<unsigned>(op));
+}
 
 static_assert(offsetof(StaticKernelNativeFrame, arena) == 0U);
 static_assert(offsetof(StaticKernelNativeFrame, bindings) == 8U);
@@ -78,6 +87,7 @@ static_assert(offsetof(StaticKernelNativeFrame, status) == 40U);
 static_assert(offsetof(StaticKernelNativeFrame, reserved) == 44U);
 static_assert(offsetof(StaticKernelNativeFrame, writes) == 56U);
 static_assert(offsetof(StaticKernelNativeFrame, containers) == 64U);
+static_assert(offsetof(StaticKernelNativeFrame, boundary) == 72U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, slot) == 4U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, count) == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, left) == 16U);
@@ -160,7 +170,7 @@ public:
     FunctionEmitter(llvm::Module& module, llvm::Function& function,
         const detail::CompiledBody& body,
         const bool local_registers, const bool flush_locals, const bool two_state,
-        std::vector<std::uint32_t>* const resume_points)
+        std::vector<std::uint32_t>* const resume_points, const bool vhdl)
         : context_(module.getContext())
         , module_(module)
         , function_(function)
@@ -175,6 +185,7 @@ public:
         , flush_locals_(flush_locals)
         , two_state_(two_state)
         , resume_points_(resume_points)
+        , vhdl_(vhdl)
     {
     }
 
@@ -205,6 +216,14 @@ public:
                 leader[at + 1U] = 1U;
             } else if (inst.op == KOp::ret || inst.op == KOp::suspend) {
                 leader[at + 1U] = 1U;
+            } else if (inst.op == KOp::step) {
+                leader[at + 1U] = 1U;
+                if (inst.z >= 1U) {
+                    leader[std::min(inst.d, size)] = 1U;
+                }
+                if (inst.z >= 2U) {
+                    leader[std::min(inst.y, size)] = 1U;
+                }
             }
         }
         for (const auto resume : body_.resume_entries) {
@@ -244,17 +263,27 @@ public:
         }
         arena_ = builder_.CreateLoad(ptr_, frame_field(0U), "arena");
         bindings_ = builder_.CreateLoad(ptr_, frame_field(8U), "bindings");
-        if (body_.resume_entries.empty() && !continuations.empty()) {
+        // A VHDL process's first run enters at operation 0, its prologue
+        // (static_kernel_prologue_entry in `reserved`).
+        const bool prologue
+            = detail::has_prologue_entry(body_, vhdl_);
+        if (body_.resume_entries.empty() && (!continuations.empty() || prologue)) {
             // Entered at `reserved` when two-state code stopped there; an
             // ordinary run passes 0, which is never a continuation.
             auto* start = builder_.CreateLoad(i32_, frame_field(44U), "resume");
             auto* targets = builder_.CreateSwitch(start,
                 blocks_[std::min(body_.entry, size)],
-                static_cast<unsigned>(continuations.size()));
+                static_cast<unsigned>(continuations.size() + 1U));
             for (const auto resume : continuations) {
                 targets->addCase(llvm::ConstantInt::get(
                                      llvm::cast<llvm::IntegerType>(i32_), resume),
                     blocks_[std::min(resume, size)]);
+            }
+            if (prologue) {
+                targets->addCase(llvm::ConstantInt::get(
+                                     llvm::cast<llvm::IntegerType>(i32_),
+                                     static_kernel_prologue_entry),
+                    blocks_[0]);
             }
         } else if (body_.resume_entries.empty()) {
             builder_.CreateBr(blocks_[std::min(body_.entry, size)]);
@@ -533,6 +562,13 @@ private:
         }
         std::ranges::fill(in[entry_block], 0U);
         reached[entry_block] = 1U;
+        // A VHDL process's first run enters at operation 0 (its prologue),
+        // also with nothing defined.
+        const auto prologue_block
+            = detail::has_prologue_entry(body_, vhdl_)
+            ? block_of[0] : entry_block;
+        std::ranges::fill(in[prologue_block], 0U);
+        reached[prologue_block] = 1U;
         Bits state(words, 0U);
         for (bool changed = true; changed;) {
             changed = false;
@@ -551,7 +587,8 @@ private:
                 }
                 for (const auto successor : successors[block]) {
                     // Each run starts at the entry with nothing defined.
-                    if (successor == exit_block || successor == entry_block) {
+                    if (successor == exit_block || successor == entry_block
+                        || successor == prologue_block) {
                         continue;
                     }
                     auto& target = in[successor];
@@ -970,6 +1007,39 @@ private:
 
     /// A runtime helper, called by name so that code does not depend on
     /// where this process loaded the runtime (see helper_symbols).
+    /// The step code's shared return switch (KOp::step, Return), made on
+    /// first use: a position that is not a return target goes back to the
+    /// runner in `reserved`, as a step's other positions do.
+    [[nodiscard]] llvm::PHINode* return_dispatch(const std::uint32_t size)
+    {
+        if (return_dispatch_ != nullptr) {
+            return return_next_;
+        }
+        const auto saved = builder_.saveIP();
+        return_dispatch_ = llvm::BasicBlock::Create(context_, "return", &function_);
+        auto* leave = llvm::BasicBlock::Create(context_, "return_leave", &function_);
+        builder_.SetInsertPoint(return_dispatch_);
+        return_next_ = builder_.CreatePHI(i32_, 4U);
+        std::vector<std::uint32_t> targets;
+        for (const auto target : body_.return_targets) {
+            if (target < size && blocks_[target] != nullptr) {
+                targets.push_back(target);
+            }
+        }
+        auto* targets_switch = builder_.CreateSwitch(return_next_, leave,
+            static_cast<unsigned>(targets.size()));
+        for (const auto target : targets) {
+            targets_switch->addCase(
+                llvm::ConstantInt::get(llvm::cast<llvm::IntegerType>(i32_), target),
+                blocks_[target]);
+        }
+        builder_.SetInsertPoint(leave);
+        builder_.CreateStore(return_next_, frame_field(44U));
+        builder_.CreateRet(llvm::ConstantInt::get(i32_, 3U));
+        builder_.restoreIP(saved);
+        return return_next_;
+    }
+
     [[nodiscard]] llvm::Value* helper_symbol(const char* name,
         llvm::FunctionType* type)
     {
@@ -994,17 +1064,21 @@ private:
                 builder_.CreateConstInBoundsGEP1_64(i64_, out, 1U)) };
     }
 
+    /// The evaluate or effect helper of instruction `at`'s kind.
     [[nodiscard]] Pair call_evaluate(const std::uint32_t at, const Pair x,
         const Pair y, const Pair z)
     {
-        return call_helper("fsim_sk_evaluate", at, x, y,
-            z);
+        return call_helper(instruction_helper_name("fsim_sk_evaluate_",
+                               body_.code[at].op).c_str(),
+            at, x, y, z);
     }
 
     void call_effect(const std::uint32_t at, const Pair x, const Pair y,
         const Pair z)
     {
-        (void)call_helper("fsim_sk_effect", at, x, y, z);
+        (void)call_helper(instruction_helper_name("fsim_sk_effect_",
+                              body_.code[at].op).c_str(),
+            at, x, y, z);
     }
 
     void check_status()
@@ -2043,25 +2117,87 @@ private:
         case KOp::mem_bind:
             break;
         case KOp::suspend:
-            // Report the suspension operation to the thread runner.
+            // Report the suspension operation to the thread runner, with
+            // its boundary helper for a behavioral thread (aux 1, the
+            // operation's kind in `sub`).
             builder_.CreateStore(llvm::ConstantInt::get(i32_, inst.x),
                 frame_field(44U));
+            if (inst.aux == 1U) {
+                auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_, i32_ }, false);
+                builder_.CreateStore(
+                    helper_symbol(
+                        ("fsim_sk_boundary_" + std::to_string(inst.sub)).c_str(), type),
+                    frame_field(72U));
+            }
             builder_.CreateRet(llvm::ConstantInt::get(i32_, 3U));
             break;
         case KOp::generic: {
             auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
                 { ptr_, ptr_, i32_ }, false);
-            auto* callee = helper_symbol("fsim_sk_generic", type);
+            // The helper of the instruction's operation kind (`sub`).
+            auto* callee = helper_symbol(
+                ("fsim_sk_generic_" + std::to_string(inst.sub)).c_str(), type);
             builder_.CreateCall(type, callee,
                 { frame_, registers_, llvm::ConstantInt::get(i32_, at) });
             // The helper reads and writes registers through the pointer.
             cache_.clear();
             if (two_state_) {
                 // A result with X or 'U' bits continues in the full code
-                // (status 4, see StaticKernel::native_generic).
+                // (status 4, see StaticKernel::native_generic_kind).
                 (void)continue_point();
             }
             check_status();
+            break;
+        }
+        case KOp::step: {
+            auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_ }, false);
+            // The helper of the operation's kind (`sub`).
+            auto* callee = helper_symbol(
+                ((inst.aux == 2U       ? "fsim_sk_hosted_step_"
+                         : inst.aux != 0U ? "fsim_sk_thread_step_"
+                                          : "fsim_sk_step_")
+                    + std::to_string(inst.sub))
+                    .c_str(),
+                type);
+            auto* next = builder_.CreateCall(type, callee,
+                { frame_, llvm::ConstantInt::get(i32_, inst.x) });
+            cache_.clear();
+            // Control continues at the operation's static successors; any
+            // other position (the end of the run, a thread boundary, an
+            // error) goes back to the runner in `reserved`.
+            const auto size = static_cast<std::uint32_t>(body_.code.size());
+            if (inst.offset != 0U) {
+                // A Return continues at one of the return targets: every
+                // Return shares one switch over them (a switch per Return
+                // makes calls x returns edges).
+                return_dispatch(size)->addIncoming(next, builder_.GetInsertBlock());
+                builder_.CreateBr(return_dispatch_);
+                break;
+            }
+            std::vector<std::uint32_t> successors;
+            if (inst.z >= 1U) {
+                successors.push_back(inst.d);
+            }
+            if (inst.z >= 2U) {
+                successors.push_back(inst.y);
+            }
+            std::ranges::sort(successors);
+            successors.erase(std::unique(successors.begin(), successors.end()),
+                successors.end());
+            std::erase_if(successors, [&](const std::uint32_t target) {
+                return target >= size || blocks_[target] == nullptr;
+            });
+            auto* leave = llvm::BasicBlock::Create(context_, "leave", &function_);
+            auto* targets = builder_.CreateSwitch(next, leave,
+                static_cast<unsigned>(successors.size()));
+            for (const auto target : successors) {
+                targets->addCase(llvm::ConstantInt::get(
+                                     llvm::cast<llvm::IntegerType>(i32_), target),
+                    blocks_[target]);
+            }
+            builder_.SetInsertPoint(leave);
+            builder_.CreateStore(next, frame_field(44U));
+            builder_.CreateRet(llvm::ConstantInt::get(i32_, 3U));
             break;
         }
         case KOp::mark:
@@ -2903,6 +3039,8 @@ private:
     /// (read_or_hand_over) instead of calling the evaluate helper.
     bool hand_over_slow_paths_ { true };
     std::vector<std::uint32_t>* resume_points_ { };
+    /// The template has a VHDL instance (prologue entry).
+    bool vhdl_ { };
     std::uint32_t at_ { };
     llvm::Value* guarded_unknown_ { };
     /// Per register: its local slot, or null when it lives in the frame.
@@ -2921,6 +3059,10 @@ private:
     std::unordered_map<std::uint32_t, llvm::Value*> slot_pointers_;
     llvm::BasicBlock* return_block_ { };
     llvm::BasicBlock* failure_block_ { };
+    /// Step code: the one switch over the return targets every Return step
+    /// branches to (its position in `return_next_`).
+    llvm::BasicBlock* return_dispatch_ { };
+    llvm::PHINode* return_next_ { };
     std::vector<llvm::BasicBlock*> blocks_;
     std::map<std::uint32_t, Pair> cache_;
     /// Blocks of the current KIR block in which an instruction started or
@@ -2939,6 +3081,8 @@ public:
             cache_.emplace(options.cache_root);
         }
         identity_ = codegen_identity();
+        identity_hash_ = llvm::xxh3_128bits(llvm::ArrayRef {
+            reinterpret_cast<const std::uint8_t*>(identity_.data()), identity_.size() });
         const char* level = std::getenv("FSIM_STATIC_KERNEL_CODEGEN_LEVEL");
         const auto codegen_level = level == nullptr ? 0 : std::atoi(level);
         jit_ = make_jit(capture_, codegen_level,
@@ -3126,13 +3270,43 @@ private:
                     reinterpret_cast<void*>(function)),
                 llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable);
         };
-        add("fsim_sk_evaluate", helpers.evaluate);
-        add("fsim_sk_effect", helpers.effect);
+        for (std::size_t op = 0U; op < helpers.evaluate_ops.size(); ++op) {
+            const auto kind = static_cast<detail::KOp>(op);
+            if (helpers.evaluate_ops[op] != nullptr) {
+                add(instruction_helper_name("fsim_sk_evaluate_", kind).c_str(),
+                    helpers.evaluate_ops[op]);
+            }
+            if (helpers.effect_ops[op] != nullptr) {
+                add(instruction_helper_name("fsim_sk_effect_", kind).c_str(),
+                    helpers.effect_ops[op]);
+            }
+        }
         add("fsim_sk_notify", helpers.notify);
         add("fsim_sk_binary", helpers.binary);
         add("fsim_sk_notify_field", helpers.notify_field);
         add("fsim_sk_fail", helpers.fail);
-        add("fsim_sk_generic", helpers.generic);
+        for (std::size_t kind = 0U; kind < helpers.generic_ops.size(); ++kind) {
+            if (helpers.generic_ops[kind] != nullptr) {
+                add(("fsim_sk_generic_" + std::to_string(kind)).c_str(),
+                    helpers.generic_ops[kind]);
+            }
+            if (helpers.step_ops[kind] != nullptr) {
+                add(("fsim_sk_step_" + std::to_string(kind)).c_str(),
+                    helpers.step_ops[kind]);
+            }
+            if (helpers.thread_step_ops[kind] != nullptr) {
+                add(("fsim_sk_thread_step_" + std::to_string(kind)).c_str(),
+                    helpers.thread_step_ops[kind]);
+            }
+            if (helpers.hosted_step_ops[kind] != nullptr) {
+                add(("fsim_sk_hosted_step_" + std::to_string(kind)).c_str(),
+                    helpers.hosted_step_ops[kind]);
+            }
+            if (helpers.boundary_ops[kind] != nullptr) {
+                add(("fsim_sk_boundary_" + std::to_string(kind)).c_str(),
+                    helpers.boundary_ops[kind]);
+            }
+        }
         if (auto error = jit.getMainJITDylib().define(
                 llvm::orc::absoluteSymbols(std::move(symbols)))) {
             throw std::runtime_error(error_text(std::move(error)));
@@ -3234,7 +3408,7 @@ private:
             FunctionEmitter emitter(*module, *function, *templates[index].body,
                 vhdl_locals || !templates[index].vhdl, templates[index].vhdl,
                 templates[index].two_state,
-                templates[index].resume_points);
+                templates[index].resume_points, templates[index].vhdl);
             emitter.emit();
         }
         if (std::getenv("FSIM_STATIC_KERNEL_VERIFY") != nullptr
@@ -3388,6 +3562,11 @@ private:
             }
         };
         const auto& body = *code.body;
+        text.reserve(64U + body.code.size() * sizeof(KInst)
+            + body.register_widths.size() * sizeof(std::uint32_t)
+            + body.resume_entries.size() * sizeof(std::uint32_t));
+        append(identity_hash_.high64);
+        append(identity_hash_.low64);
         append(code.tier);
         append(code.vhdl);
         append(code.two_state);
@@ -3445,10 +3624,20 @@ private:
         append_all(body.u_operands);
         append(body.call_stack_base);
         append_all(body.resume_entries);
-        CacheKeyBuilder key;
-        key.add("codegen", identity_);
-        key.add("template", text);
-        return key.finish();
+        // A content key for this process's cache and the ahead-of-time
+        // image (not an integrity check: the image's objects are checksummed
+        // by the cache). Keys are computed for every template a simulation
+        // restores, so a fast 128-bit hash.
+        const auto hash = llvm::xxh3_128bits(llvm::ArrayRef {
+            reinterpret_cast<const std::uint8_t*>(text.data()), text.size() });
+        static constexpr char digits[] = "0123456789abcdef";
+        std::string key = "x3";
+        key.resize(2U + 32U);
+        for (std::size_t nibble = 0U; nibble < 16U; ++nibble) {
+            key[2U + nibble] = digits[(hash.high64 >> (60U - 4U * nibble)) & 15U];
+            key[18U + nibble] = digits[(hash.low64 >> (60U - 4U * nibble)) & 15U];
+        }
+        return key;
     }
 
     /// The template's function: compiled in this process or built ahead
@@ -3591,6 +3780,7 @@ private:
     bool ahead_of_time_ { };
     std::optional<ObjectCache> cache_;
     std::string identity_;
+    llvm::XXH128_hash_t identity_hash_ { };
     std::unordered_map<std::string, Known> known_;
     std::unordered_map<std::string, Record> records_;
     std::vector<IndexEntry> index_;

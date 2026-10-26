@@ -223,4 +223,15 @@ std::size_t HierarchyPathTable::size() const noexcept
     return storage_ ? storage_->paths.size() : 0U;
 }
 
+std::string_view HierarchyPathTable::canonical_digest() const noexcept
+{
+    return canonical_digest_ ? std::string_view { *canonical_digest_ }
+                             : std::string_view { };
+}
+
+void HierarchyPathTable::set_canonical_digest(std::string digest)
+{
+    canonical_digest_ = std::make_shared<const std::string>(std::move(digest));
+}
+
 } // namespace fsim::semantic

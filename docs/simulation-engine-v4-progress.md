@@ -138,6 +138,65 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-25 (late night, later): nothing interpreted at run time; hosted tier (sweep `v4c5`)
+
+Toward the owner gate (no interpretation in a compiled simulation), from `v4b8`:
+- **Census instrumentation.** Static `static-kernel-interpreted` rows and a
+  dynamic `static-kernel-run` line after each run: `interpreted=` (kernel
+  `step_generic`), `executes=` (`Impl::execute` loops), `kernel_bytecode_runs=`,
+  `kernel_operations=`, `kernel_deopts=`, `constant_drivers=`. `census.py`
+  reports them per suite.
+- **Operation tier.** A member, thread or deopt resume that has no
+  compiled body runs native step code: one `KOp::step` per SimIR operation,
+  calling the helper of that operation's kind (`fsim_sk_step_<K>`,
+  `fsim_sk_thread_step_<K>`), chosen when the code is generated
+  (`simir_operation_kinds.hpp`). Step code is shared by content.
+- **Hosted tier.** `Impl::execute` is split into `execute_operation<Op>` and
+  `continue_after_boundary`. Hosted processes, commit and resolver programs
+  and startup run native step code over their operation list
+  (`fsim_sk_hosted_step_<K>`), built ahead of time at adoption and cached
+  per process (validated by list, body identity and size).
+- **Compiled-thread suspension.** Generated code stores the suspending
+  operation's boundary helper (`fsim_sk_boundary_<K>`) in the native frame;
+  the runner calls it instead of visiting the operation.
+- **Compact constant drivers** are a fixed-shape routine, now counted as
+  `constant_drivers=`.
+- **Long repeat loops.** A SystemVerilog `repeat` with a constant count above
+  256 is lowered as a runtime loop rather than unrolled (IEEE 1800-2017
+  12.7.2). `t_randomize_real` (`repeat (1000)` around a 64-iteration `for`)
+  had unrolled to 2.4M operations and a 1 GB LLVM module, and timed out on
+  `v4c4`. It now simulates in 0.45 s.
+- **Codegen.** Return steps share one dispatch block per body. Template keys
+  hash the codegen identity once (xxh3).
+- **Load.** A hierarchy-path table carries its canonical digest, so runtime
+  and design artifacts bind external paths by digest and do not re-encode them.
+  `Reader::read_exact` has an inline fast path.
+
+Sweep `v4c5`: the frozen binary `fsim-archive/v4c5`, `--engine v4`, against
+`b96x1` (`v4c4` lost `t_randomize_real` to a timeout; fixed above).
+
+| Suite | Pass (base) | Pass (v4) | Planned | Admitted | host=0 | Host processes | Hosted processes | interpreted=0 | Runs interpreted>0 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| ivtest | 2635 | 2642 | 2273 | 2273 | 2273 | 0 | 2592 | 2263 | 0 |
+| sv-tests | 1495 | 1495 | 387 | 387 | 387 | 0 | 422 | 386 | 0 |
+| verilator | 2065 | 2070 | 2087 | 2087 | 2087 | 0 | 3647 | 2072 | 0 |
+| vests | 3646 | 3646 | 1606 | 1606 | 1606 | 0 | 973 | 1596 | 0 |
+| nvc | 1261 | 1261 | 1209 | 1209 | 1209 | 0 | 1059 | 1148 | 1 |
+| vhdl-compliance | 65 | 65 | 65 | 65 | 65 | 0 | 86 | 65 | 0 |
+
+- **Losses against `b96x1`: 0 (G2 met).**
+- Runs that still interpret: `nvc_issue1161` (2 `Impl::execute` runs). Its only
+  programs are commit programs, so the plan was trivial and no kernel ran
+  them. Run-time counters elsewhere: `specialize_folding` in 133 cases (7814
+  operations), `kernel_deopts` in 14 cases (48; resumed by the operation
+  tier, not interpreted).
+- Census: `.local-artifacts/v4-migration/census/v4c5/census.md`.
+
+G5 quiet timings on the live build (CPU 9, single runs, ±4% build-to-build
+layout noise): `mixed_codec` simulate 2.37–2.45 s (target ≤2.27 s),
+`original_codec` 2.65–2.76 s (≤2.53 s). Generated code is 44% of the
+`mixed_codec` profile, spread over 8035 templates.
+
 ### 2026-10-25 (late night): no host processes; port wiring; owner gate: nothing interpreted (sweep `v4b8`)
 
 From sweep `v4b7` (`v4a9`):

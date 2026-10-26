@@ -9,6 +9,7 @@
 #include "simir_signal_storage.hpp"
 #include "simir_process_storage.hpp"
 #include "simir_process_program.hpp"
+#include "simir_operation_kinds.hpp"
 #include "fsim/runtime/sva_engine.hpp"
 #include <deque>
 
@@ -587,6 +588,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         bool track_interpreter_operations { };
         std::uint64_t interpreter_operations { };
         std::vector<InstructionIndex> dynamic_call_stack;
+        /// The static kernel's hosted tier for this process's operation
+        /// list (StaticKernel::hosted_tier), with the list it was found for.
+        const void* hosted_tier { };
+        const OperationList* hosted_tier_list { };
+        const void* hosted_tier_body { };
+        std::size_t hosted_tier_size { };
 
         void set_program(
             Process process,
@@ -1731,6 +1738,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // in kernel storage and are published on observation.
     class StaticKernel;
     std::shared_ptr<StaticKernel> static_kernel;
+    /// execute() calls that run SimIR operations on this evaluator
+    /// (processes and programs without a native executor).
+    std::uint64_t interpreted_executes { };
+    /// Compact constant drivers run (no operation is interpreted).
+    std::uint64_t constant_driver_executes { };
+    /// FSIM_PROFILE_PHASES: interpreted_executes by program.
+    std::map<ProcessId, std::uint64_t> interpreted_programs;
+    void note_interpreted_execute(ProcessId id);
     std::vector<std::uint8_t> static_kernel_owned_signal;
     bool static_kernel_materializing { };
     void materialize_static_kernel_signal(SignalId signal);
@@ -2427,6 +2442,25 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void request_channel_update(
         ProcessId process, std::uint64_t channel);
     void execute(ProcessId id);
+    /// One operation of execute's loop: its semantics (true at a boundary),
+    /// and the boundary handling after it (false when execute returns).
+    template <typename Op>
+    bool execute_operation(ProcessState& process, InstructionIndex instruction,
+        const Op& op);
+    bool continue_after_boundary(ProcessState& process, const Operation& operation,
+        InstructionIndex instruction);
+    /// Both for operation kind Op at `instruction`: the position execute's
+    /// loop continues at, or operation_tier_stop when execute returns. The
+    /// static kernel's operation-tier code for a hosted process calls the
+    /// helper of each operation's kind (no dispatch over operations).
+    template <typename Op>
+    std::uint32_t hosted_step(ProcessState& process, InstructionIndex instruction);
+    using HostedStep = std::uint32_t (Impl::*)(ProcessState&, InstructionIndex);
+    [[nodiscard]] static const std::array<HostedStep,
+        static_kernel_detail::operation_kind_count>& hosted_steps();
+    /// Runs the process on the static kernel's operation-tier code (from its
+    /// pc to where execute returns); false when it has none.
+    bool run_hosted_tier(ProcessState& process);
     void execute_compact_constant(ConstantDriverStartupEntry& process);
     void execute_compact_startup_write(
         ConstantDriverStartupEntry& process);

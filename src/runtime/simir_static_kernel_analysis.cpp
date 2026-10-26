@@ -134,11 +134,20 @@ void Interpreter::Impl::StaticKernel::prune_operations(
             return_targets.push_back(call->return_target);
         }
     }
+    // A VHDL first run enters at operation 0 and leaves the prologue for the
+    // entry (native_prologue).
+    const bool prologue = native_prologue(member);
+    const auto prologue_exit = prologue && member.prologue_end != entry
+        ? member.prologue_end : no_slot;
     // Successors of each operation in the compiled view: the wait (or halt)
     // ends the activation and the next one resumes at the entry.
     const auto successors = [&](const std::uint32_t pc,
                                 std::vector<std::uint32_t>& next) {
         next.clear();
+        if (pc == prologue_exit) {
+            next.push_back(entry);
+            return;
+        }
         if (pc == stop) {
             if (stop < size && operation_holds<WaitSensitivity>(operations[pc])) {
                 next.push_back(entry);
@@ -169,6 +178,9 @@ void Interpreter::Impl::StaticKernel::prune_operations(
     };
     std::vector<std::uint8_t> reachable(size, 0U);
     std::vector<std::uint32_t> work { entry };
+    if (prologue) {
+        work.push_back(0U);
+    }
     std::vector<std::uint32_t> next;
     while (!work.empty()) {
         const auto pc = work.back();
@@ -199,6 +211,9 @@ void Interpreter::Impl::StaticKernel::prune_operations(
             continue;
         }
         successors(pc, succ[pc]);
+        if (pc == prologue_exit) {
+            continue;
+        }
         const auto& operation = operations[pc];
         if (const auto* call = operation_get_if<Call>(&operation)) {
             if (call->stack.capacity != 0U) {
@@ -273,10 +288,15 @@ void Interpreter::Impl::StaticKernel::prune_operations(
         const auto first = static_cast<std::ptrdiff_t>(entry * words);
         live_at_entry.assign(live_in.begin() + first,
             live_in.begin() + first + static_cast<std::ptrdiff_t>(words));
+        if (prologue) {
+            for (std::size_t word = 0U; word < words; ++word) {
+                live_at_entry[word] |= live_in[word];
+            }
+        }
     }
     for (std::uint32_t pc = 0U; pc < size; ++pc) {
         const auto* load = operation_get_if<LoadConstant>(&operations[pc]);
-        if (reachable[pc] == 0U || load == nullptr
+        if (reachable[pc] == 0U || load == nullptr || pc == prologue_exit
             || load->destination >= registers) {
             continue;
         }

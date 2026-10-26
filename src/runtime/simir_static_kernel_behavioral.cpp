@@ -268,6 +268,38 @@ void Interpreter::Impl::StaticKernel::behavioral_output(
 bool Interpreter::Impl::StaticKernel::behavioral_step(
     const std::uint32_t member_index, const std::uint32_t pc)
 {
+    ++interpreted_operations_;
+    ++interpreted_by_cause_[static_cast<std::size_t>(interpreting_)];
+    return visit_operation([&](const auto& op) {
+        return behavioral_operation(member_index, pc, op);
+    }, members_[member_index].operations[pc]);
+}
+
+template <typename Op>
+bool Interpreter::Impl::StaticKernel::behavioral_operation_at(
+    const std::uint32_t member_index, const std::uint32_t pc)
+{
+    return behavioral_operation(member_index, pc,
+        operation_get<Op>(members_[member_index].operations[pc]));
+}
+
+const std::array<Interpreter::Impl::StaticKernel::BehavioralOperationStep,
+    operation_kind_count>&
+Interpreter::Impl::StaticKernel::behavioral_operation_steps()
+{
+    static constexpr auto steps = []<std::size_t... K>(
+                                      std::index_sequence<K...>) {
+        return std::array<BehavioralOperationStep, operation_kind_count> {
+            &StaticKernel::behavioral_operation_at<OperationKindAt<K>>...
+        };
+    }(std::make_index_sequence<operation_kind_count>());
+    return steps;
+}
+
+template <typename Op>
+bool Interpreter::Impl::StaticKernel::behavioral_operation(
+    const std::uint32_t member_index, const std::uint32_t pc, const Op& op)
+{
     auto& member = members_[member_index];
     const auto string_register = [&](const StringRegisterId id) -> std::string& {
         if (id >= member.strings.size()) {
@@ -289,8 +321,8 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
         return member.container_registers[id];
     };
     bool handled = true;
-    visit_operation([&](const auto& op) {
-        using T = std::decay_t<decltype(op)>;
+    [&] {
+        using T = Op;
         if constexpr (std::is_same_v<T, Display>) {
             behavioral_output(member_index, op.text, op.newline);
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
@@ -649,13 +681,45 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
         } else {
             handled = false;
         }
-    }, member.operations[pc]);
+    }();
     return handled;
 }
 
 Interpreter::Impl::StaticKernel::Boundary
 Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
     const std::uint32_t pc)
+{
+    return visit_operation([&](const auto& op) {
+        return behavioral_boundary_op(index, pc, op);
+    }, members_[threads_[index].member].operations[pc]);
+}
+
+template <typename Op>
+Interpreter::Impl::StaticKernel::Boundary
+Interpreter::Impl::StaticKernel::behavioral_boundary_at(const std::uint32_t index,
+    const std::uint32_t pc)
+{
+    return behavioral_boundary_op(index, pc,
+        operation_get<Op>(members_[threads_[index].member].operations[pc]));
+}
+
+const std::array<Interpreter::Impl::StaticKernel::BoundaryStep,
+    operation_kind_count>&
+Interpreter::Impl::StaticKernel::boundary_steps()
+{
+    static constexpr auto steps = []<std::size_t... K>(
+                                      std::index_sequence<K...>) {
+        return std::array<BoundaryStep, operation_kind_count> {
+            &StaticKernel::behavioral_boundary_at<OperationKindAt<K>>...
+        };
+    }(std::make_index_sequence<operation_kind_count>());
+    return steps;
+}
+
+template <typename Op>
+Interpreter::Impl::StaticKernel::Boundary
+Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t index,
+    const std::uint32_t pc, const Op& op)
 {
     const auto member_index = threads_[index].member;
     auto& member = members_[member_index];
@@ -679,8 +743,8 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
     auto outcome = Boundary::none;
     // process_suspend is raised once the wait (or halt) is registered.
     bool suspend_point = false;
-    visit_operation([&](const auto& op) {
-        using T = std::decay_t<decltype(op)>;
+    [&] {
+        using T = Op;
         if constexpr (std::is_same_v<T, DebugPoint>) {
             // Debugger plan (also a deoptimized member's reference path):
             // the execution point of a statement, call, wait, assertion or
@@ -863,7 +927,8 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
                                                     : Boundary::suspend;
             suspend_point = op.join != ForkJoinKind::none;
         }
-    }, member.operations[pc]);
+    }();
+    (void)op;
     if (suspend_point && debug_points_) {
         debug_suspend(index, pc);
     }
@@ -1153,10 +1218,35 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
                 continue;
             }
             pc = *stopped_at;
-            outcome = behavioral_boundary(index, pc);
+            // Native code named the suspension's boundary helper; the
+            // kernel bytecode tier did not.
+            if (auto* helper = std::exchange(behavioral_boundary_helper_, nullptr)) {
+                outcome = static_cast<Boundary>(
+                    reinterpret_cast<std::uint32_t (*)(void*, std::uint32_t,
+                        std::uint32_t)>(helper)(this, index, pc));
+            } else {
+                outcome = behavioral_boundary(index, pc);
+            }
+        } else if (const auto stopped = [&] {
+                       // Native operation-tier code from `pc` to the next
+                       // suspension or finish.
+                       const auto outer = std::exchange(operation_tier_thread_, index);
+                       const auto result = run_operation_tier(member_index, pc, true);
+                       operation_tier_thread_ = outer;
+                       return result;
+                   }()) {
+            if (*stopped != operation_tier_stop) {
+                pc = *stopped;
+                continue;
+            }
+            pc = operation_tier_pc_;
+            outcome = operation_tier_boundary_;
         } else {
             outcome = behavioral_boundary(index, pc);
             if (outcome == Boundary::none) {
+                const InterpretingScope scope { *this, member.compiled
+                        ? InterpretedCause::generic_mode
+                        : InterpretedCause::thread };
                 if (behavioral_step(member_index, pc)) {
                     ++pc;
                 } else {
@@ -1200,6 +1290,10 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
     }
     behavioral_entry_ = start;
     behavioral_suspended_.reset();
+    behavioral_boundary_helper_ = nullptr;
+    if (member.native.entry == nullptr && member.native.lazy_template != no_slot) {
+        note_lazy_run(member.native.lazy_template);
+    }
     try {
         if (member.native.entry != nullptr) {
             run_native(member.native, body, member_index);

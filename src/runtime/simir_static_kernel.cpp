@@ -1096,6 +1096,9 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     // Every process is a member and nothing crosses the host boundary.
     closed_ = !host_boundary_ && !has_hosted_
         && impl_.processes.size() == members_.size();
+    if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
+        report_interpreted_sites();
+    }
 }
 
 Interpreter::Impl::StaticKernel::~StaticKernel()
@@ -2480,6 +2483,12 @@ bool Interpreter::Impl::StaticKernel::first_run_is_activation(const Member& memb
     return member.prologue_end == 0U || (jump != nullptr && jump->target == 0U);
 }
 
+bool Interpreter::Impl::StaticKernel::native_prologue(const Member& member)
+{
+    return member.vhdl && member.body_begin != 0U && member.prologue_end != 0U
+        && !first_run_is_activation(member);
+}
+
 void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_index)
 {
     auto& member = members_[member_index];
@@ -2499,12 +2508,18 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
         ++profile_member_runs_[member_index];
     }
     if (member.vhdl && member.compiled && member.fresh && !member.generic_mode
-        && !verify_ && first_run_is_activation(member)) {
-        // The prologue is the body itself (the activation's entry jumps to
-        // operation 0), so the first run is an ordinary activation.
+        && !verify_
+        && (first_run_is_activation(member)
+            || has_prologue_entry(*member.compiled, member.vhdl))) {
+        // Either the prologue is the body itself (the activation's entry
+        // jumps to operation 0), so the first run is an ordinary activation,
+        // or the code enters at operation 0 and runs the prologue into the
+        // activation (IEEE 1076-2019 14.7.5.2: each process runs until it
+        // suspends).
         member.fresh = false;
         profile_compiled_runs_ += profile_ ? 1U : 0U;
-        run_compiled(member_index);
+        run_compiled(member_index, first_run_is_activation(member)
+                ? 0U : static_kernel_prologue_entry);
         return;
     }
     if (member.vhdl && member.compiled && member.fresh && !member.generic_mode
@@ -2513,12 +2528,26 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
         // activation: the prologue runs on the reference evaluator, the body
         // from its start (prologue_end) in compiled code.
         member.fresh = false;
-        const auto pc = run_generic_from(member_index, 0U, member.prologue_end);
+        if (const auto stopped = run_operation_tier(member_index, 0U, false)) {
+            // The whole first run in operation-tier code.
+            if (*stopped != member.body_end) {
+                const InterpretingScope scope { *this, InterpretedCause::prologue };
+                run_generic_from(member_index, *stopped);
+            }
+            sync_compiled_registers(member_index);
+            return;
+        }
+        const auto pc = [&] {
+            const InterpretingScope scope { *this, InterpretedCause::prologue };
+            return run_generic_from(member_index, 0U, member.prologue_end);
+        }();
         sync_compiled_registers(member_index);
         if (pc == member.body_end) {
             return;
         }
         if (member.generic_mode) {
+            const InterpretingScope scope { *this,
+                InterpretedCause::generic_mode };
             run_generic_from(member_index, pc);
             sync_compiled_registers(member_index);
             return;
@@ -2533,6 +2562,8 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
             profile_member_deopts_.resize(members_.size(), 0U);
             ++profile_member_deopts_[member_index];
         }
+        const InterpretingScope scope { *this, member.fresh
+                ? InterpretedCause::prologue : InterpretedCause::generic_mode };
         run_generic(member_index);
         sync_compiled_registers(member_index);
         return;
@@ -2545,6 +2576,7 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
         }
         run_compiled(member_index);
     } else {
+        const InterpretingScope scope { *this, InterpretedCause::uncompiled };
         run_generic(member_index);
     }
 }
@@ -2624,7 +2656,10 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                 body.registers[reg].b),
             kind);
     }
-    run_generic_from(member_index, member.body_begin);
+    {
+        const InterpretingScope scope { *this, InterpretedCause::verify };
+        run_generic_from(member_index, member.body_begin);
+    }
     const auto reference_writes = writes();
     std::string mismatch;
     if (compiled_writes != reference_writes) {
@@ -2749,6 +2784,9 @@ void Interpreter::Impl::StaticKernel::run_generic(const std::uint32_t member_ind
         run_generic_from(member_index, pc);
         return;
     }
+    if (const auto stopped = run_operation_tier(member_index, pc, false)) {
+        pc = *stopped;
+    }
     while (pc >= member.body_begin && pc < member.body_end) {
         if (++steps > run_step_limit) {
             fail(member_index, pc, "static kernel member did not terminate");
@@ -2764,6 +2802,13 @@ std::uint32_t Interpreter::Impl::StaticKernel::run_generic_from(
     // halt of a process without sensitivity), or at `until`.
     const auto& member = members_[member_index];
     const auto size = member.operations.size();
+    if (until == no_slot) {
+        // Native code from `pc`; the reference loop below only finishes a
+        // run the operation tier could not (no code, an unexpected stop).
+        if (const auto stopped = run_operation_tier(member_index, pc, false)) {
+            pc = *stopped;
+        }
+    }
     std::size_t steps = 0U;
     while (pc != member.body_end && pc != until) {
         if (++steps > run_step_limit) {
@@ -2781,6 +2826,39 @@ std::uint32_t Interpreter::Impl::StaticKernel::run_generic_from(
 std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
     const std::uint32_t member_index, const std::uint32_t pc)
 {
+    profile_operations_ += profile_ ? 1U : 0U;
+    ++interpreted_operations_;
+    ++interpreted_by_cause_[static_cast<std::size_t>(interpreting_)];
+    return visit_operation([&](const auto& op) {
+        return step_operation(member_index, pc, op);
+    }, members_[member_index].operations[pc]);
+}
+
+template <typename Op>
+std::uint32_t Interpreter::Impl::StaticKernel::step_operation_at(
+    const std::uint32_t member_index, const std::uint32_t pc)
+{
+    return step_operation(member_index, pc,
+        operation_get<Op>(members_[member_index].operations[pc]));
+}
+
+const std::array<Interpreter::Impl::StaticKernel::OperationStep,
+    operation_kind_count>&
+Interpreter::Impl::StaticKernel::operation_steps()
+{
+    static constexpr auto steps = []<std::size_t... K>(
+                                      std::index_sequence<K...>) {
+        return std::array<OperationStep, operation_kind_count> {
+            &StaticKernel::step_operation_at<OperationKindAt<K>>...
+        };
+    }(std::make_index_sequence<operation_kind_count>());
+    return steps;
+}
+
+template <typename Op>
+std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
+    const std::uint32_t member_index, const std::uint32_t pc, const Op& op)
+{
     auto& member = members_[member_index];
     auto& registers = member.registers;
     const auto reg = [&](const RegisterId id,
@@ -2796,8 +2874,8 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
     };
     {
         const auto& operation = member.operations[pc];
+        (void)operation;
         std::uint32_t next = pc + 1U;
-        profile_operations_ += profile_ ? 1U : 0U;
         const auto signal_write = [&](const SignalId signal, PackedLogic4 value,
                                       const std::optional<std::uint32_t> offset,
                                       const bool blocking,
@@ -2873,8 +2951,8 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
             }
             return containers_[member.container_registers[id]];
         };
-        visit_operation([&](const auto& op) {
-            using T = std::decay_t<decltype(op)>;
+        [&] {
+            using T = Op;
             if constexpr (std::is_same_v<T, DebugPoint>) {
             } else if constexpr (std::is_same_v<T, LoadConstant>) {
                 reg(op.destination, pc) = Impl::coerce_value_kind(
@@ -3424,7 +3502,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                 fail(member_index, pc,
                     "static kernel member contains an unsupported operation");
             }
-        }, operation);
+        }();
         return next;
     }
 }
@@ -4548,6 +4626,21 @@ void InterpreterProgramAccess::set_static_kernel_time_warp(
     if (impl.static_kernel) {
         impl.static_kernel->set_time_warp(allowed);
     }
+}
+
+InterpretationCounts InterpreterProgramAccess::interpretation_counts(
+    const Interpreter& interpreter)
+{
+    const auto& impl = *interpreter.impl_;
+    auto counts = impl.static_kernel ? impl.static_kernel->interpretation_counts()
+                                     : InterpretationCounts { };
+    counts.executes = impl.interpreted_executes;
+    counts.constant_drivers = impl.constant_driver_executes;
+    for (const auto& [process, count] : impl.interpreted_programs) {
+        counts.executed_programs.emplace_back(
+            std::string { impl.processes.program_view(process).name() }, count);
+    }
+    return counts;
 }
 
 void InterpreterProgramAccess::install_static_kernel(

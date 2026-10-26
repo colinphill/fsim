@@ -22,6 +22,10 @@ namespace {
     constexpr std::uint64_t maximum_runtime_vhdl_for_iterations
         = std::uint64_t { 1 } << 62U;
     constexpr std::size_t minimum_static_vhdl_for_runtime_iterations = 8U;
+    // A repeat loop has no loop variable, so its iterations are one body
+    // (IEEE 1800-2017 12.7.2): a longer one runs as a loop rather than being
+    // unrolled into a program the size of its count (nested, the product).
+    constexpr std::size_t maximum_unrolled_repeat_iterations = 256U;
 
     class HirDebugScopeGuard final {
     public:
@@ -18113,7 +18117,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 visiting);
         }();
         auto static_loop_iterations = hir_loop_iteration_count(statement_id);
-        if (runtime_repeat_count) {
+        const bool long_repeat = statement->systemverilog != nullptr
+            && statement->systemverilog->loop_repeat
+            && statement->systemverilog->loop_limit && static_loop_iterations
+            && *static_loop_iterations > maximum_unrolled_repeat_iterations;
+        if (runtime_repeat_count || long_repeat) {
             static_loop_iterations.reset();
         }
         std::optional<std::int64_t> vhdl_first_static;
@@ -18280,7 +18288,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && (loop_statement.loop_runtime
                     || (loop_statement.loop_repeat
                         && loop_statement.loop_limit
-                        && (runtime_repeat_count
+                        && (runtime_repeat_count || long_repeat
                             || !hir_constant_integer(
                                 *loop_statement.loop_limit)))
                     || (!loop_statement.loop_variable.empty()

@@ -5,7 +5,9 @@
 #include "simir_static_kernel_compiled_internal.hpp"
 #include "fsim/support/index_distance.hpp"
 
+#include <array>
 #include <cctype>
+#include <cstdlib>
 #include <cxxabi.h>
 #include <iostream>
 #include <limits>
@@ -13,6 +15,7 @@
 #include <queue>
 #include <typeinfo>
 #include <unordered_map>
+#include <utility>
 
 namespace fsim::runtime::simir {
 
@@ -23,6 +26,8 @@ namespace kw = kernel_word;
 void Interpreter::Impl::StaticKernel::execute(
     CompiledBody& body, std::uint32_t member_index)
 {
+    ++interpreted_bytecode_runs_;
+    const InterpretingScope scope { *this, InterpretedCause::bytecode };
     if (members_[member_index].vhdl) {
         try {
             execute_body(body, member_index);
@@ -432,6 +437,9 @@ void Interpreter::Impl::StaticKernel::execute_body(
         case KOp::suspend:
             behavioral_suspended_ = inst.x;
             return;
+        case KOp::step:
+            // Operation-tier bodies run only as native code.
+            throw std::logic_error { "static kernel bytecode met an operation-tier step" };
         }
         if (mode == 0U) {
             continue;
@@ -470,6 +478,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
 void Interpreter::Impl::StaticKernel::handle_deopt(const std::uint32_t member_index,
     CompiledBody& body, const KernelDeopt& deopt)
 {
+    ++interpreted_deopts_;
     auto& member = members_[member_index];
     if (profile_) {
         ++profile_deopts_;
@@ -522,6 +531,7 @@ void Interpreter::Impl::StaticKernel::handle_deopt(const std::uint32_t member_in
         }
         body.registers[body.call_stack_base] = { };
     }
+    const InterpretingScope scope { *this, InterpretedCause::deopt };
     run_generic_from(member_index, deopt.executed ? deopt.resume + 1U
                                                   : deopt.resume);
     sync_compiled_registers(member_index);
@@ -571,52 +581,12 @@ bool Interpreter::Impl::StaticKernel::wide_part_insert(CompiledBody& body,
     return true;
 }
 
-bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
-    Word* registers, const KInst& inst, const std::uint32_t member_index,
-    const bool two_state_code)
+void Interpreter::Impl::StaticKernel::generic_load_operands(CompiledBody& body,
+    const Word* registers, const KInst& inst, const std::uint32_t member_index,
+    const std::vector<RegisterId>& reads)
 {
     auto& member = members_[member_index];
-    const auto& operation = member.operations[inst.x];
-    if (profile_) {
-        visit_operation([&](const auto& op) {
-            int status = 0;
-            char* name = abi::__cxa_demangle(typeid(op).name(), nullptr, nullptr,
-                &status);
-            std::string key = name != nullptr ? name : "?";
-            std::free(name);
-            key = key.substr(key.rfind(':') + 1U);
-            std::vector<RegisterId> regs;
-            std::optional<RegisterId> out;
-            operation_registers(operation, regs, out);
-            key += " w=";
-            for (const auto reg : regs) {
-                key += std::to_string(body.register_widths[inst.y + reg]) + ",";
-            }
-            if (out) {
-                key += "->" + std::to_string(body.register_widths[inst.y + *out]);
-            }
-            if (member_index < profile_names_.size()) {
-                // The member, instance indices dropped (as for evaluate).
-                auto who = " " + profile_names_[member_index];
-                std::erase_if(who, [](const char c) {
-                    return std::isdigit(static_cast<unsigned char>(c)) != 0;
-                });
-                key += who;
-            }
-            ++profile_generic_ops_[key];
-        }, operation);
-    }
     const auto base = inst.y;
-    if (const auto* insert = operation_get_if<DynamicPartInsert>(&operation);
-        insert != nullptr
-        && (insert->source >= member.register_kinds.size()
-            || member.register_kinds[insert->source] == ValueKind::logic4)
-        && wide_part_insert(body, registers, *insert, base)) {
-        return false;
-    }
-    std::vector<RegisterId> reads;
-    std::optional<RegisterId> write;
-    operation_registers(operation, reads, write);
     for (const auto reg : reads) {
         const auto index = base + reg;
         const auto width = body.register_widths[index];
@@ -632,44 +602,135 @@ bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
             member.registers[reg] = body.wide_registers[index];
         }
     }
+}
+
+bool Interpreter::Impl::StaticKernel::generic_store_result(CompiledBody& body,
+    Word* registers, const KInst& inst, const std::uint32_t member_index,
+    const std::optional<RegisterId> write, const bool two_state_code)
+{
+    if (!write) {
+        return false;
+    }
+    auto& member = members_[member_index];
+    const auto index = inst.y + *write;
+    const auto width = body.register_widths[index];
+    auto& value = member.registers[*write];
+    if (width > 64U) {
+        body.wide_registers[index] = value;
+        return false;
+    }
+    if (value.width() != width) {
+        fail(member_index, inst.x,
+            "static kernel generic result width is inconsistent");
+    }
+    const auto word = exact_uword(value);
+    const bool tracked = body.shadow_base != 0U
+        && index < body.tracked.size() && body.tracked[index] != 0U;
+    if (!word || (word->unknown != 0U && !tracked)) {
+        throw KernelDeopt { inst.x, true, *write };
+    }
+    registers[index] = word->value;
+    if (tracked) {
+        registers[body.shadow_base + index] = { word->unknown, 0U };
+    }
+    // Two-state code cannot continue with a result with X or 'U' bits.
+    return two_state_code && (word->value.b != 0U || word->unknown != 0U);
+}
+
+void Interpreter::Impl::StaticKernel::note_generic_profile(
+    const CompiledBody& body, const KInst& inst, const std::uint32_t member_index,
+    const char* mangled, const std::vector<RegisterId>& regs,
+    const std::optional<RegisterId> out)
+{
+    int status = 0;
+    char* name = abi::__cxa_demangle(mangled, nullptr, nullptr, &status);
+    std::string key = name != nullptr ? name : "?";
+    std::free(name);
+    key = key.substr(key.rfind(':') + 1U);
+    key += " w=";
+    for (const auto reg : regs) {
+        key += std::to_string(body.register_widths[inst.y + reg]) + ",";
+    }
+    if (out) {
+        key += "->" + std::to_string(body.register_widths[inst.y + *out]);
+    }
+    if (member_index < profile_names_.size()) {
+        // The member, instance indices dropped (as for evaluate).
+        auto who = " " + profile_names_[member_index];
+        std::erase_if(who, [](const char c) {
+            return std::isdigit(static_cast<unsigned char>(c)) != 0;
+        });
+        key += who;
+    }
+    ++profile_generic_ops_[key];
+}
+
+bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
+    Word* registers, const KInst& inst, const std::uint32_t member_index,
+    const bool two_state_code)
+{
+    auto& member = members_[member_index];
+    const auto& operation = member.operations[inst.x];
+    auto& reads = generic_reads_;
+    std::optional<RegisterId> write;
+    operation_registers(operation, reads, write);
+    if (profile_) {
+        visit_operation([&](const auto& op) {
+            note_generic_profile(body, inst, member_index, typeid(op).name(),
+                reads, write);
+        }, operation);
+    }
+    if (const auto* insert = operation_get_if<DynamicPartInsert>(&operation);
+        insert != nullptr
+        && (insert->source >= member.register_kinds.size()
+            || member.register_kinds[insert->source] == ValueKind::logic4)
+        && wide_part_insert(body, registers, *insert, inst.y)) {
+        return false;
+    }
+    generic_load_operands(body, registers, inst, member_index, reads);
     // Behavioral runtime-library operations (output, strings, plusargs)
     // run on the thread's reference state.
     if (member.kind != StaticKernelMemberKind::behavioral
         || !behavioral_step(member_index, inst.x)) {
         (void)step_generic(member_index, inst.x);
     }
-    if (write) {
-        const auto index = base + *write;
-        const auto width = body.register_widths[index];
-        auto& value = member.registers[*write];
-        if (width <= 64U) {
-            if (value.width() != width) {
-                fail(member_index, inst.x,
-                    "static kernel generic result width is inconsistent");
-            }
-            const auto word = exact_uword(value);
-            const bool tracked = body.shadow_base != 0U
-                && index < body.tracked.size() && body.tracked[index] != 0U;
-            if (!word || (word->unknown != 0U && !tracked)) {
-                throw KernelDeopt { inst.x, true, *write };
-            }
-            registers[index] = word->value;
-            if (tracked) {
-                registers[body.shadow_base + index] = { word->unknown, 0U };
-            }
-            if (two_state_code
-                && (word->value.b != 0U || word->unknown != 0U)) {
-                // Two-state code cannot continue with this value.
-                return true;
-            }
-        } else {
-            body.wide_registers[index] = value;
-        }
-    }
-    return false;
+    return generic_store_result(body, registers, inst, member_index, write,
+        two_state_code);
 }
 
-void Interpreter::Impl::StaticKernel::native_generic(
+template <std::size_t K>
+bool Interpreter::Impl::StaticKernel::execute_generic_kind(CompiledBody& body,
+    Word* registers, const KInst& inst, const std::uint32_t member_index,
+    const bool two_state_code)
+{
+    using T = OperationKindAt<K>;
+    auto& member = members_[member_index];
+    const auto& op = operation_get<T>(member.operations[inst.x]);
+    auto& reads = generic_reads_;
+    std::optional<RegisterId> write;
+    operation_registers_of(op, reads, write);
+    if (profile_) {
+        note_generic_profile(body, inst, member_index, typeid(T).name(), reads,
+            write);
+    }
+    if constexpr (std::is_same_v<T, DynamicPartInsert>) {
+        if ((op.source >= member.register_kinds.size()
+                || member.register_kinds[op.source] == ValueKind::logic4)
+            && wide_part_insert(body, registers, op, inst.y)) {
+            return false;
+        }
+    }
+    generic_load_operands(body, registers, inst, member_index, reads);
+    if (member.kind != StaticKernelMemberKind::behavioral
+        || !(this->*behavioral_operation_steps()[K])(member_index, inst.x)) {
+        (void)(this->*operation_steps()[K])(member_index, inst.x);
+    }
+    return generic_store_result(body, registers, inst, member_index, write,
+        two_state_code);
+}
+
+template <std::size_t K>
+void Interpreter::Impl::StaticKernel::native_generic_kind(
     StaticKernelNativeFrame* frame, Word* registers, const std::uint32_t at)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
@@ -677,9 +738,9 @@ void Interpreter::Impl::StaticKernel::native_generic(
     try {
         const auto& program = *static_cast<const CompiledBody*>(frame->program);
         kernel.running_position_ = frame->position;
-        if (kernel.execute_generic(*static_cast<CompiledBody*>(frame->instance),
-                registers, program.code[at], frame->member,
-                kernel.two_state_running_)) {
+        if (kernel.execute_generic_kind<K>(
+                *static_cast<CompiledBody*>(frame->instance), registers,
+                program.code[at], frame->member, kernel.two_state_running_)) {
             // The template's full code continues after the instruction.
             frame->reserved = at + 1U;
             frame->status = 4U;
@@ -693,8 +754,82 @@ void Interpreter::Impl::StaticKernel::native_generic(
     }
 }
 
+template <std::size_t K>
+std::uint32_t Interpreter::Impl::StaticKernel::native_step_kind(
+    StaticKernelNativeFrame* frame, const std::uint32_t pc)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        if (++kernel.operation_tier_steps_ > run_step_limit) {
+            kernel.fail(frame->member, pc, "static kernel member did not terminate");
+        }
+        return (kernel.*operation_steps()[K])(frame->member, pc);
+    } catch (...) {
+        kernel.native_exception_ = std::current_exception();
+        frame->status = 1U;
+        return operation_tier_stop;
+    }
+}
+
+template <std::size_t K>
+std::uint32_t Interpreter::Impl::StaticKernel::native_thread_step_kind(
+    StaticKernelNativeFrame* frame, const std::uint32_t pc)
+{
+    // As the thread runner's reference loop: the operation's boundary
+    // (wait, fork, halt, debug point), else its behavioral or kernel step.
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        const auto outcome
+            = (kernel.*boundary_steps()[K])(kernel.operation_tier_thread_, pc);
+        if (outcome == Boundary::none) {
+            if ((kernel.*behavioral_operation_steps()[K])(frame->member, pc)) {
+                return pc + 1U;
+            }
+            return (kernel.*operation_steps()[K])(frame->member, pc);
+        }
+        if (outcome == Boundary::advance) {
+            return pc + 1U;
+        }
+        kernel.operation_tier_boundary_ = outcome;
+        kernel.operation_tier_pc_ = pc;
+        return operation_tier_stop;
+    } catch (...) {
+        kernel.native_exception_ = std::current_exception();
+        frame->status = 1U;
+        return operation_tier_stop;
+    }
+}
+
+template <std::size_t K>
+std::uint32_t Interpreter::Impl::StaticKernel::native_boundary_kind(void* kernel,
+    const std::uint32_t thread, const std::uint32_t pc)
+{
+    // Called by the thread runner (not by native code) once the compiled
+    // registers are back in the member's state.
+    return static_cast<std::uint32_t>(
+        (static_cast<StaticKernel*>(kernel)->*boundary_steps()[K])(thread, pc));
+}
+
+template <std::size_t K>
+std::uint32_t Interpreter::Impl::StaticKernel::native_hosted_step_kind(
+    StaticKernelNativeFrame* frame, const std::uint32_t pc)
+{
+    // The evaluator's semantics for this operation kind on the process, then
+    // its boundary handling (Impl::hosted_step).
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        auto& process = *static_cast<ProcessState*>(frame->instance);
+        return (kernel.impl_.*Impl::hosted_steps()[K])(process, pc);
+    } catch (...) {
+        kernel.native_exception_ = std::current_exception();
+        frame->status = 1U;
+        return operation_tier_stop;
+    }
+}
+
+template <KOp Op>
 Interpreter::Impl::StaticKernel::Word
-Interpreter::Impl::StaticKernel::evaluate_slow(const CompiledBody& body,
+Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
     const KInst& inst, const std::uint32_t at, const std::uint32_t member_index,
     const std::uint32_t body_begin, const Word x, const Word y, const Word z,
     const std::uint32_t resolved, const std::vector<PackedLogic4>* wide)
@@ -765,9 +900,12 @@ Interpreter::Impl::StaticKernel::evaluate_slow(const CompiledBody& body,
     };
     // Runs SimIR operation `origin + at` on the reference evaluator with the
     // given operand words and returns its destination as a word.
-    const auto reference = [&](const std::initializer_list<
+    // The operation's kernel step (its kind's, chosen here).
+    const auto reference = [&](const auto& operation,
+                               const std::initializer_list<
                                    std::pair<RegisterId, Word>> operands,
                                const RegisterId destination) -> Word {
+        using T = std::decay_t<decltype(operation)>;
         auto& member = members_[member_index];
         const auto& widths = body.register_widths;
         for (const auto& [reg, value] : operands) {
@@ -776,13 +914,14 @@ Interpreter::Impl::StaticKernel::evaluate_slow(const CompiledBody& body,
             member.registers[reg] = Impl::coerce_value_kind(
                 PackedLogic4::from_aval_bval(widths[reg], value.a, value.b), kind);
         }
-        (void)step_generic(member_index, body_begin + at);
+        (void)(this->*operation_steps()[operation_kind_of<T>])(member_index,
+            body_begin + at);
         if (const auto word = exact_word(member.registers[destination])) {
             return *word;
         }
         throw KernelDeopt { at, true, destination };
     };
-    switch (inst.op) {
+    switch (Op) {
     case KOp::load_field9: {
         const auto field = source_field(inst.offset, inst.width);
         last_unknown_ = field.unknown;
@@ -862,12 +1001,12 @@ Interpreter::Impl::StaticKernel::evaluate_slow(const CompiledBody& body,
                 return { static_cast<std::uint64_t>(*result) & kw::mask(32U), 0U };
             }
         }
-        return reference({ { op.lhs, x }, { op.rhs, y } }, op.destination);
+        return reference(op, { { op.lhs, x }, { op.rhs, y } }, op.destination);
     }
     case KOp::integer_unary: {
         const auto& op = *operation_get_if<IntegerUnary>(
             &members_[member_index].operations[body_begin + at]);
-        return reference({ { op.source, x } }, op.destination);
+        return reference(op, { { op.source, x } }, op.destination);
     }
     case KOp::load_host: {
         const auto& current = impl_.logical_signal_value(resolved);
@@ -1045,7 +1184,8 @@ Interpreter::Impl::StaticKernel::evaluate_slow(const CompiledBody& body,
     return { };
 }
 
-void Interpreter::Impl::StaticKernel::effect_slow(const CompiledBody& body,
+template <KOp Op>
+void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
     const KInst& inst, const std::uint32_t at, const std::uint32_t member_index,
     const std::uint32_t body_begin, const Word x, const Word y, const Word z,
     const std::uint32_t resolved)
@@ -1072,7 +1212,9 @@ void Interpreter::Impl::StaticKernel::effect_slow(const CompiledBody& body,
     };
     // Runs SimIR operation `body_begin + at` on the reference evaluator with
     // its operand register set to `value`.
-    const auto reference = [&](const RegisterId reg, const Word value) {
+    const auto reference = [&](const auto& operation, const RegisterId reg,
+                               const Word value) {
+        using T = std::decay_t<decltype(operation)>;
         auto& member = members_[member_index];
         const auto kind = reg < member.register_kinds.size()
             ? member.register_kinds[reg] : ValueKind::logic4;
@@ -1080,9 +1222,10 @@ void Interpreter::Impl::StaticKernel::effect_slow(const CompiledBody& body,
             PackedLogic4::from_aval_bval(body.register_widths[reg], value.a,
                 value.b),
             kind);
-        (void)step_generic(member_index, body_begin + at);
+        (void)(this->*operation_steps()[operation_kind_of<T>])(member_index,
+            body_begin + at);
     };
-    switch (inst.op) {
+    switch (Op) {
     case KOp::store_vhdl: {
         auto offset = inst.offset;
         if (inst.sub == 1U) {
@@ -1144,7 +1287,7 @@ void Interpreter::Impl::StaticKernel::effect_slow(const CompiledBody& body,
         }
         const auto& op = *operation_get_if<IntegerCheck>(
             &members_[member_index].operations[body_begin + at]);
-        reference(op.source, x);
+        reference(op, op.source, x);
         return;
     }
     case KOp::call:
@@ -1185,7 +1328,7 @@ void Interpreter::Impl::StaticKernel::effect_slow(const CompiledBody& body,
         }
         const auto& op = *operation_get_if<Assert>(
             &members_[member_index].operations[body_begin + at]);
-        reference(op.condition, x);
+        reference(op, op.condition, x);
         return;
     }
     case KOp::store_slot:
@@ -1283,6 +1426,218 @@ void Interpreter::Impl::StaticKernel::effect_slow(const CompiledBody& body,
         break;
     }
     fail_at("static kernel instruction has no effect evaluation");
+}
+
+namespace {
+
+/// Instruction kinds with slow evaluate and effect semantics
+/// (evaluate_slow_op, effect_slow_op).
+constexpr std::array evaluate_kinds { KOp::load_field9, KOp::branch, KOp::ret,
+    KOp::load_slot9, KOp::integer_binary, KOp::integer_unary, KOp::load_host,
+    KOp::shift, KOp::binary, KOp::extract, KOp::dynamic_extract,
+    KOp::dynamic_part_select, KOp::dynamic_insert, KOp::dynamic_part_insert,
+    KOp::mem_read };
+constexpr std::array effect_kinds { KOp::store_vhdl, KOp::integer_check,
+    KOp::call, KOp::ret, KOp::deopt, KOp::assert_check, KOp::store_slot,
+    KOp::store_slot_nba, KOp::store_slot_dynamic, KOp::store_slot_part,
+    KOp::store_host, KOp::mem_copy, KOp::wide_move, KOp::mem_write };
+
+} // namespace
+
+Interpreter::Impl::StaticKernel::Word
+Interpreter::Impl::StaticKernel::evaluate_slow(const CompiledBody& body,
+    const KInst& inst, const std::uint32_t at, const std::uint32_t member_index,
+    const std::uint32_t body_begin, const Word x, const Word y, const Word z,
+    const std::uint32_t resolved, const std::vector<PackedLogic4>* wide)
+{
+    using Evaluate = Word (StaticKernel::*)(const CompiledBody&, const KInst&,
+        std::uint32_t, std::uint32_t, std::uint32_t, Word, Word, Word,
+        std::uint32_t, const std::vector<PackedLogic4>*);
+    static constexpr auto table = []<std::size_t... I>(
+                                      std::index_sequence<I...>) {
+        std::array<Evaluate, kernel_op_count> entries { };
+        ((entries[static_cast<std::size_t>(evaluate_kinds[I])]
+             = &StaticKernel::evaluate_slow_op<evaluate_kinds[I]>),
+            ...);
+        return entries;
+    }(std::make_index_sequence<evaluate_kinds.size()>());
+    const auto entry = table[static_cast<std::size_t>(inst.op)];
+    if (entry == nullptr) {
+        fail(member_index, body_begin + at,
+            "static kernel instruction has no slow evaluation");
+    }
+    return (this->*entry)(body, inst, at, member_index, body_begin, x, y, z,
+        resolved, wide);
+}
+
+void Interpreter::Impl::StaticKernel::effect_slow(const CompiledBody& body,
+    const KInst& inst, const std::uint32_t at, const std::uint32_t member_index,
+    const std::uint32_t body_begin, const Word x, const Word y, const Word z,
+    const std::uint32_t resolved)
+{
+    using Effect = void (StaticKernel::*)(const CompiledBody&, const KInst&,
+        std::uint32_t, std::uint32_t, std::uint32_t, Word, Word, Word,
+        std::uint32_t);
+    static constexpr auto table = []<std::size_t... I>(
+                                      std::index_sequence<I...>) {
+        std::array<Effect, kernel_op_count> entries { };
+        ((entries[static_cast<std::size_t>(effect_kinds[I])]
+             = &StaticKernel::effect_slow_op<effect_kinds[I]>),
+            ...);
+        return entries;
+    }(std::make_index_sequence<effect_kinds.size()>());
+    const auto entry = table[static_cast<std::size_t>(inst.op)];
+    if (entry == nullptr) {
+        fail(member_index, body_begin + at,
+            "static kernel instruction has no effect evaluation");
+    }
+    (this->*entry)(body, inst, at, member_index, body_begin, x, y, z, resolved);
+}
+
+template <KOp Op>
+void Interpreter::Impl::StaticKernel::native_evaluate(
+    StaticKernelNativeFrame* frame, const std::uint32_t at,
+    const std::uint64_t xa, const std::uint64_t xb, const std::uint64_t ya,
+    const std::uint64_t yb, const std::uint64_t za, const std::uint64_t zb,
+    std::uint64_t* out)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    kernel.profile_native_calls_[0] += kernel.profile_ ? 1U : 0U;
+    try {
+        const auto& body = *static_cast<const CompiledBody*>(frame->program);
+        const auto& inst = body.code[at];
+        if (kernel.profile_) {
+            static const bool who = std::getenv("FSIM_PROFILE_KERNEL_WHO") != nullptr;
+            std::string member;
+            if (who && frame->member < kernel.profile_names_.size()) {
+                member = " " + kernel.profile_names_[frame->member];
+                std::erase_if(member, [](const char c) {
+                    return std::isdigit(static_cast<unsigned char>(c)) != 0;
+                });
+            }
+            ++kernel.profile_generic_ops_["evaluate op="
+                + std::to_string(static_cast<int>(inst.op)) + " sub="
+                + std::to_string(inst.sub) + " w=" + std::to_string(inst.width) + member];
+        }
+        std::uint32_t resolved = 0U;
+        if (inst.op == KOp::load_host || inst.op == KOp::mem_read) {
+            resolved = frame->bindings[2U * inst.x];
+        } else if (((inst.op == KOp::dynamic_extract
+                        || inst.op == KOp::dynamic_part_select)
+                       && inst.sub == 1U)
+            || inst.op == KOp::load_slot9 || inst.op == KOp::load_field9) {
+            resolved = frame->bindings[2U * inst.x + 1U] & ~partition_tag;
+        }
+        const auto result = kernel.evaluate_slow_op<Op>(body, inst, at, frame->member,
+            kernel.members_[frame->member].vhdl ? 0U : kernel.members_[frame->member].body_begin,
+            { xa, xb }, { ya, yb },
+            { za, zb }, resolved,
+            &static_cast<CompiledBody*>(frame->instance)->wide_registers);
+        out[0] = result.a;
+        out[1] = result.b;
+        out[2] = kernel.last_unknown_;
+    } catch (const KernelDeopt& deopt) {
+        kernel.pending_deopt_ = deopt;
+        if (kernel.pending_deopt_->resume == 0xffffffffU) {
+            kernel.pending_deopt_->resume = at;
+        }
+        frame->status = 2U;
+        out[0] = 0U;
+        out[1] = 0U;
+    } catch (...) {
+        kernel.native_exception_ = std::current_exception();
+        frame->status = 1U;
+        out[0] = 0U;
+        out[1] = 0U;
+    }
+}
+
+template <KOp Op>
+void Interpreter::Impl::StaticKernel::native_effect(
+    StaticKernelNativeFrame* frame, const std::uint32_t at,
+    const std::uint64_t xa, const std::uint64_t xb, const std::uint64_t ya,
+    const std::uint64_t yb, const std::uint64_t za, const std::uint64_t zb,
+    std::uint64_t* out)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    kernel.profile_native_calls_[1] += kernel.profile_ ? 1U : 0U;
+    out[0] = 0U;
+    out[1] = 0U;
+    try {
+        const auto& body = *static_cast<const CompiledBody*>(frame->program);
+        const auto& inst = body.code[at];
+        if (kernel.profile_) {
+            static const bool who = std::getenv("FSIM_PROFILE_KERNEL_WHO") != nullptr;
+            std::string member;
+            if (who && frame->member < kernel.profile_names_.size()) {
+                member = " " + kernel.profile_names_[frame->member];
+                std::erase_if(member, [](const char c) {
+                    return std::isdigit(static_cast<unsigned char>(c)) != 0;
+                });
+            }
+            ++kernel.profile_generic_ops_["effect op="
+                + std::to_string(static_cast<int>(inst.op)) + " sub="
+                + std::to_string(inst.sub) + " w=" + std::to_string(inst.width) + member];
+        }
+        const auto binding = inst.d;
+        std::uint32_t resolved = 0U;
+        auto source = Word { xa, xb };
+        if (inst.op == KOp::store_host || inst.op == KOp::mem_write
+            || inst.op == KOp::mem_copy) {
+            resolved = frame->bindings[2U * binding];
+        } else if (inst.op == KOp::store_slot || inst.op == KOp::store_slot_nba
+            || inst.op == KOp::store_slot_dynamic
+            || inst.op == KOp::store_slot_part || inst.op == KOp::store_vhdl
+            || inst.op == KOp::wide_move) {
+            resolved = frame->bindings[2U * binding + 1U] & ~partition_tag;
+        }
+        if (inst.op == KOp::mem_copy) {
+            // x carries the source container.
+            source = { frame->bindings[2U * inst.x], 0U };
+        }
+        if (inst.op == KOp::wide_move) {
+            // x carries the source slot.
+            source = { frame->bindings[2U * inst.x + 1U] & ~partition_tag, 0U };
+        }
+        kernel.running_position_ = frame->position;
+        kernel.effect_slow_op<Op>(body, inst, at, frame->member,
+            kernel.members_[frame->member].vhdl ? 0U : kernel.members_[frame->member].body_begin,
+            source, { ya, yb }, { za, zb }, resolved);
+    } catch (const KernelDeopt& deopt) {
+        kernel.pending_deopt_ = deopt;
+        if (kernel.pending_deopt_->resume == 0xffffffffU) {
+            kernel.pending_deopt_->resume = at;
+        }
+        frame->status = 2U;
+    } catch (...) {
+        kernel.native_exception_ = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+
+void Interpreter::Impl::StaticKernel::set_instruction_helpers(
+    StaticKernelNativeHelpers& helpers)
+{
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+        ((helpers.evaluate_ops[static_cast<std::size_t>(evaluate_kinds[I])]
+             = &StaticKernel::native_evaluate<evaluate_kinds[I]>),
+            ...);
+    }(std::make_index_sequence<evaluate_kinds.size()>());
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+        ((helpers.effect_ops[static_cast<std::size_t>(effect_kinds[I])]
+             = &StaticKernel::native_effect<effect_kinds[I]>),
+            ...);
+    }(std::make_index_sequence<effect_kinds.size()>());
+    [&]<std::size_t... K>(std::index_sequence<K...>) {
+        ((helpers.generic_ops[K] = &StaticKernel::native_generic_kind<K>), ...);
+        ((helpers.step_ops[K] = &StaticKernel::native_step_kind<K>), ...);
+        ((helpers.thread_step_ops[K] = &StaticKernel::native_thread_step_kind<K>),
+            ...);
+        ((helpers.hosted_step_ops[K] = &StaticKernel::native_hosted_step_kind<K>),
+            ...);
+        ((helpers.boundary_ops[K] = &StaticKernel::native_boundary_kind<K>), ...);
+    }(std::make_index_sequence<operation_kind_count>());
 }
 
 void Interpreter::Impl::StaticKernel::move_wide(const CompiledBody& body,

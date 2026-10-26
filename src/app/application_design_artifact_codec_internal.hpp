@@ -24,6 +24,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <iterator>
@@ -2709,7 +2710,26 @@ namespace codec_detail {
             return true;
         }
 
-        bool read_exact(char* destination, std::size_t size)
+        bool read_exact(char* destination, const std::size_t size)
+        {
+            // Most reads are a few bytes from the current buffer: inline.
+            if (size <= remaining_) [[likely]] {
+                const char* source = input_ == nullptr
+                    ? bytes_.data() + position_
+                    : size <= buffer_size_ - buffer_position_
+                    ? buffer_.data() + buffer_position_
+                    : nullptr;
+                if (source != nullptr) [[likely]] {
+                    std::memcpy(destination, source, size);
+                    (input_ == nullptr ? position_ : buffer_position_) += size;
+                    remaining_ -= size;
+                    return true;
+                }
+            }
+            return read_exact_refill(destination, size);
+        }
+
+        [[gnu::noinline]] bool read_exact_refill(char* destination, std::size_t size)
         {
             if (size > remaining_) {
                 return fail("design state is truncated");

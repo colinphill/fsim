@@ -10,6 +10,7 @@
 
 #include "simir_internal.hpp"
 #include "simir_kernel_word_ops.hpp"
+#include "simir_operation_kinds.hpp"
 #include "simir_static_kernel_ir.hpp"
 #include "simir_static_kernel_native.hpp"
 #include "simir_static_kernel.hpp"
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <tuple>
 #include <limits>
 #include <optional>
 #include <queue>
@@ -39,6 +41,28 @@ constexpr auto no_container_object
 constexpr std::size_t run_step_limit = 100'000'000U;
 constexpr std::size_t edge_iteration_limit = 100'000U;
 constexpr std::uint32_t partition_tag = std::uint32_t { 1 } << 31U;
+
+/// Why the kernel's reference evaluator runs an operation (interpretation
+/// census): a member without compiled code, a VHDL prologue, generic mode
+/// after a deoptimization, the deoptimization's own resume, kernel bytecode,
+/// a behavioral thread on the reference path, verify mode, specialization's
+/// constant folding (kernel construction), or a slow-path fallback inside a
+/// compiled instruction's helper (reference).
+enum class InterpretedCause : std::uint8_t {
+    reference,
+    uncompiled,
+    prologue,
+    generic_mode,
+    deopt,
+    bytecode,
+    thread,
+    verify,
+    specialize,
+};
+inline constexpr std::array<const char*, 9> interpreted_cause_names {
+    "reference", "uncompiled", "prologue", "generic_mode", "deopt", "bytecode",
+    "thread", "verify", "specialize"
+};
 
 struct Reader {
     std::uint32_t member { };
@@ -161,6 +185,9 @@ public:
     void import_host_write(SignalId signal, SignalChangeOrigin origin);
     /// Hosted tier: a wake of a hosted process, redirected from the host
     /// scheduler's queue_* entry points (Impl::static_kernel_enqueue_hosted).
+    /// Runs the process to its next suspension on its hosted tier; false when
+    /// it has none (the evaluator runs it).
+    [[nodiscard]] bool run_hosted_tier(ProcessState& process);
     void enqueue_hosted(ProcessId process, StaticKernelHostedWake wake,
         SimulationTick time, StableOrder order);
     /// Hosted tier, region model (S25): a hosted process executing a
@@ -285,11 +312,10 @@ private:
         /// Every register's X plane and 'U' mask is zero, so two-state code
         /// may run; rechecked after any other run.
         bool registers_known { };
-        /// Handovers to full code (FastRun::two_state_runs counts the runs),
-        /// and runs since the registers were last known; a member that keeps
-        /// meeting X or 'U' values stops running two-state code.
+        /// Handovers to full code (FastRun::two_state_runs counts the runs);
+        /// a member that keeps meeting X or 'U' values stops running
+        /// two-state code.
         std::uint32_t two_state_deopts { };
-        std::uint32_t unknown_runs { };
         bool two_state_off { };
         /// While two-state code is off: full runs since it went off, and
         /// the count at which known registers turn it back on (doubling
@@ -578,10 +604,21 @@ private:
     /// an ordinary activation: its activations enter at a jump to operation
     /// 0, so both run the original operations from 0 to the wait.
     [[nodiscard]] static bool first_run_is_activation(const Member& member);
+    /// A VHDL member whose compiled code runs its prologue (operations 0 to
+    /// prologue_end) on the first run, then continues at the activation
+    /// entry: a specialized member's prologue_end is the original body, so
+    /// the compiled code jumps from there to the specialized body.
+    [[nodiscard]] static bool native_prologue(const Member& member);
     void run_generic(std::uint32_t member);
     [[nodiscard]] std::uint32_t step_generic(std::uint32_t member,
         std::uint32_t pc);
-    void run_compiled(std::uint32_t member);
+    /// step_generic's semantics of one operation kind.
+    template <typename Op>
+    [[nodiscard]] std::uint32_t step_operation(std::uint32_t member,
+        std::uint32_t pc, const Op& op);
+    /// `start` static_kernel_prologue_entry: a VHDL process's first run,
+    /// from operation 0 (its prologue).
+    void run_compiled(std::uint32_t member, std::uint32_t start = 0U);
     void execute(CompiledBody& body, std::uint32_t member);
     void execute_body(CompiledBody& body, std::uint32_t member);
     /// build_partitions: forwards slot stores to later loads in a partition
@@ -597,8 +634,55 @@ private:
     bool execute_generic(CompiledBody& body, Word* registers,
         const static_kernel_detail::KInst& inst, std::uint32_t member,
         bool two_state_code = false);
-    static void native_generic(StaticKernelNativeFrame* frame,
+    /// execute_generic for operation kind K (generated code's per-kind
+    /// helper native_generic_kind<K>): no dispatch over operation kinds.
+    template <std::size_t K>
+    bool execute_generic_kind(CompiledBody& body, Word* registers,
+        const static_kernel_detail::KInst& inst, std::uint32_t member,
+        bool two_state_code);
+    template <std::size_t K>
+    static void native_generic_kind(StaticKernelNativeFrame* frame,
         Word* registers, std::uint32_t at);
+    /// A generic instruction's operands into the member's reference
+    /// registers, and its result back (true: two-state code got X or 'U').
+    void generic_load_operands(CompiledBody& body, const Word* registers,
+        const static_kernel_detail::KInst& inst, std::uint32_t member,
+        const std::vector<RegisterId>& reads);
+    bool generic_store_result(CompiledBody& body, Word* registers,
+        const static_kernel_detail::KInst& inst, std::uint32_t member,
+        std::optional<RegisterId> write, bool two_state_code);
+    void note_generic_profile(const CompiledBody& body,
+        const static_kernel_detail::KInst& inst, std::uint32_t member,
+        const char* mangled, const std::vector<RegisterId>& reads,
+        std::optional<RegisterId> write);
+    std::vector<RegisterId> generic_reads_;
+    /// step_operation and behavioral_operation by operation ordinal
+    /// (simir_static_kernel.cpp, simir_static_kernel_behavioral.cpp).
+    using OperationStep = std::uint32_t (StaticKernel::*)(std::uint32_t member,
+        std::uint32_t pc);
+    using BehavioralOperationStep = bool (StaticKernel::*)(std::uint32_t member,
+        std::uint32_t pc);
+    [[nodiscard]] static const std::array<OperationStep,
+        static_kernel_detail::operation_kind_count>& operation_steps();
+    [[nodiscard]] static const std::array<BehavioralOperationStep,
+        static_kernel_detail::operation_kind_count>& behavioral_operation_steps();
+    template <typename Op>
+    std::uint32_t step_operation_at(std::uint32_t member, std::uint32_t pc);
+    template <typename Op>
+    bool behavioral_operation_at(std::uint32_t member, std::uint32_t pc);
+    /// The slow semantics of one instruction kind; native code reaches them
+    /// through that kind's helper. The untemplated forms select the kind at
+    /// run time (kernel bytecode only).
+    template <static_kernel_detail::KOp Op>
+    [[nodiscard]] Word evaluate_slow_op(const CompiledBody& body,
+        const static_kernel_detail::KInst& inst, std::uint32_t at,
+        std::uint32_t member, std::uint32_t body_begin, Word x, Word y, Word z,
+        std::uint32_t resolved, const std::vector<PackedLogic4>* wide);
+    template <static_kernel_detail::KOp Op>
+    void effect_slow_op(const CompiledBody& body,
+        const static_kernel_detail::KInst& inst, std::uint32_t at,
+        std::uint32_t member, std::uint32_t body_begin, Word x, Word y, Word z,
+        std::uint32_t resolved);
     [[nodiscard]] Word evaluate_slow(const CompiledBody& body,
         const static_kernel_detail::KInst& inst, std::uint32_t at,
         std::uint32_t member, std::uint32_t body_begin, Word x, Word y, Word z,
@@ -630,7 +714,7 @@ private:
     void compile_full_template(std::uint32_t full_template);
     void run_native(NativeUnit& unit, CompiledBody& body,
         std::uint32_t member,
-        bool full = false);
+        bool full = false, std::uint32_t start = 0U);
     /// The part of run_native after the call returns something other than
     /// 0 with frame status 0.
     void finish_native(NativeUnit& unit, CompiledBody& body,
@@ -652,14 +736,19 @@ private:
     };
     std::vector<FastRun> fast_runs_;
     void refresh_fast_run(std::uint32_t member);
+    template <static_kernel_detail::KOp Op>
     static void native_evaluate(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint64_t xa, std::uint64_t xb, std::uint64_t ya,
         std::uint64_t yb, std::uint64_t za, std::uint64_t zb,
         std::uint64_t* out);
+    template <static_kernel_detail::KOp Op>
     static void native_effect(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint64_t xa, std::uint64_t xb, std::uint64_t ya,
         std::uint64_t yb, std::uint64_t za, std::uint64_t zb,
         std::uint64_t* out);
+    /// Fills `helpers.evaluate_ops` and `effect_ops`: one helper per
+    /// instruction kind with slow semantics.
+    static void set_instruction_helpers(StaticKernelNativeHelpers& helpers);
     static void native_notify(StaticKernelNativeFrame* frame,
         std::uint32_t slot, std::uint64_t changed);
     static void native_notify_field(StaticKernelNativeFrame* frame,
@@ -914,7 +1003,93 @@ private:
     std::optional<std::uint32_t> behavioral_suspended_;
     std::uint32_t deopt_resume_ { };
     [[nodiscard]] bool behavioral_step(std::uint32_t member, std::uint32_t pc);
+    /// behavioral_step's semantics of one operation kind; false when the
+    /// kind is not a behavioral runtime-library operation.
+    template <typename Op>
+    [[nodiscard]] bool behavioral_operation(std::uint32_t member,
+        std::uint32_t pc, const Op& op);
     [[nodiscard]] Boundary behavioral_boundary(std::uint32_t thread,
+        std::uint32_t pc);
+    /// behavioral_boundary for one operation kind (Boundary::none for kinds
+    /// that are not thread boundaries), and by operation ordinal.
+    template <typename Op>
+    [[nodiscard]] Boundary behavioral_boundary_op(std::uint32_t thread,
+        std::uint32_t pc, const Op& op);
+    template <typename Op>
+    [[nodiscard]] Boundary behavioral_boundary_at(std::uint32_t thread,
+        std::uint32_t pc);
+    using BoundaryStep = Boundary (StaticKernel::*)(std::uint32_t thread,
+        std::uint32_t pc);
+    [[nodiscard]] static const std::array<BoundaryStep,
+        static_kernel_detail::operation_kind_count>& boundary_steps();
+
+    /// Operation tier: native code that runs a member's SimIR operations on
+    /// its reference register file through one helper per operation kind
+    /// (KOp::step; build_operation_tier). It runs what compiled code does
+    /// not: members without compiled bodies, VHDL threads, generic mode and
+    /// the rest of a deoptimized activation.
+    struct OperationTier {
+        CompiledBody body;
+        StaticKernelNativeEntry entry { };
+    };
+    /// Per member: the member variant (a run ends at the member's wait or
+    /// leaves its body) and the thread variant; built on first use. Members
+    /// with one shared operation body (body_identity) and equal bounds share
+    /// their tier.
+    std::vector<std::array<OperationTier*, 2>> operation_tiers_;
+    std::vector<std::unique_ptr<OperationTier>> operation_tier_store_;
+    std::map<std::tuple<const void*, std::uint32_t, std::uint32_t, std::uint32_t,
+                 bool>,
+        OperationTier*>
+        shared_operation_tiers_;
+    /// Specialized members' tiers by content (hash, then equal code).
+    std::unordered_map<std::uint64_t, std::vector<OperationTier*>>
+        operation_tiers_by_content_;
+    /// The member's tier slot, built (not compiled) when it is new.
+    [[nodiscard]] OperationTier& operation_tier_slot(std::uint32_t member, bool thread);
+    [[nodiscard]] std::unique_ptr<OperationTier> build_operation_tier(
+        std::uint32_t member, bool thread) const;
+    [[nodiscard]] StaticKernelTemplate operation_template(
+        const OperationTier& tier) const;
+    [[nodiscard]] OperationTier* operation_tier(std::uint32_t member, bool thread);
+    /// Runs the operation tier from `pc`: the position it stopped at
+    /// (operation_tier_stop: a thread boundary, operation_tier_boundary_ at
+    /// operation_tier_pc_), or nothing when the member has no tier code.
+    [[nodiscard]] std::optional<std::uint32_t> run_operation_tier(
+        std::uint32_t member, std::uint32_t pc, bool thread);
+    /// Hosted tier: the operation tier of a process the evaluator would run
+    /// (hosted processes and the programs the kernel's host runs): one
+    /// `fsim_sk_hosted_step_<ordinal>` per operation, the evaluator's own
+    /// semantics for that kind (Impl::hosted_step). Programs with equal step
+    /// code (fork children, instances of one body) share one tier; built for
+    /// the hosted processes ahead of time, else on first use. A process
+    /// remembers its tier (ProcessColdState::hosted_tier).
+    std::vector<std::unique_ptr<OperationTier>> hosted_tier_store_;
+    std::unordered_map<std::uint64_t, std::vector<OperationTier*>>
+        hosted_tiers_by_content_;
+    [[nodiscard]] OperationTier& hosted_tier_slot(const OperationList& operations);
+    [[nodiscard]] OperationTier* hosted_tier(ProcessState& process,
+        const OperationList& operations);
+    void build_hosted_tiers();
+    template <std::size_t K>
+    static std::uint32_t native_hosted_step_kind(StaticKernelNativeFrame* frame,
+        std::uint32_t pc);
+    template <std::size_t K>
+    static std::uint32_t native_boundary_kind(void* kernel, std::uint32_t thread,
+        std::uint32_t pc);
+    /// The boundary helper native code stored at the last compiled thread
+    /// suspension (StaticKernelNativeFrame::boundary).
+    void* behavioral_boundary_helper_ { };
+    /// The thread a thread-variant run belongs to.
+    std::uint32_t operation_tier_thread_ { };
+    std::size_t operation_tier_steps_ { };
+    Boundary operation_tier_boundary_ { };
+    std::uint32_t operation_tier_pc_ { };
+    template <std::size_t K>
+    static std::uint32_t native_step_kind(StaticKernelNativeFrame* frame,
+        std::uint32_t pc);
+    template <std::size_t K>
+    static std::uint32_t native_thread_step_kind(StaticKernelNativeFrame* frame,
         std::uint32_t pc);
     [[nodiscard]] std::optional<std::uint32_t> run_behavioral_compiled(
         std::uint32_t thread, std::uint32_t start);
@@ -940,8 +1115,8 @@ private:
     std::vector<std::unique_ptr<CompiledBody>> templates_;
     /// Owns the generated code.
     std::shared_ptr<StaticKernelCodegen> codegen_;
-    /// Cold member templates are compiled only once they have run
-    /// lazy_threshold_ times; until then their members run interpreted.
+    /// Cold member templates are compiled when they have run
+    /// lazy_threshold_ times (by default at their first run).
     struct LazyTemplate {
         StaticKernelTemplate code;
         std::vector<NativeUnit*> units;
@@ -1012,6 +1187,58 @@ private:
     std::uint64_t last_unknown_ { };
     std::uint64_t profile_deopts_ { };
     std::uint64_t profile_generic_runs_ { };
+    /// Interpretive work, always counted (engine v4 gate: all zero in a
+    /// compiled simulation): bytecode member runs, operations stepped by the
+    /// reference evaluator, and deoptimizations.
+    std::uint64_t interpreted_bytecode_runs_ { };
+    std::uint64_t interpreted_operations_ { };
+    std::uint64_t interpreted_deopts_ { };
+    std::array<std::uint64_t, static_kernel_detail::interpreted_cause_names.size()>
+        interpreted_by_cause_ { };
+    static_kernel_detail::InterpretedCause interpreting_ {
+        static_kernel_detail::InterpretedCause::reference
+    };
+    /// Sets the cause of the reference evaluator's operations for a scope.
+    struct InterpretingScope {
+        StaticKernel& kernel;
+        static_kernel_detail::InterpretedCause saved;
+        InterpretingScope(StaticKernel& owner,
+            const static_kernel_detail::InterpretedCause cause)
+            : kernel(owner)
+            , saved(std::exchange(owner.interpreting_, cause))
+        {
+        }
+        ~InterpretingScope() { kernel.interpreting_ = saved; }
+        InterpretingScope(const InterpretingScope&) = delete;
+        InterpretingScope& operator=(const InterpretingScope&) = delete;
+    };
+    /// Why each member has no compiled body (compile_members), for the
+    /// interpreted-site census.
+    std::vector<const char*> not_compiled_reason_;
+    /// FSIM_PROFILE_PHASES census: every site whose run would interpret
+    /// (`static-kernel-interpreted reason= count= example=` rows).
+    void report_interpreted_sites() const;
+
+public:
+    [[nodiscard]] InterpretationCounts interpretation_counts() const
+    {
+        using static_kernel_detail::InterpretedCause;
+        const auto folded = interpreted_by_cause_[static_cast<std::size_t>(
+            InterpretedCause::specialize)];
+        InterpretationCounts counts { 0U, interpreted_bytecode_runs_,
+            interpreted_operations_ - folded, interpreted_deopts_, {}, {}, 0U };
+        for (std::size_t cause = 0U; cause < interpreted_by_cause_.size();
+             ++cause) {
+            if (interpreted_by_cause_[cause] != 0U) {
+                counts.kernel_operations_by.emplace_back(
+                    static_kernel_detail::interpreted_cause_names[cause],
+                    interpreted_by_cause_[cause]);
+            }
+        }
+        return counts;
+    }
+
+private:
     std::vector<std::uint64_t> profile_member_deopts_;
     /// Diagnostic (FSIM_KERNEL_VERIFY): every compiled VHDL run is replayed
     /// on the reference evaluator and compared.

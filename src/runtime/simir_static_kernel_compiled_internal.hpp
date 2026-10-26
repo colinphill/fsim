@@ -58,14 +58,15 @@ struct CompileFailure {
     const char* reason;
 };
 
-/// Register operands of the operations the kernel supports.
-inline void operation_registers(const Operation& operation,
-    std::vector<RegisterId>& reads, std::optional<RegisterId>& write)
+/// Register operands of the operations the kernel supports, for one
+/// operation kind.
+template <typename T>
+inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
+    std::optional<RegisterId>& write)
 {
     reads.clear();
     write.reset();
-    visit_operation([&](const auto& op) {
-        using T = std::decay_t<decltype(op)>;
+    {
         if constexpr (std::is_same_v<T, LoadConstant>
             || std::is_same_v<T, ReadSignal>) {
             write = op.destination;
@@ -170,6 +171,15 @@ inline void operation_registers(const Operation& operation,
                 reads.push_back(level.index);
             }
         }
+    }
+}
+
+/// Register operands of the operations the kernel supports.
+inline void operation_registers(const Operation& operation,
+    std::vector<RegisterId>& reads, std::optional<RegisterId>& write)
+{
+    visit_operation([&](const auto& op) {
+        operation_registers_of(op, reads, write);
     }, operation);
 }
 
@@ -235,6 +245,19 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
     std::optional<RegisterId> write;
     const auto fall = [&] { next.push_back(at + 1U); };
     switch (inst.op) {
+    case KOp::step:
+        // Operation tier: the operation's static successors.
+        if (inst.z >= 1U) {
+            next.push_back(inst.d);
+        }
+        if (inst.z >= 2U) {
+            next.push_back(inst.y);
+        }
+        if (inst.offset != 0U) {
+            next.insert(next.end(), body.return_targets.begin(),
+                body.return_targets.end());
+        }
+        break;
     case KOp::nop:
     case KOp::mark:
     case KOp::mem_bind:

@@ -106,7 +106,18 @@ enum class KOp : std::uint8_t {
     /// Behavioral threads: stop at SimIR operation x (a wait, fork, halt or
     /// $finish) and return it to the thread runner.
     suspend,
+    /// Operation tier: runs SimIR operation x through the helper of its
+    /// kind (sub, the operation ordinal; aux 1: a thread's step, with its
+    /// boundary). Control continues at the returned position when it is a
+    /// static successor (d, then y: z of them; offset 1 adds the return
+    /// targets); any other position goes back to the runner.
+    step,
 };
+
+/// Number of kernel instruction kinds (KOp values 0 .. step).
+inline constexpr std::size_t kernel_op_count
+    = static_cast<std::size_t>(KOp::step) + 1U;
+
 
 /// For KOp::constant in a VHDL body: the 'U' mask of the constant is
 /// offset | aux << 32.
@@ -175,6 +186,15 @@ struct CompiledBody {
     /// after each suspension, fork branches), for the native entry switch.
     std::vector<std::uint32_t> resume_entries;
 };
+
+/// A VHDL process body whose first run enters its native code at operation
+/// 0, the process prologue (static_kernel_prologue_entry), and later runs at
+/// the activation entry.
+inline bool has_prologue_entry(const CompiledBody& body, const bool vhdl)
+{
+    return vhdl && body.resume_entries.empty() && body.entry != 0U
+        && !body.code.empty();
+}
 
 /// Entries of a synthetic VHDL call stack (deeper calls deoptimize).
 constexpr std::uint32_t call_stack_depth = 16U;

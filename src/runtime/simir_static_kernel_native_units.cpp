@@ -13,6 +13,7 @@
 #include <queue>
 #include <typeinfo>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace fsim::runtime::simir {
 
@@ -30,39 +31,68 @@ std::string static_kernel_canonical_identity()
         + static_kernel_compiler_identity();
 }
 
-void Interpreter::Impl::StaticKernel::run_compiled(const std::uint32_t member_index)
+void Interpreter::Impl::StaticKernel::run_compiled(const std::uint32_t member_index,
+    const std::uint32_t start)
 {
     auto& member = members_[member_index];
     if (member.native.entry == nullptr
         && member.native.lazy_template != no_slot) {
         note_lazy_run(member.native.lazy_template);
     }
+    // Kernel bytecode enters at the activation entry: a prologue runs on the
+    // reference evaluator first.
+    const auto bytecode = [&] {
+        if (start == static_kernel_prologue_entry) {
+            if (const auto stopped = run_operation_tier(member_index, 0U, false)) {
+                // The whole first run (prologue, then the activation) in
+                // operation-tier code.
+                if (*stopped != member.body_end) {
+                    run_generic_from(member_index, *stopped);
+                }
+                sync_compiled_registers(member_index);
+                return;
+            }
+            std::uint32_t pc = 0U;
+            {
+                const InterpretingScope scope { *this, InterpretedCause::prologue };
+                pc = run_generic_from(member_index, 0U, member.prologue_end);
+            }
+            sync_compiled_registers(member_index);
+            if (pc == member.body_end) {
+                return;
+            }
+            if (member.generic_mode) {
+                const InterpretingScope scope { *this,
+                    InterpretedCause::generic_mode };
+                run_generic_from(member_index, pc);
+                sync_compiled_registers(member_index);
+                return;
+            }
+        }
+        execute(*member.compiled, member_index);
+    };
     if (member.native.entry != nullptr
         && (!member.native.two_state
             || (member.registers_known && !member.two_state_off))) {
-        run_native(member.native, *member.compiled, member_index);
+        run_native(member.native, *member.compiled, member_index, false, start);
         return;
     }
     if (member.native.entry == nullptr || !member.native.two_state) {
-        execute(*member.compiled, member_index);
+        bytecode();
         return;
     }
-    // A two-state member with X or 'U' values: full-semantics code once
-    // the member keeps needing it, the interpreter until then.
-    if (member.native.full_entry == nullptr
-        && (member.two_state_off || ++member.unknown_runs >= 64U)) {
+    // A two-state member with X or 'U' values runs its full-semantics code
+    // (built ahead of time, or compiled now).
+    if (member.native.full_entry == nullptr) {
         compile_full_template(member.native.full_template);
     }
     if (member.native.full_entry != nullptr) {
-        run_native(member.native, *member.compiled, member_index, true);
+        run_native(member.native, *member.compiled, member_index, true, start);
     } else {
-        execute(*member.compiled, member_index);
+        bytecode();
     }
     if (!member.two_state_off) {
         member.registers_known = registers_known(*member.compiled);
-        if (member.registers_known) {
-            member.unknown_runs = 0U;
-        }
     } else if (++member.off_runs >= member.off_retry) {
         member.off_runs = 0U;
         member.off_retry = member.off_retry < (1U << 20U)
@@ -140,15 +170,11 @@ bool Interpreter::Impl::StaticKernel::registers_known(
 void Interpreter::Impl::StaticKernel::note_lazy_run(
     const std::uint32_t lazy_template)
 {
+    // A template reaching the threshold is compiled before this run (by
+    // default its first: compiled code never waits on the interpreter).
     auto& lazy = lazy_templates_[lazy_template];
     if (++lazy.runs == lazy_threshold_) {
         lazy_pending_.push_back(lazy_template);
-    }
-    // Compile in batches; a waiting template that keeps running does not
-    // wait for the batch to fill.
-    if (!lazy_pending_.empty()
-        && (lazy_pending_.size() >= 32U
-            || lazy.runs >= 4U * lazy_threshold_)) {
         compile_lazy_templates();
     }
 }
@@ -187,7 +213,8 @@ void Interpreter::Impl::StaticKernel::compile_lazy_templates()
 }
 
 void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
-    CompiledBody& body, const std::uint32_t member, const bool full)
+    CompiledBody& body, const std::uint32_t member, const bool full,
+    const std::uint32_t start)
 {
     profile_native_calls_[4] += profile_ ? 1U : 0U;
     if (profile_) {
@@ -207,7 +234,7 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     const bool behavioral = !body.resume_entries.empty();
     // Behavioral bodies start at a resume point and return 3 when they
     // reach a suspension, whose operation index comes back in `reserved`.
-    frame.reserved = behavioral ? behavioral_entry_ : 0U;
+    frame.reserved = behavioral ? behavioral_entry_ : start;
     profile_operations_ += profile_ ? body.code.size() : 0U;
     const bool two_state = unit.two_state && !full;
     two_state_running_ = two_state;
@@ -220,6 +247,353 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     if (status != 0U || frame.status != 0U) {
         finish_native(unit, body, member, frame, status, full);
     }
+}
+
+namespace {
+
+/// Step code for an operation stream: one step instruction per operation
+/// (the helper family `aux`), then native control flow to its static
+/// successors (pc + 1, jump and branch targets, call and return targets).
+/// `stops(pc)` positions return to the runner. Any operation may be where a
+/// run starts (a deoptimization or a resumed process continues anywhere).
+template <typename Operations, typename Stops>
+void build_step_code(CompiledBody& body, const Operations& operations,
+    const std::uint32_t aux, const Stops& stops)
+{
+    const auto size = static_cast<std::uint32_t>(operations.size());
+    for (std::uint32_t pc = 0U; pc < size; ++pc) {
+        if (const auto* call = operation_get_if<Call>(&operations[pc])) {
+            body.return_targets.push_back(call->return_target);
+        }
+    }
+    std::ranges::sort(body.return_targets);
+    body.return_targets.erase(std::unique(body.return_targets.begin(),
+                                  body.return_targets.end()),
+        body.return_targets.end());
+    body.code.reserve(size);
+    for (std::uint32_t pc = 0U; pc < size; ++pc) {
+        KInst inst;
+        inst.x = pc;
+        if (stops(pc)) {
+            inst.op = KOp::suspend;
+            body.code.push_back(inst);
+            continue;
+        }
+        const auto& operation = operations[pc];
+        inst.op = KOp::step;
+        inst.sub = static_cast<std::uint8_t>(operation_kind_ordinal(operation));
+        inst.aux = aux;
+        if (const auto* jump = operation_get_if<Jump>(&operation)) {
+            inst.d = jump->target;
+            inst.z = 1U;
+        } else if (const auto* branch = operation_get_if<Branch>(&operation)) {
+            inst.d = branch->when_true;
+            inst.y = branch->when_false;
+            inst.z = 2U;
+        } else if (const auto* call = operation_get_if<Call>(&operation)) {
+            inst.d = call->target;
+            inst.z = 1U;
+        } else if (operation_holds<Return>(operation)) {
+            inst.offset = 1U;
+        } else {
+            inst.d = pc + 1U;
+            inst.z = 1U;
+        }
+        body.code.push_back(inst);
+    }
+    body.resume_entries.resize(size);
+    for (std::uint32_t pc = 0U; pc < size; ++pc) {
+        body.resume_entries[pc] = pc;
+    }
+}
+
+/// Content hash of step code (op, kind, successors and return targets).
+std::uint64_t step_code_hash(const CompiledBody& body)
+{
+    std::uint64_t hash = 1469598103934665603ULL;
+    const auto mix = [&](const std::uint64_t value) {
+        hash = (hash ^ value) * 1099511628211ULL;
+    };
+    for (const auto& inst : body.code) {
+        mix(static_cast<std::uint64_t>(inst.op) | std::uint64_t { inst.sub } << 8U
+            | std::uint64_t { inst.z } << 16U | std::uint64_t { inst.offset } << 24U
+            | std::uint64_t { inst.aux } << 32U);
+        mix(inst.d | std::uint64_t { inst.y } << 32U);
+    }
+    for (const auto target : body.return_targets) {
+        mix(target);
+    }
+    return hash;
+}
+
+bool same_step_code(const CompiledBody& left, const CompiledBody& right)
+{
+    return left.return_targets == right.return_targets
+        && std::ranges::equal(left.code, right.code, [](const KInst& a, const KInst& b) {
+               return a.op == b.op && a.sub == b.sub && a.aux == b.aux && a.x == b.x
+                   && a.d == b.d && a.y == b.y && a.z == b.z && a.offset == b.offset;
+           });
+}
+
+} // namespace
+
+std::unique_ptr<Interpreter::Impl::StaticKernel::OperationTier>
+Interpreter::Impl::StaticKernel::build_operation_tier(
+    const std::uint32_t member_index, const bool thread) const
+{
+    // The member variant stops where the reference loop stops
+    // (run_generic_from at the VHDL wait, run_generic outside the body); the
+    // thread variant stops at the boundaries its helpers report.
+    const auto& member = members_[member_index];
+    const auto size = static_cast<std::uint32_t>(member.operations.size());
+    auto tier = std::make_unique<OperationTier>();
+    auto& body = tier->body;
+    build_step_code(body, member.operations, thread ? 1U : 0U,
+        [&](const std::uint32_t pc) {
+            return !thread
+                && (member.vhdl ? pc == member.body_end
+                                : pc < member.body_begin || pc >= member.body_end);
+        });
+    if (!thread && native_prologue(member) && member.prologue_end != member.body_begin
+        && member.prologue_end < size) {
+        // A specialized member's first run leaves the prologue for the
+        // specialized body (as its compiled code does).
+        KInst jump;
+        jump.op = KOp::jump;
+        jump.d = member.body_begin;
+        body.code[member.prologue_end] = jump;
+    }
+    return tier;
+}
+
+StaticKernelTemplate Interpreter::Impl::StaticKernel::operation_template(
+    const OperationTier& tier) const
+{
+    StaticKernelTemplate code;
+    code.body = &tier.body;
+    return code;
+}
+
+Interpreter::Impl::StaticKernel::OperationTier*
+Interpreter::Impl::StaticKernel::operation_tier(const std::uint32_t member_index,
+    const bool thread)
+{
+    // Helpers are bound once build_native has run.
+    if (codegen_ == nullptr || verify_ || native_helpers_.step_ops[0] == nullptr
+        || members_[member_index].operations.empty()) {
+        return nullptr;
+    }
+    const bool built = operation_tiers_.size() == members_.size()
+        && operation_tiers_[member_index][thread ? 1U : 0U] != nullptr;
+    auto& tier = operation_tier_slot(member_index, thread);
+    if (!built && tier.entry == nullptr) {
+        const std::array batch { operation_template(tier) };
+        const auto entries = codegen_->compile(batch, native_helpers_);
+        if (!entries.empty()) {
+            tier.entry = entries.front();
+        }
+    }
+    return tier.entry != nullptr ? &tier : nullptr;
+}
+
+Interpreter::Impl::StaticKernel::OperationTier&
+Interpreter::Impl::StaticKernel::operation_tier_slot(const std::uint32_t member_index,
+    const bool thread)
+{
+    if (operation_tiers_.size() != members_.size()) {
+        operation_tiers_.resize(members_.size());
+    }
+    auto& slot = operation_tiers_[member_index][thread ? 1U : 0U];
+    if (slot != nullptr) {
+        return *slot;
+    }
+    const auto& member = members_[member_index];
+    const auto key = std::tuple { member.body_identity, member.body_begin,
+        member.body_end, member.prologue_end, thread };
+    if (member.body_identity != nullptr) {
+        if (const auto found = shared_operation_tiers_.find(key);
+            found != shared_operation_tiers_.end()) {
+            slot = found->second;
+            return *slot;
+        }
+    }
+    auto tier = build_operation_tier(member_index, thread);
+    if (member.body_identity != nullptr) {
+        slot = operation_tier_store_.emplace_back(std::move(tier)).get();
+        shared_operation_tiers_.emplace(key, slot);
+        return *slot;
+    }
+    // A specialized member: equal step code shares one tier.
+    auto& candidates = operation_tiers_by_content_[step_code_hash(tier->body)];
+    for (auto* candidate : candidates) {
+        if (same_step_code(candidate->body, tier->body)) {
+            slot = candidate;
+            return *slot;
+        }
+    }
+    slot = operation_tier_store_.emplace_back(std::move(tier)).get();
+    candidates.push_back(slot);
+    return *slot;
+}
+
+std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_operation_tier(
+    const std::uint32_t member_index, const std::uint32_t pc, const bool thread)
+{
+    auto* tier = operation_tier(member_index, thread);
+    if (tier == nullptr) {
+        return std::nullopt;
+    }
+    StaticKernelNativeFrame frame;
+    frame.arena = arena_.data();
+    frame.kernel = this;
+    frame.program = &tier->body;
+    frame.instance = &tier->body;
+    frame.writes = &writes_;
+    frame.containers = container_info_.data();
+    frame.member = member_index;
+    frame.reserved = pc;
+    // A step may run another member's tier (nested runs keep their counts).
+    const auto steps = std::exchange(operation_tier_steps_, 0U);
+    const auto status = tier->entry(&frame, nullptr);
+    operation_tier_steps_ = steps;
+    if (frame.status != 0U || status != 3U) {
+        auto error = std::exchange(native_exception_, nullptr);
+        if (error) {
+            std::rethrow_exception(error);
+        }
+        fail(member_index, pc, "static kernel operation tier failed");
+    }
+    return frame.reserved;
+}
+
+Interpreter::Impl::StaticKernel::OperationTier&
+Interpreter::Impl::StaticKernel::hosted_tier_slot(const OperationList& operations)
+{
+    auto tier = std::make_unique<OperationTier>();
+    build_step_code(tier->body, operations, 2U, [](const std::uint32_t) { return false; });
+    auto& candidates = hosted_tiers_by_content_[step_code_hash(tier->body)];
+    for (auto* candidate : candidates) {
+        if (same_step_code(candidate->body, tier->body)) {
+            return *candidate;
+        }
+    }
+    auto* slot = hosted_tier_store_.emplace_back(std::move(tier)).get();
+    candidates.push_back(slot);
+    return *slot;
+}
+
+Interpreter::Impl::StaticKernel::OperationTier*
+Interpreter::Impl::StaticKernel::hosted_tier(ProcessState& process,
+    const OperationList& operations)
+{
+    // Helpers are bound once build_native has run.
+    if (codegen_ == nullptr || verify_ || native_helpers_.hosted_step_ops[0] == nullptr
+        || operations.size() == 0U) {
+        return nullptr;
+    }
+    auto& cold = process.cold();
+    if (cold.hosted_tier != nullptr && cold.hosted_tier_list == &operations
+        && cold.hosted_tier_body == operations.body_identity()
+        && cold.hosted_tier_size == operations.size()) {
+        return static_cast<OperationTier*>(const_cast<void*>(cold.hosted_tier));
+    }
+    auto& tier = hosted_tier_slot(operations);
+    if (tier.entry == nullptr) {
+        const std::array batch { operation_template(tier) };
+        const auto entries = codegen_->compile(batch, native_helpers_);
+        if (!entries.empty()) {
+            tier.entry = entries.front();
+        }
+    }
+    if (tier.entry == nullptr) {
+        return nullptr;
+    }
+    cold.hosted_tier = &tier;
+    cold.hosted_tier_list = &operations;
+    cold.hosted_tier_body = operations.body_identity();
+    cold.hosted_tier_size = operations.size();
+    return &tier;
+}
+
+void Interpreter::Impl::StaticKernel::build_hosted_tiers()
+{
+    // An ahead-of-time build compiles the hosted processes' tiers with the
+    // rest of the image; the simulation finds them there.
+    if (codegen_ == nullptr || !codegen_->ahead_of_time() || verify_
+        || native_helpers_.hosted_step_ops[0] == nullptr) {
+        return;
+    }
+    std::vector<StaticKernelTemplate> code;
+    std::vector<OperationTier*> tier_of;
+    std::unordered_set<OperationTier*> queued;
+    for (ProcessId id = 0U; id < impl_.static_kernel_hosted_process.size(); ++id) {
+        if (impl_.static_kernel_hosted_process[id] == 0U) {
+            continue;
+        }
+        const auto* state = std::as_const(impl_.processes).full_state_if_present(id);
+        if (state == nullptr) {
+            continue;
+        }
+        const auto& operations = state->program().operations();
+        if (operations.size() == 0U) {
+            continue;
+        }
+        auto& tier = hosted_tier_slot(operations);
+        if (tier.entry == nullptr && queued.insert(&tier).second) {
+            code.push_back(operation_template(tier));
+            tier_of.push_back(&tier);
+        }
+    }
+    if (!code.empty()) {
+        const auto compiled = codegen_->compile(code, native_helpers_);
+        for (std::size_t at = 0U; at < compiled.size(); ++at) {
+            tier_of[at]->entry = compiled[at];
+        }
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::run_hosted_tier(ProcessState& process)
+{
+    const auto& operations = process.program().operations();
+    if (process.pc >= operations.size()) {
+        return false;
+    }
+    auto* tier = hosted_tier(process, operations);
+    if (tier == nullptr) {
+        return false;
+    }
+    StaticKernelNativeFrame frame;
+    frame.arena = arena_.data();
+    frame.kernel = this;
+    frame.program = &tier->body;
+    frame.instance = &process;
+    frame.writes = &writes_;
+    frame.containers = container_info_.data();
+    frame.member = process.id;
+    // The process runs to its next suspension. A step that leaves the
+    // operation's static successors (a disable, a fork redirect) re-enters
+    // at the process's new position.
+    while (!process.halted) {
+        frame.status = 0U;
+        frame.reserved = process.pc;
+        const auto status = tier->entry(&frame, nullptr);
+        if (frame.status != 0U || status != 3U) {
+            auto error = std::exchange(native_exception_, nullptr);
+            if (error) {
+                std::rethrow_exception(error);
+            }
+            impl_.fail(process, "static kernel hosted tier failed");
+        }
+        if (frame.reserved == operation_tier_stop) {
+            return true;
+        }
+        if (frame.reserved >= operations.size()) {
+            // The evaluator reports the position (Impl::execute).
+            return false;
+        }
+        process.pc = frame.reserved;
+    }
+    return true;
 }
 
 void Interpreter::Impl::StaticKernel::refresh_fast_run(
@@ -303,6 +677,7 @@ void Interpreter::Impl::StaticKernel::finish_native(NativeUnit& unit,
     }
     if (behavioral && status == 3U && frame.status == 0U) {
         behavioral_suspended_ = frame.reserved;
+        behavioral_boundary_helper_ = frame.boundary;
         return;
     }
     if (status != 0U || frame.status != 0U) {
@@ -312,125 +687,6 @@ void Interpreter::Impl::StaticKernel::finish_native(NativeUnit& unit,
         }
         fail(frame.member, members_[frame.member].body_begin,
             "static kernel native code failed");
-    }
-}
-
-void Interpreter::Impl::StaticKernel::native_evaluate(
-    StaticKernelNativeFrame* frame, const std::uint32_t at,
-    const std::uint64_t xa, const std::uint64_t xb, const std::uint64_t ya,
-    const std::uint64_t yb, const std::uint64_t za, const std::uint64_t zb,
-    std::uint64_t* out)
-{
-    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
-    kernel.profile_native_calls_[0] += kernel.profile_ ? 1U : 0U;
-    try {
-        const auto& body = *static_cast<const CompiledBody*>(frame->program);
-        const auto& inst = body.code[at];
-        if (kernel.profile_) {
-            static const bool who = std::getenv("FSIM_PROFILE_KERNEL_WHO") != nullptr;
-            std::string member;
-            if (who && frame->member < kernel.profile_names_.size()) {
-                member = " " + kernel.profile_names_[frame->member];
-                std::erase_if(member, [](const char c) {
-                    return std::isdigit(static_cast<unsigned char>(c)) != 0;
-                });
-            }
-            ++kernel.profile_generic_ops_["evaluate op="
-                + std::to_string(static_cast<int>(inst.op)) + " sub="
-                + std::to_string(inst.sub) + " w=" + std::to_string(inst.width) + member];
-        }
-        std::uint32_t resolved = 0U;
-        if (inst.op == KOp::load_host || inst.op == KOp::mem_read) {
-            resolved = frame->bindings[2U * inst.x];
-        } else if (((inst.op == KOp::dynamic_extract
-                        || inst.op == KOp::dynamic_part_select)
-                       && inst.sub == 1U)
-            || inst.op == KOp::load_slot9 || inst.op == KOp::load_field9) {
-            resolved = frame->bindings[2U * inst.x + 1U] & ~partition_tag;
-        }
-        const auto result = kernel.evaluate_slow(body, inst, at, frame->member,
-            kernel.members_[frame->member].vhdl ? 0U : kernel.members_[frame->member].body_begin,
-            { xa, xb }, { ya, yb },
-            { za, zb }, resolved,
-            &static_cast<CompiledBody*>(frame->instance)->wide_registers);
-        out[0] = result.a;
-        out[1] = result.b;
-        out[2] = kernel.last_unknown_;
-    } catch (const KernelDeopt& deopt) {
-        kernel.pending_deopt_ = deopt;
-        if (kernel.pending_deopt_->resume == 0xffffffffU) {
-            kernel.pending_deopt_->resume = at;
-        }
-        frame->status = 2U;
-        out[0] = 0U;
-        out[1] = 0U;
-    } catch (...) {
-        kernel.native_exception_ = std::current_exception();
-        frame->status = 1U;
-        out[0] = 0U;
-        out[1] = 0U;
-    }
-}
-
-void Interpreter::Impl::StaticKernel::native_effect(
-    StaticKernelNativeFrame* frame, const std::uint32_t at,
-    const std::uint64_t xa, const std::uint64_t xb, const std::uint64_t ya,
-    const std::uint64_t yb, const std::uint64_t za, const std::uint64_t zb,
-    std::uint64_t* out)
-{
-    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
-    kernel.profile_native_calls_[1] += kernel.profile_ ? 1U : 0U;
-    out[0] = 0U;
-    out[1] = 0U;
-    try {
-        const auto& body = *static_cast<const CompiledBody*>(frame->program);
-        const auto& inst = body.code[at];
-        if (kernel.profile_) {
-            static const bool who = std::getenv("FSIM_PROFILE_KERNEL_WHO") != nullptr;
-            std::string member;
-            if (who && frame->member < kernel.profile_names_.size()) {
-                member = " " + kernel.profile_names_[frame->member];
-                std::erase_if(member, [](const char c) {
-                    return std::isdigit(static_cast<unsigned char>(c)) != 0;
-                });
-            }
-            ++kernel.profile_generic_ops_["effect op="
-                + std::to_string(static_cast<int>(inst.op)) + " sub="
-                + std::to_string(inst.sub) + " w=" + std::to_string(inst.width) + member];
-        }
-        const auto binding = inst.d;
-        std::uint32_t resolved = 0U;
-        auto source = Word { xa, xb };
-        if (inst.op == KOp::store_host || inst.op == KOp::mem_write
-            || inst.op == KOp::mem_copy) {
-            resolved = frame->bindings[2U * binding];
-        } else if (inst.op == KOp::store_slot || inst.op == KOp::store_slot_nba
-            || inst.op == KOp::store_slot_dynamic
-            || inst.op == KOp::store_slot_part || inst.op == KOp::store_vhdl
-            || inst.op == KOp::wide_move) {
-            resolved = frame->bindings[2U * binding + 1U] & ~partition_tag;
-        }
-        if (inst.op == KOp::mem_copy) {
-            // x carries the source container.
-            source = { frame->bindings[2U * inst.x], 0U };
-        }
-        if (inst.op == KOp::wide_move) {
-            // x carries the source slot.
-            source = { frame->bindings[2U * inst.x + 1U] & ~partition_tag, 0U };
-        }
-        kernel.running_position_ = frame->position;
-        kernel.effect_slow(body, inst, at, frame->member,
-            kernel.members_[frame->member].vhdl ? 0U : kernel.members_[frame->member].body_begin,
-            source, { ya, yb }, { za, zb }, resolved);
-    } catch (const KernelDeopt& deopt) {
-        kernel.pending_deopt_ = deopt;
-        if (kernel.pending_deopt_->resume == 0xffffffffU) {
-            kernel.pending_deopt_->resume = at;
-        }
-        frame->status = 2U;
-    } catch (...) {
-        kernel.native_exception_ = std::current_exception();
-        frame->status = 1U;
     }
 }
 
@@ -872,8 +1128,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         }
     }
     StaticKernelNativeHelpers helpers;
-    helpers.evaluate = &StaticKernel::native_evaluate;
-    helpers.effect = &StaticKernel::native_effect;
+    set_instruction_helpers(helpers);
     helpers.notify = &StaticKernel::native_notify;
     helpers.notify_field = &StaticKernel::native_notify_field;
     helpers.binary = [](const std::uint64_t operation_width, const std::uint64_t la,
@@ -886,7 +1141,6 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         out[1] = result.b;
     };
     helpers.fail = &StaticKernel::native_fail;
-    helpers.generic = &StaticKernel::native_generic;
     if (std::getenv("FSIM_STATIC_KERNEL_PERF_MAP") != nullptr) {
         std::vector<std::size_t> units_of(templates_.size(), 0U);
         std::vector<std::string> example(templates_.size());
@@ -907,14 +1161,14 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                       << " example=" << example[index] << '\n';
         }
     }
-    // Cold member templates that run rarely (or only at start) would cost
-    // more to compile than to interpret: they are compiled once they have
-    // run FSIM_STATIC_KERNEL_LAZY_RUNS times (0 compiles everything now).
+    // Cold member templates are compiled when they first run, so members
+    // that never run cost nothing (FSIM_STATIC_KERNEL_LAZY_RUNS: the run
+    // that compiles them; 0 compiles everything now).
     static const std::uint32_t lazy_threshold = [] {
         const char* text = std::getenv("FSIM_STATIC_KERNEL_LAZY_RUNS");
         return text != nullptr
             ? static_cast<std::uint32_t>(std::strtoul(text, nullptr, 10))
-            : 1024U;
+            : 1U;
     }();
     // An ahead-of-time build compiles every template now; code built ahead
     // of time is used from the start.
@@ -970,6 +1224,35 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         // Full code continues two-state code that leaves at one of its
         // resume points, known now that the two-state code is compiled.
         static_cast<void>(codegen.compile(full_code, helpers));
+    }
+    if (ahead_of_time) {
+        // Members without compiled bodies run their operation tier, and
+        // VHDL members continue in it after a deoptimization (Logic9 values
+        // compiled code does not represent, typically the initial 'U's);
+        // later runs find it with the rest of the code built now. Instances
+        // of one design unit share it.
+        std::vector<StaticKernelTemplate> tier_code;
+        std::vector<OperationTier*> tier_of;
+        std::unordered_set<OperationTier*> queued;
+        for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+            const auto& member = members_[index];
+            if ((member.compiled && !member.vhdl) || member.partition != no_slot
+                || member.operations.empty()) {
+                continue;
+            }
+            const bool thread = member.kind == StaticKernelMemberKind::behavioral;
+            auto& tier = operation_tier_slot(index, thread);
+            if (queued.insert(&tier).second) {
+                tier_code.push_back(operation_template(tier));
+                tier_of.push_back(&tier);
+            }
+        }
+        if (!tier_code.empty()) {
+            const auto compiled = codegen.compile(tier_code, helpers);
+            for (std::size_t at = 0U; at < compiled.size(); ++at) {
+                tier_of[at]->entry = compiled[at];
+            }
+        }
     }
 
     for (std::size_t unit = 0U; unit < units.size(); ++unit) {
@@ -1463,6 +1746,7 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                 case KOp::mem_bind:
                 case KOp::mark:
                 case KOp::suspend:
+                case KOp::step:
                     break;
                 case KOp::generic:
                     inst.y += register_base;
@@ -1589,6 +1873,9 @@ void Interpreter::Impl::StaticKernel::build_partitions(
             }
             // Member state now lives in the partition program.
             members_[index].compiled.reset();
+            if (index < not_compiled_reason_.size()) {
+                not_compiled_reason_[index] = "partitioned";
+            }
         }
         forward_partition_stores(program, slot_of_offset);
     }
