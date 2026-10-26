@@ -138,6 +138,29 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-26 (late night): SystemC matrix compiler work cut (`57b96ae0`)
+
+The SystemC matrix shards spent nearly all their time in clang child processes (about 94% of the
+scheduling shard's profile). Two changes cut the compiler work:
+
+- A process remembers each `-M` dependency scan, keyed by command and working directory. Before the
+  result is reused, size and write-time stamps of the scanned headers and searched directories are
+  checked. This covers `plugin_compiler_dependencies.cpp` (cache key) and `incremental_compiler.cpp`
+  (input digest).
+- Shards that compiled the same models into one cache per case now share caches. The interpreter
+  references keep their own cache, so the compiled pairs' cold builds still miss.
+
+| Matrix | Before | After |
+|---|---:|---:|
+| Plug-in compiles (`-c`), all parts | 29 | 15 |
+| Dependency scans (`-M`), all parts | at least 84 | 29 |
+| `scheduling` shard: compiles / scans | 10 / 54 | 3 / 5 |
+
+Counts come from `strace -f -e execve`. Wall times were not measured because the host was heavily
+loaded. Full ctest passed in normal and `FSIM_V4_STRICT=1` mode, apart from `fsim.native-path-io`,
+which was then fixed (stamps go through `support::native_fs`). Commit message correction: it says
+"77 scans"; the before count is at least 84.
+
 ### 2026-10-26 (night): every feature on v4; full ctest clean, strict included (sweep `v4c8`)
 
 Owner gate (2026-10-26): every feature runs on v4 (SystemC, coverage, the
