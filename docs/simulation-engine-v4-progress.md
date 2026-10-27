@@ -138,6 +138,52 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: shared package function bodies, fast-tier codegen cuts (`c620a92d`, sweep `v4c23`)
+
+**Elaboration item 2: callable body sharing** (`src/elaboration/lowerer_hir_callable_memo.cpp`). Process lowering now keeps the SimIR body of an automatic VHDL package function, keyed by its callable key. A later process calling the same function with the same key replays that body: registers are renumbered, frame push sites patched, and debug locals, scalar ranges and expression profiles restored.
+- A body is recorded only when it is self-contained. That means:
+  - it has no signal or shaped formals;
+  - it has no class, interface or protected receivers;
+  - it has no static variables or enclosing identity;
+  - generic bindings are limited to static integer actuals;
+  - its operations are all pure register operations or control flow.
+- Recording is refused when lowering the body changed any other lowerer state, for example when it lowered nested callables.
+- `FSIM_HIR_BODY_MEMO_VERIFY=1` lowers every body fresh and aborts if the replay differs. `FSIM_HIR_BODY_MEMO_TRACE` prints refusals.
+- mixed_codec: 694 of 1314 bodies are replayed, and body lowering went from 593 to 419 ms. The remaining refusals:
+  - 53 bodies lower nested calls;
+  - 53 bind non-integer generics;
+  - 50 are not declared in a package.
+
+**Codegen.** These cuts apply to the fast tier only:
+- `dag-maps-huge-region` defaults to 100.
+- Reductions no longer use `ctpop`.
+- An i1 select with a constant arm becomes and/or.
+
+**Measured**, `--jobs 1`:
+
+| Design | Elaborate | Simulate | Before (v4c22) |
+|---|---:|---:|---:|
+| mixed_codec | 7.52 s | 1.86 s | 9.34 s elaborate |
+| original_codec | 10.18 s | 2.29 s | |
+| LDPC (checksum unchanged) | | 2.03 s | |
+
+All transcripts are unchanged.
+
+**Validation.** Full ctest passes 1087/1087 in normal mode, strict mode, and with `FSIM_HIR_BODY_MEMO_VERIFY=1` (0 mismatches). Sweep `v4c23` shows 0 losses against `b96x1`:
+- Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+
+`tools/perf.sh` campaign `v4c23` (3 samples, `v4_o2_aot`, end-to-end median). xsim ran 4–8% slower than in `v4c22`, so the ratios are the better comparison:
+
+| Case | v4c22 fsim | × xsim | v4c23 fsim | × xsim |
+|---|---:|---:|---:|---:|
+| mixed_codec | 10.39 s | 2.39 | 10.09 s | 2.61 |
+| original_codec | 11.67 s | 2.44 | 12.12 s | 2.44 |
+| mixed_throughput | 5.27 s | 2.40 | 4.83 s | 2.83 |
+| original_throughput | 5.35 s | 3.04 | 5.45 s | 3.01 |
+| codex reference/throughput (6 cases) | 2.31–2.72 s | 3.67–4.11 | 2.26–2.72 s | 3.84–4.28 |
+
+The geometric mean of the × xsim ratios rose from 3.31 to 3.48. The codec cases are still below 3×. Item 3, query sharing across generate iterations, is next.
+
 ### 2026-10-27: elaboration items, runtime-bounded slice actuals (`af8506f6`, `9dfccd9c`, `91424a92`, `a0584d31`, sweeps `v4c21`, `v4c22`)
 
 This entry covers the six architectural elaboration items the owner ordered before multi-threading, plus kernel work on the LDPC decoder.
