@@ -867,6 +867,30 @@ bool Lowerer::hir_retained_static_local(
             != semantic::sv::Lifetime::automatic;
 }
 
+std::string Lowerer::hir_callable_debug_local_name(
+    const std::size_t callable, const semantic::DeclarationId declaration,
+    const std::string_view name)
+{
+    const auto& frame = hir_callable_frames_[callable];
+    const auto base = frame.debug_name.empty()
+        ? "@hir-callable-" + std::to_string(frame.declaration.value()) + "::"
+            + std::string { name }
+        : frame.debug_name + "." + std::string { name };
+    auto result = base;
+    std::size_t occurrence { };
+    while (!debug_local_names_.emplace(result).second) {
+        result = base + "@hir-callable-"
+            + std::to_string(frame.invocation_identity) + "-declaration-"
+            + std::to_string(declaration.value()) + "-"
+            + std::to_string(occurrence++);
+    }
+    if (hir_callable_debug_name_log_ != nullptr) {
+        hir_callable_debug_name_log_->push_back(
+            { declaration, std::string { name }, result });
+    }
+    return result;
+}
+
 bool Lowerer::initialize_hir_declarations(
     const std::span<const semantic::DeclarationId> declarations)
 {
@@ -890,21 +914,8 @@ bool Lowerer::initialize_hir_declarations(
             (void)declaration_id;
             return result;
         }
-        const auto& frame = hir_callable_frames_[*active_hir_callable_];
-        const auto base = frame.debug_name.empty()
-            ? "@hir-callable-"
-                + std::to_string(frame.declaration.value()) + "::"
-                + std::string { name }
-            : frame.debug_name + "." + std::string { name };
-        auto result = base;
-        std::size_t occurrence { };
-        while (!debug_local_names_.emplace(result).second) {
-            result = base + "@hir-callable-"
-                + std::to_string(frame.invocation_identity)
-                + "-declaration-" + std::to_string(declaration_id.value())
-                + "-" + std::to_string(occurrence++);
-        }
-        return result;
+        return hir_callable_debug_local_name(
+            *active_hir_callable_, declaration_id, name);
     };
     const auto capture_scalar_subtype_range = [&](
         const semantic::CompiledDeclarationView& declaration) {

@@ -136,9 +136,25 @@ void initialize_native_target()
             throw std::runtime_error(
                 "static kernel codegen cannot initialize the native target");
         }
+        const char* text = std::getenv("FSIM_STATIC_KERNEL_LLVM_ARGS");
+        // The machine scheduler links every memory access of a region to
+        // the pending ones until 1000 are pending: on a hot template's long
+        // straight-line blocks that is quadratic (mixed_codec hot tier
+        // 1030 -> 238 ms with 100; simulate unchanged on mixed_codec,
+        // original_codec and LDPC).
+        if (text == nullptr
+            || std::string_view { text }.find("dag-maps-huge-region")
+                == std::string_view::npos) {
+            auto& options = llvm::cl::getRegisteredOptions();
+            if (const auto found = options.find("dag-maps-huge-region");
+                found != options.end()) {
+                (void)found->second->addOccurrence(
+                    0U, "dag-maps-huge-region", "100");
+            }
+        }
         // Diagnostic: LLVM command-line options (space separated) for
         // codegen experiments, e.g. "-regalloc=greedy".
-        if (const char* text = std::getenv("FSIM_STATIC_KERNEL_LLVM_ARGS")) {
+        if (text != nullptr) {
             static std::vector<std::string> words;
             std::istringstream stream { text };
             for (std::string word; stream >> word;) {
@@ -1092,21 +1108,50 @@ private:
         auto* zeros = builder_.CreateAnd(
             builder_.CreateAnd(bit_not(value.a), bit_not(value.b)), m);
         auto* unknown = nonzero(builder_.CreateAnd(value.b, m));
-        auto* count = builder_.CreateUnaryIntrinsic(llvm::Intrinsic::ctpop, ones);
+        // The fast instruction selector has no population count: outside the
+        // optimizing tier, one-hot tests clear the lowest set bit and parity
+        // folds the word, so a reduction does not send its block to the
+        // full selector.
+        const auto at_most_one = [&] {
+            return builder_.CreateICmpEQ(
+                builder_.CreateAnd(ones, builder_.CreateSub(ones, constant(1U))),
+                constant(0U));
+        };
         switch (static_cast<ReductionOperator>(inst.sub)) {
         case ReductionOperator::one_hot:
-            return scalar_bool(builder_.CreateICmpEQ(count, constant(1U)));
+            if (!optimizing_) {
+                return scalar_bool(builder_.CreateAnd(
+                    builder_.CreateICmpNE(ones, constant(0U)), at_most_one()));
+            }
+            return scalar_bool(builder_.CreateICmpEQ(
+                builder_.CreateUnaryIntrinsic(llvm::Intrinsic::ctpop, ones),
+                constant(1U)));
         case ReductionOperator::one_hot_or_zero:
-            return scalar_bool(builder_.CreateICmpULE(count, constant(1U)));
+            if (!optimizing_) {
+                return scalar_bool(at_most_one());
+            }
+            return scalar_bool(builder_.CreateICmpULE(
+                builder_.CreateUnaryIntrinsic(llvm::Intrinsic::ctpop, ones),
+                constant(1U)));
         case ReductionOperator::bit_and:
             return select(nonzero(zeros), Pair { constant(0U), constant(0U) },
                 select(unknown, x_value(1U), Pair { constant(1U), constant(0U) }));
         case ReductionOperator::bit_or:
             return select(nonzero(ones), Pair { constant(1U), constant(0U) },
                 select(unknown, x_value(1U), Pair { constant(0U), constant(0U) }));
-        case ReductionOperator::bit_xor:
+        case ReductionOperator::bit_xor: {
+            llvm::Value* parity = ones;
+            if (optimizing_) {
+                parity = builder_.CreateUnaryIntrinsic(llvm::Intrinsic::ctpop, ones);
+            } else {
+                for (std::uint32_t shift = 32U; shift != 0U; shift /= 2U) {
+                    parity = builder_.CreateXor(parity,
+                        builder_.CreateLShr(parity, constant(shift)));
+                }
+            }
             return select(unknown, x_value(1U),
-                Pair { builder_.CreateAnd(count, constant(1U)), constant(0U) });
+                Pair { builder_.CreateAnd(parity, constant(1U)), constant(0U) });
+        }
         }
         return x_value(1U);
     }
@@ -3951,6 +3996,52 @@ private:
                 throw std::runtime_error(error_text(std::move(error)));
             }
             pipeline.run(*module, module_analyses);
+        }
+        // simplifycfg merges branch conditions into i1 selects with a
+        // constant arm, which the fast instruction selector cannot select:
+        // it hands the rest of the block to the full selector. The same
+        // value is an and/or with the other arm frozen (a select does not
+        // propagate the poison of the arm it does not choose), frozen as i8
+        // because the fast selector freezes only legal types.
+        if (tier == 0U) {
+            for (auto& function : *module) {
+                for (auto& block : function) {
+                    for (auto next = block.begin(); next != block.end();) {
+                        auto* select = llvm::dyn_cast<llvm::SelectInst>(&*next++);
+                        if (select == nullptr || !select->getType()->isIntegerTy(1)) {
+                            continue;
+                        }
+                        auto* const when_true
+                            = llvm::dyn_cast<llvm::ConstantInt>(select->getTrueValue());
+                        auto* const when_false
+                            = llvm::dyn_cast<llvm::ConstantInt>(select->getFalseValue());
+                        llvm::IRBuilder<> rewrite(select);
+                        auto* const condition = select->getCondition();
+                        const auto freeze = [&](llvm::Value* const value) {
+                            return rewrite.CreateTrunc(
+                                rewrite.CreateFreeze(
+                                    rewrite.CreateZExt(value, rewrite.getInt8Ty())),
+                                rewrite.getInt1Ty());
+                        };
+                        llvm::Value* replacement = nullptr;
+                        if (when_true != nullptr) {
+                            auto* const other = freeze(select->getFalseValue());
+                            replacement = when_true->isOne()
+                                ? rewrite.CreateOr(condition, other)
+                                : rewrite.CreateAnd(rewrite.CreateNot(condition), other);
+                        } else if (when_false != nullptr) {
+                            auto* const other = freeze(select->getTrueValue());
+                            replacement = when_false->isZero()
+                                ? rewrite.CreateAnd(condition, other)
+                                : rewrite.CreateOr(rewrite.CreateNot(condition), other);
+                        }
+                        if (replacement != nullptr) {
+                            select->replaceAllUsesWith(replacement);
+                            select->eraseFromParent();
+                        }
+                    }
+                }
+            }
         }
         if (const char* dump = std::getenv("FSIM_STATIC_KERNEL_DUMP_IR")) {
             // Diagnostic: the IR handed to instruction selection, one file per

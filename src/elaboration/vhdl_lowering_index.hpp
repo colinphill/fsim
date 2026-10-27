@@ -9,11 +9,15 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace fsim::elaboration {
+
+struct HirCallableBodyRecording;
 
 /// Facts about one revision of the design's VHDL HIR, each derived on first
 /// use and shared by the design's lowerers.
@@ -78,6 +82,12 @@ struct VhdlLoweringIndex {
         std::vector<std::size_t> processes;
     };
     std::optional<SystemVerilogEvents> systemverilog_events_;
+    /// Lowered bodies of package-level VHDL functions, by frame key, which
+    /// a later process replays instead of lowering the body again
+    /// (Lowerer::record_hir_callable_body).
+    std::unordered_map<std::string,
+        std::shared_ptr<const HirCallableBodyRecording>>
+        callable_bodies;
 
     /// The event-waiting statements and processes of `source`'s current
     /// revision.

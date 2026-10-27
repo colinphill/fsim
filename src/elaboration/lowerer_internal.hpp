@@ -314,6 +314,58 @@ sv_container_method_call(const std::string_view text) noexcept
 [[nodiscard]] std::string_view hir_expression_kind_name(
     semantic::vhdl::ExpressionKind kind) noexcept;
 
+// One lowered body of a package-level VHDL function, numbered as in the
+// process that lowered it: the operations from the body's entry, the
+// registers they allocated, and the frame registers they read, so a later
+// process with a frame of the same key renumbers it instead of lowering the
+// body again (Lowerer::replay_hir_callable_body).
+struct HirCallableBodyRecording {
+    using RegisterId = runtime::simir::RegisterId;
+    struct Register {
+        std::size_t width { };
+        frontend::ValueDomain domain { };
+        friend bool operator==(const Register&, const Register&) = default;
+    };
+    struct ScalarRange {
+        semantic::SourceSpanId source;
+        RegisterId left { };
+        RegisterId right { };
+        bool descending { };
+    };
+    runtime::simir::InstructionIndex target { };
+    RegisterId register_begin { };
+    // The first register of the body's declarative part; it and those
+    // after it are saved across a recursive invocation.
+    RegisterId invocation_begin { };
+    std::vector<Register> registers;
+    // The frame's result, then its arguments.
+    std::vector<RegisterId> frame_registers;
+    std::vector<Register> frame_register_shapes;
+    std::vector<runtime::simir::Operation> operations;
+    // The body's local registers beyond the enclosing process's, which a
+    // subprogram declared in the body reads.
+    std::vector<std::pair<std::uint32_t, RegisterId>> body_registers;
+    std::vector<ScalarRange> scalar_ranges;
+    // Each debug local name the body took, in order: the declaration, its
+    // simple name and the name it got, which depends on the names the
+    // process already holds (Lowerer::hir_callable_debug_local_name).
+    struct DebugName {
+        semantic::DeclarationId declaration;
+        std::string name;
+        std::string result;
+    };
+    std::vector<DebugName> debug_names;
+    // The debug locals the body added, each with the index of its name.
+    std::vector<std::pair<std::size_t, runtime::simir::DebugLocal>>
+        debug_locals;
+    std::vector<runtime::simir::ExpressionProfile> expression_profiles;
+};
+
+// Whether two recordings in one numbering hold the same body.
+[[nodiscard]] bool same_hir_callable_body(
+    const HirCallableBodyRecording& left,
+    const HirCallableBodyRecording& right);
+
 class Lowerer final {
 public:
     Lowerer(
@@ -5244,6 +5296,9 @@ private:
         std::unordered_map<std::uint32_t, HirVhdlShapedLocal>
             vhdl_shaped_formals;
         std::string debug_name;
+        // The frame key of a VHDL function call, from which
+        // hir_callable_body_memo_key derives the design-wide body key.
+        std::string memo_key;
         // Signal-class procedure formals denote their actual signal for the
         // whole call. Frames are specialized per actual signal set.
         std::unordered_map<std::uint32_t, HirRuntimeBinding> signal_formals;
@@ -5284,6 +5339,48 @@ private:
         std::string class_static_scope;
     };
     void inherit_enclosing_hir_frame_facts(HirCallableFrame& frame) const;
+    // The design-wide key under which the body of `frame` may be recorded
+    // and replayed: a package-level VHDL function whose frame reads no
+    // process state (signals, protected objects, generics bound from an
+    // instance, enclosing callables) and holds no string or container.
+    [[nodiscard]] std::optional<std::string> hir_callable_body_memo_key(
+        const HirCallableFrame& frame) const;
+    // Counts of the lowering state a recordable body leaves unchanged.
+    [[nodiscard]] std::vector<std::size_t>
+    hir_callable_body_side_state() const;
+    struct HirCallableBodyStart {
+        InstructionIndex target { };
+        RegisterId register_begin { };
+        std::size_t scalar_ranges { };
+        std::size_t debug_locals { };
+        std::size_t expression_profiles { };
+        std::vector<std::size_t> side_state;
+    };
+    // The recording of the body just lowered for `callable` from `start`,
+    // which took `debug_names`, when every operation is one a replay can
+    // renumber.
+    [[nodiscard]] std::optional<HirCallableBodyRecording>
+    record_hir_callable_body(std::size_t callable,
+        const HirCallableBodyStart& start, RegisterId invocation_begin,
+        std::vector<HirCallableBodyRecording::DebugName> debug_names) const;
+    // A process-unique debug local name for the local `declaration` called
+    // `name` of the callable `callable`; logged while a body is recorded.
+    [[nodiscard]] std::string hir_callable_debug_local_name(
+        std::size_t callable, semantic::DeclarationId declaration,
+        std::string_view name);
+    std::vector<HirCallableBodyRecording::DebugName>*
+        hir_callable_debug_name_log_ { };
+    // `recording` renumbered for `callable` with its body at `target` and
+    // its registers from `register_begin`; nullopt when the frame's
+    // registers differ in shape.
+    [[nodiscard]] std::optional<HirCallableBodyRecording>
+    renumber_hir_callable_body(const HirCallableBodyRecording& recording,
+        std::size_t callable, InstructionIndex target,
+        RegisterId register_begin) const;
+    // Emits the renumbered body for `callable` and completes its frame as
+    // lower_hir_callable_body does.
+    void replay_hir_callable_body(std::size_t callable,
+        HirCallableBodyRecording body);
     [[nodiscard]] bool allocate_hir_static_callable_declarations(
         std::size_t frame_index);
     // The name prefix shared by the static locals of one class method in

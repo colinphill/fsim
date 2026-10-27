@@ -184,7 +184,9 @@ fsim::project::Config make_shaped_config(
 
 // An unconstrained array formal whose slice actual has bounds known only at
 // run time takes the slice's own index range (IEEE 1076-2008 4.2.2.2, 8.5).
-std::array<std::string, 3> run_shaped_once(
+// Two processes calling one package function with the same shapes share its
+// lowered body; each still computes its own result.
+std::array<std::string, 7> run_shaped_once(
     const fsim::project::Config& config,
     const fsim::app::SimulationEngine engine) {
   fsim::diagnostic::Engine diagnostics;
@@ -197,10 +199,14 @@ std::array<std::string, 3> run_shaped_once(
   assert(project);
   fsim::app::Simulation simulation{
       std::move(*project), config.run.max_deltas, engine};
-  constexpr std::array<std::string_view, 3> paths{
+  constexpr std::array<std::string_view, 7> paths{
       "shaped_actuals.sum_result",
       "shaped_actuals.outer_result",
-      "shaped_actuals.ones_result"};
+      "shaped_actuals.ones_result",
+      "shaped_actuals.rev_a",
+      "shaped_actuals.rev_b",
+      "shaped_actuals.weight_a",
+      "shaped_actuals.weight_b"};
   std::array<fsim::runtime::simir::SignalId, paths.size()> signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
     const auto signal = simulation.find_signal(paths[index]);
@@ -209,7 +215,7 @@ std::array<std::string, 3> run_shaped_once(
   }
   const auto result = simulation.run();
   assert(result.status == fsim::runtime::RunStatus::completed);
-  std::array<std::string, 3> values;
+  std::array<std::string, 7> values;
   for (std::size_t index = 0; index < signals.size(); ++index) {
     values[index] = simulation.read_signal(signals[index]).to_msb_string();
   }
@@ -333,6 +339,30 @@ end architecture;
   {
     std::ofstream output{shaped_source};
     output << R"(
+package shared_bodies is
+  function rev(v : bit_vector) return bit_vector;
+  function weight(v : bit_vector; bias : integer) return integer;
+end package;
+package body shared_bodies is
+  function rev(v : bit_vector) return bit_vector is
+    variable r : bit_vector(v'range);
+  begin
+    for j in v'range loop
+      r(j) := v(v'high - j + v'low);
+    end loop;
+    return r;
+  end function;
+  function weight(v : bit_vector; bias : integer) return integer is
+    variable n : integer := bias;
+  begin
+    for j in v'range loop
+      if v(j) = '1' then n := n + j; else n := n - 1; end if;
+    end loop;
+    return n;
+  end function;
+end package body;
+
+use work.shared_bodies.all;
 entity shaped_actuals is end entity;
 architecture rtl of shaped_actuals is
   type int_vector is array (integer range <>) of integer;
@@ -354,7 +384,23 @@ architecture rtl of shaped_actuals is
     end loop;
   end procedure;
   signal sum_result, outer_result, ones_result : integer;
+  signal rev_a, rev_b : bit_vector(7 downto 0);
+  signal weight_a, weight_b : integer;
 begin
+  first : process
+    variable a : bit_vector(7 downto 0) := x"16";
+  begin
+    rev_a <= rev(a);
+    weight_a <= weight(a, 3);
+    wait;
+  end process;
+  second : process
+    variable b : bit_vector(7 downto 0) := x"C1";
+  begin
+    rev_b <= rev(b);
+    weight_b <= weight(b, 3);
+    wait;
+  end process;
   exercise : process
     variable q : int_vector(0 to 9);
     variable v : bit_vector(15 downto 0) := x"F0A5";
@@ -385,10 +431,14 @@ end architecture;
            fsim::project::Optimization::o2}) {
     const auto shaped_config = make_shaped_config(
         directory.path, shaped_source, optimization);
-    const std::array<std::string, 3> shaped_expected{
+    const std::array<std::string, 7> shaped_expected{
         std::bitset<32>(78U).to_string(),
         std::bitset<32>(615180U).to_string(),
-        std::bitset<32>(76U).to_string()};
+        std::bitset<32>(76U).to_string(),
+        "01101000",
+        "10000011",
+        std::bitset<32>(5U).to_string(),
+        std::bitset<32>(11U).to_string()};
     assert(run_shaped_once(
         shaped_config, fsim::app::SimulationEngine::interpreter)
         == shaped_expected);

@@ -941,6 +941,7 @@ src/elaboration/hir_output_conversion.hpp
 src/elaboration/lowerer_driver_regions.cpp
 src/elaboration/lowerer_driver_regions.hpp
 src/elaboration/lowerer_hir_callable.cpp
+src/elaboration/lowerer_hir_callable_memo.cpp
 src/elaboration/lowerer_hir_capability.cpp
 src/elaboration/lowerer_hir_container.cpp
 src/elaboration/lowerer_hir_expression.cpp

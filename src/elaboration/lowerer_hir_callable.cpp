@@ -12,6 +12,7 @@
 #include "lowerer_internal.hpp"
 
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -18972,6 +18973,9 @@ Lowerer::lower_hir_function_call_value(
         frame.type = *type;
         frame.vhdl_result_subtype = result_context;
         frame.vhdl_shaped_result = shaped_result;
+        if (declaration->vhdl != nullptr) {
+            frame.memo_key = callable_key;
+        }
         if (interface_callable) {
             frame.interface_receiver = interface_callable->receiver;
             frame.callee_unit = callee_unit;
@@ -23783,6 +23787,43 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     initial_frame->call_sites.clear();
     initial_frame->lowered = true;
 
+    // Another process may have lowered this package-level function under
+    // the same key; its body then differs only in register and instruction
+    // numbering. FSIM_HIR_BODY_MEMO_VERIFY lowers every such body again and
+    // checks it against the renumbered recording.
+    static const bool memo_verify
+        = std::getenv("FSIM_HIR_BODY_MEMO_VERIFY") != nullptr;
+    const auto memo_key = hir_callable_body_memo_key(*initial_frame);
+    std::shared_ptr<const HirCallableBodyRecording> recorded_body;
+    if (memo_key) {
+        const auto& bodies = vhdl_lowering_index().callable_bodies;
+        if (const auto found = bodies.find(*memo_key);
+            found != bodies.end()) {
+            recorded_body = found->second;
+        }
+    }
+    if (recorded_body && !memo_verify) {
+        const auto active = std::exchange(active_hir_callable_, callable_index);
+        auto body = renumber_hir_callable_body(*recorded_body, callable_index,
+            *initial_frame->target, next_register_);
+        active_hir_callable_ = active;
+        if (body) {
+            replay_hir_callable_body(callable_index, std::move(*body));
+            return true;
+        }
+    }
+    HirCallableBodyStart memo_start;
+    std::vector<HirCallableBodyRecording::DebugName> memo_debug_names;
+    auto* const saved_debug_name_log = hir_callable_debug_name_log_;
+    if (memo_key) {
+        memo_start = { *initial_frame->target, next_register_,
+            initial_frame->body_vhdl_scalar_ranges.size(),
+            process_.debug_locals.size(),
+            process_.expression_profiles.size(),
+            hir_callable_body_side_state() };
+        hir_callable_debug_name_log_ = &memo_debug_names;
+    }
+
     const auto saved_scope = hir_process_scope_;
     auto saved_hir_locals = std::move(hir_local_registers_);
     auto saved_hir_string_locals
@@ -23814,6 +23855,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         hir_vhdl_shaped_locals_.insert_or_assign(formal, local);
     }
     const auto restore_context = [&] {
+        hir_callable_debug_name_log_ = saved_debug_name_log;
         for (auto& [formal, local] : saved_shaped_formals) {
             if (local) {
                 hir_vhdl_shaped_locals_.insert_or_assign(
@@ -24400,6 +24442,29 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         = hir_local_registers_;
     hir_callable_frames_[callable_index].body_string_registers
         = hir_local_string_registers_;
+    if (lowered && memo_key) {
+        auto recording = record_hir_callable_body(callable_index,
+            memo_start, packed_begin, std::move(memo_debug_names));
+        if (recorded_body && memo_verify) {
+            const auto replayed = renumber_hir_callable_body(*recorded_body,
+                callable_index, memo_start.target,
+                memo_start.register_begin);
+            const auto lowered_body = recording
+                ? renumber_hir_callable_body(*recording, callable_index,
+                      memo_start.target, memo_start.register_begin)
+                : std::nullopt;
+            if (!lowered_body || !replayed
+                || !same_hir_callable_body(*lowered_body, *replayed)) {
+                std::cerr << "[fsim-hir-lower] body-memo mismatch "
+                          << *memo_key << '\n';
+                std::abort();
+            }
+        } else if (!recorded_body && recording) {
+            vhdl_lowering_index().callable_bodies.emplace(*memo_key,
+                std::make_shared<const HirCallableBodyRecording>(
+                    std::move(*recording)));
+        }
+    }
 
     restore_context();
     return lowered;
@@ -24415,7 +24480,32 @@ bool Lowerer::lower_pending_hir_callables()
         pending_hir_callables_.pop_front();
         hir_callable_frames_[callable].queued = false;
         const auto body_begin = process_.operations.size();
+        // FSIM_HIR_CALLABLE_BODY_STATS prints each lowered body's name,
+        // operation count and lowering time.
+        static const bool body_stats
+            = std::getenv("FSIM_HIR_CALLABLE_BODY_STATS") != nullptr;
+        const auto body_start = body_stats
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point { };
         lowered = lower_hir_callable_body(callable);
+        if (body_stats) {
+            const auto declaration = specialized_hir_unit_->find_declaration(
+                hir_callable_frames_[callable].declaration);
+            std::cerr << "[fsim-hir-lower] callable-body "
+                      << (declaration && declaration->vhdl != nullptr
+                                 ? declaration->vhdl->name
+                             : declaration
+                                 && declaration->systemverilog != nullptr
+                             ? declaration->systemverilog->name
+                             : std::string { "?" })
+                      << ' ' << hir_callable_frames_[callable].declaration.value()
+                      << " ops=" << process_.operations.size() - body_begin
+                      << " us="
+                      << std::chrono::duration_cast<std::chrono::microseconds>(
+                             std::chrono::steady_clock::now() - body_start)
+                             .count()
+                      << '\n';
+        }
         if (!lowered && hir_callable_frames_[callable].function
             && hir_class_function_declaration(
                 hir_callable_frames_[callable].declaration)) {
