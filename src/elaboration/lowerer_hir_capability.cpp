@@ -6454,6 +6454,25 @@ Lowerer::hir_referenced_declaration(
         return std::nullopt;
     }
 
+    // A simple name outside any package resolves by its root alone; that
+    // outcome is kept per binding-frame state, like the resolution.
+    const auto parts = support::split_vhdl_selected_name(reference_name);
+    const auto fallback_frames
+        = hir_effective_vhdl_subtype_cache_depth_ != 0U && parts.size() < 2U
+        ? hir_binding_frames_state()
+        : std::nullopt;
+    if (fallback_frames) {
+        if (const auto found = hir_vhdl_simple_name_fallback_cache_.find(
+                expression_id.value());
+            found != hir_vhdl_simple_name_fallback_cache_.end()) {
+            for (const auto& [frames, declaration] : found->second) {
+                if (frames == *fallback_frames) {
+                    return declaration;
+                }
+            }
+        }
+    }
+
     const auto expression_scope = expression->vhdl->scope;
     const auto packages = resolver.resolve_vhdl_package_members(
         reference, expression_scope);
@@ -6568,11 +6587,22 @@ Lowerer::hir_referenced_declaration(
                            base_name, expression_scope, predicate)
             .unique();
     };
-    const auto parts = support::split_vhdl_selected_name(reference_name);
     if (parts.size() < 2U) {
-        return simple_hir_identifier(reference_name, true)
+        auto root = simple_hir_identifier(reference_name, true)
             ? resolve_root(reference_name)
             : std::nullopt;
+        constexpr std::size_t maximum_entries { 1U << 16U };
+        if (fallback_frames
+            && hir_binding_frames_state() == fallback_frames
+            && hir_vhdl_simple_name_fallback_cache_.size()
+                < maximum_entries) {
+            try {
+                hir_vhdl_simple_name_fallback_cache_[expression_id.value()]
+                    .emplace_back(*fallback_frames, root);
+            } catch (const std::bad_alloc&) {
+            }
+        }
+        return root;
     }
     if (!simple_hir_identifier(parts.front(), true)) {
         return std::nullopt;
@@ -26188,6 +26218,42 @@ Lowerer::hir_vhdl_array_selection(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    // Only an index or call names a selection.
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || (expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+            && expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::index)) {
+        return std::nullopt;
+    }
+    // A selection depends on what the expression's subtype does; it is
+    // kept like the subtype (see hir_vhdl_expression_subtype).
+    auto key = hir_vhdl_query_key(expression_id, hir_process_scope_);
+    if (key) {
+        if (const auto found = hir_vhdl_array_selection_cache_.find(*key);
+            found != hir_vhdl_array_selection_cache_.end()) {
+            return found->second;
+        }
+    }
+    const auto fallback_calls = hir_boundary_fallback_calls_;
+    auto result = compute_hir_vhdl_array_selection(expression_id);
+    constexpr std::size_t maximum_entries { 1U << 17U };
+    if (key && hir_boundary_fallback_calls_ == fallback_calls
+        && hir_vhdl_array_selection_cache_.size() < maximum_entries
+        && hir_vhdl_expression_subtype_cacheable()) {
+        try {
+            hir_vhdl_array_selection_cache_.emplace(std::move(*key), result);
+        } catch (const std::bad_alloc&) {
+        }
+    }
+    return result;
+}
+
+std::optional<Lowerer::HirVhdlArraySelection>
+Lowerer::compute_hir_vhdl_array_selection(
+    const semantic::ExpressionId expression_id) const
+{
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     if (!expression || expression->vhdl == nullptr) {

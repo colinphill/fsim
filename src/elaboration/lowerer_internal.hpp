@@ -693,6 +693,13 @@ private:
     mutable std::map<semantic::ExpressionId,
         std::vector<HirExpressionResolutionCacheEntry>>
         hir_expression_resolution_cache_;
+    // The declarations hir_referenced_declaration finds for VHDL simple
+    // names the resolver leaves unresolved, by expression and binding-frame
+    // state; cleared with hir_expression_resolution_cache_.
+    mutable std::unordered_map<std::uint32_t,
+        std::vector<std::pair<std::size_t,
+            std::optional<semantic::DeclarationId>>>>
+        hir_vhdl_simple_name_fallback_cache_;
     mutable std::unordered_map<std::string,
         std::vector<HirVhdlCallableCacheEntry>>
         hir_vhdl_callable_cache_;
@@ -2469,6 +2476,14 @@ private:
     [[nodiscard]] std::optional<HirVhdlArraySelection>
     hir_vhdl_array_selection(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirVhdlArraySelection>
+    compute_hir_vhdl_array_selection(
+        semantic::ExpressionId expression) const;
+    // hir_vhdl_array_selection results, absent ones included (see
+    // hir_vhdl_width_cache_).
+    mutable std::unordered_map<HirVhdlQueryKey,
+        std::optional<HirVhdlArraySelection>, HirVhdlQueryKeyHash>
+        hir_vhdl_array_selection_cache_;
     struct HirVhdlMemberSelection {
         semantic::DeclarationId declaration;
         semantic::ExpressionId root;

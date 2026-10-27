@@ -9437,8 +9437,16 @@ std::optional<semantic::ExpressionId> Lowerer::hir_generic_actual(
     if (!selected && expression && expression->vhdl != nullptr
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::name) {
-        selected
-            = hir_resolver().resolve_expression_name(expression_id).unique();
+        // The resolution hir_referenced_declaration also keeps.
+        if (const auto* cached
+            = find_hir_expression_resolution_cache(expression_id)) {
+            selected = cached->unique();
+        } else {
+            const auto resolution
+                = hir_resolver().resolve_expression_name(expression_id);
+            cache_hir_expression_resolution(expression_id, resolution);
+            selected = resolution.unique();
+        }
     }
     if (!selected) {
         return std::nullopt;
@@ -9999,6 +10007,7 @@ void Lowerer::clear_hir_vhdl_query_caches() const noexcept
     hir_vhdl_expression_subtype_cache_entries_ = 0U;
     hir_vhdl_width_cache_.clear();
     hir_vhdl_shape_cache_.clear();
+    hir_vhdl_array_selection_cache_.clear();
     clear_hir_binding_frame_snapshots();
     hir_vhdl_function_call_cache_.clear();
     hir_vhdl_function_call_cache_entries_ = 0U;
@@ -10025,6 +10034,7 @@ void Lowerer::clear_hir_effective_vhdl_subtype_cache() const noexcept
 void Lowerer::clear_hir_expression_resolution_cache() const noexcept
 {
     hir_expression_resolution_cache_.clear();
+    hir_vhdl_simple_name_fallback_cache_.clear();
     hir_expression_resolution_cache_entries_ = 0U;
     hir_expression_resolution_cache_bytes_ = 0U;
     hir_expression_resolution_cache_hits_ = 0U;
