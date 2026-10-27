@@ -911,6 +911,7 @@ endif()
       src/elaboration/hierarchy_sv_aliases.cpp
       src/elaboration/hierarchy_sv_configuration.cpp
       src/elaboration/hierarchy_sv_constant_evaluator.cpp
+      src/elaboration/hierarchy_sv_constant_program.cpp
       src/elaboration/hierarchy_sv_declarations.cpp
       src/elaboration/hierarchy_sv_generate.cpp
       src/elaboration/hierarchy_sv_instance_worklist.cpp

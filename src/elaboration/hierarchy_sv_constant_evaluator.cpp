@@ -43,6 +43,29 @@ using ScalarKind = frontend::SystemVerilogScalarKind;
     return enabled;
 }
 
+[[nodiscard]] bool sv_const_program_enabled()
+{
+    static const bool enabled = [] {
+        const char* const value = std::getenv("FSIM_SV_CONST_PROGRAM");
+        return value == nullptr || std::string_view { value } != "0";
+    }();
+    return enabled;
+}
+
+[[nodiscard]] bool sv_const_program_verify()
+{
+    static const bool enabled
+        = std::getenv("FSIM_SV_CONST_PROGRAM_VERIFY") != nullptr;
+    return enabled;
+}
+
+[[nodiscard]] bool sv_const_program_trace()
+{
+    static const bool enabled
+        = std::getenv("FSIM_SV_CONST_PROGRAM_TRACE") != nullptr;
+    return enabled;
+}
+
 [[nodiscard]] bool sv_const_cast_trace()
 {
     static const bool enabled
@@ -1719,6 +1742,23 @@ private:
     // Hierarchy identities read so far, including through cached values
     // that read one (value_for_declaration).
     std::size_t hierarchy_reads_ { };
+    // Constant-function frame values read so far (formals, locals, pattern
+    // bindings, local arrays, class frames) from frames below
+    // frame_read_floor_. A compiled function folds only what reads none of
+    // the frames active when it is compiled; the frames of calls the fold
+    // makes are its own.
+    mutable std::size_t frame_reads_ { };
+    std::size_t frame_read_floor_ { std::numeric_limits<std::size_t>::max() };
+
+    template <typename FrameIterator>
+    void note_frame_read(const FrameIterator frame) const
+    {
+        // A reverse iterator: frames_.rend() - frame is the frame's depth.
+        if (static_cast<std::size_t>(frames_.rend() - frame)
+            <= frame_read_floor_) {
+            ++frame_reads_;
+        }
+    }
 
     struct LocalUnpackedArray {
         std::int64_t left { };
@@ -1797,6 +1837,7 @@ private:
         for (auto frame = frames_.rbegin(); frame != frames_.rend(); ++frame) {
             if (const auto found = frame->arrays.find(declaration);
                 found != frame->arrays.end()) {
+                note_frame_read(frame);
                 return &found->second;
             }
         }
@@ -2299,6 +2340,7 @@ private:
         for (auto frame = frames_.rbegin(); frame != frames_.rend(); ++frame) {
             if (const auto found = frame->values.find(declaration);
                 found != frame->values.end()) {
+                note_frame_read(frame);
                 return found->second;
             }
         }
@@ -2314,6 +2356,7 @@ private:
             const auto property = std::ranges::find(properties, declaration,
                 &semantic::sv::ClassProperty::declaration);
             if (property != properties.end()) {
+                note_frame_read(class_frame);
                 if (!property->parameter || !property->initializer) {
                     error_ = "class property '" + property->name
                         + "' is not a constant";
@@ -2472,10 +2515,12 @@ private:
         for (auto frame = frames_.rbegin(); frame != frames_.rend(); ++frame) {
             if (const auto found = frame->pattern_values.find(record.text);
                 found != frame->pattern_values.end()) {
+                note_frame_read(frame);
                 return found->second;
             }
         }
         if (const auto member = frame_member(record)) {
+            ++frame_reads_;
             const auto& root = *member->root;
             runtime::PackedLogic4 selected {
                 static_cast<std::size_t>(member->width), Logic4::x };
@@ -2498,6 +2543,7 @@ private:
                     ++frame) {
                     if (const auto found = frame->values.find(*selected);
                         found != frame->values.end()) {
+                        note_frame_read(frame);
                         return found->second;
                     }
                 }
@@ -2676,6 +2722,7 @@ private:
             if (const auto found
                 = frame->values.find(*record.referenced_name->selected);
                 found != frame->values.end()) {
+                note_frame_read(frame);
                 return &found->second;
             }
         }
@@ -5319,14 +5366,26 @@ private:
                 }
             }
         }
-        for (const auto statement : callable.statements) {
-            const auto flow = execute_statement(statement);
-            if (flow == Flow::failed) {
-                frames_.pop_back();
-                return std::nullopt;
-            }
-            if (flow == Flow::returned) {
-                break;
+        // A function without arrays may run compiled; an abandoned run
+        // leaves the frame as bound and the body is interpreted.
+        std::optional<Value> compiled;
+        if (!memo_key.empty() && frames_.back().arrays.empty()
+            && sv_const_program_enabled()) {
+            compiled = run_callable_program(callable);
+        }
+        if (!compiled || sv_const_program_verify()) {
+            for (const auto statement : callable.statements) {
+                const auto flow = execute_statement(statement);
+                if (flow == Flow::failed) {
+                    if (compiled) {
+                        report_program_mismatch(callable, *compiled, nullptr);
+                    }
+                    frames_.pop_back();
+                    return std::nullopt;
+                }
+                if (flow == Flow::returned) {
+                    break;
+                }
             }
         }
         if (result_array_type) {
@@ -5334,8 +5393,16 @@ private:
             frames_.pop_back();
             return make_known(0U, 1U, false, false);
         }
-        auto value = frames_.back().result.value_or(
-            frames_.back().values.at(callable.id));
+        auto value = compiled && !sv_const_program_verify()
+            ? std::move(*compiled)
+            : frames_.back().result.value_or(
+                  frames_.back().values.at(callable.id));
+        if (compiled && sv_const_program_verify()
+            && !(program_value(value)
+                && same_program_shape(value, program_shape(*compiled))
+                && value.canonical() == compiled->canonical())) {
+            report_program_mismatch(callable, *compiled, &value);
+        }
         frames_.pop_back();
         auto converted = convert_record_type(
             std::move(value), callable.callable->return_type);
@@ -7063,6 +7130,47 @@ private:
             : std::optional { matched == Truth::true_value };
     }
 
+    /// Whether a block-local variable without an initializer starts at its
+    /// type's default value (initialize_declarations).
+    [[nodiscard]] static bool defaulted_local(
+        const semantic::sv::Declaration& source)
+    {
+        if (source.form != semantic::sv::DeclarationForm::variable
+            || !source.type || source.type->container_form
+            || !source.type->unpacked_dimensions.empty()
+            || !source.type->value_form) {
+            return false;
+        }
+        using TypeForm = semantic::sv::TypeForm;
+        const auto form = *source.type->value_form;
+        return form == TypeForm::packed_integral
+            || form == TypeForm::enumeration
+            || form == TypeForm::packed_structure
+            || form == TypeForm::packed_union
+            || form == TypeForm::tagged_union;
+    }
+
+    /// The default value of a defaulted_local: x bits for a 4-state type,
+    /// zeros for a 2-state one (IEEE 1800-2017 6.8 Table 6-7).
+    [[nodiscard]] std::optional<Value> local_default_value(
+        const semantic::sv::Declaration& source)
+    {
+        std::unordered_set<std::uint32_t> visiting;
+        const auto width = resolved_type_width(
+            *source.type, &specialization_, visiting);
+        if (!width || *width == 0U || *width > maximum_constant_width) {
+            error_ = "constant function local type width is unresolved";
+            return std::nullopt;
+        }
+        auto initial_value = make_value(
+            PackedLogic4 {
+                static_cast<std::size_t>(*width),
+                source.type->four_state ? Logic4::x : Logic4::zero },
+            source.type->signed_value, false,
+            type_domain(*source.type));
+        return convert_record_type(std::move(initial_value), *source.type);
+    }
+
     [[nodiscard]] bool initialize_declarations(
         const semantic::sv::Statement& statement)
     {
@@ -7078,38 +7186,10 @@ private:
                     return false;
                 }
                 if (frames_.back().arrays.contains(declaration_id)
-                    || source.form
-                        != semantic::sv::DeclarationForm::variable
-                    || !source.type || source.type->container_form
-                    || !source.type->unpacked_dimensions.empty()
-                    || !source.type->value_form) {
+                    || !defaulted_local(source)) {
                     continue;
                 }
-                using TypeForm = semantic::sv::TypeForm;
-                const auto form = *source.type->value_form;
-                if (form != TypeForm::packed_integral
-                    && form != TypeForm::enumeration
-                    && form != TypeForm::packed_structure
-                    && form != TypeForm::packed_union
-                    && form != TypeForm::tagged_union) {
-                    continue;
-                }
-                std::unordered_set<std::uint32_t> visiting;
-                const auto width = resolved_type_width(
-                    *source.type, &specialization_, visiting);
-                if (!width || *width == 0U
-                    || *width > maximum_constant_width) {
-                    error_ = "constant function local type width is unresolved";
-                    return false;
-                }
-                auto initial_value = make_value(
-                    PackedLogic4 {
-                        static_cast<std::size_t>(*width),
-                        source.type->four_state ? Logic4::x : Logic4::zero },
-                    source.type->signed_value, false,
-                    type_domain(*source.type));
-                auto converted = convert_record_type(
-                    std::move(initial_value), *source.type);
+                auto converted = local_default_value(source);
                 if (!converted) {
                     return false;
                 }
@@ -7438,6 +7518,1718 @@ private:
             }
         }
         return Flow::normal;
+    }
+
+    // ---- Compiled constant functions (hierarchy_sv_constant_program.hpp) ----
+    //
+    // A function whose formals, locals and result hold at most 64 bits is
+    // compiled once per specialization: every subexpression that reads no
+    // frame value is folded by evaluate() itself, and every other one
+    // becomes register code that applies this evaluator's operand
+    // extensions and value profiles, fixed at compile time.
+
+    using ProgramShape = sv_constant_program::Shape;
+    using ProgramCode = sv_constant_program::OpCode;
+
+    /// A compiled operand: a register, or a constant folded by evaluate().
+    struct ProgramOperand {
+        std::uint32_t reg { };
+        std::optional<std::uint64_t> constant;
+        ProgramShape shape;
+    };
+
+    /// A frame value held in a register.
+    struct ProgramSlot {
+        std::uint32_t reg { };
+        // An explicit integral type converts each whole assignment
+        // (assign_target); the converted value profile.
+        std::optional<ProgramShape> type_shape;
+        bool typed { };
+        // Every value profile the slot takes: its entry or initial value's
+        // and each stored one's, in code order.
+        std::vector<ProgramShape> profiles;
+        // The profile reads assume, checked when the profiles differ.
+        std::optional<ProgramShape> read_shape;
+        bool checked { };
+    };
+
+    /// The read profile each slot assumed in the previous pass.
+    struct ProgramAssumption {
+        std::optional<ProgramShape> read_shape;
+        bool checked { };
+    };
+
+    struct ProgramCompilation {
+        sv_constant_program::Program program;
+        std::unordered_map<std::uint32_t, ProgramSlot> slots;
+        std::unordered_map<std::uint32_t, ProgramAssumption> assumptions;
+        std::unordered_map<std::uint32_t, bool> reads_slot;
+        struct Jumps {
+            std::vector<std::size_t> breaks;
+            std::vector<std::size_t> continues;
+        };
+        std::vector<Jumps> jumps;
+        std::string refusal;
+    };
+    ProgramCompilation* compilation_ { };
+
+    [[nodiscard]] static bool program_value(const Value& value)
+    {
+        return !value.scalar && !value.unbounded && value.width != 0U
+            && value.width <= 64U && !value.packed.is_logic9()
+            && value.packed.width() == value.width;
+    }
+
+    [[nodiscard]] static ProgramShape program_shape(const Value& value)
+    {
+        return { value.width, value.signed_value, value.unsized,
+            value.domain, value.nominal_type, value.packed_range };
+    }
+
+    [[nodiscard]] static bool same_program_shape(
+        const Value& value, const ProgramShape& shape)
+    {
+        return value.width == shape.width
+            && value.signed_value == shape.signed_value
+            && value.unsized == shape.unsized && value.domain == shape.domain
+            && value.nominal_type == shape.nominal_type
+            && value.packed_range == shape.packed_range
+            && (!value.packed_range
+                || value.packed_range->element_signed
+                    == shape.packed_range->element_signed);
+    }
+
+    [[nodiscard]] static Value program_result_value(
+        const std::uint64_t bits, const ProgramShape& shape)
+    {
+        auto value = make_value(PackedLogic4::from_aval_bval(shape.width,
+                                    bits & sv_constant_program::width_mask(
+                                        shape.width),
+                                    0U),
+            shape.signed_value, shape.unsized, shape.domain);
+        value.nominal_type = shape.nominal_type;
+        value.packed_range = shape.packed_range;
+        return value;
+    }
+
+    /// logical_result's profile.
+    [[nodiscard]] static ProgramShape logical_shape()
+    {
+        return { 1U, false, false, frontend::ValueDomain::Logic4, { }, { } };
+    }
+
+    [[nodiscard]] bool refuse_program(std::string reason)
+    {
+        if (compilation_->refusal.empty()) {
+            compilation_->refusal = std::move(reason);
+        }
+        return false;
+    }
+
+    [[nodiscard]] std::optional<ProgramOperand> refuse_operand(
+        std::string reason)
+    {
+        (void)refuse_program(std::move(reason));
+        return std::nullopt;
+    }
+
+    std::size_t emit(const ProgramCode code, const std::uint32_t a = 0U,
+        const std::uint32_t b = 0U, const std::uint32_t c = 0U,
+        const std::uint32_t width = 0U, const std::uint32_t aux = 0U,
+        const bool flag = false, const std::uint64_t immediate = 0U)
+    {
+        auto& ops = compilation_->program.ops;
+        ops.push_back({ code, flag, width, aux, a, b, c, immediate });
+        return ops.size() - 1U;
+    }
+
+    [[nodiscard]] std::size_t program_position() const
+    {
+        return compilation_->program.ops.size();
+    }
+
+    void patch_jump(const std::size_t jump, const std::size_t target)
+    {
+        compilation_->program.ops[jump].immediate = target;
+    }
+
+    [[nodiscard]] std::uint32_t fresh_register()
+    {
+        return compilation_->program.registers++;
+    }
+
+    /// Abandon the run when `compare(r[reg], immediate)` holds.
+    void abandon_when(const ProgramCode compare, const std::uint32_t reg,
+        const std::uint64_t immediate, const std::uint32_t width)
+    {
+        const auto bound = fresh_register();
+        emit(ProgramCode::constant, bound, 0U, 0U, 0U, 0U, false, immediate);
+        const auto test = fresh_register();
+        emit(compare, test, reg, bound, width);
+        const auto skip = emit(ProgramCode::jump_if_zero, test);
+        emit(ProgramCode::abandon);
+        patch_jump(skip, program_position());
+    }
+
+    [[nodiscard]] std::uint32_t operand_register(const ProgramOperand& operand)
+    {
+        if (!operand.constant) {
+            return operand.reg;
+        }
+        const auto reg = fresh_register();
+        emit(ProgramCode::constant, reg, 0U, 0U, 0U, 0U, false,
+            *operand.constant);
+        return reg;
+    }
+
+    [[nodiscard]] std::uint32_t intern_shape(const ProgramShape& shape)
+    {
+        auto& shapes = compilation_->program.shapes;
+        const auto found = std::ranges::find(shapes, shape);
+        if (found != shapes.end()) {
+            return static_cast<std::uint32_t>(found - shapes.begin());
+        }
+        shapes.push_back(shape);
+        return static_cast<std::uint32_t>(shapes.size() - 1U);
+    }
+
+    /// An operation's result in a fresh register.
+    [[nodiscard]] ProgramOperand program_result(const ProgramCode code,
+        const std::uint32_t b, const std::uint32_t c,
+        const std::uint32_t width, ProgramShape shape,
+        const std::uint32_t aux = 0U, const bool flag = false)
+    {
+        const auto reg = fresh_register();
+        emit(code, reg, b, c, width, aux, flag);
+        return { reg, std::nullopt, std::move(shape) };
+    }
+
+    /// resized() of an operand.
+    [[nodiscard]] ProgramOperand program_resized(
+        ProgramOperand value, const std::uint32_t width)
+    {
+        if (value.shape.width == width) {
+            return value;
+        }
+        auto shape = value.shape;
+        shape.width = width;
+        // An unsized fill literal sets every bit and keeps its range.
+        if (value.shape.unsized && value.shape.width == 1U && width > 1U) {
+            return program_result(ProgramCode::fill,
+                operand_register(value), 0U, width, std::move(shape));
+        }
+        shape.packed_range = semantic::sv::PackedRange {
+            static_cast<std::int64_t>(width - 1U), 0, std::nullopt,
+            std::nullopt, true, { }
+        };
+        return program_result(ProgramCode::extend, operand_register(value),
+            0U, width, std::move(shape), value.shape.width,
+            value.shape.signed_value);
+    }
+
+    /// common_operand() of an operand.
+    [[nodiscard]] ProgramOperand program_common_operand(
+        ProgramOperand value, const std::uint32_t width,
+        const bool signed_value)
+    {
+        if (value.shape.unsized && value.shape.width == 1U && width > 1U) {
+            auto shape = value.shape;
+            shape.width = width;
+            shape.signed_value = signed_value;
+            return program_result(ProgramCode::fill,
+                operand_register(value), 0U, width, std::move(shape));
+        }
+        value.shape.signed_value = signed_value;
+        value = program_resized(std::move(value), width);
+        value.shape.signed_value = signed_value;
+        return value;
+    }
+
+    /// Whether an expression reads a compiled slot.
+    [[nodiscard]] bool program_reads_slot(const semantic::ExpressionId id)
+    {
+        auto& cache = compilation_->reads_slot;
+        if (const auto found = cache.find(id.value()); found != cache.end()) {
+            return found->second;
+        }
+        bool reads { };
+        const auto view = specialization_.find_expression(id);
+        if (view && view->systemverilog != nullptr) {
+            const auto& record = *view->systemverilog;
+            reads = record.kind == ExpressionKind::name
+                && record.referenced_name && record.referenced_name->selected
+                && compilation_->slots.contains(
+                    record.referenced_name->selected->value());
+            for (const auto operand : record.operands) {
+                reads = program_reads_slot(operand) || reads;
+            }
+        }
+        cache.emplace(id.value(), reads);
+        return reads;
+    }
+
+    /// The declarations a folded expression names: a frame binding one of
+    /// them when the program runs would have changed the folded value.
+    void collect_folded_names(const semantic::ExpressionId id)
+    {
+        const auto view = specialization_.find_expression(id);
+        if (!view || view->systemverilog == nullptr) {
+            return;
+        }
+        const auto& record = *view->systemverilog;
+        if (record.kind == ExpressionKind::name && record.referenced_name
+            && record.referenced_name->selected) {
+            auto& names = compilation_->program.folded_declarations;
+            const auto declaration
+                = record.referenced_name->selected->value();
+            if (std::ranges::find(names, declaration) == names.end()) {
+                names.push_back(declaration);
+            }
+        }
+        for (const auto operand : record.operands) {
+            collect_folded_names(operand);
+        }
+    }
+
+    /// Whether a folded expression names only resolved declarations.
+    [[nodiscard]] bool resolved_names(const semantic::ExpressionId id) const
+    {
+        const auto view = specialization_.find_expression(id);
+        if (!view || view->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& record = *view->systemverilog;
+        if (record.kind == ExpressionKind::name
+            && (!record.referenced_name
+                || !record.referenced_name->selected)) {
+            return false;
+        }
+        return std::ranges::all_of(record.operands,
+            [&](const semantic::ExpressionId operand) {
+                return resolved_names(operand);
+            });
+    }
+
+    /// Run `step` as evaluation at compile time: it must read no frame
+    /// value, no hierarchy identity and no work, and leaves error_ as it
+    /// was.
+    template <typename Step>
+    [[nodiscard]] auto frame_free(Step&& step) -> decltype(step())
+    {
+        const auto frame_reads = frame_reads_;
+        const auto hierarchy_reads = hierarchy_reads_;
+        const auto work = work_units_used_;
+        const auto error = error_;
+        const auto floor = frame_read_floor_;
+        frame_read_floor_ = frames_.size();
+        auto result = step();
+        frame_read_floor_ = floor;
+        const bool clean = frame_reads_ == frame_reads
+            && hierarchy_reads_ == hierarchy_reads
+            && work_units_used_ == work;
+        error_ = error;
+        if (!clean) {
+            return decltype(step()) { };
+        }
+        return result;
+    }
+
+    /// An expression that reads no frame value, evaluated once.
+    [[nodiscard]] std::optional<ProgramOperand> fold_operand(
+        const semantic::ExpressionId id,
+        const std::optional<std::uint32_t> context)
+    {
+        if (!resolved_names(id)) {
+            return refuse_operand("unresolved name");
+        }
+        const auto value = frame_free([&]() -> std::optional<Value> {
+            if (context) {
+                contexts_[id.value()] = *context;
+            }
+            auto result = evaluate(id);
+            if (context) {
+                contexts_.erase(id.value());
+            }
+            return result;
+        });
+        if (!value || !program_value(*value) || !value->known()) {
+            return refuse_operand("constant operand");
+        }
+        collect_folded_names(id);
+        return ProgramOperand { 0U, small_words(*value)->a,
+            program_shape(*value) };
+    }
+
+    [[nodiscard]] std::optional<ProgramOperand> compile_expression(
+        const semantic::ExpressionId id,
+        const std::optional<std::uint32_t> context)
+    {
+        if (!program_reads_slot(id)) {
+            return fold_operand(id, context);
+        }
+        const auto view = specialization_.find_expression(id);
+        if (!view || view->systemverilog == nullptr) {
+            return refuse_operand("expression");
+        }
+        const auto& record = *view->systemverilog;
+        if (record.decimal_literal) {
+            return refuse_operand("decimal literal");
+        }
+        std::optional<ProgramOperand> result;
+        switch (record.kind) {
+        case ExpressionKind::name:
+            result = compile_slot_read(record);
+            break;
+        case ExpressionKind::unary:
+            result = compile_unary(record, context);
+            break;
+        case ExpressionKind::binary:
+            result = compile_binary(record, context);
+            break;
+        case ExpressionKind::index:
+            result = compile_bit_select(record);
+            break;
+        case ExpressionKind::slice:
+            result = compile_part_select(record);
+            break;
+        case ExpressionKind::concatenation:
+        case ExpressionKind::replication:
+            result = compile_concatenation(record);
+            break;
+        case ExpressionKind::call:
+            result = compile_call(record, context);
+            break;
+        default:
+            return refuse_operand("expression kind");
+        }
+        if (result && result->shape.width > 64U) {
+            return refuse_operand("width over 64");
+        }
+        return result;
+    }
+
+    [[nodiscard]] ProgramSlot* program_slot(
+        const semantic::sv::Expression& record)
+    {
+        if (record.kind != ExpressionKind::name || !record.referenced_name
+            || !record.referenced_name->selected
+            || record.text.find('.') != std::string::npos
+            || record.text == "$" || record.text.starts_with('@')) {
+            return nullptr;
+        }
+        const auto found = compilation_->slots.find(
+            record.referenced_name->selected->value());
+        return found == compilation_->slots.end() ? nullptr
+                                                  : &found->second;
+    }
+
+    [[nodiscard]] std::optional<ProgramShape> slot_read_shape(
+        ProgramSlot& slot)
+    {
+        if (!slot.read_shape) {
+            return std::nullopt;
+        }
+        emit(ProgramCode::require_known, slot.reg);
+        if (slot.checked) {
+            emit(ProgramCode::require_shape, slot.reg, 0U, 0U, 0U, 0U,
+                false, intern_shape(*slot.read_shape));
+        }
+        return slot.read_shape;
+    }
+
+    [[nodiscard]] std::optional<ProgramOperand> compile_slot_read(
+        const semantic::sv::Expression& record)
+    {
+        auto* const slot = program_slot(record);
+        if (slot == nullptr) {
+            return refuse_operand("name");
+        }
+        auto shape = slot_read_shape(*slot);
+        if (!shape) {
+            return refuse_operand("slot profile");
+        }
+        return ProgramOperand { slot->reg, std::nullopt, std::move(*shape) };
+    }
+
+    [[nodiscard]] std::optional<ProgramOperand> compile_unary(
+        const semantic::sv::Expression& record,
+        const std::optional<std::uint32_t> context)
+    {
+        if (record.operands.size() != 1U) {
+            return refuse_operand("unary arity");
+        }
+        const auto& op = record.text;
+        if ((op == "-" || op == "+") && real_valued(record.operands.front())) {
+            return refuse_operand("real operand");
+        }
+        const auto operand_context = op == "-" || op == "~" || op == "+"
+            ? context : std::nullopt;
+        auto operand = compile_expression(
+            record.operands.front(), operand_context);
+        if (!operand) {
+            return std::nullopt;
+        }
+        if (operand_context && operand->shape.width < *operand_context) {
+            operand = program_resized(std::move(*operand), *operand_context);
+        }
+        const auto reg = operand_register(*operand);
+        const auto width = operand->shape.width;
+        if (op == "+") {
+            return operand;
+        }
+        if (op == "-" || op == "~") {
+            return program_result(op == "-" ? ProgramCode::negate
+                                            : ProgramCode::invert,
+                reg, 0U, width, operand->shape);
+        }
+        const auto reduction = op == "!" ? ProgramCode::logical_not
+            : op == "&" || op == "~&"   ? ProgramCode::reduce_and
+            : op == "|" || op == "~|"   ? ProgramCode::reduce_or
+            : op == "^" || op == "~^" || op == "^~"
+            ? ProgramCode::reduce_xor
+            : ProgramCode::abandon;
+        if (reduction == ProgramCode::abandon) {
+            return refuse_operand("unary operator " + op);
+        }
+        auto result = program_result(
+            reduction, reg, 0U, width, logical_shape());
+        if (op == "~&" || op == "~|" || op == "~^" || op == "^~") {
+            result = program_result(ProgramCode::logical_not, result.reg, 0U,
+                1U, logical_shape());
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::optional<ProgramOperand> compile_binary(
+        const semantic::sv::Expression& record,
+        const std::optional<std::uint32_t> context)
+    {
+        if (record.operands.size() != 2U) {
+            return refuse_operand("binary arity");
+        }
+        const auto& op = record.text;
+        const bool shift = op == "<<" || op == "<<<" || op == ">>"
+            || op == ">>>";
+        const bool logical = op == "&&" || op == "||";
+        const bool supported = shift || logical || op == "+" || op == "-"
+            || op == "*" || op == "/" || op == "%" || op == "&" || op == "|"
+            || op == "^" || op == "~^" || op == "^~" || op == "=="
+            || op == "!=" || op == "===" || op == "!==" || op == "<"
+            || op == "<=" || op == ">" || op == ">=";
+        if (!supported) {
+            return refuse_operand("binary operator " + op);
+        }
+        const auto& plan = binary_plan(record);
+        if (plan.real_operand || plan.chandle_operand) {
+            return refuse_operand("real operand");
+        }
+        // evaluate_binary's operand contexts.
+        const bool left_context = plan.left_context;
+        const auto outer = plan.arithmetic_context || left_context
+            ? context : std::nullopt;
+        std::optional<std::uint32_t> target;
+        if (plan.arithmetic_context || plan.relational_context
+            || left_context) {
+            const auto left_width = plan.left_width;
+            const auto right_width = left_context
+                ? std::optional<std::uint32_t> { 0U }
+                : plan.right_width;
+            if (left_width && right_width) {
+                auto width = std::max(*left_width, *right_width);
+                if (outer) {
+                    width = std::max(width, *outer);
+                }
+                if (width != 0U && width <= maximum_constant_width) {
+                    target = width;
+                }
+            }
+        }
+        auto left = compile_expression(record.operands.front(), target);
+        if (!left) {
+            return std::nullopt;
+        }
+        if (logical) {
+            // `&&` and `||` decide on a known left operand alone.
+            const auto result = fresh_register();
+            const auto left_reg = operand_register(*left);
+            emit(ProgramCode::constant, result, 0U, 0U, 0U, 0U, false,
+                op == "&&" ? 0U : 1U);
+            const auto skip = emit(op == "&&" ? ProgramCode::jump_if_zero
+                                              : ProgramCode::jump_if_nonzero,
+                left_reg);
+            auto right = compile_expression(record.operands.back(), std::nullopt);
+            if (!right) {
+                return std::nullopt;
+            }
+            emit(ProgramCode::reduce_or, result, operand_register(*right));
+            patch_jump(skip, program_position());
+            return ProgramOperand { result, std::nullopt, logical_shape() };
+        }
+        auto right = compile_expression(record.operands.back(),
+            left_context ? std::nullopt : target);
+        if (!right) {
+            return std::nullopt;
+        }
+        if (target) {
+            if (left_context) {
+                if (left->shape.width < *target) {
+                    left = program_resized(std::move(*left), *target);
+                }
+            } else {
+                const bool both_signed = left->shape.signed_value
+                    && right->shape.signed_value;
+                const auto extend = [&](ProgramOperand& value,
+                                        const bool context_determined) {
+                    const bool negated = value.shape.signed_value
+                        && context_determined;
+                    if (!both_signed && !negated) {
+                        value.shape.signed_value = false;
+                    }
+                    const bool unsized_fill = value.shape.unsized
+                        && value.shape.width == 1U;
+                    if (value.shape.width < *target && !unsized_fill) {
+                        value = program_resized(std::move(value), *target);
+                    }
+                    if (!both_signed) {
+                        value.shape.signed_value = false;
+                    }
+                };
+                extend(*left, plan.left_context_determined);
+                extend(*right, plan.right_context_determined);
+            }
+        }
+        if (plan.contextual
+            && !(left->shape.signed_value && right->shape.signed_value)) {
+            const auto width = std::max(left->shape.width, right->shape.width);
+            const auto widen = [&](ProgramOperand& value,
+                                   const bool context_determined) {
+                if (!value.shape.signed_value || value.shape.width >= width
+                    || !context_determined) {
+                    return;
+                }
+                value = program_resized(std::move(value), width);
+            };
+            widen(*left, plan.left_context_determined);
+            widen(*right, plan.right_context_determined);
+        }
+        if (left->shape.width > 64U || right->shape.width > 64U) {
+            return refuse_operand("width over 64");
+        }
+        // small_binary. A negative count, or an unsigned one above
+        // 0x7fffffff, takes the general path.
+        if (shift) {
+            const auto count = operand_register(*right);
+            if (right->constant) {
+                const bool general = right->shape.signed_value
+                    ? small_signed(*right->constant, right->shape.width) < 0
+                    : *right->constant > 0x7fffffffU;
+                if (general) {
+                    return refuse_operand("shift count");
+                }
+            } else if (right->shape.signed_value) {
+                abandon_when(ProgramCode::less_signed, count, 0U,
+                    right->shape.width);
+            } else {
+                abandon_when(ProgramCode::greater_unsigned, count,
+                    0x7fffffffU, 64U);
+            }
+            const auto code = op == "<<" || op == "<<<"
+                ? ProgramCode::shift_left
+                : op == ">>>" && left->shape.signed_value
+                ? ProgramCode::shift_right_arithmetic
+                : ProgramCode::shift_right;
+            return program_result(code, operand_register(*left), count,
+                left->shape.width, left->shape);
+        }
+        const auto width = std::max(left->shape.width, right->shape.width);
+        if ((left->shape.unsized && left->shape.width == 1U
+                && left->shape.width < width)
+            || (right->shape.unsized && right->shape.width == 1U
+                && right->shape.width < width)) {
+            return refuse_operand("unsized fill operand");
+        }
+        const bool signed_value
+            = left->shape.signed_value && right->shape.signed_value;
+        const auto extended = [&](const ProgramOperand& value) {
+            if (value.shape.width == width) {
+                return operand_register(value);
+            }
+            const auto reg = fresh_register();
+            emit(ProgramCode::extend, reg, operand_register(value), 0U, width,
+                value.shape.width, signed_value);
+            return reg;
+        };
+        const auto lhs = extended(*left);
+        const auto rhs = extended(*right);
+        if (op == "==" || op == "===" || op == "!=" || op == "!==") {
+            return program_result(op == "==" || op == "==="
+                    ? ProgramCode::equal : ProgramCode::not_equal,
+                lhs, rhs, width, logical_shape());
+        }
+        if (op == "<" || op == "<=" || op == ">" || op == ">=") {
+            const auto code = op == "<"
+                ? (signed_value ? ProgramCode::less_signed
+                                : ProgramCode::less_unsigned)
+                : op == "<="
+                ? (signed_value ? ProgramCode::less_equal_signed
+                                : ProgramCode::less_equal_unsigned)
+                : op == ">" ? (signed_value ? ProgramCode::greater_signed
+                                            : ProgramCode::greater_unsigned)
+                            : (signed_value
+                                      ? ProgramCode::greater_equal_signed
+                                      : ProgramCode::greater_equal_unsigned);
+            return program_result(code, lhs, rhs, width, logical_shape());
+        }
+        const auto domain = left->shape.domain == right->shape.domain
+            ? left->shape.domain : frontend::ValueDomain::Logic4;
+        const ProgramShape shape { width, signed_value, false, domain, { },
+            { } };
+        const auto code = op == "&" ? ProgramCode::bit_and
+            : op == "|"            ? ProgramCode::bit_or
+            : op == "^"            ? ProgramCode::bit_xor
+            : op == "~^" || op == "^~" ? ProgramCode::bit_xnor
+            : op == "+"            ? ProgramCode::add
+            : op == "-"            ? ProgramCode::subtract
+            : op == "*"            ? ProgramCode::multiply
+            : op == "/" ? (signed_value ? ProgramCode::divide_signed
+                                        : ProgramCode::divide_unsigned)
+                        : (signed_value ? ProgramCode::modulo_signed
+                                        : ProgramCode::modulo_unsigned);
+        return program_result(code, lhs, rhs, width, shape);
+    }
+
+    /// Where offset `start + index` (or `start - index`) reads a base whose
+    /// value profile is `base` (normalized_index); nothing for a range
+    /// that does not number exactly the base's bits.
+    [[nodiscard]] static std::optional<sv_constant_program::Select>
+    program_select(const ProgramShape& base, const std::uint32_t count)
+    {
+        sv_constant_program::Select select;
+        select.width = base.width;
+        select.count = count;
+        select.two_state = base.domain == frontend::ValueDomain::Bit2;
+        if (base.packed_range && base.packed_range->left
+            && base.packed_range->right) {
+            const auto left = *base.packed_range->left;
+            const auto right = *base.packed_range->right;
+            if (support::index_distance(left, right) + 1U != base.width) {
+                return std::nullopt;
+            }
+            // Descending: offset = index - right; ascending: right - index.
+            select.start = left >= right ? -right : right;
+            select.index_negated = left < right;
+        }
+        return select;
+    }
+
+    [[nodiscard]] bool ascending_profile(const ProgramShape& base) const
+    {
+        return base.packed_range && base.packed_range->left
+            && base.packed_range->right
+            && *base.packed_range->left < *base.packed_range->right;
+    }
+
+    /// The select of an index operand.
+    [[nodiscard]] std::uint32_t add_select(
+        sv_constant_program::Select select, const ProgramOperand& index,
+        const bool constant_index)
+    {
+        select.constant_index = constant_index;
+        select.index_signed = index.shape.signed_value;
+        select.index_width = index.shape.width;
+        auto& selects = compilation_->program.selects;
+        selects.push_back(select);
+        return static_cast<std::uint32_t>(selects.size() - 1U);
+    }
+
+    /// The bit-select paths evaluate_selection tries before reading a
+    /// plain packed base apply only to frame-free typed constants; this
+    /// one must reach the plain path.
+    [[nodiscard]] bool plain_bit_select(const semantic::sv::Expression& record)
+    {
+        const auto base_view
+            = specialization_.find_expression(record.operands.front());
+        if (!base_view || base_view->systemverilog == nullptr
+            || base_view->systemverilog->kind != ExpressionKind::name
+            || !base_view->systemverilog->referenced_name
+            || !base_view->systemverilog->referenced_name->selected) {
+            return false;
+        }
+        const auto declaration
+            = *base_view->systemverilog->referenced_name->selected;
+        return frame_free([&]() -> bool {
+            if (find_local_array(declaration) != nullptr
+                || typed_constant(record.id)) {
+                return false;
+            }
+            error_.clear();
+            if (evaluate_array_parameter_element(record) || !error_.empty()
+                || evaluate_member_array_element(record)) {
+                return false;
+            }
+            const auto shape = packed_shape(record.operands.front());
+            return !shape || shape->size() <= 1U;
+        });
+    }
+
+    [[nodiscard]] std::optional<ProgramOperand> compile_bit_select(
+        const semantic::sv::Expression& record)
+    {
+        if (record.operands.size() != 2U || !plain_bit_select(record)) {
+            return refuse_operand("bit-select");
+        }
+        auto base = compile_expression(record.operands.front(), std::nullopt);
+        auto index = base
+            ? compile_expression(record.operands.back(), std::nullopt)
+            : std::nullopt;
+        if (!base || !index) {
+            return std::nullopt;
+        }
+        auto select = program_select(base->shape, 1U);
+        if (!select) {
+            return refuse_operand("bit-select range");
+        }
+        const auto entry = add_select(*select, *index, false);
+        const auto reg = fresh_register();
+        emit(ProgramCode::select, reg, operand_register(*base),
+            operand_register(*index), 0U, 0U, false, entry);
+        return ProgramOperand { reg, std::nullopt,
+            ProgramShape { 1U, false, false, base->shape.domain, { }, { } } };
+    }
+
+    /// A part-select's width and the offset of its bit 0 relative to its
+    /// first index, by evaluate_selection's index arithmetic; nothing for
+    /// a reversed field.
+    struct PartSelectField {
+        std::uint32_t width { };
+        // The first index operand is read (`+:`, `-:`), else the offset
+        // is constant.
+        bool indexed { };
+        std::int64_t start { };
+        bool negated { };
+    };
+    [[nodiscard]] std::optional<PartSelectField> part_select_field(
+        const semantic::sv::Expression& record, const ProgramShape& base,
+        const std::optional<std::int64_t> first,
+        const std::optional<std::int64_t> second, const bool write)
+    {
+        PartSelectField field;
+        const bool indexed = record.text == "+:" || record.text == "-:";
+        if (!second || (!indexed && !first)) {
+            return std::nullopt;
+        }
+        if (indexed) {
+            if (*second <= 0 || *second > 64) {
+                return std::nullopt;
+            }
+            field.width = static_cast<std::uint32_t>(*second);
+        } else {
+            const auto distance = support::index_distance(*first, *second);
+            if (distance >= 64U) {
+                return std::nullopt;
+            }
+            field.width = static_cast<std::uint32_t>(distance + 1U);
+        }
+        const auto w = static_cast<std::int64_t>(field.width);
+        // The base offset of index i: i - right (descending or no range)
+        // or right - i (ascending).
+        const bool ranged = base.packed_range && base.packed_range->left
+            && base.packed_range->right;
+        const auto right = ranged ? *base.packed_range->right : 0;
+        const bool ascending = ascending_profile(base);
+        // Reads take an ascending base's `+:`/`-:` fields MSB first; a
+        // write takes `first + bit` in either case (assign_target).
+        const bool read_ascending = ascending && !write;
+        field.indexed = indexed;
+        if (record.text == "+:") {
+            // read: index = ascending ? first + (w-1-bit) : first + bit.
+            if (read_ascending) {
+                field.start = right - (w - 1);
+                field.negated = true;
+            } else if (ascending) {
+                return std::nullopt;
+            } else {
+                field.start = -right;
+            }
+        } else if (record.text == "-:") {
+            // read: index = ascending ? first - bit : first - (w-1-bit).
+            if (read_ascending) {
+                field.start = right;
+                field.negated = true;
+            } else if (ascending) {
+                return std::nullopt;
+            } else {
+                field.start = -right - (w - 1);
+            }
+        } else if (*first >= *second) {
+            // index = second + bit.
+            if (ascending) {
+                return std::nullopt;
+            }
+            field.start = *second - right;
+        } else {
+            // index = second - bit.
+            if (!ascending) {
+                return std::nullopt;
+            }
+            field.start = right - *second;
+        }
+        return field;
+    }
+
+    [[nodiscard]] std::optional<ProgramOperand> compile_part_select(
+        const semantic::sv::Expression& record)
+    {
+        if (record.operands.size() != 3U) {
+            return refuse_operand("part-select");
+        }
+        auto base = compile_expression(record.operands[0], std::nullopt);
+        auto first = base
+            ? compile_expression(record.operands[1], std::nullopt)
+            : std::nullopt;
+        auto second = first
+            ? compile_expression(record.operands[2], std::nullopt)
+            : std::nullopt;
+        if (!base || !first || !second) {
+            return std::nullopt;
+        }
+        const auto constant_integer = [](const ProgramOperand& operand)
+            -> std::optional<std::int64_t> {
+            if (!operand.constant) {
+                return std::nullopt;
+            }
+            return program_result_value(*operand.constant, operand.shape)
+                .integer_value();
+        };
+        const auto field = part_select_field(record, base->shape,
+            constant_integer(*first), constant_integer(*second), false);
+        auto select = field
+            ? program_select(base->shape, field->width) : std::nullopt;
+        if (!field || !select) {
+            return refuse_operand("part-select field");
+        }
+        select->part_select = true;
+        select->start = field->start;
+        select->index_negated = field->negated;
+        const auto entry = add_select(*select, *first, !field->indexed);
+        const auto reg = fresh_register();
+        emit(ProgramCode::select, reg, operand_register(*base),
+            field->indexed ? operand_register(*first) : 0U, 0U, 0U, false,
+            entry);
+        return ProgramOperand { reg, std::nullopt,
+            ProgramShape { field->width, false, false, base->shape.domain,
+                { }, { } } };
+    }
+
+    [[nodiscard]] std::optional<ProgramOperand> compile_concatenation(
+        const semantic::sv::Expression& record)
+    {
+        std::size_t first { };
+        std::uint64_t repetitions { 1U };
+        if (record.kind == ExpressionKind::replication) {
+            if (record.operands.size() < 2U) {
+                return refuse_operand("replication");
+            }
+            const auto count = compile_expression(
+                record.operands.front(), std::nullopt);
+            if (!count || !count->constant) {
+                return refuse_operand("replication count");
+            }
+            std::string ignored;
+            const auto converted = nonnegative_count(
+                program_result_value(*count->constant, count->shape), ignored);
+            if (!converted || *converted == 0U || *converted > 64U) {
+                return refuse_operand("replication count");
+            }
+            repetitions = *converted;
+            first = 1U;
+        }
+        std::vector<ProgramOperand> operands;
+        std::uint64_t element_width { };
+        for (auto index = first; index < record.operands.size(); ++index) {
+            auto operand = compile_expression(
+                record.operands[index], std::nullopt);
+            if (!operand) {
+                return std::nullopt;
+            }
+            element_width += operand->shape.width;
+            operands.push_back(std::move(*operand));
+        }
+        const auto result_width = element_width * repetitions;
+        if (operands.empty() || result_width == 0U || result_width > 64U) {
+            return refuse_operand("concatenation width");
+        }
+        const auto width = static_cast<std::uint32_t>(result_width);
+        if (operands.size() == 1U && element_width == 1U) {
+            return program_result(ProgramCode::fill,
+                operand_register(operands.front()), 0U, width,
+                ProgramShape { width, false, false,
+                    operands.front().shape.domain, { }, { } });
+        }
+        std::optional<std::uint32_t> accumulated;
+        std::uint32_t accumulated_width { };
+        for (std::uint64_t repetition { }; repetition < repetitions;
+             ++repetition) {
+            for (const auto& operand : operands) {
+                const auto reg = operand_register(operand);
+                accumulated_width += operand.shape.width;
+                if (!accumulated) {
+                    accumulated = reg;
+                    continue;
+                }
+                const auto next = fresh_register();
+                emit(ProgramCode::shift_or, next, *accumulated, reg,
+                    accumulated_width, operand.shape.width);
+                accumulated = next;
+            }
+        }
+        return ProgramOperand { *accumulated, std::nullopt,
+            ProgramShape { width, false, false,
+                frontend::ValueDomain::Logic4, { }, { } } };
+    }
+
+    [[nodiscard]] std::optional<ProgramOperand> compile_call(
+        const semantic::sv::Expression& record,
+        const std::optional<std::uint32_t> context)
+    {
+        if ((record.text == "$signed" || record.text == "$unsigned")
+            && record.operands.size() == 1U) {
+            auto result = compile_expression(
+                record.operands.front(), std::nullopt);
+            if (result) {
+                result->shape.signed_value = record.text == "$signed";
+            }
+            return result;
+        }
+        if (record.text != "?:" || record.operands.size() != 3U
+            || real_valued(record.operands[1])
+            || real_valued(record.operands[2])) {
+            return refuse_operand("call " + record.text);
+        }
+        // A known condition selects one operand, which takes the context
+        // width and then the wider operand's width.
+        auto condition = compile_expression(
+            record.operands.front(), std::nullopt);
+        if (!condition) {
+            return std::nullopt;
+        }
+        const auto when_true_width = expression_width(record.operands[1]);
+        const auto when_false_width = expression_width(record.operands[2]);
+        const bool widths = when_true_width && when_false_width;
+        const auto common = widths
+            ? std::max(*when_true_width, *when_false_width) : 0U;
+        auto selected_context = std::optional<std::uint32_t> { };
+        if (widths) {
+            selected_context = context ? std::max(common, *context) : common;
+        }
+        const auto result = fresh_register();
+        const auto branch = [&](const semantic::ExpressionId selected)
+            -> std::optional<ProgramOperand> {
+            auto value = compile_expression(selected, selected_context);
+            if (value && widths) {
+                value = program_common_operand(
+                    std::move(*value), common, value->shape.signed_value);
+            }
+            if (value) {
+                emit(ProgramCode::copy, result, operand_register(*value));
+            }
+            return value;
+        };
+        const auto to_false = emit(
+            ProgramCode::jump_if_zero, operand_register(*condition));
+        const auto when_true = branch(record.operands[1]);
+        const auto to_end = emit(ProgramCode::jump);
+        patch_jump(to_false, program_position());
+        const auto when_false = branch(record.operands[2]);
+        patch_jump(to_end, program_position());
+        if (!when_true || !when_false) {
+            return std::nullopt;
+        }
+        if (!(when_true->shape == when_false->shape)) {
+            return refuse_operand("conditional operand profiles");
+        }
+        return ProgramOperand { result, std::nullopt, when_true->shape };
+    }
+
+    // ---- Statements ----
+
+    /// A slot for a declaration a block or loop initializes.
+    [[nodiscard]] ProgramSlot& declare_program_slot(
+        const semantic::DeclarationId declaration)
+    {
+        auto& slot = compilation_->slots[declaration.value()];
+        if (slot.reg == 0U) {
+            slot.reg = fresh_register();
+            const auto view = specialization_.find_declaration(declaration);
+            if (view && view->systemverilog != nullptr
+                && view->systemverilog->type
+                && hir_systemverilog_explicit_integral_type(
+                    *view->systemverilog->type)) {
+                slot.typed = true;
+                auto converted = frame_free([&]() -> std::optional<Value> {
+                    return convert_record_type(make_known(0U, 1U, false, false),
+                        *view->systemverilog->type);
+                });
+                if (converted && program_value(*converted)) {
+                    slot.type_shape = program_shape(*converted);
+                }
+            }
+            const auto assumed
+                = compilation_->assumptions.find(declaration.value());
+            if (assumed != compilation_->assumptions.end()) {
+                slot.read_shape = assumed->second.read_shape;
+                slot.checked = assumed->second.checked;
+            }
+        }
+        return slot;
+    }
+
+    /// Store a whole value into a slot as assign_target does.
+    [[nodiscard]] bool store_program_slot(
+        ProgramSlot& slot, ProgramOperand value)
+    {
+        auto shape = value.shape;
+        if (slot.typed) {
+            if (!slot.type_shape) {
+                return refuse_program("slot type");
+            }
+            value = program_resized(std::move(value), slot.type_shape->width);
+            shape = *slot.type_shape;
+        }
+        emit(ProgramCode::store, slot.reg, operand_register(value), 0U, 0U,
+            0U, false, intern_shape(shape));
+        slot.profiles.push_back(std::move(shape));
+        if (!slot.read_shape) {
+            slot.read_shape = slot.profiles.back();
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool compile_assignment(
+        const semantic::ExpressionId target, ProgramOperand value)
+    {
+        const auto view = specialization_.find_expression(target);
+        if (!view || view->systemverilog == nullptr) {
+            return refuse_program("assignment target");
+        }
+        const auto& record = *view->systemverilog;
+        if (record.kind == ExpressionKind::name) {
+            auto* const slot = program_slot(record);
+            if (slot == nullptr) {
+                return refuse_program("assignment target name");
+            }
+            return store_program_slot(*slot, std::move(value));
+        }
+        if ((record.kind != ExpressionKind::index
+                && record.kind != ExpressionKind::slice)
+            || record.operands.empty()) {
+            return refuse_program("assignment target form");
+        }
+        const auto base_view
+            = specialization_.find_expression(record.operands.front());
+        auto* const slot = base_view && base_view->systemverilog != nullptr
+            ? program_slot(*base_view->systemverilog)
+            : nullptr;
+        const bool plain = slot != nullptr && frame_free([&]() -> bool {
+            const auto shape = packed_shape(record.operands.front());
+            return !shape || shape->size() <= 1U;
+        });
+        if (!plain) {
+            return refuse_program("assignment target base");
+        }
+        const auto base_shape = slot_read_shape(*slot);
+        if (!base_shape) {
+            return refuse_program("slot profile");
+        }
+        if (record.kind == ExpressionKind::index
+            && record.operands.size() == 2U) {
+            auto index = compile_expression(
+                record.operands.back(), std::nullopt);
+            auto select = index ? program_select(*base_shape, 1U)
+                                : std::nullopt;
+            if (!index || !select) {
+                return refuse_program("bit write");
+            }
+            const auto entry = add_select(*select, *index, false);
+            emit(ProgramCode::write_select, slot->reg,
+                operand_register(value), operand_register(*index), 0U, 0U,
+                false, entry);
+            return true;
+        }
+        if (record.operands.size() != 3U) {
+            return refuse_program("part write");
+        }
+        auto first = compile_expression(record.operands[1], std::nullopt);
+        auto second = first
+            ? compile_expression(record.operands[2], std::nullopt)
+            : std::nullopt;
+        if (!first || !second) {
+            return false;
+        }
+        const auto constant_integer = [](const ProgramOperand& operand)
+            -> std::optional<std::int64_t> {
+            if (!operand.constant) {
+                return std::nullopt;
+            }
+            return program_result_value(*operand.constant, operand.shape)
+                .integer_value();
+        };
+        const auto field = part_select_field(record, *base_shape,
+            constant_integer(*first), constant_integer(*second), true);
+        auto select = field ? program_select(*base_shape, field->width)
+                            : std::nullopt;
+        if (!field || !select) {
+            return refuse_program("part write field");
+        }
+        select->part_select = true;
+        select->start = field->start;
+        select->index_negated = field->negated;
+        value = program_resized(std::move(value), field->width);
+        const auto entry = add_select(*select, *first, !field->indexed);
+        emit(ProgramCode::write_select, slot->reg, operand_register(value),
+            field->indexed ? operand_register(*first) : 0U, 0U, 0U, false,
+            entry);
+        return true;
+    }
+
+    /// initialize_declarations.
+    [[nodiscard]] bool compile_declarations(
+        const std::vector<semantic::DeclarationId>& declarations)
+    {
+        for (const auto declaration_id : declarations) {
+            const auto declaration
+                = specialization_.find_declaration(declaration_id);
+            if (!declaration || declaration->systemverilog == nullptr) {
+                continue;
+            }
+            const auto& source = *declaration->systemverilog;
+            if (source.form != semantic::sv::DeclarationForm::variable
+                || !source.type || source.type->container_form
+                || !source.type->unpacked_dimensions.empty()) {
+                return refuse_program("local declaration");
+            }
+            auto& slot = declare_program_slot(declaration_id);
+            if (!source.initializer) {
+                if (!defaulted_local(source)) {
+                    return refuse_program("local declaration");
+                }
+                const auto initial = frame_free([&]() -> std::optional<Value> {
+                    return local_default_value(source);
+                });
+                if (!initial || !program_value(*initial)) {
+                    return refuse_program("local default");
+                }
+                auto shape = program_shape(*initial);
+                if (initial->known()) {
+                    const auto reg = fresh_register();
+                    emit(ProgramCode::constant, reg, 0U, 0U, 0U, 0U, false,
+                        small_words(*initial)->a);
+                    emit(ProgramCode::store, slot.reg, reg, 0U, 0U, 0U, false,
+                        intern_shape(shape));
+                } else {
+                    emit(ProgramCode::set_unknown, slot.reg, 0U, 0U, 0U, 0U,
+                        false, intern_shape(shape));
+                }
+                slot.profiles.push_back(shape);
+                if (!slot.read_shape) {
+                    slot.read_shape = std::move(shape);
+                }
+                continue;
+            }
+            const auto initializer
+                = specialization_.find_expression(*source.initializer);
+            if (!initializer || initializer->systemverilog == nullptr
+                || initializer->systemverilog->kind
+                    == ExpressionKind::assignment_pattern) {
+                return refuse_program("local initializer");
+            }
+            auto value = compile_expression(*source.initializer, std::nullopt);
+            if (!value || !store_program_slot(slot, std::move(*value))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool compile_statements(
+        const std::vector<semantic::StatementId>& statements)
+    {
+        return std::ranges::all_of(statements,
+            [&](const semantic::StatementId statement) {
+                return compile_statement(statement);
+            });
+    }
+
+    /// A statement list whose break and continue jump to `breaks` and
+    /// `continues`.
+    [[nodiscard]] bool compile_jump_scope(
+        const std::vector<semantic::StatementId>& statements,
+        ProgramCompilation::Jumps& jumps)
+    {
+        compilation_->jumps.emplace_back();
+        const bool compiled = compile_statements(statements);
+        auto scope = std::move(compilation_->jumps.back());
+        compilation_->jumps.pop_back();
+        jumps.breaks.insert(
+            jumps.breaks.end(), scope.breaks.begin(), scope.breaks.end());
+        jumps.continues.insert(jumps.continues.end(),
+            scope.continues.begin(), scope.continues.end());
+        return compiled;
+    }
+
+    [[nodiscard]] bool compile_condition_jump(
+        const semantic::ExpressionId condition, std::vector<std::size_t>& exits)
+    {
+        auto value = compile_expression(condition, std::nullopt);
+        if (!value) {
+            return false;
+        }
+        exits.push_back(
+            emit(ProgramCode::jump_if_zero, operand_register(*value)));
+        return true;
+    }
+
+    /// execute_loop.
+    [[nodiscard]] bool compile_loop(const semantic::sv::Statement& record)
+    {
+        if (!compile_declarations(record.declarations)) {
+            return false;
+        }
+        std::vector<std::size_t> exits;
+        ProgramCompilation::Jumps body;
+        if (record.loop_repeat) {
+            if (!record.loop_limit) {
+                return refuse_program("repeat count");
+            }
+            auto count = compile_expression(*record.loop_limit, std::nullopt);
+            if (!count) {
+                return false;
+            }
+            // nonnegative_count: a negative or over-limit count fails.
+            const auto count_reg = operand_register(*count);
+            if (count->shape.signed_value) {
+                abandon_when(ProgramCode::less_signed, count_reg, 0U,
+                    count->shape.width);
+            }
+            abandon_when(ProgramCode::greater_unsigned, count_reg,
+                maximum_constant_work_units, 64U);
+            const auto iteration = fresh_register();
+            const auto one = fresh_register();
+            emit(ProgramCode::constant, iteration);
+            emit(ProgramCode::constant, one, 0U, 0U, 0U, 0U, false, 1U);
+            const auto top = program_position();
+            const auto more = fresh_register();
+            emit(ProgramCode::less_unsigned, more, iteration, count_reg);
+            exits.push_back(emit(ProgramCode::jump_if_zero, more));
+            if (!compile_jump_scope(record.statements, body)) {
+                return false;
+            }
+            for (const auto jump : body.continues) {
+                patch_jump(jump, program_position());
+            }
+            emit(ProgramCode::add, iteration, iteration, one, 64U);
+            emit(ProgramCode::jump, 0U, 0U, 0U, 0U, 0U, false, top);
+        } else {
+            if (record.loop_initial) {
+                const auto target = record.target ? record.target
+                                                  : record.loop_update_target;
+                auto initial = compile_expression(
+                    *record.loop_initial, std::nullopt);
+                if (!target || !initial
+                    || !compile_assignment(*target, std::move(*initial))) {
+                    return refuse_program("loop initialization");
+                }
+            }
+            const auto guard = fresh_register();
+            emit(ProgramCode::loop_start, guard);
+            const auto top = program_position();
+            if (!record.loop_post_test && record.condition
+                && !compile_condition_jump(*record.condition, exits)) {
+                return false;
+            }
+            if (!compile_jump_scope(record.statements, body)) {
+                return false;
+            }
+            for (const auto jump : body.continues) {
+                patch_jump(jump, program_position());
+            }
+            if (record.value) {
+                const auto target = record.loop_update_target
+                    ? record.loop_update_target : record.target;
+                auto value = compile_expression(*record.value, std::nullopt);
+                if (!target || !value
+                    || !compile_assignment(*target, std::move(*value))) {
+                    return refuse_program("loop update");
+                }
+            }
+            ProgramCompilation::Jumps updates;
+            if (!compile_jump_scope(record.loop_updates, updates)) {
+                return false;
+            }
+            for (const auto jump : updates.continues) {
+                patch_jump(jump, program_position());
+            }
+            body.breaks.insert(body.breaks.end(), updates.breaks.begin(),
+                updates.breaks.end());
+            if (record.loop_post_test && record.condition
+                && !compile_condition_jump(*record.condition, exits)) {
+                return false;
+            }
+            emit(ProgramCode::loop_step, guard);
+            emit(ProgramCode::jump, 0U, 0U, 0U, 0U, 0U, false, top);
+        }
+        const auto exit = program_position();
+        for (const auto jump : exits) {
+            patch_jump(jump, exit);
+        }
+        for (const auto jump : body.breaks) {
+            patch_jump(jump, exit);
+        }
+        return true;
+    }
+
+    /// The exact and wildcard case statements (execute_statement).
+    [[nodiscard]] bool compile_case(const semantic::sv::Statement& record)
+    {
+        using CaseMatch = semantic::sv::CaseMatchKind;
+        if (!record.condition || record.case_match == CaseMatch::matches
+            || record.case_match == CaseMatch::inside) {
+            return refuse_program("case form");
+        }
+        auto selector = compile_expression(*record.condition, std::nullopt);
+        if (!selector) {
+            return false;
+        }
+        std::vector<std::vector<ProgramOperand>> choices;
+        bool all_signed = selector->shape.signed_value;
+        for (const auto& alternative : record.case_alternatives) {
+            auto& compiled = choices.emplace_back();
+            if (alternative.is_default) {
+                continue;
+            }
+            for (const auto choice : alternative.choices) {
+                auto candidate = compile_expression(choice, std::nullopt);
+                if (!candidate) {
+                    return false;
+                }
+                if (record.case_match == CaseMatch::exact) {
+                    all_signed = all_signed && candidate->shape.signed_value;
+                }
+                compiled.push_back(std::move(*candidate));
+            }
+        }
+        // compare_known: both at the wider width and the common signedness.
+        std::vector<std::vector<std::size_t>> matches(choices.size());
+        const semantic::sv::CaseAlternative* fallback { };
+        for (std::size_t index { }; index < choices.size(); ++index) {
+            const auto& alternative = record.case_alternatives[index];
+            if (alternative.is_default) {
+                fallback = &alternative;
+                continue;
+            }
+            for (const auto& candidate : choices[index]) {
+                const auto width = std::max(
+                    candidate.shape.width, selector->shape.width);
+                auto left = program_common_operand(candidate, width, all_signed);
+                auto right
+                    = program_common_operand(*selector, width, all_signed);
+                const auto equal = program_result(ProgramCode::equal,
+                    operand_register(left), operand_register(right), width,
+                    logical_shape());
+                matches[index].push_back(
+                    emit(ProgramCode::jump_if_nonzero, equal.reg));
+            }
+        }
+        std::vector<std::size_t> ends { emit(ProgramCode::jump) };
+        for (std::size_t index { }; index < choices.size(); ++index) {
+            const auto& alternative = record.case_alternatives[index];
+            if (alternative.is_default) {
+                continue;
+            }
+            for (const auto jump : matches[index]) {
+                patch_jump(jump, program_position());
+            }
+            if (!compile_statements(alternative.statements)) {
+                return false;
+            }
+            ends.push_back(emit(ProgramCode::jump));
+        }
+        if (fallback != nullptr) {
+            patch_jump(ends.front(), program_position());
+            ends.erase(ends.begin());
+            if (!compile_statements(fallback->statements)) {
+                return false;
+            }
+        }
+        for (const auto jump : ends) {
+            patch_jump(jump, program_position());
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool compile_statement(const semantic::StatementId statement)
+    {
+        const auto view = specialization_.find_statement(statement);
+        if (!view || view->systemverilog == nullptr) {
+            return refuse_program("statement");
+        }
+        const auto& record = *view->systemverilog;
+        using Kind = semantic::sv::StatementKind;
+        switch (record.kind) {
+        case Kind::assignment: {
+            if (!record.target || !record.value) {
+                return refuse_program("assignment");
+            }
+            const auto value_view
+                = specialization_.find_expression(*record.value);
+            if (!value_view || value_view->systemverilog == nullptr
+                || value_view->systemverilog->kind
+                    == ExpressionKind::assignment_pattern) {
+                return refuse_program("assignment pattern");
+            }
+            auto value = compile_expression(*record.value, std::nullopt);
+            return value && compile_assignment(*record.target, std::move(*value));
+        }
+        case Kind::return_statement: {
+            if (!record.value) {
+                emit(ProgramCode::finish, result_slot_register());
+                return true;
+            }
+            auto value = compile_expression(*record.value, std::nullopt);
+            if (!value) {
+                return false;
+            }
+            emit(ProgramCode::return_value, operand_register(*value), 0U, 0U,
+                0U, 0U, false, intern_shape(value->shape));
+            return true;
+        }
+        case Kind::conditional: {
+            if (!record.condition) {
+                return refuse_program("condition");
+            }
+            std::vector<std::size_t> to_else;
+            if (!compile_condition_jump(*record.condition, to_else)
+                || !compile_statements(record.statements)) {
+                return false;
+            }
+            const auto to_end = emit(ProgramCode::jump);
+            patch_jump(to_else.front(), program_position());
+            if (!compile_statements(record.else_statements)) {
+                return false;
+            }
+            patch_jump(to_end, program_position());
+            return true;
+        }
+        case Kind::block:
+            return compile_declarations(record.declarations)
+                && compile_statements(record.statements);
+        case Kind::loop:
+            return compile_loop(record);
+        case Kind::break_loop:
+            compilation_->jumps.back().breaks.push_back(emit(ProgramCode::jump));
+            return true;
+        case Kind::continue_loop:
+            compilation_->jumps.back().continues.push_back(
+                emit(ProgramCode::jump));
+            return true;
+        case Kind::selection:
+            return compile_case(record);
+        case Kind::null_statement:
+            return true;
+        default:
+            return refuse_program("statement kind");
+        }
+    }
+
+    semantic::DeclarationId compiled_callable_;
+
+    [[nodiscard]] std::uint32_t result_slot_register() const
+    {
+        return compilation_->slots.at(compiled_callable_.value()).reg;
+    }
+
+    /// One compilation pass over a function body, its frame bound.
+    [[nodiscard]] bool compile_callable_pass(
+        const semantic::sv::Declaration& callable)
+    {
+        auto& compilation = *compilation_;
+        compilation.program.registers = 1U;
+        const auto& frame = frames_.back();
+        if (!frame.arrays.empty() || !frame.pattern_values.empty()) {
+            return refuse_program("frame arrays");
+        }
+        for (const auto& [declaration, value] : frame.values) {
+            if (!program_value(value)) {
+                return refuse_program("entry value");
+            }
+            auto& slot = declare_program_slot(declaration);
+            auto shape = program_shape(value);
+            compilation.program.entry.push_back({ declaration.value(),
+                slot.reg, intern_shape(shape) });
+            slot.profiles.push_back(shape);
+            if (!slot.read_shape) {
+                slot.read_shape = std::move(shape);
+            }
+        }
+        if (!compilation.slots.contains(callable.id.value())) {
+            return refuse_program("result");
+        }
+        for (const auto statement : callable.statements) {
+            // A break or continue outside a loop ends its top-level
+            // statement (evaluate_callable).
+            ProgramCompilation::Jumps jumps;
+            if (!compile_jump_scope({ statement }, jumps)) {
+                return false;
+            }
+            for (const auto jump : jumps.breaks) {
+                patch_jump(jump, program_position());
+            }
+            for (const auto jump : jumps.continues) {
+                patch_jump(jump, program_position());
+            }
+        }
+        emit(ProgramCode::finish, result_slot_register());
+        return true;
+    }
+
+    /// Compile a function body against its bound frame; null when it
+    /// cannot be compiled.
+    [[nodiscard]] std::shared_ptr<const sv_constant_program::Program>
+    compile_callable_program(const semantic::sv::Declaration& callable)
+    {
+        std::unordered_map<std::uint32_t, ProgramAssumption> assumptions;
+        std::string refusal;
+        // A fold may call a function compiled in turn.
+        auto* const previous_compilation = compilation_;
+        const auto previous_callable = compiled_callable_;
+        compiled_callable_ = callable.id;
+        // Each pass assumes the read profiles the previous one stored.
+        for (std::size_t pass { }; pass < 4U; ++pass) {
+            ProgramCompilation compilation;
+            compilation.assumptions = assumptions;
+            compilation_ = &compilation;
+            const bool compiled = compile_callable_pass(callable);
+            compilation_ = previous_compilation;
+            if (!compiled) {
+                refusal = compilation.refusal;
+                break;
+            }
+            bool stable = true;
+            for (const auto& [declaration, slot] : compilation.slots) {
+                ProgramAssumption next;
+                // Reads assume the stored profile when every store agrees.
+                const auto stored = slot.profiles.size() > 1U
+                    ? std::span { slot.profiles }.subspan(1U)
+                    : std::span { slot.profiles };
+                const bool stores_agree = !stored.empty()
+                    && std::ranges::all_of(stored, [&](const auto& shape) {
+                           return shape == stored.front();
+                       });
+                next.read_shape = stores_agree
+                    ? std::optional { stored.front() }
+                    : slot.read_shape;
+                next.checked = !std::ranges::all_of(slot.profiles,
+                    [&](const auto& shape) {
+                        return next.read_shape && shape == *next.read_shape;
+                    });
+                const auto found = assumptions.find(declaration);
+                if (found == assumptions.end()
+                    || found->second.read_shape != next.read_shape
+                    || found->second.checked != next.checked) {
+                    stable = false;
+                }
+                assumptions[declaration] = std::move(next);
+            }
+            if (stable) {
+                compiled_callable_ = previous_callable;
+                return std::make_shared<const sv_constant_program::Program>(
+                    std::move(compilation.program));
+            }
+            refusal = "value profiles do not settle";
+        }
+        compiled_callable_ = previous_callable;
+        if (sv_const_program_trace()) {
+            std::cerr << "FSIM_SV_CONST_PROGRAM refused " << callable.name
+                      << ": " << refusal << '\n';
+        }
+        return nullptr;
+    }
+
+    /// FSIM_SV_CONST_PROGRAM_VERIFY: the compiled body's result differs
+    /// from the interpreted one (null when interpretation failed).
+    [[noreturn]] static void report_program_mismatch(
+        const semantic::sv::Declaration& callable, const Value& compiled,
+        const Value* const interpreted)
+    {
+        std::cerr << "FSIM_SV_CONST_PROGRAM_VERIFY mismatch in "
+                  << callable.name << ": compiled " << compiled.canonical()
+                  << " interpreted "
+                  << (interpreted != nullptr ? interpreted->canonical()
+                                             : std::string { "failure" })
+                  << '\n';
+        std::abort();
+    }
+
+    /// The function's result from its compiled body, its frame bound;
+    /// nothing when it has no program or the run is abandoned.
+    [[nodiscard]] std::optional<Value> run_callable_program(
+        const semantic::sv::Declaration& callable)
+    {
+        auto& programs = *specialization_cache(specialization_)
+                              .constants->unit_programs;
+        auto found = programs.find(callable.id.value());
+        if (found == programs.end()) {
+            const auto reads = hierarchy_reads_;
+            auto program = compile_callable_program(callable);
+            // A program folds no hierarchy identity, so it holds for every
+            // occurrence sharing these constants.
+            if (hierarchy_reads_ != reads) {
+                program = nullptr;
+            }
+            if (program && sv_const_program_trace()) {
+                std::cerr << "FSIM_SV_CONST_PROGRAM compiled " << callable.name
+                          << ": " << program->ops.size() << " ops\n";
+            }
+            found = programs.emplace(callable.id.value(), std::move(program))
+                        .first;
+        }
+        const auto* const program = found->second.get();
+        if (program == nullptr) {
+            return std::nullopt;
+        }
+        // A frame binding a folded declaration would shadow its value.
+        for (const auto& frame : frames_) {
+            if (!frame.pattern_values.empty()
+                || std::ranges::any_of(program->folded_declarations,
+                    [&](const std::uint32_t declaration) {
+                        return frame.values.contains(
+                            semantic::DeclarationId::from_index(declaration));
+                    })) {
+                return std::nullopt;
+            }
+        }
+        const auto& values = frames_.back().values;
+        if (values.size() != program->entry.size()) {
+            return std::nullopt;
+        }
+        std::vector<sv_constant_program::EntryValue> entry;
+        entry.reserve(program->entry.size());
+        for (const auto& slot : program->entry) {
+            const auto value = values.find(
+                semantic::DeclarationId::from_index(slot.declaration));
+            if (value == values.end() || !program_value(value->second)
+                || !same_program_shape(
+                    value->second, program->shapes[slot.shape])) {
+                return std::nullopt;
+            }
+            const auto words = small_words(value->second);
+            entry.push_back({ words->a, words->b == 0U });
+        }
+        const auto result = sv_constant_program::run(*program, entry);
+        if (!result) {
+            return std::nullopt;
+        }
+        return program_result_value(result->bits, program->shapes[result->shape]);
     }
 
     // ---- Real-family values (IEEE 1800-2017 6.12, 11.3.1) ----

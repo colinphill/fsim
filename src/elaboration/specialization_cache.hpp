@@ -6,6 +6,7 @@
 #pragma once
 
 #include "hierarchy_sv_constant_evaluator.hpp"
+#include "hierarchy_sv_constant_program.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
 
 #include <array>
@@ -54,6 +55,13 @@ struct SpecializationConstants {
     std::shared_ptr<std::unordered_map<std::string, CallResult>> unit_calls {
         std::make_shared<std::unordered_map<std::string, CallResult>>()
     };
+    /// Compiled constant functions (hierarchy_sv_constant_program.hpp), by
+    /// callable; null for a function that does not compile. A program folds
+    /// no hierarchy identity, so it is shared like unit_calls.
+    std::shared_ptr<std::unordered_map<std::uint32_t,
+        std::shared_ptr<const sv_constant_program::Program>>>
+        unit_programs { std::make_shared<std::unordered_map<std::uint32_t,
+            std::shared_ptr<const sv_constant_program::Program>>>() };
     /// Resolved widths of declaration and callable types, by type record.
     std::unordered_map<const void*, std::optional<std::uint64_t>>
         record_type_widths;
@@ -142,6 +150,7 @@ derive_occurrence_specialization(
     derived_constants.unit_declarations = parent_constants.unit_declarations;
     derived_constants.unit_expressions = parent_constants.unit_expressions;
     derived_constants.unit_calls = parent_constants.unit_calls;
+    derived_constants.unit_programs = parent_constants.unit_programs;
     return derived;
 }
 
