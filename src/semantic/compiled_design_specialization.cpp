@@ -18311,8 +18311,20 @@ SpecializedHirUnit::evaluate_integral_expression(
 {
     // A value reads only this specialization. A failure is kept only when
     // the shared constant evaluator ran: inside it, its fallback is
-    // unavailable.
-    auto& values = resolution_memo().integral_values;
+    // unavailable. Every iteration of a generate body shares the value of
+    // an expression that names nothing of the iteration.
+    auto* memo = &resolution_memo();
+    if (auto* const family = iteration_family_memo(); family != nullptr) {
+        if (const auto found = find_expression(expression);
+            found && found->vhdl != nullptr
+            && detail::vhdl_expression_iteration_independent(*this,
+                expression,
+                detail::iteration_variant_names(
+                    *this, found->vhdl->scope, *family))) {
+            memo = family;
+        }
+    }
+    auto& values = memo->integral_values;
     if (const auto found = values.find(expression.value());
         found != values.end()) {
         return found->second;
@@ -18331,7 +18343,7 @@ SpecializedHirUnit::evaluate_integral_expression(
         value = shared_constant_integral(*this, expression, &consulted);
     }
     if (value || consulted) {
-        resolution_memo().integral_values.emplace(expression.value(), value);
+        memo->integral_values.emplace(expression.value(), value);
     }
     return value;
 }
@@ -19076,6 +19088,25 @@ SpecializedHirUnit SpecializedHirUnit::with_overlay(
     result.vhdl_processes_ = vhdl_processes_;
     result.systemverilog_instances_ = systemverilog_instances_;
     result.vhdl_instances_ = vhdl_instances_;
+    // A family member's derivative with the same overlay up to the generate
+    // parameters' values stays in the family.
+    if (iteration_family_memo_ != nullptr
+        && result.specialization_.unit == specialization_.unit
+        && result.specialization_.scope == specialization_.scope
+        && result.specialization_.language == specialization_.language
+        && result.specialization_.actual_identities
+            == specialization_.actual_identities
+        && result.specialization_.residual_expressions
+            == specialization_.residual_expressions
+        && result.specialization_.dependent_generates
+            == specialization_.dependent_generates
+        && std::ranges::equal(result.specialization_.hierarchy_identities,
+            specialization_.hierarchy_identities, std::ranges::equal_to { },
+            &SpecializedHirNamedIdentity::name,
+            &SpecializedHirNamedIdentity::name)
+        && result.selected_generates_ == selected_generates_) {
+        result.iteration_family_memo_ = iteration_family_memo_;
+    }
     return result;
 }
 
@@ -19085,7 +19116,24 @@ SpecializedHirUnit SpecializedHirUnit::with_hierarchy_identities(
     auto overlay = specialization_;
     overlay.hierarchy_identities.assign(
         identities.begin(), identities.end());
-    return with_overlay(std::move(overlay));
+    auto result = with_overlay(std::move(overlay));
+    // The iterations derived from this unit (or from its own iteration
+    // family) with the same generate parameters form one family.
+    std::vector<std::string> names;
+    names.reserve(identities.size());
+    for (const auto& identity : identities) {
+        names.push_back(identity.name);
+    }
+    auto& families = (iteration_family_memo_ != nullptr
+            ? *iteration_family_memo_
+            : resolution_memo())
+                         .iteration_families;
+    auto& family = families[std::move(names)];
+    if (family == nullptr) {
+        family = std::make_shared<detail::ResolutionMemo>();
+    }
+    result.iteration_family_memo_ = family;
+    return result;
 }
 
 SpecializedHirUnit SpecializedHirUnit::with_local_actual_identities(
@@ -19135,6 +19183,7 @@ bool SpecializedHirUnit::select_generate(
     selected_generates_.insert(found, declaration);
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     const auto generated = generate_instance_ids(declaration);
     selected_generate_instance_ids_.insert(
         selected_generate_instance_ids_.end(),
@@ -19151,6 +19200,7 @@ bool SpecializedHirUnit::replace(sv::Declaration replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -19175,6 +19225,7 @@ bool SpecializedHirUnit::replace(vhdl::Declaration replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -19193,6 +19244,7 @@ bool SpecializedHirUnit::replace(sv::TypeDefinition replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -19210,6 +19262,7 @@ bool SpecializedHirUnit::replace(vhdl::TypeDefinition replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -19226,6 +19279,7 @@ bool SpecializedHirUnit::replace(sv::Expression replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -19244,6 +19298,7 @@ bool SpecializedHirUnit::replace(vhdl::Expression replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -19262,6 +19317,7 @@ bool SpecializedHirUnit::replace(sv::Statement replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -19280,6 +19336,7 @@ bool SpecializedHirUnit::replace(vhdl::Statement replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -19298,6 +19355,7 @@ bool SpecializedHirUnit::replace(sv::Process replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -19316,6 +19374,7 @@ bool SpecializedHirUnit::replace(vhdl::Process replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -19333,6 +19392,7 @@ bool SpecializedHirUnit::replace(sv::Instance replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -19351,6 +19411,7 @@ bool SpecializedHirUnit::replace(vhdl::Instance replacement)
     client_cache_.detach();
     vhdl_operator_selections_.detach();
     resolution_memo_.detach();
+    iteration_family_memo_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }

@@ -1404,6 +1404,12 @@ private:
         // generate path/index in this template discriminator.
         std::string_view generate_relative_discriminator = { },
         std::span<const semantic::DeclarationId> additional_declarations = { });
+    // Whether every iteration of the iterative generate bodies around a
+    // concurrent statement lowers it alike, up to its signals and names.
+    [[nodiscard]] bool vhdl_statement_iteration_invariant(
+        const semantic::vhdl::Unit& owner,
+        const semantic::SpecializedHirUnit& specialized,
+        semantic::StatementId statement);
     struct SystemVerilogConcurrentProcessOccurrence {
         std::optional<Process> process;
         std::shared_ptr<const ProcessProgramTemplate> common;
@@ -1515,7 +1521,13 @@ private:
         // determines the lowering completely, so they admit any statement
         // or process whose operations remap.
         bool exact { };
+        // The entry serves every iteration of its generate bodies: overlays
+        // match up to the generate parameters' values.
+        bool iteration_invariant { };
     };
+    // vhdl_statement_iteration_invariant results by statement.
+    std::unordered_map<std::uint32_t, bool>
+        vhdl_iteration_invariant_statements_;
     // concurrent_process_templates_ positions by unit, statement, process
     // and generate-relative discriminator.
     std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t,
@@ -2316,6 +2328,7 @@ private:
     std::size_t systemverilog_generated_concurrent_replays_ { };
     std::size_t concurrent_template_misses_ { };
     std::size_t concurrent_template_hits_ { };
+    std::size_t concurrent_template_iteration_hits_ { };
     std::size_t concurrent_template_rejections_ { };
     std::uint64_t concurrent_template_lower_cpu_ns_ { };
     /// The last element is the overlay class: only templates lowered in the

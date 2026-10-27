@@ -185,8 +185,10 @@ fsim::project::Config make_shaped_config(
 // An unconstrained array formal whose slice actual has bounds known only at
 // run time takes the slice's own index range (IEEE 1076-2008 4.2.2.2, 8.5).
 // Two processes calling one package function with the same shapes share its
-// lowered body; each still computes its own result.
-std::array<std::string, 7> run_shaped_once(
+// lowered body; each still computes its own result. Iterations of a generate
+// body share the lowering of statements that name nothing of the iteration,
+// and still bind their own signals and subtypes.
+std::array<std::string, 9> run_shaped_once(
     const fsim::project::Config& config,
     const fsim::app::SimulationEngine engine) {
   fsim::diagnostic::Engine diagnostics;
@@ -199,14 +201,16 @@ std::array<std::string, 7> run_shaped_once(
   assert(project);
   fsim::app::Simulation simulation{
       std::move(*project), config.run.max_deltas, engine};
-  constexpr std::array<std::string_view, 7> paths{
+  constexpr std::array<std::string_view, 9> paths{
       "shaped_actuals.sum_result",
       "shaped_actuals.outer_result",
       "shaped_actuals.ones_result",
       "shaped_actuals.rev_a",
       "shaped_actuals.rev_b",
       "shaped_actuals.weight_a",
-      "shaped_actuals.weight_b"};
+      "shaped_actuals.weight_b",
+      "shaped_actuals.gen_out",
+      "shaped_actuals.gen_wide"};
   std::array<fsim::runtime::simir::SignalId, paths.size()> signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
     const auto signal = simulation.find_signal(paths[index]);
@@ -215,7 +219,7 @@ std::array<std::string, 7> run_shaped_once(
   }
   const auto result = simulation.run();
   assert(result.status == fsim::runtime::RunStatus::completed);
-  std::array<std::string, 7> values;
+  std::array<std::string, 9> values;
   for (std::size_t index = 0; index < signals.size(); ++index) {
     values[index] = simulation.read_signal(signals[index]).to_msb_string();
   }
@@ -386,7 +390,20 @@ architecture rtl of shaped_actuals is
   signal sum_result, outer_result, ones_result : integer;
   signal rev_a, rev_b : bit_vector(7 downto 0);
   signal weight_a, weight_b : integer;
+  signal gen_out : bit_vector(7 downto 0);
+  signal gen_wide : bit_vector(3 downto 0);
 begin
+  gen_bits : for g in 0 to 3 generate
+    constant shift : integer := g * 2;
+    signal pair, inv : bit_vector(1 downto 0);
+    signal wide : bit_vector(g downto 0);
+  begin
+    pair <= rev_a(shift + 1 downto shift);
+    inv <= not pair;
+    wide <= (others => inv(1));
+    gen_out(2 * g + 1 downto 2 * g) <= inv;
+    gen_wide(g) <= wide(g);
+  end generate;
   first : process
     variable a : bit_vector(7 downto 0) := x"16";
   begin
@@ -431,14 +448,16 @@ end architecture;
            fsim::project::Optimization::o2}) {
     const auto shaped_config = make_shaped_config(
         directory.path, shaped_source, optimization);
-    const std::array<std::string, 7> shaped_expected{
+    const std::array<std::string, 9> shaped_expected{
         std::bitset<32>(78U).to_string(),
         std::bitset<32>(615180U).to_string(),
         std::bitset<32>(76U).to_string(),
         "01101000",
         "10000011",
         std::bitset<32>(5U).to_string(),
-        std::bitset<32>(11U).to_string()};
+        std::bitset<32>(11U).to_string(),
+        "10010111",
+        "1001"};
     assert(run_shaped_once(
         shaped_config, fsim::app::SimulationEngine::interpreter)
         == shaped_expected);

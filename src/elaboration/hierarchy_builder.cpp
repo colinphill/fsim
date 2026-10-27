@@ -4,9 +4,11 @@
 #include "specialization_cache.hpp"
 #include "lowerer_internal.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
+#include "fsim/support/vhdl_identifier.hpp"
 
 #include <iostream>
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <functional>
 #include <map>
@@ -175,14 +177,17 @@ bool same_concurrent_signal_layout(
 
 // Scalar vhdlconst-v1 identities encode the effective subtype and value.
 // Source spans and actual expression IDs are instance provenance, so compare
-// the canonical identity and exact binding declaration instead.
+// the canonical identity and exact binding declaration instead. An
+// iteration-invariant statement ignores the generate parameters' values.
 bool same_concurrent_scalar_actuals(
     const semantic::SpecializedHirOverlay& first,
-    const semantic::SpecializedHirOverlay& second)
+    const semantic::SpecializedHirOverlay& second,
+    const bool iteration_invariant)
 {
     if (first.unit != second.unit || first.scope != second.scope
         || first.language != second.language
-        || first.hierarchy_identities != second.hierarchy_identities
+        || (!iteration_invariant
+            && first.hierarchy_identities != second.hierarchy_identities)
         || first.residual_expressions != second.residual_expressions
         || first.dependent_generates != second.dependent_generates
         || first.actual_identities.size()
@@ -201,6 +206,50 @@ bool same_concurrent_scalar_actuals(
     }
     return true;
 }
+
+// Two occurrences' overlays, equal but for the generate parameters' values.
+bool same_overlay_except_hierarchy(
+    const semantic::SpecializedHirOverlay& first,
+    const semantic::SpecializedHirOverlay& second)
+{
+    return first.unit == second.unit && first.scope == second.scope
+        && first.language == second.language
+        && first.actual_identities == second.actual_identities
+        && first.residual_expressions == second.residual_expressions
+        && first.dependent_generates == second.dependent_generates;
+}
+
+// A generate-relative path with every generate index written as `(*)`.
+std::string iteration_erased_discriminator(const std::string_view path)
+{
+    std::string erased { "iteration-invariant:" };
+    erased.reserve(erased.size() + path.size());
+    std::size_t depth { };
+    for (const char character : path) {
+        if (character == '(') {
+            if (depth++ == 0U) {
+                erased += "(*)";
+            }
+        } else if (character == ')' && depth != 0U) {
+            --depth;
+        } else if (depth == 0U) {
+            erased.push_back(character);
+        }
+    }
+    return erased;
+}
+
+// FSIM_VHDL_ITERATION_TEMPLATES=0 lowers every iteration of a generate body
+// separately (to compare snapshots).
+// FSIM_VHDL_ITERATION_TRACE prints why a statement is not iteration-
+// invariant.
+const bool vhdl_iteration_trace_enabled
+    = std::getenv("FSIM_VHDL_ITERATION_TRACE") != nullptr;
+
+const bool vhdl_iteration_templates_enabled = [] {
+    const char* setting = std::getenv("FSIM_VHDL_ITERATION_TEMPLATES");
+    return setting == nullptr || std::string_view { setting } != "0";
+}();
 
 bool complete_systemverilog_template_actual(
     const semantic::SpecializedHirActualIdentity& actual)
@@ -794,6 +843,345 @@ HierarchyBuilder::collect_generate_occurrences(const semantic::sv::Unit& unit,
     return collected;
 }
 
+// A statement inside iterative generate bodies sees each iteration through
+// the generate parameters and the declarations of those bodies, which the
+// iteration elaborates afresh (IEEE 1076-2008 11.8, 14.5.3). Lowering the
+// statement is the same in every iteration, up to the signals it names and
+// its hierarchy names, when it names no generate parameter, nothing that
+// depends on the hierarchy, and of those bodies' declarations only signals
+// whose subtypes are themselves iteration-independent: replay rebinds such
+// signals and renames the process. The check is syntactic and conservative:
+// any identifier token spelled like a generate parameter or like another
+// declaration of those bodies disqualifies the statement, which also covers
+// names that are resolved only by their spelling.
+bool HierarchyBuilder::vhdl_statement_iteration_invariant(
+    const semantic::vhdl::Unit& owner,
+    const semantic::SpecializedHirUnit& specialized,
+    const semantic::StatementId statement_id)
+{
+    if (const auto cached = vhdl_iteration_invariant_statements_.find(
+            statement_id.value());
+        cached != vhdl_iteration_invariant_statements_.end()) {
+        return cached->second;
+    }
+    const auto statement = specialized.find_statement(statement_id);
+    if (!statement || statement->vhdl == nullptr) {
+        return false;
+    }
+    const auto& scopes = compiled_->semantics.scopes();
+    // Whether `inner` is `outer` or nested in it.
+    const auto within = [&](const semantic::ScopeId outer,
+                            semantic::ScopeId inner) {
+        for (std::size_t steps { }; steps < scopes.size(); ++steps) {
+            if (inner == outer) {
+                return true;
+            }
+            if (!inner.valid() || inner.value() >= scopes.size()
+                || scopes[inner.value()].id != inner
+                || !scopes[inner.value()].parent) {
+                return false;
+            }
+            inner = *scopes[inner.value()].parent;
+        }
+        return false;
+    };
+    std::vector<const semantic::vhdl::GenerateRegion*> regions;
+    const auto collect = [&](const auto& self,
+                             const std::vector<semantic::vhdl::GenerateRegion>&
+                                 candidates) -> void {
+        for (const auto& region : candidates) {
+            if (region.kind == semantic::vhdl::GenerateKind::iterative
+                && within(region.scope, statement->vhdl->scope)) {
+                regions.push_back(&region);
+            }
+            self(self, region.nested);
+        }
+    };
+    collect(collect, owner.generates);
+    const auto local = [&](const semantic::ScopeId scope) {
+        return std::ranges::any_of(regions,
+            [&](const semantic::vhdl::GenerateRegion* region) {
+                return within(region->scope, scope);
+            });
+    };
+
+    // Spellings that refer to the iteration: generate parameters, then the
+    // bodies' declarations other than iteration-independent signals.
+    std::vector<std::string_view> variant_names;
+    const auto names_variant = [&](const std::string_view text) {
+        if (text.find('\\') != std::string_view::npos) {
+            return true;
+        }
+        std::size_t index { };
+        while (index < text.size()) {
+            const auto character = static_cast<unsigned char>(text[index]);
+            if (!std::isalpha(character) && character != '_') {
+                ++index;
+                continue;
+            }
+            const auto begin = index;
+            while (index < text.size()
+                && (std::isalnum(static_cast<unsigned char>(text[index]))
+                    || text[index] == '_')) {
+                ++index;
+            }
+            const auto token = text.substr(begin, index - begin);
+            if (std::ranges::any_of(variant_names,
+                    [&](const std::string_view name) {
+                        return support::equal_ignoring_ascii_case(
+                            name, token);
+                    })) {
+                if (vhdl_iteration_trace_enabled) {
+                    std::cerr << "fsim-iteration-variant: token " << token
+                              << " in " << text << '\n';
+                }
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto& types = compiled_->semantics.types();
+    const auto type_invariant = [&](const semantic::TypeId type) {
+        if (!type.valid()) {
+            return true;
+        }
+        return type.value() < types.size()
+            && types[type.value()].id == type
+            && !local(types[type.value()].scope);
+    };
+    static constexpr std::size_t maximum_depth { 256U };
+    bool exceeded { };
+    // Whether a referenced declaration is the same in every iteration, or
+    // a signal of the bodies with an iteration-independent subtype.
+    const auto declaration_invariant = [&](const semantic::DeclarationId id) {
+        const auto declaration = specialized.find_declaration(id);
+        if (!declaration) {
+            return false;
+        }
+        if (declaration->vhdl == nullptr) {
+            return true;
+        }
+        if (!local(declaration->vhdl->scope)) {
+            return true;
+        }
+        const bool invariant = declaration->vhdl->form
+                == semantic::vhdl::DeclarationForm::signal
+            && !names_variant(declaration->vhdl->name);
+        if (!invariant && vhdl_iteration_trace_enabled) {
+            std::cerr << "fsim-iteration-variant: declaration "
+                      << declaration->vhdl->name << '\n';
+        }
+        return invariant;
+    };
+    const auto name_invariant = [&](const semantic::vhdl::Name& name) {
+        return !names_variant(name.spelling)
+            && !names_variant(name.canonical)
+            && (!name.selected || declaration_invariant(*name.selected))
+            && std::ranges::all_of(name.overloads, declaration_invariant);
+    };
+    const auto expression = [&](const auto& self,
+                                const semantic::ExpressionId id,
+                                const std::size_t depth) -> bool {
+        if (depth > maximum_depth) {
+            exceeded = true;
+            return false;
+        }
+        const auto found = specialized.find_expression(id);
+        if (!found || found->vhdl == nullptr) {
+            return false;
+        }
+        const auto& value = *found->vhdl;
+        // An unresolved name (dependencies.hierarchy) is resolved by its
+        // spelling, which names_variant checks.
+        const auto& dependencies = value.dependencies;
+        return !names_variant(value.text)
+            && (!value.referenced_name
+                || name_invariant(*value.referenced_name))
+            && (!value.resolved_declaration
+                || declaration_invariant(*value.resolved_declaration))
+            && (!value.resolved_type
+                || type_invariant(*value.resolved_type))
+            && std::ranges::all_of(
+                dependencies.parameters, declaration_invariant)
+            && std::ranges::all_of(
+                dependencies.generics, declaration_invariant)
+            && std::ranges::all_of(dependencies.types, type_invariant)
+            && std::ranges::all_of(value.operands,
+                [&](const semantic::ExpressionId operand) {
+                    return self(self, operand, depth + 1U);
+                })
+            && std::ranges::all_of(value.associations,
+                [&](const semantic::vhdl::AggregateAssociation& association) {
+                    return !names_variant(association.choice_spelling)
+                        && std::ranges::all_of(association.choices,
+                            [&](const semantic::ExpressionId choice) {
+                                return self(self, choice, depth + 1U);
+                            })
+                        && self(self, association.value, depth + 1U);
+                });
+    };
+    const auto optional_expression
+        = [&](const std::optional<semantic::ExpressionId>& id,
+              const std::size_t depth) {
+        return !id || expression(expression, *id, depth);
+    };
+    const auto range_invariant
+        = [&](const semantic::vhdl::RangeConstraint& range) {
+        return optional_expression(range.left_expression, 0U)
+            && optional_expression(range.right_expression, 0U);
+    };
+    const auto subtype_invariant
+        = [&](const semantic::vhdl::SubtypeIndication& subtype) {
+        return type_invariant(subtype.type_mark.target)
+            && !names_variant(subtype.type_mark.spelling)
+            && name_invariant(subtype.resolution_function)
+            && optional_expression(subtype.predefined_attribute_dimension, 0U)
+            && std::ranges::all_of(subtype.constraints, range_invariant)
+            && std::ranges::all_of(subtype.element_constraints,
+                [&](const semantic::vhdl::ElementConstraint& element) {
+                    return std::ranges::all_of(
+                        element.constraints, range_invariant);
+                });
+    };
+
+    for (const auto* const region : regions) {
+        variant_names.push_back(region->iterator);
+    }
+    // The bodies' declarations, signals last: a signal is iteration-
+    // independent when its subtype names nothing else of the bodies.
+    std::vector<const semantic::vhdl::Declaration*> local_signals;
+    const auto declare = [&](const auto& self,
+                             const semantic::vhdl::GenerateRegion& region)
+        -> void {
+        for (const auto id : region.declarations) {
+            const auto declaration = specialized.find_declaration(id);
+            if (!declaration || declaration->vhdl == nullptr) {
+                continue;
+            }
+            if (declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::signal
+                && declaration->vhdl->subtype) {
+                local_signals.push_back(declaration->vhdl);
+            } else {
+                variant_names.push_back(declaration->vhdl->name);
+            }
+        }
+        for (const auto& nested : region.nested) {
+            self(self, nested);
+        }
+    };
+    for (const auto* const region : regions) {
+        declare(declare, *region);
+    }
+    // A subtype may name another signal of the bodies ('range), so repeat
+    // until no further signal turns out to vary.
+    for (bool added = true; added;) {
+        added = false;
+        for (auto& signal : local_signals) {
+            if (signal != nullptr && !subtype_invariant(*signal->subtype)) {
+                variant_names.push_back(signal->name);
+                signal = nullptr;
+                added = true;
+            }
+        }
+    }
+
+    const auto delay_value_invariant
+        = [&](const semantic::vhdl::DelayValue& value) {
+        return optional_expression(value.expression, 0U);
+    };
+    const auto delay_invariant = [&](const auto& self,
+                                     const semantic::vhdl::Delay& delay)
+        -> bool {
+        return delay_value_invariant(delay.primary)
+            && (!delay.minimum || delay_value_invariant(*delay.minimum))
+            && (!delay.typical || delay_value_invariant(*delay.typical))
+            && (!delay.maximum || delay_value_invariant(*delay.maximum))
+            && std::ranges::all_of(delay.additional,
+                [&](const semantic::vhdl::Delay& additional) {
+                    return self(self, additional);
+                });
+    };
+    const auto optional_delay
+        = [&](const std::optional<semantic::vhdl::Delay>& delay) {
+        return !delay || delay_invariant(delay_invariant, *delay);
+    };
+    const auto statement_invariant
+        = [&](const auto& self, const semantic::StatementId id,
+              const std::size_t depth) -> bool {
+        if (depth > maximum_depth) {
+            exceeded = true;
+            return false;
+        }
+        const auto found = specialized.find_statement(id);
+        if (!found || found->vhdl == nullptr) {
+            return false;
+        }
+        const auto& value = *found->vhdl;
+        const auto statements = [&](const std::vector<semantic::StatementId>&
+                                        ids) {
+            return std::ranges::all_of(ids,
+                [&](const semantic::StatementId nested) {
+                    return self(self, nested, depth + 1U);
+                });
+        };
+        return value.declarations.empty()
+            && !names_variant(value.loop_variable)
+            && optional_expression(value.target, 0U)
+            && optional_expression(value.value, 0U)
+            && optional_expression(value.condition, 0U)
+            && optional_expression(value.guard, 0U)
+            && optional_expression(value.report, 0U)
+            && optional_expression(value.severity, 0U)
+            && optional_expression(value.loop_initial, 0U)
+            && optional_expression(value.loop_limit, 0U)
+            && optional_delay(value.delay)
+            && optional_delay(value.rejection_limit)
+            && optional_delay(value.disconnection_delay)
+            && std::ranges::all_of(value.sensitivities,
+                [&](const semantic::vhdl::Sensitivity& sensitivity) {
+                    return !names_variant(sensitivity.signal)
+                        && optional_expression(sensitivity.expression, 0U);
+                })
+            && name_invariant(value.procedure)
+            && (!value.resolved_procedure
+                || declaration_invariant(*value.resolved_procedure))
+            && std::ranges::all_of(value.procedure_arguments,
+                [&](const semantic::vhdl::ProcedureAssociation& argument) {
+                    return (!argument.formal
+                               || name_invariant(*argument.formal))
+                        && expression(expression, argument.actual, 0U);
+                })
+            && std::ranges::all_of(value.waveform,
+                [&](const semantic::vhdl::WaveformElement& element) {
+                    return expression(expression, element.value, 0U)
+                        && optional_delay(element.delay);
+                })
+            && statements(value.statements)
+            && statements(value.else_statements)
+            && std::ranges::all_of(value.alternatives,
+                [&](const semantic::vhdl::CaseAlternative& alternative) {
+                    return std::ranges::all_of(alternative.choices,
+                               [&](const semantic::ExpressionId choice) {
+                                   return expression(
+                                       expression, choice, 0U);
+                               })
+                        && statements(alternative.statements);
+                });
+    };
+    const bool invariant = !regions.empty()
+        && statement_invariant(statement_invariant, statement_id, 0U)
+        && !exceeded;
+    if (vhdl_iteration_trace_enabled) {
+        std::cerr << "fsim-iteration-statement: " << statement_id.value()
+                  << " regions=" << regions.size()
+                  << " invariant=" << invariant << '\n';
+    }
+    vhdl_iteration_invariant_statements_.emplace(
+        statement_id.value(), invariant);
+    return invariant;
+}
+
 std::optional<HierarchyBuilder::VhdlProcessOccurrence>
 HierarchyBuilder::lower_cached_vhdl_occurrence(
     const semantic::vhdl::Unit& entity,
@@ -940,10 +1328,18 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
                 design_.signal_info_[first], design_.signal_info_[second],
                 design_.signals_[first], design_.signals_[second]);
     };
+    // A statement that every iteration of its generate bodies lowers alike
+    // shares one entry across the iterations.
+    const bool iteration_invariant = vhdl_iteration_templates_enabled
+        && !process_source && !generate_relative_discriminator.empty()
+        && vhdl_statement_iteration_invariant(owner, specialized, statement);
+    const auto discriminator = iteration_invariant
+        ? iteration_erased_discriminator(generate_relative_discriminator)
+        : std::string { generate_relative_discriminator };
     const auto template_key = std::tuple {
         owner.id.value(), statement.value(),
         process_source ? process_source->value() + 1U : 0U,
-        std::string { generate_relative_discriminator }
+        discriminator
     };
     const auto indexed = concurrent_process_template_index_.find(template_key);
     const auto candidates = indexed == concurrent_process_template_index_.end()
@@ -953,15 +1349,19 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
         const auto& cached = concurrent_process_templates_[candidate];
         if (cached.unit != owner.id || cached.statement != statement
             || cached.process_source != process_source
-            || cached.generate_relative_discriminator
-                != generate_relative_discriminator
+            || cached.generate_relative_discriminator != discriminator
+            || cached.iteration_invariant != iteration_invariant
             || !std::ranges::equal(
                 cached.selected_generates, selected_generates)
             || (cached.exact
-                    ? cached.overlay != specialized.specialization()
+                    ? (iteration_invariant
+                            ? !same_overlay_except_hierarchy(cached.overlay,
+                                specialized.specialization())
+                            : cached.overlay != specialized.specialization())
                     : !scalar
                         || !same_concurrent_scalar_actuals(
-                            cached.overlay, specialized.specialization()))
+                            cached.overlay, specialized.specialization(),
+                            iteration_invariant))
             || cached.language_standard != owner.standard
             || cached.compatibility_profile
                 != owner.compatibility_profile
@@ -1063,6 +1463,9 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
         }
         record_lowering_census(process_source
             ? vhdl_process_template_hits_ : concurrent_template_hits_);
+        if (iteration_invariant) {
+            record_lowering_census(concurrent_template_iteration_hits_);
+        }
         return VhdlProcessOccurrence {
             cached.common, std::move(*replay_instance)
         };
@@ -1239,10 +1642,10 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
         invocation_before, invocation_after,
         std::move(formals),
         std::move(read_only_roles), process_source,
-        std::string { generate_relative_discriminator },
+        discriminator,
         std::vector<semantic::DeclarationId>(
             selected_generates.begin(), selected_generates.end()),
-        exact
+        exact, iteration_invariant
     });
     return VhdlProcessOccurrence {
         std::move(common), std::move(instance)

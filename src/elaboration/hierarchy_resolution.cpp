@@ -1820,6 +1820,8 @@ void HierarchyBuilder::finish()
                   << vhdl_concurrent_template_occurrences_
                   << " misses=" << concurrent_template_misses_
                   << " hits=" << concurrent_template_hits_
+                  << " iteration_hits="
+                  << concurrent_template_iteration_hits_
                   << " rejected=" << concurrent_template_rejections_
                   << " lowerer_calls="
                   << vhdl_concurrent_template_occurrences_

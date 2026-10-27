@@ -555,6 +555,12 @@ private:
     compute_effective_vhdl_subtype(
         const vhdl::SubtypeIndication&, ScopeId use_scope) const;
 
+    // Whether the generate iterations sharing `family` all give the subtype
+    // the same effective subtype at `use_scope`.
+    [[nodiscard]] bool vhdl_subtype_iteration_independent(
+        const vhdl::SubtypeIndication&, ScopeId use_scope,
+        detail::ResolutionMemo& family) const;
+
     // Whether results read only the design, the specialization and the
     // binding frames, so the specialization's memo can keep them.
     [[nodiscard]] bool resolutions_memoizable() const noexcept;

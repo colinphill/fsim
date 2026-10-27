@@ -469,6 +469,16 @@ public:
     /// share them; replace() and select_generate() detach them.
     [[nodiscard]] detail::ResolutionMemo& resolution_memo() const;
 
+    /// The memo this generate iteration shares with the other iterations of
+    /// its generate bodies (with_hierarchy_identities), whose overlays differ
+    /// only in the generate parameters' values; null outside an iteration.
+    /// It holds only resolutions those values cannot change.
+    [[nodiscard]] detail::ResolutionMemo* iteration_family_memo()
+        const noexcept
+    {
+        return iteration_family_memo_.get();
+    }
+
     [[nodiscard]] const CompiledDesign& design() const noexcept;
     [[nodiscard]] const SpecializedHirOverlay& specialization() const noexcept;
     [[nodiscard]] UnitId unit() const noexcept;
@@ -804,6 +814,7 @@ private:
     detail::SharedCacheSlot<detail::VhdlOperatorSelectionMemo>
         vhdl_operator_selections_;
     detail::SharedCacheSlot<detail::ResolutionMemo> resolution_memo_;
+    std::shared_ptr<detail::ResolutionMemo> iteration_family_memo_;
     // True only when construction received ValidatedCompiledDesign's proof
     // that the immutable design's non-owning indexes are current.
     bool validated_lookup_indexes_ { };

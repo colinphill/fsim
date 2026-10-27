@@ -3399,7 +3399,10 @@ CompiledDesignResolver::resolve_vhdl_type_identity(
         return compute_vhdl_type_identity(spelling, owner_scope);
     }
     spelling = vhdl::without_builtin_prefix(spelling);
-    auto& by_spelling = effective_->resolution_memo()
+    // A type name resolves alike in every iteration of a generate body.
+    auto* const family = effective_->iteration_family_memo();
+    auto& by_spelling = (family != nullptr ? *family
+                                           : effective_->resolution_memo())
                             .type_identities[owner_scope->value()];
     if (const auto found = by_spelling.find(spelling);
         found != by_spelling.end()) {
@@ -4012,6 +4015,181 @@ CompiledDesignResolver::vhdl_enumeration_literal_ordinal(
     return resolve(resolve, expected_type);
 }
 
+namespace detail {
+
+const std::vector<std::string>& iteration_variant_names(
+    const SpecializedHirUnit& unit, const ScopeId use_scope,
+    ResolutionMemo& family)
+{
+    auto [found, inserted] = family.iteration_variant_names.try_emplace(
+        use_scope.value());
+    auto& names = found->second;
+    if (!inserted) {
+        return names;
+    }
+    const auto& design = unit.design();
+    const auto& scopes = design.semantics.scopes();
+    const auto within = [&](const ScopeId outer, ScopeId inner) {
+        for (std::size_t steps { }; steps < scopes.size(); ++steps) {
+            if (inner == outer) {
+                return true;
+            }
+            if (!inner.valid() || inner.value() >= scopes.size()
+                || scopes[inner.value()].id != inner
+                || !scopes[inner.value()].parent) {
+                return false;
+            }
+            inner = *scopes[inner.value()].parent;
+        }
+        return false;
+    };
+    // Every generate parameter (an unresolved name may reach one by its
+    // spelling alone), then the declarations of the iterative bodies around
+    // the use scope.
+    for (const auto& identity : unit.specialization().hierarchy_identities) {
+        names.push_back(identity.name);
+    }
+    const auto declare = [&](const auto& self,
+                             const vhdl::GenerateRegion& region) -> void {
+        for (const auto id : region.declarations) {
+            if (const auto declaration = unit.find_declaration(id);
+                declaration && declaration->vhdl != nullptr) {
+                names.push_back(declaration->vhdl->name);
+            }
+        }
+        for (const auto& nested : region.nested) {
+            self(self, nested);
+        }
+    };
+    const auto collect = [&](const auto& self,
+                             const std::vector<vhdl::GenerateRegion>&
+                                 regions) -> void {
+        for (const auto& region : regions) {
+            if (region.kind == vhdl::GenerateKind::iterative
+                && within(region.scope, use_scope)) {
+                names.push_back(region.iterator);
+                declare(declare, region);
+            }
+            self(self, region.nested);
+        }
+    };
+    if (const auto owner = design.find_unit(unit.unit());
+        owner && owner->vhdl != nullptr) {
+        collect(collect, owner->vhdl->generates);
+    }
+    return names;
+}
+
+bool spelling_iteration_variant(const std::string_view text,
+    const std::span<const std::string> names)
+{
+    if (names.empty()) {
+        return false;
+    }
+    if (text.find('\\') != std::string_view::npos) {
+        return true;
+    }
+    std::size_t index { };
+    while (index < text.size()) {
+        const auto character = static_cast<unsigned char>(text[index]);
+        if (!std::isalpha(character) && character != '_') {
+            ++index;
+            continue;
+        }
+        const auto begin = index;
+        while (index < text.size()
+            && (std::isalnum(static_cast<unsigned char>(text[index]))
+                || text[index] == '_')) {
+            ++index;
+        }
+        const auto token = text.substr(begin, index - begin);
+        if (std::ranges::any_of(names, [&](const std::string& name) {
+                return support::equal_ignoring_ascii_case(name, token);
+            })) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool vhdl_expression_iteration_independent(const SpecializedHirUnit& unit,
+    const ExpressionId id, const std::span<const std::string> names,
+    const std::size_t depth)
+{
+    if (depth > 256U) {
+        return false;
+    }
+    const auto found = unit.find_expression(id);
+    if (!found || found->vhdl == nullptr) {
+        return false;
+    }
+    if (names.empty()) {
+        return true;
+    }
+    const auto& value = *found->vhdl;
+    const auto nested = [&](const ExpressionId operand) {
+        return vhdl_expression_iteration_independent(
+            unit, operand, names, depth + 1U);
+    };
+    return !spelling_iteration_variant(value.text, names)
+        && (!value.referenced_name
+            || (!spelling_iteration_variant(
+                    value.referenced_name->spelling, names)
+                && !spelling_iteration_variant(
+                    value.referenced_name->canonical, names)))
+        && std::ranges::all_of(value.operands, nested)
+        && std::ranges::all_of(value.associations,
+            [&](const vhdl::AggregateAssociation& association) {
+                return !spelling_iteration_variant(
+                           association.choice_spelling, names)
+                    && std::ranges::all_of(association.choices, nested)
+                    && nested(association.value);
+            });
+}
+
+} // namespace detail
+
+// Whether every iteration of the generate bodies around `use_scope` gives
+// `input` the same effective subtype (detail::iteration_variant_names).
+bool CompiledDesignResolver::vhdl_subtype_iteration_independent(
+    const vhdl::SubtypeIndication& input, const ScopeId use_scope,
+    detail::ResolutionMemo& family) const
+{
+    const auto& names
+        = detail::iteration_variant_names(*effective_, use_scope, family);
+    if (names.empty()) {
+        return true;
+    }
+    const auto variant = [&](const std::string_view text) {
+        return detail::spelling_iteration_variant(text, names);
+    };
+    const auto optional_expression
+        = [&](const std::optional<ExpressionId>& id) {
+        return !id
+            || detail::vhdl_expression_iteration_independent(
+                *effective_, *id, names);
+    };
+    const auto range = [&](const vhdl::RangeConstraint& constraint) {
+        return optional_expression(constraint.left_expression)
+            && optional_expression(constraint.right_expression);
+    };
+    const auto& types = design_->semantics.types();
+    const auto target = input.type_mark.target;
+    const bool target_outside = !target.valid()
+        || (target.value() < types.size()
+            && types[target.value()].id == target
+            && !variant(types[target.value()].name));
+    return target_outside && !variant(input.type_mark.spelling)
+        && !variant(input.resolution_function.spelling)
+        && !variant(input.resolution_function.canonical)
+        && optional_expression(input.predefined_attribute_dimension)
+        && std::ranges::all_of(input.constraints, range)
+        && std::ranges::all_of(input.element_constraints,
+            [&](const vhdl::ElementConstraint& element) {
+                return std::ranges::all_of(element.constraints, range);
+            });
+}
+
 std::optional<vhdl::SubtypeIndication>
 CompiledDesignResolver::effective_vhdl_subtype(
     const vhdl::SubtypeIndication& input, const ScopeId use_scope) const
@@ -4022,7 +4200,11 @@ CompiledDesignResolver::effective_vhdl_subtype(
     auto key = std::hash<std::string_view> { }(input.type_mark.spelling);
     key = key * 31U + use_scope.value();
     key = key * 31U + input.type_mark.target.value();
-    auto& memo = effective_->resolution_memo();
+    auto* const family = effective_->iteration_family_memo();
+    auto& memo = family != nullptr
+            && vhdl_subtype_iteration_independent(input, use_scope, *family)
+        ? *family
+        : effective_->resolution_memo();
     if (const auto found = memo.effective_subtypes.find(key);
         found != memo.effective_subtypes.end()) {
         for (const auto& entry : found->second) {
