@@ -138,6 +138,28 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: generate-iteration sharing (`52b7fc26`, sweep `v4c24`)
+
+**Elaboration item 3: queries shared between generate iterations.** Every iteration of a VHDL `for ... generate` gets its own specialization, which differs from its siblings only in hierarchy identity values (the iterator). Two parts:
+- **Family memo** (`src/semantic/compiled_design_specialization.cpp`, `compiled_design_resolver.cpp`). Sibling iterations now share one resolution memo, registered by their identity names. A query uses the shared memo only when it reads nothing that varies by iteration:
+  - type identities always;
+  - an effective subtype when its type mark, resolution function, attribute dimension and constraint expressions are iteration-independent;
+  - an integral expression when it names no iterator and no declaration of an enclosing iterative region.
+- **Statement templates** (`src/elaboration/hierarchy_builder.cpp`). A concurrent statement inside a generate body is *iteration-invariant* when it names no iterator, no non-signal region declaration, and no signal whose subtype varies. Such a statement takes a template key with each `(...)` of its path replaced by `(*)`, so the second and later iterations replay the first one's lowering. Replay requires the overlay to be equal apart from hierarchy identities.
+- `FSIM_VHDL_ITERATION_TEMPLATES=0` disables the statement templates and `FSIM_VHDL_ITERATION_TRACE` prints the decisions. The `concurrent-process-template` census prints `iteration_hits=`.
+- mixed_codec: the family memo saves 3.0% of elaboration instructions (34.05G to 33.04G). Only 13 of 58 generate-body statements are invariant. Their 146 iteration hits replaced existing cross-instance hits, so the number of lowered statements stayed at 3928. Snapshots are byte-identical to `v4c23`.
+
+**Measured**, `--jobs 1`: mixed_codec elaborates in 7.65 s and simulates in 1.85 s; original_codec 10.50 s and 2.35 s; LDPC simulates in 2.04 s with its checksum unchanged. The wall times are noisy under host load, so the instruction count is the better comparison.
+
+**Validation.** Full ctest passes 1087/1087 in normal and strict mode. `vhdl_composite_operation_application_test` gains a generate body with per-iteration constants, slices and a subtype that varies by iteration. Sweep `v4c24` shows 0 losses against `b96x1`:
+- Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+
+**Next: the SystemVerilog side of original_codec** (callgrind on `v4c24`, 42.7G instructions):
+- The constant evaluator costs 6.4G. Lowering folds `alpha_pow_fn(PRIM_POW * apg)` in every generate iteration. Each call has distinct arguments and loops up to 255 times, at about 20k instructions per iteration.
+- 3.0G go to lowering 431 SystemVerilog function bodies again in every process that calls them. The item 2 body memo covers VHDL package functions only.
+- 1.6G go to uncached SystemVerilog expression widths.
+- 1.1G go to SHA-256 of object source payloads and cache keys.
+
 ### 2026-10-27: shared package function bodies, fast-tier codegen cuts (`c620a92d`, sweep `v4c23`)
 
 **Elaboration item 2: callable body sharing** (`src/elaboration/lowerer_hir_callable_memo.cpp`). Process lowering now keeps the SimIR body of an automatic VHDL package function, keyed by its callable key. A later process calling the same function with the same key replays that body: registers are renumbered, frame push sites patched, and debug locals, scalar ranges and expression profiles restored.
