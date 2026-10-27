@@ -138,6 +138,53 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-26 (night): G5 campaign `v4-g5-1026b` on `v4c10` (db81054a), rs-suite check
+
+The timed campaign used 3 samples, CPU 9, ASLR off, with xsim in the same session and nothing else running. Preflight passed. Against the D6 exit criteria:
+- every simulate ratio is now at least 3× xsim;
+- the geomean end-to-end ratio is 3.19× (3.17× in `v4-g5-1026a`).
+
+The tool's own `passed_timing` flag covers only the `llvm_o2` configuration, so it stays false for `v4_o2_aot`.
+
+| Case | e2e × | fsim sim s | xsim sim s | sim × (1026a) |
+|---|---:|---:|---:|---:|
+| original_codec | 2.22 | 2.385 | 7.652 | 3.21 (3.17) |
+| original_throughput | 3.01 | 1.681 | 7.753 | 4.61 (4.60) |
+| mixed_codec | 2.05 | 2.134 | 6.701 | 3.14 (2.98) |
+| mixed_throughput | 2.58 | 1.683 | 6.147 | 3.65 (3.49) |
+| codex_reference_mode0_frames1 | 3.84 | 0.127 | 3.940 | 31.03 |
+| codex_reference_mode0_frames2 | 3.85 | 0.128 | 4.041 | 31.46 |
+| codex_reference_mode1_frames1 | 3.94 | 0.128 | 3.991 | 31.12 |
+| codex_reference_mode1_frames2 | 4.01 | 0.128 | 3.941 | 30.88 |
+| codex_throughput_default | 3.64 | 0.429 | 4.041 | 9.42 |
+| codex_throughput_direct_syndrome | 3.63 | 0.377 | 4.038 | 10.70 |
+
+**G5 (b).** The rs suite was elaborated with `b96x` and with `v4c10`, interleaved, 2 repetitions on CPU 9; the comparison uses the minimum over the repetitions:
+- 8 testbenches × VHDL/Verilog: instructions −5.4% to +1.3%, CPU −5.9% to +3.2% (the largest CPU increases are on sub-second cases);
+- `rs_param_tb` VHDL: 13.55 → 13.79 s (+0.3% instructions);
+- `rs_param_tb` Verilog: 18.72 → 18.02 s;
+- the four frontend compile jobs: unchanged or faster.
+
+Both binaries return rc=1 for `rs_decoder_tb` VHDL and `rs_param_tb` Verilog. In `rs_decoder_tb`, the Verilog testbench leaves VHDL input `parity_syms` unassociated, and that port has no default (FSIM-ELAB-BIND-027). These are workload issues, not regressions.
+
+**G2/G3.** The six-suite `--engine v4` sweep `v4c10` was compared against `b96x1`. It has 0 losses, apart from nvc `case11` and `issue705`, which are excluded under the strict 10.9 reading (owner). It gained 5 ivtest cases (br1008, br988, fork3.19A, fork3.19B, pr1862744a) and 5 verilator cases (t_interface_input_port_assign, t_interface_input_port_assign_noinl, t_math_eq, t_tri_select_eqcase, t_udp_sequential).
+
+The census (`census/v4c10`) found:
+- host processes 0 in every suite;
+- all 7,648 kernel runs report `interpreted=0`;
+- 36 kernel deopts across 9 cases, all on the operation tier.
+
+| Suite | b96x1 | v4c10 | Planned = admitted = host=0 |
+|---|---:|---:|---:|
+| ivtest | 2635 | 2640 | 2273 |
+| sv-tests | 1495 | 1495 | 387 |
+| verilator | 2065 | 2070 | 2087 |
+| vests | 3646 | 3646 | 1606 |
+| nvc | 1261 | 1259 | 1208 |
+| vhdl-compliance | 65 | 65 | 65 |
+
+G1-G5 are all met on `v4c10` (db81054a). The design-level optimizations follow as v4 phases (owner, 2026-10-26).
+
 ### 2026-10-26 (night): mixed_codec deopts removed
 
 `mixed_codec` failed the per-case simulate clause at 2.98× because 7,613 kernel deopts ran members on the operation tier. Almost all of them came from `gf_mult` under the Euclid key-equation solver, where `'U'` operands reach code that only handles Logic4. Two changes clear every deopt in both mixed cases:
