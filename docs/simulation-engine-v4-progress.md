@@ -138,6 +138,52 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: design-level phase 5, per-signal access plan (trace selection) (`9adf4431`, sweep `v4c15`)
+
+Until now, a run that wrote a trace file set `observe_all`, which made every signal a host signal. Plan §3.6 asks for a per-signal plan: only what a client can observe needs the host's storage.
+
+**Selection.** The CLI `simulate` knows its trace selection before planning, and the selection is fixed for the run. `plan_trace_access` (app) computes it from the same rules `attach_trace` applies:
+- signal-bearing DesignIR objects;
+- the `--trace-filter` globs, matched against both the design path and the canonical FST path, so the result is a superset of either format's selection.
+
+The result is `StaticKernelAccessPlan::observed`, which replaces `observe_all`. Its SHA-256 (`observed_identity`) joins the persisted-plan key.
+
+**What stays global:**
+- The debugger, Tcl sessions, the library API and foreign libraries keep `foreign`/`observe_all`, because their access is not known in advance.
+- `$dumpvars` (a run-time observer) keeps `observe_all`.
+- With an observed set, dead-logic removal, VHDL delta collapse and time warp stay off.
+- An opaque VHDL process widens the set to every signal, as before.
+- `FSIM_STATIC_KERNEL_TRACE_SELECTION=0` restores whole-design observation.
+
+**Planner.** The observed signals are marked `host_touched`, exactly as signals a host process writes. Everything downstream already reads that per signal.
+
+**Exactness fixes found on the way.** Both concern a member's NBA to a host signal. The reference applies every NBA of a time step, then runs what they wake, in the same delta.
+
+1. **Split commit.** With only some signals on the host, one clock edge can give a member NBAs to both a host signal and a kernel-owned signal. Before this fix:
+   - the host applied the host-signal NBA in its own NBA region;
+   - the kernel committed its own NBAs and settled in its activation, ahead of the host's;
+   - so a net reading both (`arr[1] = acc ^ rd` in the test) changed twice, a delta apart.
+2. **Late wake.** With every signal on the host, kernel readers of such a signal ran again a delta late, through `yield_requested_` and the next delta. The test fixture saw this at its mid-run reset.
+
+Now a member's NBA-region update to a host signal (`host_nba_staged_`, `host_nba_wakes_`) defers the kernel's NBA region into the host's update phase:
+- the deferred task is ordered last (`StableOrder` max);
+- the task first scans the host's applied updates, then commits the kernel's own writes, then settles.
+
+The SystemVerilog regions of a mixed (VHDL) kernel (`sv_drain`) keep the previous behavior.
+
+**Test.** `static_kernel_test` traces five signals of its fixture: a wide register, a race register, the net above and two more. It requires:
+- the selection plan owns 20+ more signals than the all-host plan;
+- under both the all-host plan and the selection plan, every traced signal changes exactly as in the reference engine (value, time and delta).
+
+**Glitches remain a race.** Compared as VCDs against the reference, both plans also match every signal's value at each time step on the SV fixture and on a mixed variant with one VHDL instance. What still differs is intermediate values within a time step on combinational chains (`dead0`, `dead1`, `dead_parity`), plus the time-0 record order:
+- the reference evaluates continuous assignments event by event, in its process order;
+- the kernel settles levelized;
+- IEEE 1800-2023 4.7 leaves that order arbitrary, so these are races under D4, like open issue 3.
+
+v4c14 gives the same differences.
+
+Full ctest passes 1085/1085 in normal and strict mode. The three perf cases are byte-identical. Sweep `v4c15` has no losses against `b96x1`. Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071 (one more than `v4c14`), sv-tests 1495.
+
 ### 2026-10-27: design-level phase 4, sequential dispatch groups (`26b04641`, sweep `v4c14`)
 
 Until now, an edge scheduled every sequential member sensitive to it, one by one. Each `schedule()` set the member's flag and pushed it to the triggered list. The Active pass then sorted that list and ran the members in index order. The owner's condition (2026-10-27) is that grouping must keep that order.
