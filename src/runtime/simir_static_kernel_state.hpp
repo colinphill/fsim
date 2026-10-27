@@ -175,6 +175,8 @@ public:
             && (text == nullptr || std::string_view { text } != "0");
     }
     void materialize(SignalId signal);
+    /// Runs the lazy writers of a slot, their lazy inputs' writers first.
+    void refresh_lazy(std::uint32_t slot);
     /// The host committed a new value to the kernel-owned signal (a process
     /// outside the kernel wrote it): take the host value into the slot and
     /// run the ordinary change handling, so readers, waiters, edges and
@@ -283,6 +285,12 @@ private:
         /// always_comb/always_latch (ProcessStartupPhase::after_procedures):
         /// starts after the initial and always procedures.
         bool after_procedures { };
+        /// Dead logic: never scheduled; materialize evaluates it from the
+        /// slots in lazy_inputs (its whole sensitivity) when a slot it
+        /// writes is read. lazy_stamp is the lazy_epoch_ of its last run.
+        bool lazy { };
+        std::vector<std::uint32_t> lazy_inputs;
+        std::uint64_t lazy_stamp { };
         std::uint32_t body_begin { };
         std::uint32_t body_end { };
         std::uint32_t exit_alt { static_kernel_detail::no_slot };
@@ -429,6 +437,8 @@ private:
         /// No reader, output or edge needs to hear about writes: every reader
         /// runs later in the writers' own partition pass.
         bool silent { };
+        /// The lazy members that write the slot.
+        std::vector<std::uint32_t> lazy_writers;
         /// A combinational member writes the slot in the NBA region
         /// (IEEE 1800-2023 4.5): readers see the value only after the commit,
         /// so no reader can be ordered after the writer within one pass.
@@ -970,6 +980,8 @@ private:
     /// Kernel-owned time (see activate): enabled for a closed kernel the
     /// application does not observe between time steps.
     bool time_warp_ { };
+    /// One per materialize: a lazy member runs at most once in it.
+    std::uint64_t lazy_epoch_ { };
     /// No host process, output or host-written input.
     bool closed_ { };
     static constexpr std::size_t max_warp_steps = 4096U;

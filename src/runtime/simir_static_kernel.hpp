@@ -68,6 +68,10 @@ struct StaticKernelMemberSpec {
     /// A behavioral thread that starts one delta after time zero's other
     /// processes (systemverilog_late_starters).
     bool start_late { };
+    /// Dead logic (plan dead-logic removal): a combinational member whose
+    /// outputs no live process reads. It is never scheduled; a read of what
+    /// it writes (materialize) evaluates it first from its current inputs.
+    bool lazy { };
 };
 
 /// A kernel-owned aggregate proxy: its value is the concatenation of its

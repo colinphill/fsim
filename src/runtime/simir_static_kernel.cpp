@@ -409,11 +409,14 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         Member member;
         member.process = member_spec.process;
         member.kind = member_spec.kind;
-        member.run_at_start = member_spec.run_at_start;
+        member.lazy = member_spec.lazy;
+        // A lazy member never starts and joins no partition: only
+        // materialize runs it.
+        member.run_at_start = member_spec.run_at_start && !member.lazy;
         member.start_late = member_spec.start_late;
         member.after_procedures = program.startup_phase()
             == ProcessStartupPhase::after_procedures;
-        member.partition_key = member_spec.partition;
+        member.partition_key = member.lazy ? no_slot : member_spec.partition;
         member.body_begin = member_spec.body_begin;
         member.prologue_end = member_spec.body_begin;
         member.body_end = member_spec.body_end;
@@ -502,7 +505,25 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                 }
             }
         }
-        for (const auto& sensitivity : behavioral
+        if (member.lazy) {
+            // Nothing wakes it; its sensitivity names every slot it reads.
+            for (const auto& sensitivity : member_spec.sensitivity) {
+                if (sensitivity.signal >= signal_count) {
+                    throw std::invalid_argument(
+                        "static kernel sensitivity is invalid");
+                }
+                if (const auto family = family_of_signal_[sensitivity.signal];
+                    family != no_slot) {
+                    for (const auto& leaf : families_[family].leaves) {
+                        member.lazy_inputs.push_back(leaf.slot);
+                    }
+                } else if (const auto slot = slot_of_signal_[sensitivity.signal];
+                           slot != no_slot) {
+                    member.lazy_inputs.push_back(slot);
+                }
+            }
+        }
+        for (const auto& sensitivity : behavioral || member.lazy
                  ? std::span<const Sensitivity> { }
                  : std::span<const Sensitivity> { member_spec.sensitivity }) {
             if (sensitivity.signal >= signal_count) {
@@ -556,6 +577,17 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         for (const auto& region : program.driver_regions()) {
             if (member.vhdl || region.signal >= signal_count) {
                 continue;
+            }
+            if (member.lazy) {
+                if (const auto family = family_of_signal_[region.signal];
+                    family != no_slot) {
+                    for (const auto& leaf : families_[family].leaves) {
+                        slots_[leaf.slot].lazy_writers.push_back(index);
+                    }
+                } else if (const auto slot = slot_of_signal_[region.signal];
+                           slot != no_slot) {
+                    slots_[slot].lazy_writers.push_back(index);
+                }
             }
             const auto slot = slot_of_signal_[region.signal];
             if (slot == no_slot) {
@@ -4714,6 +4746,10 @@ void Interpreter::Impl::StaticKernel::materialize(const SignalId signal)
     if (slot.output) {
         return;
     }
+    if (!slot.lazy_writers.empty()) {
+        ++lazy_epoch_;
+        refresh_lazy(slot_index);
+    }
     const auto value = slot_value(slot_index);
     if (impl_.logical_signal_value(signal) == value) {
         return;
@@ -4730,6 +4766,25 @@ void Interpreter::Impl::StaticKernel::materialize(const SignalId signal)
         }
     } else {
         impl_.commit_driver(slot.last_writer, signal, value);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::refresh_lazy(const std::uint32_t slot)
+{
+    // The lazy members form no cycle (the planner keeps members on one
+    // live), so the recursion ends.
+    for (const auto writer : slots_[slot].lazy_writers) {
+        auto& member = members_[writer];
+        if (member.lazy_stamp == lazy_epoch_) {
+            continue;
+        }
+        member.lazy_stamp = lazy_epoch_;
+        for (const auto input : member.lazy_inputs) {
+            if (!slots_[input].lazy_writers.empty()) {
+                refresh_lazy(input);
+            }
+        }
+        run(writer);
     }
 }
 

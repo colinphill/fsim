@@ -650,6 +650,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                       << " processes=" << plan.processes
                       << " host=" << plan.host_processes
                       << " hosted=" << plan.hosted_processes
+                      << " lazy=" << plan.lazy_members
                       << '\n';
             for (const auto& row : plan.host_reasons) {
                 std::cerr << "fsim-profile: static-kernel-host reason="

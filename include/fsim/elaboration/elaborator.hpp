@@ -929,6 +929,8 @@ struct StaticKernelPlan {
     /// `hosted_processes` is always set, the rows with FSIM_PROFILE_PHASES.
     std::size_t hosted_processes { };
     std::vector<StaticKernelHostReason> hosted_reasons;
+    /// Lazy members: dead combinational logic, evaluated only when read.
+    std::size_t lazy_members { };
 };
 
 class ElaboratedDesign final {

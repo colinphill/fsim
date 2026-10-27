@@ -6,7 +6,9 @@
 // dynamic bit and part-select nonblocking writes, a net array with a dynamic
 // read, and a combinational case block must produce the same transcript in
 // the kernel as in the reference scheduler. Hidden kernel-owned signals must
-// read back their exact values mid-run and at the end.
+// read back their exact values mid-run and at the end, including the nets of
+// a combinational chain no process reads (dead logic the kernel evaluates
+// only when observed).
 #include "fsim/app/application.hpp"
 
 #include <chrono>
@@ -114,6 +116,10 @@ module sk_dut(input wire clk, input wire rst_n, input wire [3:0] a,
   assign arr[1] = arr[0] ^ {rd[3:0], rd[7:4]};
   assign arr[2] = arr[1] + shreg;
   assign mix = arr[ra[1:0] == 2'b11 ? 2'd2 : ra[1:0]];
+  wire [7:0] dead0 = acc ^ {slow, sel};
+  wire [7:0] dead1 = dead0 + {rd[3:0], prod};
+  wire dead_parity;
+  assign dead_parity = ^dead1;
   always @(*)
     case (a[1:0])
       2'b00: sel = b;
@@ -208,6 +214,9 @@ const std::vector<std::string> internal_paths {
     "sk_top.dut.shreg",
     "sk_top.dut.arr[1]",
     "sk_top.dut.arr[2]",
+    "sk_top.dut.dead0",
+    "sk_top.dut.dead1",
+    "sk_top.dut.dead_parity",
 };
 
 [[nodiscard]] RunCapture run(const std::filesystem::path& root,
@@ -221,6 +230,8 @@ const std::vector<std::string> internal_paths {
         require(plan.members > 60U && plan.owned_signals > 20U
                 && plan.owned_containers != 0U,
             "the kernel must own the DUT, its memory and its arrays");
+        require(plan.lazy_members >= 3U,
+            "the unread combinational chain must be lazy");
     }
     project.cone_fusion = kernel;
     set_environment("FSIM_STATIC_KERNEL", kernel ? "1" : "0");

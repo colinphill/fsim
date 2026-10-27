@@ -2533,6 +2533,330 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
 
+    // Dead-logic removal (engine-v4 plan 3.1, 3.6): a member whose only
+    // effects are writes that no live process reads, and that nothing
+    // outside the processes observes, changes nothing a run can see except
+    // a read of a named net on demand. Such a member is lazy: never
+    // scheduled, and evaluated from its current inputs when what it writes
+    // is read (StaticKernel::materialize), which the eligibility rule below
+    // makes exact. Live roots are every process outside the native members,
+    // every member that cannot be lazy (state, effects beyond plain writes:
+    // output, assertion, randomization, a runtime error check, a nonblocking,
+    // delayed or waveform write), every signal the host owns or touches,
+    // and every signal a client outside the processes may observe. Liveness
+    // flows from a live process to what it reads and from a live signal or
+    // container to its writers. Members on a cycle of activations stay live:
+    // such a cycle need not settle (IEEE 1800-2023 4.7). Any client that
+    // reads arbitrary state as it changes (foreign library, trace, coverage,
+    // debugger, publish-all) turns the removal off.
+    std::vector<std::uint8_t> lazy(process_count, 0U);
+    {
+        const char* dead_text = std::getenv("FSIM_STATIC_KERNEL_DEAD_LOGIC");
+        bool enabled = (dead_text == nullptr || std::string_view { dead_text } != "0")
+            && !access.foreign && !observe_all && !access.coverage && !access.debug
+            && !publish_all && graph.access_inventory_complete()
+            && graph_processes.size() == process_count;
+        for (std::size_t index = 0U; enabled && index < process_count; ++index) {
+            enabled = !views[index].valid() || !graph_processes[index].dependencies_unknown;
+        }
+        std::vector<std::uint8_t> live_process(process_count, 0U);
+        std::vector<std::uint8_t> live_signal(signal_count, 0U);
+        std::vector<std::uint8_t> live_container(object_count, 0U);
+        std::vector<ProcessId> process_work;
+        std::vector<SignalId> signal_work;
+        std::vector<ContainerObjectId> container_work;
+        const auto mark_process = [&](const std::size_t process) {
+            if (process < process_count && live_process[process] == 0U) {
+                live_process[process] = 1U;
+                process_work.push_back(static_cast<ProcessId>(process));
+            }
+        };
+        const auto mark_signal = [&](const SignalId signal) {
+            if (signal < signal_count && live_signal[signal] == 0U) {
+                live_signal[signal] = 1U;
+                signal_work.push_back(signal);
+            }
+        };
+        const auto mark_container = [&](const ContainerObjectId object) {
+            if (object < object_count && live_container[object] == 0U) {
+                live_container[object] = 1U;
+                container_work.push_back(object);
+            }
+        };
+        const auto propagate = [&] {
+            while (!process_work.empty() || !signal_work.empty()
+                || !container_work.empty()) {
+                if (!process_work.empty()) {
+                    const auto process = process_work.back();
+                    process_work.pop_back();
+                    const auto& node = graph_processes[process];
+                    for (const auto& read : node.reads) {
+                        mark_signal(read.signal);
+                    }
+                    for (const auto& sensitivity : node.sensitivities) {
+                        mark_signal(sensitivity.signal);
+                    }
+                    for (const auto object : container_uses[process]) {
+                        mark_container(object);
+                    }
+                } else if (!signal_work.empty()) {
+                    const auto signal = signal_work.back();
+                    signal_work.pop_back();
+                    for (const auto& writer : graph_signals[signal].writers) {
+                        mark_process(writer.process);
+                    }
+                } else {
+                    const auto object = container_work.back();
+                    container_work.pop_back();
+                    for (const auto process : accessors[object]) {
+                        mark_process(process);
+                    }
+                }
+            }
+        };
+        // Operations whose only effects are register values and immediate
+        // signal and container writes (blocking, or a continuous
+        // assignment's update): a lazy run at a read has no later region to
+        // defer a nonblocking update to. Per shared body.
+        std::unordered_map<const void*, bool> effect_free_body;
+        const auto effect_free = [&](const ProcessProgramView& view) {
+            // Operation overrides make one body's instances differ.
+            const auto* const body = view.operations().has_operation_overrides()
+                ? nullptr : view.operations().body_identity();
+            if (body != nullptr) {
+                if (const auto found = effect_free_body.find(body);
+                    found != effect_free_body.end()) {
+                    return found->second;
+                }
+            }
+            const auto& operations = view.operations();
+            bool free = true;
+            for (std::size_t op = 0U; free && op < operations.size(); ++op) {
+                free = visit_operation([&](const auto& value) {
+                    using T = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<T, WriteUpdate>
+                        || std::is_same_v<T, WriteUpdateSlice>
+                        || std::is_same_v<T, WriteUpdateDynamicSlice>
+                        || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
+                        // A continuous assignment's update applies at once;
+                        // a nonblocking one waits for the NBA region.
+                        return value.domain != SignalUpdateDomain::systemverilog_nba;
+                    } else if constexpr (std::is_same_v<T, Halt>) {
+                        // The end of a process that runs once; not an exit.
+                        return !value.program_exit;
+                    } else {
+                        return std::is_same_v<T, LoadConstant>
+                            || std::is_same_v<T, CopyRegister>
+                            || std::is_same_v<T, ConvertToTwoState>
+                            || std::is_same_v<T, UnaryNot>
+                            || std::is_same_v<T, LogicalNot>
+                            || std::is_same_v<T, LogicalBinary>
+                            || std::is_same_v<T, Reduction>
+                            || std::is_same_v<T, CountOnes>
+                            || std::is_same_v<T, CountBits>
+                            || std::is_same_v<T, Shift>
+                            || std::is_same_v<T, Extract>
+                            || std::is_same_v<T, DynamicExtract>
+                            || std::is_same_v<T, DynamicPartSelect>
+                            || std::is_same_v<T, Concatenate>
+                            || std::is_same_v<T, Binary>
+                            || std::is_same_v<T, Insert>
+                            || std::is_same_v<T, DynamicInsert>
+                            || std::is_same_v<T, DynamicPartInsert>
+                            || std::is_same_v<T, ConditionalSelect>
+                            || std::is_same_v<T, ReadSignal>
+                            || std::is_same_v<T, SignalEvent>
+                            || std::is_same_v<T, SignalLastValue>
+                            || std::is_same_v<T, SignalLastEvent>
+                            || std::is_same_v<T, SignalActive>
+                            || std::is_same_v<T, SignalLastActive>
+                            || std::is_same_v<T, WriteBlocking>
+                            || std::is_same_v<T, WriteBlockingSlice>
+                            || std::is_same_v<T, WriteBlockingDynamicSlice>
+                            || std::is_same_v<T, WriteBlockingDynamicPartSlice>
+                            || std::is_same_v<T, ContainerRead>
+                            || std::is_same_v<T, ContainerWrite>
+                            || std::is_same_v<T, ContainerElementRead>
+                            || std::is_same_v<T, ContainerElementWrite>
+                            || std::is_same_v<T, Jump>
+                            || std::is_same_v<T, Branch>
+                            || std::is_same_v<T, Call>
+                            || std::is_same_v<T, Return>
+                            || std::is_same_v<T, CallableFramePush>
+                            || std::is_same_v<T, CallableFramePop>
+                            || std::is_same_v<T, DebugPoint>
+                            || std::is_same_v<T, WaitSensitivity>;
+                    }
+                }, operations.at(op));
+            }
+            if (body != nullptr) {
+                effect_free_body.emplace(body, free);
+            }
+            return free;
+        };
+        // A dead member can be left unscheduled and evaluated when its
+        // output is read only if its value then is the value it would have
+        // had: a combinational SystemVerilog member that runs at time zero
+        // (continuous assignment, always_comb) and is sensitive to every
+        // kernel-owned signal it reads, with no container access and no
+        // effect but its writes. Any other candidate is a root, so what it
+        // reads stays computed.
+        const auto lazy_ok = [&](const std::size_t index) {
+            const auto& candidate = candidates[index];
+            if (!candidate || candidate->vhdl || !candidate->run_at_start
+                || candidate->kind != static_cast<std::uint8_t>(
+                       StaticKernelMemberKind::combinational)
+                || !container_uses[index].empty() || !effect_free(views[index])) {
+                return false;
+            }
+            return std::ranges::all_of(graph_processes[index].reads,
+                [&](const Sensitivity& read) {
+                    return read.signal < signal_count && owned[read.signal] != 0U
+                        && alias_role[read.signal] == 0U
+                        && std::ranges::any_of(candidate->sensitivity,
+                            [&](const Sensitivity& sensitivity) {
+                                // Width 0 is the whole signal.
+                                return sensitivity.signal == read.signal
+                                    && sensitivity.edge == EdgeKind::any
+                                    && (sensitivity.width == 0U
+                                        || (read.width != 0U
+                                            && sensitivity.offset <= read.offset
+                                            && read.offset + read.width
+                                                <= sensitivity.offset
+                                                    + sensitivity.width));
+                            });
+                });
+        };
+        // Candidates whose trigger edges stay inside the dead set: lazy only
+        // off a cycle of activations.
+        std::vector<std::uint8_t> sensitive(signal_count, 0U);
+        std::vector<std::vector<ProcessId>> triggered(signal_count);
+        if (enabled) {
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                const auto& candidate = candidates[index];
+                if (!views[index].valid()) {
+                    continue;
+                }
+                if (!lazy_ok(index)) {
+                    mark_process(index);
+                }
+                for (const auto& sensitivity : candidate
+                         ? candidate->sensitivity : std::vector<Sensitivity> { }) {
+                    if (sensitivity.signal < signal_count) {
+                        triggered[sensitivity.signal].push_back(
+                            static_cast<ProcessId>(index));
+                    }
+                }
+            }
+            for (SignalId signal = 0U; signal < signal_count; ++signal) {
+                const auto& node = graph_signals[signal];
+                const auto& info = signals_[signal];
+                if (owned[signal] == 0U || host_touched[signal] != 0U
+                    || alias_role[signal] != 0U
+                    || node.descriptor.observations != RegionObservation::none
+                    || (static_cast<std::uint32_t>(node.observations)
+                           & static_cast<std::uint32_t>(RegionObservation::unknown
+                               | RegionObservation::coverage)) != 0U
+                    || node.writers_unknown || node.descriptor.external_driver
+                    || info.implicit_driver.has_value()) {
+                    mark_signal(signal);
+                }
+            }
+            for (std::size_t object = 0U; object < object_count; ++object) {
+                if (packed_alias[object] || has_element_alias[object] != 0U) {
+                    mark_container(static_cast<ContainerObjectId>(object));
+                }
+            }
+            propagate();
+            // Tarjan over the dead candidates' trigger edges (a write to a
+            // signal another dead candidate is sensitive to); a member on a
+            // cycle, a self-trigger included, becomes a root.
+            for (bool cycles = true; cycles;) {
+                cycles = false;
+                std::vector<std::uint32_t> order(process_count, 0U);
+                std::vector<std::uint32_t> low(process_count, 0U);
+                std::vector<std::uint8_t> on_stack(process_count, 0U);
+                std::vector<ProcessId> stack;
+                std::uint32_t counter = 0U;
+                const auto successors = [&](const ProcessId process) {
+                    std::vector<ProcessId> next;
+                    for (const auto& write : graph_processes[process].writes) {
+                        if (write.signal < signal_count) {
+                            for (const auto target : triggered[write.signal]) {
+                                if (live_process[target] == 0U) {
+                                    next.push_back(target);
+                                }
+                            }
+                        }
+                    }
+                    return next;
+                };
+                struct Frame {
+                    ProcessId process;
+                    std::vector<ProcessId> next;
+                    std::size_t at { };
+                };
+                for (ProcessId root = 0U; root < process_count; ++root) {
+                    if (live_process[root] != 0U || !candidates[root]
+                        || order[root] != 0U) {
+                        continue;
+                    }
+                    std::vector<Frame> frames;
+                    const auto enter = [&](const ProcessId process) {
+                        order[process] = low[process] = ++counter;
+                        stack.push_back(process);
+                        on_stack[process] = 1U;
+                        frames.push_back({ process, successors(process) });
+                    };
+                    enter(root);
+                    while (!frames.empty()) {
+                        auto& frame = frames.back();
+                        if (frame.at < frame.next.size()) {
+                            const auto target = frame.next[frame.at++];
+                            if (target == frame.process) {
+                                mark_process(target);
+                                cycles = true;
+                            } else if (order[target] == 0U) {
+                                enter(target);
+                            } else if (on_stack[target] != 0U) {
+                                low[frame.process]
+                                    = std::min(low[frame.process], order[target]);
+                            }
+                            continue;
+                        }
+                        const auto process = frame.process;
+                        frames.pop_back();
+                        if (!frames.empty()) {
+                            low[frames.back().process]
+                                = std::min(low[frames.back().process], low[process]);
+                        }
+                        if (low[process] != order[process]) {
+                            continue;
+                        }
+                        std::vector<ProcessId> component;
+                        ProcessId popped { };
+                        do {
+                            popped = stack.back();
+                            stack.pop_back();
+                            on_stack[popped] = 0U;
+                            component.push_back(popped);
+                        } while (popped != process);
+                        if (component.size() > 1U) {
+                            for (const auto member_process : component) {
+                                mark_process(member_process);
+                            }
+                            cycles = true;
+                        }
+                    }
+                }
+                propagate();
+            }
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                lazy[index] = candidates[index] && live_process[index] == 0U ? 1U : 0U;
+            }
+        }
+    }
+
     // 3. Members, specification, host and boundaries.
     auto spec = std::make_shared<StaticKernelRuntimeSpec>();
     std::vector<std::uint8_t> member(process_count, 0U);
@@ -2552,6 +2876,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         runtime_member.exit_alt = candidate.exit_alt;
         runtime_member.vhdl = candidate.vhdl;
         runtime_member.sensitivity = std::move(candidate.sensitivity);
+        runtime_member.lazy = lazy[index] != 0U;
+        plan.lazy_members += lazy[index];
         spec->members.push_back(std::move(runtime_member));
     }
     // Commit programs (S25b): the programs of the update commit (resolvers,
@@ -2858,7 +3184,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
 namespace detail {
 namespace {
 
-constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v4" };
+constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v5" };
 
 class PlanWriter {
 public:
@@ -2971,7 +3297,8 @@ std::string static_kernel_plan_identity()
              "FSIM_STATIC_KERNEL_ACCESS_PLAN", "FSIM_STATIC_KERNEL_HOSTED",
              "FSIM_STATIC_KERNEL_HOSTED_REGIONS",
              "FSIM_STATIC_KERNEL_HOSTED_VHDL",
-             "FSIM_STATIC_KERNEL_HOSTED_POSTPONED" }) {
+             "FSIM_STATIC_KERNEL_HOSTED_POSTPONED",
+             "FSIM_STATIC_KERNEL_DEAD_LOGIC" }) {
         const char* value = std::getenv(name);
         identity += ";";
         identity += name;
@@ -3002,6 +3329,7 @@ std::string serialize_static_kernel_plan(const StaticKernelPlan& plan)
         out.put(member.partition);
         out.put(member.vhdl);
         out.put(member.start_late);
+        out.put(member.lazy);
     });
     out.list(spec.hosted, [&](const runtime::simir::StaticKernelMemberSpec& member) {
         out.put(member.process);
@@ -3074,7 +3402,7 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
                    && in.sensitivities(member.sensitivity)
                    && sensitivity_ok(member.sensitivity)
                    && in.get(member.partition) && in.get(member.vhdl)
-                   && in.get(member.start_late);
+                   && in.get(member.start_late) && in.get(member.lazy);
            })
         && in.list(spec->hosted, [&](StaticKernelMemberSpec& member) {
                member.kind = StaticKernelMemberKind::hosted;
@@ -3130,6 +3458,8 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
     }
     plan.members = spec->members.size();
     plan.hosted_processes = spec->hosted.size();
+    plan.lazy_members = static_cast<std::size_t>(std::ranges::count_if(
+        spec->members, &StaticKernelMemberSpec::lazy));
     plan.owned_signals = spec->owned_signals.size();
     plan.boundary_outputs = spec->boundary_outputs.size();
     plan.owned_containers = spec->containers.size();
