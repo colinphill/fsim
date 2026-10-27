@@ -138,6 +138,38 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: design-level phases measured (constant propagation rejected)
+
+This entry covers the remaining design-level items measured against the perf cases, using instructions:u and kernel counters on `v4c11`.
+
+**Constant propagation across bindings: tested and rejected.** The patch is saved as `.local-artifacts/v4-migration/design-opt/constant-propagation-rejected-2026-10-27.patch`. It had four parts:
+- one shared evaluator for constant programs;
+- `initialize_constant_driven_nets` extended to merged constant drivers and to tied-port actuals. Continuous assignments and `always_comb` evaluate at time zero, so they no longer count as waiters needing the time-0 event;
+- a planner list of signals that stay at their constant;
+- members' `ReadSignal` of those signals rewritten to `LoadConstant`.
+
+On original_codec it folded 8,544 signals into 63,257 members, and outputs stayed byte-identical. It still does not pay:
+
+| Variant | original_codec sim | original_throughput sim | Elaboration |
+|---|---:|---:|---:|
+| Constants bound per instance (template sharing kept) | +0.4% | +1.3% | +1.1%, +3.1% |
+| Constants as immediates (LLVM folds them) | +1.3% | +2.2% | +38%, +26% |
+
+In the bound variant, partition templates went from 550 to 795 because tied and untied instances now differ in shape. The ALU work in the folded operands is not where the run time is.
+
+**Port and alias collapsing: already done.** Elaboration aliases a port connected to a simple net, so a hierarchy plans the same members as its flat equivalent. Explicit whole-signal copies (`assign y = x`) are 483 of 96,886 combinational members in original_codec, 209 of 50,746 in original_throughput, and 0 in mixed_codec.
+
+**Sequential supernodes.** Every perf case has one trigger set: 253 sequential members in original_codec and mixed_codec, 152 in original_throughput, 45 in codex_throughput_default. Grouping them saves only per-member dispatch, about 7.65M schedule and run calls, or 2–3% of original_codec simulate. It would also reorder same-level Active-region evaluation, which race-order corpus cases see.
+
+**Wide values.** The remaining wide work on the kernel's generic path is under 1% of simulate. On mixed_codec it is about 350k reference operations against 17M member runs: 256- and 264-bit dynamic part inserts, reads and copies. original_codec has no wide members.
+
+**VHDL delta collapsing.** On mixed_codec the per-delta machinery is the largest cost:
+- `commit_round` takes 15% of simulate instructions;
+- `activate_mixed`, `sort_round`, `schedule` and `store_planes_word` take another 7%;
+- VHDL combinational runs are 9.1M, against 0.55M combinational plus 1.67M partition runs for the Verilog build of the same design.
+
+An exact as-if collapse needs every observer of a collapsed signal to be blind to its delta. A process woken in the same delta by another event, such as a flop on a delta-delayed clock (`clk_int <= clk`) when a testbench input changed in that delta, reads the collapsed value one or more deltas early. A process sensitive to a collapsed chain's output runs once instead of once per glitch. Neither can be ruled out statically in general. This needs an owner decision on its semantics.
+
 ### 2026-10-27: design-level phase 1, dead logic as lazy members (`6adcb28e`, sweep `v4c11`)
 
 The planner runs a liveness pass over the region graph.
