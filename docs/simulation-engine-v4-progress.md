@@ -138,6 +138,29 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: `%m` in shared templates, workspace file root (`b6c49426`, sweep `v4c18`)
+
+Two bugs found while building the larger multi-threading benchmark (the LDPC P=128 decoder, `.local-artifacts/v4-migration/mt-bench/ldpc/tb_decoder_long.sv`). Both are older than v4 and affect the interpreter and the v4 kernel alike.
+
+**`%m` in instances that share a specialization** (IEEE 1800-2023 21.2.1.6).
+- Lowering writes the scope's path into the program text of `$display("%m")`, `$fwrite`, `$sscanf` with `%m`, `'path_name`/`'instance_name` and context DPI call identities.
+- The process-template caches then replayed that program for later instances of the same specialization, remapping only signals. Every `always` block in such instances printed the first instance's path.
+- The Lowerer now counts lowerings that read the instance path (`hir_instance_path_uses`). The SystemVerilog process, generated-process and concurrent-statement caches, and the VHDL process/concurrent cache, refuse to share a process whose lowering read it.
+- Fixture `sv_hierarchy_format_shared_instances` covers this: two plain instances and two generate-loop instances.
+
+**User files resolve in the workspace** (owner decision, 2026-10-27).
+- Files a simulation names (`$fopen`, `$readmemh`, `$coverage_save`) resolve against the workspace, the directory the run starts in. This holds for design and snapshot runs alike; `--file-root` overrides it.
+- Before, a design elaborated without a file root read every file as missing, so `$readmemh` silently loaded nothing. Snapshot runs resolved files against the snapshot's revision directory.
+- A run with no file root now raises an error instead of returning a zero handle. A `$readmemh` file that cannot be opened is reported as `cannot open read-memory file`.
+- `workspace_application_test` now expects the coverage database in the workspace.
+
+With these fixes, the LDPC testbench (10 frames) matches xsim: checksum `bea9da86287aabd0`, 10720 cycles. It runs in 3.2 s on v4.
+
+Full ctest passes 1087/1087 in normal and strict mode.
+- **Sweep `v4c18`:** no losses against `b96x1`.
+  - Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+  - nvc `case11` and `issue705` stay excluded.
+
 ### 2026-10-27: end-of-plan perf, elaboration cuts (`d4ab0a42`, `ea052048`, sweeps `v4c16`, `v4c17`)
 
 The design-level phases are done, so the perf work held for the end of the plan begins. It targets elaboration, the largest phase. The baseline is `v4c15`; a callgrind profile of `original_codec` elaborate without `--aot` showed 51.6G instructions.
