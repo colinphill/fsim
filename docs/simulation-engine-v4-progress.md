@@ -138,7 +138,7 @@ per completed phase).
 
 ## 4. Log
 
-### 2026-10-27: design-level phase 2, VHDL delta collapse (exact-only subset)
+### 2026-10-27: design-level phase 2, VHDL delta collapse (exact-only subset) (`11dc5c30`, sweep `v4c12`)
 
 The owner chose the exact-only subset on 2026-10-27. A collapsed VHDL combinational member runs in the update phase that woke it, instead of in the next round. Other members still use one round per delta.
 
@@ -171,6 +171,8 @@ Moving runs earlier saves no round, because each delta still holds non-collapsed
 - 2,356 cascaded from rejected readers.
 
 None of these can be admitted without relaxing the exact rule. `static_kernel_vhdl_test` adds a two-member chain read only by a clk register; it must collapse and match the reference exactly.
+
+Full ctest passes 1085/1085 in normal and strict mode. Sweep `v4c12` has no losses against `b96x1`. Passes: nvc 1259 (the two owner-excluded cases), vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2070, sv-tests 1495.
 
 ### 2026-10-27: design-level phases measured (constant propagation rejected)
 
