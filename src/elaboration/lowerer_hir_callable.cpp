@@ -59,7 +59,7 @@ namespace {
 
     constexpr std::size_t maximum_effective_subtype_cache_entries = 4096U;
     constexpr std::size_t maximum_expression_resolution_cache_entries
-        = 1024U;
+        = 16384U;
     constexpr std::size_t maximum_vhdl_subtype_name_cache_entries = 512U;
     constexpr std::size_t maximum_pure_integral_attempt_cache_entries
         = 1024U;

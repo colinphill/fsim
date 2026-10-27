@@ -1163,6 +1163,50 @@ void CompiledDesign::refresh_lookup_indexes()
     rebuilt.owner = this;
     rebuilt.initialized = true;
     lookup_indexes_ = std::move(rebuilt);
+    // With no checks recorded yet, find_unit compares each unit's identity
+    // with its HIR record in full.
+    std::vector<std::uint8_t> checks(semantics.units().size());
+    for (std::size_t index = 0; index < checks.size(); ++index) {
+        checks[index] = find_unit(UnitId::from_index(
+            static_cast<std::uint32_t>(index))) ? 1U : 0U;
+    }
+    lookup_indexes_.unit_identity_checks = std::move(checks);
+    const auto& scopes = semantics.scopes();
+    std::vector<std::vector<const vhdl::Unit*>> scope_units(scopes.size());
+    for (std::size_t index = 0; index < scopes.size(); ++index) {
+        auto& units = scope_units[index];
+        auto scope = ScopeId::from_index(static_cast<std::uint32_t>(index));
+        for (std::size_t depth { };
+             scope.valid() && depth <= scopes.size(); ++depth) {
+            if (scope.value() >= scopes.size()
+                || scopes[scope.value()].id != scope) {
+                break;
+            }
+            const auto& record = scopes[scope.value()];
+            const auto owner = find_unit(record.unit);
+            if (owner && owner->vhdl != nullptr
+                && std::ranges::find(units, owner->vhdl) == units.end()) {
+                units.push_back(owner->vhdl);
+            }
+            if (!record.parent) {
+                break;
+            }
+            scope = *record.parent;
+        }
+    }
+    lookup_indexes_.vhdl_scope_units = std::move(scope_units);
+}
+
+const std::vector<const vhdl::Unit*>* CompiledDesign::vhdl_scope_units(
+    const ScopeId scope) const noexcept
+{
+    const auto& units = lookup_indexes_.vhdl_scope_units;
+    if (!lookup_indexes_current() || !scope.valid()
+        || scope.value() >= units.size()
+        || semantics.scopes()[scope.value()].id != scope) {
+        return nullptr;
+    }
+    return &units[scope.value()];
 }
 
 bool CompiledDesign::apply_linked_vhdl_expression_annotations(
@@ -1275,7 +1319,12 @@ CompiledDesign::find_unit(const UnitId id) const noexcept
     }
     const auto* systemverilog = record->systemverilog;
     const auto* vhdl = record->vhdl;
-    if (systemverilog != nullptr) {
+    const auto& checks = lookup_indexes_.unit_identity_checks;
+    if (lookup_indexes_current() && id.value() < checks.size()) {
+        if (checks[id.value()] == 0U) {
+            return std::nullopt;
+        }
+    } else if (systemverilog != nullptr) {
         if ((identity.language != Language::verilog
                 && identity.language != Language::system_verilog)
             || !same_identity(identity, *systemverilog)) {

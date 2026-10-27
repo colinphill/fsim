@@ -239,6 +239,11 @@ public:
     systemverilog_units() const noexcept;
     [[nodiscard]] std::span<const vhdl::Unit> vhdl_units() const noexcept;
 
+    /// The VHDL units that own a scope and its enclosing scopes, innermost
+    /// first and without repeats; null unless the lookup indexes are current.
+    [[nodiscard]] const std::vector<const vhdl::Unit*>* vhdl_scope_units(
+        ScopeId scope) const noexcept;
+
     /// Return the unique entity or package declaration for one VHDL
     /// architecture or package body. A stale or foreign lookup falls back to
     /// the complete VHDL unit collection.
@@ -424,6 +429,11 @@ private:
         std::uint64_t systemverilog_revision { };
         std::uint64_t vhdl_revision { };
         RecordPositions units;
+        // By unit identity: whether find_unit's identity check holds,
+        // decided once when the indexes are built.
+        std::vector<std::uint8_t> unit_identity_checks;
+        // By scope identity: see vhdl_scope_units.
+        std::vector<std::vector<const vhdl::Unit*>> vhdl_scope_units;
         std::vector<const vhdl::Unit*> vhdl_primary_units;
         RecordPositions declarations;
         RecordPositions types;

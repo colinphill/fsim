@@ -1277,6 +1277,10 @@ std::vector<const vhdl::Unit*> vhdl_lookup_units(
             result.push_back(unit);
         }
     };
+    if (const auto* scope_units = design.vhdl_scope_units(use_scope)) {
+        result = *scope_units;
+        use_scope = ScopeId { };
+    }
     for (std::size_t depth { };
          use_scope.valid() && depth <= design.semantics.scopes().size();
          ++depth) {

@@ -184,7 +184,6 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
         return true;
     };
     auto compacted = process;
-    auto containers = design_.container_objects_;
     bool compact = !compacted.switch_source && !compacted.switch_target
         && !compacted.switch_control;
     for (std::size_t index = 0;
@@ -207,9 +206,9 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
     // signals follow.
     const auto named_signals = sources.size();
     const auto named_sequence = sequence.size();
-    for (auto& object : containers) {
-        compact = compact
-            && (!object.change_signal || rename(*object.change_signal));
+    for (const auto& object : design_.container_objects_) {
+        auto change_signal = object.change_signal;
+        compact = compact && (!change_signal || rename(*change_signal));
     }
     auto result_image = result;
     compact = compact && (!result_image || rename(*result_image));
@@ -281,6 +280,9 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
                 signals[index].initial_value, signals[index].value_kind);
         }
     }
+    // The design's container objects are copied only for a run, not for a
+    // value the memo already holds.
+    auto containers = design_.container_objects_;
     if (compact) {
         runtime::simir::normalize_sensitivities(
             compacted.static_sensitivity);
@@ -289,9 +291,13 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
         compacted.static_trigger_regions = { };
         add_elaboration_signals(interpreter, signals);
         process = std::move(compacted);
+        for (auto& object : containers) {
+            if (object.change_signal) {
+                object.change_signal = images.at(*object.change_signal);
+            }
+        }
     } else {
         add_elaboration_signals(interpreter, design_.signals_);
-        containers = design_.container_objects_;
         result_image = result;
     }
     for (const auto& object : design_.string_objects_) {

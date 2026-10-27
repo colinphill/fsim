@@ -349,15 +349,15 @@ void validate_container_value(const ContainerValue& value) {
     throw std::invalid_argument{
         "nested SimIR container has inactive element storage"};
   }
+  // Only a two-state or scalar element type rules out unknown bits.
+  const bool known_elements = value.type.two_state
+      || value.type.element_kind == ContainerElementKind::Scalar;
   for (const auto& element : value.elements) {
-    const bool contains_unknown = std::ranges::any_of(
-        element.bval_words(),
-        [](const std::uint64_t word) { return word != 0; });
     if (element.width() != value.type.element_width
         || element.is_logic9()
-        || ((value.type.two_state
-             || value.type.element_kind == ContainerElementKind::Scalar)
-            && contains_unknown)) {
+        || (known_elements
+            && std::ranges::any_of(element.bval_words(),
+                [](const std::uint64_t word) { return word != 0; }))) {
       throw std::invalid_argument{
           "SimIR container element does not match its type"};
     }
