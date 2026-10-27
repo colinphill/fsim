@@ -617,4 +617,428 @@ void Interpreter::Impl::StaticKernel::eliminate_dead_constants(
     }
 }
 
+const char* Interpreter::Impl::StaticKernel::collapse_impurity(
+    const Member& member, KOp& rejected_op) const
+{
+    // A collapsed member may run in a different delta, and never on the
+    // intermediate input combinations the delta schedule passes through,
+    // so its compiled code must compute a function of the slots it reads
+    // and do nothing else: no state carried between runs (a register read
+    // before this run writes it, unless no run writes it), no check or
+    // assertion that could fail, no loop (the step limit), no generic
+    // operation, and only deferred static-range assignments. A selection
+    // whose index is a constant is checked here once.
+    const auto& body = *member.compiled;
+    const auto& code = body.code;
+    const auto size = static_cast<std::uint32_t>(code.size());
+    const auto registers = static_cast<std::uint32_t>(body.registers.size());
+    if (size == 0U || body.entry >= size || !body.resume_entries.empty()
+        || body.call_stack_base != 0U) {
+        return "code_shape";
+    }
+    std::vector<std::uint8_t> reached(size, 0U);
+    std::vector<std::uint32_t> definitions(registers, 0U);
+    std::vector<const KInst*> definition(registers, nullptr);
+    // Successors of each reached instruction: successor_begin[at] ..
+    // successor_begin[at] + successor_count[at] in successors.
+    std::vector<std::uint32_t> successor_begin(size, 0U);
+    std::vector<std::uint8_t> successor_count(size, 0U);
+    // Instructions that may end the run.
+    std::vector<std::uint8_t> exits(size, 0U);
+    std::vector<std::uint32_t> successors;
+    std::vector<std::uint32_t> use;
+    std::optional<std::uint32_t> def;
+    std::vector<std::uint32_t> next;
+    std::vector<std::uint32_t> work { body.entry };
+    reached[body.entry] = 1U;
+    while (!work.empty()) {
+        const auto at = work.back();
+        work.pop_back();
+        const auto& inst = code[at];
+        bool allowed = false;
+        switch (inst.op) {
+        case KOp::nop:
+        case KOp::constant:
+        case KOp::copy:
+        case KOp::load_slot:
+        case KOp::load_slot9:
+        case KOp::load_field:
+        case KOp::load_field9:
+        // A host signal the planner found unwritten (a constant input).
+        case KOp::load_host:
+        case KOp::binary:
+        case KOp::reduce:
+        case KOp::unary_not:
+        case KOp::logical_not:
+        case KOp::logical_binary:
+        case KOp::shift:
+        case KOp::insert:
+        case KOp::concat:
+        case KOp::conditional:
+        case KOp::two_state:
+        case KOp::jump:
+        case KOp::dynamic_insert:
+        case KOp::dynamic_part_insert:
+        case KOp::assert_check:
+            allowed = true;
+            break;
+        // Sub 2 reads a wide register, which only generic code writes.
+        case KOp::extract:
+        case KOp::dynamic_extract:
+        case KOp::dynamic_part_select:
+        case KOp::branch:
+            allowed = inst.sub != 2U;
+            break;
+        case KOp::store_vhdl:
+            allowed = inst.sub == 0U && (inst.flags & flag_blocking) == 0U;
+            break;
+        default:
+            break;
+        }
+        if (!allowed) {
+            rejected_op = inst.op;
+            return "operation";
+        }
+        kinst_flow(inst, at, body, member.operations, member.body_end, use, def,
+            next);
+        for (const auto reg : use) {
+            if (reg >= registers) {
+                return "register";
+            }
+        }
+        if (def) {
+            if (*def >= registers) {
+                return "register";
+            }
+            ++definitions[*def];
+            definition[*def] = &inst;
+        }
+        successor_begin[at] = static_cast<std::uint32_t>(successors.size());
+        exits[at] = next.empty() ? 1U : 0U;
+        for (const auto target : next) {
+            if (target >= size) {
+                exits[at] = 1U;
+                continue;
+            }
+            successors.push_back(target);
+            ++successor_count[at];
+            if (reached[target] == 0U) {
+                reached[target] = 1U;
+                work.push_back(target);
+            }
+        }
+    }
+    // No loop: depth-first postorder, rejecting a back edge.
+    std::vector<std::uint32_t> postorder;
+    {
+        std::vector<std::uint8_t> color(size, 0U);
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> stack {
+            { body.entry, 0U } };
+        color[body.entry] = 1U;
+        while (!stack.empty()) {
+            auto& [at, position] = stack.back();
+            if (position < successor_count[at]) {
+                const auto target = successors[successor_begin[at] + position++];
+                if (color[target] == 1U) {
+                    return "loop";
+                }
+                if (color[target] == 0U) {
+                    color[target] = 1U;
+                    stack.push_back({ target, 0U });
+                }
+                continue;
+            }
+            color[at] = 2U;
+            postorder.push_back(at);
+            stack.pop_back();
+        }
+    }
+    // Upward-exposed uses of registers some run writes: backward liveness
+    // in postorder (successors first), on the written registers only.
+    std::vector<std::uint32_t> compact(registers, no_slot);
+    std::uint32_t written = 0U;
+    for (std::uint32_t reg = 0U; reg < registers; ++reg) {
+        if (definitions[reg] != 0U) {
+            compact[reg] = written++;
+        }
+    }
+    const std::size_t words = (written + 63U) / 64U;
+    if (words != 0U) {
+        if (static_cast<std::uint64_t>(size) * words > (std::uint64_t { 1 } << 21U)) {
+            return "size";
+        }
+        std::vector<std::uint64_t> live(static_cast<std::size_t>(size) * words, 0U);
+        for (const auto at : postorder) {
+            kinst_flow(code[at], at, body, member.operations, member.body_end, use,
+                def, next);
+            auto* in = live.data() + static_cast<std::size_t>(at) * words;
+            for (std::uint32_t position = 0U; position < successor_count[at];
+                 ++position) {
+                const auto target = successors[successor_begin[at] + position];
+                const auto* out = live.data() + static_cast<std::size_t>(target) * words;
+                for (std::size_t word = 0U; word < words; ++word) {
+                    in[word] |= out[word];
+                }
+            }
+            if (def) {
+                const auto bit = compact[*def];
+                in[bit / 64U] &= ~(std::uint64_t { 1 } << (bit % 64U));
+            }
+            for (const auto reg : use) {
+                if (const auto bit = compact[reg]; bit != no_slot) {
+                    in[bit / 64U] |= std::uint64_t { 1 } << (bit % 64U);
+                }
+            }
+        }
+        const auto* entry = live.data() + static_cast<std::size_t>(body.entry) * words;
+        for (std::size_t word = 0U; word < words; ++word) {
+            if (entry[word] != 0U) {
+                return "carried_state";
+            }
+        }
+    }
+    // Every run assigns every bit of what it drives: an assignment on some
+    // paths only keeps the previous value on the others (a latch), which
+    // depends on the inputs it saw in earlier deltas. Forward must-analysis
+    // in reverse postorder over the driven bits.
+    {
+        std::vector<std::uint32_t> base(slots_.size(), no_slot);
+        std::uint32_t bits = 0U;
+        for (const auto at : postorder) {
+            if (const auto& inst = code[at];
+                inst.op == KOp::store_vhdl && base[inst.d] == no_slot) {
+                base[inst.d] = bits;
+                bits += slots_[inst.d].width;
+            }
+        }
+        const std::size_t span = (bits + 63U) / 64U;
+        if (span != 0U) {
+            if (static_cast<std::uint64_t>(size) * span > (std::uint64_t { 1 } << 21U)) {
+                return "size";
+            }
+            std::vector<std::uint64_t> must(static_cast<std::size_t>(size) * span, 0U);
+            std::vector<std::uint8_t> seen(size, 0U);
+            std::vector<std::uint64_t> out(span, 0U);
+            for (auto position = postorder.size(); position-- > 0U;) {
+                const auto at = postorder[position];
+                const auto* in = must.data() + static_cast<std::size_t>(at) * span;
+                std::copy(in, in + span, out.begin());
+                if (const auto& inst = code[at]; inst.op == KOp::store_vhdl) {
+                    for (auto bit = base[inst.d] + inst.offset;
+                         bit < base[inst.d] + inst.offset + inst.width; ++bit) {
+                        out[bit / 64U] |= std::uint64_t { 1 } << (bit % 64U);
+                    }
+                }
+                if (exits[at] != 0U) {
+                    for (std::uint32_t bit = 0U; bit < bits; ++bit) {
+                        if (((out[bit / 64U] >> (bit % 64U)) & 1U) == 0U) {
+                            return "partial_assignment";
+                        }
+                    }
+                }
+                for (std::uint32_t index = 0U; index < successor_count[at]; ++index) {
+                    const auto target = successors[successor_begin[at] + index];
+                    auto* target_in = must.data() + static_cast<std::size_t>(target) * span;
+                    for (std::size_t word = 0U; word < span; ++word) {
+                        target_in[word] = seen[target] != 0U
+                            ? target_in[word] & out[word] : out[word];
+                    }
+                    seen[target] = 1U;
+                }
+            }
+        }
+    }
+    // Every use now follows a write in the same run: a register written
+    // once, by a constant, holds that constant wherever it is read.
+    const auto constant = [&](const std::uint32_t reg) -> std::optional<kw::Word> {
+        if (reg < registers && definitions[reg] == 1U
+            && definition[reg]->op == KOp::constant) {
+            return kw::Word { definition[reg]->imm_a, definition[reg]->imm_b };
+        }
+        return std::nullopt;
+    };
+    for (const auto at : postorder) {
+        const auto& inst = code[at];
+        switch (inst.op) {
+        case KOp::dynamic_extract: {
+            if ((inst.flags & flag_strict) == 0U) {
+                break;
+            }
+            const auto index = constant(inst.y);
+            const auto offset = index
+                ? kw::dynamic_index(*index, body.indices[inst.aux]) : std::nullopt;
+            if (!offset || *offset >= inst.width) {
+                return "strict_extract";
+            }
+            break;
+        }
+        case KOp::dynamic_insert: {
+            if ((inst.flags & flag_strict) == 0U) {
+                break;
+            }
+            const auto index = constant(inst.z);
+            const auto offset = index
+                ? kw::dynamic_index(*index, body.indices[inst.aux]) : std::nullopt;
+            if (!offset || *offset > inst.width || inst.offset > inst.width - *offset) {
+                return "strict_insert";
+            }
+            break;
+        }
+        case KOp::dynamic_part_insert: {
+            const auto base = constant(inst.z);
+            if (!base) {
+                return "dynamic_part_insert";
+            }
+            const auto write = kw::dynamic_part_write({ }, *base, body.parts[inst.aux]);
+            if (!write.valid
+                || (write.write
+                    && (write.write->offset > inst.width
+                        || write.write->width > inst.width - write.write->offset))) {
+                return "part_insert_range";
+            }
+            break;
+        }
+        case KOp::assert_check: {
+            const auto condition = constant(inst.x);
+            if (!condition || (condition->a & 1U) == 0U || (condition->b & 1U) != 0U) {
+                return "assertion";
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+    return nullptr;
+}
+
+void Interpreter::Impl::StaticKernel::plan_delta_collapse()
+{
+    // The planner admitted members whose readers are collapsed members or
+    // run only in a time step's first round, after signals that only
+    // delay-only threads write, which the kernel runs before that round.
+    // That needs every delta to be the kernel's: a host process at the
+    // boundary or a hosted process could run between its rounds. Members
+    // whose compiled code is not pure leave the set, and so do the
+    // collapsed writers of what they read (they become ordinary readers).
+    const auto count = static_cast<std::uint32_t>(members_.size());
+    const bool allowed = vhdl_ && !host_boundary_ && !has_hosted_;
+    std::vector<std::uint8_t> keep(count, 0U);
+    std::vector<std::uint32_t> dropped;
+    std::uint32_t planned = 0U;
+    std::map<std::string, std::size_t> impurities;
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        const auto& member = members_[index];
+        if (!member.collapse) {
+            continue;
+        }
+        ++planned;
+        const auto plain = [](const std::vector<std::uint32_t>& slots) {
+            return std::ranges::find(slots, no_slot) == slots.end();
+        };
+        const char* shape = !allowed ? "shape:boundary"
+            : !member.vhdl || !member.run_at_start
+                || member.kind != StaticKernelMemberKind::combinational
+            ? "shape:kind"
+            : member.lazy ? "shape:lazy"
+            : member.partition != no_slot ? "shape:partition"
+            : !member.compiled ? "shape:compiled"
+            : !plain(member.collapse_inputs) ? "shape:inputs"
+            : member.collapse_outputs.empty() || !plain(member.collapse_outputs)
+            ? "shape:outputs"
+            : nullptr;
+        KOp op { };
+        const auto* impurity
+            = shape != nullptr ? shape : collapse_impurity(member, op);
+        if (impurity != nullptr) {
+            ++impurities[std::string { impurity }
+                + (std::string_view { impurity } == "operation"
+                        ? ":" + std::to_string(static_cast<int>(op)) : "")];
+            dropped.push_back(index);
+            continue;
+        }
+        keep[index] = 1U;
+    }
+    std::vector<std::uint32_t> writer(slots_.size(), no_slot);
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        if (keep[index] != 0U) {
+            for (const auto slot : members_[index].collapse_outputs) {
+                writer[slot] = index;
+            }
+        }
+    }
+    while (!dropped.empty()) {
+        const auto index = dropped.back();
+        dropped.pop_back();
+        for (const auto slot : members_[index].collapse_inputs) {
+            if (slot == no_slot) {
+                continue;
+            }
+            if (const auto source = writer[slot];
+                source != no_slot && keep[source] != 0U) {
+                keep[source] = 0U;
+                dropped.push_back(source);
+            }
+        }
+    }
+    // Levels: a member after the collapsed writers of its inputs (the
+    // planner left no cycle).
+    std::vector<std::vector<std::uint32_t>> successors(count);
+    std::vector<std::uint32_t> indegree(count, 0U);
+    std::vector<std::uint32_t> ready;
+    std::uint32_t kept = 0U;
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        if (keep[index] == 0U) {
+            continue;
+        }
+        ++kept;
+        auto inputs = members_[index].collapse_inputs;
+        std::ranges::sort(inputs);
+        inputs.erase(std::ranges::unique(inputs).begin(), inputs.end());
+        for (const auto slot : inputs) {
+            if (const auto source = writer[slot];
+                source != no_slot && keep[source] != 0U) {
+                successors[source].push_back(index);
+                ++indegree[index];
+            }
+        }
+        if (indegree[index] == 0U) {
+            ready.push_back(index);
+        }
+    }
+    std::vector<std::uint32_t> level(count, 0U);
+    std::uint32_t levels = 0U;
+    std::uint32_t ordered = 0U;
+    while (!ready.empty()) {
+        const auto index = ready.back();
+        ready.pop_back();
+        ++ordered;
+        levels = std::max(levels, level[index] + 1U);
+        for (const auto next : successors[index]) {
+            level[next] = std::max(level[next], level[index] + 1U);
+            if (--indegree[next] == 0U) {
+                ready.push_back(next);
+            }
+        }
+    }
+    collapse_enabled_ = kept != 0U && ordered == kept;
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        auto& state = member_schedule_[index];
+        state.collapse = collapse_enabled_ && keep[index] != 0U;
+        state.collapse_level = state.collapse ? level[index] : 0U;
+    }
+    collapse_buckets_.assign(collapse_enabled_ ? levels : 0U, { });
+    collapse_low_ = static_cast<std::uint32_t>(collapse_buckets_.size());
+    if (std::getenv("FSIM_PROFILE_PHASES") != nullptr && planned != 0U) {
+        std::cerr << "fsim-profile: static-kernel-collapse planned=" << planned
+                  << " kept=" << (collapse_enabled_ ? kept : 0U)
+                  << " levels=" << (collapse_enabled_ ? levels : 0U)
+                  << (allowed ? "" : " host-boundary");
+        for (const auto& [reason, members] : impurities) {
+            std::cerr << ' ' << reason << '=' << members;
+        }
+        std::cerr << '\n';
+    }
+}
+
 } // namespace fsim::runtime::simir

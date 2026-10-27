@@ -2857,6 +2857,403 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
 
+    // VHDL delta collapsing, exact subset (owner 2026-10-27). A VHDL member
+    // whose any-edge sensitivity covers everything it reads and whose only
+    // effects are zero-delay assignments to signals it alone drives computes
+    // a function of its inputs. The kernel may evaluate such a member inside
+    // the update phase that changed its inputs, writing its outputs in the
+    // same phase, instead of one delta later, when no reader can tell: every
+    // reader of what it writes is another such member (it recomputes from
+    // the settled values), or a VHDL member that reads it only as data and
+    // wakes only on signals that change before the first delta of a time
+    // step. Such a member runs only in that first delta, when the delta
+    // schedule has settled every chain anyway. A signal changes only before
+    // the first delta when every writer is a SystemVerilog thread that
+    // suspends only on a positive constant delay (a clock generator): the
+    // kernel runs it before the time step's first round. The kernel confirms
+    // each member's purity on its compiled code and keeps the subset closed
+    // under the reader rule (StaticKernel::plan_delta_collapse). Clients
+    // that observe arbitrary signals turn it off.
+    std::vector<std::uint8_t> collapse(process_count, 0U);
+    {
+        // FSIM_PROFILE_KERNEL_PLAN: why each candidate stays out.
+        std::vector<const char*> why(diagnose ? process_count : 0U, nullptr);
+        std::vector<ProcessId> why_reader(diagnose ? process_count : 0U,
+            std::numeric_limits<ProcessId>::max());
+        const char* collapse_text = std::getenv("FSIM_STATIC_KERNEL_DELTA_COLLAPSE");
+        bool enabled = vhdl_mode
+            && (collapse_text == nullptr || std::string_view { collapse_text } != "0")
+            && !access.foreign && !observe_all && !access.coverage && !access.debug
+            && !publish_all && graph.access_inventory_complete()
+            && graph_processes.size() == process_count;
+        // An operation whose accesses are opaque could write anything.
+        for (std::size_t index = 0U; enabled && index < process_count; ++index) {
+            enabled = !views[index].valid() || !graph_processes[index].dependencies_unknown;
+        }
+        // A thread whose only suspensions are positive constant delays and
+        // whose only effects are immediate or nonblocking writes.
+        const auto clock_thread = [&](const ProcessId process) {
+            if (process >= process_count || !candidates[process]
+                || candidates[process]->kind != behavioral_kind
+                || candidates[process]->vhdl || !candidates[process]->waited.empty()
+                || !graph_processes[process].sensitivities.empty()
+                || graph_processes[process].dependencies_unknown
+                || !container_uses[process].empty()) {
+                return false;
+            }
+            const auto& operations = views[process].operations();
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                const auto operation = operations.expanded(op);
+                if (const auto* wait = operation_get_if<WaitFor>(&operation)) {
+                    if (wait->source || wait->delay == 0U) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (const auto* read = operation_get_if<ReadSignal>(&operation)) {
+                    if (read->kind != SignalReadKind::current || read->clock
+                        || read->gate) {
+                        return false;
+                    }
+                    continue;
+                }
+                if (!(operation_holds<WaitForever>(operation)
+                        || operation_holds<Halt>(operation)
+                        || operation_holds<Jump>(operation)
+                        || operation_holds<Branch>(operation)
+                        || operation_holds<DebugPoint>(operation)
+                        || operation_holds<LoadConstant>(operation)
+                        || operation_holds<CopyRegister>(operation)
+                        || operation_holds<ConvertToTwoState>(operation)
+                        || operation_holds<UnaryNot>(operation)
+                        || operation_holds<LogicalNot>(operation)
+                        || operation_holds<LogicalBinary>(operation)
+                        || operation_holds<Binary>(operation)
+                        || operation_holds<Reduction>(operation)
+                        || operation_holds<Shift>(operation)
+                        || operation_holds<Extract>(operation)
+                        || operation_holds<Concatenate>(operation)
+                        || operation_holds<Insert>(operation)
+                        || operation_holds<ConditionalSelect>(operation)
+                        || operation_holds<WriteBlocking>(operation)
+                        || operation_holds<WriteBlockingSlice>(operation)
+                        || operation_holds<WriteUpdate>(operation)
+                        || operation_holds<WriteUpdateSlice>(operation))) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        const auto plain_signal = [&](const SignalId signal) {
+            const auto& node = graph_signals[signal];
+            return owned[signal] != 0U && alias_role[signal] == 0U
+                && host_touched[signal] == 0U && !node.writes_undeclared
+                && !node.writers.empty() && !node.descriptor.external_driver
+                && !signals_[signal].implicit_driver.has_value();
+        };
+        // A host signal nothing writes keeps its initial value.
+        const auto constant_input = [&](const SignalId signal) {
+            const auto& node = graph_signals[signal];
+            return node.writers.empty() && !node.writes_undeclared
+                && host_touched[signal] == 0U && !node.descriptor.external_driver
+                && (static_cast<std::uint32_t>(node.observations)
+                       & static_cast<std::uint32_t>(RegionObservation::mutation
+                           | RegionObservation::unknown))
+                    == 0U;
+        };
+        // Signals that change only before a time step's first delta.
+        std::vector<std::uint8_t> time_only(signal_count, 0U);
+        for (SignalId signal = 0U; enabled && signal < signal_count; ++signal) {
+            const auto& node = graph_signals[signal];
+            time_only[signal] = (plain_signal(signal)
+                    && (static_cast<std::uint32_t>(node.observations)
+                           & static_cast<std::uint32_t>(RegionObservation::mutation
+                               | RegionObservation::unknown))
+                        == 0U
+                    && std::ranges::all_of(node.writers,
+                        [&](const RegionAccess& writer) {
+                            // A process that runs once runs at time zero.
+                            return clock_thread(writer.process)
+                                || (writer.process < process_count
+                                    && candidates[writer.process]
+                                    && candidates[writer.process]->kind == 2U);
+                        }))
+                    || constant_input(signal)
+                ? 1U : 0U;
+        }
+        // Readers that wake only on such signals.
+        std::vector<std::uint8_t> first_delta(process_count, 0U);
+        for (std::size_t index = 0U; enabled && index < process_count; ++index) {
+            const auto& candidate = candidates[index];
+            first_delta[index] = candidate && candidate->vhdl
+                    && candidate->kind != behavioral_kind && lazy[index] == 0U
+                    && !candidate->sensitivity.empty()
+                    && std::ranges::all_of(candidate->sensitivity,
+                        [&](const Sensitivity& sensitivity) {
+                            return sensitivity.signal < signal_count
+                                && time_only[sensitivity.signal] != 0U;
+                        })
+                ? 1U : 0U;
+        }
+        for (std::size_t index = 0U; enabled && index < process_count; ++index) {
+            const auto& candidate = candidates[index];
+            if (!candidate || !candidate->vhdl || !candidate->run_at_start
+                || lazy[index] != 0U
+                || candidate->kind != static_cast<std::uint8_t>(
+                       StaticKernelMemberKind::combinational)
+                || !container_uses[index].empty() || !views[index].valid()
+                || graph_processes[index].dependencies_unknown
+                || graph_processes[index].writes.empty()) {
+                continue;
+            }
+            const auto& node = graph_processes[index];
+            const bool covered = std::ranges::all_of(node.reads,
+                [&](const Sensitivity& read) {
+                    return read.signal < signal_count
+                        && (owned[read.signal] != 0U || constant_input(read.signal))
+                        && alias_role[read.signal] == 0U
+                        && std::ranges::any_of(candidate->sensitivity,
+                            [&](const Sensitivity& sensitivity) {
+                                return sensitivity.signal == read.signal
+                                    && sensitivity.edge == EdgeKind::any
+                                    && (sensitivity.width == 0U
+                                        || (read.width != 0U
+                                            && sensitivity.offset <= read.offset
+                                            && read.offset + read.width
+                                                <= sensitivity.offset
+                                                    + sensitivity.width));
+                            });
+                });
+            const bool outputs = std::ranges::all_of(node.writes,
+                [&](const Process::DriverRegion& region) {
+                    if (region.signal >= signal_count || !plain_signal(region.signal)) {
+                        return false;
+                    }
+                    const auto& written = graph_signals[region.signal];
+                    return written.observations == RegionObservation::none
+                        && written.descriptor.observations == RegionObservation::none
+                        && std::ranges::all_of(written.writers,
+                            [&](const RegionAccess& writer) {
+                                return writer.process == index;
+                            });
+                });
+            collapse[index] = covered && outputs ? 1U : 0U;
+            if (diagnose && collapse[index] == 0U) {
+                why[index] = "outputs";
+                for (const auto& read : node.reads) {
+                    if (read.signal >= signal_count
+                        || (owned[read.signal] == 0U && !constant_input(read.signal))) {
+                        why[index] = "reads_unowned";
+                        break;
+                    }
+                    if (alias_role[read.signal] != 0U) {
+                        why[index] = "reads_alias";
+                        break;
+                    }
+                }
+                if (!covered && std::string_view { why[index] } == "outputs") {
+                    why[index] = "reads_uncovered";
+                }
+                if (covered) {
+                    for (const auto& region : node.writes) {
+                        if (region.signal >= signal_count) {
+                            break;
+                        }
+                        const auto& written = graph_signals[region.signal];
+                        why[index] = owned[region.signal] == 0U ? "outputs_unowned"
+                            : alias_role[region.signal] != 0U ? "outputs_alias"
+                            : host_touched[region.signal] != 0U ? "outputs_host"
+                            : !plain_signal(region.signal) ? "outputs_driver"
+                            : written.observations != RegionObservation::none
+                                || written.descriptor.observations != RegionObservation::none
+                            ? "outputs_observed"
+                            : !std::ranges::all_of(written.writers,
+                                  [&](const RegionAccess& writer) {
+                                      return writer.process == index;
+                                  })
+                            ? "outputs_writers" : nullptr;
+                        if (why[index] != nullptr) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // Close the subset under the reader rule; a member on a cycle of
+        // collapsed members (or reading its own output) leaves it.
+        std::vector<std::uint32_t> indegree(process_count, 0U);
+        std::vector<ProcessId> ready;
+        for (bool changed = enabled; changed;) {
+            changed = false;
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                if (collapse[index] == 0U) {
+                    continue;
+                }
+                const bool readers_ok = std::ranges::all_of(
+                    graph_processes[index].writes,
+                    [&](const Process::DriverRegion& region) {
+                        return std::ranges::all_of(graph_signals[region.signal].readers,
+                            [&](const RegionAccess& reader) {
+                                return reader.process < process_count
+                                    && reader.process != index
+                                    && (collapse[reader.process] != 0U
+                                        || first_delta[reader.process] != 0U);
+                            });
+                    });
+                if (!readers_ok) {
+                    collapse[index] = 0U;
+                    changed = true;
+                    if (diagnose) {
+                        // The first reader that fails the rule.
+                        for (const auto& region : graph_processes[index].writes) {
+                            for (const auto& reader : graph_signals[region.signal].readers) {
+                                const auto other = reader.process;
+                                if (why[index] != nullptr
+                                    || (other < process_count && other != index
+                                        && (collapse[other] != 0U
+                                            || first_delta[other] != 0U))) {
+                                    continue;
+                                }
+                                const auto* found = other < process_count
+                                        && candidates[other]
+                                    ? &*candidates[other] : nullptr;
+                                why_reader[index] = other;
+                                why[index] = other == index ? "reader_self"
+                                    : found == nullptr ? "reader_host"
+                                    : found->kind == behavioral_kind
+                                    ? (found->vhdl ? "reader_vhdl_thread" : "reader_sv_thread")
+                                    : !found->vhdl ? "reader_sv"
+                                    : why[other] != nullptr ? "reader_vhdl_rejected"
+                                    : "reader_vhdl_wakes";
+                            }
+                        }
+                    }
+                }
+            }
+            if (changed) {
+                continue;
+            }
+            // Kahn over writer -> collapsed reader: what remains is on or
+            // behind a cycle.
+            std::ranges::fill(indegree, 0U);
+            const auto for_each_successor = [&](const std::size_t index,
+                                                const auto& visit) {
+                for (const auto& region : graph_processes[index].writes) {
+                    for (const auto& reader : graph_signals[region.signal].readers) {
+                        if (collapse[reader.process] != 0U) {
+                            visit(reader.process);
+                        }
+                    }
+                }
+            };
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                if (collapse[index] != 0U) {
+                    for_each_successor(index,
+                        [&](const ProcessId reader) { ++indegree[reader]; });
+                }
+            }
+            ready.clear();
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                if (collapse[index] != 0U && indegree[index] == 0U) {
+                    ready.push_back(static_cast<ProcessId>(index));
+                }
+            }
+            while (!ready.empty()) {
+                const auto process = ready.back();
+                ready.pop_back();
+                for_each_successor(process, [&](const ProcessId reader) {
+                    if (--indegree[reader] == 0U) {
+                        ready.push_back(reader);
+                    }
+                });
+            }
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                if (collapse[index] != 0U && indegree[index] != 0U) {
+                    collapse[index] = 0U;
+                    changed = true;
+                    if (diagnose) {
+                        why[index] = "cycle";
+                    }
+                }
+            }
+        }
+        if (diagnose && enabled) {
+            std::map<std::string, std::size_t> reasons;
+            std::map<std::string, std::string> examples;
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                if (why[index] != nullptr) {
+                    ++reasons[why[index]];
+                    const auto reader = why_reader[index];
+                    examples.try_emplace(why[index],
+                        std::string { views[index].name() }
+                            + (reader < process_count
+                                    ? " <- " + std::string { views[reader].name() }
+                                    : std::string { }));
+                }
+            }
+            // The first sensitivity signal of each VHDL member that is not
+            // time-only, by cause.
+            std::map<std::string, std::size_t> clocks;
+            std::map<std::string, std::string> clock_examples;
+            for (std::size_t index = 0U; index < process_count; ++index) {
+                const auto& candidate = candidates[index];
+                if (!candidate || !candidate->vhdl || first_delta[index] != 0U
+                    || candidate->kind == behavioral_kind) {
+                    continue;
+                }
+                for (const auto& sensitivity : candidate->sensitivity) {
+                    const auto signal = sensitivity.signal;
+                    if (signal >= signal_count || time_only[signal] != 0U) {
+                        continue;
+                    }
+                    const auto& node = graph_signals[signal];
+                    std::string cause = owned[signal] == 0U ? "unowned"
+                        : alias_role[signal] != 0U ? "alias"
+                        : host_touched[signal] != 0U ? "host"
+                        : node.writers.empty() ? "undriven"
+                        : !plain_signal(signal) ? "driver"
+                        : "writer";
+                    if (cause == "writer") {
+                        for (const auto& writer : node.writers) {
+                            if (!clock_thread(writer.process)
+                                && !(writer.process < process_count
+                                    && candidates[writer.process]
+                                    && candidates[writer.process]->kind == 2U)) {
+                                const auto& found = writer.process < process_count
+                                    ? candidates[writer.process] : std::nullopt;
+                                cause = !found ? "writer_host"
+                                    : found->kind != behavioral_kind
+                                    ? (found->vhdl ? "writer_vhdl_member" : "writer_sv_member")
+                                    : found->vhdl ? "writer_vhdl_thread"
+                                    : "writer_sv_thread";
+                                clock_examples.try_emplace(cause,
+                                    views[writer.process].name());
+                                break;
+                            }
+                        }
+                    }
+                    ++clocks[cause];
+                    clock_examples.try_emplace(cause, views[index].name());
+                    break;
+                }
+            }
+            for (const auto& [cause, count] : clocks) {
+                std::cerr << "fsim-kernel-plan: collapse-wake cause=" << cause
+                          << " count=" << count << " example="
+                          << clock_examples[cause] << '\n';
+            }
+            std::cerr << "fsim-kernel-plan: collapse admitted="
+                      << std::ranges::count(collapse, 1U) << " time_only="
+                      << std::ranges::count(time_only, 1U) << " first_delta="
+                      << std::ranges::count(first_delta, 1U) << '\n';
+            for (const auto& [reason, count] : reasons) {
+                std::cerr << "fsim-kernel-plan: collapse-reject reason=" << reason
+                          << " count=" << count << " example=" << examples[reason]
+                          << '\n';
+            }
+        }
+    }
+
     // 3. Members, specification, host and boundaries.
     auto spec = std::make_shared<StaticKernelRuntimeSpec>();
     std::vector<std::uint8_t> member(process_count, 0U);
@@ -2877,7 +3274,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         runtime_member.vhdl = candidate.vhdl;
         runtime_member.sensitivity = std::move(candidate.sensitivity);
         runtime_member.lazy = lazy[index] != 0U;
+        runtime_member.collapse = collapse[index] != 0U;
         plan.lazy_members += lazy[index];
+        plan.collapse_members += collapse[index];
         spec->members.push_back(std::move(runtime_member));
     }
     // Commit programs (S25b): the programs of the update commit (resolvers,
@@ -3184,7 +3583,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
 namespace detail {
 namespace {
 
-constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v5" };
+constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v6" };
 
 class PlanWriter {
 public:
@@ -3298,7 +3697,8 @@ std::string static_kernel_plan_identity()
              "FSIM_STATIC_KERNEL_HOSTED_REGIONS",
              "FSIM_STATIC_KERNEL_HOSTED_VHDL",
              "FSIM_STATIC_KERNEL_HOSTED_POSTPONED",
-             "FSIM_STATIC_KERNEL_DEAD_LOGIC" }) {
+             "FSIM_STATIC_KERNEL_DEAD_LOGIC",
+             "FSIM_STATIC_KERNEL_DELTA_COLLAPSE" }) {
         const char* value = std::getenv(name);
         identity += ";";
         identity += name;
@@ -3330,6 +3730,7 @@ std::string serialize_static_kernel_plan(const StaticKernelPlan& plan)
         out.put(member.vhdl);
         out.put(member.start_late);
         out.put(member.lazy);
+        out.put(member.collapse);
     });
     out.list(spec.hosted, [&](const runtime::simir::StaticKernelMemberSpec& member) {
         out.put(member.process);
@@ -3402,7 +3803,8 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
                    && in.sensitivities(member.sensitivity)
                    && sensitivity_ok(member.sensitivity)
                    && in.get(member.partition) && in.get(member.vhdl)
-                   && in.get(member.start_late) && in.get(member.lazy);
+                   && in.get(member.start_late) && in.get(member.lazy)
+                   && in.get(member.collapse);
            })
         && in.list(spec->hosted, [&](StaticKernelMemberSpec& member) {
                member.kind = StaticKernelMemberKind::hosted;
@@ -3460,6 +3862,8 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
     plan.hosted_processes = spec->hosted.size();
     plan.lazy_members = static_cast<std::size_t>(std::ranges::count_if(
         spec->members, &StaticKernelMemberSpec::lazy));
+    plan.collapse_members = static_cast<std::size_t>(std::ranges::count_if(
+        spec->members, &StaticKernelMemberSpec::collapse));
     plan.owned_signals = spec->owned_signals.size();
     plan.boundary_outputs = spec->boundary_outputs.size();
     plan.owned_containers = spec->containers.size();

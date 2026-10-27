@@ -410,6 +410,26 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.process = member_spec.process;
         member.kind = member_spec.kind;
         member.lazy = member_spec.lazy;
+        member.collapse = member_spec.collapse;
+        if (member.collapse) {
+            // Plain kernel slots; no_slot for anything else, which makes
+            // plan_delta_collapse drop the member, except an input on the
+            // host (a signal nothing writes, which the planner allows).
+            const auto plain_slot = [&](const SignalId signal) {
+                return signal < signal_count && family_of_signal_[signal] == no_slot
+                    ? slot_of_signal_[signal] : no_slot;
+            };
+            for (const auto& sensitivity : member_spec.sensitivity) {
+                const auto slot = plain_slot(sensitivity.signal);
+                if (slot != no_slot || sensitivity.signal >= signal_count
+                    || family_of_signal_[sensitivity.signal] != no_slot) {
+                    member.collapse_inputs.push_back(slot);
+                }
+            }
+            for (const auto& region : program.driver_regions()) {
+                member.collapse_outputs.push_back(plain_slot(region.signal));
+            }
+        }
         // A lazy member never starts and joins no partition: only
         // materialize runs it.
         member.run_at_start = member_spec.run_at_start && !member.lazy;
@@ -1129,6 +1149,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     // Every process is a member and nothing crosses the host boundary.
     closed_ = !host_boundary_ && !has_hosted_
         && impl_.processes.size() == members_.size();
+    plan_delta_collapse();
     if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
         report_interpreted_sites();
     }
@@ -1187,7 +1208,8 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
               << " notify=" << profile_native_calls_[2]
               << " generic=" << profile_native_calls_[3]
               << " slot_changes=" << profile_slot_changes_
-              << " schedules=" << profile_schedules_ << '\n';
+              << " schedules=" << profile_schedules_
+              << " collapsed=" << profile_collapsed_runs_ << '\n';
     std::cerr << "fsim-kernel: activations=" << profile_activations_
               << " combinational_runs=" << profile_runs_[0]
               << " sequential_runs=" << profile_runs_[1]
@@ -1747,6 +1769,44 @@ bool Interpreter::Impl::StaticKernel::copy_wire(const Wire& wire)
 }
 
 void Interpreter::Impl::StaticKernel::commit_round()
+{
+    // After time zero (whose delta order the collapsed members' readers may
+    // observe; plan_delta_collapse) a collapsed member woken by this update
+    // phase runs in it.
+    collapsing_ = collapse_enabled_ && impl_.scheduler.now() != 0U;
+    commit_writes();
+    if (collapse_pending_ != 0U) {
+        run_collapsed();
+    }
+    collapsing_ = false;
+}
+
+void Interpreter::Impl::StaticKernel::run_collapsed()
+{
+    // A collapsed member is pure and reads only signals its sensitivity
+    // names, so running it once its inputs' writers (lower levels) have
+    // committed gives the value the delta schedule settles to. Each level
+    // commits before the next runs; its changes wake only higher levels.
+    for (auto level = collapse_low_; collapse_pending_ != 0U; ++level) {
+        auto& bucket = collapse_buckets_[level];
+        if (bucket.empty()) {
+            continue;
+        }
+        collapse_batch_.swap(bucket);
+        collapse_pending_ -= collapse_batch_.size();
+        std::ranges::sort(collapse_batch_);
+        for (const auto member : collapse_batch_) {
+            member_schedule_[member].collapse_queued = false;
+            run(member);
+        }
+        profile_collapsed_runs_ += profile_ ? collapse_batch_.size() : 0U;
+        collapse_batch_.clear();
+        commit_writes();
+    }
+    collapse_low_ = static_cast<std::uint32_t>(collapse_buckets_.size());
+}
+
+void Interpreter::Impl::StaticKernel::commit_writes()
 {
     // VHDL update phase: apply this round's assignments in program order
     // (the last one to an element wins), then report each signal whose
@@ -2457,6 +2517,16 @@ void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
 {
     profile_schedules_ += profile_ ? 1U : 0U;
     auto& state = member_schedule_[member];
+    if (state.collapse && collapsing_) {
+        // Runs in this update phase (run_collapsed).
+        if (!state.collapse_queued) {
+            state.collapse_queued = true;
+            collapse_buckets_[state.collapse_level].push_back(member);
+            collapse_low_ = std::min(collapse_low_, state.collapse_level);
+            ++collapse_pending_;
+        }
+        return;
+    }
     if (mixed_) {
         // A VHDL member runs in the next round; a SystemVerilog member woken
         // by a VHDL commit runs in the next delta.

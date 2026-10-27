@@ -153,6 +153,10 @@ struct RegionSignalNode {
     RegionObservation observations { RegionObservation::none };
     /// Current writer accesses or declared ownership could not be proven.
     bool writers_unknown { };
+    /// A write the writers' declared driver regions do not name (or that
+    /// could not be attributed), as opposed to a declared write whose range
+    /// the operation walk could not prove: `writers` may miss a process.
+    bool writes_undeclared { };
     /// Fork children may introduce new driver identities for these accesses.
     /// Structural regions treat this as unknown ownership. Existing guarded
     /// cohorts can use proven current owners until spawn invalidates them.

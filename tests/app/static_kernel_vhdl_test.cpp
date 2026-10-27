@@ -11,7 +11,8 @@
 // variables with initializers, weak Logic9 values, resolved vectors with
 // disjoint concurrent drivers, dynamic slice assignments, an X injection, and
 // a one-delta glitch that the testbench counts and feeds back into the design
-// (each kernel round must be its own host delta).
+// (each kernel round must be its own host delta), and a pure chain that a
+// clk register alone reads (collapsed into the delta of its source).
 #include "fsim/app/application.hpp"
 #include "fsim/compiler/static_kernel_codegen.hpp"
 
@@ -195,7 +196,8 @@ entity vk_dut is
         late2 : out std_logic_vector(3 downto 0);
         pulse : out std_logic;
         fb : in std_logic;
-        fbc : out std_logic_vector(3 downto 0));
+        fbc : out std_logic_vector(3 downto 0);
+        ch : out std_logic_vector(3 downto 0));
 end entity vk_dut;
 
 architecture rtl of vk_dut is
@@ -213,7 +215,21 @@ architecture rtl of vk_dut is
   signal nib : std_logic_vector(3 downto 0);
   signal g1, g2 : std_logic := '0';
   signal fb_r : unsigned(3 downto 0) := (others => '0');
+  signal ch_r : std_logic_vector(3 downto 0) := "0001";
+  signal ch1, ch2 : std_logic_vector(3 downto 0);
 begin
+  -- A pure chain that only a clk register reads: it settles in the delta
+  -- of its source's update.
+  ch1 <= ch_r xor "0101";
+  ch2 <= (ch1(2 downto 0) & ch1(3)) or "1000" when ch1(0) = '1'
+    else ch1(2 downto 0) & ch1(3);
+  process(clk)
+  begin
+    if rising_edge(clk) then
+      ch_r <= ch2;
+    end if;
+  end process;
+  ch <= ch_r;
   m : entity work.vk_mult port map (a => a, b => b, p => prod_i);
 
   -- A change of a(0) makes pulse rise and fall in consecutive deltas.
@@ -309,7 +325,7 @@ module vk_top;
   always #5 clk = ~clk;
   reg rst_n, we;
   reg [3:0] a, b, addr;
-  wire [3:0] prod, slow, flags, cnt, late, late2, fbc;
+  wire [3:0] prod, slow, flags, cnt, late, late2, fbc, ch;
   wire pulse;
   integer pulses = 0;
   always @(pulse) pulses = pulses + 1;
@@ -317,7 +333,7 @@ module vk_top;
   vk_dut dut(.clk(clk), .rst_n(rst_n), .a(a), .b(b), .we(we), .addr(addr),
              .prod(prod), .acc(acc), .rd(rd), .slow(slow), .mix(mix),
              .flags(flags), .cnt(cnt), .late(late), .late2(late2),
-             .pulse(pulse), .fb(pulse), .fbc(fbc));
+             .pulse(pulse), .fb(pulse), .fbc(fbc), .ch(ch));
   integer cyc;
   initial begin
     rst_n = 0; we = 0; a = 0; b = 0; addr = 0;
@@ -339,8 +355,8 @@ module vk_top;
     $finish;
   end
   always @(posedge clk)
-    $display("%0t p=%b acc=%h rd=%h slow=%h mix=%h flags=%b cnt=%h late=%h/%h pulses=%0d fb=%h",
-             $time, prod, acc, rd, slow, mix, flags, cnt, late, late2, pulses, fbc);
+    $display("%0t p=%b acc=%h rd=%h slow=%h mix=%h flags=%b cnt=%h late=%h/%h pulses=%0d fb=%h ch=%h",
+             $time, prod, acc, rd, slow, mix, flags, cnt, late, late2, pulses, fbc, ch);
 endmodule
 )";
 
@@ -405,6 +421,7 @@ const std::vector<std::string> internal_paths {
     "vk_top.dut.clk_d",
     "vk_top.dut.weak",
     "vk_top.dut.slow_r",
+    "vk_top.dut.ch2",
 };
 
 /// With a cache, the kernel's code is built ahead of time into it
@@ -423,6 +440,8 @@ const std::vector<std::string> internal_paths {
         require(!plan.disabled, "the fixture must be eligible for the kernel");
         require(plan.members > 20U && plan.owned_signals > 20U,
             "the kernel must own the VHDL design");
+        require(plan.collapse_members >= 2U,
+            "the chain read only by a clk register must collapse");
     }
     project.cone_fusion = kernel;
     set_environment("FSIM_STATIC_KERNEL", kernel ? "1" : "0");

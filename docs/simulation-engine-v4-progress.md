@@ -138,6 +138,40 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: design-level phase 2, VHDL delta collapse (exact-only subset)
+
+The owner chose the exact-only subset on 2026-10-27. A collapsed VHDL combinational member runs in the update phase that woke it, instead of in the next round. Other members still use one round per delta.
+
+**Planner (elaboration, plan v6).** A member is admitted only if all of these hold:
+- it is a VHDL combinational member that runs at start, is not lazy, uses no container and has known dependencies;
+- its any-edge sensitivity covers every signal it reads (owned or constant inputs, no aliases);
+- it is the sole writer of plain owned outputs that nothing observes;
+- every reader of those outputs is a collapsed member or a **first-delta** member, i.e. one whose sensitivity holds only time-only signals.
+
+A **time-only** signal is written only by delay-only SystemVerilog threads (static `#d > 0` waits, no event controls, a whitelist of operations) or by time-zero initializers, or it is a constant input. Such a signal changes only before a time step's first round, so a first-delta reader never sees the deltas in between. Admission repeats to a fixed point. Kahn's algorithm then drops cycles.
+
+**Kernel.** It drops a planned member when any of these apply:
+- a host boundary or hosted process could run between rounds;
+- the compiled code is impure: loops, state carried between runs, checks or assertions that could fail, generic or integer operations, calls, or partial or dynamic stores.
+
+A drop propagates to the collapsed writers of what the member reads. Collapse is off at time 0 and when `FSIM_STATIC_KERNEL_DELTA_COLLAPSE=0`. Diagnostics: `FSIM_PROFILE_KERNEL_PLAN` prints admission and reject reasons, `FSIM_PROFILE_PHASES` prints kernel drop reasons, and `FSIM_PROFILE_KERNEL` prints `collapsed=`.
+
+**Region graph.** `RegionSignalNode::writes_undeclared` separates undeclared or unattributable writes from declared writes whose range is unproven (`ownership_mismatch`). Those unproven ranges no longer mark the signal unknown-observed. Existing consumers still use `writers_unknown`.
+
+**Measured on mixed_codec:**
+- the planner admits 553 members; the kernel keeps 335 in 3 levels;
+- kernel drops: 92 code shape (calls), 36 assertions, 23 generic, 22 `integer_binary`, 11 `integer_check`;
+- 175,157 runs move into the update phase that woke them;
+- outputs are byte-identical to `v4c11` on both mixed cases;
+- simulate instructions are unchanged: mixed_codec 29.72G against 29.68G, mixed_throughput 26.88G against 26.85G.
+
+Moving runs earlier saves no round, because each delta still holds non-collapsed members. The planner's remaining rejections are:
+- 2,564 outputs with several disjoint writers (slice drivers);
+- 1,146 port-conversion driver readers;
+- 2,356 cascaded from rejected readers.
+
+None of these can be admitted without relaxing the exact rule. `static_kernel_vhdl_test` adds a two-member chain read only by a clk register; it must collapse and match the reference exactly.
+
 ### 2026-10-27: design-level phases measured (constant propagation rejected)
 
 This entry covers the remaining design-level items measured against the perf cases, using instructions:u and kernel counters on `v4c11`.

@@ -72,6 +72,11 @@ struct StaticKernelMemberSpec {
     /// outputs no live process reads. It is never scheduled; a read of what
     /// it writes (materialize) evaluates it first from its current inputs.
     bool lazy { };
+    /// VHDL delta collapsing (exact subset): a pure combinational member
+    /// whose every reader is another such member or wakes only before a
+    /// time step's first delta. The kernel may evaluate it in the update
+    /// phase that changed its inputs (StaticKernel::plan_delta_collapse).
+    bool collapse { };
 };
 
 /// A kernel-owned aggregate proxy: its value is the concatenation of its

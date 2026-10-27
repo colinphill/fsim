@@ -291,6 +291,12 @@ private:
         bool lazy { };
         std::vector<std::uint32_t> lazy_inputs;
         std::uint64_t lazy_stamp { };
+        /// VHDL delta collapsing (plan_delta_collapse): the planner admitted
+        /// the member; collapse_inputs are its sensitivity slots (they cover
+        /// every read) and collapse_outputs the slots it drives.
+        bool collapse { };
+        std::vector<std::uint32_t> collapse_inputs;
+        std::vector<std::uint32_t> collapse_outputs;
         std::uint32_t body_begin { };
         std::uint32_t body_end { };
         std::uint32_t exit_alt { static_kernel_detail::no_slot };
@@ -565,7 +571,19 @@ private:
     [[nodiscard]] Logic4 slot_edge_bit(std::uint32_t slot) const noexcept;
     void store_slot_bits(std::uint32_t slot, const PackedLogic4& value,
         std::uint32_t offset);
+    /// The VHDL update phase: commit_writes, then the collapsed members its
+    /// changes woke, each set of them committed in turn (run_collapsed).
     void commit_round();
+    /// Applies the queued VHDL assignments and reports the changed slots.
+    void commit_writes();
+    void run_collapsed();
+    /// Keeps the planner's collapsed members whose compiled code is pure,
+    /// closes the set under the reader rule and levels it.
+    void plan_delta_collapse();
+    /// Why a collapsed member's compiled code is not pure (null when it
+    /// is); rejected_op names an operation it cannot run.
+    [[nodiscard]] const char* collapse_impurity(const Member& member,
+        static_kernel_detail::KOp& rejected_op) const;
     void write_slot_immediate(std::uint32_t slot, PackedLogic4 value,
         std::optional<std::uint32_t> offset, std::uint32_t member,
         InstructionIndex instruction);
@@ -845,6 +863,11 @@ private:
         /// next delta (a SystemVerilog member woken by a VHDL commit).
         bool round { };
         bool deferred { };
+        /// A collapsed member (plan_delta_collapse): woken during an update
+        /// phase it runs in that phase, at collapse_level.
+        bool collapse { };
+        bool collapse_queued { };
+        std::uint32_t collapse_level { };
     };
     /// Whole-slot targets [begin, end) in notify_targets_. `general` marks
     /// a slot that also has ranged readers, an output, edges or several
@@ -1004,6 +1027,15 @@ private:
     /// scan_inputs' reused list of the inputs it refreshes.
     std::vector<std::uint32_t> scan_order_;
     bool committing_round_ { };
+    /// Collapsed members exist (plan_delta_collapse); collapsing_ while an
+    /// update phase after time zero runs, when their wakes go to
+    /// collapse_buckets_ (by level) instead of the next round.
+    bool collapse_enabled_ { };
+    bool collapsing_ { };
+    std::vector<std::vector<std::uint32_t>> collapse_buckets_;
+    std::vector<std::uint32_t> collapse_batch_;
+    std::size_t collapse_pending_ { };
+    std::uint32_t collapse_low_ { };
     std::vector<std::uint32_t> next_round_;
     /// The round being run (swapped with next_round_ to keep capacity).
     std::vector<std::uint32_t> round_;
@@ -1513,6 +1545,7 @@ private:
     std::unordered_map<const void*, std::uint64_t> profile_template_runs_;
     std::uint64_t profile_slot_changes_ { };
     std::uint64_t profile_schedules_ { };
+    std::uint64_t profile_collapsed_runs_ { };
     std::map<std::string, std::uint64_t> profile_generic_ops_;
     std::uint64_t profile_runs_[3] { };
     std::uint64_t profile_compiled_runs_ { };

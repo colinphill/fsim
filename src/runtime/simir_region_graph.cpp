@@ -1489,6 +1489,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             graph.signals_[index].observations = graph.signals_[index].observations
                 | RegionObservation::unknown;
             graph.signals_[index].writers_unknown = true;
+            graph.signals_[index].writes_undeclared = true;
         }
     }
     for (const auto& family : graph.signal_alias_families_) {
@@ -1548,6 +1549,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 ownership_complete = false;
                 auto& target = graph.signals_[signal];
                 target.writers_unknown = true;
+                target.writes_undeclared = true;
                 target.observations = target.observations | RegionObservation::unknown;
             }
             if (!has_update_kind) {
@@ -1668,6 +1670,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 ownership_complete = false;
                 auto& target = graph.signals_[signal];
                 target.writers_unknown = true;
+                target.writes_undeclared = true;
                 target.observations = target.observations
                     | RegionObservation::unknown;
             }
@@ -1688,6 +1691,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 ownership_complete = false;
                 auto& target = graph.signals_[signal];
                 target.writers_unknown = true;
+                target.writes_undeclared = true;
                 target.observations = target.observations
                     | RegionObservation::unknown;
             }
@@ -1886,12 +1890,14 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 if (!family.project_range(access.offset, access.width,
                         projected)) {
                     graph.signals_[write.signal].writers_unknown = true;
+                    graph.signals_[write.signal].writes_undeclared = true;
                     graph.signals_[write.signal].observations
                         = graph.signals_[write.signal].observations
                         | RegionObservation::unknown;
                     for (const auto& leaf : family.leaves) {
                         auto& target = graph.signals_[leaf.signal];
                         target.writers_unknown = true;
+                        target.writes_undeclared = true;
                         target.observations = target.observations
                             | RegionObservation::unknown;
                     }
@@ -1942,11 +1948,11 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     find_container, operation_write_ranges_exact)) {
                 note_impurity(!node.pure, "ownership_mismatch");
                 node.pure = false;
+                // The writes stay those the driver regions declare (an
+                // undeclared one is writes_undeclared); only their ranges
+                // are unproven. Nothing new observes the signals.
                 for (const auto& write : node.writes) {
-                    auto& target = graph.signals_[write.signal];
-                    target.writers_unknown = true;
-                    target.observations = target.observations
-                        | RegionObservation::unknown;
+                    graph.signals_[write.signal].writers_unknown = true;
                 }
             } else {
                 node.operation_write_ranges_exact

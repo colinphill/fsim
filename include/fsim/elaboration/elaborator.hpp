@@ -931,6 +931,8 @@ struct StaticKernelPlan {
     std::vector<StaticKernelHostReason> hosted_reasons;
     /// Lazy members: dead combinational logic, evaluated only when read.
     std::size_t lazy_members { };
+    /// VHDL members the planner admits to delta collapsing.
+    std::size_t collapse_members { };
 };
 
 class ElaboratedDesign final {
