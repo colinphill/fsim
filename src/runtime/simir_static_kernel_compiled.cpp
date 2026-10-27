@@ -36,7 +36,7 @@ namespace kw = kernel_word;
 
 namespace {
 
-constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v2" };
+constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v3" };
 
 } // namespace
 

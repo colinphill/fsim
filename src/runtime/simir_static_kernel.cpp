@@ -1746,7 +1746,29 @@ void Interpreter::Impl::StaticKernel::commit_round()
         return slot;
     };
     const auto count = writes_.count;
+    // The round's slots are scattered across the arena: fetch a write's
+    // commit slot eight writes ahead and its value four ahead, so the loads
+    // below rarely wait on memory.
+    constexpr std::uint32_t slot_ahead = 8U;
+    constexpr std::uint32_t value_ahead = 4U;
+    const auto fetch_slot = [&](const std::uint32_t at) {
+        if (writes_.data[at].kind == 0U) {
+            __builtin_prefetch(&commit_slots_[writes_.data[at].slot]);
+        }
+    };
+    for (std::uint32_t at = 0U; at < std::min(count, slot_ahead); ++at) {
+        fetch_slot(at);
+    }
     for (std::uint32_t index = 0U; index < count; ++index) {
+        if (index + slot_ahead < count) {
+            fetch_slot(index + slot_ahead);
+        }
+        if (index + value_ahead < count) {
+            const auto& later = writes_.data[index + value_ahead];
+            if (later.kind == 0U) {
+                __builtin_prefetch(arena_.data() + commit_slots_[later.slot].offset);
+            }
+        }
         const auto& item = writes_.data[index];
         if (item.kind == 0U) {
             auto& pending = commit_slots_[item.slot];

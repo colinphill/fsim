@@ -138,6 +138,61 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-26 (night): mixed_codec deopts removed
+
+`mixed_codec` failed the per-case simulate clause at 2.98× because 7,613 kernel deopts ran members on the operation tier. Almost all of them came from `gf_mult` under the Euclid key-equation solver, where `'U'` operands reach code that only handles Logic4. Two changes clear every deopt in both mixed cases:
+
+- **Register-source selections.** `DynamicExtract` and `DynamicPartSelect` with a Logic4 register source are `'U'`-aware. The selected 'U' bits pass into a tracked destination; the index is an integer and is never `'U'`. Tracking propagation marks such a destination tracked when its source is, so 'U' no longer reads as X.
+- **Case equality.** VHDL `=` on `std_ulogic` lowers to `case_equal`. That op now also compares the operands' 'U' masks in codegen and in the bytecode interpreter, so it no longer requests a 'U' check.
+
+`commit_round` also prefetches upcoming commit slots and arena values. `bodies_magic` is now `fsim-static-kernel-bodies-v3`.
+
+Results:
+
+- Deopts fell from 7,613 to 0 (`mixed_codec`) and from 8,205 to 0 (`mixed_throughput`).
+- Simulate output is byte-identical against the `v4c9`-equivalent replay on all ten campaign cases.
+- On the quiet host, the interleaved simulate median over 7 runs (CPU 9, ASLR off) against `v4c9` was:
+  - `mixed_codec`: 2.265 → 2.162 s (−4.5%);
+  - `mixed_throughput`: 1.735 → 1.660 s (−4.3%);
+  - `original_codec`: 3.185 → 3.115 s (−2.2%).
+
+### 2026-10-26 (evening, host quiet): G5 campaign `v4-g5-1026a` on `v4c9` (e4373678)
+
+e4373678 committed the parked setup and cache cuts. Object cache envelope V2 uses XXH64, and older
+envelopes miss. Against `v4c8`, instruction counts (instructions:u) fell by 1.0-5.6% for elaborate
+and 0.3-5.2% for simulate, with simulate output byte-identical. Full ctest passed 1085/1085 in normal
+and `FSIM_V4_STRICT=1` mode.
+
+The timed campaign (3 samples, CPU 9, ASLR off, xsim in the same session) passed preflight but not
+timing:
+
+| Case | fsim e2e s | xsim e2e s | e2e × | fsim sim s | xsim sim s | sim × |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 12.67 | 27.96 | 2.21 | 2.33 | 7.40 | 3.17 |
+| original_throughput | 5.25 | 15.87 | 3.03 | 1.63 | 7.50 | 4.60 |
+| mixed_codec | 12.30 | 24.62 | 2.00 | 2.18 | 6.49 | **2.98** |
+| mixed_throughput | 4.97 | 12.59 | 2.53 | 1.73 | 6.04 | 3.49 |
+| codex_reference_mode0_frames1 | 2.41 | 9.23 | 3.82 | 0.13 | 3.84 | 29.98 |
+| codex_reference_mode0_frames2 | 2.42 | 9.28 | 3.84 | 0.13 | 3.84 | 30.12 |
+| codex_reference_mode1_frames1 | 2.47 | 9.89 | 4.01 | 0.13 | 3.84 | 30.02 |
+| codex_reference_mode1_frames2 | 2.47 | 9.78 | 3.97 | 0.13 | 3.79 | 30.06 |
+| codex_throughput_default | 2.72 | 9.84 | 3.62 | 0.43 | 3.94 | 9.23 |
+| codex_throughput_direct_syndrome | 2.42 | 8.73 | 3.61 | 0.38 | 3.94 | 10.42 |
+
+Geomean e2e is 3.17×, which meets its ≥3× criterion. mixed_codec simulate is 2.98×, below the ≥3× bar,
+and original_codec is thin at 3.17×.
+
+The mixed_codec simulate split is about 1.66 s run and 0.55 s setup. The kernel census reports
+interpreted=0. The run is affected by:
+- 7,613 deoptimizations, mostly 'U' operands in the VHDL `gf_mult` instances under `u_euclid`;
+- about 2M slow-op helper calls: extract from wide registers 729k, `mem_write` 602k, dynamic
+  part-select 428k;
+- 240k wide `DynamicPartInsert` helper runs.
+
+Owner, 2026-10-26: the design-level optimizations (P6 collapsing, constant propagation, dead logic;
+cross-instance partitions; VHDL delta collapsing; native wide values) are now v4 scope after these
+cuts.
+
 ### 2026-10-26 (late night): SystemC matrix compiler work cut (`57b96ae0`)
 
 The SystemC matrix shards spent nearly all their time in clang child processes (about 94% of the

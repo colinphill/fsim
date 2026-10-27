@@ -237,6 +237,11 @@ void Interpreter::Impl::StaticKernel::execute_body(
         case KOp::binary:
             registers[inst.d] = kw::binary(static_cast<BinaryOperator>(inst.sub),
                 registers[inst.x], registers[inst.y], inst.width);
+            // 'U' and X differ only in the 'U' mask.
+            if (static_cast<BinaryOperator>(inst.sub) == BinaryOperator::case_equal
+                && unknown(inst.x) != unknown(inst.y)) {
+                registers[inst.d] = { };
+            }
             break;
         case KOp::reduce:
             registers[inst.d] = kw::reduce(
@@ -297,7 +302,9 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 : evaluate_slow(body, inst, at, member_index,
                       origin,
                       inst.sub == 2U ? Word { } : registers[inst.x],
-                      registers[inst.y], { }, 0U, &body.wide_registers);
+                      registers[inst.y],
+                      inst.sub == 2U ? Word { } : Word { unknown(inst.x), 0U },
+                      0U, &body.wide_registers);
             break;
         case KOp::dynamic_insert:
         case KOp::dynamic_part_insert:
@@ -1059,6 +1066,8 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
             }
             return kw::all_x(1U);
         }
+        // z holds the source register's 'U' mask.
+        last_unknown_ = (z.a >> *offset) & 1U;
         return kw::extract(x, *offset, 1U);
     }
     case KOp::dynamic_part_select: {
@@ -1132,6 +1141,12 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
             }
             return result;
         }
+        // z holds the source register's 'U' mask: the same selection of it,
+        // with bits outside the source not 'U'.
+        last_unknown_ = kw::dynamic_part_select({ z.a, 0U }, inst.offset, y,
+            part.left, part.right, part.base_offset, inst.width,
+            (inst.flags & flag_increasing) != 0U,
+            (inst.flags & flag_descending) != 0U, true).a;
         return kw::dynamic_part_select(x, inst.offset, y, part.left, part.right,
             part.base_offset, inst.width, (inst.flags & flag_increasing) != 0U,
             (inst.flags & flag_descending) != 0U,

@@ -420,7 +420,8 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
             case KOp::dynamic_part_select:
                 source = inst.sub == 2U
                     || (inst.sub == 1U && slots_[inst.x].planes == 4U
-                        && inst.imm_b == 0U);
+                        && inst.imm_b == 0U)
+                    || (inst.sub == 0U && inst.x < count && tracked[inst.x] != 0U);
                 break;
             case KOp::dynamic_insert:
             case KOp::dynamic_part_insert:
@@ -469,10 +470,11 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::copy:
             mode = def && logic9_register(*def) ? u_aware : u_clear;
             break;
+        // A selection from a register carries its source's 'U' elements
+        // (the index is an integer, never 'U').
         case KOp::dynamic_extract:
         case KOp::dynamic_part_select:
-            mode = inst.sub == 2U
-                    || (inst.sub == 1U && slots_[inst.x].planes == 4U)
+            mode = inst.sub != 1U || slots_[inst.x].planes == 4U
                 ? u_aware : static_cast<std::uint8_t>(u_check | u_clear);
             break;
         case KOp::load_field9:
@@ -507,13 +509,11 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::ret:
             mode = u_clear;
             break;
-        case KOp::binary: {
-            const auto operation = static_cast<BinaryOperator>(inst.sub);
-            mode = bitwise(inst) ? u_aware
-                : operation == BinaryOperator::case_equal ? u_check | u_clear
-                                                          : u_clear;
+        // Case equality (VHDL "=" on std_ulogic) compares the 'U' masks too;
+        // the other relations give the same result for 'U' as for X.
+        case KOp::binary:
+            mode = bitwise(inst) ? u_aware : u_clear;
             break;
-        }
         case KOp::unary_not:
             mode = u_aware;
             break;

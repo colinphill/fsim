@@ -891,8 +891,11 @@ private:
                             : builder_.getTrue())));
         }
         case BinaryOperator::case_equal:
-            return scalar_bool(builder_.CreateAnd(builder_.CreateICmpEQ(l.a, r.a),
-                builder_.CreateICmpEQ(l.b, r.b)));
+            // 'U' and X differ only in the 'U' mask.
+            return scalar_bool(builder_.CreateAnd(
+                builder_.CreateAnd(builder_.CreateICmpEQ(l.a, r.a),
+                    builder_.CreateICmpEQ(l.b, r.b)),
+                builder_.CreateICmpEQ(unknown_of(inst.x), unknown_of(inst.y))));
         case BinaryOperator::casez_equal: {
             auto* z = builder_.CreateAnd(
                 builder_.CreateOr(builder_.CreateAnd(bit_not(l.a), l.b),
@@ -1115,7 +1118,7 @@ private:
     /// Returns the merged result in the continuation block.
     [[nodiscard]] Pair with_fallback(llvm::Value* fast_ok, const Pair fast,
         const std::uint32_t at, const Pair x, const Pair y,
-        llvm::Value* fast_unknown = nullptr)
+        llvm::Value* fast_unknown = nullptr, llvm::Value* z_a = nullptr)
     {
         if (folded(fast_ok, true) || (two_state_ && hand_over_slow_paths_)) {
             // Two-state code leaves a slow path (an error or an unusual
@@ -1131,7 +1134,8 @@ private:
         auto* merge = llvm::BasicBlock::Create(context_, "merge", &function_);
         builder_.CreateCondBr(fast_ok, merge, slow);
         builder_.SetInsertPoint(slow);
-        const auto slow_value = call_evaluate(at, x, y, zero_pair());
+        const auto slow_value = call_evaluate(at, x, y,
+            z_a != nullptr ? Pair { z_a, constant(0U) } : zero_pair());
         auto* slow_end = builder_.GetInsertBlock();
         builder_.CreateBr(merge);
         builder_.SetInsertPoint(merge);
@@ -1223,7 +1227,11 @@ private:
         auto* safe = builder_.CreateSelect(ok, offset, constant(0U));
         const Pair fast { builder_.CreateAnd(builder_.CreateLShr(source.a, safe), constant(1U)),
             builder_.CreateAnd(builder_.CreateLShr(source.b, safe), constant(1U)) };
-        return with_fallback(ok, fast, at, source, index);
+        // The source's 'U' elements select with it (the helper gets the mask).
+        auto* source_unknown = unknown_of(inst.x);
+        return with_fallback(ok, fast, at, source, index,
+            builder_.CreateAnd(builder_.CreateLShr(source_unknown, safe), constant(1U)),
+            source_unknown);
     }
 
     [[nodiscard]] Pair emit_dynamic_part_select(const KInst& inst,
@@ -1275,7 +1283,10 @@ private:
         auto* m = constant(mask_of(width));
         const Pair fast { builder_.CreateAnd(builder_.CreateLShr(source.a, safe), m),
             builder_.CreateAnd(builder_.CreateLShr(source.b, safe), m) };
-        return with_fallback(ok, fast, at, source, base);
+        auto* source_unknown = unknown_of(inst.x);
+        return with_fallback(ok, fast, at, source, base,
+            builder_.CreateAnd(builder_.CreateLShr(source_unknown, safe), m),
+            source_unknown);
     }
 
     /// Appends a deferred VHDL assignment to the round's queue.
