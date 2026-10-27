@@ -3058,13 +3058,13 @@ begin
     variable eight_total : integer := 0;
     variable nested_total : integer := 0;
   begin
-    -- Seven trips remain expanded below the candidate threshold.
+    -- A short static loop runs as a loop too.
     for i in 0 to 6 loop
       seven_total := seven_total + 1;
     end loop;
     seven_count <= seven_total;
 
-    -- Eight trips exercise the candidate threshold.
+    -- Eight trips.
     for i in 0 to 7 loop
       eight_total := eight_total + 1;
     end loop;
@@ -3170,15 +3170,14 @@ end architecture;
             }
         }
     }
-    // The seven-trip loop expands, while eligible loops (the attribute-range
-    // loop among them) retain one emitted body and jump back to it at
-    // runtime.
+    // Every static loop, however short (the attribute-range loop among
+    // them), retains one emitted body and jumps back to it at runtime.
     const std::array<std::size_t, 6U> expected_body_points {
-        7U, 1U, 1U, 1U, 1U, 1U,
+        1U, 1U, 1U, 1U, 1U, 1U,
     };
     assert(emitted_body_points == expected_body_points);
     assert(redundant_cap_reports == 0U);
-    assert(backward_jumps >= 7U);
+    assert(backward_jumps >= 8U);
     auto interpreter = elaborated.design->create_interpreter();
     std::size_t body_visits { };
     std::size_t seven_body_visits { };

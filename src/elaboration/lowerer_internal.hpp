@@ -3599,8 +3599,10 @@ private:
         runtime::simir::RegisterId destination);
     [[nodiscard]] bool hir_checked_fixed_array_index(
         const HirContainerElementBinding& element) const;
-    // Invalid fixed-array coordinates produce a disjoint sentinel. Reads
-    // return the element default; writes guard publication after evaluation.
+    // A rank-one dynamic index is the index as written (read as signed; an
+    // unsigned one gains a zero bit). Other invalid fixed-array coordinates
+    // produce a disjoint sentinel. Reads return the element default; writes
+    // guard publication after evaluation.
     [[nodiscard]] std::optional<runtime::simir::RegisterId>
     lower_hir_fixed_array_index(const HirContainerElementBinding& element);
     [[nodiscard]] std::optional<runtime::simir::InstructionIndex>

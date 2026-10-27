@@ -21,7 +21,23 @@ namespace {
     // unroll runs at run time with 64-bit counters.
     constexpr std::uint64_t maximum_runtime_vhdl_for_iterations
         = std::uint64_t { 1 } << 62U;
-    constexpr std::size_t minimum_static_vhdl_for_runtime_iterations = 8U;
+    // A for loop over a static range runs as a loop, however short: the
+    // unrolled bodies cost more to compile than they save (mixed_codec
+    // elaborate -0.4 s, simulate -0.06 s against unrolling up to 7), and the
+    // static kernel's specializer still unrolls the constant loops of its
+    // members. Diagnostic: FSIM_VHDL_UNROLL_FOR_LIMIT unrolls loops of up to
+    // that many iterations.
+    constexpr std::size_t default_maximum_unrolled_vhdl_for_iterations = 0U;
+    std::size_t maximum_unrolled_vhdl_for_iterations()
+    {
+        static const std::size_t limit = [] {
+            const char* text = std::getenv("FSIM_VHDL_UNROLL_FOR_LIMIT");
+            return text == nullptr ? default_maximum_unrolled_vhdl_for_iterations
+                                   : static_cast<std::size_t>(
+                                         std::strtoull(text, nullptr, 10));
+        }();
+        return limit;
+    }
     // A repeat loop has no loop variable, so its iterations are one body
     // (IEEE 1800-2017 12.7.2): a longer one runs as a loop rather than being
     // unrolled into a program the size of its count (nested, the product).
@@ -29,7 +45,18 @@ namespace {
     // A for loop with constant bounds is unrolled only while short; a longer
     // one runs at run time like a loop with dynamic bounds (12.7.1), so a
     // 100000-iteration loop is not a program of 100000 bodies.
-    constexpr std::size_t maximum_unrolled_for_iterations = 256U;
+    constexpr std::size_t default_maximum_unrolled_for_iterations = 256U;
+    // Diagnostic: FSIM_SV_UNROLL_FOR_LIMIT overrides the limit.
+    std::size_t maximum_unrolled_for_iterations()
+    {
+        static const std::size_t limit = [] {
+            const char* text = std::getenv("FSIM_SV_UNROLL_FOR_LIMIT");
+            return text == nullptr ? default_maximum_unrolled_for_iterations
+                                   : static_cast<std::size_t>(
+                                         std::strtoull(text, nullptr, 10));
+        }();
+        return limit;
+    }
 
     class HirDebugScopeGuard final {
     public:
@@ -18124,7 +18151,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && *static_loop_iterations > maximum_unrolled_repeat_iterations;
         const bool long_static_for = [&] {
             if (statement->systemverilog == nullptr || !static_loop_iterations
-                || *static_loop_iterations <= maximum_unrolled_for_iterations) {
+                || *static_loop_iterations <= maximum_unrolled_for_iterations()) {
                 return false;
             }
             const auto& loop_statement = *statement->systemverilog;
@@ -19741,7 +19768,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && (statement->vhdl->loop_limit || attribute_static_range)
             && vhdl_first_static && vhdl_last_static
             && iterations
-            && *iterations >= minimum_static_vhdl_for_runtime_iterations
+            && *iterations > maximum_unrolled_vhdl_for_iterations()
             && *iterations <= maximum_runtime_vhdl_for_iterations) {
             const auto operation_count = process_.operations.size();
             if (lower_runtime_vhdl_for(std::pair {

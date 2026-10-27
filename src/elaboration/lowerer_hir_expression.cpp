@@ -9787,6 +9787,19 @@ Lowerer::lower_hir_fixed_array_index(
     if (has_constant_invalid) {
         return emit_invalid_sentinel();
     }
+    if (rank_one) {
+        // ContainerRead yields the element default for an unknown or
+        // out-of-range declared index (IEEE 1800-2023 7.4.6) and reads the
+        // index register as signed; begin_hir_fixed_array_write checks the
+        // declared range itself.
+        const auto signed_index = hir_expression_signed(element.indices.front());
+        const auto width = register_width(indices.front());
+        if (signed_index ? width <= 64U : width < 64U) {
+            return signed_index
+                ? indices.front()
+                : resize_register(indices.front(), width + 1U, false);
+        }
+    }
 
     std::optional<RegisterId> all_dimensions_valid;
     for (std::size_t dimension { };
@@ -9967,9 +9980,38 @@ std::optional<InstructionIndex> Lowerer::begin_hir_fixed_array_write(
             }
         }
     }
+    // Place this guard after evaluating the RHS and every index expression.
+    if (element.indices.size() == 1U) {
+        // A rank-one index (as written, or a constant) is valid inside the
+        // declared range; all declared bounds fit int32. An unknown index
+        // takes the false edge.
+        const auto low = std::min(
+            element.type->index_left, element.type->index_right);
+        const auto high = std::max(
+            element.type->index_left, element.type->index_right);
+        const auto width = std::max<std::size_t>(register_width(index), 32U);
+        const auto compared = resize_register(index, width, true);
+        const auto domain = register_domain(compared);
+        const auto above = allocate_register(1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::greater_equal_signed, above, compared,
+            load_integer(low, width, domain) });
+        const auto below = allocate_register(1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_equal_signed, below, compared,
+            load_integer(high, width, domain) });
+        const auto valid = allocate_register(1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LogicalBinary {
+            LogicalBinaryOperator::logical_and, valid, above, below });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            valid, static_cast<InstructionIndex>(branch + 1U), 0U,
+            UnknownBranchPolicy::when_false });
+        return branch;
+    }
     // All declared bounds fit int32, and a multidimensional ordinal is
     // nonnegative. INT64_MIN is therefore disjoint from every valid index.
-    // Place this guard after evaluating the RHS and every index expression.
     const auto invalid = load_integer(std::numeric_limits<std::int64_t>::min(),
         64U, frontend::ValueDomain::Bit2);
     const auto valid = allocate_register(1U, frontend::ValueDomain::Bit2);
