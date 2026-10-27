@@ -138,6 +138,45 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: design-level phase 3, native wide values (`ed621e15`, sweep `v4c13`)
+
+Before this change, every register operand or result wider than 64 bits went through the generic fallback. That fallback copies operands into the reference register file as `PackedLogic4` and runs the reference step. The only exceptions were field slots, family proxies and the source of a narrow selection.
+
+**Storage.** A *chunked* register has a fixed width above 64 and is not polymorphic, not a field slot and not a family proxy. It keeps its SimIR index for analyses. Its storage moves to the end of the instance register file:
+- `CompiledBody::wide_base[r]` holds the first storage index, plus a flag when masks are present;
+- chunk `j` is `registers[base + j]` as `{aval, bval}`;
+- 'U' mask words sit at `registers[base + n + j]`.
+
+Every chunked VHDL register has masks. A VHDL register can hold Logic9 values whatever its declared kind, because only ReadSignal, LoadConstant and CopyRegister coerce to the kind. SV Logic9 registers have masks too. Bridges assemble and split `PackedLogic4` for generic operands, deopt, verify and the behavioral tier.
+
+**Ops.** Each SimIR op still lowers to one KInst. The new ops replace the generic path for ReadSignal, CopyRegister, LoadConstant, Concatenate, DynamicPartInsert and signal writes:
+- `wide_load` reads a signal; a Logic9 slot is read exactly, or coerced for a Logic4 register;
+- `wide_copy` copies a register;
+- `wide_const` loads from the `body.wide_constants` pool;
+- `wide_concat` builds a value from narrow or wide operands;
+- `wide_store` writes a signal per chunk, as an SV blocking or NBA write, or a VHDL `store_vhdl` write with 'U';
+- `wide_part_insert` inserts a narrow value at a dynamic position.
+
+Extract, dynamic_extract and dynamic_part_select read chunked sources in place (`sub 3`). Codegen emits copies, constants, exact loads and static extracts inline. It calls `fsim_sk_wide_<op>` helpers for the rest. Arithmetic, compares, shifts, conditionals, dynamic slice writes, proxies and host signals stay generic.
+
+**Partitions and caches.** Partition concatenation rebases `wide_base` and appends `wide_constants`. The native object cache key (`template_key`) now includes `wide_base`, `wide_constants` and concat 'U' operands. Without them, partition templates that differed only in their wide constants shared code; this broke original_codec. `verify_run` merges adjacent chunk writes to a slot so they compare against one reference write. `FSIM_KERNEL_WIDE_MASK` (diagnostic) selects the wide lowerings: bit 0 ReadSignal, 1 CopyRegister, 2 LoadConstant, 3 Concatenate, 4 DynamicPartInsert, 5 writes.
+
+**Tests.** Both static kernel tests gain wide registers:
+- SV: an NBA register, a blocking concat and a dynamic part-select;
+- VHDL: a wide variable process with a 132-bit concat, and an entity instantiated twice whose wide constant depends on a generic, so the two instances share a template but not constants.
+
+**Measured** (simulate instructions:u against `v4c12`); outputs are byte-identical on all three cases:
+
+| Case | v4c12 | v4c13 | Change |
+|---|---:|---:|---:|
+| original_codec | 29.25G | 29.24G | flat |
+| mixed_codec | 29.82G | 28.50G | −4.4% |
+| mixed_throughput | 26.98G | 25.74G | −4.6% |
+
+Generic runs on mixed_codec fall from 382,332 to 22,641.
+
+Full ctest passes 1085/1085 in normal and strict mode. Sweep `v4c13` has no losses against `b96x1`. Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2070, sv-tests 1495.
+
 ### 2026-10-27: design-level phase 2, VHDL delta collapse (exact-only subset) (`11dc5c30`, sweep `v4c12`)
 
 The owner chose the exact-only subset on 2026-10-27. A collapsed VHDL combinational member runs in the update phase that woke it, instead of in the next round. Other members still use one round per delta.
