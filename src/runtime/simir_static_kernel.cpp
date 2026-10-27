@@ -1465,7 +1465,8 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
     const std::uint64_t* before, const std::uint32_t field_offset)
 {
     auto& slot = slots_[slot_index];
-    if (before == nullptr && !slot.chunk_begin.empty()) {
+    bool scan = before != nullptr || slot.chunk_begin.empty();
+    if (!scan) {
         // The readers of the changed bits' chunks, in the group order of the
         // scan below: a group stays skipped once its target is pending.
         if (changed_mask != 0U) {
@@ -1484,13 +1485,20 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
                     slot.chunk_begin[first],
                     slot.chunk_begin[first + 1U] - slot.chunk_begin[first]);
             } else if (first < last) {
-                ranged_candidates_.assign(
-                    slot.chunk_readers.begin() + slot.chunk_begin[first],
-                    slot.chunk_readers.begin() + slot.chunk_begin[last + 1U]);
-                std::ranges::sort(ranged_candidates_);
-                const auto [end, unused] = std::ranges::unique(ranged_candidates_);
-                ranged_candidates_.erase(end, ranged_candidates_.end());
-                candidates = ranged_candidates_;
+                // Ordering many candidates costs more than the scan.
+                const std::size_t count
+                    = slot.chunk_begin[last + 1U] - slot.chunk_begin[first];
+                scan = count * static_cast<std::size_t>(std::bit_width(count))
+                    >= slot.readers.size();
+                if (!scan) {
+                    ranged_candidates_.assign(
+                        slot.chunk_readers.begin() + slot.chunk_begin[first],
+                        slot.chunk_readers.begin() + slot.chunk_begin[last + 1U]);
+                    std::ranges::sort(ranged_candidates_);
+                    const auto [end, unused] = std::ranges::unique(ranged_candidates_);
+                    ranged_candidates_.erase(end, ranged_candidates_.end());
+                    candidates = ranged_candidates_;
+                }
             }
             for (const auto index : candidates) {
                 if (target_pending(slot.reader_group[index])) {
@@ -1509,9 +1517,8 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
             }
         }
     }
-    for (const auto& group : before == nullptr && !slot.chunk_begin.empty()
-             ? std::span<const RangedGroup> { }
-             : std::span<const RangedGroup> { slot.ranged }) {
+    for (const auto& group : scan ? std::span<const RangedGroup> { slot.ranged }
+                                  : std::span<const RangedGroup> { }) {
         // Scheduling a target that is already pending changes nothing.
         if (target_pending(group.id)) {
             continue;

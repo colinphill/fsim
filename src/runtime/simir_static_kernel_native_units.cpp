@@ -342,6 +342,69 @@ bool same_step_code(const CompiledBody& left, const CompiledBody& right)
            });
 }
 
+/// Instructions one run of `body` executes, estimated: its size, plus each
+/// loop body (a backward jump or branch) again per estimated iteration. A
+/// loop's exit test comparing against a constant gives the trip count
+/// (capped); otherwise eight iterations are assumed.
+std::size_t estimated_run_size(const CompiledBody& body)
+{
+    constexpr std::uint64_t default_trips = 8U;
+    constexpr std::uint64_t maximum_trips = 1024U;
+    const auto size = body.code.size();
+    std::uint64_t total = size;
+    const auto constant_of = [&](const std::uint32_t reg, const std::size_t before)
+        -> std::optional<std::uint64_t> {
+        for (auto at = before; at-- > 0U;) {
+            const auto& inst = body.code[at];
+            if (inst.d == reg && inst.op == KOp::constant && inst.sub == 0U
+                && inst.imm_b == 0U) {
+                return inst.imm_a;
+            }
+            if (before - at > 8U) {
+                break;
+            }
+        }
+        return std::nullopt;
+    };
+    for (std::size_t at = 0U; at < size; ++at) {
+        const auto& inst = body.code[at];
+        std::uint32_t target = std::numeric_limits<std::uint32_t>::max();
+        if (inst.op == KOp::jump && inst.d <= at) {
+            target = inst.d;
+        } else if (inst.op == KOp::branch) {
+            target = std::min(inst.y <= at ? inst.y : target,
+                inst.z <= at ? inst.z : target);
+        }
+        if (target == std::numeric_limits<std::uint32_t>::max()) {
+            continue;
+        }
+        // The header's first branch tests a comparison with a constant.
+        std::uint64_t trips = default_trips;
+        for (auto scan = static_cast<std::size_t>(target);
+             scan < std::min<std::size_t>(at, target + 16U); ++scan) {
+            const auto& test = body.code[scan];
+            if (test.op != KOp::branch) {
+                continue;
+            }
+            for (auto define = scan; define-- > target;) {
+                const auto& compare = body.code[define];
+                if (compare.d != test.x || compare.op != KOp::binary) {
+                    continue;
+                }
+                const auto bound = constant_of(compare.y, define);
+                if (bound && *bound >= 2U) {
+                    trips = std::min(*bound, maximum_trips);
+                }
+                break;
+            }
+            break;
+        }
+        total += (at - target + 1U) * (trips - 1U);
+    }
+    return static_cast<std::size_t>(std::min<std::uint64_t>(total,
+        std::numeric_limits<std::uint32_t>::max()));
+}
+
 } // namespace
 
 std::unique_ptr<Interpreter::Impl::StaticKernel::OperationTier>
@@ -1115,6 +1178,13 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     const std::size_t hot_threshold = threshold_text != nullptr
         ? static_cast<std::size_t>(std::strtoull(threshold_text, nullptr, 10))
         : 32768U;
+    // The optimizing backend's cost grows faster than a template's size: a
+    // loop template larger than this stays with the fast one
+    // (FSIM_STATIC_KERNEL_HOT_LOOP_MAX_SIZE).
+    const char* loop_max_text = std::getenv("FSIM_STATIC_KERNEL_HOT_LOOP_MAX_SIZE");
+    const std::size_t hot_loop_max_size = loop_max_text != nullptr
+        ? static_cast<std::size_t>(std::strtoull(loop_max_text, nullptr, 10))
+        : 4096U;
     // VHDL templates run two-state code while their registers hold known
     // values (FSIM_STATIC_KERNEL_TWO_STATE=0 keeps the full code). A literal
     // with X or 'U' bits would leave it on every run.
@@ -1140,12 +1210,20 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     for (std::size_t index = 0U; index < templates_.size(); ++index) {
         // Instances times size estimates how much run time a template
         // carries; only the heaviest get the slower optimizing backend.
+        // Loops (their bodies counted per iteration) need it as partitions
+        // do: the fast register allocator spills every live value around
+        // each loop block.
         const auto size = templates_[index]->code.size();
+        const auto run_size = estimated_run_size(*templates_[index]);
+        const bool hot_loop = run_size >= 2U * size && size <= hot_loop_max_size
+            && template_units[index] * run_size >= hot_threshold;
         templates.push_back({ templates_[index].get(),
-            static_cast<std::uint8_t>(
-                size >= 64U && template_units[index] * size >= hot_threshold
-                    ? (template_partition[index] != 0U ? 2U : 1U)
-                    : 0U),
+            static_cast<std::uint8_t>(size < 64U ? 0U
+                    : hot_loop || (template_partition[index] != 0U
+                                      && template_units[index] * size >= hot_threshold)
+                    ? 2U
+                    : template_units[index] * size >= hot_threshold ? 1U
+                                                                    : 0U),
             template_vhdl[index] != 0U,
             two_state
                 && ((template_vhdl[index] != 0U

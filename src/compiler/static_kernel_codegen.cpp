@@ -175,8 +175,9 @@ class FunctionEmitter {
 public:
     FunctionEmitter(llvm::Module& module, llvm::Function& function,
         const detail::CompiledBody& body,
-        const bool local_registers, const bool flush_locals, const bool two_state,
-        std::vector<std::uint32_t>* const resume_points, const bool vhdl)
+        const bool local_registers, const bool optimizing, const bool flush_locals,
+        const bool two_state, std::vector<std::uint32_t>* const resume_points,
+        const bool vhdl)
         : context_(module.getContext())
         , module_(module)
         , function_(function)
@@ -188,6 +189,7 @@ public:
         , i8_(llvm::Type::getInt8Ty(context_))
         , ptr_(llvm::PointerType::getUnqual(context_))
         , local_registers_(local_registers)
+        , optimizing_(optimizing)
         , flush_locals_(flush_locals)
         , two_state_(two_state)
         , resume_points_(resume_points)
@@ -258,9 +260,10 @@ public:
                 local_[reg] = builder_.CreateAlloca(
                     llvm::ArrayType::get(i64_, 2U), nullptr, "r");
             }
-            if (local_[reg] != nullptr && flush_locals_) {
+            if (local_[reg] != nullptr
+                && (flush_exits() || !body_.resume_entries.empty())) {
                 // Defined (as a known 0) before this run writes it, for the
-                // flush at an exit (failure_block_).
+                // flush at an exit (failure_block_, a suspension).
                 builder_.CreateStore(constant(0U),
                     builder_.CreateConstInBoundsGEP1_64(i64_, local_[reg], 0U));
                 builder_.CreateStore(constant(0U),
@@ -337,10 +340,28 @@ public:
         builder_.SetInsertPoint(return_block_);
         builder_.CreateRet(llvm::ConstantInt::get(i32_, 0U));
         builder_.SetInsertPoint(failure_block_);
-        // VHDL deoptimization and the full code (after two-state code)
-        // continue from the register file: local registers go there first.
-        // (SystemVerilog failures only report errors.)
-        for (std::size_t reg = 0U; reg < local_.size() && flush_locals_; ++reg) {
+        // VHDL deoptimization, the full code (after two-state code) and a
+        // synthetic call stack overflow continue from the register file:
+        // local registers go there first. (Other SystemVerilog failures only
+        // report errors.)
+        if (flush_exits()) {
+            flush_local_registers();
+        }
+        builder_.CreateRet(llvm::ConstantInt::get(i32_, 1U));
+    }
+
+    /// Whether an exit continues from the register file: VHDL
+    /// deoptimization and the full code, or a deoptimizing overflow of the
+    /// synthetic call stack.
+    [[nodiscard]] bool flush_exits() const noexcept
+    {
+        return flush_locals_ || body_.call_stack_base != 0U;
+    }
+
+    /// Stores every local register to the register file.
+    void flush_local_registers()
+    {
+        for (std::size_t reg = 0U; reg < local_.size(); ++reg) {
             if (local_[reg] == nullptr) {
                 continue;
             }
@@ -352,7 +373,6 @@ public:
                         static_cast<std::uint64_t>(reg) * 2U + word));
             }
         }
-        builder_.CreateRet(llvm::ConstantInt::get(i32_, 1U));
     }
 
 private:
@@ -396,13 +416,18 @@ private:
         }();
         // Two-state code hands over to the full code, which continues from
         // the register file (as from a resume entry).
-        // Exits flush local registers to the register file (failure_block_),
-        // so two-state code and deoptimizing bodies may use them; code
-        // entered mid-body (behavioral resumption, the full code's
-        // continuations) and runtime-stack calls may not.
-        if (!local_registers_ || disabled || !body_.resume_entries.empty()
-            || body_.call_stack_base != 0U
-            || (resume_points_ != nullptr && !resume_points_->empty())) {
+        // Exits flush local registers to the register file (failure_block_,
+        // and a suspension before it returns), so two-state code,
+        // deoptimizing bodies (synthetic call stack overflow included) and
+        // resumed threads may use them: a resume entry, like the entry,
+        // starts with nothing defined. The full code's continuations may not.
+        // Unoptimized code spills every value live across a block boundary,
+        // so a body whose loops run around calls or suspensions keeps its
+        // registers in the frame unless the optimizing backend compiles it.
+        if (!local_registers_ || disabled
+            || (resume_points_ != nullptr && !resume_points_->empty())
+            || (!optimizing_
+                && (!body_.resume_entries.empty() || body_.call_stack_base != 0U))) {
             return;
         }
         const auto size = static_cast<std::uint32_t>(body_.code.size());
@@ -529,8 +554,22 @@ private:
             case KOp::wide_part_insert:
                 reads = { inst.y, inst.z };
                 return true;
+            case KOp::call:
+            case KOp::ret:
+                // Fixed-register calls stay inside the function; their
+                // pointer and entries stay in the register file (pinned).
+                return inst.z != 0U;
+            case KOp::suspend:
+                return true;
             default:
                 return false;
+            }
+        };
+        // Registers generated code addresses dynamically.
+        Bits pinned((static_cast<std::size_t>(body_.registers.size()) + 63U) / 64U, 0U);
+        const auto pin = [&](const std::uint32_t reg) {
+            if (reg < body_.registers.size()) {
+                pinned[reg / 64U] |= std::uint64_t { 1 } << (reg % 64U);
             }
         };
         // Basic blocks and their successors.
@@ -546,11 +585,28 @@ private:
             if (inst.op == KOp::jump) {
                 leader[std::min(inst.d, size)] = 1U;
                 leader[at + 1U] = 1U;
+            } else if (inst.op == KOp::call || inst.op == KOp::ret) {
+                if (inst.op == KOp::call) {
+                    leader[std::min(inst.d, size)] = 1U;
+                }
+                leader[at + 1U] = 1U;
+                pin(inst.x);
+                for (std::uint32_t slot = 0U; slot < inst.z; ++slot) {
+                    pin(inst.y + slot);
+                }
             } else if (inst.op == KOp::branch) {
                 leader[std::min(inst.y, size)] = 1U;
                 leader[std::min(inst.z, size)] = 1U;
                 leader[at + 1U] = 1U;
+            } else if (inst.op == KOp::suspend) {
+                leader[at + 1U] = 1U;
             }
+        }
+        for (const auto target : body_.return_targets) {
+            leader[std::min<std::size_t>(target, size)] = 1U;
+        }
+        for (const auto resume : body_.resume_entries) {
+            leader[std::min<std::size_t>(resume, size)] = 1U;
         }
         std::vector<std::uint32_t> block_begin;
         std::vector<std::uint32_t> block_of(size + 1U, 0U);
@@ -570,8 +626,16 @@ private:
         for (std::uint32_t block = 0U; block < blocks; ++block) {
             const auto last = block_end(block) - 1U;
             const auto& inst = body_.code[last];
-            if (inst.op == KOp::jump) {
+            if (inst.op == KOp::jump || inst.op == KOp::call) {
                 successors[block] = { block_of[std::min(inst.d, size)] };
+            } else if (inst.op == KOp::suspend) {
+                // The run ends; it continues at a resume entry.
+            } else if (inst.op == KOp::ret) {
+                // A return continues at any return target.
+                for (const auto target : body_.return_targets) {
+                    successors[block].push_back(
+                        block_of[std::min<std::size_t>(target, size)]);
+                }
             } else if (inst.op == KOp::branch) {
                 successors[block] = { block_of[std::min(inst.y, size)],
                     block_of[std::min(inst.z, size)] };
@@ -596,6 +660,17 @@ private:
             ? block_of[0] : entry_block;
         std::ranges::fill(in[prologue_block], 0U);
         reached[prologue_block] = 1U;
+        std::vector<std::uint8_t> run_entry(blocks + 1U, 0U);
+        run_entry[entry_block] = 1U;
+        run_entry[prologue_block] = 1U;
+        for (const auto resume : body_.resume_entries) {
+            const auto block = block_of[std::min<std::size_t>(resume, size)];
+            if (block != exit_block) {
+                std::ranges::fill(in[block], 0U);
+                reached[block] = 1U;
+                run_entry[block] = 1U;
+            }
+        }
         Bits state(words, 0U);
         for (bool changed = true; changed;) {
             changed = false;
@@ -613,9 +688,8 @@ private:
                     }
                 }
                 for (const auto successor : successors[block]) {
-                    // Each run starts at the entry with nothing defined.
-                    if (successor == exit_block || successor == entry_block
-                        || successor == prologue_block) {
+                    // Each run starts at an entry with nothing defined.
+                    if (successor == exit_block || run_entry[successor] != 0U) {
                         continue;
                     }
                     auto& target = in[successor];
@@ -659,7 +733,7 @@ private:
         }
         local_.assign(count, nullptr);
         for (std::uint32_t reg = 0U; reg < count; ++reg) {
-            if (test(written, reg) && !test(live_in, reg)
+            if (test(written, reg) && !test(live_in, reg) && !test(pinned, reg)
                 && reg < body_.register_widths.size()
                 && body_.register_widths[reg] <= 64U && !tracked(reg)
                 && (body_.shadow_base == 0U || reg < body_.shadow_base)) {
@@ -2452,6 +2526,8 @@ private:
             // operation's kind in `sub`).
             builder_.CreateStore(llvm::ConstantInt::get(i32_, inst.x),
                 frame_field(44U));
+            // The thread runner and the next run read the register file.
+            flush_local_registers();
             if (inst.aux == 1U) {
                 auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_, i32_ }, false);
                 builder_.CreateStore(
@@ -3393,6 +3469,8 @@ private:
     llvm::Value* frame_ { };
     llvm::Value* registers_ { };
     bool local_registers_ { };
+    /// Compiled by the optimizing backend (hot tier).
+    bool optimizing_ { };
     /// Exits store local registers to the register file (VHDL).
     bool flush_locals_ { };
     /// Records the instruction after the current one as a continuation.
@@ -3810,7 +3888,8 @@ private:
                 return text != nullptr && std::string_view { text } == "1";
             }();
             FunctionEmitter emitter(*module, *function, *templates[index].body,
-                vhdl_locals || !templates[index].vhdl, templates[index].vhdl,
+                vhdl_locals || !templates[index].vhdl, tier == 2U,
+                templates[index].vhdl,
                 templates[index].two_state,
                 templates[index].resume_points, templates[index].vhdl);
             emitter.emit();
