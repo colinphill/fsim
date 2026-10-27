@@ -138,6 +138,57 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: design-level phase 1, dead logic as lazy members (`6adcb28e`, sweep `v4c11`)
+
+The planner runs a liveness pass over the region graph.
+- **Roots:** every process that cannot be lazy, every signal the host owns, touches or observes, and aliased containers.
+- **Propagation:** liveness flows from a live process to what it reads, and from a live signal or container to its writers.
+- **Cycles:** a member on an activation cycle stays live (Tarjan over the dead candidates' trigger edges).
+
+A dead member becomes **lazy** only if it meets all of these:
+- it is a SystemVerilog combinational member that runs at start;
+- it has only immediate writes (blocking, or a continuous assignment's Active update);
+- it uses no container;
+- its any-edge sensitivity covers every bit it reads.
+
+A lazy member is never scheduled. `StaticKernel::materialize` evaluates it from current inputs when one of its outputs is read, after its lazy inputs' writers. This keeps §3.6 on-demand reads exact.
+
+Removal is off when any of these apply:
+- foreign, trace, coverage, debug and publish-all runs;
+- the access inventory is incomplete;
+- `FSIM_STATIC_KERNEL_DEAD_LOGIC=0`.
+
+The persisted plan format is v5.
+
+Lazy members: original_codec 83 of 99,752, original_throughput 23, codex_throughput_default 11. The mixed cases have none, because VHDL members are excluded. Results on the 10 perf cases:
+- outputs are byte-identical to `v4c10`;
+- simulate instructions are within +0.03%, so these designs carry little dead logic;
+- time warps are intact.
+
+`static_kernel_test` adds an unread chain. It must be lazy, and it must read back exactly mid-run and at the end. Full ctest passes 1085/1085, normal and strict.
+
+Sweep `v4c11` against `b96x1`:
+- **Losses:** none in five suites. nvc `case11`/`issue705` are excluded as before. verilator `t_for_local` timed out under the load of a concurrent profile; alone it passes on both `v4c11` (31.2 s) and `v4c10` (31.6 s).
+- **Gains:** the same 5 ivtest and 5 verilator gains as `v4c10`.
+
+Profile of original_codec simulate on `v4c11` (instructions:u):
+- native code 40%;
+- notification and scheduling about 17% (`native_notify`, `slot_changed_general`, `write_slot_word`, `schedule`);
+- setup and snapshot decode about 20%.
+
+Kernel counters for original_codec:
+
+| Counter | Value |
+|---|---:|
+| sequential runs | 7.65M |
+| combinational runs | 0.55M |
+| partition runs | 1.67M |
+| schedules | 24.8M |
+| notifications | 15.1M |
+| once members | 2,311 |
+
+Simple port connections are already aliased at elaboration: a hierarchy and its flat equivalent plan the same members. Port collapsing is therefore mostly done. The next phase is constant propagation of tied ports such as `gf_mult`'s constant `b`.
+
 ### 2026-10-26 (night): G5 campaign `v4-g5-1026b` on `v4c10` (db81054a), rs-suite check
 
 The timed campaign used 3 samples, CPU 9, ASLR off, with xsim in the same session and nothing else running. Preflight passed. Against the D6 exit criteria:
