@@ -26,6 +26,10 @@ namespace {
     // (IEEE 1800-2017 12.7.2): a longer one runs as a loop rather than being
     // unrolled into a program the size of its count (nested, the product).
     constexpr std::size_t maximum_unrolled_repeat_iterations = 256U;
+    // A for loop with constant bounds is unrolled only while short; a longer
+    // one runs at run time like a loop with dynamic bounds (12.7.1), so a
+    // 100000-iteration loop is not a program of 100000 bodies.
+    constexpr std::size_t maximum_unrolled_for_iterations = 256U;
 
     class HirDebugScopeGuard final {
     public:
@@ -18118,7 +18122,28 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && statement->systemverilog->loop_repeat
             && statement->systemverilog->loop_limit && static_loop_iterations
             && *static_loop_iterations > maximum_unrolled_repeat_iterations;
-        if (runtime_repeat_count || long_repeat) {
+        const bool long_static_for = [&] {
+            if (statement->systemverilog == nullptr || !static_loop_iterations
+                || *static_loop_iterations <= maximum_unrolled_for_iterations) {
+                return false;
+            }
+            const auto& loop_statement = *statement->systemverilog;
+            if (loop_statement.loop_repeat
+                || loop_statement.loop_variable.empty()
+                || !loop_statement.target || !loop_statement.loop_initial
+                || !loop_statement.condition || !loop_statement.value) {
+                return false;
+            }
+            // A foreach keeps its unrolled form (runtime foreach covers
+            // strings only).
+            const auto condition = specialized_hir_unit_->find_expression(
+                *loop_statement.condition);
+            return !(condition && condition->systemverilog != nullptr
+                && condition->systemverilog->kind
+                    == semantic::sv::ExpressionKind::call
+                && condition->systemverilog->text == "@sv-foreach");
+        }();
+        if (runtime_repeat_count || long_repeat || long_static_for) {
             static_loop_iterations.reset();
         }
         std::optional<std::int64_t> vhdl_first_static;
@@ -18282,7 +18307,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             const auto& loop_statement = *statement->systemverilog;
             return !static_loop_iterations
-                && (loop_statement.loop_runtime
+                && (loop_statement.loop_runtime || long_static_for
                     || (loop_statement.loop_repeat
                         && loop_statement.loop_limit
                         && (runtime_repeat_count || long_repeat
