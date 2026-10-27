@@ -154,6 +154,18 @@ per completed phase).
 **Validation.** Full ctest passes 1087/1087 in normal and strict mode. `vhdl_composite_operation_application_test` gains a generate body with per-iteration constants, slices and a subtype that varies by iteration. Sweep `v4c24` shows 0 losses against `b96x1`:
 - Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
 
+`tools/perf.sh` campaign `v4c24` (3 samples, `v4_o2_aot`, end-to-end median). Both simulators ran 2–9% slower than in `v4c23` on a busier host, so the ratios are the better comparison:
+
+| Case | v4c23 fsim | × xsim | v4c24 fsim | × xsim |
+|---|---:|---:|---:|---:|
+| mixed_codec | 10.09 s | 2.61 | 10.14 s | 2.68 |
+| original_codec | 12.12 s | 2.44 | 12.97 s | 2.48 |
+| mixed_throughput | 4.83 s | 2.83 | 4.93 s | 2.79 |
+| original_throughput | 5.45 s | 3.01 | 5.65 s | 3.10 |
+| codex reference/throughput (6 cases) | 2.26–2.72 s | 3.84–4.28 | 2.42–2.72 s | 3.81–4.26 |
+
+The geometric mean of the × xsim ratios is 3.48, unchanged.
+
 **Next: the SystemVerilog side of original_codec** (callgrind on `v4c24`, 42.7G instructions):
 - The constant evaluator costs 6.4G. Lowering folds `alpha_pow_fn(PRIM_POW * apg)` in every generate iteration. Each call has distinct arguments and loops up to 255 times, at about 20k instructions per iteration.
 - 3.0G go to lowering 431 SystemVerilog function bodies again in every process that calls them. The item 2 body memo covers VHDL package functions only.
