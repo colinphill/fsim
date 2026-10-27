@@ -1160,6 +1160,12 @@ enum class SimulationOutputSink {
 void plan_kernel_access(BuiltProject& built, SimulationEngine engine,
     bool foreign, bool observe_all);
 
+/// A file trace whose selection (`filters`) is fixed for the run observes
+/// only the signals it records: they replace `observe_all` in the plan
+/// (FSIM_STATIC_KERNEL_TRACE_SELECTION=0 keeps every signal a host signal).
+void plan_trace_access(
+    BuiltProject& built, const std::vector<std::string>& filters);
+
 int run_built_project(
     BuiltProject project,
     SimulationEngine engine,

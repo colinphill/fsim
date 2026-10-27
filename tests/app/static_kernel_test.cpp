@@ -13,14 +13,18 @@
 // of wide constants, concatenations and dynamic part-select inserts.
 // Registers sharing an edge-sensitivity set run as one dispatch group, in
 // the order the reference runs them: blocking writes that race on one clock
-// must read back the same values.
+// must read back the same values. Observed signals change (value, time and
+// delta) as in the reference, whether every signal is a host signal or only
+// a trace selection's are.
 #include "fsim/app/application.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -302,6 +306,73 @@ const std::vector<std::string> internal_paths {
     return capture;
 }
 
+// The traced signals of the observation check.
+const std::vector<std::string> observed_paths {
+    "sk_top.dut.acc",
+    "sk_top.dut.shreg",
+    "sk_top.dut.arr[1]",
+    "sk_top.dut.wide_q",
+    "sk_top.dut.race_x",
+};
+
+enum class Observation : std::uint8_t { reference, all, selection };
+
+// Value changes of the observed signals, by signal: value, time, delta. The
+// kernel runs with every signal a host signal (`all`, as for a debugger or
+// a foreign library) or with the observed signals as a trace's selection.
+[[nodiscard]] std::map<std::uint32_t, std::vector<std::string>> observe(
+    const std::filesystem::path& root, const Observation mode)
+{
+    auto project = build(root);
+    std::vector<fsim::runtime::simir::SignalId> observed;
+    for (const auto& object : project.design_ir.objects()) {
+        if (std::ranges::find(observed_paths, project.design_ir.path(object.path))
+            != observed_paths.end()) {
+            observed.push_back(
+                static_cast<fsim::runtime::simir::SignalId>(object.runtime_index));
+        }
+    }
+    std::ranges::sort(observed);
+    observed.erase(std::unique(observed.begin(), observed.end()), observed.end());
+    require(observed.size() == observed_paths.size(),
+        "the observed signals must be design objects");
+    project.cone_fusion = false;
+    if (mode == Observation::all) {
+        project.kernel_access.admit = true;
+        project.kernel_access.observe_all = true;
+    } else if (mode == Observation::selection) {
+        auto& access = project.kernel_access;
+        access.admit = true;
+        access.observed = observed;
+        access.observed_identity = "static-kernel-test";
+        fsim::elaboration::StaticKernelAccessPlan all_access;
+        all_access.admit = true;
+        all_access.observe_all = true;
+        const auto plan = project.design.plan_static_kernel(access);
+        const auto all_plan = project.design.plan_static_kernel(all_access);
+        require(!plan.disabled && !all_plan.disabled,
+            "the fixture must be eligible for the kernel");
+        require(plan.owned_signals > all_plan.owned_signals + 20U,
+            "only the selection's signals may be host signals");
+    }
+    set_environment("FSIM_STATIC_KERNEL",
+        mode == Observation::reference ? "0" : "1");
+    Simulation simulation(std::move(project), 100'000U,
+        SimulationEngine::compiled, SystemVerilogVpiRuntimeUpdates::omitted);
+    std::map<std::uint32_t, std::vector<std::string>> changes;
+    (void)simulation.add_signal_change_hook(
+        [&](const fsim::runtime::simir::SignalId signal,
+            const fsim::runtime::PackedLogic4& value,
+            const fsim::runtime::SimulationTick time, const std::uint64_t delta) {
+            if (std::ranges::binary_search(observed, signal)) {
+                changes[signal].push_back(value.to_msb_string() + ' '
+                    + std::to_string(time) + ' ' + std::to_string(delta));
+            }
+        });
+    (void)simulation.run();
+    return changes;
+}
+
 } // namespace
 
 int main()
@@ -350,6 +421,35 @@ int main()
             "hidden signals must materialize their exact values mid-run");
         require(kernel.final_internal == reference.final_internal,
             "hidden signals must materialize their exact values at the end");
+    }
+    const auto reference = observe(root / "observe-reference", Observation::reference);
+    require(reference.size() == observed_paths.size(),
+        "every observed signal must change");
+    for (const auto mode : { Observation::all, Observation::selection }) {
+        const auto observed = observe(root
+                / (mode == Observation::all ? "observe-all" : "observe-selection"),
+            mode);
+        for (const auto& [signal, expected] : reference) {
+            const auto found = observed.find(signal);
+            const auto& actual = found == observed.end()
+                ? std::vector<std::string> { } : found->second;
+            if (actual != expected) {
+                std::size_t index = 0U;
+                while (index < actual.size() && index < expected.size()
+                    && actual[index] == expected[index]) {
+                    ++index;
+                }
+                std::cerr << (mode == Observation::all ? "all-host" : "selection")
+                          << " signal " << signal << " reference changes="
+                          << expected.size() << " kernel changes=" << actual.size()
+                          << " first difference: "
+                          << (index < expected.size() ? expected[index] : "-")
+                          << " | " << (index < actual.size() ? actual[index] : "-")
+                          << '\n';
+            }
+        }
+        require(observed == reference,
+            "observed signals must change as in the reference");
     }
     std::filesystem::remove_all(root);
     std::cout << "static kernel tests passed\n";

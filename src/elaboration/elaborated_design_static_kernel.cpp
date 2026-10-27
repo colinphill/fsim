@@ -508,14 +508,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // kernel-owned, so nothing needs publishing and no host-computed
         // effective value replaces a kernel slot; the process is hosted like
         // any other non-member (S25a).
+        // A trace selection widens to every signal for such a process.
         const bool all_signals_host
-            = (access.foreign || observe_all)
+            = (access.foreign || observe_all || !access.observed.empty())
             && (publish_all_switch == nullptr
                 || std::string_view { publish_all_switch } != "0");
         if (publish_all_allowed) {
             publish_all = true;
         } else if (all_signals_host) {
-            // Accepted: no refusal, no publish-all mode.
+            // Accepted: no refusal, no publish-all mode. A trace selection
+            // then observes every signal.
+            observe_all = true;
         } else {
             // Fail closed: an opaque access could read kernel-owned state.
             if (!census) {
@@ -1524,6 +1527,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     std::vector<std::uint8_t> host_touched(signal_count, 0U);
     if (host_signals) {
         std::ranges::fill(host_touched, 1U);
+    }
+    // A file trace's fixed selection: its signals are host signals, which
+    // the trace observes through the host commit path (plan §3.6).
+    for (const auto signal : access.observed) {
+        if (signal < signal_count) {
+            host_touched[signal] = 1U;
+        }
     }
     // Module paths and timing checks run on the host commit path and its
     // value-change events (IEEE 1800-2023 30.4, 31): their terminals,
@@ -2553,7 +2563,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     {
         const char* dead_text = std::getenv("FSIM_STATIC_KERNEL_DEAD_LOGIC");
         bool enabled = (dead_text == nullptr || std::string_view { dead_text } != "0")
-            && !access.foreign && !observe_all && !access.coverage && !access.debug
+            && !access.foreign && !observe_all && access.observed.empty()
+            && !access.coverage && !access.debug
             && !publish_all && graph.access_inventory_complete()
             && graph_processes.size() == process_count;
         for (std::size_t index = 0U; enabled && index < process_count; ++index) {
@@ -2883,7 +2894,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         const char* collapse_text = std::getenv("FSIM_STATIC_KERNEL_DELTA_COLLAPSE");
         bool enabled = vhdl_mode
             && (collapse_text == nullptr || std::string_view { collapse_text } != "0")
-            && !access.foreign && !observe_all && !access.coverage && !access.debug
+            && !access.foreign && !observe_all && access.observed.empty()
+            && !access.coverage && !access.debug
             && !publish_all && graph.access_inventory_complete()
             && graph_processes.size() == process_count;
         // An operation whose accesses are opaque could write anything.

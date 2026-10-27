@@ -1450,6 +1450,17 @@ private:
     /// This activation staged an Active update to a host signal: #0
     /// threads (Inactive region) resume only after the host applies it.
     bool host_active_staged_ { };
+    /// A member staged an NBA-region update to a host signal at this time:
+    /// the kernel's NBA commit joins the host's NBA region, after it, so
+    /// what both wake runs after every update (IEEE 1800-2023 4.5).
+    bool host_nba_staged_ { };
+    SimulationTick host_nba_time_ { };
+    /// Kernel members read a host signal with such an update: they run
+    /// again in that region, not in the next delta.
+    bool host_nba_wakes_ { };
+    /// The deferred NBA commit runs after the host's updates: it commits
+    /// before the activation settles.
+    bool nonblocking_after_host_ { };
     /// The NBA commit waits for the host's same-time Active and Inactive
     /// work (IEEE 1800-2023 4.5): a host NBA-region task performs it.
     bool nonblocking_deferred_ { };

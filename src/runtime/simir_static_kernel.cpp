@@ -2021,6 +2021,10 @@ void Interpreter::Impl::StaticKernel::write_host(const std::uint32_t member,
         // region) wait for it (IEEE 1800-2023 4.5).
         host_active_staged_ = true;
     }
+    if (!blocking && domain == SignalUpdateDomain::systemverilog_nba) {
+        host_nba_staged_ = true;
+        host_nba_time_ = impl_.scheduler.now();
+    }
     if (blocking) {
         if (offset) {
             impl_.commit_driver_slice(process, signal, std::move(value), *offset);
@@ -2039,8 +2043,14 @@ void Interpreter::Impl::StaticKernel::write_host(const std::uint32_t member,
         input != no_slot
         && (!inputs_[input].readers.empty() || !inputs_[input].edges.empty())) {
         // A process does not wake on its own updates; run again once they
-        // commit. (Mirror-only inputs have no readers to wake.)
-        yield_requested_ = true;
+        // commit. (Mirror-only inputs have no readers to wake.) An NBA-region
+        // update wakes its readers in the host's NBA region, as the
+        // reference's does (defer_nonblocking), not a delta later.
+        if (domain == SignalUpdateDomain::systemverilog_nba && !mixed_ && !vhdl_) {
+            host_nba_wakes_ = true;
+        } else {
+            yield_requested_ = true;
+        }
     }
     if (const auto input = input_of_signal_[signal];
         input != no_slot && inputs_[input].sole_writer
@@ -3935,6 +3945,7 @@ void Interpreter::Impl::StaticKernel::commit_pending()
     // notifying its readers as it lands.
     const auto count = writes_.count;
     writes_.count = 0U;
+    host_nba_staged_ = false;
     auto elements = std::move(nba_);
     nba_.clear();
     auto generic = std::move(pending_generic_);
@@ -4398,6 +4409,18 @@ bool Interpreter::Impl::StaticKernel::activate()
     } else {
         (void)scan_inputs();
     }
+    if (in_host_nonblocking_region_ && std::exchange(nonblocking_after_host_, false)) {
+        // The host has applied this time's NBA-region updates, the members'
+        // included (scan_inputs woke their readers): the kernel's own land
+        // with them, before anything that either wakes runs.
+        host_nba_staged_ = false;
+        host_nba_wakes_ = false;
+        if (writes_.count != 0U) {
+            nonblocking_region_ = false;
+            nonblocking_committed_ = true;
+            commit_pending();
+        }
+    }
     if (late_start_armed_
         && (late_start_due_ || (!first_activation && (mixed_ || vhdl_)))) {
         // The delta after time zero: continuous assignments and event
@@ -4628,13 +4651,18 @@ void Interpreter::Impl::StaticKernel::activate_step()
                 }
                 continue;
             }
-            if (writes_.count != 0U) {
+            if (writes_.count != 0U || host_nba_wakes_) {
                 if (defer_nonblocking()) {
                     break;
                 }
-                nonblocking_committed_ = true;
-                commit_pending();
-                continue;
+                if (writes_.count != 0U) {
+                    nonblocking_committed_ = true;
+                    commit_pending();
+                    continue;
+                }
+                // Not deferred: run again once the host applies them.
+                host_nba_wakes_ = false;
+                yield_requested_ = true;
             }
             if (active) {
                 continue;
@@ -4662,13 +4690,18 @@ bool Interpreter::Impl::StaticKernel::defer_nonblocking()
         const char* value = std::getenv("FSIM_STATIC_KERNEL_NBA_DEFER");
         return value == nullptr || std::string_view { value } != "0";
     }();
+    // Members staged NBA-region updates to host signals: the host applies
+    // them in its NBA region, which the kernel's commit joins last.
+    const bool after_host
+        = host_nba_staged_ && host_nba_time_ == impl_.scheduler.now();
     if (!enabled || closed_ || warp_time_
-        || (!host_active_staged_ && output_queue_.empty()
+        || (!after_host && !host_active_staged_ && output_queue_.empty()
             && hosted_active_.empty()
             && !impl_.scheduler.systemverilog_active_work_pending())) {
         return false;
     }
     publish();
+    nonblocking_after_host_ = nonblocking_after_host_ || after_host;
     if (nonblocking_deferred_) {
         return true;
     }
@@ -4699,7 +4732,10 @@ bool Interpreter::Impl::StaticKernel::defer_nonblocking()
             }
         }>(KernelNonblockingTask { &impl_, host_process_ });
     impl_.scheduler.schedule_internal_systemverilog_at(impl_.scheduler.now(),
-        SchedulerPhase::update, host_process_, task);
+        SchedulerPhase::update,
+        nonblocking_after_host_ ? std::numeric_limits<StableOrder>::max()
+                                : StableOrder { host_process_ },
+        task);
     return true;
 }
 

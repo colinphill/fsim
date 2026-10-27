@@ -879,6 +879,11 @@ struct StaticKernelAccessPlan {
     /// A trace writer or a VCD control observer records every value change
     /// of any signal (IEEE 1800-2023 21.7): every signal is a host signal.
     bool observe_all { };
+    /// A trace file whose selection is fixed for the run records these
+    /// signals (sorted, unique; a superset of the selection is exact): they
+    /// alone are host signals for it. `observed_identity` keys the set.
+    std::vector<runtime::simir::SignalId> observed;
+    std::string observed_identity;
     /// Code coverage is on. Statement, branch and line counters are host
     /// data bumped by CodeCoverageHit operations, which the kernel does not
     /// evaluate: processes with such operations stay host processes.
@@ -891,12 +896,14 @@ struct StaticKernelAccessPlan {
     /// Key text for persisted plans; empty for the default plan.
     [[nodiscard]] std::string identity() const
     {
-        if (!foreign && !observe_all && !coverage && !debug) {
+        if (!foreign && !observe_all && !coverage && !debug
+            && observed_identity.empty()) {
             return { };
         }
         std::string text { "access" };
         text += foreign ? ";foreign" : "";
         text += observe_all ? ";observe_all" : "";
+        text += observed_identity.empty() ? "" : ";observed=" + observed_identity;
         text += coverage ? ";coverage" : "";
         text += debug ? ";debug" : "";
         return text;

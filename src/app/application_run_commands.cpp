@@ -247,6 +247,9 @@ int run_built_project(
     // Cone fusion hides internal nets and stays off for these clients; the
     // static kernel's access plan replaces the gates.
     plan_kernel_access(built, engine, foreign, trace_output);
+    if (trace_output) {
+        plan_trace_access(built, trace_config.run.trace_filters);
+    }
     if (profile_phases && !built.cone_fusion
         && !built.kernel_access.admit && static_kernel_requested(engine)) {
         // The census counts these runs as kernel-off, by gate.

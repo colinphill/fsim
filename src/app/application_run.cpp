@@ -13,10 +13,13 @@
 #include "fsim/support/glob_match.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/sha256.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <limits>
 #include <map>
 
 namespace fsim::app::application_detail {
@@ -1004,6 +1007,46 @@ bool trace_selected(
         || std::any_of(filters.begin(), filters.end(), [&](const auto& filter) {
                return wildcard_match(filter, name);
            });
+}
+
+void plan_trace_access(
+    BuiltProject& built, const std::vector<std::string>& filters)
+{
+    auto& access = built.kernel_access;
+    const char* text = std::getenv("FSIM_STATIC_KERNEL_TRACE_SELECTION");
+    if (!access.admit || !access.observe_all || access.foreign || access.debug
+        || (text != nullptr && std::string_view { text } == "0")) {
+        return;
+    }
+    // attach_trace's selection, by design path or canonical FST path,
+    // whichever format the file has: a superset of what it records.
+    std::vector<SignalId> observed;
+    try {
+        for (const auto& object : built.design_ir.objects()) {
+            if (!design_object_is_signal_bearing(object)
+                || object.runtime_index > std::numeric_limits<SignalId>::max()) {
+                continue;
+            }
+            if (trace_selected(filters, built.design_ir.path(object.path))
+                || (object.specialization.valid()
+                    && trace_selected(filters,
+                        canonical_fst_trace_object(built.design_ir, object).path))) {
+                observed.push_back(static_cast<SignalId>(object.runtime_index));
+            }
+        }
+    } catch (const std::exception&) {
+        // Keep the whole-design observer.
+        return;
+    }
+    std::ranges::sort(observed);
+    observed.erase(std::unique(observed.begin(), observed.end()), observed.end());
+    support::Sha256 hash;
+    for (const auto signal : observed) {
+        hash.update(std::to_string(signal) + ",");
+    }
+    access.observe_all = false;
+    access.observed_identity = support::Sha256::hex(hash.finish());
+    access.observed = std::move(observed);
 }
 
 std::optional<VcdScale> vcd_scale(

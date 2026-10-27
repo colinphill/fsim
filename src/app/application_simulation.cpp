@@ -270,7 +270,8 @@ runtime::RunResult Simulation::run(
                 // Foreign libraries and VCD observers may start observing
                 // or depositing at any time step.
                 && !impl_->built.kernel_access.foreign
-                && !impl_->built.kernel_access.observe_all);
+                && !impl_->built.kernel_access.observe_all
+                && impl_->built.kernel_access.observed.empty());
         auto result = impl_->interpreter->run(until);
         if (profile_phase_split) {
             const auto milliseconds = [](const auto duration) {
