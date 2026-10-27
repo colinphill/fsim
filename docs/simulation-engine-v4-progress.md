@@ -138,6 +138,54 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: elaboration items, runtime-bounded slice actuals (`af8506f6`, `9dfccd9c`, `91424a92`, `a0584d31`, sweeps `v4c21`, `v4c22`)
+
+This entry covers the six architectural elaboration items the owner ordered before multi-threading, plus kernel work on the LDPC decoder.
+
+**Kernel** (`af8506f6`, `91424a92`). LDPC decoder, 20 frames: simulate went from 5.96 s to 4.15 s, then to 2.0 s. The checksum is identical.
+- Slots with many ranged readers index those readers by bit chunk.
+- Blocking element and dynamic stores write in place.
+- Template tiers weigh loop bodies by estimated trip count. A loop template of up to 4096 instructions gets the optimizing backend.
+- Locals stay in registers across call/ret and resume entries.
+
+**Lowering** (`9dfccd9c`).
+- A rank-one array read with a dynamic index uses the index as is; an out-of-range read yields the default (IEEE 1800-2023 7.4.6).
+- A rank-one write is guarded by one range compare.
+- Static VHDL for loops run as loops however short. `FSIM_VHDL_UNROLL_FOR_LIMIT` and `FSIM_SV_UNROLL_FOR_LIMIT` are diagnostic overrides.
+
+Sweep `v4c21` lost nvc `issue351`. A procedure call whose array actual is sliced by the loop parameter was lowered only with static slice bounds.
+
+**Runtime-bounded slice actuals** (`a0584d31`). An unconstrained array formal whose slice actual has bounds known only at run time now takes the slice's own index range (IEEE 1076-2008 4.2.2.2, 8.5).
+- The actual is passed as a shaped value, using the new `VhdlShaped` `slice` operation. The body reads its attributes and elements at run time.
+- This holds for procedures and functions, and for slices of static length with dynamic bounds (`q(k to k + 4)`), which v4c21 rejected even with unrolling.
+- `issue351` passes with loops kept. A regression case is in `fsim.application.vhdl_composite_operations`.
+- One gap remains: an ieee function on a type-converted runtime-length slice, e.g. `to_integer(unsigned(v(a downto 4)))`. v4c21 rejects it too.
+
+**Elaboration items**, all in `a0584d31`. Details are in `.local-artifacts/v4-migration/elab/`.
+1. SystemVerilog constant functions: a call memo per distinct argument values, shared across a unit's derived specializations. It applies only when the call read no hierarchy state, and a hit charges the stored work units. The effect on original_codec is small, because the generate iterations pass different arguments.
+2. Callable body sharing across processes: not yet done.
+3. Generate query sharing: not yet done.
+4. Native kernel codegen splits the template set across `--jobs` and builds the modules in parallel.
+5. Runtime-state encoding into an in-memory buffer: original_codec encode went from 681 to 665 ms, within noise. It is kept as a cleanup.
+6. The large original_codec templates are different parameterizations (decoder widths 8 and 4, immediates 255 and 15), not near-duplicates. Merging them would need width-parametric templates; item 4 covers their cost. `FSIM_KERNEL_DIFF_TEMPLATES` prints field-wise template differences.
+
+**Measured.** mixed_codec, unroll limit 0 vs 7: elaborate 9.9 s vs 10.1 s, simulate 1.93 s for both, transcript ok=11 pass=75.
+
+`tools/perf.sh` campaign `v4c22` (3 samples, `v4_o2_aot`, end-to-end median against `v4-c21a`):
+
+| Case | v4-c21a fsim | × xsim | v4c22 fsim | × xsim |
+|---|---:|---:|---:|---:|
+| mixed_codec | 17.32 s | 1.45 | 10.39 s | 2.39 |
+| original_codec | 19.04 s | 1.52 | 11.67 s | 2.44 |
+| mixed_throughput | 5.23 s | 2.47 | 5.27 s | 2.40 |
+| original_throughput | 5.30 s | 3.07 | 5.35 s | 3.04 |
+| codex reference/throughput (6 cases) | 2.37–2.72 s | 3.64–4.27 | 2.31–2.67 s | 3.67–4.11 |
+
+The codec cases are still below 3×. Their remaining cost is elaboration, which items 2 and 3 address.
+
+Full ctest passes 1087/1087 in normal and strict mode. Sweep `v4c22` shows 0 losses against `b96x1`.
+- Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+
 ### 2026-10-27: elaboration cuts, lookup indexes and lowering memos (`e9532075`, `f5ff3314`, sweeps `v4c19`, `v4c20`)
 
 This continues the end-of-plan elaboration work (owner ordering: elaboration first, then multi-threading). Measurements are mixed_codec elaborate without `--aot`, `--jobs 1`.
