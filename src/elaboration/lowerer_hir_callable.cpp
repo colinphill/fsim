@@ -11386,6 +11386,59 @@ Lowerer::hir_callable_formal_binding(
     return result;
 }
 
+std::optional<Lowerer::HirVhdlShapedProfile>
+Lowerer::hir_vhdl_shaped_formal_profile(
+    const semantic::DeclarationId formal,
+    const semantic::ExpressionId actual) const
+{
+    const auto declaration = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_declaration(formal)
+        : std::nullopt;
+    if (!declaration || declaration->vhdl == nullptr
+        || !declaration->vhdl->subtype
+        || declaration->vhdl->object_class
+            == semantic::vhdl::ObjectClass::signal
+        || callable_direction(*declaration) != frontend::PortDirection::Input) {
+        return std::nullopt;
+    }
+    const auto subtype = hir_effective_vhdl_subtype(
+        *declaration->vhdl->subtype);
+    if (!subtype || !subtype->unconstrained
+        || subtype->unspecified_class
+            != semantic::vhdl::UnspecifiedTypeClass::none
+        || subtype->domain == semantic::vhdl::ValueDomain::string
+        || hir_vhdl_partially_constrained_record(*subtype)) {
+        return std::nullopt;
+    }
+    // An actual of static index range keeps the formal's packed storage; a
+    // slice whose bounds are known only at run time does not, even when its
+    // length is static.
+    const auto expression = specialized_hir_unit_->find_expression(actual);
+    if (!expression || expression->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    const bool slice
+        = expression->vhdl->kind == semantic::vhdl::ExpressionKind::slice
+        && expression->vhdl->operands.size() == 3U
+        && (expression->vhdl->text == "to"
+            || expression->vhdl->text == "downto");
+    if (slice) {
+        if (const auto shape = hir_vhdl_shape(actual);
+            shape && shape->complete()) {
+            return std::nullopt;
+        }
+    } else if (hir_expression_width(actual, hir_process_scope_)
+        || !hir_vhdl_shaped_value_profile(actual)) {
+        return std::nullopt;
+    }
+    auto profile = hir_vhdl_shaped_open_profile(*subtype);
+    if (!profile || profile->constraints.size() != 1U
+        || profile->outer_rank != 0U || !profile->members.empty()) {
+        return std::nullopt;
+    }
+    return profile;
+}
+
 bool Lowerer::hir_vhdl_actual_lengths_fit(
     const semantic::DeclarationId callable,
     const std::span<const semantic::ExpressionId> actuals,
@@ -18769,6 +18822,31 @@ Lowerer::lower_hir_function_call_value(
         signal_actual_key += "|p" + std::to_string(index) + ":"
             + std::to_string(*anchor);
     }
+    // An unconstrained array formal whose actual's index range is known
+    // only when the call is executed takes it then (IEEE 1076-2008
+    // 4.2.2.2): the actual is passed as a shaped value.
+    std::vector<std::optional<HirVhdlShapedProfile>> shaped_formals(
+        formals.size());
+    if (declaration->vhdl != nullptr) {
+        for (std::size_t index { }; index < formals.size(); ++index) {
+            if (signal_actuals[index] || protected_actuals[index]) {
+                continue;
+            }
+            shaped_formals[index] = hir_vhdl_shaped_formal_profile(
+                formals[index], (*actuals)[index]);
+            if (!shaped_formals[index]) {
+                continue;
+            }
+            const auto shaped_index = [index](const auto& entry) {
+                return entry.first == index;
+            };
+            std::erase_if(vhdl_actual_ranges, shaped_index);
+            std::erase_if(vhdl_actual_element_constraints, shaped_index);
+            std::erase_if(static_integer_actuals, shaped_index);
+            std::erase_if(static_integer_actual_expressions, shaped_index);
+            signal_actual_key += "|s" + std::to_string(index);
+        }
+    }
 
     const auto callable_identity
         = (static_cast<std::uint64_t>(resolution->key.value()) << 32U)
@@ -19015,6 +19093,33 @@ Lowerer::lower_hir_function_call_value(
                     frontend::PortDirection::Input);
                 continue;
             }
+            if (shaped_formals[index]) {
+                // A placeholder register keeps argument positions aligned.
+                HirVhdlShapedLocal local;
+                local.container = allocate_container_register(
+                    shaped_formals[index]->type);
+                local.profile = *shaped_formals[index];
+                frame.invocation_containers.push_back(local.container);
+                if (frame.profile_formals.size() == formals.size()
+                    && frame.profile_formals[index] != formal) {
+                    frame.vhdl_shaped_formals.emplace(
+                        frame.profile_formals[index].value(), local);
+                }
+                frame.vhdl_shaped_formals.emplace(
+                    formal.value(), std::move(local));
+                frame.argument_is_string.push_back(false);
+                frame.argument_is_container.push_back(false);
+                frame.arguments.push_back(allocate_register(
+                    1U, frontend::ValueDomain::Bit2));
+                frame.string_arguments.push_back({ });
+                frame.container_arguments.push_back({ });
+                frame.container_output_defaults.push_back(std::nullopt);
+                frame.invocation_registers.push_back(
+                    frame.arguments.back());
+                frame.directions.push_back(
+                    frontend::PortDirection::Input);
+                continue;
+            }
             const auto static_actual = std::ranges::find_if(
                 static_integer_actuals,
                 [index](const auto& binding) {
@@ -19120,8 +19225,19 @@ Lowerer::lower_hir_function_call_value(
         lowered_container_actuals(actuals->size());
     std::vector<std::optional<HirPackedUpdateTarget>>
         packed_copy_out_targets(actuals->size());
+    std::vector<std::optional<ContainerRegisterId>> shaped_actuals(
+        actuals->size());
     for (std::size_t index = 0U; index < actuals->size(); ++index) {
         const auto& frame = hir_callable_frames_[frame_index];
+        if (shaped_formals[index]) {
+            shaped_actuals[index] = lower_hir_vhdl_shaped_materialize(
+                *shaped_formals[index], (*actuals)[index],
+                hir_source_span(expression->vhdl->source));
+            if (!shaped_actuals[index]) {
+                return std::nullopt;
+            }
+            continue;
+        }
         if (frame.argument_is_container[index]) {
             const auto formal_type
                 = runtime::simir::process_layout_detail::ProcessLayoutAccess::copy_at(
@@ -19275,7 +19391,12 @@ Lowerer::lower_hir_function_call_value(
     }
     for (std::size_t index = 0U;
         index < lowered_actuals.size(); ++index) {
-        if (frame.argument_is_container[index]) {
+        if (shaped_actuals[index]) {
+            process_.operations.emplace_back(CopyContainerRegister {
+                frame.vhdl_shaped_formals.at(formals[index].value())
+                    .container,
+                *shaped_actuals[index] });
+        } else if (frame.argument_is_container[index]) {
             if (frame.directions[index]
                 == frontend::PortDirection::Output) {
                 if (!frame.container_output_defaults[index]) {
@@ -21996,6 +22117,18 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             string_formals[index] = true;
         }
     }
+    // An unconstrained array formal whose actual's index range is known
+    // only when the call is executed takes it then (IEEE 1076-2008
+    // 4.2.2.2): the actual is passed as a shaped value.
+    std::vector<std::optional<HirVhdlShapedProfile>> shaped_formals(
+        formals.size());
+    for (std::size_t index { }; index < formals.size(); ++index) {
+        if (!signal_actuals[index] && !protected_actuals[index]
+            && !string_formals[index]) {
+            shaped_formals[index] = hir_vhdl_shaped_formal_profile(
+                formals[index], (*actuals)[index]);
+        }
+    }
     // A locally static input actual becomes a static binding of the frame
     // (see below), so each distinct value needs its own frame; otherwise a
     // later call would observe the first call's value.
@@ -22052,6 +22185,10 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     };
     for (std::size_t index { }; index < formals.size(); ++index) {
         if (signal_actuals[index] || protected_actuals[index]) {
+            continue;
+        }
+        if (shaped_formals[index]) {
+            range_actual_key += "|s" + std::to_string(index);
             continue;
         }
         const auto formal = specialized_hir_unit_->find_declaration(formals[index]);
@@ -22520,6 +22657,28 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                     frontend::PortDirection::Input);
                 continue;
             }
+            if (shaped_formals[index]) {
+                // A placeholder register keeps argument positions aligned.
+                HirVhdlShapedLocal local;
+                local.container = allocate_container_register(
+                    shaped_formals[index]->type);
+                local.profile = *shaped_formals[index];
+                frame.invocation_containers.push_back(local.container);
+                if (frame.profile_formals.size() == formals.size()
+                    && frame.profile_formals[index] != formal) {
+                    frame.vhdl_shaped_formals.emplace(
+                        frame.profile_formals[index].value(), local);
+                }
+                frame.vhdl_shaped_formals.emplace(
+                    formal.value(), std::move(local));
+                frame.arguments.push_back(allocate_register(
+                    1U, frontend::ValueDomain::Bit2));
+                frame.invocation_registers.push_back(
+                    frame.arguments.back());
+                frame.directions.push_back(
+                    frontend::PortDirection::Input);
+                continue;
+            }
             const auto record = specialized_hir_unit_->find_declaration(
                 formal);
             // The formal's storage follows the actual's shape in this
@@ -22564,8 +22723,19 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         actuals->size());
     std::vector<std::optional<HirPackedUpdateTarget>>
         copy_out_targets(actuals->size());
+    std::vector<std::optional<ContainerRegisterId>> shaped_actuals(
+        actuals->size());
     for (std::size_t index { }; index < actuals->size(); ++index) {
         if (signal_actuals[index] || protected_actuals[index]) {
+            continue;
+        }
+        if (shaped_formals[index]) {
+            shaped_actuals[index] = lower_hir_vhdl_shaped_materialize(
+                *shaped_formals[index], (*actuals)[index],
+                hir_source_span(statement->vhdl->source));
+            if (!shaped_actuals[index]) {
+                return procedure_rejected(__LINE__);
+            }
             continue;
         }
         // A variable or constant actual is a value: in this iteration its
@@ -22654,13 +22824,20 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         frame.invocation_identity,
         frame.invocation_registers,
         frame.invocation_strings,
-        { },
+        frame.invocation_containers,
         true,
     });
     if (!frame.snapshot_complete) {
         frame.invocation_push_sites.push_back(push_site);
     }
     for (std::size_t index { }; index < lowered_actuals.size(); ++index) {
+        if (shaped_actuals[index]) {
+            process_.operations.emplace_back(CopyContainerRegister {
+                frame.vhdl_shaped_formals.at(formals[index].value())
+                    .container,
+                *shaped_actuals[index] });
+            continue;
+        }
         if (lowered_actuals[index]) {
             process_.operations.emplace_back(CopyRegister {
                 frame.arguments[index], *lowered_actuals[index] });
@@ -23625,7 +23802,26 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     const auto saved_captured_scalar_range_count
         = hir_vhdl_captured_scalar_ranges_.size();
     hir_class_container_caches_.clear();
+    // A shaped formal names its actual's value for the whole body.
+    std::vector<std::pair<std::uint32_t, std::optional<HirVhdlShapedLocal>>>
+        saved_shaped_formals;
+    for (const auto& [formal, local] : initial_frame->vhdl_shaped_formals) {
+        const auto found = hir_vhdl_shaped_locals_.find(formal);
+        saved_shaped_formals.emplace_back(formal,
+            found == hir_vhdl_shaped_locals_.end()
+                ? std::nullopt
+                : std::optional { found->second });
+        hir_vhdl_shaped_locals_.insert_or_assign(formal, local);
+    }
     const auto restore_context = [&] {
+        for (auto& [formal, local] : saved_shaped_formals) {
+            if (local) {
+                hir_vhdl_shaped_locals_.insert_or_assign(
+                    formal, std::move(*local));
+            } else {
+                hir_vhdl_shaped_locals_.erase(formal);
+            }
+        }
         hir_class_container_caches_ = std::move(saved_container_caches);
         hir_vhdl_protected_caches_ = std::move(saved_protected_caches);
         active_hir_callable_ = saved_active;
@@ -23750,6 +23946,9 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     for (std::size_t index = 0U;
         index < initial_frame->formals.size(); ++index) {
         const auto formal = initial_frame->formals[index];
+        if (initial_frame->vhdl_shaped_formals.contains(formal.value())) {
+            continue;
+        }
         const auto record = specialized_hir_unit_->find_declaration(formal);
         const auto name = record->systemverilog != nullptr
             ? record->systemverilog->name
@@ -23888,6 +24087,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 = specialized_hir_unit_->find_declaration(formal_id);
             return !record || record->vhdl == nullptr
                 || hir_callable_frames_[callable_index].signal_formals
+                    .contains(formal_id.value())
+                || hir_callable_frames_[callable_index].vhdl_shaped_formals
                     .contains(formal_id.value())
                 || emit_hir_callable_scalar_range_check(
                     formal_id,

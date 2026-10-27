@@ -694,6 +694,48 @@ std::optional<ContainerRegisterId> Lowerer::lower_hir_vhdl_shaped_materialize(
         from_packed(*container, *packed);
         return container;
     }
+    // A slice whose bounds are known only at run time has the slice's own
+    // index range (8.5): the prefix's value is sliced when it is evaluated.
+    if (source->vhdl->kind == semantic::vhdl::ExpressionKind::slice
+        && source->vhdl->operands.size() == 3U
+        && (source->vhdl->text == "to" || source->vhdl->text == "downto")
+        && profile.constraints.size() == 1U && profile.outer_rank == 0U
+        && [&] {
+               const auto shape = hir_vhdl_shape(value);
+               return !shape || !shape->complete();
+           }()) {
+        const auto prefix = lower_hir_vhdl_shaped_materialize(
+            profile, source->vhdl->operands[0], span);
+        if (!prefix) {
+            return std::nullopt;
+        }
+        std::vector<RegisterId> bounds;
+        for (const auto bound :
+            { source->vhdl->operands[1], source->vhdl->operands[2] }) {
+            const auto lowered = lower_hir_expression(bound,
+                hir_expression_width(bound, hir_process_scope_).value_or(32U));
+            if (!lowered) {
+                return std::nullopt;
+            }
+            bounds.push_back(*lowered);
+        }
+        const auto container = allocate_container_register(profile.type);
+        process_.operations.emplace_back(VhdlShaped {
+            VhdlShapedOperation::slice,
+            container,
+            *prefix,
+            { },
+            std::move(bounds),
+            { static_cast<std::uint8_t>(
+                source->vhdl->text == "downto" ? 1U : 0U) },
+            profile.type,
+            0U,
+            VhdlShapedAttribute::length,
+            0U,
+            { },
+        });
+        return container;
+    }
     // An array: another shaped value, or a packed one with its own ranges.
     if (hir_vhdl_shaped_value_profile(value)) {
         const auto shaped = lower_hir_vhdl_shaped_container(value, span);

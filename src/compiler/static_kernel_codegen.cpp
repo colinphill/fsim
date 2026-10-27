@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <optional>
 #include <sstream>
 #include <chrono>
@@ -46,6 +47,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -3546,6 +3548,8 @@ class LlvmStaticKernelCodegen final : public StaticKernelCodegen {
 public:
     explicit LlvmStaticKernelCodegen(StaticKernelCodegenOptions options)
         : ahead_of_time_ { options.ahead_of_time }
+        , jobs_ { options.jobs != 0U ? options.jobs
+                                     : std::max(1U, std::thread::hardware_concurrency()) }
     {
         initialize_native_target();
         if (!options.cache_root.empty()) {
@@ -3556,8 +3560,9 @@ public:
             reinterpret_cast<const std::uint8_t*>(identity_.data()), identity_.size() });
         const char* level = std::getenv("FSIM_STATIC_KERNEL_CODEGEN_LEVEL");
         const auto codegen_level = level == nullptr ? 0 : std::atoi(level);
-        jit_ = make_jit(capture_, codegen_level,
-            std::getenv("FSIM_STATIC_KERNEL_NO_FAST_ISEL") == nullptr);
+        cold_machine_ = { codegen_level,
+            std::getenv("FSIM_STATIC_KERNEL_NO_FAST_ISEL") == nullptr };
+        jit_ = make_jit(capture_, cold_machine_);
         // Hot templates: the optimizing backend. Register allocation and the
         // machine passes carry most of its benefit; fast instruction
         // selection halves its compile time for a small run-time cost, so
@@ -3566,21 +3571,23 @@ public:
         // FSIM_STATIC_KERNEL_HOT_FAST_ISEL=0/1 chooses either way.
         const char* hot_level = std::getenv("FSIM_STATIC_KERNEL_HOT_LEVEL");
         const char* hot_fast_isel = std::getenv("FSIM_STATIC_KERNEL_HOT_FAST_ISEL");
-        hot_jit_ = make_jit(capture_, hot_level == nullptr ? 2 : std::atoi(hot_level),
+        hot_machine_ = { hot_level == nullptr ? 2 : std::atoi(hot_level),
             hot_fast_isel == nullptr ? !ahead_of_time_
-                                     : std::string_view { hot_fast_isel } != "0");
+                                     : std::string_view { hot_fast_isel } != "0" };
+        hot_jit_ = make_jit(capture_, hot_machine_);
         // Warm templates: full instruction selection without the optimizing
         // backend's cost (FSIM_STATIC_KERNEL_WARM_LEVEL,
         // FSIM_STATIC_KERNEL_WARM_FAST_ISEL=0/1).
         const char* warm_level = std::getenv("FSIM_STATIC_KERNEL_WARM_LEVEL");
         const char* warm_fast_isel = std::getenv("FSIM_STATIC_KERNEL_WARM_FAST_ISEL");
-        warm_jit_ = make_jit(capture_, warm_level == nullptr ? 0 : std::atoi(warm_level),
-            warm_fast_isel != nullptr && std::string_view { warm_fast_isel } != "0");
+        warm_machine_ = { warm_level == nullptr ? 0 : std::atoi(warm_level),
+            warm_fast_isel != nullptr && std::string_view { warm_fast_isel } != "0" };
+        warm_jit_ = make_jit(capture_, warm_machine_);
         if (const char* limit = std::getenv("FSIM_STATIC_KERNEL_OPT_MAX_SIZE")) {
             opt_max_size_ = static_cast<std::size_t>(std::strtoull(limit, nullptr, 10));
             const char* opt_level = std::getenv("FSIM_STATIC_KERNEL_OPT_LEVEL");
-            opt_jit_ = make_jit(capture_,
-                opt_level == nullptr ? 1 : std::atoi(opt_level), true);
+            opt_machine_ = { opt_level == nullptr ? 1 : std::atoi(opt_level), true };
+            opt_jit_ = make_jit(capture_, opt_machine_);
         }
     }
 
@@ -3694,7 +3701,12 @@ public:
                 const auto group_started = std::chrono::steady_clock::now();
                 auto& jit = tier == 3U ? *opt_jit_ : tier == 2U ? *hot_jit_ : tier == 1U ? *warm_jit_ : *jit_;
                 define_helpers(jit, helpers);
-                compile_group(jit, templates, keys, group, entries,
+                compile_group(jit,
+                    tier == 3U       ? opt_machine_
+                        : tier == 2U ? hot_machine_
+                        : tier == 1U ? warm_machine_
+                                     : cold_machine_,
+                    templates, keys, group, entries,
                     tier == 3U ? std::uint8_t { 1U } : tier);
                 tier_ms[std::min<std::uint8_t>(tier, 2U)] += std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - group_started).count();
@@ -3816,20 +3828,32 @@ private:
         std::string bytes;
     };
 
-    [[nodiscard]] static std::unique_ptr<llvm::orc::LLJIT> make_jit(
-        ObjectCapture& capture, const int codegen_level, const bool fast_isel)
+    /// A tier's backend settings.
+    struct TierMachine {
+        int level { };
+        bool fast_isel { };
+    };
+
+    [[nodiscard]] static llvm::orc::JITTargetMachineBuilder target_builder(
+        const TierMachine& machine)
     {
         auto target = llvm::orc::JITTargetMachineBuilder::detectHost();
         if (!target) {
             throw std::runtime_error(error_text(target.takeError()));
         }
-        target->setCodeGenOptLevel(codegen_level <= 0 ? llvm::CodeGenOptLevel::None
-                : codegen_level == 1                   ? llvm::CodeGenOptLevel::Less
-                : codegen_level == 2 ? llvm::CodeGenOptLevel::Default
+        target->setCodeGenOptLevel(machine.level <= 0 ? llvm::CodeGenOptLevel::None
+                : machine.level == 1                   ? llvm::CodeGenOptLevel::Less
+                : machine.level == 2 ? llvm::CodeGenOptLevel::Default
                                      : llvm::CodeGenOptLevel::Aggressive);
-        target->getOptions().EnableFastISel = fast_isel;
+        target->getOptions().EnableFastISel = machine.fast_isel;
+        return std::move(*target);
+    }
+
+    [[nodiscard]] static std::unique_ptr<llvm::orc::LLJIT> make_jit(
+        ObjectCapture& capture, const TierMachine& machine)
+    {
         auto jit = llvm::orc::LLJITBuilder()
-                       .setJITTargetMachineBuilder(std::move(*target))
+                       .setJITTargetMachineBuilder(target_builder(machine))
                        .setNumCompileThreads(0U)
                        .setCompileFunctionCreator(
                            [&capture](llvm::orc::JITTargetMachineBuilder builder)
@@ -3850,23 +3874,22 @@ private:
         return std::move(*jit);
     }
 
-    void compile_group(llvm::orc::LLJIT& jit,
+    struct BuiltModule {
+        std::unique_ptr<llvm::LLVMContext> context;
+        std::unique_ptr<llvm::Module> module;
+    };
+
+    /// The module of one function per template of `group`, its IR passes
+    /// run. Touches no state of this generator but the templates' resume
+    /// points, so chunks of a group build concurrently.
+    [[nodiscard]] BuiltModule build_module(const llvm::DataLayout& layout,
         std::span<const StaticKernelTemplate> templates,
-        const std::vector<std::string>& keys,
-        const std::vector<std::size_t>& all,
-        std::vector<StaticKernelNativeEntry>& entries, const std::uint8_t tier)
+        const std::vector<std::string>& keys, const std::vector<std::size_t>& group,
+        const std::uint8_t tier, const std::size_t chunk) const
     {
-        // Templates with equal keys share one function.
-        std::vector<std::size_t> group;
-        std::unordered_map<std::string_view, std::size_t> first;
-        for (const auto index : all) {
-            if (first.emplace(keys[index], index).second) {
-                group.push_back(index);
-            }
-        }
         auto context = std::make_unique<llvm::LLVMContext>();
         auto module = std::make_unique<llvm::Module>("fsim_static_kernel", *context);
-        module->setDataLayout(jit.getDataLayout());
+        module->setDataLayout(layout);
         auto* i32 = llvm::Type::getInt32Ty(*context);
         auto* ptr = llvm::PointerType::getUnqual(*context);
         auto* type = llvm::FunctionType::get(i32, { ptr, ptr }, false);
@@ -3935,6 +3958,7 @@ private:
             auto file = support::native_fs::open_ofstream(
                 std::filesystem::path { dump }
                 / ("static-kernel-" + std::to_string(generation_)
+                    + (chunk != 0U ? "-" + std::to_string(chunk) : std::string { })
                     + (tier == 2U ? "-hot.ll" : tier == 1U ? "-warm.ll" : "-cold.ll")));
             std::string text;
             llvm::raw_string_ostream stream(text);
@@ -3945,20 +3969,22 @@ private:
             }
             file << text;
         }
-        if (auto error = jit.addIRModule(llvm::orc::ThreadSafeModule(
-                std::move(module), std::move(context)))) {
-            throw std::runtime_error(error_text(std::move(error)));
-        }
-        const bool store = ahead_of_time_ && cache_;
-        capture_.enabled = store;
-        capture_.bytes.clear();
-        for (std::size_t slot = 0U; slot < group.size(); ++slot) {
-            auto symbol = jit.lookup(names[slot]);
+        return { std::move(context), std::move(module) };
+    }
+
+    /// Sets the entries of `group` from `jit` (compiling what it holds as
+    /// IR) and records them as known.
+    void bind_entries(llvm::orc::LLJIT& jit,
+        std::span<const StaticKernelTemplate> templates,
+        const std::vector<std::string>& keys, const std::vector<std::size_t>& group,
+        std::vector<StaticKernelNativeEntry>& entries)
+    {
+        for (const auto index : group) {
+            auto symbol = jit.lookup(symbol_name(keys[index]));
             if (!symbol) {
                 capture_.enabled = false;
                 throw std::runtime_error(error_text(symbol.takeError()));
             }
-            const auto index = group[slot];
             entries[index] = symbol->toPtr<StaticKernelNativeEntry>();
             auto& known = known_[keys[index]];
             known.entry = entries[index];
@@ -3966,14 +3992,131 @@ private:
                 known.resume_points = *templates[index].resume_points;
             }
         }
-        capture_.enabled = false;
+    }
+
+    /// `group` in chunks of similar instruction counts that compile on
+    /// separate threads (each keeps template order, so its object is the
+    /// same for the same templates and job count). A chunk smaller than
+    /// a thread's setup is worth stays with another.
+    [[nodiscard]] std::vector<std::vector<std::size_t>> split_group(
+        std::span<const StaticKernelTemplate> templates,
+        const std::vector<std::size_t>& group, const std::uint8_t tier) const
+    {
+        // The optimizing backend costs about twenty times as much per
+        // instruction as the fast one.
+        const std::size_t minimum_chunk = tier == 2U ? 256U : 4096U;
+        std::size_t total = 0U;
+        for (const auto index : group) {
+            total += templates[index].body->code.size();
+        }
+        const auto count = std::min({ jobs_, group.size(),
+            std::max<std::size_t>(1U, total / minimum_chunk) });
+        if (count <= 1U) {
+            return { group };
+        }
+        auto order = group;
+        std::ranges::stable_sort(order, [&](const std::size_t left, const std::size_t right) {
+            return templates[left].body->code.size() > templates[right].body->code.size();
+        });
+        std::vector<std::vector<std::size_t>> chunks(count);
+        std::vector<std::size_t> load(count, 0U);
+        for (const auto index : order) {
+            const auto lightest = static_cast<std::size_t>(
+                std::ranges::min_element(load) - load.begin());
+            chunks[lightest].push_back(index);
+            load[lightest] += templates[index].body->code.size();
+        }
+        for (auto& chunk : chunks) {
+            std::ranges::sort(chunk);
+        }
+        return chunks;
+    }
+
+    void compile_group(llvm::orc::LLJIT& jit, const TierMachine& machine,
+        std::span<const StaticKernelTemplate> templates,
+        const std::vector<std::string>& keys,
+        const std::vector<std::size_t>& all,
+        std::vector<StaticKernelNativeEntry>& entries, const std::uint8_t tier)
+    {
+        // Templates with equal keys share one function.
+        std::vector<std::size_t> group;
+        std::unordered_map<std::string_view, std::size_t> first;
+        for (const auto index : all) {
+            if (first.emplace(keys[index], index).second) {
+                group.push_back(index);
+            }
+        }
+        const bool store = ahead_of_time_ && cache_;
+        const auto chunks = split_group(templates, group, tier);
+        if (chunks.size() == 1U) {
+            auto built = build_module(jit.getDataLayout(), templates, keys, group, tier, 0U);
+            if (auto error = jit.addIRModule(llvm::orc::ThreadSafeModule(
+                    std::move(built.module), std::move(built.context)))) {
+                throw std::runtime_error(error_text(std::move(error)));
+            }
+            capture_.enabled = store;
+            capture_.bytes.clear();
+            bind_entries(jit, templates, keys, group, entries);
+            capture_.enabled = false;
+            if (store && !capture_.bytes.empty()) {
+                store_group(keys, group, capture_.bytes);
+            }
+        } else {
+            // Each chunk builds and compiles its module on its own thread,
+            // with its own context and target machine; the objects are then
+            // linked and stored in chunk order.
+            std::vector<std::unique_ptr<llvm::MemoryBuffer>> objects(chunks.size());
+            std::vector<std::exception_ptr> failures(chunks.size());
+            std::atomic_size_t next { 0U };
+            const auto layout = jit.getDataLayout();
+            const auto work = [&] {
+                for (auto chunk = next.fetch_add(1U); chunk < chunks.size();
+                     chunk = next.fetch_add(1U)) {
+                    try {
+                        auto built = build_module(
+                            layout, templates, keys, chunks[chunk], tier, chunk);
+                        auto target = target_builder(machine).createTargetMachine();
+                        if (!target) {
+                            throw std::runtime_error(error_text(target.takeError()));
+                        }
+                        llvm::orc::SimpleCompiler compiler(**target);
+                        auto object = compiler(*built.module);
+                        if (!object) {
+                            throw std::runtime_error(error_text(object.takeError()));
+                        }
+                        objects[chunk] = std::move(*object);
+                    } catch (...) {
+                        failures[chunk] = std::current_exception();
+                    }
+                }
+            };
+            {
+                std::vector<std::jthread> workers;
+                for (std::size_t worker = 1U; worker < chunks.size(); ++worker) {
+                    workers.emplace_back(work);
+                }
+                work();
+            }
+            for (const auto& failure : failures) {
+                if (failure) {
+                    std::rethrow_exception(failure);
+                }
+            }
+            for (std::size_t chunk = 0U; chunk < chunks.size(); ++chunk) {
+                const std::string bytes { objects[chunk]->getBuffer() };
+                if (auto error = jit.addObjectFile(std::move(objects[chunk]))) {
+                    throw std::runtime_error(error_text(std::move(error)));
+                }
+                bind_entries(jit, templates, keys, chunks[chunk], entries);
+                if (store) {
+                    store_group(keys, chunks[chunk], bytes);
+                }
+            }
+        }
         for (const auto index : all) {
             const auto found = known_.find(keys[index]);
             entries[index] = found->second.entry;
             restore_resume_points(found->second, templates[index]);
-        }
-        if (store && !capture_.bytes.empty()) {
-            store_group(keys, group);
         }
     }
 
@@ -4177,7 +4320,8 @@ private:
         return known_.emplace(key, std::move(known)).first->second.entry;
     }
 
-    void store_group(const std::vector<std::string>& keys, const std::vector<std::size_t>& group)
+    void store_group(const std::vector<std::string>& keys,
+        const std::vector<std::size_t>& group, const std::string& bytes)
     {
         CacheKeyBuilder object_key;
         object_key.add("codegen", identity_);
@@ -4187,7 +4331,7 @@ private:
         const auto object = object_key.finish();
         std::error_code error;
         if (!cache_->store(object,
-                std::as_bytes(std::span { capture_.bytes.data(), capture_.bytes.size() }),
+                std::as_bytes(std::span { bytes.data(), bytes.size() }),
                 error)) {
             return;
         }
@@ -4284,6 +4428,12 @@ private:
     std::unique_ptr<llvm::orc::LLJIT> hot_jit_;
     std::unique_ptr<llvm::orc::LLJIT> warm_jit_;
     std::unique_ptr<llvm::orc::LLJIT> opt_jit_;
+    TierMachine cold_machine_;
+    TierMachine hot_machine_;
+    TierMachine warm_machine_;
+    TierMachine opt_machine_;
+    /// Threads a group compiles on.
+    std::size_t jobs_ { 1U };
     std::size_t opt_max_size_ { };
     std::size_t generation_ { };
 };
@@ -4299,22 +4449,32 @@ std::shared_ptr<runtime::simir::StaticKernelCodegen> make_static_kernel_codegen(
 namespace {
 
 thread_local std::size_t ahead_of_time_scopes { };
+thread_local std::uint32_t ahead_of_time_jobs { 1U };
 
 } // namespace
 
-StaticKernelAheadOfTimeScope::StaticKernelAheadOfTimeScope() noexcept
+StaticKernelAheadOfTimeScope::StaticKernelAheadOfTimeScope(
+    const std::uint32_t jobs) noexcept
+    : previous_jobs_ { ahead_of_time_jobs }
 {
     ++ahead_of_time_scopes;
+    ahead_of_time_jobs = jobs;
 }
 
 StaticKernelAheadOfTimeScope::~StaticKernelAheadOfTimeScope()
 {
     --ahead_of_time_scopes;
+    ahead_of_time_jobs = previous_jobs_;
 }
 
 bool StaticKernelAheadOfTimeScope::active() noexcept
 {
     return ahead_of_time_scopes != 0U;
+}
+
+std::uint32_t StaticKernelAheadOfTimeScope::jobs() noexcept
+{
+    return ahead_of_time_jobs;
 }
 
 std::string native_host_fingerprint()

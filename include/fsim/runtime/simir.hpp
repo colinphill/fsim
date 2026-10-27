@@ -650,6 +650,10 @@ enum class VhdlShapedOperation : std::uint8_t {
     // target := target & the packed operands[0], a whole number of
     // elements.
     append_packed,
+    // target := source(operands[0] to/downto operands[1]) of a
+    // one-dimensional value, `directions[0]` set for downto, as a value
+    // with the slice's own index range (8.5).
+    slice,
 };
 
 enum class VhdlShapedAttribute : std::uint8_t {

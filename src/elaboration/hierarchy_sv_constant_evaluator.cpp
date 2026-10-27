@@ -5204,6 +5204,32 @@ private:
             }
             frame.values.emplace(formals[index], std::move(*value));
         }
+        // A constant function reads only its arguments, parameters and other
+        // constant items (IEEE 1800-2023 13.4.3), so a call with the same
+        // converted arguments that read no hierarchy identity has the same
+        // result in every occurrence of this specialization. Its recorded
+        // work is charged again, so the work limit is reached as before.
+        // Array arguments and results, recursion and class contexts are
+        // evaluated each time.
+        std::string memo_key;
+        if (array_formals.empty() && array_result == nullptr
+            && std::ranges::none_of(frames_, [&](const Frame& active) {
+                   return active.callable == callable.id
+                       || active.class_owner != nullptr;
+               })) {
+            memo_key = call_memo_key(callable.id, formals, frame.values);
+            const auto& calls = *specialization_cache(specialization_)
+                                     .constants->unit_calls;
+            if (const auto found = calls.find(memo_key); found != calls.end()) {
+                if (!consume_work(found->second.work)) {
+                    return std::nullopt;
+                }
+                return found->second.value;
+            }
+        }
+        const auto reads_before = hierarchy_reads_;
+        const auto work_before = work_units_used_;
+        const auto error_before = error_;
         auto result = make_known(0U, 32U, true, false);
         if (callable.callable->return_type.executable_width) {
             result = *convert_record_type(
@@ -5311,8 +5337,53 @@ private:
         auto value = frames_.back().result.value_or(
             frames_.back().values.at(callable.id));
         frames_.pop_back();
-        return convert_record_type(
+        auto converted = convert_record_type(
             std::move(value), callable.callable->return_type);
+        if (converted && !memo_key.empty() && hierarchy_reads_ == reads_before
+            && error_ == error_before) {
+            specialization_cache(specialization_).constants->unit_calls->emplace(
+                std::move(memo_key),
+                SpecializationConstants::CallResult {
+                    *converted, work_units_used_ - work_before });
+        }
+        return converted;
+    }
+
+    /// The callable and its converted argument values, in formal order.
+    [[nodiscard]] static std::string call_memo_key(
+        const semantic::DeclarationId callable,
+        const std::vector<semantic::DeclarationId>& formals,
+        const std::map<semantic::DeclarationId, Value>& values)
+    {
+        std::string key = std::to_string(callable.value());
+        for (const auto formal : formals) {
+            const auto found = values.find(formal);
+            key += '|';
+            if (found == values.end()) {
+                continue;
+            }
+            key += found->second.canonical();
+            // The packed range is not part of the canonical identity; every
+            // field of it can reach the body (selects, their signedness).
+            if (const auto& range = found->second.packed_range) {
+                const auto bound = [&](const auto& value) {
+                    key += value ? ':' + std::to_string(*value) : std::string { ":-" };
+                };
+                const auto expression = [&](const auto& value) {
+                    key += value ? ':' + std::to_string(value->value())
+                                 : std::string { ":-" };
+                };
+                key += ":r";
+                bound(range->left);
+                bound(range->right);
+                expression(range->left_expression);
+                expression(range->right_expression);
+                key += ':' + std::to_string(range->source.value()) + ':'
+                    + (range->descending ? 'd' : 'a')
+                    + (range->element_signed ? 's' : 'u');
+            }
+        }
+        return key;
     }
 
     /// Copy `source`'s elements, left to right, into `target`, converting

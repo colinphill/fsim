@@ -477,7 +477,8 @@ void Interpreter::Impl::execute_container(
         break;
     }
     case VhdlShapedOperation::slice_read:
-    case VhdlShapedOperation::slice_write: {
+    case VhdlShapedOperation::slice_write:
+    case VhdlShapedOperation::slice: {
         if (operation.operands.size() != 2U || operation.directions.size() != 1U) {
             container_error(id, pc, "malformed VHDL slice operation");
         }
@@ -486,7 +487,22 @@ void Interpreter::Impl::execute_container(
         const auto last = known_index(id, pc,
             get_register(process, operation.operands[1]));
         const bool descending = operation.directions.front() != 0U;
-        if (operation.operation == VhdlShapedOperation::slice_read) {
+        if (operation.operation == VhdlShapedOperation::slice) {
+            const auto& source
+                = read_container_register(process, operation.source);
+            require_shaped(id, pc, source);
+            const auto place
+                = slice_place(id, pc, source, first, last, descending);
+            ContainerValue sliced;
+            sliced.type = source.type;
+            sliced.shape.push_back(VhdlShapeRange { first, last, descending });
+            sliced.elements.push_back(place.width == 0U
+                    ? PackedLogic4(0U, Logic4::zero)
+                    : source.elements.front().extract_bits(
+                          place.offset, place.width));
+            get_container_register(process, operation.target)
+                = std::move(sliced);
+        } else if (operation.operation == VhdlShapedOperation::slice_read) {
             const auto& source
                 = read_container_register(process, operation.source);
             require_shaped(id, pc, source);

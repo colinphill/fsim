@@ -42,6 +42,18 @@ struct SpecializationConstants {
     std::shared_ptr<std::unordered_map<std::uint32_t, HirSystemVerilogConstant>>
         unit_expressions { std::make_shared<std::unordered_map<std::uint32_t,
             HirSystemVerilogConstant>>() };
+    /// A constant function call's converted result and the work units its
+    /// evaluation consumed.
+    struct CallResult {
+        HirSystemVerilogConstant value;
+        std::uint64_t work { };
+    };
+    /// Results of constant function calls that read no hierarchy identity,
+    /// by callable and converted argument values (call_memo_key); shared
+    /// with derived occurrence specializations like unit_declarations.
+    std::shared_ptr<std::unordered_map<std::string, CallResult>> unit_calls {
+        std::make_shared<std::unordered_map<std::string, CallResult>>()
+    };
     /// Resolved widths of declaration and callable types, by type record.
     std::unordered_map<const void*, std::optional<std::uint64_t>>
         record_type_widths;
@@ -117,8 +129,8 @@ struct SpecializationCache {
 }
 
 /// `parent` with other hierarchy identities (with_hierarchy_identities). The
-/// result keeps the parent's unit-scope declaration and expression values,
-/// which read no hierarchy identity.
+/// result keeps the parent's unit-scope declaration and expression values
+/// and constant function results, which read no hierarchy identity.
 [[nodiscard]] inline semantic::SpecializedHirUnit
 derive_occurrence_specialization(
     const semantic::SpecializedHirUnit& parent,
@@ -129,6 +141,7 @@ derive_occurrence_specialization(
     const auto& parent_constants = *specialization_cache(parent).constants;
     derived_constants.unit_declarations = parent_constants.unit_declarations;
     derived_constants.unit_expressions = parent_constants.unit_expressions;
+    derived_constants.unit_calls = parent_constants.unit_calls;
     return derived;
 }
 

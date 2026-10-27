@@ -2,6 +2,7 @@
 #include "fsim/app/application.hpp"
 
 #include <array>
+#include <bitset>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -158,6 +159,63 @@ ViewCapture run_view_once(
   return capture;
 }
 
+fsim::project::Config make_shaped_config(
+    const std::filesystem::path& directory,
+    const std::filesystem::path& source,
+    const fsim::project::Optimization optimization) {
+  fsim::project::Config config;
+  config.base_directory = directory;
+  config.project.name = "vhdl-shaped-actuals";
+  config.project.top = "vhdl:work.shaped_actuals(rtl)";
+  config.project.time_resolution = "1ns";
+  config.build.optimization = optimization;
+  config.build.cache_path = directory
+      / (optimization == fsim::project::Optimization::o0
+             ? "shaped-cache-o0" : "shaped-cache-o2");
+  config.run.max_deltas = 1000;
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2008";
+  sources.library = "work";
+  sources.files.push_back(source);
+  config.source_sets.push_back(std::move(sources));
+  return config;
+}
+
+// An unconstrained array formal whose slice actual has bounds known only at
+// run time takes the slice's own index range (IEEE 1076-2008 4.2.2.2, 8.5).
+std::array<std::string, 3> run_shaped_once(
+    const fsim::project::Config& config,
+    const fsim::app::SimulationEngine engine) {
+  fsim::diagnostic::Engine diagnostics;
+  auto project = fsim::app::build_project(config, diagnostics);
+  if (!project) {
+    for (const auto& diagnostic : diagnostics.diagnostics()) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(project);
+  fsim::app::Simulation simulation{
+      std::move(*project), config.run.max_deltas, engine};
+  constexpr std::array<std::string_view, 3> paths{
+      "shaped_actuals.sum_result",
+      "shaped_actuals.outer_result",
+      "shaped_actuals.ones_result"};
+  std::array<fsim::runtime::simir::SignalId, paths.size()> signals{};
+  for (std::size_t index = 0; index < paths.size(); ++index) {
+    const auto signal = simulation.find_signal(paths[index]);
+    assert(signal);
+    signals[index] = *signal;
+  }
+  const auto result = simulation.run();
+  assert(result.status == fsim::runtime::RunStatus::completed);
+  std::array<std::string, 3> values;
+  for (std::size_t index = 0; index < signals.size(); ++index) {
+    values[index] = simulation.read_signal(signals[index]).to_msb_string();
+  }
+  return values;
+}
+
 }  // namespace
 
 int main() {
@@ -169,6 +227,7 @@ int main() {
   std::filesystem::create_directories(directory.path);
   const auto source = directory.path / "composite_operations.vhd";
   const auto view_source = directory.path / "view_execution.vhd";
+  const auto shaped_source = directory.path / "shaped_actuals.vhd";
   {
     std::ofstream output{source};
     output << R"(
@@ -271,9 +330,72 @@ end architecture;
     assert(output.good());
   }
 
+  {
+    std::ofstream output{shaped_source};
+    output << R"(
+entity shaped_actuals is end entity;
+architecture rtl of shaped_actuals is
+  type int_vector is array (integer range <>) of integer;
+  function total(w : int_vector) return integer is
+    variable s : integer := 0;
+  begin
+    for i in w'range loop s := s + w(i); end loop;
+    return s;
+  end function;
+  function outer(w : int_vector) return integer is
+  begin
+    return total(w) + w'length * 1000 + w'left * 100000;
+  end function;
+  procedure ones(v : in bit_vector; n : out integer) is
+  begin
+    n := 0;
+    for i in v'reverse_range loop
+      if v(i) = '1' then n := n + 1; end if;
+    end loop;
+  end procedure;
+  signal sum_result, outer_result, ones_result : integer;
+begin
+  exercise : process
+    variable q : int_vector(0 to 9);
+    variable v : bit_vector(15 downto 0) := x"F0A5";
+    variable a : integer := 5;
+    variable n, acc : integer := 0;
+  begin
+    for i in q'range loop q(i) := i * 3; end loop;
+    sum_result <= total(q(a to 8));
+    for k in 1 to 3 loop
+      acc := acc + outer(q(k to k + 4));
+    end loop;
+    outer_result <= acc;
+    acc := 0;
+    for k in 0 to 15 loop
+      ones(v(15 downto k), n);
+      acc := acc + n;
+    end loop;
+    ones_result <= acc;
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+
   for (const auto optimization : {
            fsim::project::Optimization::o0,
            fsim::project::Optimization::o2}) {
+    const auto shaped_config = make_shaped_config(
+        directory.path, shaped_source, optimization);
+    const std::array<std::string, 3> shaped_expected{
+        std::bitset<32>(78U).to_string(),
+        std::bitset<32>(615180U).to_string(),
+        std::bitset<32>(76U).to_string()};
+    assert(run_shaped_once(
+        shaped_config, fsim::app::SimulationEngine::interpreter)
+        == shaped_expected);
+    assert(run_shaped_once(
+        shaped_config, fsim::app::SimulationEngine::compiled)
+        == shaped_expected);
+
     const auto config = make_config(directory.path, source, optimization);
     const auto reference = run_once(
         config, fsim::app::SimulationEngine::interpreter);

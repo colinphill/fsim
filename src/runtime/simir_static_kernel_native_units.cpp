@@ -1269,7 +1269,70 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         for (std::size_t index = 0U; index < templates_.size(); ++index) {
             std::cerr << "fsim-kernel-template: " << index << " units="
                       << units_of[index] << " insts=" << templates_[index]->code.size()
+                      << " run=" << estimated_run_size(*templates_[index])
+                      << " tier=" << static_cast<unsigned>(templates[index].tier)
                       << " example=" << example[index] << '\n';
+        }
+    }
+    // Diagnostic: FSIM_KERNEL_DIFF_TEMPLATES=A,B lists the instructions in
+    // which two templates differ (what kept them from sharing a shape).
+    if (const char* pair = std::getenv("FSIM_KERNEL_DIFF_TEMPLATES")) {
+        char* rest = nullptr;
+        const auto left_index = std::strtoull(pair, &rest, 10);
+        const auto right_index = rest != nullptr && *rest == ','
+            ? std::strtoull(rest + 1, nullptr, 10) : left_index;
+        if (left_index < templates_.size() && right_index < templates_.size()) {
+            const auto& left = *templates_[left_index];
+            const auto& right = *templates_[right_index];
+            std::cerr << "fsim-kernel-diff: sizes " << left.code.size() << ' '
+                      << right.code.size() << " registers " << left.registers.size()
+                      << ' ' << right.registers.size() << " indices "
+                      << left.indices.size() << ' ' << right.indices.size()
+                      << " parts " << left.parts.size() << ' ' << right.parts.size()
+                      << " wide " << left.wide_constants.size() << ' '
+                      << right.wide_constants.size() << '\n';
+            // The side tables a template's key also covers.
+            const auto table = [&](const char* name, const auto& a, const auto& b) {
+                if (a != b) {
+                    std::cerr << "fsim-kernel-diff: " << name << " differ (sizes "
+                              << a.size() << ' ' << b.size() << ")\n";
+                }
+            };
+            table("register_widths", left.register_widths, right.register_widths);
+            table("return_targets", left.return_targets, right.return_targets);
+            table("tracked", left.tracked, right.tracked);
+            table("u_mode", left.u_mode, right.u_mode);
+            table("u_operands", left.u_operands, right.u_operands);
+            table("wide_base", left.wide_base, right.wide_base);
+            table("resume_entries", left.resume_entries, right.resume_entries);
+            if (left.entry != right.entry || left.shadow_base != right.shadow_base
+                || left.call_stack_base != right.call_stack_base) {
+                std::cerr << "fsim-kernel-diff: entry/shadow/call-stack differ\n";
+            }
+            std::size_t shown = 0U;
+            for (std::size_t at = 0U; at < std::min(left.code.size(), right.code.size())
+                 && shown < 40U;
+                 ++at) {
+                const auto& x = left.code[at];
+                const auto& y = right.code[at];
+                if (x.op == y.op && x.sub == y.sub && x.flags == y.flags
+                    && x.width == y.width && x.d == y.d && x.x == y.x && x.y == y.y
+                    && x.z == y.z && x.offset == y.offset && x.aux == y.aux
+                    && x.imm_a == y.imm_a && x.imm_b == y.imm_b) {
+                    continue;
+                }
+                ++shown;
+                std::cerr << "fsim-kernel-diff: at " << at << " op "
+                          << static_cast<int>(x.op) << '/' << static_cast<int>(y.op)
+                          << " sub " << int(x.sub) << '/' << int(y.sub) << " d " << x.d
+                          << '/' << y.d << " x " << x.x << '/' << y.x << " y " << x.y
+                          << '/' << y.y << " z " << x.z << '/' << y.z << " off "
+                          << x.offset << '/' << y.offset << " w " << x.width << '/'
+                          << y.width << " aux " << x.aux << '/' << y.aux << " imm "
+                          << x.imm_a << '/' << y.imm_a << ' ' << x.imm_b << '/'
+                          << y.imm_b << " flags " << int(x.flags) << '/'
+                          << int(y.flags) << '\n';
+            }
         }
     }
     // Cold member templates are compiled when they first run, so members

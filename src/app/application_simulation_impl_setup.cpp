@@ -700,6 +700,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                         ? std::filesystem::path { }
                         : built.cache_path / "static-kernel",
                     compiler::StaticKernelAheadOfTimeScope::active(),
+                    compiler::StaticKernelAheadOfTimeScope::jobs(),
                 });
             }
             // VHDL specializations: recorded ahead of time, restored after.

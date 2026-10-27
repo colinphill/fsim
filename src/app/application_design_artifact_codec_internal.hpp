@@ -559,7 +559,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, runtime::simir::VhdlShapedOperation>) {
             return value >= runtime::simir::VhdlShapedOperation::create
-                && value <= runtime::simir::VhdlShapedOperation::append_packed;
+                && value <= runtime::simir::VhdlShapedOperation::slice;
         } else if constexpr (
             std::same_as<T, runtime::simir::VhdlShapedAttribute>) {
             return value >= runtime::simir::VhdlShapedAttribute::left
@@ -1299,7 +1299,7 @@ namespace codec_detail {
         Writer() = default;
         explicit Writer(const std::size_t output_capacity)
         {
-            bytes_.reserve(output_capacity);
+            reserve_memory(output_capacity);
         }
         Writer(std::ostream* output, support::Sha256* checksum)
             : output_(output)
@@ -1345,10 +1345,15 @@ namespace codec_detail {
         void raw(std::string_view bytes)
         {
             total_written_ += bytes.size();
-            if (output_ == nullptr && checksum_ == nullptr) {
-                bytes_.append(bytes);
+            if (output_ == nullptr && checksum_ == nullptr) [[likely]] {
+                append_memory(bytes.data(), bytes.size());
                 return;
             }
+            raw_stream(bytes);
+        }
+
+        void raw_stream(std::string_view bytes)
+        {
             while (!bytes.empty() && failure_.empty()) {
                 const auto available = buffer_.size() - buffered_;
                 const auto count = std::min(available, bytes.size());
@@ -1365,8 +1370,8 @@ namespace codec_detail {
 
         void byte(const char value)
         {
-            if (output_ == nullptr && checksum_ == nullptr) {
-                bytes_.push_back(value);
+            if (output_ == nullptr && checksum_ == nullptr) [[likely]] {
+                append_memory(&value, 1U);
                 return;
             }
             if (!failure_.empty()) {
@@ -1612,7 +1617,10 @@ namespace codec_detail {
             --depth_;
         }
 
-        std::string finish() && { return std::move(bytes_); }
+        std::string finish() &&
+        {
+            return std::string { memory_.get(), memory_size_ };
+        }
         bool complete()
         {
             flush();
@@ -1832,7 +1840,33 @@ namespace codec_detail {
             buffered_ = 0;
         }
 
-        std::string bytes_;
+        // The in-memory output (no stream or checksum): appends of a few
+        // bytes, most of them fixed-size fields, copy without std::string's
+        // per-call checks.
+        void append_memory(const char* const data, const std::size_t count)
+        {
+            if (count > memory_capacity_ - memory_size_) [[unlikely]] {
+                reserve_memory(std::max(memory_size_ + count,
+                    std::max<std::size_t>(memory_capacity_ * 2U, 4096U)));
+            }
+            std::memcpy(memory_.get() + memory_size_, data, count);
+            memory_size_ += count;
+        }
+        void reserve_memory(const std::size_t capacity)
+        {
+            if (capacity <= memory_capacity_) {
+                return;
+            }
+            auto grown = std::make_unique_for_overwrite<char[]>(capacity);
+            if (memory_size_ != 0U) {
+                std::memcpy(grown.get(), memory_.get(), memory_size_);
+            }
+            memory_ = std::move(grown);
+            memory_capacity_ = capacity;
+        }
+        std::unique_ptr<char[]> memory_;
+        std::size_t memory_size_ { };
+        std::size_t memory_capacity_ { };
         std::size_t total_written_ { };
         bool runtime_string_table_ { };
         // Keys view interned storage, which lives as long as the process.

@@ -1523,7 +1523,9 @@ int elaborate_built_workspace(
         // kernel builds its code here (in the cache).
         const auto receipt_cache_path = reloaded->cache_path;
         reloaded->cone_fusion = !reloaded->code_coverage_enabled;
-        const compiler::StaticKernelAheadOfTimeScope static_kernel_aot;
+        // Native code compiles on the --jobs threads (0: all).
+        const compiler::StaticKernelAheadOfTimeScope static_kernel_aot {
+            config.build.jobs };
         Simulation simulation { std::move(*reloaded), config.run.max_deltas,
             SimulationEngine::v4,
             SystemVerilogVpiRuntimeUpdates::omitted };

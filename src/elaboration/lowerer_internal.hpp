@@ -1172,6 +1172,13 @@ private:
     [[nodiscard]] std::optional<HirVhdlShapedProfile>
     hir_vhdl_shaped_open_profile(
         const semantic::vhdl::SubtypeIndication& subtype) const;
+    // The shaped profile an `in` unconstrained array formal takes when its
+    // actual's index range is known only at run time (a slice with
+    // non-static bounds, or a shaped value; IEEE 1076-2008 4.2.2.2), or
+    // nullopt when the actual has a static width.
+    [[nodiscard]] std::optional<HirVhdlShapedProfile>
+    hir_vhdl_shaped_formal_profile(semantic::DeclarationId formal,
+        semantic::ExpressionId actual) const;
     // Whether this unit has any shaped object or shaped access type.
     [[nodiscard]] bool hir_vhdl_shaped_active() const;
     // The heap object denoted by `p.all`, or by `p` when `prefix`.
@@ -5230,6 +5237,12 @@ private:
         // A result whose bounds the returned value gives at run time, held
         // in container_result; part of the frame key.
         std::optional<HirVhdlShapedProfile> vhdl_shaped_result;
+        // Unconstrained array formals whose actuals' index ranges are known
+        // only at run time (hir_vhdl_shaped_formal_profile): each holds its
+        // actual as a shaped value, keyed like vhdl_formal_ranges; part of
+        // the frame key.
+        std::unordered_map<std::uint32_t, HirVhdlShapedLocal>
+            vhdl_shaped_formals;
         std::string debug_name;
         // Signal-class procedure formals denote their actual signal for the
         // whole call. Frames are specialized per actual signal set.
