@@ -131,12 +131,14 @@ FileHandle Interpreter::Impl::open_file(
     // $fopen returns zero when the file cannot be opened (IEEE 1800-2017
     // 21.3.1).
     // A name outside the manifest root stays an error: file access is
-    // confined to the project.
+    // confined to the project. So does a run with no file root at all,
+    // which would otherwise read every file as missing.
     try {
         return open_file_unchecked(process, path_text, mode_text, vhdl);
     } catch (const std::runtime_error& error) {
         const std::string_view message { error.what() };
         if (message.find("manifest root") != std::string_view::npos
+            || message.find("project root") != std::string_view::npos
             || message.find("escapes") != std::string_view::npos) {
             throw;
         }

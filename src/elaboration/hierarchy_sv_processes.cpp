@@ -430,6 +430,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         bool lowered_here { };
         std::size_t diagnostics_before { };
         std::uint32_t invocation_before { };
+        std::uint64_t instance_path_uses_before { };
         if (!lowered) {
             lowerer.set_hir_code_coverage_active(parsed_process
                 && !concurrent_assertion
@@ -442,6 +443,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             diagnostics_before = diagnostics_.size();
             invocation_before
                 = lowerer.next_hir_callable_invocation_identity();
+            instance_path_uses_before = lowerer.hir_instance_path_uses();
             lowerer.reset_hierarchical_reference_state();
             lowerer.set_hierarchical_reference_retry(
                 deferred_processes != nullptr);
@@ -484,7 +486,9 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             && diagnostics_.size() == diagnostics_before
             && invocation_after >= invocation_before
             && !lowerer.has_generated_processes()
-            && !lowerer.hierarchical_reference_used()) {
+            && !lowerer.hierarchical_reference_used()
+            && lowerer.hir_instance_path_uses()
+                == instance_path_uses_before) {
             remembered_template
                 = remember_systemverilog_process_template(
                     unit,
@@ -697,6 +701,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             bool lowered_here { };
             std::size_t diagnostics_before { };
             std::uint32_t invocation_before { };
+            std::uint64_t instance_path_uses_before { };
             if (!lowered) {
                 generated_lowerer.set_hir_code_coverage_active(
                     parsed_process
@@ -709,6 +714,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 invocation_before
                     = generated_lowerer
                         .next_hir_callable_invocation_identity();
+                instance_path_uses_before
+                    = generated_lowerer.hir_instance_path_uses();
                 generated_lowerer.reset_hierarchical_reference_state();
                 generated_lowerer.set_hierarchical_reference_retry(
                     deferred_generated != nullptr);
@@ -760,7 +767,9 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 && diagnostics_.size() == diagnostics_before
                 && invocation_after >= invocation_before
                 && !generated_lowerer.has_generated_processes()
-                && !generated_lowerer.hierarchical_reference_used()) {
+                && !generated_lowerer.hierarchical_reference_used()
+                && generated_lowerer.hir_instance_path_uses()
+                    == instance_path_uses_before) {
                 remembered_template
                     = remember_systemverilog_process_template(
                         unit,

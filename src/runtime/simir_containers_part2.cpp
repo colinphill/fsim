@@ -989,9 +989,22 @@ void Interpreter::Impl::execute_container(
         ++process.pc;
         return;
     }
-    const auto handle = open_file(
-        process.id,
-        get_string_register(process, operation.path), "r");
+    const auto& read_path = get_string_register(process, operation.path);
+    const auto handle = open_file(process.id, read_path, "r");
+    // A file that cannot be opened loads nothing; say so rather than
+    // reporting an empty file's word count (IEEE 1800-2023 21.4).
+    if (handle == 0) {
+        const auto message
+            = "cannot open read-memory file '" + read_path + "'";
+        if (!report_hook) {
+            container_error(process.id, process.pc, message);
+        } else {
+            report_hook(process.id, message, AssertionSeverity::error,
+                SourceLocation { }, scheduler.now(), scheduler.delta());
+        }
+        ++process.pc;
+        return;
+    }
     std::string text;
     try {
         while (!file_end_of_file(process.id, handle)) {

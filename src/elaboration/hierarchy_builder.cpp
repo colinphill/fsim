@@ -1074,6 +1074,7 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
     const bool measure = lowering_census_enabled_;
     const auto started = measure
         ? diagnostic::thread_cpu_now() : std::nullopt;
+    const auto instance_path_uses_before = lowerer.hir_instance_path_uses();
     auto lowered = lower_occurrence();
     if (process_source && lowered && lowered->name == "<process>") {
         lowered->name = std::string { path };
@@ -1089,6 +1090,7 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
     }
     if (!lowered || diagnostics_.size() != diagnostics_before
         || lowerer.has_generated_processes()
+        || lowerer.hir_instance_path_uses() != instance_path_uses_before
         || lowered->string_register_count != 0U
         || lowered->container_register_count != 0U
         || !lowered->static_trigger_regions.empty()
@@ -1392,6 +1394,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     const bool measure = lowering_census_enabled_;
     const auto started = measure
         ? diagnostic::thread_cpu_now() : std::nullopt;
+    const auto instance_path_uses_before = lowerer.hir_instance_path_uses();
     auto lowered = lowerer.lower_hir_concurrent_statement(
         statement, source_language, path, order);
     const auto invocation_after
@@ -1415,6 +1418,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     if (diagnostics_.size() != diagnostics_before
         || invocation_after != invocation_before
         || lowerer.has_generated_processes()
+        || lowerer.hir_instance_path_uses() != instance_path_uses_before
         || lowered->scheduling_domain != expected_domain
         || lowered->string_register_count != 0U
         || lowered->container_register_count != 0U
@@ -1430,6 +1434,8 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
         why(diagnostics_.size() != diagnostics_before ? "diagnostics"
             : invocation_after != invocation_before ? "callable_invocation"
             : lowerer.has_generated_processes() ? "generated_processes"
+            : lowerer.hir_instance_path_uses() != instance_path_uses_before
+            ? "instance_path"
             : lowered->driver_regions.size() != 1U ? "driver_regions"
             : "program_shape");
         record_lowering_census(systemverilog_concurrent_template_rejections_);

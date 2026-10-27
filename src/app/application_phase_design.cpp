@@ -1598,8 +1598,13 @@ static int handle_simulate_impl(
     if (invocation.cache_directory) {
         built->cache_path = *invocation.cache_directory;
     }
+    // Files a simulation names ($fopen, $readmemh, $coverage_save) resolve
+    // against the workspace, the directory the run starts in, never the
+    // snapshot's storage; --file-root overrides it.
     if (invocation.file_root) {
         built->file_root = *invocation.file_root;
+    } else if (!config.base_directory.empty()) {
+        built->file_root = config.base_directory;
     }
     if (invocation.random_seed) {
         built->seed = entropy_seed();

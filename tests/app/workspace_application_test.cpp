@@ -466,7 +466,7 @@ endmodule
     assert_output(run, "INSTANCE_WITNESS a=11 b=22");
     assert_output(run, "COVERAGE_SAVE status=1");
     const auto database = fsim::artifact::read_coverage_database(
-        snapshot(store, "cov").path.parent_path() / "run.fsimcov");
+        directory.path / "run.fsimcov");
     assert(database.ok());
     using Identity = fsim::artifact::CoverageDatabaseIdentity;
     using Family = fsim::artifact::CoverageDatabaseMetricFamily;
@@ -516,7 +516,7 @@ endmodule
         assert_output(compiled, "INSTANCE_WITNESS a=11 b=22");
         assert_output(compiled, "COVERAGE_SAVE status=1");
         const auto native = fsim::artifact::read_coverage_database(
-            snapshot(store, "cov").path.parent_path() / "run.fsimcov");
+            directory.path / "run.fsimcov");
         assert(native.ok());
         assert(without_run_identity(native.contents->metrics) == expected_metrics);
     }
@@ -546,7 +546,7 @@ endmodule
     assert_output(run, "LOOP i=0 j=0");
     assert_output(run, "LOOP i=1 j=3");
     const auto database = fsim::artifact::read_coverage_database(
-        snapshot(store).path.parent_path() / "run.fsimcov");
+        directory.path / "run.fsimcov");
     assert(database.ok());
     std::vector<std::uint64_t> loop_line_hits;
     for (const auto& metric : database.contents->metrics) {
@@ -586,7 +586,7 @@ endmodule
     invoke({ "elaborate", "--quiet", "--no-aot", "--code-coverage", "tb" });
     assert_output(simulate(), "CALLABLE_WITNESS value=8");
     const auto database = fsim::artifact::read_coverage_database(
-        snapshot(store).path.parent_path() / "run.fsimcov");
+        directory.path / "run.fsimcov");
     assert(database.ok());
     bool call_statement { };
     bool conditional_statement { };
@@ -617,7 +617,7 @@ endmodule
     invoke({ "compile", "--quiet", "disabled.sv" });
     elaborate({ "tb" });
     assert_output(simulate(), "DISABLED_SAVE=0");
-    assert(!fs::exists(snapshot(store).path.parent_path() / "run.fsimcov"));
+    assert(!fs::exists(directory.path / "run.fsimcov"));
     const auto rejected = invoke({ "simulate", "--code-coverage",
         "--engine", "interpreter" }, false);
     assert(rejected.error.find("FSIM-COV-008") != std::string::npos);

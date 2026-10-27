@@ -25523,6 +25523,7 @@ std::string Lowerer::hir_library_cell() const
 
 std::string Lowerer::hir_instance_path() const
 {
+    ++hir_instance_path_uses_;
     if (!active_hir_callable_
         || *active_hir_callable_ >= hir_callable_frames_.size()) {
         return hierarchy_;

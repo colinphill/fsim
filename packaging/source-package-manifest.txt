@@ -1917,6 +1917,7 @@ tests/fixtures/compliance/sv_generate_references.sv
 tests/fixtures/compliance/sv_generated_scope_callable_batch58_20261013.sv
 tests/fixtures/compliance/sv_hierarchical_calls.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
+tests/fixtures/compliance/sv_hierarchy_format_shared_instances.sv
 tests/fixtures/compliance/sv_interface_member_connections.sv
 tests/fixtures/compliance/sv_interface_packed_type_actuals_20261013.sv
 tests/fixtures/compliance/sv_interface_ports_and_waits.sv

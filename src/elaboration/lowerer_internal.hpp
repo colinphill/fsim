@@ -433,6 +433,13 @@ public:
     [[nodiscard]] bool advance_hir_callable_invocation_identity(
         std::uint32_t expected_before,
         std::uint32_t after) noexcept;
+    // Lowerings that wrote this instance's path into the program (%m,
+    // 'path_name, context DPI identities). A process whose lowering did
+    // names one instance and must not become a shared template.
+    [[nodiscard]] std::uint64_t hir_instance_path_uses() const noexcept
+    {
+        return hir_instance_path_uses_;
+    }
     [[nodiscard]] std::optional<Process> lower_hir_input_actual(
         semantic::ExpressionId expression,
         SignalId destination,
@@ -5506,6 +5513,7 @@ private:
     // a task or function of another instance (`a.t()`) is lowered inline.
     [[nodiscard]] std::string hir_instance_path() const;
     mutable bool hierarchical_reference_used_ { };
+    mutable std::uint64_t hir_instance_path_uses_ { };
     mutable bool hierarchical_reference_missed_ { };
     bool hierarchical_reference_retry_ { };
     // `g[1].h[2].x` as a hierarchical name when every index is constant.

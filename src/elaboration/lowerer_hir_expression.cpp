@@ -27281,6 +27281,7 @@ std::optional<std::string> Lowerer::hir_vhdl_path_attribute(
     if (simple) {
         return name;
     }
+    ++hir_instance_path_uses_;
     const auto declaration_id = hir_referenced_declaration(
         expression->vhdl->operands.front());
     // An item of a protected type body, or the type itself, is named
@@ -27335,6 +27336,7 @@ std::optional<std::string> Lowerer::hir_vhdl_path_text(
     const std::optional<std::string_view> prefix_text,
     const semantic::ScopeId prefix_scope) const
 {
+    ++hir_instance_path_uses_;
     const auto lower = [](const std::string_view text) {
         return lowercase_ascii_copy(text);
     };
