@@ -138,6 +138,38 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: design-level phase 4, sequential dispatch groups (`26b04641`, sweep `v4c14`)
+
+Until now, an edge scheduled every sequential member sensitive to it, one by one. Each `schedule()` set the member's flag and pushed it to the triggered list. The Active pass then sorted that list and ran the members in index order. The owner's condition (2026-10-27) is that grouping must keep that order.
+
+**Groups.** `build_dispatch_groups` forms a group from sequential SystemVerilog members that meet both conditions:
+- they share an identical edge-sensitivity set, such as `posedge clk` or `posedge clk or negedge rst_n`;
+- they have no other wake-up: no any-edge or ranged readers, and they are not VHDL.
+
+Each slot or input edge list then holds one reader per group and edge in place of the members' readers. An edge does one `edge_matches` check and queues one group token.
+
+**Running.** `run_triggered` drains the triggered list in one of two ways:
+- **Group tokens only (up to 8).** It merges the groups' member lists by member index, which is the same order the sorted list gives, with no flags and no sort.
+- **Otherwise.** It expands each group into its members, skipping members already pending (their flags dedupe), then sorts and runs as before.
+
+**Exactness.** Two cases fall back to per-member `schedule()`, so the member flags give today's semantics:
+- *An edge on a group that is being merged.* The members that ran (or are running) in this pass are scheduled again; the rest are still pending.
+- *An edge on an expanded group, or one arriving while a mixed round commits.* The members are scheduled individually; in the mixed case they wait for the next delta as before.
+
+`FSIM_STATIC_KERNEL_DISPATCH_GROUPS=0` disables grouping, and `FSIM_PROFILE_KERNEL` prints `dispatch_groups=`. `static_kernel_test` adds two registers on `posedge clk or negedge rst_n` whose blocking writes read each other. Their values depend on the members' run order and must match the reference mid-run and at the end.
+
+**Measured** (simulate instructions:u, against `v4c13`); outputs are byte-identical on all three cases:
+
+| Case | v4c13 | Groups | Change |
+|---|---:|---:|---:|
+| original_codec | 29.24G | 28.27G | −3.3% |
+| mixed_codec | 28.50G | 28.52G | flat |
+| mixed_throughput | 25.74G | 25.72G | flat |
+
+On original_codec, all 253 sequential members form one group, and schedules fall from 24.8M to 17.2M. The mixed cases' clocked logic is VHDL, so they have no groups.
+
+Full ctest passes 1085/1085 in normal and strict mode. Sweep `v4c14` has no losses against `b96x1`. Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2070, sv-tests 1495.
+
 ### 2026-10-27: design-level phase 3, native wide values (`ed621e15`, sweep `v4c13`)
 
 Before this change, every register operand or result wider than 64 bits went through the generic fallback. That fallback copies operands into the reference register file as `PackedLogic4` and runs the reference step. The only exceptions were field slots, family proxies and the source of a narrow selection.
