@@ -138,6 +138,50 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: end-of-plan perf, elaboration cuts (`d4ab0a42`, `ea052048`, sweeps `v4c16`, `v4c17`)
+
+The design-level phases are done, so the perf work held for the end of the plan begins. It targets elaboration, the largest phase. The baseline is `v4c15`; a callgrind profile of `original_codec` elaborate without `--aot` showed 51.6G instructions.
+
+**Kernel codegen at elaborate (`--aot`).**
+- **Lazy operation tiers.** A compiled member, VHDL included, no longer gets an AOT operation tier. A VHDL member that deoptimizes compiles its tier on demand; the perf cases have no deopts. On mixed_codec this removed a 480-tier batch (0.62 s).
+- **VHDL shape sharing.** VHDL units now join step-2 shape groups. Where group members differ in a `load_field`, `load_field9` or `store_vhdl` offset, the offset becomes a binding: `with_bound_offset` at run time, a bound-offset plane read and a deferred store in codegen. Constants stay unparameterized when a VHDL unit carries a `'U'`-tracking flag (`imm_b`), so the two-state rule for unknown constants holds.
+- On mixed_codec: eager templates 1963 → 864, eager KInsts 250k → 173k, full templates 1256 → 636, native stage 4.77 → 3.31 s.
+
+**Trusted reload.** `elaborate --aot` reloads the design it has just published through `load_design_artifact_for_simulation`, which is trusted, as in simulate. Artifact load: original_codec 1.27 → 0.53 s, mixed_codec 0.37 → 0.16 s.
+
+**Frontend.**
+- `truth()` in the constant evaluator reads the aval/bval planes a word at a time instead of calling `get_logic9` per bit. That was 13.4M calls on original_codec.
+- `pack_container_signal_value` writes four-state leaves into the planes a word at a time instead of one `insert_bits` per leaf. That was 2.6M calls (1.76G) from declaration materialization.
+- **Library-object checksums** use XXH64 (owner, 2026-10-27). The checksums of compiled-HIR, native and auxiliary payloads are now `xxh64:`; verifying them with SHA-256 cost about 1.5G per codec elaborate. Validators accept either spelling.
+  - Source entries stay SHA-256, because an object source's checksum is also its `CheckedSource` content digest. That digest must equal the direct path's, or specialization cache keys depend on how the design was loaded (`mixed_conversions` test).
+
+**Measured** (perf stat, elaborate with `--aot`, quiet host):
+
+| Case | v4c15 instructions | v4c16 instructions | v4c15 task-clock | v4c16 task-clock |
+|---|---:|---:|---:|---:|
+| mixed_codec | 113.5G | 87.8G | 11.55 s | 9.1–9.6 s |
+| original_codec | — | 89.0G | 12.20 s | 11.3 s |
+
+Simulate is unchanged: instruction counts are within 1%, and simulate compiles no new code. The three perf cases are byte-identical; object paths in messages differ only by digest.
+
+**What remains in elaboration** (callgrind, without `--aot`):
+- constant-function evaluation of generate-local localparams: about 11.5G, from loop-heavy GF(2^m) functions (`alpha_pow`, `calc_alpha_pow`) evaluated per generate iteration;
+- HIR process lowering: about 16G;
+- runtime-state encoding: about 4.3G;
+- `CacheKeyBuilder` SHA-256: about 0.37G.
+
+**Long constant-bound `for` loops** (`ea052048`). Sweep `v4c16` timed out on verilator `t_for_local`. That case had been slow since `v4c3`: 4.6 s before, 37–57 s after, and a timeout at `v4c11` as well.
+- Lowering unrolled a SystemVerilog `for` loop with constant bounds whatever its length, so the case's 100000-iteration loop became an 800k-operation body.
+- Elaboration took 7 s. Since `v4c3` compiles every member natively, simulate also spent 31 s in LLVM on that body.
+- Past 256 iterations, the cap `repeat` loops already use, such a loop now takes the existing run-time `for` lowering used for dynamic bounds (IEEE 1800-2023 12.7.1). `foreach` keeps its unrolled form, because run-time `foreach` covers strings only.
+- The case now takes 0.05 s to elaborate and 0.06 s to simulate.
+
+Full ctest passes 1085/1085 in normal and strict mode for both commits.
+- **Sweep `v4c16`:** no losses against `b96x1` except the `t_for_local` timeout.
+- **Sweep `v4c17`:** no losses against `b96x1`.
+  - Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+  - The two nvc cases `case11` and `issue705` remain excluded (strict 10.9 reading, owner).
+
 ### 2026-10-27: design-level phase 5, per-signal access plan (trace selection) (`9adf4431`, sweep `v4c15`)
 
 Until now, a run that wrote a trace file set `observe_all`, which made every signal a host signal. Plan §3.6 asks for a per-signal plan: only what a client can observe needs the host's storage.
