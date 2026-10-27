@@ -11,6 +11,9 @@
 // only when observed), and registers wider than 64 bits (chunked in the
 // kernel's register file) written by blocking and nonblocking assignments
 // of wide constants, concatenations and dynamic part-select inserts.
+// Registers sharing an edge-sensitivity set run as one dispatch group, in
+// the order the reference runs them: blocking writes that race on one clock
+// must read back the same values.
 #include "fsim/app/application.hpp"
 
 #include <chrono>
@@ -135,6 +138,13 @@ module sk_dut(input wire clk, input wire rst_n, input wire [3:0] a,
                 acc, acc, acc, acc, acc, 4'h5};
     end
   assign wx = wide_q[ra * 8 +: 8] ^ wide_b[135:128];
+  reg [7:0] race_x, race_y;
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n) race_x = 8'h01;
+    else race_x = race_y + acc;
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n) race_y = 8'h80;
+    else race_y = {race_x[6:0], race_x[7]} ^ {4'h0, prod};
   wire [7:0] dead0 = acc ^ {slow, sel};
   wire [7:0] dead1 = dead0 + {rd[3:0], prod};
   wire dead_parity;
@@ -238,6 +248,8 @@ const std::vector<std::string> internal_paths {
     "sk_top.dut.dead_parity",
     "sk_top.dut.wide_q",
     "sk_top.dut.wide_b",
+    "sk_top.dut.race_x",
+    "sk_top.dut.race_y",
 };
 
 [[nodiscard]] RunCapture run(const std::filesystem::path& root,

@@ -1117,6 +1117,12 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
         stage("native");
     }
+    // FSIM_STATIC_KERNEL_DISPATCH_GROUPS=0 schedules every sequential member
+    // on its own.
+    if (const char* groups = std::getenv("FSIM_STATIC_KERNEL_DISPATCH_GROUPS");
+        groups == nullptr || std::string_view { groups } != "0") {
+        build_dispatch_groups();
+    }
     build_schedule_targets();
     stage("schedule");
     for (const auto signal : spec.unwritten_inputs) {
@@ -1209,6 +1215,7 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
               << " generic=" << profile_native_calls_[3]
               << " slot_changes=" << profile_slot_changes_
               << " schedules=" << profile_schedules_
+              << " dispatch_groups=" << dispatch_groups_.size()
               << " collapsed=" << profile_collapsed_runs_ << '\n';
     std::cerr << "fsim-kernel: activations=" << profile_activations_
               << " combinational_runs=" << profile_runs_[0]
@@ -2420,6 +2427,85 @@ void Interpreter::Impl::StaticKernel::schedule_target(const ScheduleTarget& targ
     schedule(target.id);
 }
 
+void Interpreter::Impl::StaticKernel::build_dispatch_groups()
+{
+    // Each member's edge sensitivities as (list, edge), where the lists
+    // number slots, then inputs. Only an edge wakes a grouped member.
+    std::vector<std::vector<std::uint64_t>> keys(members_.size());
+    std::vector<std::uint8_t> eligible(members_.size(), 0U);
+    for (std::size_t index = 0U; index < members_.size(); ++index) {
+        eligible[index] = members_[index].kind == StaticKernelMemberKind::sequential
+                && !members_[index].vhdl
+            ? 1U : 0U;
+    }
+    const auto collect = [&](const std::vector<EdgeReader>& edges,
+                             const std::uint64_t list) {
+        for (const auto& reader : edges) {
+            keys[reader.member].push_back(
+                (list << 8U) | static_cast<std::uint64_t>(reader.edge));
+        }
+    };
+    const auto exclude = [&](const std::vector<Reader>& readers) {
+        for (const auto& reader : readers) {
+            eligible[reader.member] = 0U;
+        }
+    };
+    for (std::size_t index = 0U; index < slots_.size(); ++index) {
+        collect(slots_[index].edges, index);
+        exclude(slots_[index].readers);
+    }
+    for (std::size_t index = 0U; index < inputs_.size(); ++index) {
+        collect(inputs_[index].edges, slots_.size() + index);
+        exclude(inputs_[index].readers);
+    }
+    std::map<std::vector<std::uint64_t>, std::vector<std::uint32_t>> sets;
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        if (eligible[index] != 0U && !keys[index].empty()) {
+            std::ranges::sort(keys[index]);
+            sets[keys[index]].push_back(index);
+        }
+    }
+    std::vector<std::uint32_t> group_of(members_.size(), no_slot);
+    for (auto& [key, members] : sets) {
+        if (members.size() < 2U) {
+            continue;
+        }
+        const auto group = static_cast<std::uint32_t>(dispatch_groups_.size());
+        for (const auto member : members) {
+            group_of[member] = group;
+        }
+        dispatch_groups_.push_back({ std::move(members), false, false });
+    }
+    if (dispatch_groups_.empty()) {
+        return;
+    }
+    // One reader per group and edge in each list.
+    const auto rewrite = [&](std::vector<EdgeReader>& edges) {
+        std::vector<EdgeReader> rewritten;
+        rewritten.reserve(edges.size());
+        for (const auto& reader : edges) {
+            const auto group = group_of[reader.member];
+            const EdgeReader entry = group == no_slot
+                ? reader
+                : EdgeReader { group | dispatch_group_tag, reader.edge };
+            if (group == no_slot
+                || std::ranges::none_of(rewritten, [&](const EdgeReader& existing) {
+                       return existing.member == entry.member
+                           && existing.edge == entry.edge;
+                   })) {
+                rewritten.push_back(entry);
+            }
+        }
+        edges = std::move(rewritten);
+    };
+    for (auto& slot : slots_) {
+        rewrite(slot.edges);
+    }
+    for (auto& input : inputs_) {
+        rewrite(input.edges);
+    }
+}
+
 void Interpreter::Impl::StaticKernel::build_schedule_targets()
 {
     for (auto& slot : slots_) {
@@ -2569,6 +2655,113 @@ void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
             triggered_.push_back(member);
         }
     }
+}
+
+void Interpreter::Impl::StaticKernel::schedule_edge(const std::uint32_t id)
+{
+    if ((id & dispatch_group_tag) == 0U) {
+        schedule(id);
+        return;
+    }
+    auto& group = dispatch_groups_[id & ~dispatch_group_tag];
+    if (group.running) {
+        // The members that have run (or are running) in this pass are
+        // scheduled again; the rest are still pending.
+        for (std::uint32_t position = 0U; position < group.next; ++position) {
+            schedule(group.members[position]);
+        }
+        return;
+    }
+    if (group.expanded || (mixed_ && committing_round_)) {
+        // The member flags say what is pending, or the members wait for the
+        // next delta.
+        for (const auto member : group.members) {
+            schedule(member);
+        }
+        return;
+    }
+    profile_schedules_ += profile_ ? 1U : 0U;
+    if (!group.triggered) {
+        group.triggered = true;
+        triggered_.push_back(id);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::run_triggered()
+{
+    auto triggered = std::move(triggered_);
+    triggered_.clear();
+    constexpr std::size_t merge_limit = 8U;
+    if (triggered.size() <= merge_limit
+        && std::ranges::all_of(triggered, [](const std::uint32_t id) {
+               return (id & dispatch_group_tag) != 0U;
+           })) {
+        // Groups only: merge their member lists into index order.
+        std::array<DispatchGroup*, merge_limit> groups { };
+        const auto count = triggered.size();
+        for (std::size_t entry = 0U; entry < count; ++entry) {
+            auto& group = dispatch_groups_[triggered[entry] & ~dispatch_group_tag];
+            group.triggered = false;
+            group.running = true;
+            group.next = 0U;
+            groups[entry] = &group;
+        }
+        for (;;) {
+            DispatchGroup* first = nullptr;
+            for (std::size_t entry = 0U; entry < count; ++entry) {
+                auto* group = groups[entry];
+                if (group->next < group->members.size()
+                    && (first == nullptr
+                        || group->members[group->next]
+                            < first->members[first->next])) {
+                    first = group;
+                }
+            }
+            if (first == nullptr) {
+                break;
+            }
+            run(first->members[first->next++]);
+        }
+        for (std::size_t entry = 0U; entry < count; ++entry) {
+            groups[entry]->running = false;
+        }
+        return;
+    }
+    // Groups with members or many groups: expand them; a member pending
+    // twice runs once.
+    const auto entries = triggered.size();
+    for (std::size_t entry = 0U; entry < entries; ++entry) {
+        const auto id = triggered[entry];
+        if ((id & dispatch_group_tag) == 0U) {
+            continue;
+        }
+        const auto index = id & ~dispatch_group_tag;
+        auto& group = dispatch_groups_[index];
+        group.triggered = false;
+        group.expanded = true;
+        expanded_groups_.push_back(index);
+        for (const auto member : group.members) {
+            auto& state = member_schedule_[member];
+            if (!state.triggered) {
+                state.triggered = true;
+                triggered.push_back(member);
+            }
+        }
+    }
+    if (!expanded_groups_.empty()) {
+        std::erase_if(triggered, [](const std::uint32_t id) {
+            return (id & dispatch_group_tag) != 0U;
+        });
+    }
+    std::ranges::sort(triggered);
+    for (const auto member : triggered) {
+        member_schedule_[member].triggered = false;
+        run(member);
+    }
+    for (const auto index : expanded_groups_) {
+        dispatch_groups_[index].expanded = false;
+    }
+    expanded_groups_.clear();
 }
 
 void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
@@ -3729,7 +3922,7 @@ void Interpreter::Impl::StaticKernel::check_owned_edges()
         slot.edge_seen = after;
         for (const auto& reader : slot.edges) {
             if (edge_matches(reader.edge, before, after)) {
-                schedule(reader.member);
+                schedule_edge(reader.member);
             }
         }
     }
@@ -4118,7 +4311,7 @@ void Interpreter::Impl::StaticKernel::apply_input(
         const auto new_bit = edge_bit(input.cached);
         for (const auto& reader : input.edges) {
             if (edge_matches(reader.edge, old_bit, new_bit)) {
-                schedule(reader.member);
+                schedule_edge(reader.member);
             }
         }
     }
@@ -4282,15 +4475,6 @@ void Interpreter::Impl::StaticKernel::activate_step()
         activate_mixed();
         return;
     }
-    const auto run_triggered = [&] {
-        auto triggered = std::move(triggered_);
-        triggered_.clear();
-        std::ranges::sort(triggered);
-        for (const auto member : triggered) {
-            member_schedule_[member].triggered = false;
-            run(member);
-        }
-    };
     for (std::size_t iteration = 0U;; ++iteration) {
         if (iteration > edge_iteration_limit) {
             fail(0U, 0U, "static kernel edge iteration limit exceeded");
@@ -4586,13 +4770,7 @@ void Interpreter::Impl::StaticKernel::sv_drain()
         check_owned_edges();
         bool active = false;
         if (!triggered_.empty()) {
-            auto triggered = std::move(triggered_);
-            triggered_.clear();
-            std::ranges::sort(triggered);
-            for (const auto member : triggered) {
-                member_schedule_[member].triggered = false;
-                run(member);
-            }
+            run_triggered();
             active = true;
         }
         if (has_hosted_ && hosted_systemverilog_pending()) {

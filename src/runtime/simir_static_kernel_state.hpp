@@ -41,6 +41,8 @@ constexpr auto no_container_object
 constexpr std::size_t run_step_limit = 100'000'000U;
 constexpr std::size_t edge_iteration_limit = 100'000U;
 constexpr std::uint32_t partition_tag = std::uint32_t { 1 } << 31U;
+/// Tags a dispatch group in edge readers and the triggered list.
+constexpr std::uint32_t dispatch_group_tag = std::uint32_t { 1 } << 31U;
 
 /// Why the kernel's reference evaluator runs an operation (interpretation
 /// census): a member without compiled code, a VHDL prologue, generic mode
@@ -647,9 +649,14 @@ private:
 
     // Scheduling.
     void schedule(std::uint32_t member);
+    /// Schedules an edge reader: a member, or a tagged dispatch group.
+    void schedule_edge(std::uint32_t id);
     void schedule_target(const ScheduleTarget& target);
     void enqueue(std::uint32_t level, std::uint32_t entry);
     void build_schedule_targets();
+    void build_dispatch_groups();
+    /// Runs the triggered sequential members in index order.
+    void run_triggered();
     [[nodiscard]] bool target_pending(std::uint32_t id) const;
     void run(std::uint32_t member);
     void run_member(std::uint32_t member);
@@ -1409,6 +1416,23 @@ private:
     std::vector<std::uint32_t> output_queue_;
     std::vector<std::uint32_t> trigger_queue_;
     std::vector<std::uint32_t> triggered_;
+    /// Sequential SystemVerilog members with one edge-sensitivity set and no
+    /// other wake-up (build_dispatch_groups). An edge schedules the group
+    /// once, and the group runs its members in index order, as the sorted
+    /// triggered list would.
+    struct DispatchGroup {
+        std::vector<std::uint32_t> members;
+        bool triggered { };
+        /// Expanded into members in the current run_triggered pass: an edge
+        /// then schedules the members, whose flags tell what is pending.
+        bool expanded { };
+        /// Run by run_triggered's merge: members before `next` have run
+        /// (or are running) in this pass.
+        bool running { };
+        std::uint32_t next { };
+    };
+    std::vector<DispatchGroup> dispatch_groups_;
+    std::vector<std::uint32_t> expanded_groups_;
     /// Level-bucketed dirty queue; `scan_level_` is the lowest level that may
     /// hold entries.
     std::vector<std::vector<std::uint32_t>> buckets_;
