@@ -1465,7 +1465,53 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
     const std::uint64_t* before, const std::uint32_t field_offset)
 {
     auto& slot = slots_[slot_index];
-    for (const auto& group : slot.ranged) {
+    if (before == nullptr && !slot.chunk_begin.empty()) {
+        // The readers of the changed bits' chunks, in the group order of the
+        // scan below: a group stays skipped once its target is pending.
+        if (changed_mask != 0U) {
+            const auto low = field_offset
+                + static_cast<std::uint32_t>(std::countr_zero(changed_mask));
+            const auto high = field_offset + 64U
+                - static_cast<std::uint32_t>(std::countl_zero(changed_mask));
+            const auto chunks
+                = static_cast<std::uint32_t>(slot.chunk_begin.size() - 1U);
+            const auto first = low >> slot.chunk_shift;
+            const auto last
+                = std::min((high - 1U) >> slot.chunk_shift, chunks - 1U);
+            std::span<const std::uint32_t> candidates;
+            if (first == last) {
+                candidates = std::span { slot.chunk_readers }.subspan(
+                    slot.chunk_begin[first],
+                    slot.chunk_begin[first + 1U] - slot.chunk_begin[first]);
+            } else if (first < last) {
+                ranged_candidates_.assign(
+                    slot.chunk_readers.begin() + slot.chunk_begin[first],
+                    slot.chunk_readers.begin() + slot.chunk_begin[last + 1U]);
+                std::ranges::sort(ranged_candidates_);
+                const auto [end, unused] = std::ranges::unique(ranged_candidates_);
+                ranged_candidates_.erase(end, ranged_candidates_.end());
+                candidates = ranged_candidates_;
+            }
+            for (const auto index : candidates) {
+                if (target_pending(slot.reader_group[index])) {
+                    continue;
+                }
+                const auto& reader = slot.readers[index];
+                const auto from = std::max(reader.offset, field_offset);
+                const auto to = std::min(reader.offset + reader.width,
+                    field_offset + 64U);
+                if (from < to
+                    && ((changed_mask >> (from - field_offset))
+                           & kernel_word::mask(to - from))
+                        != 0U) {
+                    schedule(reader.member);
+                }
+            }
+        }
+    }
+    for (const auto& group : before == nullptr && !slot.chunk_begin.empty()
+             ? std::span<const RangedGroup> { }
+             : std::span<const RangedGroup> { slot.ranged }) {
         // Scheduling a target that is already pending changes nothing.
         if (target_pending(group.id)) {
             continue;
@@ -2516,6 +2562,64 @@ void Interpreter::Impl::StaticKernel::build_dispatch_groups()
     }
 }
 
+void Interpreter::Impl::StaticKernel::index_ranged_readers(Slot& slot)
+{
+    slot.chunk_begin.clear();
+    slot.chunk_readers.clear();
+    slot.reader_group.clear();
+    // A few readers scan faster than they index.
+    constexpr std::size_t indexed_readers = 8U;
+    if (slot.readers.size() < indexed_readers) {
+        return;
+    }
+    std::uint64_t bits = slot.width;
+    for (const auto& reader : slot.readers) {
+        bits = std::max<std::uint64_t>(bits,
+            std::uint64_t { reader.offset } + reader.width);
+    }
+    // About one chunk per reader, coarser while readers spanning many chunks
+    // would make the index much larger than the reader list.
+    auto shift = static_cast<std::uint32_t>(std::countr_zero(std::bit_ceil(
+        std::max<std::uint64_t>(1U, bits / slot.readers.size()))));
+    const auto entries = [&](const std::uint32_t s) {
+        std::uint64_t total = 0U;
+        for (const auto& reader : slot.readers) {
+            total += ((std::uint64_t { reader.offset } + reader.width - 1U) >> s)
+                - (reader.offset >> s) + 1U;
+        }
+        return total;
+    };
+    while (shift < 31U && entries(shift) > 8U * slot.readers.size()) {
+        ++shift;
+    }
+    const auto chunks = static_cast<std::size_t>(((bits - 1U) >> shift) + 1U);
+    slot.chunk_shift = shift;
+    slot.chunk_begin.assign(chunks + 1U, 0U);
+    for (const auto& reader : slot.readers) {
+        for (auto chunk = reader.offset >> shift;
+             chunk <= (reader.offset + reader.width - 1U) >> shift; ++chunk) {
+            ++slot.chunk_begin[chunk + 1U];
+        }
+    }
+    for (std::size_t chunk = 0U; chunk < chunks; ++chunk) {
+        slot.chunk_begin[chunk + 1U] += slot.chunk_begin[chunk];
+    }
+    slot.chunk_readers.resize(slot.chunk_begin[chunks]);
+    auto fill = slot.chunk_begin;
+    for (std::uint32_t index = 0U; index < slot.readers.size(); ++index) {
+        const auto& reader = slot.readers[index];
+        for (auto chunk = reader.offset >> shift;
+             chunk <= (reader.offset + reader.width - 1U) >> shift; ++chunk) {
+            slot.chunk_readers[fill[chunk]++] = index;
+        }
+    }
+    slot.reader_group.resize(slot.readers.size());
+    for (const auto& group : slot.ranged) {
+        std::fill(slot.reader_group.begin() + group.begin,
+            slot.reader_group.begin() + group.end, group.id);
+    }
+}
+
 void Interpreter::Impl::StaticKernel::build_schedule_targets()
 {
     for (auto& slot : slots_) {
@@ -2562,6 +2666,29 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
         }
         slot.readers = std::move(ranged);
         slot.targets = std::move(targets);
+        index_ranged_readers(slot);
+    }
+    // Native blocking element writes store in place when the element slots
+    // agree on whether a change is announced: as for native slot stores, a
+    // changing write announces itself (and records its writer) through
+    // native_notify_field.
+    for (std::size_t index = 0U; index < container_info_.size(); ++index) {
+        auto& info = container_info_[index];
+        std::span<const std::uint32_t> element_slots;
+        if (info.storage == 1U) {
+            element_slots = containers_[index].element_slots;
+        } else if (info.storage == 2U) {
+            element_slots = std::span { &info.slot, 1U };
+        } else {
+            continue;
+        }
+        const auto silent = std::ranges::all_of(element_slots,
+            [&](const std::uint32_t slot) { return slots_[slot].silent; });
+        const auto announced = std::ranges::none_of(element_slots,
+            [&](const std::uint32_t slot) { return slots_[slot].silent; });
+        if (silent || announced) {
+            info.flags |= 4U | (silent ? 8U : 0U);
+        }
     }
     member_schedule_.resize(members_.size());
     for (std::size_t index = 0U; index < members_.size(); ++index) {

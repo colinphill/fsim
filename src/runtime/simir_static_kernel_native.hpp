@@ -53,7 +53,9 @@ struct StaticKernelContainerInfo {
     std::uint64_t unknown_a { };
     std::uint64_t unknown_b { };
     std::uint32_t element_width { };
-    /// Bit 0: two-state elements; bit 1: descending range (left >= right).
+    /// Bit 0: two-state elements; bit 1: descending range (left >= right);
+    /// bit 2 (storage 1 and 2): blocking writes store in place; bit 3: with
+    /// bit 2, no change is announced (silent slots).
     std::uint32_t flags { };
     /// Storage 1: per element, its slot's arena offset and slot index.
     const std::uint32_t* elements { };

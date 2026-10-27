@@ -428,6 +428,14 @@ private:
         /// `ranged` group.
         std::vector<Reader> readers;
         std::vector<RangedGroup> ranged;
+        /// Slots with many ranged readers index them by bit chunk of
+        /// 1 << chunk_shift bits: chunk c holds the ascending reader indices
+        /// chunk_readers[chunk_begin[c], chunk_begin[c + 1]). Empty
+        /// otherwise; reader_group is each indexed reader's group id.
+        std::uint32_t chunk_shift { };
+        std::vector<std::uint32_t> chunk_begin;
+        std::vector<std::uint32_t> chunk_readers;
+        std::vector<std::uint32_t> reader_group;
         std::vector<ScheduleTarget> targets;
         std::vector<EdgeReader> edges;
         Logic4 edge_seen { Logic4::x };
@@ -570,6 +578,8 @@ private:
     /// outputs, waiters, edges).
     void slot_changed_general(std::uint32_t slot, std::uint64_t changed_mask,
         const std::uint64_t* before, std::uint32_t field_offset);
+    /// Builds the slot's chunk index of its ranged readers.
+    static void index_ranged_readers(Slot& slot);
     [[nodiscard]] Logic4 slot_edge_bit(std::uint32_t slot) const noexcept;
     void store_slot_bits(std::uint32_t slot, const PackedLogic4& value,
         std::uint32_t offset);
@@ -1405,6 +1415,8 @@ private:
     std::vector<std::uint32_t> container_elements_;
     /// KOp::wide_move value planes.
     std::vector<std::uint64_t> wide_move_scratch_;
+    /// slot_changed_general's indexed readers of a change spanning chunks.
+    std::vector<std::uint32_t> ranged_candidates_;
     /// KOp::wide_concat result (aval, bval and 'U' words).
     std::vector<std::uint64_t> wide_concat_scratch_;
     /// members_[i].process, dense: hot paths record slot writers without

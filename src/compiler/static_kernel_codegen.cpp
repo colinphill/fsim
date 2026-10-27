@@ -1558,17 +1558,30 @@ private:
         writable = builder_.CreateAnd(writable, builder_.CreateNot(
             builder_.CreateAnd(two_state, nonzero(value.b))));
         if ((inst.flags & detail::flag_nba) == 0U) {
-            // Blocking: kernel-held elements (storage 3) are stored in place.
-            // Memories other processes observe take the helper: inlining
-            // their change detection grew testbench code (and compile time)
-            // more than it saved at run time.
+            // Blocking: kernel-held elements (storage 3) are stored in place,
+            // and so are element and packed slots (flag bit 2), with the
+            // change detection of native slot stores. Other memories take
+            // the helper.
             auto* held = llvm::BasicBlock::Create(context_, "mem_store", &function_);
+            auto* signal = llvm::BasicBlock::Create(context_, "mem_signal", &function_);
+            auto* in_place = llvm::BasicBlock::Create(context_, "mem_in_place",
+                &function_);
             auto* slow = llvm::BasicBlock::Create(context_, "mem_store_slow", &function_);
             auto* done = llvm::BasicBlock::Create(context_, "mem_stored", &function_);
             builder_.CreateCondBr(builder_.CreateAnd(writable,
                                       builder_.CreateICmpEQ(element.storage,
                                           llvm::ConstantInt::get(i32_, 3U))),
-                held, slow);
+                held, signal);
+            builder_.SetInsertPoint(signal);
+            builder_.CreateCondBr(builder_.CreateAnd(writable,
+                                      nonzero(builder_.CreateAnd(
+                                          builder_.CreateZExt(info_field(element.info,
+                                                                  i32_, 60U),
+                                              i64_),
+                                          constant(4U)))),
+                in_place, slow);
+            builder_.SetInsertPoint(in_place);
+            emit_store_element_slot(inst, element, value, done);
             builder_.SetInsertPoint(held);
             auto* offset = builder_.CreateAdd(
                 builder_.CreateZExt(info_field(element.info, i32_, 72U), i64_),
@@ -1624,6 +1637,154 @@ private:
             builder_.CreateAdd(count, llvm::ConstantInt::get(i32_, 1U)),
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
         builder_.CreateBr(done);
+        builder_.SetInsertPoint(slow);
+        call_effect(at, value, index, zero_pair());
+        builder_.CreateBr(done);
+        builder_.SetInsertPoint(done);
+    }
+
+    /// A blocking write of a storage 1 or 2 element in place (see
+    /// emit_store_field). Branches to `done`.
+    void emit_store_element_slot(const KInst& inst, const MemoryElement& element,
+        const Pair value, llvm::BasicBlock* done)
+    {
+        const auto location = memory_location(element);
+        emit_store_field(inst.width, location.arena_offset, location.words,
+            location.bit, location.slot,
+            nonzero(builder_.CreateAnd(
+                builder_.CreateZExt(info_field(element.info, i32_, 60U), i64_),
+                constant(8U))),
+            value, done);
+    }
+
+    /// The field [bit, bit + width) of the slot `slot` (arena words from
+    /// `arena_offset`, `words` per plane) takes `value`, as
+    /// StaticKernel::write_slot_word stores it: a change is announced unless
+    /// the slot is `silent`. Branches to `done`.
+    void emit_store_field(const std::uint32_t width, llvm::Value* arena_offset,
+        llvm::Value* words, llvm::Value* bit, llvm::Value* slot,
+        llvm::Value* silent, const Pair value, llvm::BasicBlock* done)
+    {
+        auto* m = constant(mask_of(width));
+        auto* word = builder_.CreateLShr(bit, constant(6U));
+        auto* shift = builder_.CreateAnd(bit, constant(63U));
+        auto* spans = builder_.CreateAnd(
+            builder_.CreateICmpUGT(builder_.CreateAdd(shift, constant(width)),
+                constant(64U)),
+            builder_.CreateICmpULT(builder_.CreateAdd(word, constant(1U)), words));
+        auto* next = builder_.CreateSelect(spans,
+            builder_.CreateAdd(word, constant(1U)), word);
+        auto* spill = builder_.CreateSub(constant(64U), shift);
+        struct Plane {
+            llvm::Value* low_address { };
+            llvm::Value* high_address { };
+            llvm::Value* low { };
+            llvm::Value* high { };
+            llvm::Value* field { };
+        };
+        const auto read = [&](llvm::Value* first) {
+            Plane plane;
+            plane.low_address = builder_.CreateInBoundsGEP(i64_, arena_,
+                builder_.CreateAdd(first, word));
+            plane.high_address = builder_.CreateInBoundsGEP(i64_, arena_,
+                builder_.CreateAdd(first, next));
+            plane.low = builder_.CreateLoad(i64_, plane.low_address);
+            plane.high = builder_.CreateLoad(i64_, plane.high_address);
+            plane.field = builder_.CreateAnd(
+                builder_.CreateOr(builder_.CreateLShr(plane.low, shift),
+                    builder_.CreateSelect(spans,
+                        builder_.CreateShl(plane.high, spill), constant(0U))),
+                m);
+            return plane;
+        };
+        const auto old_a = read(arena_offset);
+        const auto old_b = read(builder_.CreateAdd(arena_offset, words));
+        auto* next_a = builder_.CreateAnd(value.a, m);
+        auto* next_b = builder_.CreateAnd(value.b, m);
+        auto* changed = builder_.CreateOr(builder_.CreateXor(old_a.field, next_a),
+            builder_.CreateXor(old_b.field, next_b));
+        auto* write = llvm::BasicBlock::Create(context_, "field_write", &function_);
+        auto* notify = llvm::BasicBlock::Create(context_, "field_notify", &function_);
+        builder_.CreateCondBr(nonzero(changed), write, done);
+        builder_.SetInsertPoint(write);
+        const auto store = [&](const Plane& old, llvm::Value* next_value) {
+            // The high word first: without a spill it is the low word, which
+            // the low store then rewrites.
+            builder_.CreateStore(builder_.CreateSelect(spans,
+                                     builder_.CreateOr(builder_.CreateAnd(old.high,
+                                                           builder_.CreateNot(
+                                                               builder_.CreateLShr(m,
+                                                                   spill))),
+                                         builder_.CreateLShr(next_value, spill)),
+                                     old.high),
+                old.high_address);
+            builder_.CreateStore(
+                builder_.CreateOr(builder_.CreateAnd(old.low,
+                                      builder_.CreateNot(builder_.CreateShl(m, shift))),
+                    builder_.CreateShl(next_value, shift)),
+                old.low_address);
+        };
+        store(old_a, next_a);
+        store(old_b, next_b);
+        builder_.CreateCondBr(silent, done, notify);
+        builder_.SetInsertPoint(notify);
+        auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+            { ptr_, i32_, i64_, i32_ }, false);
+        auto* callee = helper_symbol("fsim_sk_notify_field", type);
+        builder_.CreateCall(type, callee,
+            { frame_, slot, changed, builder_.CreateTrunc(bit, i32_) });
+        auto* status = builder_.CreateLoad(i32_, frame_field(40U));
+        builder_.CreateCondBr(
+            builder_.CreateICmpNE(status, llvm::ConstantInt::get(i32_, 0U)),
+            failure_block_, done);
+    }
+
+    /// A blocking write through a known, in-range dynamic index (imm_a: the
+    /// slot's words per plane, imm_b: its width) stores in place; the
+    /// helper takes the rest (no write, or a strict index error).
+    void emit_store_slot_dynamic(const KInst& inst, const std::uint32_t at)
+    {
+        const auto value = load_register(inst.x);
+        const auto index = load_register(inst.y);
+        if ((inst.flags & detail::flag_nba) != 0U || inst.imm_b == 0U) {
+            call_effect(at, value, index, zero_pair());
+            return;
+        }
+        const auto& selection = body_.indices[inst.aux];
+        const auto lower = std::min(selection.left, selection.right);
+        const auto upper = std::max(selection.left, selection.right);
+        auto* known = builder_.CreateICmpEQ(
+            builder_.CreateAnd(index.b, constant(mask_of(32U))), constant(0U));
+        auto* position = signed_index(index);
+        auto* in_range = builder_.CreateAnd(
+            builder_.CreateICmpSGE(position,
+                constant(static_cast<std::uint64_t>(lower))),
+            builder_.CreateICmpSLE(position,
+                constant(static_cast<std::uint64_t>(upper))));
+        auto* right = constant(static_cast<std::uint64_t>(selection.right));
+        auto* distance = builder_.CreateSelect(
+            builder_.CreateICmpSGE(position, right),
+            builder_.CreateSub(position, right), builder_.CreateSub(right, position));
+        auto* offset = builder_.CreateAdd(distance, constant(selection.base_offset));
+        auto* fits = builder_.CreateICmpULE(offset,
+            constant(std::uint64_t { inst.imm_b } - inst.width));
+        auto* ok = builder_.CreateAnd(builder_.CreateAnd(known, in_range),
+            builder_.CreateAnd(fits,
+                builder_.CreateICmpULE(constant(inst.width), constant(inst.imm_b))));
+        auto* fast = llvm::BasicBlock::Create(context_, "dynamic_store", &function_);
+        auto* slow = llvm::BasicBlock::Create(context_, "dynamic_store_slow",
+            &function_);
+        auto* done = llvm::BasicBlock::Create(context_, "dynamic_stored", &function_);
+        builder_.CreateCondBr(ok, fast, slow);
+        builder_.SetInsertPoint(fast);
+        auto* info = binding(inst.d, 1U);
+        emit_store_field(inst.width, builder_.CreateZExt(binding(inst.d, 0U), i64_),
+            constant(inst.imm_a), builder_.CreateSelect(ok, offset, constant(0U)),
+            builder_.CreateAnd(info, llvm::ConstantInt::get(i32_, ~silent_bit)),
+            builder_.CreateICmpNE(
+                builder_.CreateAnd(info, llvm::ConstantInt::get(i32_, silent_bit)),
+                llvm::ConstantInt::get(i32_, 0U)),
+            value, done);
         builder_.SetInsertPoint(slow);
         call_effect(at, value, index, zero_pair());
         builder_.CreateBr(done);
@@ -2645,6 +2806,8 @@ private:
             call_effect(at, load_register(inst.x), zero_pair(), zero_pair());
             break;
         case KOp::store_slot_dynamic:
+            emit_store_slot_dynamic(inst, at);
+            break;
         case KOp::store_slot_part:
             call_effect(at, load_register(inst.x), load_register(inst.y),
                 zero_pair());

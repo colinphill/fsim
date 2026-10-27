@@ -2300,6 +2300,10 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.x = op.source;
                 inst.y = op.selection.index;
                 inst.width = w(op.source);
+                // The slot's words per plane and width, for native stores
+                // (Logic4 slots only).
+                inst.imm_a = slots_[*slot].words;
+                inst.imm_b = slots_[*slot].planes == 2U ? slots_[*slot].width : 0U;
                 inst.aux = static_cast<std::uint32_t>(body.indices.size());
                 body.indices.push_back(op.selection);
                 // A strict (VHDL) index is checked; a SystemVerilog write
