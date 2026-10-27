@@ -1450,6 +1450,20 @@ std::optional<ArtifactInspection> inspect_artifact(
 namespace fsim::app::application_detail {
 namespace {
 
+/// Loads a design artifact for a simulation (or the ahead-of-time build of
+/// one). Its checksums and producing build already match, so derived state
+/// it carries is adopted; the interpreter built from it validates every
+/// process program as it is populated, so the loader's trial population
+/// would repeat that.
+std::optional<BuiltProject> load_design_artifact_for_simulation(
+    const std::filesystem::path& directory,
+    diagnostic::Engine& diagnostics)
+{
+    const elaboration::detail::DeferredProgramValidation deferred;
+    const elaboration::detail::TrustedArtifactLoad trusted;
+    return load_design_artifact(directory, diagnostics);
+}
+
 } // namespace
 
 int elaborate_built_workspace(
@@ -1494,7 +1508,7 @@ int elaborate_built_workspace(
     }
 #if defined(FSIM_HAS_LLVM)
     try {
-        auto reloaded = load_design_artifact(
+        auto reloaded = load_design_artifact_for_simulation(
             *invocation.artifact_output, diagnostics);
         if (!reloaded) {
             return 1;
@@ -1572,13 +1586,8 @@ static int handle_simulate_impl(
                 + metadata->delay_mode + "'");
         return 1;
     }
-    // The interpreter built for this run validates every process program
-    // as it is populated; the loader's trial population would repeat that.
-    auto built = [&] {
-        const elaboration::detail::DeferredProgramValidation deferred;
-        const elaboration::detail::TrustedArtifactLoad trusted;
-        return load_design_artifact(*invocation.design, diagnostics);
-    }();
+    auto built = load_design_artifact_for_simulation(
+        *invocation.design, diagnostics);
     if (!built) {
         return 1;
     }

@@ -30,9 +30,9 @@ private:
     std::size_t buffered_ {};
 };
 
-/// Integrity checksum of a design-snapshot payload: "xxh64:" followed by
-/// sixteen lowercase hex digits. The checksum detects corruption; payload
-/// identities that other artifacts depend on stay SHA-256.
+/// Integrity checksum of a design-snapshot or library-object payload:
+/// "xxh64:" followed by sixteen lowercase hex digits. The checksum detects
+/// corruption; content identities (source digests, cache keys) stay SHA-256.
 [[nodiscard]] std::string payload_checksum(std::string_view bytes);
 
 /// A recorded payload checksum is either xxh64-tagged or SHA-256 hex.

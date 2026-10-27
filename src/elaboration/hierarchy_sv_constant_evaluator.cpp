@@ -936,6 +936,12 @@ void convert_to_two_state(Value& value)
         std::move(packed), signed_value, !explicit_width);
 }
 
+[[nodiscard]] std::uint64_t width_mask(const std::uint32_t width) noexcept
+{
+    return width >= 64U ? ~std::uint64_t { 0 }
+                        : (std::uint64_t { 1 } << width) - 1U;
+}
+
 enum class Truth : std::uint8_t { false_value,
     true_value,
     unknown };
@@ -949,6 +955,27 @@ enum class Truth : std::uint8_t { false_value,
         }
         return value.scalar->bits != 0U ? Truth::true_value
                                          : Truth::false_value;
+    }
+    // Planes word by word: a one bit decides truth, else any X/Z bit
+    // (bval set) leaves it unknown (11.4.7).
+    if (!value.packed.is_logic9() && value.packed.width() == value.width) {
+        const auto aval = value.packed.aval_words();
+        const auto bval = value.packed.bval_words();
+        bool unknown_bits { };
+        const auto words = std::min<std::size_t>(
+            aval.size(), (std::size_t { value.width } + 63U) / 64U);
+        for (std::size_t word = 0U; word < words; ++word) {
+            const auto low = word * 64U;
+            const auto mask = low + 64U <= value.width
+                ? ~std::uint64_t { 0 }
+                : width_mask(static_cast<std::uint32_t>(value.width - low));
+            const auto b = word < bval.size() ? bval[word] & mask : 0U;
+            if ((aval[word] & ~b & mask) != 0U) {
+                return Truth::true_value;
+            }
+            unknown_bits = unknown_bits || b != 0U;
+        }
+        return unknown_bits ? Truth::unknown : Truth::false_value;
     }
     bool unknown { };
     for (std::uint32_t bit = 0U; bit < value.width; ++bit) {
@@ -975,12 +1002,6 @@ struct SmallWords {
     std::uint64_t a { };
     std::uint64_t b { };
 };
-
-[[nodiscard]] std::uint64_t width_mask(const std::uint32_t width) noexcept
-{
-    return width >= 64U ? ~std::uint64_t { 0 }
-                        : (std::uint64_t { 1 } << width) - 1U;
-}
 
 [[nodiscard]] std::optional<SmallWords> small_words(const Value& value)
 {

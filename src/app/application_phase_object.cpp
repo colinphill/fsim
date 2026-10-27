@@ -6,6 +6,7 @@
 #include "fsim/library/source_mapping.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -33,8 +34,7 @@ std::optional<std::string> read_object_payload(
             + std::string { budget } + support::path_to_utf8(path));
     return std::nullopt;
   }
-  if (support::Sha256::hex(support::Sha256::digest(*payload.bytes))
-      != expected_checksum) {
+  if (!support::payload_checksum_matches(*payload.bytes, expected_checksum)) {
     diagnostics.error(
         "FSIM-ART-0005",
         ".fsimobj payload checksum mismatch: "

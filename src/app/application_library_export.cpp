@@ -8,6 +8,7 @@
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/scv.hpp"
 #include "fsim/systemc_abi.h"
@@ -116,7 +117,7 @@ namespace {
             const auto artifact = std::filesystem::path { "native" } / "systemc"
                 / compiled.library_path.filename();
             metadata.native_artifacts.push_back({ "systemc_plugin", artifact,
-                support::Sha256::hex(support::Sha256::digest(*bytes)),
+                support::payload_checksum(*bytes),
                 runtime_abi_version, FSIM_SYSTEMC_ABI_VERSION,
                 fsim_scv_compatibility_identity(), compiled.host_fingerprint,
                 { }, application_detail::target_name(), { }, "compiler-default",
@@ -476,8 +477,7 @@ bool export_library(
         return false;
     }
     metadata.compiled_hir_artifact = "compiled/design.fsimhir";
-    metadata.compiled_hir_checksum = support::Sha256::hex(
-        support::Sha256::digest(*compiled_bytes));
+    metadata.compiled_hir_checksum = support::payload_checksum(*compiled_bytes);
     payloads.push_back(
         { metadata.compiled_hir_artifact, std::move(*compiled_bytes) });
 

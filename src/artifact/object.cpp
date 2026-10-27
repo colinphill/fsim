@@ -7,6 +7,7 @@
 #include "fsim/support/bounded_bytes.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -356,12 +357,12 @@ bool validate_metadata(
   const auto compiled_hir_path
       = support::path_to_utf8(metadata.compiled_hir_artifact);
   if (!safe_relative_path(metadata.compiled_hir_artifact)
-      || !checksum_spelling(metadata.compiled_hir_checksum)
+      || !support::payload_checksum_spelling(metadata.compiled_hir_checksum)
       || !payload_paths.insert(compiled_hir_path).second) {
     error(
         diagnostics, kValueCode,
         "object compiled-HIR bundle requires a unique contained payload and "
-        "lowercase SHA-256 checksum",
+        "payload checksum",
         source);
   }
   for (const auto& item : metadata.sources) {
@@ -369,7 +370,7 @@ bool validate_metadata(
     if (item.logical_name.empty() || !safe_relative_path(item.logical_name)
         || !logical_sources.insert(item.logical_name).second
         || !safe_relative_path(item.artifact)
-        || !checksum_spelling(item.checksum)
+        || !support::payload_checksum_spelling(item.checksum)
         || item.language != metadata.language
         || item.standard != metadata.standard
         || item.compatibility_profile != metadata.compatibility_profile
@@ -845,8 +846,7 @@ bool publish_object(
     const auto found = expected.find(path);
     if (!safe_relative_path(payload.path) || found == expected.end()
         || !supplied.insert(path).second
-        || found->second != support::Sha256::hex(
-            support::Sha256::digest(payload.bytes))) {
+        || !support::payload_checksum_matches(payload.bytes, found->second)) {
       error(
           diagnostics, kIoCode,
           "object payload is unsafe, duplicate, unindexed, or has a checksum "

@@ -542,7 +542,9 @@ bool validate(
           || object.unit_checksums.empty()
           || std::ranges::any_of(
               object.unit_checksums,
-              [](const auto& checksum) { return !checksum_spelling(checksum); })) {
+              [](const auto& checksum) {
+                  return !support::payload_checksum_spelling(checksum);
+              })) {
           report(
               diagnostics, kValueCode,
               "design object inputs require complete portable content identities",

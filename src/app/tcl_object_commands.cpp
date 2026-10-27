@@ -10,6 +10,7 @@
 #include "fsim/runtime/simir_container_value.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
@@ -1384,9 +1385,8 @@ namespace {
                             + support::path_to_utf8(bundle_path) + "'";
                     return std::nullopt;
                 }
-                if (support::Sha256::hex(
-                        support::Sha256::digest(*payload.bytes))
-                    != metadata->compiled_hir_checksum) {
+                if (!support::payload_checksum_matches(
+                        *payload.bytes, metadata->compiled_hir_checksum)) {
                     error = "compiled definition archive checksum does not match "
                             "its object metadata";
                     return std::nullopt;

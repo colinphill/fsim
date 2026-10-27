@@ -11,6 +11,7 @@
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc/incremental.hpp"
 #include "fsim/version.hpp"
@@ -176,6 +177,8 @@ bool publish_workspace_object(
     if (!contents.has_value()) {
       return false;
     }
+    // A source's checksum is also its content identity (CheckedSource
+    // content_digest), so it stays SHA-256 like the project's own digests.
     const auto checksum = support::Sha256::hex(
         support::Sha256::digest(*contents));
     metadata.sources.push_back({
@@ -254,8 +257,7 @@ bool publish_workspace_object(
   }
   const auto compiled_path
       = std::filesystem::path { "compiled/design.fsimhir" };
-  const auto compiled_checksum = support::Sha256::hex(
-      support::Sha256::digest(*compiled_bytes));
+  const auto compiled_checksum = support::payload_checksum(*compiled_bytes);
   metadata.compiled_hir_schema = library::kCompiledHirSchemaVersion;
   metadata.compiled_hir_artifact = compiled_path;
   metadata.compiled_hir_checksum = compiled_checksum;

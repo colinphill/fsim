@@ -1750,6 +1750,42 @@ private:
 
     /// Appends a deferred VHDL write at bit `offset` (an i32; the static
     /// offset when null).
+    /// Bits [offset, offset + width) of the plane at word `first` of slot
+    /// x (inst.imm_a words per plane), for a bit offset known only at run
+    /// time (a 32-bit binding): the high word is read (from an in-plane
+    /// address) only when the field crosses a word boundary inside the
+    /// plane.
+    [[nodiscard]] llvm::Value* bound_field_plane(const KInst& inst,
+        llvm::Value* bound_offset, const std::uint64_t first)
+    {
+        auto* offset = builder_.CreateZExt(bound_offset, i64_);
+        auto* word = builder_.CreateLShr(offset, constant(6U));
+        auto* shift = builder_.CreateAnd(offset, constant(63U));
+        auto* crosses = builder_.CreateAnd(
+            builder_.CreateICmpNE(shift, constant(0U)),
+            builder_.CreateAnd(
+                builder_.CreateICmpUGT(
+                    builder_.CreateAdd(shift, constant(inst.width)),
+                    constant(64U)),
+                builder_.CreateICmpULT(
+                    builder_.CreateAdd(word, constant(1U)),
+                    constant(inst.imm_a))));
+        auto* next = builder_.CreateSelect(crosses,
+            builder_.CreateAdd(word, constant(1U)), word);
+        auto* spill_shift = builder_.CreateAnd(
+            builder_.CreateSub(constant(64U), shift), constant(63U));
+        auto* start = slot_word(inst.x, first);
+        auto* low = builder_.CreateLoad(i64_,
+            builder_.CreateInBoundsGEP(i64_, start, word));
+        auto* high = builder_.CreateLoad(i64_,
+            builder_.CreateInBoundsGEP(i64_, start, next));
+        auto* value = builder_.CreateOr(
+            builder_.CreateLShr(low, shift),
+            builder_.CreateSelect(crosses,
+                builder_.CreateShl(high, spill_shift), constant(0U)));
+        return builder_.CreateAnd(value, constant(mask_of(inst.width)));
+    }
+
     void emit_deferred_store(const KInst& inst, const std::uint32_t at,
         llvm::Value* offset = nullptr)
     {
@@ -2518,38 +2554,10 @@ private:
             break;
         case KOp::load_field: {
             if (inst.sub == 1U) {
-                // The bit offset is a per-instance binding: the high word is
-                // read (from an in-plane address) only when the field
-                // crosses a word boundary inside the plane.
-                auto* offset = builder_.CreateZExt(binding(inst.y, 0U), i64_);
-                auto* word = builder_.CreateLShr(offset, constant(6U));
-                auto* shift = builder_.CreateAnd(offset, constant(63U));
-                auto* crosses = builder_.CreateAnd(
-                    builder_.CreateICmpNE(shift, constant(0U)),
-                    builder_.CreateAnd(
-                        builder_.CreateICmpUGT(
-                            builder_.CreateAdd(shift, constant(inst.width)),
-                            constant(64U)),
-                        builder_.CreateICmpULT(
-                            builder_.CreateAdd(word, constant(1U)),
-                            constant(inst.imm_a))));
-                auto* next = builder_.CreateSelect(crosses,
-                    builder_.CreateAdd(word, constant(1U)), word);
-                auto* spill_shift = builder_.CreateAnd(
-                    builder_.CreateSub(constant(64U), shift), constant(63U));
-                const auto plane = [&](const std::uint64_t first) {
-                    auto* start = slot_word(inst.x, first);
-                    auto* low = builder_.CreateLoad(i64_,
-                        builder_.CreateInBoundsGEP(i64_, start, word));
-                    auto* high = builder_.CreateLoad(i64_,
-                        builder_.CreateInBoundsGEP(i64_, start, next));
-                    auto* value = builder_.CreateOr(
-                        builder_.CreateLShr(low, shift),
-                        builder_.CreateSelect(crosses,
-                            builder_.CreateShl(high, spill_shift), constant(0U)));
-                    return builder_.CreateAnd(value, constant(mask_of(inst.width)));
-                };
-                store_register(inst.d, { plane(0U), plane(inst.imm_a) });
+                // The bit offset is a per-instance binding.
+                auto* offset = binding(inst.y, 0U);
+                store_register(inst.d, { bound_field_plane(inst, offset, 0U),
+                                           bound_field_plane(inst, offset, inst.imm_a) });
                 break;
             }
             const auto word = inst.offset / 64U;
@@ -2733,9 +2741,14 @@ private:
         }
         case KOp::load_field9: {
             // Strong 0/1 fields read inline; others take the helper.
-            const auto word = inst.offset / 64U;
-            const auto shift = inst.offset % 64U;
             const auto plane = [&](const std::uint64_t index) {
+                if (inst.z != 0U) {
+                    // The bit offset is a per-instance binding (z - 1).
+                    return bound_field_plane(inst, binding(inst.z - 1U, 0U),
+                        index * inst.imm_a);
+                }
+                const auto word = inst.offset / 64U;
+                const auto shift = inst.offset % 64U;
                 const auto first = index * inst.imm_a + word;
                 auto* low = builder_.CreateLoad(i64_, slot_word(inst.x, first));
                 llvm::Value* value = builder_.CreateLShr(low, constant(shift));
@@ -2800,7 +2813,9 @@ private:
         }
         case KOp::store_vhdl:
             if (inst.sub == 0U && (inst.flags & detail::flag_blocking) == 0U) {
-                emit_deferred_store(inst, at);
+                // z - 1: a per-instance binding holding the bit offset.
+                emit_deferred_store(inst, at,
+                    inst.z != 0U ? binding(inst.z - 1U, 0U) : nullptr);
                 break;
             }
             if (inst.sub == 1U && (inst.flags & detail::flag_blocking) == 0U

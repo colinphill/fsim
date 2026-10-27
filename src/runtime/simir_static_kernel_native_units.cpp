@@ -884,7 +884,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         // picks the bucket and an exact comparison of the same fields decides.
         const auto same_inst = [](const KInst& left, const KInst& right,
                                    const bool shape) {
-            const bool field = shape && left.op == KOp::load_field;
+            const bool field = shape && binding_offset_field(left);
             const bool open = shape && left.op == KOp::constant;
             return left.op == right.op && left.sub == right.sub
                 && left.flags == right.flags && left.width == right.width
@@ -959,7 +959,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                     | static_cast<std::uint64_t>(inst.width) << 32U);
                 mix(inst.d | static_cast<std::uint64_t>(inst.x) << 32U);
                 mix(inst.y | static_cast<std::uint64_t>(inst.z) << 32U);
-                mix((shape && inst.op == KOp::load_field ? 0U : inst.offset)
+                mix((shape && binding_offset_field(inst) ? 0U : inst.offset)
                     | static_cast<std::uint64_t>(inst.aux) << 32U);
                 if (!(shape && inst.op == KOp::constant)) {
                     mix(inst.imm_a);
@@ -980,9 +980,6 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             std::vector<std::vector<std::uint32_t>> shapes;
             std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> shapes_by_hash;
             for (std::size_t unit = 0U; unit < units.size(); ++unit) {
-                if (units[unit].vhdl) {
-                    continue;
-                }
                 const auto& body = *canonicals[unit].body;
                 auto& bucket = shapes_by_hash[hash_body(body, true)];
                 const auto found = std::ranges::find_if(bucket, [&](const std::uint32_t shape) {
@@ -1001,9 +998,11 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                 }
                 const auto& first = canonicals[group.front()].body->code;
                 for (std::uint32_t at = 0U; at < first.size(); ++at) {
-                    if (first[at].op == KOp::load_field && first[at].sub == 0U) {
-                        // Field reads at different bit offsets of the same-shaped
-                        // slot read the offset from a binding (sub 1, y).
+                    if (binding_offset_field(first[at])) {
+                        // Field reads (and VHDL signal assignments) at different
+                        // bit offsets of the same-shaped slot take the offset
+                        // from a binding: load_field sub 1 and y; load_field9
+                        // and store_vhdl z, the binding plus one.
                         const bool offsets_differ = std::ranges::any_of(group,
                             [&](const std::uint32_t unit) {
                                 return canonicals[unit].body->code[at].offset
@@ -1013,8 +1012,13 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                             for (const auto unit : group) {
                                 auto& state = canonicals[unit];
                                 auto& inst = state.body->code[at];
-                                inst.sub = 1U;
-                                inst.y = bind_in(state, 7U, at, inst.offset, 0U);
+                                const auto offset = bind_in(state, 7U, at, inst.offset, 0U);
+                                if (inst.op == KOp::load_field) {
+                                    inst.sub = 1U;
+                                    inst.y = offset;
+                                } else {
+                                    inst.z = offset + 1U;
+                                }
                                 inst.offset = 0U;
                             }
                         }
@@ -1029,7 +1033,15 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                             return inst.imm_a != first[at].imm_a
                                 || inst.imm_b != first[at].imm_b;
                         });
-                    if (!differs) {
+                    // A VHDL template runs two-state code only without X or 'U'
+                    // literals (unknown_constant), so a literal that has X bits
+                    // in any unit stays an immediate there.
+                    const bool unknown = std::ranges::any_of(group,
+                        [&](const std::uint32_t unit) {
+                            return units[unit].vhdl
+                                && canonicals[unit].body->code[at].imm_b != 0U;
+                        });
+                    if (!differs || unknown) {
                         continue;
                     }
                     for (const auto unit : group) {
@@ -1247,17 +1259,18 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         static_cast<void>(codegen.compile(full_code, helpers));
     }
     if (ahead_of_time) {
-        // Members without compiled bodies run their operation tier, and
-        // VHDL members continue in it after a deoptimization (Logic9 values
-        // compiled code does not represent, typically the initial 'U's);
-        // later runs find it with the rest of the code built now. Instances
-        // of one design unit share it.
+        // Members without compiled bodies run their operation tier; later
+        // runs find it with the rest of the code built now. Instances of one
+        // design unit share it. A compiled VHDL member continues in its tier
+        // only after a deoptimization (Logic9 values its full code does not
+        // represent), which is rare, so that tier is compiled when first
+        // needed (operation_tier).
         std::vector<StaticKernelTemplate> tier_code;
         std::vector<OperationTier*> tier_of;
         std::unordered_set<OperationTier*> queued;
         for (std::uint32_t index = 0U; index < members_.size(); ++index) {
             const auto& member = members_[index];
-            if ((member.compiled && !member.vhdl) || member.partition != no_slot
+            if (member.compiled || member.partition != no_slot
                 || member.operations.empty()) {
                 continue;
             }

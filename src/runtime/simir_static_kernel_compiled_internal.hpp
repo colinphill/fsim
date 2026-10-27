@@ -231,6 +231,30 @@ inline void operation_registers(const Operation& operation,
     return { value_a & m, value_b & m };
 }
 
+/// Instructions whose static bit offset a canonical template may take from a
+/// per-unit binding instead (StaticKernel::build_native, step 2):
+/// load_field (then sub 1, binding y), load_field9 and static store_vhdl
+/// (then z, the binding plus one).
+[[nodiscard]] inline bool binding_offset_field(const KInst& inst) noexcept
+{
+    return (inst.op == KOp::load_field && inst.sub == 0U)
+        || inst.op == KOp::load_field9
+        || (inst.op == KOp::store_vhdl && inst.sub == 0U);
+}
+
+/// `inst` with its bit offset resolved from the unit's bindings when a
+/// canonical template takes it from there (load_field9, store_vhdl).
+[[nodiscard]] inline KInst with_bound_offset(const KInst& inst,
+    const std::uint32_t* bindings) noexcept
+{
+    auto resolved = inst;
+    if (inst.z != 0U && binding_offset_field(inst)) {
+        resolved.offset = bindings[2U * (inst.z - 1U)];
+        resolved.z = 0U;
+    }
+    return resolved;
+}
+
 /// Registers a compiled instruction reads and writes, and its successors.
 inline void kinst_flow(const KInst& inst, const std::uint32_t at,
     const CompiledBody& body, const std::vector<Operation>& operations,

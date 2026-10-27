@@ -1618,7 +1618,7 @@ void Interpreter::Impl::StaticKernel::native_evaluate(
     kernel.profile_native_calls_[0] += kernel.profile_ ? 1U : 0U;
     try {
         const auto& body = *static_cast<const CompiledBody*>(frame->program);
-        const auto& inst = body.code[at];
+        const auto inst = with_bound_offset(body.code[at], frame->bindings);
         if (kernel.profile_) {
             static const bool who = std::getenv("FSIM_PROFILE_KERNEL_WHO") != nullptr;
             std::string member;
@@ -1678,7 +1678,7 @@ void Interpreter::Impl::StaticKernel::native_effect(
     out[1] = 0U;
     try {
         const auto& body = *static_cast<const CompiledBody*>(frame->program);
-        const auto& inst = body.code[at];
+        const auto inst = with_bound_offset(body.code[at], frame->bindings);
         if (kernel.profile_) {
             static const bool who = std::getenv("FSIM_PROFILE_KERNEL_WHO") != nullptr;
             std::string member;

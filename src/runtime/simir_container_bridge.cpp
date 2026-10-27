@@ -108,6 +108,28 @@ void for_each_leaf(Value& value, Callback&& callback) {
   }
 }
 
+// ORs bits [0, width) of source into destination starting at offset; the
+// destination bits are zero.
+void or_word_planes(
+    std::vector<std::uint64_t>& destination,
+    const std::span<const std::uint64_t> source,
+    const std::size_t offset,
+    const std::size_t width) {
+  const auto shift = offset % 64U;
+  auto target = offset / 64U;
+  for (std::size_t word = 0; word * 64U < width; ++word, ++target) {
+    auto bits = word < source.size() ? source[word] : 0U;
+    const auto remaining = width - word * 64U;
+    if (remaining < 64U) {
+      bits &= (std::uint64_t{1} << remaining) - 1U;
+    }
+    destination[target] |= bits << shift;
+    if (shift != 0U && target + 1U < destination.size()) {
+      destination[target + 1U] |= bits >> (64U - shift);
+    }
+  }
+}
+
 }  // namespace
 
 std::optional<std::size_t>
@@ -133,6 +155,36 @@ PackedLogic4 pack_container_signal_value(
   if (!width) {
     throw std::invalid_argument{
         "container type cannot cross a packed signal boundary"};
+  }
+  // Four-state leaves land word by word in zeroed planes; a nine-state
+  // leaf takes the general insertion below.
+  const auto words = (*width + 63U) / 64U;
+  std::vector<std::uint64_t> aval(words);
+  std::vector<std::uint64_t> bval(words);
+  bool logic9_leaf{};
+  std::size_t offset = *width;
+  for_each_leaf(
+      value,
+      [&](const PackedLogic4& element) {
+        if (element.width() > offset) {
+          throw std::invalid_argument{
+              "container boundary leaf width exceeds its descriptor"};
+        }
+        offset -= element.width();
+        if (element.is_logic9()) {
+          logic9_leaf = true;
+          return;
+        }
+        or_word_planes(aval, element.aval_words(), offset, element.width());
+        or_word_planes(bval, element.bval_words(), offset, element.width());
+      });
+  if (offset != 0) {
+    throw std::invalid_argument{
+        "container boundary descriptor has unfilled storage"};
+  }
+  if (!logic9_leaf) {
+    auto result = PackedLogic4::from_word_planes(*width, aval, bval);
+    return logic9 ? result.promoted_to_logic9() : result;
   }
   PackedLogic4 result(*width, Logic4::zero);
   std::size_t cursor = *width;

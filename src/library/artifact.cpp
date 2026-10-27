@@ -4,7 +4,7 @@
 #include "../diagnostic/artifact_identity.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
-#include "fsim/support/sha256.hpp"
+#include "fsim/support/payload_checksum.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -857,11 +857,11 @@ std::optional<Metadata> parse_metadata(
   std::unordered_set<std::string> source_names;
   std::unordered_set<std::string> payload_paths;
   if (!safe_relative_path(metadata.compiled_hir_artifact)
-      || !checksum_spelling(metadata.compiled_hir_checksum)) {
+      || !support::payload_checksum_spelling(metadata.compiled_hir_checksum)) {
     error(
         diagnostics, kValueCode,
-        "metadata requires a contained compiled-HIR bundle with a lowercase "
-        "SHA-256 checksum",
+        "metadata requires a contained compiled-HIR bundle with a payload "
+        "checksum",
         source_name, document_line);
   } else {
     payload_paths.insert(
@@ -871,7 +871,7 @@ std::optional<Metadata> parse_metadata(
     const bool no_text = source_entry.artifact.empty()
         && source_entry.checksum.empty();
     const bool with_text = safe_relative_path(source_entry.artifact)
-        && checksum_spelling(source_entry.checksum);
+        && support::payload_checksum_spelling(source_entry.checksum);
     const bool known_language = source_entry.language.empty()
         || source_entry.language == "vhdl"
         || source_entry.language == "verilog"
@@ -946,7 +946,7 @@ std::optional<Metadata> parse_metadata(
     const auto identity = auxiliary.kind + "\n" + auxiliary.name;
     if (auxiliary.kind.empty() || auxiliary.name.empty()
         || !safe_relative_path(auxiliary.artifact)
-        || !checksum_spelling(auxiliary.checksum)
+        || !support::payload_checksum_spelling(auxiliary.checksum)
         || auxiliary.revision.empty()
         || auxiliary.compatibility_profile.empty()
         || !auxiliary_identities.insert(identity).second
@@ -962,7 +962,7 @@ std::optional<Metadata> parse_metadata(
   }
   for (const auto& native : metadata.native_artifacts) {
     const bool common = safe_relative_path(native.artifact)
-        && checksum_spelling(native.checksum)
+        && support::payload_checksum_spelling(native.checksum)
         && native.runtime_abi != 0 && !native.target.empty()
         && !native.cpu.empty();
     const bool systemc = native.kind == "systemc_plugin"
@@ -1127,11 +1127,10 @@ bool publish(
               + "' is unsafe, duplicate, or absent from the unit index");
       return false;
     }
-    const auto checksum = support::Sha256::hex(
-        support::Sha256::digest(payload.bytes));
     const auto expected_checksum = expected_checksums.find(path);
     if (expected_checksum == expected_checksums.end()
-        || expected_checksum->second != checksum) {
+        || !support::payload_checksum_matches(
+            payload.bytes, expected_checksum->second)) {
       diagnostics.error(
           std::string{kPublishCode},
           "portable payload checksum does not match metadata for '"
