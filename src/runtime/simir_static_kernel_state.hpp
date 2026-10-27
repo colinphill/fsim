@@ -811,6 +811,29 @@ private:
         const static_kernel_detail::KInst& inst, std::uint32_t at,
         std::uint32_t member_index, std::uint32_t source_slot, Word base,
         std::uint32_t target_slot);
+    /// Wide-register instructions (KOp::wide_load .. wide_part_insert) on
+    /// the register file `registers`, with narrow operands y (its 'U' mask
+    /// y_unknown) and z; `resolved` is the slot of a load or store.
+    void execute_wide(const static_kernel_detail::CompiledBody& body,
+        Word* registers, const static_kernel_detail::KInst& inst,
+        std::uint32_t at, std::uint32_t member_index, std::uint32_t body_begin,
+        Word y, std::uint64_t y_unknown, Word z, std::uint32_t resolved);
+    /// fsim_sk_wide_<op>: a wide-register instruction, or a selection from a
+    /// wide register (sub 3), with the caller's register file.
+    template <static_kernel_detail::KOp Op>
+    static void native_wide(StaticKernelNativeFrame* frame, Word* registers,
+        std::uint32_t at, std::uint64_t xa, std::uint64_t xb, std::uint64_t ya,
+        std::uint64_t yb, std::uint64_t za, std::uint64_t zb,
+        std::uint64_t* out);
+    /// The value of wide register `reg` (storage CompiledBody::wide_base)
+    /// as the reference holds it, and back (false: a value with codes the
+    /// registers cannot hold, other than 0, 1, X, Z and 'U').
+    [[nodiscard]] static PackedLogic4 wide_value(const CompiledBody& body,
+        const Word* registers, std::uint32_t reg, ValueKind kind);
+    [[nodiscard]] static bool set_wide_value(const CompiledBody& body,
+        Word* registers, std::uint32_t reg, const PackedLogic4& value);
+    /// The register file sub 3 selections read (evaluate_slow_op).
+    const Word* wide_file_ { };
     static void native_fail(StaticKernelNativeFrame* frame, std::uint32_t at,
         std::uint32_t reason);
     void compile_members();
@@ -1375,6 +1398,8 @@ private:
     std::vector<std::uint32_t> container_elements_;
     /// KOp::wide_move value planes.
     std::vector<std::uint64_t> wide_move_scratch_;
+    /// KOp::wide_concat result (aval, bval and 'U' words).
+    std::vector<std::uint64_t> wide_concat_scratch_;
     /// members_[i].process, dense: hot paths record slot writers without
     /// touching the large member records.
     std::vector<ProcessId> member_process_;

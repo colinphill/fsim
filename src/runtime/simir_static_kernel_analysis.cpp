@@ -403,7 +403,7 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
                 source = true;
                 break;
             case KOp::extract:
-                source = inst.sub == 2U
+                source = inst.sub >= 2U
                     || (inst.x < count && tracked[inst.x] != 0U);
                 break;
             case KOp::copy:
@@ -418,7 +418,7 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
                 break;
             case KOp::dynamic_extract:
             case KOp::dynamic_part_select:
-                source = inst.sub == 2U
+                source = inst.sub >= 2U
                     || (inst.sub == 1U && slots_[inst.x].planes == 4U
                         && inst.imm_b == 0U)
                     || (inst.sub == 0U && inst.x < count && tracked[inst.x] != 0U);
@@ -465,6 +465,13 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         case KOp::concat:
         case KOp::store_vhdl:
         case KOp::generic:
+        // Wide registers hold their own 'U' masks.
+        case KOp::wide_load:
+        case KOp::wide_copy:
+        case KOp::wide_const:
+        case KOp::wide_concat:
+        case KOp::wide_store:
+        case KOp::wide_part_insert:
             mode = u_aware;
             break;
         case KOp::copy:
@@ -488,7 +495,7 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
             mode = u_aware;
             break;
         case KOp::extract:
-            mode = inst.sub == 2U || reads_tracked ? u_aware : 0U;
+            mode = inst.sub >= 2U || reads_tracked ? u_aware : 0U;
             break;
         // The result is the same for 'U' as for X.
         case KOp::reduce:
@@ -682,12 +689,13 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
         case KOp::assert_check:
             allowed = true;
             break;
-        // Sub 2 reads a wide register, which only generic code writes.
+        // Sub 2 and 3 read a wide register, which only generic and wide
+        // instructions write.
         case KOp::extract:
         case KOp::dynamic_extract:
         case KOp::dynamic_part_select:
         case KOp::branch:
-            allowed = inst.sub != 2U;
+            allowed = inst.sub != 2U && inst.sub != 3U;
             break;
         case KOp::store_vhdl:
             allowed = inst.sub == 0U && (inst.flags & flag_blocking) == 0U;

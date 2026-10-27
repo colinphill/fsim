@@ -1146,7 +1146,10 @@ PackedLogic4 Interpreter::Impl::StaticKernel::debug_register(
             throw std::logic_error { "SimIR debug local has not been initialized" };
         }
         const auto register_width = body.register_widths[reg];
-        value = register_width > 64U
+        value = register_width > 64U && reg < body.wide_base.size()
+                && body.wide_base[reg] != 0U
+            ? wide_value(body, body.registers.data(), reg, ValueKind::logic4)
+            : register_width > 64U
             ? body.wide_registers.at(reg)
             : uword_value(body.registers[reg], 0U, register_width,
                   ValueKind::logic4);
@@ -1216,7 +1219,10 @@ void Interpreter::Impl::StaticKernel::debug_write_register(
             };
         }
         const auto converted = Impl::coerce_value_kind(value, ValueKind::logic4);
-        if (value.width() > 64U) {
+        if (value.width() > 64U && reg < body.wide_base.size()
+            && body.wide_base[reg] != 0U) {
+            (void)set_wide_value(body, body.registers.data(), reg, converted);
+        } else if (value.width() > 64U) {
             body.wide_registers.at(reg) = converted;
         } else {
             const auto aval = converted.aval_words();

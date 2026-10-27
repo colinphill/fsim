@@ -112,11 +112,50 @@ enum class KOp : std::uint8_t {
     /// static successor (d, then y: z of them; offset 1 adds the return
     /// targets); any other position goes back to the runner.
     step,
+    // Wide registers (fixed widths over 64 bits). A wide register's value
+    // lives in the register file at its storage index s (CompiledBody::
+    // wide_base): chunk j (bits 64j .. 64j + 63) is register s + j, and a
+    // Logic9 register's 'U' masks follow as registers s + n + j (n chunks;
+    // their `a` words). Instructions name storage indices; analyses treat
+    // each as one register.
+    /// d = slot x (width bits; imm_a words per plane; aux 1: the register
+    /// has 'U' masks, cleared unless sub 1). sub 0: a Logic4 slot; sub 1: a
+    /// Logic9 slot, exact (codes other than 0, 1, X, Z and 'U' deoptimize);
+    /// sub 2: a Logic9 slot coerced to a Logic4 register.
+    wide_load,
+    /// Registers d .. d + aux - 1 = x .. x + aux - 1, then imm_a registers
+    /// from d + aux cleared (a Logic4 value's 'U' masks).
+    wide_copy,
+    /// Registers d .. d + aux - 1 = CompiledBody::wide_constants from imm_a.
+    wide_const,
+    /// d (width bits; sub 1: with 'U' masks) = the x operands from
+    /// concat[aux], most significant first: narrow registers, or wide
+    /// storage (width over 64; ConcatOperand::unknown: with 'U' masks).
+    wide_concat,
+    /// Register x (width bits; aux 1: with 'U' masks) to bits offset ..
+    /// offset + width - 1 of slot d, by 64-bit chunk. sub 0: SystemVerilog
+    /// blocking, 1: nonblocking, 2: VHDL signal assignment (flag_blocking:
+    /// immediate, a shared variable).
+    wide_store,
+    /// d (width bits; imm_a 1: with 'U' masks) = target x with narrow
+    /// source y written at the part selection parts[aux] of base z, as
+    /// dynamic_part_insert.
+    wide_part_insert,
 };
 
-/// Number of kernel instruction kinds (KOp values 0 .. step).
+/// Number of kernel instruction kinds (KOp values 0 .. wide_part_insert).
 inline constexpr std::size_t kernel_op_count
-    = static_cast<std::size_t>(KOp::step) + 1U;
+    = static_cast<std::size_t>(KOp::wide_part_insert) + 1U;
+
+/// Chunks of a wide register of `width` bits.
+[[nodiscard]] constexpr std::uint32_t wide_chunks(const std::uint32_t width) noexcept
+{
+    return (width + 63U) / 64U;
+}
+
+/// CompiledBody::wide_base entries: the storage index, with this bit set
+/// when the register has 'U' masks (a Logic9 register).
+inline constexpr std::uint32_t wide_unknown_flag = 1U << 31U;
 
 
 /// For KOp::constant in a VHDL body: the 'U' mask of the constant is
@@ -146,6 +185,8 @@ struct KInst {
 struct ConcatOperand {
     std::uint32_t reg { };
     std::uint32_t width { };
+    /// wide_concat: a wide operand (width over 64) with 'U' masks.
+    std::uint32_t unknown { };
 };
 
 struct CompiledBody {
@@ -157,8 +198,14 @@ struct CompiledBody {
     std::vector<ConcatOperand> concat;
     std::vector<std::uint32_t> containers;
     std::uint32_t entry { };
-    /// Registers wider than 64 bits, used only by generic instructions.
+    /// Polymorphic registers (no fixed width), used only by generic
+    /// instructions.
     std::vector<PackedLogic4> wide_registers;
+    /// By register: the storage index of a wide register (see KOp::wide_load;
+    /// with wide_unknown_flag), 0 for any other register.
+    std::vector<std::uint32_t> wide_base;
+    /// wide_const values, as registers.
+    std::vector<kernel_word::Word> wide_constants;
     /// Return targets (SimIR operation indices) a ret may reach, for the
     /// native dispatch.
     std::vector<std::uint32_t> return_targets;

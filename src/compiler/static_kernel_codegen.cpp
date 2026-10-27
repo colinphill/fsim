@@ -461,7 +461,9 @@ private:
             case KOp::logical_not:
             case KOp::two_state:
             case KOp::extract:
-                reads = { inst.x };
+                if (inst.sub != 3U) {
+                    reads = { inst.x };
+                }
                 writes = true;
                 return true;
             case KOp::binary:
@@ -485,7 +487,10 @@ private:
                 return true;
             case KOp::dynamic_extract:
             case KOp::dynamic_part_select:
-                reads = { inst.x, inst.y };
+                reads = { inst.y };
+                if (inst.sub == 0U) {
+                    reads.push_back(inst.x);
+                }
                 writes = true;
                 return true;
             case KOp::mem_read:
@@ -507,6 +512,22 @@ private:
                 return true;
             case KOp::wide_move:
                 reads = { inst.y };
+                return true;
+            // Wide storage is never local: its writes are not listed.
+            case KOp::wide_load:
+            case KOp::wide_copy:
+            case KOp::wide_const:
+            case KOp::wide_store:
+                return true;
+            case KOp::wide_concat:
+                for (std::uint32_t index = 0U; index < inst.x; ++index) {
+                    if (body_.concat[inst.aux + index].width <= 64U) {
+                        reads.push_back(body_.concat[inst.aux + index].reg);
+                    }
+                }
+                return true;
+            case KOp::wide_part_insert:
+                reads = { inst.y, inst.z };
                 return true;
             default:
                 return false;
@@ -1088,6 +1109,81 @@ private:
         (void)call_helper(instruction_helper_name("fsim_sk_effect_",
                               body_.code[at].op).c_str(),
             at, x, y, z);
+    }
+
+    /// The wide-register helper of instruction `at`'s kind
+    /// (`fsim_sk_wide_<op>`): it reads and writes wide values in the
+    /// register file. Narrow operands pass by value (x carries y's 'U'
+    /// mask), except a concatenation's, which it reads from the register
+    /// file: local ones are stored there first.
+    [[nodiscard]] Pair call_wide(const std::uint32_t at, const Pair x,
+        const Pair y, const Pair z)
+    {
+        const auto& inst = body_.code[at];
+        if (inst.op == KOp::wide_concat) {
+            for (std::uint32_t index = 0U; index < inst.x; ++index) {
+                const auto reg = body_.concat[inst.aux + index].reg;
+                if (body_.concat[inst.aux + index].width > 64U
+                    || reg >= local_.size() || local_[reg] == nullptr) {
+                    continue;
+                }
+                const auto value = load_register(reg);
+                builder_.CreateStore(value.a, chunk_address(reg, 0U));
+                builder_.CreateStore(value.b, chunk_address(reg, 1U));
+            }
+        }
+        auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+            { ptr_, ptr_, i32_, i64_, i64_, i64_, i64_, i64_, i64_, ptr_ }, false);
+        auto* callee = helper_symbol(
+            instruction_helper_name("fsim_sk_wide_", inst.op).c_str(), type);
+        builder_.CreateCall(type, callee,
+            { frame_, registers_, llvm::ConstantInt::get(i32_, at), x.a, x.b, y.a,
+                y.b, z.a, z.b, out_ });
+        check_status();
+        last_unknown_ = builder_.CreateLoad(i64_,
+            builder_.CreateConstInBoundsGEP1_64(i64_, out_, 2U));
+        return { builder_.CreateLoad(i64_, out_),
+            builder_.CreateLoad(i64_,
+                builder_.CreateConstInBoundsGEP1_64(i64_, out_, 1U)) };
+    }
+
+    /// Word `word` of register-file entry `reg` (wide storage is never
+    /// local or cached).
+    [[nodiscard]] llvm::Value* chunk_address(const std::uint32_t reg,
+        const std::uint64_t word)
+    {
+        return builder_.CreateConstInBoundsGEP1_64(i64_, registers_,
+            static_cast<std::uint64_t>(reg) * 2U + word);
+    }
+
+    /// Bits [offset, offset + width) of the wide register at storage index
+    /// `base` (`chunks` chunks; with 'U' masks when `masks`), as
+    /// wide_field in the reference evaluator: the value and its 'U' mask.
+    [[nodiscard]] std::pair<Pair, llvm::Value*> wide_field(const std::uint32_t base,
+        const std::uint32_t chunks, const bool masks, const std::uint32_t offset,
+        const std::uint32_t width)
+    {
+        const auto word = offset / 64U;
+        const auto shift = offset % 64U;
+        auto* m = constant(mask_of(width));
+        if (word >= chunks) {
+            return { { m, m }, constant(0U) };
+        }
+        const bool spans = shift != 0U && shift + width > 64U && word + 1U < chunks;
+        const auto field = [&](const std::uint32_t first, const std::uint64_t plane) {
+            llvm::Value* value = builder_.CreateLShr(
+                builder_.CreateLoad(i64_, chunk_address(first + word, plane)),
+                constant(shift));
+            if (spans) {
+                value = builder_.CreateOr(value,
+                    builder_.CreateShl(
+                        builder_.CreateLoad(i64_, chunk_address(first + word + 1U, plane)),
+                        constant(64U - shift)));
+            }
+            return builder_.CreateAnd(value, m);
+        };
+        return { { field(base, 0U), field(base, 1U) },
+            masks ? field(base + chunks, 0U) : constant(0U) };
     }
 
     void check_status()
@@ -1821,7 +1917,7 @@ private:
         case KOp::copy:
             return unknown_of(inst.x);
         case KOp::extract:
-            if (inst.sub == 2U) {
+            if (inst.sub >= 2U) {
                 return nullptr;
             }
             return builder_.CreateAnd(
@@ -1919,7 +2015,7 @@ private:
                                                            : constant(0U));
             break;
         case KOp::extract:
-            set_unknown(inst.d, inst.sub == 2U
+            set_unknown(inst.d, inst.sub >= 2U
                     ? (last_unknown_ != nullptr ? last_unknown_ : constant(0U))
                     : result_unknown);
             break;
@@ -2026,6 +2122,26 @@ private:
                 builder_.CreateShl(builder_.CreateAnd(source.b, m), safe)) };
         insert_unknowns(inst, at, ok, keep, m, safe);
         return with_fallback3(ok, fast, at, target, source, index);
+    }
+
+    /// Deoptimizes (the reference evaluator continues at `at`) unless `ok`.
+    void fail_unless(llvm::Value* ok, const std::uint32_t at)
+    {
+        if (folded(ok, true)) {
+            return;
+        }
+        auto* deopt = llvm::BasicBlock::Create(context_, "deopt", &function_);
+        auto* next = llvm::BasicBlock::Create(context_, "known", &function_);
+        builder_.CreateCondBr(ok, next, deopt);
+        builder_.SetInsertPoint(deopt);
+        auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
+            { ptr_, i32_, i32_ }, false);
+        auto* callee = helper_symbol("fsim_sk_fail", type);
+        builder_.CreateCall(type, callee,
+            { frame_, llvm::ConstantInt::get(i32_, at),
+                llvm::ConstantInt::get(i32_, 2U) });
+        builder_.CreateBr(failure_block_);
+        builder_.SetInsertPoint(next);
     }
 
     /// A U-aware insert without an inline path deoptimizes on 'U' operands.
@@ -2292,6 +2408,24 @@ private:
                     call_evaluate(at, zero_pair(), zero_pair(), zero_pair()));
                 break;
             }
+            if (inst.sub == 3U) {
+                const auto [value, unknown] = wide_field(inst.x,
+                    static_cast<std::uint32_t>(inst.imm_b), inst.imm_a != 0U,
+                    inst.offset, inst.width);
+                if (inst.imm_a != 0U && !tracked(inst.d)) {
+                    // A 'U' bit has nowhere to go: the reference evaluator
+                    // continues (two-state code: the full code redoes it).
+                    auto* ok = builder_.CreateICmpEQ(unknown, constant(0U));
+                    if (two_state_) {
+                        read_or_hand_over(ok);
+                    } else {
+                        fail_unless(ok, at);
+                    }
+                }
+                last_unknown_ = unknown;
+                store_register(inst.d, value);
+                break;
+            }
             const auto value = load_register(inst.x);
             auto* m = constant(mask_of(inst.width));
             auto* shift = constant(inst.offset);
@@ -2357,7 +2491,10 @@ private:
                 emit_shift(inst, at, load_register(inst.x), load_register(inst.y)));
             break;
         case KOp::dynamic_extract:
-            if (inst.sub != 0U) {
+            if (inst.sub == 3U) {
+                store_register(inst.d,
+                    call_wide(at, zero_pair(), load_register(inst.y), zero_pair()));
+            } else if (inst.sub != 0U) {
                 store_register(inst.d,
                     call_evaluate(at, zero_pair(), load_register(inst.y), zero_pair()));
             } else {
@@ -2366,7 +2503,10 @@ private:
             }
             break;
         case KOp::dynamic_part_select:
-            if (inst.sub == 1U && (inst.z == 2U || inst.z == 4U)) {
+            if (inst.sub == 3U) {
+                store_register(inst.d,
+                    call_wide(at, zero_pair(), load_register(inst.y), zero_pair()));
+            } else if (inst.sub == 1U && (inst.z == 2U || inst.z == 4U)) {
                 store_register(inst.d, emit_slot_part_select(inst, at));
             } else if (inst.sub != 0U) {
                 store_register(inst.d,
@@ -2512,6 +2652,62 @@ private:
             call_effect(at, zero_pair(),
                 inst.sub == 1U ? load_register(inst.y) : zero_pair(), zero_pair());
             break;
+        case KOp::wide_copy:
+            for (std::uint32_t index = 0U; index < inst.aux; ++index) {
+                for (std::uint64_t word = 0U; word < 2U; ++word) {
+                    builder_.CreateStore(
+                        builder_.CreateLoad(i64_, chunk_address(inst.x + index, word)),
+                        chunk_address(inst.d + index, word));
+                }
+            }
+            for (std::uint64_t index = 0U; index < inst.imm_a; ++index) {
+                const auto reg = inst.d + inst.aux + static_cast<std::uint32_t>(index);
+                builder_.CreateStore(constant(0U), chunk_address(reg, 0U));
+                builder_.CreateStore(constant(0U), chunk_address(reg, 1U));
+            }
+            break;
+        case KOp::wide_const:
+            for (std::uint32_t index = 0U; index < inst.aux; ++index) {
+                const auto& word = body_.wide_constants[inst.imm_a + index];
+                builder_.CreateStore(constant(word.a), chunk_address(inst.d + index, 0U));
+                builder_.CreateStore(constant(word.b), chunk_address(inst.d + index, 1U));
+            }
+            break;
+        case KOp::wide_load:
+            if (inst.sub == 0U) {
+                // A Logic4 slot: its planes' words are the chunks.
+                const auto chunks = detail::wide_chunks(inst.width);
+                for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                    auto* m = constant(mask_of(std::min(64U, inst.width - 64U * chunk)));
+                    for (std::uint64_t plane = 0U; plane < 2U; ++plane) {
+                        builder_.CreateStore(
+                            builder_.CreateAnd(builder_.CreateLoad(i64_,
+                                                   slot_word(inst.x,
+                                                       plane * inst.imm_a + chunk)),
+                                m),
+                            chunk_address(inst.d + chunk, plane));
+                    }
+                    if (inst.aux != 0U) {
+                        builder_.CreateStore(constant(0U),
+                            chunk_address(inst.d + chunks + chunk, 0U));
+                        builder_.CreateStore(constant(0U),
+                            chunk_address(inst.d + chunks + chunk, 1U));
+                    }
+                }
+                break;
+            }
+            (void)call_wide(at, zero_pair(), zero_pair(), zero_pair());
+            break;
+        case KOp::wide_concat:
+        case KOp::wide_store:
+            (void)call_wide(at, zero_pair(), zero_pair(), zero_pair());
+            break;
+        case KOp::wide_part_insert: {
+            const auto source = load_register(inst.y);
+            (void)call_wide(at, Pair { unknown_of(inst.y), constant(0U) }, source,
+                load_register(inst.z));
+            break;
+        }
         case KOp::load_slot9: {
             // Strong 0/1 elements: p1 set, p2 and p3 clear, p0 the value.
             const auto plane = [&](const std::uint64_t index) {
@@ -3303,6 +3499,10 @@ private:
                 add(instruction_helper_name("fsim_sk_effect_", kind).c_str(),
                     helpers.effect_ops[op]);
             }
+            if (helpers.wide_ops[op] != nullptr) {
+                add(instruction_helper_name("fsim_sk_wide_", kind).c_str(),
+                    helpers.wide_ops[op]);
+            }
         }
         add("fsim_sk_notify", helpers.notify);
         add("fsim_sk_binary", helpers.binary);
@@ -3642,6 +3842,13 @@ private:
         for (const auto& operand : body.concat) {
             append(operand.reg);
             append(operand.width);
+            append(operand.unknown);
+        }
+        append_all(body.wide_base);
+        append(body.wide_constants.size());
+        for (const auto& word : body.wide_constants) {
+            append(word.a);
+            append(word.b);
         }
         append(body.entry);
         append_all(body.return_targets);

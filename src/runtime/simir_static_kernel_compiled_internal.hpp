@@ -363,14 +363,48 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         }
         fall();
         break;
-    case KOp::generic:
+    case KOp::generic: {
+        // A chunked wide register by its storage index.
+        const auto named = [&](const std::uint32_t reg) {
+            return reg < body.wide_base.size() && body.wide_base[reg] != 0U
+                ? body.wide_base[reg] & ~wide_unknown_flag : reg;
+        };
         operation_registers(operations[inst.x], reads, write);
         for (const auto reg : reads) {
-            use.push_back(inst.y + reg);
+            use.push_back(named(inst.y + reg));
         }
         if (write) {
-            def = inst.y + *write;
+            def = named(inst.y + *write);
         }
+        fall();
+        break;
+    }
+    case KOp::wide_load:
+    case KOp::wide_const:
+        def = inst.d;
+        fall();
+        break;
+    case KOp::wide_copy:
+        use.push_back(inst.x);
+        def = inst.d;
+        fall();
+        break;
+    case KOp::wide_concat:
+        for (std::uint32_t index = 0U; index < inst.x; ++index) {
+            use.push_back(body.concat[inst.aux + index].reg);
+        }
+        def = inst.d;
+        fall();
+        break;
+    case KOp::wide_store:
+        use.push_back(inst.x);
+        fall();
+        break;
+    case KOp::wide_part_insert:
+        use.push_back(inst.x);
+        use.push_back(inst.y);
+        use.push_back(inst.z);
+        def = inst.d;
         fall();
         break;
     case KOp::jump:
@@ -482,6 +516,7 @@ public:
         list(body.concat, [&](const ConcatOperand& operand) {
             put(operand.reg);
             put(operand.width);
+            put(operand.unknown);
         });
         integers(body.containers);
         put(body.entry);
@@ -490,6 +525,11 @@ public:
             const auto spelling = value.to_msb_string();
             put(spelling.size());
             out_.append(spelling);
+        });
+        integers(body.wide_base);
+        list(body.wide_constants, [&](const kernel_word::Word& word) {
+            put(word.a);
+            put(word.b);
         });
         integers(body.return_targets);
         integers(body.live_at_entry);
@@ -625,7 +665,8 @@ public:
                        && get(part.increasing) && get(part.source_descending);
                })
             && list(body.concat, [&](ConcatOperand& operand) {
-                   return get(operand.reg) && get(operand.width);
+                   return get(operand.reg) && get(operand.width)
+                       && get(operand.unknown);
                })
             && integers(body.containers) && get(body.entry)
             && list(body.wide_registers, [&](PackedLogic4& value) {
@@ -643,6 +684,10 @@ public:
                        return false;
                    }
                    return true;
+               })
+            && integers(body.wide_base)
+            && list(body.wide_constants, [&](kernel_word::Word& word) {
+                   return get(word.a) && get(word.b);
                })
             && integers(body.return_targets) && integers(body.live_at_entry)
             && get(body.shadow_base) && integers(body.tracked)

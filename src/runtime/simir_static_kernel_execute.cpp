@@ -23,6 +23,37 @@ using namespace static_kernel_detail;
 using namespace static_kernel_compiled_detail;
 namespace kw = kernel_word;
 
+namespace {
+
+/// Bits offset .. offset + width - 1 (width 1 to 64) of the wide register
+/// at storage index `base` with `chunks` chunks, and their 'U' mask when it
+/// has 'U' masks (packed_field: X past its chunks).
+[[nodiscard]] kw::UWord wide_field(const kw::Word* registers,
+    const std::uint32_t base, const std::uint32_t chunks, const bool unknown,
+    const std::uint32_t offset, const std::uint32_t width) noexcept
+{
+    const auto word = offset / 64U;
+    const auto shift = offset % 64U;
+    if (word >= chunks) {
+        return { kw::all_x(width), 0U };
+    }
+    const auto low = registers[base + word];
+    kw::Word value { low.a >> shift, low.b >> shift };
+    std::uint64_t mask = unknown ? registers[base + chunks + word].a >> shift : 0U;
+    if (shift != 0U && shift + width > 64U && word + 1U < chunks) {
+        const auto high = registers[base + word + 1U];
+        value.a |= high.a << (64U - shift);
+        value.b |= high.b << (64U - shift);
+        if (unknown) {
+            mask |= registers[base + chunks + word + 1U].a << (64U - shift);
+        }
+    }
+    const auto m = kw::mask(width);
+    return { { value.a & m, value.b & m }, mask & m };
+}
+
+} // namespace
+
 void Interpreter::Impl::StaticKernel::execute(
     CompiledBody& body, std::uint32_t member_index)
 {
@@ -104,7 +135,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 result_unknown = unknown(inst.x);
                 break;
             case KOp::extract:
-                result_unknown = inst.sub == 2U ? 0U
+                result_unknown = inst.sub >= 2U ? 0U
                     : (unknown(inst.x) >> inst.offset) & kw::mask(inst.width);
                 break;
             case KOp::insert: {
@@ -265,6 +296,20 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 0U, &body.wide_registers);
             break;
         case KOp::extract:
+            if (inst.sub == 3U) {
+                // A wide register's chunks.
+                const auto field = wide_field(registers, inst.x,
+                    static_cast<std::uint32_t>(inst.imm_b), inst.imm_a != 0U,
+                    inst.offset, inst.width);
+                if (field.unknown != 0U
+                    && (shadow_base == 0U || inst.d >= shadow_base
+                        || body.tracked[inst.d] == 0U)) {
+                    throw KernelDeopt { at, false };
+                }
+                last_unknown_ = field.unknown;
+                registers[inst.d] = field.value;
+                break;
+            }
             registers[inst.d] = inst.sub == 2U
                 ? evaluate_slow(body, inst, at, member_index, origin, { }, { }, { },
                       0U, &body.wide_registers)
@@ -295,16 +340,29 @@ void Interpreter::Impl::StaticKernel::execute_body(
             break;
         case KOp::dynamic_extract:
         case KOp::dynamic_part_select:
+            wide_file_ = registers;
             registers[inst.d] = inst.sub == 1U
                 ? evaluate_slow(body, inst, at, member_index,
                       origin, { }, registers[inst.y], { }, inst.x,
                       &body.wide_registers)
                 : evaluate_slow(body, inst, at, member_index,
                       origin,
-                      inst.sub == 2U ? Word { } : registers[inst.x],
+                      inst.sub >= 2U ? Word { } : registers[inst.x],
                       registers[inst.y],
-                      inst.sub == 2U ? Word { } : Word { unknown(inst.x), 0U },
+                      inst.sub >= 2U ? Word { } : Word { unknown(inst.x), 0U },
                       0U, &body.wide_registers);
+            break;
+        case KOp::wide_load:
+        case KOp::wide_copy:
+        case KOp::wide_const:
+        case KOp::wide_concat:
+        case KOp::wide_store:
+            execute_wide(body, registers, inst, at, member_index, origin, { }, 0U,
+                { }, inst.op == KOp::wide_load ? inst.x : inst.d);
+            break;
+        case KOp::wide_part_insert:
+            execute_wide(body, registers, inst, at, member_index, origin,
+                registers[inst.y], unknown(inst.y), registers[inst.z], 0U);
             break;
         case KOp::dynamic_insert:
         case KOp::dynamic_part_insert:
@@ -463,10 +521,17 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 set_unknown(inst.d, last_unknown_);
                 break;
             case KOp::extract:
-                set_unknown(inst.d, inst.sub == 2U ? last_unknown_ : result_unknown);
+                set_unknown(inst.d, inst.sub >= 2U ? last_unknown_ : result_unknown);
                 break;
             case KOp::store_vhdl:
             case KOp::generic:
+            // Wide registers hold their own 'U' masks.
+            case KOp::wide_load:
+            case KOp::wide_copy:
+            case KOp::wide_const:
+            case KOp::wide_concat:
+            case KOp::wide_store:
+            case KOp::wide_part_insert:
                 break;
             default:
                 set_unknown(inst.d, result_unknown);
@@ -515,14 +580,17 @@ void Interpreter::Impl::StaticKernel::handle_deopt(const std::uint32_t member_in
         if (reg == deopt.keep || width == 0U) {
             continue;
         }
+        const auto kind = reg < member.register_kinds.size()
+            ? member.register_kinds[reg] : ValueKind::logic4;
         if (width > 64U) {
-            if (reg < body.wide_registers.size()) {
+            if (reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
+                member.registers[reg] = wide_value(body, body.registers.data(),
+                    static_cast<std::uint32_t>(reg), kind);
+            } else if (reg < body.wide_registers.size()) {
                 member.registers[reg] = body.wide_registers[reg];
             }
             continue;
         }
-        const auto kind = reg < member.register_kinds.size()
-            ? member.register_kinds[reg] : ValueKind::logic4;
         const auto unknown = body.shadow_base != 0U && body.tracked[reg] != 0U
             ? body.registers[body.shadow_base + reg].a : 0U;
         member.registers[reg] = uword_value(body.registers[reg], unknown,
@@ -565,8 +633,12 @@ bool Interpreter::Impl::StaticKernel::wide_part_insert(CompiledBody& body,
             ? registers[body.shadow_base + reg].a
             : 0U;
     };
+    const auto chunked = [&](const std::uint32_t reg) {
+        return reg < body.wide_base.size() && body.wide_base[reg] != 0U;
+    };
     if (destination >= widths.size() || target >= widths.size()
         || source >= widths.size() || index >= widths.size()
+        || chunked(destination) || chunked(target)
         || widths[destination] <= 64U || widths[target] != widths[destination]
         || widths[source] > 64U || widths[source] != insert.selection.width
         || widths[index] != 32U || unknown(source) != 0U
@@ -611,6 +683,10 @@ void Interpreter::Impl::StaticKernel::generic_load_operands(CompiledBody& body,
                 ? registers[body.shadow_base + index].a : 0U;
             member.registers[reg] = uword_value(registers[index], unknown, width,
                 kind);
+        } else if (index < body.wide_base.size() && body.wide_base[index] != 0U) {
+            const auto kind = reg < member.register_kinds.size()
+                ? member.register_kinds[reg] : ValueKind::logic4;
+            member.registers[reg] = wide_value(body, registers, index, kind);
         } else {
             member.registers[reg] = body.wide_registers[index];
         }
@@ -629,7 +705,13 @@ bool Interpreter::Impl::StaticKernel::generic_store_result(CompiledBody& body,
     const auto width = body.register_widths[index];
     auto& value = member.registers[*write];
     if (width > 64U) {
-        body.wide_registers[index] = value;
+        if (index < body.wide_base.size() && body.wide_base[index] != 0U) {
+            if (!set_wide_value(body, registers, index, value)) {
+                throw KernelDeopt { inst.x, true, *write };
+            }
+        } else {
+            body.wide_registers[index] = value;
+        }
         return false;
     }
     if (value.width() != width) {
@@ -886,6 +968,16 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
                 throw KernelDeopt { at, false };
             }
             return *field;
+        }
+        if (inst.sub == 3U) {
+            // A wide register's chunks (imm_b of them; imm_a: 'U' masks).
+            const auto field = wide_field(wide_file_, inst.x,
+                static_cast<std::uint32_t>(inst.imm_b), inst.imm_a != 0U, offset,
+                width);
+            if (field.unknown != 0U && !tracks(inst.d)) {
+                throw KernelDeopt { at, false };
+            }
+            return field;
         }
         const auto& source = (*wide)[inst.x];
         if (!source.is_logic9()) {
@@ -1650,6 +1742,14 @@ void Interpreter::Impl::StaticKernel::set_instruction_helpers(
              = &StaticKernel::native_effect<effect_kinds[I]>),
             ...);
     }(std::make_index_sequence<effect_kinds.size()>());
+    static constexpr std::array wide_kinds { KOp::wide_load, KOp::wide_copy,
+        KOp::wide_const, KOp::wide_concat, KOp::wide_store, KOp::wide_part_insert,
+        KOp::dynamic_extract, KOp::dynamic_part_select };
+    [&]<std::size_t... I>(std::index_sequence<I...>) {
+        ((helpers.wide_ops[static_cast<std::size_t>(wide_kinds[I])]
+             = &StaticKernel::native_wide<wide_kinds[I]>),
+            ...);
+    }(std::make_index_sequence<wide_kinds.size()>());
     [&]<std::size_t... K>(std::index_sequence<K...>) {
         ((helpers.generic_ops[K] = &StaticKernel::native_generic_kind<K>), ...);
         ((helpers.step_ops[K] = &StaticKernel::native_step_kind<K>), ...);
@@ -1792,6 +1892,357 @@ void Interpreter::Impl::StaticKernel::move_wide(const CompiledBody& body,
         } else {
             write_slot_word(target_slot, next, offset, chunk, member_index);
         }
+    }
+}
+
+PackedLogic4 Interpreter::Impl::StaticKernel::wide_value(
+    const CompiledBody& body, const Word* registers, const std::uint32_t reg,
+    const ValueKind kind)
+{
+    const auto entry = body.wide_base[reg];
+    const auto base = entry & ~wide_unknown_flag;
+    const auto width = body.register_widths[reg];
+    const auto chunks = wide_chunks(width);
+    // As uword_value: a value with 'U' bits is Logic9 whatever the kind.
+    bool unknown = false;
+    for (std::uint32_t chunk = 0U;
+         chunk < chunks && (entry & wide_unknown_flag) != 0U; ++chunk) {
+        unknown = unknown || registers[base + chunks + chunk].a != 0U;
+    }
+    if (!unknown) {
+        std::vector<std::uint64_t> a(chunks);
+        std::vector<std::uint64_t> b(chunks);
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            a[chunk] = registers[base + chunk].a;
+            b[chunk] = registers[base + chunk].b;
+        }
+        auto result = PackedLogic4::from_word_planes(width, a, b);
+        return kind == ValueKind::logic9 ? result.promoted_to_logic9() : result;
+    }
+    std::array<std::vector<std::uint64_t>, 4> planes;
+    for (auto& plane : planes) {
+        plane.resize(chunks);
+    }
+    for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+        const auto codes = kw::logic9_planes(registers[base + chunk],
+            std::min(64U, width - 64U * chunk), registers[base + chunks + chunk].a);
+        planes[0][chunk] = codes.p0;
+        planes[1][chunk] = codes.p1;
+        planes[2][chunk] = codes.p2;
+        planes[3][chunk] = codes.p3;
+    }
+    return PackedLogic4::from_logic9_word_planes(width, planes[0], planes[1],
+        planes[2], planes[3]);
+}
+
+bool Interpreter::Impl::StaticKernel::set_wide_value(const CompiledBody& body,
+    Word* registers, const std::uint32_t reg, const PackedLogic4& value)
+{
+    const auto entry = body.wide_base[reg];
+    const auto base = entry & ~wide_unknown_flag;
+    const auto width = body.register_widths[reg];
+    const auto chunks = wide_chunks(width);
+    if (value.width() != width) {
+        return false;
+    }
+    if ((entry & wide_unknown_flag) == 0U || !value.is_logic9()) {
+        const auto logic4 = Impl::coerce_value_kind(value, ValueKind::logic4);
+        const auto a = logic4.aval_words();
+        const auto b = logic4.bval_words();
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            const auto m = kw::mask(std::min(64U, width - 64U * chunk));
+            registers[base + chunk] = { (chunk < a.size() ? a[chunk] : 0U) & m,
+                (chunk < b.size() ? b[chunk] : 0U) & m };
+            if ((entry & wide_unknown_flag) != 0U) {
+                registers[base + chunks + chunk] = { };
+            }
+        }
+        return true;
+    }
+    // Every chunk is checked before any is written.
+    const auto plane = [&](const std::uint32_t index, const std::uint32_t chunk) {
+        const auto words = value.logic9_plane_words(index);
+        return chunk < words.size() ? words[chunk] : 0U;
+    };
+    for (std::uint32_t pass = 0U; pass < 2U; ++pass) {
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            const auto field = kw::logic9_uword(plane(0U, chunk), plane(1U, chunk),
+                plane(2U, chunk), plane(3U, chunk), std::min(64U, width - 64U * chunk));
+            if (!field) {
+                return false;
+            }
+            if (pass == 1U) {
+                registers[base + chunk] = field->value;
+                registers[base + chunks + chunk] = { field->unknown, 0U };
+            }
+        }
+    }
+    return true;
+}
+
+void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
+    Word* registers, const KInst& inst, const std::uint32_t at,
+    const std::uint32_t member_index, const std::uint32_t body_begin,
+    const Word y, const std::uint64_t y_unknown, const Word z,
+    const std::uint32_t resolved)
+{
+    const auto chunks = wide_chunks(inst.width);
+    const auto chunk_width = [&](const std::uint32_t chunk) {
+        return std::min(64U, inst.width - 64U * chunk);
+    };
+    switch (inst.op) {
+    case KOp::wide_load: {
+        const auto& slot = slots_[resolved];
+        const auto* planes = arena_.data() + slot.offset;
+        const auto words = static_cast<std::uint32_t>(inst.imm_a);
+        if (inst.sub == 1U) {
+            // Every chunk is checked before any is written.
+            for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                if (!kw::logic9_uword(planes[chunk], planes[words + chunk],
+                        planes[2U * words + chunk], planes[3U * words + chunk],
+                        chunk_width(chunk))) {
+                    throw KernelDeopt { at, false };
+                }
+            }
+        }
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            const auto m = kw::mask(chunk_width(chunk));
+            switch (inst.sub) {
+            case 0U:
+                registers[inst.d + chunk] = { planes[chunk] & m,
+                    planes[words + chunk] & m };
+                if (inst.aux != 0U) {
+                    registers[inst.d + chunks + chunk] = { };
+                }
+                break;
+            case 1U: {
+                const auto field = *kw::logic9_uword(planes[chunk],
+                    planes[words + chunk], planes[2U * words + chunk],
+                    planes[3U * words + chunk], chunk_width(chunk));
+                registers[inst.d + chunk] = field.value;
+                registers[inst.d + chunks + chunk] = { field.unknown, 0U };
+                break;
+            }
+            default:
+                registers[inst.d + chunk] = kw::logic9_coerced(planes[chunk],
+                    planes[words + chunk], planes[2U * words + chunk],
+                    planes[3U * words + chunk], chunk_width(chunk));
+                if (inst.aux != 0U) {
+                    registers[inst.d + chunks + chunk] = { };
+                }
+                break;
+            }
+        }
+        return;
+    }
+    case KOp::wide_copy:
+        for (std::uint32_t index = 0U; index < inst.aux; ++index) {
+            registers[inst.d + index] = registers[inst.x + index];
+        }
+        for (std::uint64_t index = 0U; index < inst.imm_a; ++index) {
+            registers[inst.d + inst.aux + index] = { };
+        }
+        return;
+    case KOp::wide_const:
+        for (std::uint32_t index = 0U; index < inst.aux; ++index) {
+            registers[inst.d + index] = body.wide_constants[inst.imm_a + index];
+        }
+        return;
+    case KOp::wide_concat: {
+        // Into scratch first: an operand may be the destination.
+        auto& value = wide_concat_scratch_;
+        value.assign(3U * chunks, 0U);
+        const auto place = [&](const Word bits, const std::uint64_t unknown,
+                               const std::uint32_t width,
+                               const std::uint32_t offset) {
+            const auto m = kw::mask(width);
+            const auto word = offset / 64U;
+            const auto shift = offset % 64U;
+            const std::uint64_t parts[3] { bits.a & m, bits.b & m, unknown & m };
+            for (std::uint32_t plane = 0U; plane < 3U; ++plane) {
+                value[plane * chunks + word] |= parts[plane] << shift;
+                if (shift != 0U && shift + width > 64U) {
+                    value[plane * chunks + word + 1U] |= parts[plane] >> (64U - shift);
+                }
+            }
+        };
+        std::uint32_t offset = 0U;
+        for (std::uint32_t index = inst.x; index-- > 0U;) {
+            const auto& operand = body.concat[inst.aux + index];
+            if (operand.width <= 64U) {
+                const auto unknown = body.shadow_base != 0U
+                        && operand.reg < body.tracked.size()
+                        && body.tracked[operand.reg] != 0U
+                    ? registers[body.shadow_base + operand.reg].a : 0U;
+                place(registers[operand.reg], unknown, operand.width, offset);
+            } else {
+                const auto count = wide_chunks(operand.width);
+                for (std::uint32_t chunk = 0U; chunk < count; ++chunk) {
+                    place(registers[operand.reg + chunk],
+                        operand.unknown != 0U
+                            ? registers[operand.reg + count + chunk].a : 0U,
+                        std::min(64U, operand.width - 64U * chunk),
+                        offset + 64U * chunk);
+                }
+            }
+            offset += operand.width;
+        }
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            registers[inst.d + chunk] = { value[chunk], value[chunks + chunk] };
+            if (inst.sub == 1U) {
+                registers[inst.d + chunks + chunk] = { value[2U * chunks + chunk], 0U };
+            }
+        }
+        return;
+    }
+    case KOp::wide_store: {
+        auto& slot = slots_[resolved];
+        if (inst.offset > slot.width || inst.width > slot.width - inst.offset) {
+            fail(member_index, body_begin + at,
+                "partial update range is outside its target signal");
+        }
+        const auto unknown = [&](const std::uint32_t chunk) {
+            return inst.aux != 0U ? registers[inst.x + chunks + chunk].a
+                    & kw::mask(chunk_width(chunk))
+                                  : 0U;
+        };
+        if (inst.sub == 2U && (inst.flags & flag_blocking) != 0U) {
+            // A shared variable: immediate, one change report.
+            slot.last_writer = member_process_[member_index];
+            std::vector<std::uint64_t> before(arena_.begin() + slot.offset,
+                arena_.begin() + slot.offset + slot.planes * slot.words);
+            for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                store_slot_word(resolved, registers[inst.x + chunk],
+                    inst.offset + 64U * chunk, chunk_width(chunk), unknown(chunk));
+            }
+            if (!std::equal(before.begin(), before.end(),
+                    arena_.begin() + slot.offset)) {
+                slot_changed(resolved, 0U, before.data());
+            }
+            return;
+        }
+        // One write per 64-bit chunk (as KOp::wide_move).
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            const auto m = kw::mask(chunk_width(chunk));
+            const auto value = registers[inst.x + chunk];
+            const auto offset = inst.offset + 64U * chunk;
+            if (inst.sub == 0U) {
+                write_slot_word(resolved, { value.a & m, value.b & m }, offset,
+                    chunk_width(chunk), member_index);
+                continue;
+            }
+            StaticKernelWrite write;
+            write.slot = resolved;
+            write.offset = offset;
+            write.width = chunk_width(chunk);
+            write.member = member_index;
+            write.a = value.a & m;
+            write.b = value.b & m;
+            write.unknown = unknown(chunk);
+            write.instruction = body_begin + at;
+            push_write(write);
+        }
+        return;
+    }
+    case KOp::wide_part_insert: {
+        const auto& part = body.parts[inst.aux];
+        const auto write = kw::dynamic_part_write(y, z, part);
+        // An invalid write, or one outside the target, is the reference's
+        // to report (nothing written yet).
+        if (!write.valid
+            || (write.write
+                && (write.write->offset > inst.width
+                    || write.write->width > inst.width - write.write->offset))) {
+            throw KernelDeopt { at, false };
+        }
+        const bool masks = inst.imm_a != 0U;
+        if (inst.d != inst.x) {
+            const auto count = masks ? 2U * chunks : chunks;
+            for (std::uint32_t index = 0U; index < count; ++index) {
+                registers[inst.d + index] = registers[inst.x + index];
+            }
+        }
+        if (!write.write) {
+            return;
+        }
+        const auto field_unknown = y_unknown != 0U
+            ? kw::dynamic_part_write({ y_unknown, 0U }, z, part).write->value.a
+            : 0U;
+        const auto width = write.write->width;
+        const auto m = kw::mask(width);
+        const auto word = write.write->offset / 64U;
+        const auto shift = write.write->offset % 64U;
+        const auto insert = [&](const std::uint32_t chunk, const bool high) {
+            const auto field_mask = high ? m >> (64U - shift) : m << shift;
+            auto& target = registers[inst.d + chunk];
+            const auto place = [&](const std::uint64_t bits) {
+                return high ? (bits & m) >> (64U - shift) : (bits & m) << shift;
+            };
+            target.a = (target.a & ~field_mask) | place(write.write->value.a);
+            target.b = (target.b & ~field_mask) | place(write.write->value.b);
+            if (masks) {
+                auto& mask = registers[inst.d + chunks + chunk];
+                mask.a = (mask.a & ~field_mask) | place(field_unknown);
+            }
+        };
+        insert(word, false);
+        if (shift != 0U && shift + width > 64U) {
+            insert(word + 1U, true);
+        }
+        return;
+    }
+    default:
+        break;
+    }
+    fail(member_index, body_begin + at, "static kernel wide instruction is invalid");
+}
+
+template <KOp Op>
+void Interpreter::Impl::StaticKernel::native_wide(StaticKernelNativeFrame* frame,
+    Word* registers, const std::uint32_t at, const std::uint64_t xa,
+    const std::uint64_t xb, const std::uint64_t ya, const std::uint64_t yb,
+    const std::uint64_t za, const std::uint64_t zb, std::uint64_t* out)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    kernel.profile_native_calls_[1] += kernel.profile_ ? 1U : 0U;
+    out[0] = 0U;
+    out[1] = 0U;
+    out[2] = 0U;
+    try {
+        const auto& body = *static_cast<const CompiledBody*>(frame->program);
+        const auto& inst = body.code[at];
+        const auto& member = kernel.members_[frame->member];
+        const auto body_begin = member.vhdl ? 0U : member.body_begin;
+        kernel.running_position_ = frame->position;
+        if constexpr (Op == KOp::dynamic_extract || Op == KOp::dynamic_part_select) {
+            kernel.wide_file_ = registers;
+            const auto result = kernel.evaluate_slow_op<Op>(body, inst, at,
+                frame->member, body_begin, { }, { ya, yb }, { }, 0U,
+                &static_cast<CompiledBody*>(frame->instance)->wide_registers);
+            out[0] = result.a;
+            out[1] = result.b;
+            out[2] = kernel.last_unknown_;
+        } else {
+            std::uint32_t resolved = 0U;
+            if constexpr (Op == KOp::wide_load) {
+                resolved = frame->bindings[2U * inst.x + 1U] & ~partition_tag;
+            } else if constexpr (Op == KOp::wide_store) {
+                resolved = frame->bindings[2U * inst.d + 1U] & ~partition_tag;
+            }
+            // x carries the 'U' mask of y.
+            (void)xb;
+            kernel.execute_wide(body, registers, inst, at, frame->member, body_begin,
+                { ya, yb }, xa, { za, zb }, resolved);
+        }
+    } catch (const KernelDeopt& deopt) {
+        kernel.pending_deopt_ = deopt;
+        if (kernel.pending_deopt_->resume == 0xffffffffU) {
+            kernel.pending_deopt_->resume = at;
+        }
+        frame->status = 2U;
+    } catch (...) {
+        kernel.native_exception_ = std::current_exception();
+        frame->status = 1U;
     }
 }
 

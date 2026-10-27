@@ -36,7 +36,7 @@ namespace kw = kernel_word;
 
 namespace {
 
-constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v3" };
+constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v4" };
 
 } // namespace
 
@@ -234,6 +234,10 @@ void Interpreter::Impl::StaticKernel::compile_members()
                             differs = "entry";
                         } else if (a->wide_registers != b->wide_registers) {
                             differs = "wide_registers";
+                        } else if (a->wide_base != b->wide_base) {
+                            differs = "wide_base";
+                        } else if (!same_words(a->wide_constants, b->wide_constants)) {
+                            differs = "wide_constants";
                         } else if (a->return_targets != b->return_targets) {
                             differs = "return_targets";
                         } else if (a->live_at_entry != b->live_at_entry) {
@@ -850,6 +854,28 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     // leaf, in a member that never writes the family: each selection loads
     // its leaf (family_leaf).
     std::vector<std::uint32_t> field_family(register_count, no_slot);
+    // Wide registers of fixed width outside threads live in chunks of the
+    // register file (CompiledBody::wide_base); instructions name them by
+    // register until storage is assigned after translation.
+    // FSIM_KERNEL_WIDE_MASK (diagnostic): the wide lowerings to use (bit 0
+    // ReadSignal, 1 CopyRegister, 2 LoadConstant, 3 Concatenate, 4
+    // DynamicPartInsert, 5 writes); 0 keeps every register in wide_registers.
+    static const std::uint32_t wide_mask = [] {
+        const char* text = std::getenv("FSIM_KERNEL_WIDE_MASK");
+        return text == nullptr ? ~0U
+                               : static_cast<std::uint32_t>(std::strtoul(text, nullptr, 0));
+    }();
+    const auto chunked = [&](const RegisterId reg) {
+        return wide_mask != 0U && !behavioral && reg < register_count && width[reg] > 64U
+            && width[reg] != polymorphic && field_slot[reg] == no_slot
+            && field_family[reg] == no_slot;
+    };
+    // A VHDL register may hold Logic9 values whatever its declared kind
+    // (only ReadSignal, LoadConstant and CopyRegister coerce to it), so
+    // every chunked VHDL register has 'U' masks.
+    const auto has_unknowns = [&](const RegisterId reg) {
+        return vhdl || kind_of(reg) == ValueKind::logic9;
+    };
     const auto family_leaf = [&](const std::uint32_t family,
                                  const std::uint32_t offset,
                                  const std::uint32_t count) -> const FamilyLeaf* {
@@ -1345,6 +1371,220 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 continue;
             }
         }
+        // Whole-value operations on chunked wide registers (KOp::wide_load
+        // .. wide_part_insert); anything else on them runs generically.
+        if (!behavioral) {
+            bool lowered = false;
+            const auto enabled = [&](const std::uint32_t bit) {
+                return ((wide_mask >> bit) & 1U) != 0U;
+            };
+            const auto narrow_operand = [&](const RegisterId reg) {
+                return reg < register_count && width[reg] != 0U
+                    && width[reg] <= 64U;
+            };
+            // An owned plain slot of `count` bits at `offset`.
+            const auto plain_slot = [&](const SignalId signal,
+                                        const std::uint32_t offset,
+                                        const std::uint32_t count,
+                                        const bool whole) -> std::uint32_t {
+                if (signal >= slot_of_signal_.size()
+                    || family_of_signal_[signal] != no_slot
+                    || slot_of_signal_[signal] == no_slot) {
+                    return no_slot;
+                }
+                const auto slot = slot_of_signal_[signal];
+                const auto& state = slots_[slot];
+                if (offset > state.width || count > state.width - offset
+                    || (whole && count != state.width)) {
+                    return no_slot;
+                }
+                return slot;
+            };
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, ReadSignal>) {
+                    if (!enabled(0U) || !chunked(op.destination)
+                        || op.kind != SignalReadKind::current || op.ticks != 1U
+                        || op.clock || op.gate) {
+                        return;
+                    }
+                    const auto slot = plain_slot(op.signal, 0U,
+                        width[op.destination], true);
+                    if (slot == no_slot) {
+                        return;
+                    }
+                    inst.op = KOp::wide_load;
+                    inst.d = op.destination;
+                    inst.x = slot;
+                    inst.width = width[op.destination];
+                    inst.imm_a = slots_[slot].words;
+                    // The value read is coerced to the register's kind.
+                    inst.aux = has_unknowns(op.destination) ? 1U : 0U;
+                    if (slots_[slot].planes != 2U) {
+                        inst.sub = kind_of(op.destination) == ValueKind::logic9
+                            ? 1U : 2U;
+                    }
+                    lowered = true;
+                } else if constexpr (std::is_same_v<T, CopyRegister>) {
+                    if (!enabled(1U) || !chunked(op.destination) || !chunked(op.source)
+                        || width[op.destination] != width[op.source]) {
+                        return;
+                    }
+                    // The copy is coerced to the destination's kind: 'U'
+                    // masks survive only into a Logic9 register ('U' reads
+                    // as X without its mask).
+                    const auto chunks = wide_chunks(width[op.destination]);
+                    const bool to = has_unknowns(op.destination);
+                    const bool keep = to && has_unknowns(op.source)
+                        && kind_of(op.destination) == ValueKind::logic9;
+                    inst.op = KOp::wide_copy;
+                    inst.d = op.destination;
+                    inst.x = op.source;
+                    inst.width = width[op.destination];
+                    inst.aux = keep ? 2U * chunks : chunks;
+                    inst.imm_a = to && !keep ? chunks : 0U;
+                    lowered = true;
+                } else if constexpr (std::is_same_v<T, LoadConstant>) {
+                    if (!enabled(2U) || !chunked(op.destination)
+                        || op.value.width() != width[op.destination]) {
+                        return;
+                    }
+                    const auto chunks = wide_chunks(width[op.destination]);
+                    const bool masks = has_unknowns(op.destination);
+                    const auto value
+                        = Impl::coerce_value_kind(op.value, kind_of(op.destination));
+                    std::vector<Word> words(masks ? 2U * chunks : chunks);
+                    for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+                        const auto field_width
+                            = std::min(64U, width[op.destination] - 64U * chunk);
+                        const auto field = value.extract_bits(64U * chunk, field_width);
+                        const auto word = exact_uword(field);
+                        if (!word || (word->unknown != 0U && !masks)) {
+                            // Codes the chunks cannot hold.
+                            return;
+                        }
+                        words[chunk] = word->value;
+                        if (masks) {
+                            words[chunks + chunk] = { word->unknown, 0U };
+                        }
+                    }
+                    inst.op = KOp::wide_const;
+                    inst.d = op.destination;
+                    inst.width = width[op.destination];
+                    inst.aux = static_cast<std::uint32_t>(words.size());
+                    inst.imm_a = body.wide_constants.size();
+                    body.wide_constants.insert(body.wide_constants.end(),
+                        words.begin(), words.end());
+                    lowered = true;
+                } else if constexpr (std::is_same_v<T, Concatenate>) {
+                    if (!enabled(3U) || !chunked(op.destination)
+                        || op.width != width[op.destination]) {
+                        return;
+                    }
+                    const bool masks = has_unknowns(op.destination);
+                    std::uint32_t total = 0U;
+                    for (const auto reg : op.operands) {
+                        if (!(narrow_operand(reg) || chunked(reg))
+                            || (!masks && has_unknowns(reg))) {
+                            return;
+                        }
+                        total += width[reg];
+                    }
+                    if (total != op.width) {
+                        return;
+                    }
+                    inst.op = KOp::wide_concat;
+                    inst.d = op.destination;
+                    inst.x = static_cast<std::uint32_t>(op.operands.size());
+                    inst.aux = static_cast<std::uint32_t>(body.concat.size());
+                    inst.width = op.width;
+                    inst.sub = masks ? 1U : 0U;
+                    for (const auto reg : op.operands) {
+                        body.concat.push_back({ reg, width[reg],
+                            width[reg] > 64U && has_unknowns(reg) ? 1U : 0U });
+                    }
+                    lowered = true;
+                } else if constexpr (std::is_same_v<T, DynamicPartInsert>) {
+                    if (!enabled(4U) || !chunked(op.destination) || !chunked(op.target)
+                        || width[op.destination] != width[op.target]
+                        || has_unknowns(op.destination) != has_unknowns(op.target)
+                        || !narrow_operand(op.source)
+                        || width[op.source] != op.selection.width
+                        || !narrow_operand(op.selection.base)
+                        || width[op.selection.base] != 32U
+                        || (!has_unknowns(op.destination) && has_unknowns(op.source))) {
+                        return;
+                    }
+                    inst.op = KOp::wide_part_insert;
+                    inst.d = op.destination;
+                    inst.x = op.target;
+                    inst.y = op.source;
+                    inst.z = op.selection.base;
+                    inst.width = width[op.destination];
+                    inst.imm_a = has_unknowns(op.destination) ? 1U : 0U;
+                    inst.aux = static_cast<std::uint32_t>(body.parts.size());
+                    body.parts.push_back(op.selection);
+                    lowered = true;
+                } else if constexpr (std::is_same_v<T, WriteBlocking>
+                    || std::is_same_v<T, WriteBlockingSlice>
+                    || std::is_same_v<T, WriteUpdate>
+                    || std::is_same_v<T, WriteUpdateSlice>
+                    || std::is_same_v<T, WriteProjected>
+                    || std::is_same_v<T, WriteProjectedSlice>) {
+                    constexpr bool blocking = std::is_same_v<T, WriteBlocking>
+                        || std::is_same_v<T, WriteBlockingSlice>;
+                    constexpr bool slice = std::is_same_v<T, WriteBlockingSlice>
+                        || std::is_same_v<T, WriteUpdateSlice>
+                        || std::is_same_v<T, WriteProjectedSlice>;
+                    constexpr bool projected = std::is_same_v<T, WriteProjected>
+                        || std::is_same_v<T, WriteProjectedSlice>;
+                    if (!enabled(5U) || !chunked(op.source)) {
+                        return;
+                    }
+                    std::uint32_t offset = 0U;
+                    if constexpr (slice) {
+                        offset = op.offset;
+                    }
+                    const auto slot = plain_slot(op.signal, offset, width[op.source],
+                        !slice);
+                    if (slot == no_slot) {
+                        return;
+                    }
+                    if (vhdl) {
+                        inst.sub = 2U;
+                        inst.flags = blocking ? flag_blocking : 0U;
+                    } else {
+                        // As KOp::wide_move: Logic4 slots; an update in the
+                        // generic domain stays generic.
+                        if (projected || slots_[slot].planes != 2U
+                            || has_unknowns(op.source)) {
+                            return;
+                        }
+                        bool deferred = false;
+                        if constexpr (std::is_same_v<T, WriteUpdate>
+                            || std::is_same_v<T, WriteUpdateSlice>) {
+                            if (op.domain == SignalUpdateDomain::generic) {
+                                return;
+                            }
+                            deferred = op.domain
+                                == SignalUpdateDomain::systemverilog_nba;
+                        }
+                        inst.sub = deferred ? 1U : 0U;
+                    }
+                    inst.op = KOp::wide_store;
+                    inst.x = op.source;
+                    inst.d = slot;
+                    inst.offset = offset;
+                    inst.width = width[op.source];
+                    inst.aux = has_unknowns(op.source) ? 1U : 0U;
+                    lowered = true;
+                }
+            }, member.operations[pc]);
+            if (lowered) {
+                body.code.push_back(inst);
+                continue;
+            }
+        }
         // Operations on values wider than 64 bits, wide or proxy slots, and
         // dynamic host writes run through the reference value functions.
         {
@@ -1817,6 +2057,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.x = op.source;
                     inst.offset = op.offset;
                     inst.width = op.width;
+                    if (chunked(op.source)) {
+                        inst.sub = 3U;
+                        inst.imm_a = has_unknowns(op.source) ? 1U : 0U;
+                        inst.imm_b = wide_chunks(width[op.source]);
+                    }
                     return;
                 }
                 if (op.width == 0U || op.offset > w(op.source)
@@ -1886,6 +2131,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.sub = 2U;
                     inst.x = op.source;
                     inst.width = width[op.source];
+                    if (chunked(op.source)) {
+                        inst.sub = 3U;
+                        inst.imm_a = has_unknowns(op.source) ? 1U : 0U;
+                        inst.imm_b = wide_chunks(width[op.source]);
+                    }
                 } else {
                     inst.x = narrow(op.source);
                     inst.width = w(op.source);
@@ -1913,6 +2163,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.sub = 2U;
                     inst.x = op.source;
                     inst.offset = width[op.source];
+                    if (chunked(op.source)) {
+                        inst.sub = 3U;
+                        inst.imm_a = has_unknowns(op.source) ? 1U : 0U;
+                        inst.imm_b = wide_chunks(width[op.source]);
+                    }
                 } else {
                     inst.x = narrow(op.source);
                     inst.offset = w(op.source);
@@ -1923,7 +2178,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     (op.increasing ? flag_increasing : 0U)
                     | (op.source_descending ? flag_descending : 0U)
                     | (op.two_state ? flag_two_state : 0U));
-                inst.imm_a = op.base_offset;
+                // Readers take the base offset from body.parts; sub 3 keeps
+                // its mask flag in imm_a.
+                if (inst.sub != 3U) {
+                    inst.imm_a = op.base_offset;
+                }
                 DynamicPartIndex part;
                 part.left = op.left;
                 part.right = op.right;
@@ -2182,6 +2441,10 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         case KOp::dynamic_part_insert:
             check(inst.z);
             break;
+        case KOp::wide_part_insert:
+            check(inst.y);
+            check(inst.z);
+            break;
         case KOp::branch:
             if (inst.sub != 2U) {
                 check(inst.x);
@@ -2273,6 +2536,71 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         body.return_targets.erase(std::unique(body.return_targets.begin(),
                                       body.return_targets.end()),
             body.return_targets.end());
+    }
+    // Storage of the chunked wide registers, after every other register
+    // and the 'U' shadows: chunks, then a Logic9 register's 'U' masks.
+    // Instructions named them by register until now.
+    {
+        std::vector<std::uint32_t> storage(register_count, 0U);
+        bool any = false;
+        for (RegisterId reg = 0U; reg < register_count; ++reg) {
+            if (!chunked(reg)) {
+                continue;
+            }
+            const auto chunks = wide_chunks(width[reg]);
+            const auto base = static_cast<std::uint32_t>(body.registers.size());
+            const auto count = has_unknowns(reg) ? 2U * chunks : chunks;
+            storage[reg] = base;
+            body.registers.resize(base + count, Word { });
+            body.register_widths.resize(base + count, 0U);
+            any = true;
+        }
+        if (any) {
+            body.wide_base.assign(body.registers.size(), 0U);
+            for (RegisterId reg = 0U; reg < register_count; ++reg) {
+                if (storage[reg] != 0U) {
+                    body.wide_base[reg] = storage[reg]
+                        | (has_unknowns(reg) ? wide_unknown_flag : 0U);
+                }
+            }
+            const auto place = [&](std::uint32_t& field) {
+                if (field >= register_count || storage[field] == 0U) {
+                    throw reject("wide_storage");
+                }
+                field = storage[field];
+            };
+            for (auto& inst : body.code) {
+                switch (inst.op) {
+                case KOp::wide_load:
+                case KOp::wide_const:
+                case KOp::wide_concat:
+                    place(inst.d);
+                    break;
+                case KOp::wide_copy:
+                case KOp::wide_part_insert:
+                    place(inst.d);
+                    place(inst.x);
+                    break;
+                case KOp::wide_store:
+                    place(inst.x);
+                    break;
+                case KOp::extract:
+                case KOp::dynamic_extract:
+                case KOp::dynamic_part_select:
+                    if (inst.sub == 3U) {
+                        place(inst.x);
+                    }
+                    break;
+                default:
+                    break;
+                }
+            }
+            for (auto& operand : body.concat) {
+                if (operand.width > 64U) {
+                    place(operand.reg);
+                }
+            }
+        }
     }
     if (has_wide) {
         body.wide_registers.assign(register_count, PackedLogic4 { });

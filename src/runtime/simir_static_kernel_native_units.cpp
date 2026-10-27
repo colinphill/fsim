@@ -139,9 +139,16 @@ bool Interpreter::Impl::StaticKernel::registers_known(
             || (reg / 64U < body.live_at_entry.size()
                 && (body.live_at_entry[reg / 64U] >> (reg % 64U) & 1U) != 0U);
     };
-    const auto registers = body.shadow_base != 0U
+    auto registers = body.shadow_base != 0U
         ? std::min<std::size_t>(body.shadow_base, body.registers.size())
         : body.registers.size();
+    // Wide registers' chunks (at the end of the file) are read with their X
+    // planes, so two-state code may start with X in them.
+    for (const auto entry : body.wide_base) {
+        if (entry != 0U) {
+            registers = std::min<std::size_t>(registers, entry & ~wide_unknown_flag);
+        }
+    }
     bool known = true;
     for (std::size_t reg = 0U; reg < registers; ++reg) {
         auto& word = body.registers[reg];
@@ -842,7 +849,11 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                     break;
                 case KOp::load_slot9:
                 case KOp::load_field9:
+                case KOp::wide_load:
                     inst.x = bind_slot(inst.x);
+                    break;
+                case KOp::wide_store:
+                    inst.d = bind_slot(inst.d);
                     break;
                 case KOp::load_host:
                     inst.x = bind(2U, inst.x, inst.x, 0U);
@@ -892,8 +903,16 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                 || left.return_targets != right.return_targets
                 || left.indices.size() != right.indices.size()
                 || left.parts.size() != right.parts.size()
-                || left.concat.size() != right.concat.size()) {
+                || left.concat.size() != right.concat.size()
+                || left.wide_base != right.wide_base
+                || left.wide_constants.size() != right.wide_constants.size()) {
                 return false;
+            }
+            for (std::size_t at = 0U; at < left.wide_constants.size(); ++at) {
+                if (left.wide_constants[at].a != right.wide_constants[at].a
+                    || left.wide_constants[at].b != right.wide_constants[at].b) {
+                    return false;
+                }
             }
             for (std::size_t at = 0U; at < left.code.size(); ++at) {
                 if (!same_inst(left.code[at], right.code[at], shape)) {
@@ -920,7 +939,8 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             }
             for (std::size_t at = 0U; at < left.concat.size(); ++at) {
                 if (left.concat[at].reg != right.concat[at].reg
-                    || left.concat[at].width != right.concat[at].width) {
+                    || left.concat[at].width != right.concat[at].width
+                    || left.concat[at].unknown != right.concat[at].unknown) {
                     return false;
                 }
             }
@@ -950,6 +970,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             mix(body.entry | static_cast<std::uint64_t>(body.shadow_base) << 32U);
             mix(body.u_operands.size() | body.indices.size() << 20U
                 | body.parts.size() << 40U);
+            mix(body.wide_base.size() | body.wide_constants.size() << 32U);
             return hash;
         };
         // 2. Units with the same shape share one template: the constants that
@@ -1385,6 +1406,7 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
         case KOp::store_slot_dynamic:
         case KOp::store_slot_part:
         case KOp::wide_move:
+        case KOp::wide_store:
             forget_slot(inst.d);
             continue;
         case KOp::generic:
@@ -1707,6 +1729,19 @@ void Interpreter::Impl::StaticKernel::build_partitions(
             const auto part_base = static_cast<std::uint32_t>(program.parts.size());
             const auto concat_base
                 = static_cast<std::uint32_t>(program.concat.size());
+            const auto constant_base
+                = static_cast<std::uint32_t>(program.wide_constants.size());
+            if (!body.wide_base.empty() || !program.wide_base.empty()) {
+                program.wide_base.resize(register_base, 0U);
+                program.wide_base.resize(register_base + body.registers.size(), 0U);
+                for (std::size_t reg = 0U; reg < body.wide_base.size(); ++reg) {
+                    if (const auto entry = body.wide_base[reg]; entry != 0U) {
+                        program.wide_base[register_base + reg] = entry + register_base;
+                    }
+                }
+            }
+            program.wide_constants.insert(program.wide_constants.end(),
+                body.wide_constants.begin(), body.wide_constants.end());
             program.registers.insert(program.registers.end(),
                 body.registers.begin(), body.registers.end());
             if (!body.wide_registers.empty() || !program.wide_registers.empty()) {
@@ -1856,6 +1891,31 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                     break;
                 case KOp::mem_copy:
                     break;
+                case KOp::wide_load:
+                    reg(inst.d);
+                    break;
+                case KOp::wide_copy:
+                    reg(inst.d);
+                    reg(inst.x);
+                    break;
+                case KOp::wide_const:
+                    reg(inst.d);
+                    inst.imm_a += constant_base;
+                    break;
+                case KOp::wide_concat:
+                    reg(inst.d);
+                    inst.aux += concat_base;
+                    break;
+                case KOp::wide_store:
+                    reg(inst.x);
+                    break;
+                case KOp::wide_part_insert:
+                    reg(inst.d);
+                    reg(inst.x);
+                    reg(inst.y);
+                    reg(inst.z);
+                    inst.aux += part_base;
+                    break;
                 case KOp::load_slot9:
                 case KOp::store_vhdl:
                 case KOp::integer_binary:
@@ -1898,10 +1958,14 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                 case KOp::load_host:
                     inst.x = bind((std::uint64_t { 1 } << 40U) | inst.x);
                     break;
+                case KOp::wide_load:
+                    inst.x = bind((std::uint64_t { 5 } << 40U) | inst.x);
+                    break;
                 case KOp::store_slot:
                 case KOp::store_slot_nba:
                 case KOp::store_slot_dynamic:
                 case KOp::store_slot_part:
+                case KOp::wide_store:
                     inst.d = bind((std::uint64_t { 2 } << 40U) | inst.d);
                     break;
                 case KOp::store_host:

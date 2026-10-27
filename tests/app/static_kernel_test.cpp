@@ -8,7 +8,9 @@
 // the kernel as in the reference scheduler. Hidden kernel-owned signals must
 // read back their exact values mid-run and at the end, including the nets of
 // a combinational chain no process reads (dead logic the kernel evaluates
-// only when observed).
+// only when observed), and registers wider than 64 bits (chunked in the
+// kernel's register file) written by blocking and nonblocking assignments
+// of wide constants, concatenations and dynamic part-select inserts.
 #include "fsim/app/application.hpp"
 
 #include <chrono>
@@ -89,7 +91,7 @@ module sk_dut(input wire clk, input wire rst_n, input wire [3:0] a,
               input wire [3:0] ra, output wire [3:0] prod,
               output wire [7:0] rd, output reg [7:0] acc,
               output wire [7:0] mix, output reg [3:0] slow,
-              output reg [3:0] sel);
+              output reg [3:0] sel, output wire [7:0] wx);
   mul4 m(.a(a), .b(b), .p(prod));
   wire [3:0] pc;
   mul4 mc(.a(acc[3:0]), .b(4'b0110), .p(pc));
@@ -116,6 +118,23 @@ module sk_dut(input wire clk, input wire rst_n, input wire [3:0] a,
   assign arr[1] = arr[0] ^ {rd[3:0], rd[7:4]};
   assign arr[2] = arr[1] + shreg;
   assign mix = arr[ra[1:0] == 2'b11 ? 2'd2 : ra[1:0]];
+  function automatic [135:0] put(input [135:0] v, input [3:0] i,
+                                 input [7:0] x);
+    begin
+      put = v;
+      put[i * 8 +: 8] = x;
+    end
+  endfunction
+  reg [135:0] wide_q;
+  reg [135:0] wide_b;
+  always @(posedge clk or negedge rst_n)
+    if (!rst_n) wide_q <= {136{1'b0}};
+    else begin
+      wide_q <= put(wide_q, a, acc);
+      wide_b = {prod, acc, acc, acc, acc, acc, acc, acc, acc, acc, acc, acc,
+                acc, acc, acc, acc, acc, 4'h5};
+    end
+  assign wx = wide_q[ra * 8 +: 8] ^ wide_b[135:128];
   wire [7:0] dead0 = acc ^ {slow, sel};
   wire [7:0] dead1 = dead0 + {rd[3:0], prod};
   wire dead_parity;
@@ -135,10 +154,10 @@ module sk_top;
   reg rst_n, we;
   reg [3:0] a, b, wa, ra;
   wire [3:0] prod, slow, sel;
-  wire [7:0] rd, acc, mix;
+  wire [7:0] rd, acc, mix, wx;
   sk_dut dut(.clk(clk), .rst_n(rst_n), .a(a), .b(b), .we(we), .wa(wa),
              .ra(ra), .prod(prod), .rd(rd), .acc(acc), .mix(mix),
-             .slow(slow), .sel(sel));
+             .slow(slow), .sel(sel), .wx(wx));
   integer cyc;
   initial begin
     rst_n = 0; we = 0; a = 0; b = 0; wa = 0; ra = 0;
@@ -161,8 +180,8 @@ module sk_top;
     $finish;
   end
   always @(posedge clk)
-    $display("%0t p=%b rd=%h acc=%h mix=%h slow=%h sel=%h", $time, prod, rd,
-             acc, mix, slow, sel);
+    $display("%0t p=%b rd=%h acc=%h mix=%h slow=%h sel=%h wx=%b", $time, prod,
+             rd, acc, mix, slow, sel, wx);
 endmodule
 )";
 
@@ -217,6 +236,8 @@ const std::vector<std::string> internal_paths {
     "sk_top.dut.dead0",
     "sk_top.dut.dead1",
     "sk_top.dut.dead_parity",
+    "sk_top.dut.wide_q",
+    "sk_top.dut.wide_b",
 };
 
 [[nodiscard]] RunCapture run(const std::filesystem::path& root,

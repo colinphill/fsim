@@ -142,6 +142,15 @@ struct StaticKernelNativeHelpers {
     std::array<void (*)(StaticKernelNativeFrame*, kernel_word::Word* registers,
                    std::uint32_t at),
         256> generic_ops { };
+    /// Wide-register instructions by kind (`fsim_sk_wide_<op>`): instruction
+    /// `at` with the caller's register file, where wide values live, and the
+    /// narrow operand words x, y and z; `out` receives a narrow result and
+    /// its 'U' mask, as for `evaluate_ops`.
+    std::array<void (*)(StaticKernelNativeFrame*, kernel_word::Word* registers,
+                   std::uint32_t at, std::uint64_t xa, std::uint64_t xb,
+                   std::uint64_t ya, std::uint64_t yb, std::uint64_t za,
+                   std::uint64_t zb, std::uint64_t* out),
+        static_kernel_detail::kernel_op_count> wide_ops { };
     /// Operation tier: runs operation `pc` of the frame's member and returns
     /// the next position, one helper per operation kind
     /// (`fsim_sk_step_<ordinal>`; threads `fsim_sk_thread_step_<ordinal>`;

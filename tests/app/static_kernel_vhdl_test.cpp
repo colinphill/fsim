@@ -11,8 +11,12 @@
 // variables with initializers, weak Logic9 values, resolved vectors with
 // disjoint concurrent drivers, dynamic slice assignments, an X injection, and
 // a one-delta glitch that the testbench counts and feeds back into the design
-// (each kernel round must be its own host delta), and a pure chain that a
-// clk register alone reads (collapsed into the delta of its source).
+// (each kernel round must be its own host delta), a pure chain that a
+// clk register alone reads (collapsed into the delta of its source), and
+// registers wider than 64 bits (chunked in the kernel's register file) that
+// start 'U' and are read and written by dynamic slices, concatenations and
+// wide constants (two instances whose wide constants differ only by a
+// generic must not share native code).
 #include "fsim/app/application.hpp"
 #include "fsim/compiler/static_kernel_codegen.hpp"
 
@@ -129,6 +133,31 @@ end architecture rtl;
 
 library ieee;
 use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity vk_wconst is
+  generic (SEED : std_logic_vector(7 downto 0));
+  port (clk : in std_logic;
+        d : in std_logic_vector(3 downto 0);
+        q : out std_logic_vector(7 downto 0));
+end entity vk_wconst;
+
+architecture rtl of vk_wconst is
+begin
+  process(clk)
+    variable w : std_logic_vector(135 downto 0);
+    variable k : integer;
+  begin
+    if rising_edge(clk) then
+      w := SEED & x"0123456789abcdef0f1e2d3c4b5a6978";
+      k := to_integer(unsigned(d)) + 1;
+      q <= w(k * 8 + 7 downto k * 8);
+    end if;
+  end process;
+end architecture rtl;
+
+library ieee;
+use ieee.std_logic_1164.all;
 
 entity vk_sub is
   port (clk : in std_logic;
@@ -197,7 +226,9 @@ entity vk_dut is
         pulse : out std_logic;
         fb : in std_logic;
         fbc : out std_logic_vector(3 downto 0);
-        ch : out std_logic_vector(3 downto 0));
+        ch : out std_logic_vector(3 downto 0);
+        wx : out std_logic_vector(7 downto 0);
+        wk : out std_logic_vector(15 downto 0));
 end entity vk_dut;
 
 architecture rtl of vk_dut is
@@ -217,7 +248,37 @@ architecture rtl of vk_dut is
   signal fb_r : unsigned(3 downto 0) := (others => '0');
   signal ch_r : std_logic_vector(3 downto 0) := "0001";
   signal ch1, ch2 : std_logic_vector(3 downto 0);
+  signal wide_r : std_logic_vector(135 downto 0);
+  signal wide_c : std_logic_vector(131 downto 0);
 begin
+  wc0 : entity work.vk_wconst generic map (SEED => x"5a")
+    port map (clk => clk, d => a, q => wk(7 downto 0));
+  wc1 : entity work.vk_wconst generic map (SEED => x"c3")
+    port map (clk => clk, d => a, q => wk(15 downto 8));
+  -- Wide registers: wide_r starts 'U' and fills a byte per edge.
+  process(clk)
+    variable w : std_logic_vector(135 downto 0);
+    variable k : integer;
+  begin
+    if rising_edge(clk) then
+      w := wide_r;
+      k := to_integer(unsigned(a));
+      w(k * 8 + 7 downto k * 8) := acc_r;
+      if a = "1111" then
+        w(135 downto 128) := b & a;
+      end if;
+      wide_r <= w;
+      wx <= wide_r(k * 8 + 7 downto k * 8) xor wide_r(135 downto 128);
+      if rst_n = '0' then
+        wide_c <= (others => '1');
+      else
+        wide_c <= prod_i & acc_r & s(0) & s(1) & s(2) & s(3) & acc_r & acc_r
+          & acc_r & acc_r & acc_r & acc_r & acc_r & acc_r & acc_r & acc_r
+          & acc_r & acc_r & acc_r;
+      end if;
+    end if;
+  end process;
+
   -- A pure chain that only a clk register reads: it settles in the delta
   -- of its source's update.
   ch1 <= ch_r xor "0101";
@@ -329,11 +390,12 @@ module vk_top;
   wire pulse;
   integer pulses = 0;
   always @(pulse) pulses = pulses + 1;
-  wire [7:0] acc, rd, mix;
+  wire [7:0] acc, rd, mix, wx;
+  wire [15:0] wk;
   vk_dut dut(.clk(clk), .rst_n(rst_n), .a(a), .b(b), .we(we), .addr(addr),
              .prod(prod), .acc(acc), .rd(rd), .slow(slow), .mix(mix),
              .flags(flags), .cnt(cnt), .late(late), .late2(late2),
-             .pulse(pulse), .fb(pulse), .fbc(fbc), .ch(ch));
+             .pulse(pulse), .fb(pulse), .fbc(fbc), .ch(ch), .wx(wx), .wk(wk));
   integer cyc;
   initial begin
     rst_n = 0; we = 0; a = 0; b = 0; addr = 0;
@@ -355,8 +417,9 @@ module vk_top;
     $finish;
   end
   always @(posedge clk)
-    $display("%0t p=%b acc=%h rd=%h slow=%h mix=%h flags=%b cnt=%h late=%h/%h pulses=%0d fb=%h ch=%h",
-             $time, prod, acc, rd, slow, mix, flags, cnt, late, late2, pulses, fbc, ch);
+    $display("%0t p=%b acc=%h rd=%h slow=%h mix=%h flags=%b cnt=%h late=%h/%h pulses=%0d fb=%h ch=%h wx=%b wk=%h",
+             $time, prod, acc, rd, slow, mix, flags, cnt, late, late2, pulses, fbc, ch, wx,
+             wk);
 endmodule
 )";
 
@@ -422,6 +485,8 @@ const std::vector<std::string> internal_paths {
     "vk_top.dut.weak",
     "vk_top.dut.slow_r",
     "vk_top.dut.ch2",
+    "vk_top.dut.wide_r",
+    "vk_top.dut.wide_c",
 };
 
 /// With a cache, the kernel's code is built ahead of time into it

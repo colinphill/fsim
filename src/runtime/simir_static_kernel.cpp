@@ -2738,7 +2738,21 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                     pending.value.promoted_to_logic9().to_msb_string());
             }
         }
-        return out;
+        // A wide store writes 64-bit chunks: adjacent writes to one slot
+        // compare as the one write they make up.
+        std::vector<std::tuple<std::uint32_t, std::uint32_t, std::string>> merged;
+        for (auto& write : out) {
+            if (!merged.empty()) {
+                auto& [slot, offset, value] = merged.back();
+                if (slot == std::get<0>(write)
+                    && offset + value.size() == std::get<1>(write)) {
+                    value = std::get<2>(write) + value;
+                    continue;
+                }
+            }
+            merged.push_back(std::move(write));
+        }
+        return merged;
     };
     run_compiled(member_index);
     const auto compiled_writes = writes();
@@ -2749,6 +2763,10 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                 && body.tracked[reg] != 0U
             ? body.registers[body.shadow_base + reg].a : 0U;
         compiled_registers.push_back(width == 0U ? std::string { }
+                : width > 64U && reg < body.wide_base.size() && body.wide_base[reg] != 0U
+                ? wide_value(body, body.registers.data(),
+                      static_cast<std::uint32_t>(reg), ValueKind::logic9)
+                      .to_msb_string()
                 : width > 64U ? (reg < body.wide_registers.size()
                                        ? Impl::coerce_value_kind(
                                              body.wide_registers[reg],
@@ -2774,14 +2792,17 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
         if (width == 0U) {
             continue;
         }
+        const auto kind = reg < member.register_kinds.size()
+            ? member.register_kinds[reg] : ValueKind::logic4;
         if (width > 64U) {
-            if (reg < body.wide_registers.size()) {
+            if (reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
+                member.registers[reg] = wide_value(body, body.registers.data(),
+                    static_cast<std::uint32_t>(reg), kind);
+            } else if (reg < body.wide_registers.size()) {
                 member.registers[reg] = body.wide_registers[reg];
             }
             continue;
         }
-        const auto kind = reg < member.register_kinds.size()
-            ? member.register_kinds[reg] : ValueKind::logic4;
         member.registers[reg] = Impl::coerce_value_kind(
             PackedLogic4::from_aval_bval(width, body.registers[reg].a,
                 body.registers[reg].b),
@@ -2868,8 +2889,22 @@ void Interpreter::Impl::StaticKernel::sync_compiled_registers(
         if (value.width() == 0U || width == 0U) {
             continue;
         }
+        // Only registers read before written in the next activation need
+        // exact values.
+        const auto live = [&] {
+            return body.live_at_entry.empty()
+                || (reg / 64U < body.live_at_entry.size()
+                    && (body.live_at_entry[reg / 64U] >> (reg % 64U) & 1U) != 0U);
+        };
         if (width > 64U) {
-            if (reg < body.wide_registers.size()) {
+            if (reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
+                if (!set_wide_value(body, body.registers.data(),
+                        static_cast<std::uint32_t>(reg), value)
+                    && live()) {
+                    member.generic_mode = true;
+                    return;
+                }
+            } else if (reg < body.wide_registers.size()) {
                 body.wide_registers[reg] = value;
             }
             continue;
@@ -2885,12 +2920,7 @@ void Interpreter::Impl::StaticKernel::sync_compiled_registers(
             }
             continue;
         }
-        // Only registers read before written in the next activation need
-        // exact values.
-        const bool live = body.live_at_entry.empty()
-            || (reg / 64U < body.live_at_entry.size()
-                && (body.live_at_entry[reg / 64U] >> (reg % 64U) & 1U) != 0U);
-        if (live) {
+        if (live()) {
             member.generic_mode = true;
             return;
         }
