@@ -138,6 +138,39 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: elaboration cuts, lookup indexes and lowering memos (`e9532075`, `f5ff3314`, sweeps `v4c19`, `v4c20`)
+
+This continues the end-of-plan elaboration work (owner ordering: elaboration first, then multi-threading). Measurements are mixed_codec elaborate without `--aot`, `--jobs 1`.
+
+**Lookup indexes and container copies** (`e9532075`, 47.04G → 42.06G instructions).
+- `CompiledDesign`'s lookup indexes now record each unit's identity check and each scope's visible VHDL units. `find_unit` and `vhdl_lookup_units` no longer re-derive them per query.
+- A scratch VHDL elaboration program copies the design's container objects only when it actually runs, not when the memo already holds its value.
+- Container validation scans element unknown bits only for two-state or scalar element types, the only case where they are rejected. It had called `bval_words` 27M times.
+- The per-scope expression resolution cache holds 16384 entries.
+
+**Lowering memos** (`f5ff3314`, 42.06G → 40.07G).
+- `hir_vhdl_array_selection` results, absent ones included, are kept under the VHDL query key that widths and shapes already use (scope, callable, binding frames, unrolled loops).
+- `hir_generic_actual` uses the expression resolution cache that `hir_referenced_declaration` keeps.
+- A VHDL simple name the resolver leaves unresolved outside any package keeps its root lookup per binding-frame state. A generate parameter used to be resolved about 40 times per statement.
+- On a trivial generate of 64 `o(i) <= '1' when sel(i) = '1' else '0'` statements, lowering went from 15.5 to 10.1 ms.
+
+**Measured** (elaborate without `--aot`, best of 3 task-clock):
+
+| Case | v4c18 instructions | v4c20 instructions | v4c18 task-clock | v4c20 task-clock |
+|---|---:|---:|---:|---:|
+| mixed_codec | 47.04G | 40.07G | 4.72 s | 4.34 s |
+| original_codec | 46.64G | 45.78G | 5.59 s | 5.65 s |
+| mixed_throughput | 13.78G | 12.75G | 1.62 s | 1.52 s |
+
+**What remains** (callgrind). Each item needs an architectural change rather than another memo:
+- **Callable bodies are lowered once per process.** On mixed_codec that is 8.3G (19%). One small `numeric_std`-style function is lowered 845 times, because each concurrent statement is its own process with its own program. Sharing a body needs a replay that remaps every operand kind (registers, frames, instruction targets); `offset_registers` in cone fusion covers only a subset.
+- **Generate iterations share nothing.** Each iteration has its own Lowerer and its own specialized unit with the parameter folded in. Every subtype, shape and selection is therefore recomputed per iteration, about 600k instructions for a trivial statement. Sharing needs a proof that a query does not read the iteration's actual.
+- **SystemVerilog constant functions** (original_codec 10G, 21%). Loop-heavy GF(2^m) functions such as `alpha_pow_fn` are evaluated per generate iteration at about 13k instructions per loop iteration. Repeat evaluations already hit the per-specialization memo. A cross-instance call memo would need every specialization read the evaluator makes recorded as a dependency.
+- Runtime-state encoding: 4.3G on original_codec, about 1.2G of it single-field `Writer::raw` appends.
+
+Full ctest passes 1087/1087 in normal and strict mode at both commits. Sweeps `v4c19` and `v4c20` show no losses against `b96x1` (nvc `case11` and `issue705` excluded) or against the previous sweep.
+- Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+
 ### 2026-10-27: `%m` in shared templates, workspace file root (`b6c49426`, sweep `v4c18`)
 
 Two bugs found while building the larger multi-threading benchmark (the LDPC P=128 decoder, `.local-artifacts/v4-migration/mt-bench/ldpc/tb_decoder_long.sv`). Both are older than v4 and affect the interpreter and the v4 kernel alike.
