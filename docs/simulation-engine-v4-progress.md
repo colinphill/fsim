@@ -138,6 +138,52 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — final procedures, `$monitor`, undriven actuals, startup order (`9b7961df`, sweep `v4c38`)
+
+**`9b7961df`** (six changesets)
+- **Final procedures as members** (IEEE 1800-2023 9.2.3, family F).
+  - The behavioral tier admits a final procedure whose body neither writes, forces nor waits (`static_kernel_final_operation`).
+  - `run_finals` runs it once in its process's place among the final blocks: through the kernel's hosted Active list when the kernel hosts processes, otherwise as one host task at the process's order.
+  - The kernel host's stub is never a final procedure. With the final flag inherited from its member, the host failed "a SimIR final process cannot initialize at time zero".
+- **`$monitor`, `$monitoron`, `$monitoroff`** (21.2.3) in behavioral members, on the host's monitor (`Impl::install_monitor` with the member's resolved file handle). The monitored signals stay host signals.
+- **Undriven VHDL actuals** (IEEE 1076-2019 14.7.3.1).
+  - A signal that no process, resolver, conversion driver or wiring drives keeps its default value for the whole run.
+  - The kernel owns it as a source of a live wiring or conversion, unless a force or a foreign library can change it, and converts it once at initialization (14.7.5.2).
+- **Sole-writer mirror read.**
+  - A member reading a sole-writer input reads the kernel's mirror of its staged update, as the compiled bodies do.
+  - An uncompiled member woken by the mirrored update read the host's old value instead (ivtest `wait3` hang).
+  - The mirror is read only after the kernel's initialization, which seeds it from the host. The first ct4 run aborted `fsim.application.static-kernel` (width-0 value) while the seed still read itself.
+- **Startup order.** The static-wait prearm arms the kernel's host process last.
+  - Its first run is the kernel's first activation, which runs the kernel's time-zero processes.
+  - Every static wait is now armed before any of those runs (IEEE 1800-2023 4.7, 9.2; ivtest `specify4`, whose `@(posedge c)` missed the x→1 edge).
+- **Census.** Live wirings, live conversions and the stubs of live driver wirings count as kernel members, not hosted commit programs: the kernel drives their targets in its update phase. A triage of the 1,028 `commit_program:conversion` rows found 848 of them were live wirings.
+
+**Validation.**
+- ct4: the static-kernel abort above, fixed. The test and its four dependent closure matrices then pass in all four variants (52/52 each).
+- Targeted runs on the live build had 0 losses: finals and `$monitor` (253 cases) and conversions (160 cases).
+- Sweep `v4c38` (frozen `9b7961df`) has 0 losses vs `b96x1`:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2641 / 2641 | 270 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+Hosted processes in the sweep: 5,125 (v4c37 5,579). `commit_program:conversion` rows: 144 (v4c37 1,028).
+
+**Remaining conversion residue** (triage):
+- sources written by delayed assignments (about 100 programs, mostly nvc issue405);
+- conversion functions with container or string operations (35);
+- multi-source composer resolvers;
+- inout ports with a driving mirror.
+
+**Next.** Package static initializers as members (in the tree). Today they run on the interpreter through `execute_hosted_startup`.
+- An SV initializer whose body neither waits nor forks (`static_kernel_startup_operation`) is a behavioral member.
+- The kernel runs it at its startup action, and the signals it touches stay host signals.
+
 ### 2026-10-28: hosted kinds into the kernel — history queries, strings, `$dist`, `$timeformat`, host registration (`d688d7d8`, sweep `v4c37`)
 
 **`d688d7d8`**
