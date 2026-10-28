@@ -224,8 +224,13 @@ public:
     void execute_hosted_startup(ProcessId process);
     /// End of simulation (IEEE 1800-2023 9.2.3): drops what the host
     /// scheduler discarded (`discarded`) and schedules the hosted final
-    /// blocks. Final blocks the kernel does not host are the caller's.
+    /// blocks and the final members, each at its process's place among the
+    /// host's. Final blocks the kernel neither hosts nor runs are the
+    /// caller's.
     void run_finals(bool discarded);
+    /// Runs a final member's procedure to its end (a host task of
+    /// run_finals, or a hosted wake when the kernel hosts processes).
+    void run_final_member(std::uint32_t member);
     /// Debugger plan: members stop at their debug points.
     [[nodiscard]] bool debug_points() const noexcept { return debug_points_; }
     /// A mixed kernel with a host boundary: its first round, the VHDL
@@ -309,6 +314,9 @@ private:
         /// always_comb/always_latch (ProcessStartupPhase::after_procedures):
         /// starts after the initial and always procedures.
         bool after_procedures { };
+        /// A final procedure (IEEE 1800-2023 9.2.3): never starts with the
+        /// others; run_finals schedules it at the end of simulation.
+        bool final_block { };
         /// Dead logic: never scheduled; materialize evaluates it from the
         /// slots in lazy_inputs (its whole sensitivity) when a slot it
         /// writes is read. lazy_stamp is the lazy_epoch_ of its last run.
@@ -2218,6 +2226,8 @@ private:
     std::priority_queue<HostedTimer, std::vector<HostedTimer>, std::greater<>>
         hosted_timers_;
     std::uint64_t hosted_sequence_ { };
+    /// The final members' processes and member indices (run_finals).
+    std::vector<std::pair<ProcessId, std::uint32_t>> final_members_;
     std::optional<SimulationTick> armed_hosted_timer_;
     /// Marks the specification's hosted processes in the interpreter.
     void adopt_hosted(const std::vector<StaticKernelMemberSpec>& hosted);

@@ -459,6 +459,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.start_late = member_spec.start_late;
         member.after_procedures = program.startup_phase()
             == ProcessStartupPhase::after_procedures;
+        member.final_block = program.final();
         member.partition_key = member.lazy ? no_slot : member_spec.partition;
         member.body_begin = member_spec.body_begin;
         member.prologue_end = member_spec.body_begin;
@@ -1311,6 +1312,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     vhdl_host_cycles_ = vhdl_host_cycles_
                         || (member.vhdl && !owned(op.signal));
                     host_written = host_written || !owned(op.signal);
+                } else if constexpr (std::is_same_v<T, MonitorInstall>
+                    || std::is_same_v<T, MonitorControl>) {
+                    // The host's monitor prints in the host's time steps
+                    // (IEEE 1800-2023 21.2.3): no time warp.
+                    host_written = true;
                 } else if constexpr (std::is_same_v<T, FileReadLine>
                     || std::is_same_v<T, FileErrorStatus>) {
                     // A text read into a signal (commit_driver).
@@ -1632,6 +1638,13 @@ PackedLogic4 Interpreter::Impl::StaticKernel::read_signal(const SignalId signal)
     }
     if (const auto family = family_of_signal_[signal]; family != no_slot) {
         return assemble(families_[family]);
+    }
+    if (const auto input = input_of_signal_[signal];
+        initialized_ && input != no_slot && inputs_[input].sole_writer) {
+        // The kernel mirrors a sole writer's staged update at once
+        // (write_host), and the readers it wakes read the mirror, as the
+        // compiled bodies do.
+        return inputs_[input].cached;
     }
     return impl_.logical_signal_value(signal);
 }
@@ -5062,9 +5075,10 @@ void Interpreter::Impl::StaticKernel::initialize()
         impl_.static_kernel_input_marks[input.signal] = 1U;
         input.revision = impl_.signal_value_revisions[input.signal];
         input.event_seen = impl_.signal_events[input.signal];
-        input.cached = vhdl_ ? read_signal(input.signal)
-                             : Impl::coerce_value_kind(read_signal(input.signal),
-                                   ValueKind::logic4);
+        // The mirror starts at the host's value.
+        auto value = impl_.logical_signal_value(input.signal);
+        input.cached = vhdl_ ? std::move(value)
+                             : Impl::coerce_value_kind(value, ValueKind::logic4);
         write_mirror(input);
     }
     for (std::uint32_t index = 0U; index < slots_.size(); ++index) {

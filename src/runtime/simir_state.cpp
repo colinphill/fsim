@@ -2961,10 +2961,16 @@ void Interpreter::Impl::install_monitor(
     const ProcessId process,
     const MonitorInstall& registration)
 {
-    const auto file_handle = registration.file_handle
-        ? std::optional<FileHandle> { known_file_handle(
-              get_process(process), *registration.file_handle) }
-        : std::nullopt;
+    install_monitor(process, registration, registration.file_handle
+            ? std::optional<FileHandle> { known_file_handle(
+                  get_process(process), *registration.file_handle) }
+            : std::nullopt);
+}
+
+void Interpreter::Impl::install_monitor(const ProcessId process,
+    const MonitorInstall& registration,
+    const std::optional<FileHandle> file_handle)
+{
     if (registration.one_shot) {
         auto publish = [this, process, registration, file_handle](
                            Scheduler& runtime) {

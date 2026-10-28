@@ -3307,6 +3307,10 @@ void Interpreter::start()
         }
         return false;
     }();
+    // The kernel's host process arms last: its first run is the kernel's
+    // first activation, which runs the kernel's time-zero processes, and
+    // every static wait is armed before any of those runs.
+    std::optional<ProcessId> kernel_host;
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
         if (inert(id)) {
             continue;
@@ -3326,6 +3330,12 @@ void Interpreter::start()
         if (impl_->processes.is_compact_constant(id)) {
             continue;
         }
+        if (!kernel_runs_after_hosted_start && impl_->static_kernel
+            && id < impl_->fusion_dormant_process.size()
+            && impl_->fusion_dormant_process[id] == 2U) {
+            kernel_host = id;
+            continue;
+        }
         if (kernel_runs_after_hosted_start
             && id < impl_->fusion_dormant_process.size()
             && impl_->fusion_dormant_process[id] == 2U) {
@@ -3342,6 +3352,10 @@ void Interpreter::start()
             impl_->execute(id);
         }
         prearmed_static_waits[id] = true;
+    }
+    if (kernel_host) {
+        impl_->execute(*kernel_host);
+        prearmed_static_waits[*kernel_host] = true;
     }
     // A SystemVerilog process that waits only on time and reads a settling
     // signal starts one delta after the other processes, so time-zero

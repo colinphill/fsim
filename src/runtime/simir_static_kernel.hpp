@@ -574,6 +574,10 @@ struct StaticKernelInlinedProgram {
                 || std::is_same_v<T, ReadStringObject>
                 // $timeformat (20.4.2).
                 || std::is_same_v<T, TimeFormatControl>
+                // $monitor, $strobe, $monitoron/off (21.2.2, 21.2.3): the
+                // planner keeps the monitored signals host signals.
+                || std::is_same_v<T, MonitorInstall>
+                || std::is_same_v<T, MonitorControl>
                 // $dist_* (20.14.2).
                 || std::is_same_v<T, RandomDistribution>
                 // $countones and $countbits (20.9).
@@ -814,6 +818,39 @@ struct StaticKernelInlinedProgram {
                 || std::is_same_v<T, StringReplaceByte>
                 || std::is_same_v<T, CountOnes>
                 || std::is_same_v<T, CountBits>;
+        }
+    }, operation);
+}
+
+/// An operation a final procedure's member may use (IEEE 1800-2023 9.2.3):
+/// a final procedure runs once, without delays, at the end of simulation,
+/// where the kernel runs it outside its rounds (run_finals). It reads
+/// signals but writes, forces and waits on none, and fills no design memory.
+[[nodiscard]] inline bool static_kernel_final_operation(
+    const Operation& operation)
+{
+    return visit_operation([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, ReadSignal>
+            || std::is_same_v<T, SignalEvent>
+            || std::is_same_v<T, SignalActive>
+            || std::is_same_v<T, SignalLastValue>
+            || std::is_same_v<T, SignalLastEvent>
+            || std::is_same_v<T, SignalLastActive>) {
+            return true;
+        } else if constexpr (requires { value.signal; }) {
+            return false;
+        } else {
+            return !(std::is_same_v<T, WaitFor> || std::is_same_v<T, WaitOn>
+                || std::is_same_v<T, WaitSensitivity>
+                || std::is_same_v<T, WaitForever> || std::is_same_v<T, Fork>
+                || std::is_same_v<T, ForkEnd> || std::is_same_v<T, Pause>
+                || std::is_same_v<T, WriteContainerObject>
+                || std::is_same_v<T, WriteContainerObjectElement>
+                || std::is_same_v<T, WriteStringObject>
+                || std::is_same_v<T, FileReadLine> || std::is_same_v<T, FileScan>
+                || std::is_same_v<T, FileErrorStatus>
+                || std::is_same_v<T, LoadMemory>);
         }
     }, operation);
 }

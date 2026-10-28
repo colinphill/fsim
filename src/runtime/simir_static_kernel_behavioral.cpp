@@ -130,7 +130,7 @@ void Interpreter::Impl::StaticKernel::prepare_behavioral()
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         auto& member = members_[index];
         if (member.kind != StaticKernelMemberKind::behavioral
-            || member.start_late
+            || member.start_late || member.final_block
             || member.wait_sensitivity.empty()
             || member.operations.empty()
             || !operation_holds<WaitSensitivity>(member.operations.front())) {
@@ -153,7 +153,7 @@ void Interpreter::Impl::StaticKernel::start_behavioral()
         for (std::uint32_t index = 0U; index < members_.size(); ++index) {
             const auto& member = members_[index];
             if (member.kind != StaticKernelMemberKind::behavioral
-                || member.prearmed
+                || member.prearmed || member.final_block
                 || (member.after_procedures && !member.vhdl)
                     != after_procedures) {
                 continue;
@@ -1017,6 +1017,19 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             } catch (const std::exception& error) {
                 fail(member_index, pc, error.what());
             }
+        } else if constexpr (std::is_same_v<T, MonitorInstall>) {
+            // $monitor, $strobe and their file forms (IEEE 1800-2023 21.2.2,
+            // 21.2.3, 21.3.2): the host's monitor watches and prints its
+            // signals, which the planner keeps host signals.
+            std::optional<FileHandle> file_handle;
+            if (op.file_handle) {
+                MemberFileStorage storage { *this, member_index, pc };
+                file_handle = impl_.known_file_handle(storage, *op.file_handle);
+            }
+            impl_.install_monitor(member.process, op, file_handle);
+        } else if constexpr (std::is_same_v<T, MonitorControl>) {
+            // $monitoron and $monitoroff (21.2.3).
+            impl_.set_monitor_enabled(op.enabled);
         } else if constexpr (std::is_same_v<T, RandomDistribution>) {
             // $dist_* (IEEE 1800-2023 20.14.2): the reference's step on the
             // member's registers; the seed is the caller's inout variable.

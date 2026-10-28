@@ -405,18 +405,59 @@ void Interpreter::Impl::StaticKernel::run_finals(const bool discarded)
     // ends (IEEE 1800-2023 9.2.3), including those a last activation
     // staged for a region that $finish or $stop discarded.
     publish(true, true);
-    if (!has_hosted_) {
-        return;
-    }
-    if (discarded) {
-        discard_hosted();
-    }
-    for (ProcessId id = 0; id < impl_.processes.size(); ++id) {
-        if (impl_.static_kernel_hosts(id)
-            && impl_.processes.program_view(id).final()) {
-            impl_.queue_at(id, impl_.scheduler.now());
+    if (has_hosted_) {
+        if (discarded) {
+            discard_hosted();
+        }
+        for (ProcessId id = 0; id < impl_.processes.size(); ++id) {
+            if (impl_.static_kernel_hosts(id)
+                && impl_.processes.program_view(id).final()) {
+                impl_.queue_at(id, impl_.scheduler.now());
+            }
         }
     }
+    // A final member runs in its process's place among the final blocks,
+    // as the host orders them (process order), so a $finish stops the ones
+    // after it: among the hosted finals in the kernel's sorted Active list,
+    // or as a host task of its own.
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        if (!members_[index].final_block) {
+            continue;
+        }
+        const auto process = members_[index].process;
+        final_members_.emplace_back(process, index);
+        if (has_hosted_) {
+            HostedReady ready;
+            ready.process = process;
+            ready.order = process;
+            ready.phase = SchedulerPhase::active;
+            hosted_active_.push_back(ready);
+            impl_.queue_active_current(host_process_);
+            continue;
+        }
+        struct KernelFinalTask {
+            Interpreter::Impl* owner { };
+            std::uint32_t member { };
+        };
+        const auto task = fsim::runtime::detail::make_scheduler_task_descriptor<
+            KernelFinalTask,
+            +[](Scheduler&, const KernelFinalTask& scheduled) {
+                if (scheduled.owner->static_kernel) {
+                    scheduled.owner->static_kernel->run_final_member(
+                        scheduled.member);
+                }
+            }>(KernelFinalTask { &impl_, index });
+        impl_.scheduler.schedule_internal_systemverilog_at(impl_.scheduler.now(),
+            SchedulerPhase::active, StableOrder { process }, task);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::run_final_member(const std::uint32_t member)
+{
+    // A final procedure has no timing control and writes no signal (the
+    // planner's final rule): it runs to its end or to a $finish.
+    run_thread(spawn_thread(member, 0U, static_kernel_detail::no_slot,
+        static_kernel_detail::no_slot));
 }
 
 void Interpreter::Impl::StaticKernel::collect_hosted()
@@ -779,6 +820,15 @@ void Interpreter::Impl::StaticKernel::run_hosted_initializers()
 
 void Interpreter::Impl::StaticKernel::run_hosted(const HostedReady& ready)
 {
+    if (const auto final = std::ranges::find(final_members_, ready.process,
+            &std::pair<ProcessId, std::uint32_t>::first);
+        final != final_members_.end()) {
+        // A final member among the hosted final blocks (run_finals); its
+        // process state is the member's (the host stub's, for the host
+        // member) and has no wake of its own.
+        run_final_member(final->second);
+        return;
+    }
     auto& state = impl_.get_process(ready.process);
     if (ready.timer && state.timer_epoch != ready.epoch) {
         return;

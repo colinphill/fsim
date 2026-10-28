@@ -2726,6 +2726,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void install_monitor(
         const ProcessId process,
         const MonitorInstall& registration);
+    /// $monitor, $fmonitor, $strobe and $fstrobe (IEEE 1800-2023 21.2.2,
+    /// 21.2.3, 21.3.2) for `process`, with its file handle resolved.
+    void install_monitor(ProcessId process, const MonitorInstall& registration,
+        std::optional<FileHandle> file_handle);
 
     void set_monitor_enabled(const bool enabled);
     void set_time_format(

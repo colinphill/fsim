@@ -171,6 +171,9 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
     stub.string_register_count = 0U;
     stub.container_register_count = 0U;
     stub.initialize = true;
+    // The host process starts at time zero even when the member it replaces
+    // is a final procedure (the kernel runs that one in run_finals).
+    stub.final = false;
     std::vector<Operation> body;
     // Without boundary inputs nothing on the host wakes the kernel; it runs at
     // start and then by its own timers (behavioral delays).
@@ -432,10 +435,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         if (view.postponed() && hit("postponed")) {
             return first;
         }
-        if (view.final() && hit("final")) {
+        // A final procedure is a behavioral member only (its body rule is
+        // static_kernel_final_operation).
+        if (view.final() && (!behavioral || vhdl) && hit("final")) {
             return first;
         }
-        if (!view.initialize() && hit("not_initialized")) {
+        // A final procedure does not start at time zero (run_finals).
+        if (!view.initialize() && !view.final() && hit("not_initialized")) {
             return first;
         }
         // Package static initializers run once, before time zero, in the
@@ -1125,6 +1131,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     }
                 }, operation);
             }
+            for (std::size_t op = 0U; supported && view.final() && op < count;
+                 ++op) {
+                if (!static_kernel_final_operation(operations.expanded(op))) {
+                    supported = false;
+                    failed_at = op;
+                    failed_reason = "final_body";
+                }
+            }
             if (supported) {
                 if (const char* reason = container_rule(view, false)) {
                     supported = false;
@@ -1611,10 +1625,21 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         const auto& operations = views[index].operations();
         for (std::size_t op = 0U; op < operations.size(); ++op) {
-            if (const auto target = static_kernel_host_signal(
-                    operations.expanded(op));
+            const auto operation = operations.expanded(op);
+            if (const auto target = static_kernel_host_signal(operation);
                 target && *target < signal_count) {
                 host_touched[*target] = 1U;
+            }
+            // A member's $monitor or $strobe: the host's monitor watches
+            // its signals through the host commit path and reads them when
+            // it prints (IEEE 1800-2023 21.2.2, 21.2.3).
+            if (const auto* monitor = operation_get_if<MonitorInstall>(&operation)) {
+                for (const auto& value : monitor->values) {
+                    if (value.kind == MonitorValueKind::signal
+                        && value.signal < signal_count) {
+                        host_touched[value.signal] = 1U;
+                    }
+                }
             }
         }
     }
@@ -2123,6 +2148,42 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             alias_role[alias.signal] = 1U;
         }
     }
+    // A forced value hides the driver's (IEEE 1800-2023 10.6.2); a port
+    // segment force reaches nets by another name, so any force in the design
+    // turns the mirroring of host signals and the ownership of undriven
+    // actuals off.
+    const bool forces = std::ranges::any_of(
+        std::views::iota(std::size_t { 0U }, process_count),
+        [&](const std::size_t index) {
+            if (!views[index].valid()) {
+                return false;
+            }
+            const auto& operations = views[index].operations();
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                const auto& operation = operations.expanded(op);
+                if (operation_get_if<ForceSignalSlice>(&operation) != nullptr
+                    || operation_get_if<ReleaseSignalSlice>(&operation) != nullptr) {
+                    return true;
+                }
+            }
+            return false;
+        });
+    // Signals with no source at all: no process writes them, and no port
+    // association (resolver, conversion driver, wiring) drives them.
+    std::vector<std::uint8_t> undriven_actual(signal_count, 0U);
+    for (SignalId signal = 0U; signal < signal_count; ++signal) {
+        undriven_actual[signal] = !signals_[signal].vhdl_resolver
+            && signals_[signal].vhdl_conversion_drivers.empty() ? 1U : 0U;
+    }
+    for (const auto& wiring : wirings) {
+        undriven_actual[wiring.target] = 0U;
+    }
+    for (const auto& wiring : driver_wirings) {
+        undriven_actual[wiring.target] = 0U;
+    }
+    for (const auto& conversion : conversions) {
+        undriven_actual[conversion.target] = 0U;
+    }
     for (bool revalidate = true; revalidate;) {
     revalidate = false;
     for (bool changed = true; changed;) {
@@ -2136,6 +2197,31 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 && !graph_signals[signal].writers.empty()
                 && signal_ok(signal)) {
                 owned[signal] = 1U;
+            }
+        }
+        // An actual no process drives keeps its default value for the whole
+        // run (IEEE 1076-2019 14.7.3.1): unless a force or a foreign library
+        // changes it, it is a constant the kernel owns, and a wiring or
+        // conversion of it converts that value once (14.7.5.2).
+        if (!forces && !host_signals) {
+            const auto own_undriven = [&](const SignalId source) {
+                if (source < signal_count && owned[source] == 0U
+                    && alias_role[source] == 0U && proxy_signal[source] == 0U
+                    && graph_signals[source].writers.empty()
+                    && undriven_actual[source] != 0U
+                    && basic_ok(source)) {
+                    owned[source] = 1U;
+                }
+            };
+            for (const auto& wiring : wirings) {
+                if (wiring.live) {
+                    own_undriven(wiring.source);
+                }
+            }
+            for (const auto& conversion : conversions) {
+                if (conversion.live) {
+                    std::ranges::for_each(conversion.sources, own_undriven);
+                }
             }
         }
         // A wired formal is kernel-owned with its source; the program is its
@@ -3491,7 +3577,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // census counts them as kernel-owned rows of their program kind, never
     // as host processes. Whatever the candidate classification said about
     // their operations is replaced by that kind.
-    const auto census_commit_programs = [&](std::vector<std::uint8_t>& kernel_rows) {
+    const auto census_commit_programs = [&](std::vector<std::uint8_t>& kernel_rows,
+                                            const std::vector<std::uint8_t>& wired) {
         if (!census) {
             return;
         }
@@ -3529,6 +3616,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         for (std::size_t index = 0U; index < process_count; ++index) {
             if (member[index] != 0U || host_program[index] == 0U) {
+                continue;
+            }
+            if (wired[index] != 0U) {
+                // A live wiring or conversion: the kernel drives its target
+                // in its own update phase, and the host never runs it.
+                kernel_rows[index] = 0U;
+                member[index] = 1U;
                 continue;
             }
             const auto& view = views[index];
@@ -3606,6 +3700,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     for (const auto& wiring : driver_wirings) {
         if (wiring.live) {
             wired_program[wiring.program] = 1U;
+            wired_program[wiring.stub] = 1U;
         }
     }
     for (const auto& conversion : conversions) {
@@ -3742,25 +3837,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
         }
     }
-    // A forced value hides the driver's (IEEE 1800-2023 10.6.2); a port
-    // segment force reaches nets by another name, so any force in the design
-    // turns the mirroring below off.
-    const bool forces = std::ranges::any_of(
-        std::views::iota(std::size_t { 0U }, process_count),
-        [&](const std::size_t index) {
-            if (!views[index].valid()) {
-                return false;
-            }
-            const auto& operations = views[index].operations();
-            for (std::size_t op = 0U; op < operations.size(); ++op) {
-                const auto& operation = operations.expanded(op);
-                if (operation_get_if<ForceSignalSlice>(&operation) != nullptr
-                    || operation_get_if<ReleaseSignalSlice>(&operation) != nullptr) {
-                    return true;
-                }
-            }
-            return false;
-        });
     // A member reading a host signal's history ('EVENT, $last_event...)
     // reads the host's, which records an update when the host commits it.
     std::vector<std::uint8_t> history_read(signal_count, 0U);
@@ -3854,7 +3930,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // 14.7.3 for effective values, conversion functions and resolution;
     // IEEE 1800-2023 23.3.3 and 28 for port coercion and inout networks).
     std::vector<std::uint8_t> kernel_owned = hosted;
-    census_commit_programs(kernel_owned);
+    census_commit_programs(kernel_owned, wired_program);
     take_census(plan, &member, &kernel_owned);
     return plan;
     };
