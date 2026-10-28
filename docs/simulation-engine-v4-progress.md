@@ -167,6 +167,18 @@ The work came out of multi-threading Phase 0 on LDPC. The batch profile showed t
 **Validation.** Full ctest passes 1087/1087 in normal mode, with `FSIM_V4_STRICT=1`, and with `FSIM_KERNEL_VERIFY=1`. Codec parity holds (ok=11 done=1 pass=75). Sweep `v4c27` shows 0 losses against `b96x1`:
 - Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
 
+`tools/perf.sh` campaign `v4c27` (3 samples, `v4_o2_aot`, end-to-end median; noise clear on every case). Every case is within noise of `v4c26`; the campaign designs gain little from this change:
+
+| Case | v4c26 fsim | × xsim | v4c27 fsim | × xsim |
+|---|---:|---:|---:|---:|
+| mixed_codec | 9.29 s | 2.76 | 9.14 s | 2.79 |
+| original_codec | 11.92 s | 2.56 | 11.47 s | 2.62 |
+| mixed_throughput | 4.47 s | 2.91 | 4.48 s | 2.93 |
+| original_throughput | 5.20 s | 3.16 | 5.30 s | 3.15 |
+| codex reference/throughput (6 cases) | 2.11–2.57 s | 3.94–4.56 | 2.22–2.57 s | 3.98–4.67 |
+
+The geometric mean of the × xsim ratios went from 3.65 to 3.66.
+
 ### 2026-10-27: SystemVerilog module-function body memo, end of the codec elaboration work (`a8e0eda7`, sweep `v4c26`)
 
 **What changed.**
