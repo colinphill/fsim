@@ -259,10 +259,25 @@ void Interpreter::Impl::execute_vhdl_report(
     const SourceLocation& source,
     const bool standalone)
 {
+    report_vhdl(process.id, process.program().name(), instruction, message,
+        severity, source, standalone, scheduler.now(), scheduler.delta());
+}
+
+void Interpreter::Impl::report_vhdl(
+    const ProcessId process,
+    const std::string_view program,
+    const InstructionIndex instruction,
+    const std::string_view message,
+    const AssertionSeverity severity,
+    const SourceLocation& source,
+    const bool standalone,
+    const SimulationTick now,
+    const std::uint64_t delta)
+{
     const auto level = static_cast<std::size_t>(severity);
     if (level >= vhdl_assert_enabled.size()) {
-        process.pc = instruction;
-        fail(process, "VHDL report severity is invalid");
+        throw InterpreterError(
+            process, instruction, "VHDL report severity is invalid");
     }
     if (!vhdl_assert_enabled[level]) {
         return;
@@ -272,16 +287,16 @@ void Interpreter::Impl::execute_vhdl_report(
     }
     const auto formatted = format_vhdl_assert_message(
         vhdl_assert_formats[level], message, severity,
-        process.program().name(), scheduler.now(),
+        program, now,
         time_format.resolution_femtoseconds);
     if (report_hook) {
         report_hook(
-            process.id, formatted, severity, source,
-            scheduler.now(), scheduler.delta());
+            process, formatted, severity, source,
+            now, delta);
     }
     if (severity == AssertionSeverity::failure) {
         throw AssertionError(
-            process.id, instruction,
+            process, instruction,
             formatted.empty()
                 ? (standalone ? "report failure" : "assertion failed")
                 : formatted,

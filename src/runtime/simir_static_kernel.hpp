@@ -226,13 +226,9 @@ struct StaticKernelRuntimeSpec {
 /// fork the parent does not join (join_any, join_none) while a suspending
 /// callable exists: only then may two threads of the member be inside one
 /// callable's registers with one of them suspended.
-///
-/// `suspending`, when given, receives the frame identities of the
-/// suspending callables.
 template <typename Operations>
 [[nodiscard]] bool static_kernel_fork_holds_suspended_frame(
-    const Operations& operations, const std::size_t count,
-    std::vector<std::uint32_t>* const suspending = nullptr)
+    const Operations& operations, const std::size_t count)
 {
     struct Entry {
         InstructionIndex pc { };
@@ -339,13 +335,6 @@ template <typename Operations>
                    })) {
                 entry.suspends = true;
                 changed = true;
-            }
-        }
-    }
-    if (suspending != nullptr) {
-        for (const auto& entry : entries) {
-            if (entry.frame && entry.suspends) {
-                suspending->push_back(*entry.frame);
             }
         }
     }
@@ -478,6 +467,27 @@ struct StaticKernelInlinedProgram {
 [[nodiscard]] std::optional<StaticKernelInlinedProgram> static_kernel_inline_calls(
     std::span<const Operation> operations, std::uint32_t wait, std::uint32_t jump);
 
+/// The file operations a behavioral member runs on its registers through the
+/// reference's run_file (IEEE 1800-2023 21.3, IEEE 1076-2019 16.4); $fread
+/// (FileBinaryRead) may target a design array and stays on the host.
+[[nodiscard]] inline bool static_kernel_file_operation(
+    const Operation& operation)
+{
+    return visit_operation([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        return std::is_same_v<T, FileOpen> || std::is_same_v<T, FileClose>
+            || std::is_same_v<T, FileWriteLiteral>
+            || std::is_same_v<T, FileWriteFormatted>
+            || std::is_same_v<T, FileWriteString>
+            || std::is_same_v<T, FileReadLine>
+            || std::is_same_v<T, FileEndOfFile>
+            || std::is_same_v<T, FileErrorStatus>
+            || std::is_same_v<T, FileScan>
+            || std::is_same_v<T, FilePosition>
+            || std::is_same_v<T, FileFlush>;
+    }, operation);
+}
+
 /// Operations a behavioral member may use: the static set plus waits,
 /// fork/join, calls with automatic frames of packed registers, integer
 /// arithmetic, immediate runtime-library output, string constants and copies,
@@ -486,7 +496,8 @@ struct StaticKernelInlinedProgram {
 [[nodiscard]] inline bool static_kernel_behavioral_operation_supported(
     const Operation& operation)
 {
-    if (static_kernel_operation_supported(operation)) {
+    if (static_kernel_operation_supported(operation)
+        || static_kernel_file_operation(operation)) {
         return true;
     }
     return visit_operation([](const auto& value) {
@@ -523,6 +534,9 @@ struct StaticKernelInlinedProgram {
             // Only the write-back of a binding to its own memory (see the
             // planner).
             return !value.nonblocking && !value.transaction_signal;
+        } else if constexpr (std::is_same_v<T, WriteStringObject>) {
+            // A nonblocking string write matures in the host's NBA region.
+            return !value.nonblocking;
         } else {
             return std::is_same_v<T, WaitFor>
                 || std::is_same_v<T, WaitSensitivity>
@@ -536,6 +550,7 @@ struct StaticKernelInlinedProgram {
                 || std::is_same_v<T, StringMethod>
                 || std::is_same_v<T, LoadStringConstant>
                 || std::is_same_v<T, CopyStringRegister>
+                || std::is_same_v<T, ReadStringObject>
                 // Between equal-shape private arrays (see the planner).
                 || std::is_same_v<T, CopyContainerRegister>
                 || std::is_same_v<T, PlusArgSelect>
@@ -645,12 +660,16 @@ struct StaticKernelInlinedProgram {
 /// `wait until` lowered as a WaitOn loop, with or without a timeout, bare
 /// `wait`), reports and `std.env` stop/finish. Signal assignments stay the
 /// zero-delay inertial ones the delta-mode set already admits; delayed,
-/// transport and waveform assignments, attribute queries and string or
-/// container registers stay on the host.
+/// transport and waveform assignments, attribute queries and container
+/// registers stay on the host. String registers carry `'image`, `'value`,
+/// concatenation, comparison and computed report messages (5.3.2.4, 16.2,
+/// 10.9), and automatic frames may save them. TEXTIO and typed files run
+/// the reference's file operations (16.4, static_kernel_file_operation).
 [[nodiscard]] inline bool static_kernel_vhdl_behavioral_operation_supported(
     const Operation& operation)
 {
-    if (static_kernel_vhdl_operation_supported(operation)) {
+    if (static_kernel_vhdl_operation_supported(operation)
+        || static_kernel_file_operation(operation)) {
         return true;
     }
     return visit_operation([](const auto& value) {
@@ -681,12 +700,25 @@ struct StaticKernelInlinedProgram {
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
             // `now` (IEEE 1076-2019 16.3): the time query.
             return value.function >= SystemVerilogMathFunction::Time;
+        } else if constexpr (std::is_same_v<T, CallableFramePush>) {
+            return value.containers.empty();
+        } else if constexpr (std::is_same_v<T, CallableFramePop>) {
+            return value.preserve_containers.empty();
         } else {
             return std::is_same_v<T, WaitFor>
                 || std::is_same_v<T, WaitSensitivity>
                 || std::is_same_v<T, WaitForever>
                 || std::is_same_v<T, Report>
-                || std::is_same_v<T, Stop>;
+                || std::is_same_v<T, Stop>
+                || std::is_same_v<T, LoadStringConstant>
+                || std::is_same_v<T, CopyStringRegister>
+                || std::is_same_v<T, ConcatenateStrings>
+                || std::is_same_v<T, StringMethod>
+                || std::is_same_v<T, StringReport>
+                || std::is_same_v<T, CompareStrings>
+                || std::is_same_v<T, StringLength>
+                || std::is_same_v<T, StringIndex>
+                || std::is_same_v<T, StringReplaceByte>;
         }
     }, operation);
 }

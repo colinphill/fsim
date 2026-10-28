@@ -461,18 +461,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 return first;
             }
             if (vhdl) {
-                // VHDL behavioral threads keep their registers in the
-                // member's reference-format file (any value kind); strings,
-                // containers and the 2019 report semantics stay on the host.
-                if (view.string_register_count() != 0U
-                    && hit("string_register")) {
-                    return first;
-                }
+                // VHDL behavioral threads keep their registers and strings in
+                // the member's reference-format files (any value kind);
+                // containers stay on the host.
                 if (view.container_register_count() != 0U
                     && hit("vhdl_container_register")) {
-                    return first;
-                }
-                if (view.language_standard() == "2019" && hit("vhdl_2019")) {
                     return first;
                 }
             } else if (non_logic4 && hit("register_kind")) {
@@ -493,9 +486,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         if (vhdl && view.container_register_count() != 0U
             && hit("vhdl_container_register")) {
-            return first;
-        }
-        if (vhdl && view.language_standard() == "2019" && hit("vhdl_2019")) {
             return first;
         }
         if (!vhdl && non_logic4 && hit("register_kind")) {
@@ -625,7 +615,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // (static_kernel_halt_after_failure) unless a branch reaches it.
         std::optional<std::vector<std::uint8_t>> targeted;
         const auto unreachable_halt = [&](const std::size_t op) {
-            if (!vhdl || op == 0U
+            // In 2019 mode std.env may disable failures (IEEE 1076-2019
+            // 16.5.6), so the halt can run.
+            if (!vhdl || op == 0U || view.language_standard() == "2019"
                 || !static_kernel_halt_after_failure(
                     operations[op - 1U], operations[op])) {
                 return false;
@@ -914,18 +906,27 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             std::set<ContainerRegisterId> private_containers;
             // Registers an element write targets.
             std::set<ContainerRegisterId> written_containers;
-            // Whole-register copies (CopyContainerRegister): both registers
-            // must be process-private arrays of one shape.
-            std::vector<std::pair<ContainerRegisterId, ContainerRegisterId>>
-                container_copies;
+            // Whole-register copies (CopyContainerRegister) between arrays of
+            // one shape, and whether the next operation writes the
+            // destination back to the memory it is bound to.
+            struct ContainerCopy {
+                ContainerRegisterId destination { };
+                ContainerRegisterId source { };
+                std::optional<ContainerObjectId> written_back;
+            };
+            std::vector<ContainerCopy> container_copies;
             // Registers bound to each design memory, and whole writes of a
-            // register to a memory: the kernel supports only the write-back
-            // of a binding to its own memory (the $readmem lowering).
+            // register to a memory: the kernel supports the write-back of a
+            // binding to its own memory (the $readmem lowering) and the
+            // blocking write of a private array of the memory's type (a
+            // task's output array copied out, IEEE 1800-2023 13.5).
             std::map<ContainerRegisterId, std::set<ContainerObjectId>> binding_objects;
-            std::vector<std::pair<ContainerObjectId, ContainerRegisterId>>
-                object_writes;
-            bool has_fork = false;
-            bool has_frame_push = false;
+            struct ObjectWrite {
+                ContainerObjectId object { };
+                ContainerRegisterId source { };
+                bool plain { };
+            };
+            std::vector<ObjectWrite> object_writes;
             for (std::size_t op = 0U; op < count && supported; ++op) {
                 const auto operation = operations.expanded(op);
                 failed_at = op;
@@ -958,7 +959,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     } else if constexpr (std::is_same_v<T, LoadMemory>) {
                         private_containers.insert(value.target);
                     } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
-                        object_writes.emplace_back(value.object, value.source);
+                        object_writes.push_back({ value.object, value.source,
+                            !value.nonblocking && !value.transaction_signal });
                     } else if constexpr (std::is_same_v<T, ContainerRead>) {
                         private_containers.insert(value.source);
                     } else if constexpr (std::is_same_v<T, ContainerWrite>) {
@@ -967,12 +969,21 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     } else if constexpr (std::is_same_v<T, CopyContainerRegister>) {
                         private_containers.insert(value.destination);
                         private_containers.insert(value.source);
-                        container_copies.emplace_back(
-                            value.destination, value.source);
-                    } else if constexpr (std::is_same_v<T, CallableFramePush>) {
-                        has_frame_push = true;
+                        std::optional<ContainerObjectId> written_back;
+                        if (op + 1U < count) {
+                            const auto next = operations.expanded(op + 1U);
+                            if (const auto* write
+                                = operation_get_if<WriteContainerObject>(&next);
+                                write != nullptr
+                                && write->source == value.destination
+                                && !write->nonblocking
+                                && !write->transaction_signal) {
+                                written_back = write->object;
+                            }
+                        }
+                        container_copies.push_back({ value.destination,
+                            value.source, written_back });
                     } else if constexpr (std::is_same_v<T, Fork>) {
-                        has_fork = true;
                         supported = supported
                             && std::ranges::all_of(value.branches,
                                 [&](const InstructionIndex branch) {
@@ -997,39 +1008,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         }
                     }
                 }, operation);
-            }
-            std::vector<std::uint32_t> suspending;
-            if (supported && has_fork && has_frame_push
-                && static_kernel_fork_holds_suspended_frame(
-                    operations, count, &suspending)) {
-                // Fork children and the activation that joins them observe
-                // the automatic variables of the enclosing callable frames
-                // (IEEE 1800-2023 6.21, 9.3.2), and concurrent activations of
-                // one automatic task each own their arguments and locals
-                // (13.4.2). The kernel gives such a member per-thread callable
-                // contexts (StaticKernel::Thread::contexts) for packed and
-                // string registers. The frame of a callable that cannot
-                // suspend is pushed and popped within one run of its thread,
-                // and a container register bound to a design array names the
-                // same array in every activation; a suspending callable's
-                // frame that saves a private array keeps the process on the
-                // host.
-                for (std::size_t op = 0U; op < count && supported; ++op) {
-                    const auto operation = operations.expanded(op);
-                    if (const auto* push
-                        = operation_get_if<CallableFramePush>(&operation);
-                        push != nullptr
-                        && std::ranges::find(suspending, push->identity)
-                            != suspending.end()
-                        && std::ranges::any_of(push->containers,
-                            [&](const ContainerRegisterId id) {
-                                return !bound_containers.contains(id);
-                            })) {
-                        supported = false;
-                        failed_at = count;
-                        failed_reason = "fork_callable_frames";
-                    }
-                }
             }
             if (supported) {
                 // A register both bound and written would alias the design
@@ -1065,30 +1043,45 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         failed_reason = "bound_container_write";
                     }
                 }
-                for (const auto& [object, source] : object_writes) {
+                for (const auto& [object, source, plain] : object_writes) {
                     if (!supported) {
                         break;
                     }
                     const auto found = binding_objects.find(source);
-                    if (found == binding_objects.end() || found->second.size() != 1U
-                        || *found->second.begin() != object) {
+                    const bool write_back = found != binding_objects.end()
+                        && found->second.size() == 1U
+                        && *found->second.begin() == object;
+                    const bool copy_out = plain && found == binding_objects.end()
+                        && source < types.size() && object < container_objects_.size()
+                        && types[source] == container_objects_[object].initial_value.type
+                        && types[source].fixed && !types[source].sparse;
+                    if (!write_back && !copy_out) {
                         supported = false;
                         failed_at = count;
                         failed_reason = "container_object_write";
                         break;
                     }
                 }
-                // A copy keeps the reference semantics only between private
-                // registers of identical type (the reference requires the
-                // same type, IEEE 1800-2023 7.6). A register bound to a
-                // design memory keeps the host: the kernel does not notify
-                // memory readers of a whole-array write.
-                for (const auto& [destination, source] : container_copies) {
+                // A copy keeps the reference semantics between registers of
+                // identical type (the reference requires the same type, IEEE
+                // 1800-2023 7.6); its source may be bound to a design memory
+                // (an array argument copied in, 13.5). The reference copies
+                // into a binding's own copy of its memory and stores it at
+                // the write-back; the kernel's binding aliases the memory, so
+                // a bound destination needs the write-back of the binding to
+                // its one memory as the next operation (a static task's array
+                // argument, 13.5).
+                for (const auto& [destination, source, written_back]
+                     : container_copies) {
                     if (!supported) {
                         break;
                     }
-                    if (bound_containers.contains(destination)
-                        || bound_containers.contains(source)
+                    const auto bound = binding_objects.find(destination);
+                    const bool published = written_back
+                        && bound != binding_objects.end()
+                        && bound->second.size() == 1U
+                        && *bound->second.begin() == *written_back;
+                    if ((bound_containers.contains(destination) && !published)
                         || destination >= types.size() || source >= types.size()
                         || !(types[destination] == types[source])
                         || types[destination].sparse

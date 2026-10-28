@@ -878,18 +878,59 @@ void Interpreter::Impl::flush_file(
     }
 }
 
+// A reference process's frame, as its file operations read and write it.
+struct Interpreter::Impl::ProcessFileStorage final : FileOperationStorage {
+    ProcessFileStorage(Impl& owner_value, ProcessState& state_value) noexcept
+        : owner { owner_value }, state { state_value }
+    {
+    }
+    [[nodiscard]] ProcessId process() const noexcept override
+    {
+        return state.id;
+    }
+    [[nodiscard]] PackedLogic4& packed(const RegisterId id) override
+    {
+        return owner.get_register(state, id);
+    }
+    [[nodiscard]] std::string& text(const StringRegisterId id) override
+    {
+        return owner.get_string_register(state, id);
+    }
+    [[nodiscard]] PackedLogic4 handle(const RegisterId id) override
+    {
+        return state.executor ? state.executor->read_register(id, 32U)
+                              : owner.get_register(state, id);
+    }
+    void commit(const SignalId signal, PackedLogic4 value) override
+    {
+        owner.commit_driver(state.id, signal, std::move(value));
+    }
+    [[noreturn]] void fail(const std::string& message) override
+    {
+        throw InterpreterError { state.id, state.pc, message };
+    }
+    Impl& owner;
+    ProcessState& state;
+};
+
 FileHandle Interpreter::Impl::known_file_handle(
     ProcessState& process,
     const RegisterId handle_register)
 {
-    const auto value = process.executor
-        ? process.executor->read_register(handle_register, 32U)
-        : get_register(process, handle_register);
+    ProcessFileStorage storage { *this, process };
+    return known_file_handle(storage, handle_register);
+}
+
+FileHandle Interpreter::Impl::known_file_handle(
+    FileOperationStorage& storage,
+    const RegisterId handle_register)
+{
+    const auto value = storage.handle(handle_register);
     const auto word = value.low_word();
     // A SystemVerilog descriptor with unknown bits selects no file (IEEE
     // 1800-2017 21.3.1).
     if (word.width != 0 && word.width <= 32 && word.bval != 0
-        && processes.scheduling_domain(process.id)
+        && processes.scheduling_domain(storage.process())
             == ProcessSchedulingDomain::systemverilog) {
         return 0;
     }
@@ -897,49 +938,60 @@ FileHandle Interpreter::Impl::known_file_handle(
         || word.bval != 0
         || word.aval
             > std::numeric_limits<FileHandle>::max()) {
-        throw InterpreterError {
-            process.id,
-            process.pc,
-            "file handle must be a known 32-bit integral value"
-        };
+        storage.fail("file handle must be a known 32-bit integral value");
     }
     return static_cast<FileHandle>(word.aval);
 }
 
-void Interpreter::Impl::execute_file(
+template <typename Operation>
+void Interpreter::Impl::run_process_file(
     ProcessState& process,
+    const Operation& operation)
+{
+    ProcessFileStorage storage { *this, process };
+    try {
+        run_file(storage, operation);
+    } catch (const InterpreterError&) {
+        throw;
+    } catch (const std::exception& error) {
+        throw InterpreterError {
+            process.id, process.pc, error.what()
+        };
+    }
+    ++process.pc;
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
     const FileOpen& operation)
 {
     try {
         if (operation.vhdl
-            && known_file_handle(process, operation.destination) != 0) {
+            && known_file_handle(storage, operation.destination) != 0) {
             if (!operation.status) {
                 throw std::runtime_error {
                     "VHDL file object is already open"
                 };
             }
-            get_register(process, *operation.status) = PackedLogic4::from_aval_bval(2, 1, 0);
-            ++process.pc;
+            storage.packed(*operation.status) = PackedLogic4::from_aval_bval(2, 1, 0);
             return;
         }
         const auto handle = open_file(
-            process.id,
-            get_string_register(process, operation.path),
-            get_string_register(process, operation.mode),
+            storage.process(),
+            storage.text(operation.path),
+            storage.text(operation.mode),
             operation.vhdl);
-        get_register(process, operation.destination) = PackedLogic4::from_aval_bval(32, handle, 0);
+        storage.packed(operation.destination) = PackedLogic4::from_aval_bval(32, handle, 0);
         if (operation.status) {
-            get_register(process, *operation.status) = PackedLogic4::from_aval_bval(2, 0, 0);
+            storage.packed(*operation.status) = PackedLogic4::from_aval_bval(2, 0, 0);
         }
-        ++process.pc;
     } catch (const InterpreterError&) {
         throw;
     } catch (const std::exception& error) {
         if (operation.status) {
-            get_register(process, operation.destination) = PackedLogic4::from_aval_bval(32, 0, 0);
-            get_register(process, *operation.status) = PackedLogic4::from_aval_bval(
+            storage.packed(operation.destination) = PackedLogic4::from_aval_bval(32, 0, 0);
+            storage.packed(*operation.status) = PackedLogic4::from_aval_bval(
                 2, vhdl_open_status(error.what()), 0);
-            ++process.pc;
             return;
         }
         // $fopen returns zero when the file cannot be opened (IEEE
@@ -948,395 +1000,437 @@ void Interpreter::Impl::execute_file(
         if (!operation.vhdl
             && std::string_view { error.what() }.starts_with(
                 "cannot open SimIR text file")) {
-            get_register(process, operation.destination)
+            storage.packed(operation.destination)
                 = PackedLogic4::from_aval_bval(32, 0, 0);
-            ++process.pc;
             return;
         }
-        throw InterpreterError {
-            process.id, process.pc, error.what()
+        throw;
+    }
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
+    const FileClose& operation)
+{
+    const auto handle = known_file_handle(storage, operation.handle);
+    if (handle != 0) {
+        close_file(storage.process(), handle);
+    } else if (!operation.ignore_zero) {
+        if (operation.clear_handle) {
+            throw std::runtime_error { "VHDL file object is not open" };
+        }
+        close_file(storage.process(), handle);
+    }
+    if (operation.clear_handle) {
+        storage.packed(operation.handle) = PackedLogic4::from_aval_bval(32, 0, 0);
+    }
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
+    const FileWriteLiteral& operation)
+{
+    write_file(
+        storage.process(),
+        known_file_handle(storage, operation.handle),
+        operation.text,
+        operation.newline);
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
+    const FileWriteFormatted& operation)
+{
+    const auto& value = storage.packed(operation.source);
+    std::string text;
+    // An integral %t argument is in its module's time unit (IEEE
+    // 1800-2017 21.2.1.3).
+    const bool integral_time = operation.format == OutputFormat::time
+        && (operation.scalar_kind == SystemVerilogScalarKind::None
+            || (operation.scalar_kind != SystemVerilogScalarKind::Chandle
+                && operation.time_unit_femtoseconds != 0U));
+    const auto integral_tick = integral_time
+        ? integral_time_ticks(value, operation.signed_decimal,
+              operation.time_unit_femtoseconds, time_format,
+              operation.scalar_kind)
+        : std::nullopt;
+    if (integral_time && !integral_tick) {
+        text = make_formatted_output(
+            operation.prefix,
+            operation.suffix,
+            OutputFormat::decimal,
+            value,
+            operation.signed_decimal,
+            operation.suppress_leading_zero,
+            operation.minimum_width,
+            operation.left_justify,
+            operation.zero_pad);
+    } else if (operation.format == OutputFormat::time) {
+        const auto decoded = integral_tick
+            ? decltype(decode_systemverilog_scalar_payload(
+                  value, operation.scalar_kind)) { }
+            : decode_systemverilog_scalar_payload(
+                  value, operation.scalar_kind);
+        const auto tick = integral_tick
+            ? integral_tick
+            : decoded ? decoded.value.as_time() : std::nullopt;
+        if (!tick) {
+            throw std::runtime_error {
+                "invalid time payload for formatted file output"
+            };
+        }
+        text = make_time_output(
+            operation.prefix,
+            operation.suffix,
+            *tick,
+            time_format,
+            operation.minimum_width == 0
+                && !operation.suppress_leading_zero,
+            operation.minimum_width,
+            operation.left_justify,
+            operation.zero_pad);
+    } else {
+        text = make_formatted_output(
+            operation.prefix,
+            operation.suffix,
+            operation.format,
+            value,
+            operation.signed_decimal,
+            operation.suppress_leading_zero,
+            operation.minimum_width,
+            operation.left_justify,
+            operation.zero_pad,
+            operation.scalar_kind,
+            operation.precision);
+    }
+    write_file(
+        storage.process(),
+        known_file_handle(storage, operation.handle),
+        text,
+        operation.newline);
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
+    const FileWriteString& operation)
+{
+    write_file(
+        storage.process(),
+        known_file_handle(storage, operation.handle),
+        operation.prefix
+            + storage.text(operation.source)
+            + operation.suffix,
+        operation.newline);
+    if (operation.clear_source) {
+        storage.text(operation.source).clear();
+    }
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
+    const FileReadLine& operation)
+{
+    std::int32_t result { };
+    const auto handle = known_file_handle(storage, operation.handle);
+    if (operation.kind == FileReadKind::line) {
+        std::uint32_t count { };
+        auto line = read_file_line(storage.process(), handle, count);
+        if (operation.vhdl_textio) {
+            if (count == 0) {
+                throw std::runtime_error { "VHDL readline reached end of file" };
+            }
+            if (!line.empty() && line.back() == '\n')
+                line.pop_back();
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+        }
+        // A string target holds exactly the characters read, so a read
+        // at end of file leaves it empty (IEEE 1800-2023 21.3.4.2); a
+        // failed read leaves it unchanged.
+        if (count == 0
+            && operation.target_kind == FileTextTargetKind::string_register
+            && checked_file(storage.process(), handle).last_error.empty()) {
+            storage.text(operation.target).clear();
+        }
+        if (count != 0) {
+            switch (operation.target_kind) {
+            case FileTextTargetKind::string_register:
+                storage.text(operation.target) = std::move(line);
+                break;
+            case FileTextTargetKind::packed_register:
+                storage.packed(operation.target) = pack_file_text(line, operation.target_width);
+                break;
+            case FileTextTargetKind::packed_signal:
+                storage.commit(operation.target,
+                    pack_file_text(line, operation.target_width));
+                break;
+            }
+        }
+        result = static_cast<std::int32_t>(count);
+    } else if (operation.kind == FileReadKind::character) {
+        result = read_file_character(storage.process(), handle);
+    } else {
+        const auto character = storage.packed(operation.source).low_word();
+        if (character.bval == 0) {
+            const auto requested = static_cast<std::int32_t>(
+                static_cast<std::uint32_t>(character.aval));
+            result = requested >= 0 && requested <= 255
+                    && unread_file_character(
+                           storage.process(), handle, requested)
+                        == requested
+                ? 0
+                : -1;
+        } else {
+            result = -1;
+        }
+    }
+    storage.packed(operation.destination) = PackedLogic4::from_aval_bval(
+        32, static_cast<std::uint32_t>(result), 0);
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
+    const FileEndOfFile& operation)
+{
+    const auto handle = known_file_handle(storage, operation.handle);
+    bool eof { };
+    if (operation.lookahead) {
+        const auto character = read_file_character(
+            storage.process(), handle);
+        eof = character < 0;
+        if (!eof && unread_file_character(storage.process(), handle, character) != character) {
+            throw std::runtime_error {
+                "VHDL endfile could not preserve lookahead"
+            };
+        }
+    } else {
+        eof = file_end_of_file(storage.process(), handle);
+    }
+    storage.packed(operation.destination) = PackedLogic4::from_aval_bval(
+        operation.lookahead ? 1U : 32U,
+        eof ? 1U : 0U, 0);
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
+    const FileErrorStatus& operation)
+{
+    bool has_error { };
+    auto message = file_error(
+        storage.process(),
+        known_file_handle(storage, operation.handle),
+        has_error);
+    switch (operation.target_kind) {
+    case FileTextTargetKind::string_register:
+        storage.text(operation.target) = std::move(message);
+        break;
+    case FileTextTargetKind::packed_register:
+        storage.packed(operation.target) = pack_file_text(message, operation.target_width);
+        break;
+    case FileTextTargetKind::packed_signal:
+        storage.commit(operation.target,
+            pack_file_text(message, operation.target_width));
+        break;
+    }
+    storage.packed(operation.destination) = PackedLogic4::from_aval_bval(
+        32, has_error ? 1U : 0U, 0);
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
+    const FileScan& operation)
+{
+    InputScanResult scanned;
+    const auto active_time_format = time_format;
+    auto effective_operation = operation;
+    if (!size_vhdl_textio_string_reads(effective_operation,
+            [&](const InputScanTarget& target)
+                -> std::optional<std::size_t> {
+                if (target.kind == InputScanTargetKind::string_register) {
+                    return storage.text(target.id).size();
+                }
+                if (target.kind == InputScanTargetKind::string_object) {
+                    return string_object_storage(target.id).size();
+                }
+                return std::nullopt;
+            })) {
+        throw std::length_error {
+            "VHDL TextIO STRING target exceeds scan limit"
         };
     }
+    // An invalid run-time format, or one whose conversions do not match
+    // the targets, assigns nothing.
+    const bool format_valid = !operation.runtime_format
+        || apply_runtime_scan_format(effective_operation,
+            storage.text(*operation.runtime_format));
+    if (!format_valid) {
+    } else if (operation.string_source) {
+        auto& source = storage.text(operation.source);
+        scanned = scan_formatted_string(
+            effective_operation, source, active_time_format);
+        complete_plusarg_value(effective_operation, source, scanned);
+        consume_scanned_source(operation, source, scanned);
+    } else {
+        const auto handle = known_file_handle(storage, operation.handle);
+        const std::function<std::int32_t()> read = [&] {
+            return read_file_character(storage.process(), handle);
+        };
+        const std::function<void(std::int32_t)> unread = [&](const auto value) {
+            if (unread_file_character(storage.process(), handle, value) != value) {
+                throw std::runtime_error { "failed to preserve file scan lookahead" };
+            }
+        };
+        scanned = scan_formatted_input(
+            effective_operation, read, unread, active_time_format);
+    }
+    const bool complete = format_valid
+        && file_scan_complete(effective_operation, scanned);
+    if (operation.success) {
+        storage.packed(*operation.success) = PackedLogic4::from_aval_bval(1, complete ? 1U : 0U, 0);
+    }
+    if (operation.require_assignments && !complete) {
+        throw std::runtime_error {
+            "VHDL file read did not convert the requested element"
+        };
+    }
+    for (std::size_t index = 0; index < scanned.values.size(); ++index) {
+        if (!scanned.values[index])
+            continue;
+        const auto& target = effective_operation.conversions[index].target;
+        auto& value = *scanned.values[index];
+        switch (target.kind) {
+        case InputScanTargetKind::packed_register:
+            storage.packed(target.id) = std::move(value.packed);
+            break;
+        case InputScanTargetKind::packed_signal:
+            storage.commit(target.id, std::move(value.packed));
+            break;
+        case InputScanTargetKind::string_register:
+            storage.text(target.id) = std::move(value.text);
+            break;
+        case InputScanTargetKind::string_object:
+            string_object_storage(target.id) = std::move(value.text);
+            break;
+        }
+    }
+    storage.packed(operation.destination) = PackedLogic4::from_aval_bval(
+        32, static_cast<std::uint32_t>(scanned.assignments), 0);
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
+    const FilePosition& operation)
+{
+    const auto known_integer = [&](const RegisterId id) {
+        const auto word = storage.packed(id).low_word();
+        if (word.width != 32 || word.bval != 0)
+            throw std::runtime_error {
+                "file position operands must be known 32-bit integers"
+            };
+        return static_cast<std::int32_t>(
+            static_cast<std::uint32_t>(word.aval));
+    };
+    const auto result = position_file(
+        storage.process(),
+        known_file_handle(storage, operation.handle),
+        operation.kind,
+        file_position_uses_operands(operation.kind)
+            ? known_integer(operation.offset)
+            : 0,
+        file_position_uses_operands(operation.kind)
+            ? known_integer(operation.origin)
+            : 0,
+        operation.lines);
+    storage.packed(operation.destination) = PackedLogic4::from_aval_bval(
+        32, static_cast<std::uint32_t>(result), 0);
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage,
+    const FileFlush& operation)
+{
+    flush_file(
+        storage.process(),
+        operation.all
+            ? std::nullopt
+            : std::optional { known_file_handle(storage, operation.handle) });
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FileOpen& operation)
+{
+    run_process_file(process, operation);
 }
 
 void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileClose& operation)
 {
-    try {
-        const auto handle = known_file_handle(process, operation.handle);
-        if (handle != 0) {
-            close_file(process.id, handle);
-        } else if (!operation.ignore_zero) {
-            if (operation.clear_handle) {
-                throw std::runtime_error { "VHDL file object is not open" };
-            }
-            close_file(process.id, handle);
-        }
-        if (operation.clear_handle) {
-            get_register(process, operation.handle) = PackedLogic4::from_aval_bval(32, 0, 0);
-        }
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError {
-            process.id, process.pc, error.what()
-        };
-    }
+    run_process_file(process, operation);
 }
 
 void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileWriteLiteral& operation)
 {
-    try {
-        write_file(
-            process.id,
-            known_file_handle(process, operation.handle),
-            operation.text,
-            operation.newline);
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError {
-            process.id, process.pc, error.what()
-        };
-    }
+    run_process_file(process, operation);
 }
 
 void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileWriteFormatted& operation)
 {
-    try {
-        const auto& value = get_register(process, operation.source);
-        std::string text;
-        // An integral %t argument is in its module's time unit (IEEE
-        // 1800-2017 21.2.1.3).
-        const bool integral_time = operation.format == OutputFormat::time
-            && (operation.scalar_kind == SystemVerilogScalarKind::None
-                || (operation.scalar_kind != SystemVerilogScalarKind::Chandle
-                    && operation.time_unit_femtoseconds != 0U));
-        const auto integral_tick = integral_time
-            ? integral_time_ticks(value, operation.signed_decimal,
-                  operation.time_unit_femtoseconds, time_format,
-                  operation.scalar_kind)
-            : std::nullopt;
-        if (integral_time && !integral_tick) {
-            text = make_formatted_output(
-                operation.prefix,
-                operation.suffix,
-                OutputFormat::decimal,
-                value,
-                operation.signed_decimal,
-                operation.suppress_leading_zero,
-                operation.minimum_width,
-                operation.left_justify,
-                operation.zero_pad);
-        } else if (operation.format == OutputFormat::time) {
-            const auto decoded = integral_tick
-                ? decltype(decode_systemverilog_scalar_payload(
-                      value, operation.scalar_kind)) { }
-                : decode_systemverilog_scalar_payload(
-                      value, operation.scalar_kind);
-            const auto tick = integral_tick
-                ? integral_tick
-                : decoded ? decoded.value.as_time() : std::nullopt;
-            if (!tick) {
-                throw std::runtime_error {
-                    "invalid time payload for formatted file output"
-                };
-            }
-            text = make_time_output(
-                operation.prefix,
-                operation.suffix,
-                *tick,
-                time_format,
-                operation.minimum_width == 0
-                    && !operation.suppress_leading_zero,
-                operation.minimum_width,
-                operation.left_justify,
-                operation.zero_pad);
-        } else {
-            text = make_formatted_output(
-                operation.prefix,
-                operation.suffix,
-                operation.format,
-                value,
-                operation.signed_decimal,
-                operation.suppress_leading_zero,
-                operation.minimum_width,
-                operation.left_justify,
-                operation.zero_pad,
-                operation.scalar_kind,
-                operation.precision);
-        }
-        write_file(
-            process.id,
-            known_file_handle(process, operation.handle),
-            text,
-            operation.newline);
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError {
-            process.id, process.pc, error.what()
-        };
-    }
+    run_process_file(process, operation);
 }
 
 void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileWriteString& operation)
 {
-    try {
-        write_file(
-            process.id,
-            known_file_handle(process, operation.handle),
-            operation.prefix
-                + get_string_register(process, operation.source)
-                + operation.suffix,
-            operation.newline);
-        if (operation.clear_source) {
-            get_string_register(process, operation.source).clear();
-        }
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError {
-            process.id, process.pc, error.what()
-        };
-    }
+    run_process_file(process, operation);
 }
 
 void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileReadLine& operation)
 {
-    try {
-        std::int32_t result { };
-        const auto handle = known_file_handle(process, operation.handle);
-        if (operation.kind == FileReadKind::line) {
-            std::uint32_t count { };
-            auto line = read_file_line(process.id, handle, count);
-            if (operation.vhdl_textio) {
-                if (count == 0) {
-                    throw std::runtime_error { "VHDL readline reached end of file" };
-                }
-                if (!line.empty() && line.back() == '\n')
-                    line.pop_back();
-                if (!line.empty() && line.back() == '\r')
-                    line.pop_back();
-            }
-            // A string target holds exactly the characters read, so a read
-            // at end of file leaves it empty (IEEE 1800-2023 21.3.4.2); a
-            // failed read leaves it unchanged.
-            if (count == 0
-                && operation.target_kind == FileTextTargetKind::string_register
-                && checked_file(process.id, handle).last_error.empty()) {
-                get_string_register(process, operation.target).clear();
-            }
-            if (count != 0) {
-                switch (operation.target_kind) {
-                case FileTextTargetKind::string_register:
-                    get_string_register(process, operation.target) = std::move(line);
-                    break;
-                case FileTextTargetKind::packed_register:
-                    get_register(process, operation.target) = pack_file_text(line, operation.target_width);
-                    break;
-                case FileTextTargetKind::packed_signal:
-                    commit_driver(
-                        process.id, operation.target,
-                        pack_file_text(line, operation.target_width));
-                    break;
-                }
-            }
-            result = static_cast<std::int32_t>(count);
-        } else if (operation.kind == FileReadKind::character) {
-            result = read_file_character(process.id, handle);
-        } else {
-            const auto character = get_register(process, operation.source).low_word();
-            if (character.bval == 0) {
-                const auto requested = static_cast<std::int32_t>(
-                    static_cast<std::uint32_t>(character.aval));
-                result = requested >= 0 && requested <= 255
-                        && unread_file_character(
-                               process.id, handle, requested)
-                            == requested
-                    ? 0
-                    : -1;
-            } else {
-                result = -1;
-            }
-        }
-        get_register(process, operation.destination) = PackedLogic4::from_aval_bval(
-            32, static_cast<std::uint32_t>(result), 0);
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError {
-            process.id, process.pc, error.what()
-        };
-    }
+    run_process_file(process, operation);
 }
 
 void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileEndOfFile& operation)
 {
-    try {
-        const auto handle = known_file_handle(process, operation.handle);
-        bool eof { };
-        if (operation.lookahead) {
-            const auto character = read_file_character(
-                process.id, handle);
-            eof = character < 0;
-            if (!eof && unread_file_character(process.id, handle, character) != character) {
-                throw std::runtime_error {
-                    "VHDL endfile could not preserve lookahead"
-                };
-            }
-        } else {
-            eof = file_end_of_file(process.id, handle);
-        }
-        get_register(process, operation.destination) = PackedLogic4::from_aval_bval(
-            operation.lookahead ? 1U : 32U,
-            eof ? 1U : 0U, 0);
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError {
-            process.id, process.pc, error.what()
-        };
-    }
+    run_process_file(process, operation);
 }
 
 void Interpreter::Impl::execute_file(
     ProcessState& process,
     const FileErrorStatus& operation)
 {
-    try {
-        bool has_error { };
-        auto message = file_error(
-            process.id,
-            known_file_handle(process, operation.handle),
-            has_error);
-        switch (operation.target_kind) {
-        case FileTextTargetKind::string_register:
-            get_string_register(process, operation.target) = std::move(message);
-            break;
-        case FileTextTargetKind::packed_register:
-            get_register(process, operation.target) = pack_file_text(message, operation.target_width);
-            break;
-        case FileTextTargetKind::packed_signal:
-            commit_driver(
-                process.id, operation.target,
-                pack_file_text(message, operation.target_width));
-            break;
-        }
-        get_register(process, operation.destination) = PackedLogic4::from_aval_bval(
-            32, has_error ? 1U : 0U, 0);
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError {
-            process.id, process.pc, error.what()
-        };
-    }
+    run_process_file(process, operation);
 }
 
 void Interpreter::Impl::execute_file(
-    ProcessState& process, const FileScan& operation)
+    ProcessState& process,
+    const FileScan& operation)
 {
-    try {
-        InputScanResult scanned;
-        const auto active_time_format = time_format;
-        auto effective_operation = operation;
-        if (!size_vhdl_textio_string_reads(effective_operation,
-                [&](const InputScanTarget& target)
-                    -> std::optional<std::size_t> {
-                    if (target.kind == InputScanTargetKind::string_register) {
-                        return get_string_register(process, target.id).size();
-                    }
-                    if (target.kind == InputScanTargetKind::string_object) {
-                        return string_object_storage(target.id).size();
-                    }
-                    return std::nullopt;
-                })) {
-            throw std::length_error {
-                "VHDL TextIO STRING target exceeds scan limit"
-            };
-        }
-        // An invalid run-time format, or one whose conversions do not match
-        // the targets, assigns nothing.
-        const bool format_valid = !operation.runtime_format
-            || apply_runtime_scan_format(effective_operation,
-                get_string_register(process, *operation.runtime_format));
-        if (!format_valid) {
-        } else if (operation.string_source) {
-            auto& source = get_string_register(process, operation.source);
-            scanned = scan_formatted_string(
-                effective_operation, source, active_time_format);
-            complete_plusarg_value(effective_operation, source, scanned);
-            consume_scanned_source(operation, source, scanned);
-        } else {
-            const auto handle = known_file_handle(process, operation.handle);
-            const std::function<std::int32_t()> read = [&] {
-                return read_file_character(process.id, handle);
-            };
-            const std::function<void(std::int32_t)> unread = [&](const auto value) {
-                if (unread_file_character(process.id, handle, value) != value) {
-                    throw std::runtime_error { "failed to preserve file scan lookahead" };
-                }
-            };
-            scanned = scan_formatted_input(
-                effective_operation, read, unread, active_time_format);
-        }
-        const bool complete = format_valid
-            && file_scan_complete(effective_operation, scanned);
-        if (operation.success) {
-            get_register(process, *operation.success) = PackedLogic4::from_aval_bval(1, complete ? 1U : 0U, 0);
-        }
-        if (operation.require_assignments && !complete) {
-            throw std::runtime_error {
-                "VHDL file read did not convert the requested element"
-            };
-        }
-        for (std::size_t index = 0; index < scanned.values.size(); ++index) {
-            if (!scanned.values[index])
-                continue;
-            const auto& target = effective_operation.conversions[index].target;
-            auto& value = *scanned.values[index];
-            switch (target.kind) {
-            case InputScanTargetKind::packed_register:
-                get_register(process, target.id) = std::move(value.packed);
-                break;
-            case InputScanTargetKind::packed_signal:
-                commit_driver(process.id, target.id, std::move(value.packed));
-                break;
-            case InputScanTargetKind::string_register:
-                get_string_register(process, target.id) = std::move(value.text);
-                break;
-            case InputScanTargetKind::string_object:
-                string_object_storage(target.id) = std::move(value.text);
-                break;
-            }
-        }
-        get_register(process, operation.destination) = PackedLogic4::from_aval_bval(
-            32, static_cast<std::uint32_t>(scanned.assignments), 0);
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError { process.id, process.pc, error.what() };
-    }
+    run_process_file(process, operation);
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FilePosition& operation)
+{
+    run_process_file(process, operation);
+}
+
+void Interpreter::Impl::execute_file(
+    ProcessState& process,
+    const FileFlush& operation)
+{
+    run_process_file(process, operation);
 }
 
 void Interpreter::Impl::execute_file(
@@ -1387,57 +1481,6 @@ void Interpreter::Impl::execute_file(
             break;
         }
         get_register(process, operation.destination) = PackedLogic4::from_aval_bval(32, result.bytes, 0);
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError { process.id, process.pc, error.what() };
-    }
-}
-
-void Interpreter::Impl::execute_file(
-    ProcessState& process, const FilePosition& operation)
-{
-    try {
-        const auto known_integer = [&](const RegisterId id) {
-            const auto word = get_register(process, id).low_word();
-            if (word.width != 32 || word.bval != 0)
-                throw std::runtime_error {
-                    "file position operands must be known 32-bit integers"
-                };
-            return static_cast<std::int32_t>(
-                static_cast<std::uint32_t>(word.aval));
-        };
-        const auto result = position_file(
-            process.id,
-            known_file_handle(process, operation.handle),
-            operation.kind,
-            file_position_uses_operands(operation.kind)
-                ? known_integer(operation.offset)
-                : 0,
-            file_position_uses_operands(operation.kind)
-                ? known_integer(operation.origin)
-                : 0,
-            operation.lines);
-        get_register(process, operation.destination) = PackedLogic4::from_aval_bval(
-            32, static_cast<std::uint32_t>(result), 0);
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError { process.id, process.pc, error.what() };
-    }
-}
-
-void Interpreter::Impl::execute_file(
-    ProcessState& process, const FileFlush& operation)
-{
-    try {
-        flush_file(
-            process.id,
-            operation.all
-                ? std::nullopt
-                : std::optional { known_file_handle(process, operation.handle) });
         ++process.pc;
     } catch (const InterpreterError&) {
         throw;

@@ -2197,8 +2197,42 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::int32_t origin,
         bool lines);
     void flush_file(ProcessId process, std::optional<FileHandle> handle);
+    /// The registers and blocking signal writes of the process that runs a
+    /// file operation: a reference process's frame (execute_file) or a
+    /// static kernel member's (its behavioral steps), so both run one
+    /// implementation (run_file).
+    struct FileOperationStorage {
+        virtual ~FileOperationStorage() = default;
+        [[nodiscard]] virtual ProcessId process() const noexcept = 0;
+        [[nodiscard]] virtual PackedLogic4& packed(RegisterId id) = 0;
+        [[nodiscard]] virtual std::string& text(StringRegisterId id) = 0;
+        // A file handle operand (a compiled process's executor holds it).
+        [[nodiscard]] virtual PackedLogic4 handle(RegisterId id) = 0;
+        // A packed signal target, written as commit_driver writes it.
+        virtual void commit(SignalId signal, PackedLogic4 value) = 0;
+        // An error at the running instruction.
+        [[noreturn]] virtual void fail(const std::string& message) = 0;
+    };
+    struct ProcessFileStorage;
     [[nodiscard]] FileHandle known_file_handle(
         ProcessState&, RegisterId);
+    [[nodiscard]] FileHandle known_file_handle(
+        FileOperationStorage&, RegisterId);
+    // A file operation's effect on its process's storage; other errors throw
+    // std::exception for the caller to report at its instruction.
+    void run_file(FileOperationStorage&, const FileOpen&);
+    void run_file(FileOperationStorage&, const FileClose&);
+    void run_file(FileOperationStorage&, const FileWriteLiteral&);
+    void run_file(FileOperationStorage&, const FileWriteFormatted&);
+    void run_file(FileOperationStorage&, const FileWriteString&);
+    void run_file(FileOperationStorage&, const FileReadLine&);
+    void run_file(FileOperationStorage&, const FileEndOfFile&);
+    void run_file(FileOperationStorage&, const FileErrorStatus&);
+    void run_file(FileOperationStorage&, const FileScan&);
+    void run_file(FileOperationStorage&, const FilePosition&);
+    void run_file(FileOperationStorage&, const FileFlush&);
+    template <typename Operation>
+    void run_process_file(ProcessState&, const Operation&);
     void execute_file(ProcessState&, const FileOpen&);
     void execute_file(ProcessState&, const FileClose&);
     void execute_file(ProcessState&, const FileWriteLiteral&);
@@ -2460,6 +2494,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
         AssertionSeverity severity,
         const SourceLocation& source,
         bool standalone);
+    /// A VHDL-2019 report or assertion violation (IEEE 1076-2019 10.9,
+    /// 16.5.6): the std.env assertion controls, counts and message format,
+    /// at `now`; a failure throws AssertionError at `instruction`. The
+    /// reference evaluator and the static kernel both report through it.
+    void report_vhdl(ProcessId process, std::string_view program,
+        InstructionIndex instruction, std::string_view message,
+        AssertionSeverity severity, const SourceLocation& source,
+        bool standalone, SimulationTick now, std::uint64_t delta);
     void handle_external_boundary(
         ProcessState& process,
         InstructionIndex instruction,

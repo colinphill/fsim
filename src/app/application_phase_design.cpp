@@ -553,7 +553,9 @@ static bool publish_design_artifact_impl(
     if (!hierarchy_paths) {
         diagnostics.error("FSIM-ART-0014",
             "cannot construct the bounded canonical .fsimdesign "
-            "hierarchy-path table");
+            "hierarchy-path table: "
+                + std::string { hierarchy_path_codec::error_text(
+                    hierarchy_paths.error) });
         return false;
     }
     auto compiled_hir = serialize_compiled_hir_bundle(
@@ -954,7 +956,9 @@ std::optional<BuiltProject> load_design_artifact(
         if (!diagnostics.has_error()) {
             diagnostics.error("FSIM-ART-0014",
                 ".fsimdesign hierarchy-path table is malformed or "
-                "exceeds its limits");
+                "exceeds its limits: "
+                    + std::string { hierarchy_path_codec::error_text(
+                        hierarchy_paths.error) });
         }
         return std::nullopt;
     }

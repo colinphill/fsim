@@ -455,6 +455,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.body_end = member_spec.body_end;
         member.exit_alt = member_spec.exit_alt;
         member.vhdl = vhdl_ && (!mixed_ || member_spec.vhdl);
+        member.vhdl_2019 = member.vhdl && program.language_standard() == "2019";
         member.fresh = member.vhdl && member_spec.run_at_start;
         if (member.vhdl) {
             const auto kinds = program.register_value_kinds();
@@ -1193,6 +1194,20 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     || std::is_same_v<T, WriteAfterDynamicSlice>
                     || std::is_same_v<T, WriteAfterDynamicPartSlice>) {
                     host_written = host_written || !owned(op.signal);
+                } else if constexpr (std::is_same_v<T, FileReadLine>
+                    || std::is_same_v<T, FileErrorStatus>) {
+                    // A text read into a signal (commit_driver).
+                    host_written = host_written
+                        || (op.target_kind == FileTextTargetKind::packed_signal
+                            && !owned(static_cast<SignalId>(op.target)));
+                } else if constexpr (std::is_same_v<T, FileScan>) {
+                    for (const auto& conversion : op.conversions) {
+                        host_written = host_written
+                            || (conversion.target.kind
+                                    == InputScanTargetKind::packed_signal
+                                && !owned(static_cast<SignalId>(
+                                    conversion.target.id)));
+                    }
                 }
             }, operation);
         }
@@ -2413,17 +2428,28 @@ void Interpreter::Impl::StaticKernel::copy_container(
     const std::uint32_t destination, const std::uint32_t source,
     const std::uint32_t member, const InstructionIndex instruction)
 {
-    const auto& to = containers_[destination];
+    auto& to = containers_[destination];
     const auto& from = containers_[source];
-    if (to.object != no_container_object || from.object != no_container_object
-        || to.storage != StaticKernelContainerStorage::elements
-        || from.storage != StaticKernelContainerStorage::elements
-        || !(to.type == from.type) || to.count != from.count
-        || to.element_words != from.element_words) {
+    if (!(to.type == from.type) || to.count != from.count) {
         fail(member, instruction,
-            "static kernel container copy needs private arrays of one type");
+            "static kernel container copy needs arrays of one type");
     }
     if (destination == source) {
+        return;
+    }
+    if (to.object != no_container_object
+        || to.storage != StaticKernelContainerStorage::elements
+        || from.storage != StaticKernelContainerStorage::elements
+        || to.element_words != from.element_words) {
+        // A design memory, or one held as signals (an array argument copied
+        // in or out): changed elements are written as element writes, which
+        // notify the memory's readers.
+        for (std::uint32_t ordinal = 0U; ordinal < to.count; ++ordinal) {
+            auto value = container_element(from, ordinal);
+            if (!(value == container_element(to, ordinal))) {
+                write_container_element(to, ordinal, value, member, instruction);
+            }
+        }
         return;
     }
     const auto words = static_cast<std::size_t>(2U) * to.element_words * to.count;
@@ -4115,6 +4141,11 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                     const auto message = op.message.empty()
                         ? std::string_view { "assertion failed" }
                         : std::string_view { op.message };
+                    if (member.vhdl_2019) {
+                        report_vhdl(member_index, pc, message, op.severity,
+                            op.source, false);
+                        return;
+                    }
                     if (op.severity != AssertionSeverity::failure
                         && impl_.report_hook) {
                         impl_.report_hook(member.process, message, op.severity,
@@ -4138,9 +4169,9 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 (void)(this->*behavioral_operation_steps()[operation_kind_of<T>])(
                     member_index, pc);
             } else if constexpr (std::is_same_v<T, Report>) {
-                // IEEE 1076-2019 10.9 (the planner keeps 2019 mode on the
-                // host): the message goes through the assertion hook. On a
-                // worker the leader emits it in the replay.
+                // IEEE 1076-2019 10.9: the message goes through the
+                // assertion hook (in 2019 mode, report_vhdl). On a worker
+                // the leader emits it in the replay.
                 if (auto* const lane = worker_lane_;
                     lane != nullptr && op.severity != AssertionSeverity::failure) {
                     LaneOutput output;
@@ -4148,6 +4179,11 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                     output.member = member_index;
                     output.pc = pc;
                     lane->outputs.push_back(std::move(output));
+                    return;
+                }
+                if (member.vhdl_2019) {
+                    report_vhdl(member_index, pc, op.message.str(), op.severity,
+                        op.source, true);
                     return;
                 }
                 if (impl_.report_hook) {

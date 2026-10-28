@@ -17,7 +17,9 @@
 // branches at once (each activation its own locals, 13.4.2) and calls a task
 // whose join_none child outlives its activation and still updates the
 // activation's locals (6.21, 9.3.2): per-thread callable contexts keep it in
-// the kernel.
+// the kernel. A fifth writes a file and reads it back ($fopen, $fdisplay,
+// $fscanf, $fgets into a module variable, $feof; 21.3) through the host's
+// file table, still as a kernel member.
 #include "fsim/app/application.hpp"
 
 #include "../../src/runtime/simir_static_kernel.hpp"
@@ -233,9 +235,43 @@ module bk_top;
     end
   endtask
 
+  // Concurrent activations each own their array arguments and locals.
+  reg [7:0] qa [0:3];
+  reg [7:0] qb [0:3];
+  task automatic walk(input [7:0] arr [0:3], input integer tag);
+    integer i;
+    reg [7:0] acc [0:1];
+    begin
+      acc[0] = 0; acc[1] = 0;
+      for (i = 0; i < 4; i = i + 1) begin
+        #(2 + tag);
+        acc[i % 2] = acc[i % 2] + arr[i];
+      end
+      $display("%0t walk %0d %h %h", $time, tag, acc[0], acc[1]);
+    end
+  endtask
+
+  // An output array argument is copied out to the design array (13.5).
+  task automatic fill(output [7:0] o [0:3], input integer base);
+    integer i;
+    begin
+      for (i = 0; i < 4; i = i + 1) o[i] = base + i * 3;
+    end
+  endtask
+
   integer ra, rb, rm;
   initial begin
     blend(rm);
+    for (rb = 0; rb < 4; rb = rb + 1) begin
+      qa[rb] = 8'h11 * (rb + 1);
+      qb[rb] = 8'h0f + rb;
+    end
+    fork
+      walk(qa, 0);
+      walk(qb, 1);
+    join
+    fill(qb, 64);
+    $display("%0t fill %h %h %h", $time, qb[0], qb[1], qb[3]);
     #1;
     fork
       slow(1, 4, ra);
@@ -246,6 +282,22 @@ module bk_top;
     tally(20);
     #20;
     $display("%0t tallies done", $time);
+  end
+
+  integer fdw, fdr, fv, fc, fn;
+  reg [8*16:1] fline;
+  initial begin
+    #3;
+    fdw = $fopen("bk_io.txt", "w");
+    $fdisplay(fdw, "%0d %h", 42, 8'h5a);
+    $fwrite(fdw, "tail\n");
+    $fclose(fdw);
+    fdr = $fopen("bk_io.txt", "r");
+    fn = $fscanf(fdr, "%d %h\n", fv, fc);
+    fn = fn + $fgets(fline, fdr);
+    $display("%0t file n=%0d v=%0d c=%h line=%s eof=%0d", $time, fn, fv, fc,
+      fline, $feof(fdr));
+    $fclose(fdr);
   end
 
   initial begin
@@ -312,7 +364,7 @@ endmodule
                     == fsim::runtime::simir::StaticKernelMemberKind::behavioral
                 ? 1U : 0U;
         }
-        require(behavioral >= 6U,
+        require(behavioral >= 7U,
             "the testbench processes must be behavioral kernel members");
         std::size_t sequential = 0U;
         for (const auto& member : plan.spec->members) {
@@ -332,9 +384,11 @@ endmodule
                     && row.reason.find("SystemVerilogScalarBinary")
                         == std::string::npos
                     && row.reason.find("fork_callable_frames")
-                        == std::string::npos,
-                "disable, fork-child $urandom, real arithmetic and automatic "
-                "tasks in fork branches must stay in the kernel: " + row.reason);
+                        == std::string::npos
+                    && row.reason.find("File") == std::string::npos,
+                "disable, fork-child $urandom, real arithmetic, automatic "
+                "tasks in fork branches and file I/O must stay in the kernel: "
+                    + row.reason);
         }
     }
     project.cone_fusion = kernel;
@@ -387,6 +441,14 @@ int main()
             done = done || line.starts_with("DONE ");
         }
         require(done, "the reference testbench must complete its checks");
+        std::string file_line = "<none>";
+        for (const auto& line : reference) {
+            if (line.find(" file n=") != std::string::npos) {
+                file_line = line;
+            }
+        }
+        require(file_line.find("file n=7 v=42 c=0000005a") != std::string::npos,
+            "the reference testbench must read its file back: " + file_line);
         require(reference.size() > 20U,
             "the reference transcript must cover the checker output");
         if (kernel != reference) {

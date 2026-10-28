@@ -1786,9 +1786,10 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     || std::is_same_v<T, Halt>) {
                     // A runtime check's halt never runs: its failure report
                     // ends the simulation (the planner checks no branch
-                    // reaches it).
+                    // reaches it). In 2019 mode std.env may disable failures
+                    // (IEEE 1076-2019 16.5.6), so the halt can run.
                     if (pc != stop
-                        && !(pc > begin
+                        && !(pc > begin && !member.vhdl_2019
                             && static_kernel_halt_after_failure(
                                 member.operations[pc - 1U],
                                 member.operations[pc]))) {
@@ -2439,7 +2440,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     (op.linear_index ? flag_linear : 0U)
                     | (op.signed_index ? flag_signed : 0U));
             } else if constexpr (std::is_same_v<T, CopyContainerRegister>) {
-                // Equal-shape private arrays; the runtime copies the words.
+                // Arrays of one shape (either may be a design memory, as the
+                // planner admitted); the runtime copies the elements.
                 if (op.destination >= container_of_register.size()
                     || op.source >= container_of_register.size()) {
                     throw reject("container_copy");
@@ -2447,12 +2449,6 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 const auto destination = container_of_register[op.destination];
                 const auto source = container_of_register[op.source];
                 if (destination == no_container || source == no_container
-                    || containers_[destination].object != no_container_object
-                    || containers_[source].object != no_container_object
-                    || containers_[destination].storage
-                        != StaticKernelContainerStorage::elements
-                    || containers_[source].storage
-                        != StaticKernelContainerStorage::elements
                     || !(containers_[destination].type
                         == containers_[source].type)
                     || containers_[destination].count != containers_[source].count) {

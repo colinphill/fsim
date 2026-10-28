@@ -58,6 +58,9 @@ struct Result {
     }
 };
 
+/// A short description of an error for diagnostics.
+[[nodiscard]] std::string_view error_text(Error error) noexcept;
+
 /// Form the sorted union of runtime and DesignIR spellings for a project.
 [[nodiscard]] Result encode_canonical_hierarchy_paths(
     const semantic::HierarchyPathTable& runtime_paths,

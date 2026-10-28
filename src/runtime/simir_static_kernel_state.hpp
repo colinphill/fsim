@@ -297,6 +297,9 @@ private:
         StaticKernelMemberKind kind { };
         /// A VHDL process (delta rounds); otherwise SystemVerilog.
         bool vhdl { };
+        /// A VHDL-2019 process: reports and assertions follow the std.env
+        /// controls (report_vhdl).
+        bool vhdl_2019 { };
         bool run_at_start { };
         /// A behavioral thread that starts in the delta after time zero's.
         bool start_late { };
@@ -961,6 +964,10 @@ private:
         std::vector<PackedLogic4> values;
         std::vector<StringRegisterId> string_ids;
         std::vector<std::string> strings;
+        /// Private arrays of the activation (arguments and locals) and their
+        /// arena words; registers bound to design arrays are not saved.
+        std::vector<ContainerRegisterId> container_ids;
+        std::vector<std::vector<std::uint64_t>> arrays;
         bool stored { };
         bool escaping { };
     };
@@ -1180,6 +1187,14 @@ private:
     template <typename Op>
     [[nodiscard]] bool behavioral_operation(std::uint32_t member,
         std::uint32_t pc, const Op& op);
+    /// A member's registers and blocking writes as the reference's file
+    /// operations (run_file) use them.
+    struct MemberFileStorage;
+    /// A VHDL-2019 member's report or assertion violation (Impl::report_vhdl)
+    /// at the kernel's time.
+    void report_vhdl(std::uint32_t member, std::uint32_t pc,
+        std::string_view message, AssertionSeverity severity,
+        const SourceLocation& source, bool standalone);
     [[nodiscard]] Boundary behavioral_boundary(std::uint32_t thread,
         std::uint32_t pc);
     /// behavioral_boundary for one operation kind (Boundary::none for kinds
@@ -1296,6 +1311,8 @@ private:
     /// escaping ones when `escaping_only`).
     void store_contexts(std::uint32_t thread);
     void load_contexts(std::uint32_t thread, bool escaping_only = false);
+    void store_context(const Member& member, CallableContext& context);
+    void load_context(Member& member, const CallableContext& context);
     void ready_thread(std::uint32_t thread);
     [[nodiscard]] bool run_ready_threads();
     void run_thread(std::uint32_t thread);

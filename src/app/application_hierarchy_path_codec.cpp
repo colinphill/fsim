@@ -252,6 +252,30 @@ void append_u32(std::string& bytes, const std::uint32_t value)
 
 } // namespace
 
+std::string_view error_text(const Error error) noexcept
+{
+    switch (error) {
+    case Error::none: return "no error";
+    case Error::payload_limit: return "the payload exceeds its byte limit";
+    case Error::path_count_limit: return "the path count exceeds its limit";
+    case Error::path_length_limit: return "a path exceeds its length limit";
+    case Error::total_path_bytes_limit:
+        return "the paths exceed their total byte limit";
+    case Error::invalid_magic: return "the payload header is invalid";
+    case Error::unsupported_schema: return "the payload schema is unsupported";
+    case Error::truncated: return "the payload is truncated";
+    case Error::trailing_bytes: return "the payload has trailing bytes";
+    case Error::invalid_utf8: return "a path is not valid UTF-8";
+    case Error::embedded_nul: return "a path contains a NUL byte";
+    case Error::duplicate_path: return "a path is duplicated";
+    case Error::unsorted_path: return "the paths are not sorted";
+    case Error::invalid_reference: return "a path reference is invalid";
+    case Error::unmapped_reference: return "a path reference is unmapped";
+    case Error::allocation_failure: return "allocation failed";
+    }
+    return "unknown error";
+}
+
 Result encode_canonical_hierarchy_paths(
     const semantic::HierarchyPathTable& runtime_paths,
     const semantic::HierarchyPathTable& design_ir_paths,

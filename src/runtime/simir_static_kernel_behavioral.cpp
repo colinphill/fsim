@@ -353,15 +353,62 @@ void Interpreter::Impl::StaticKernel::store_contexts(const std::uint32_t index)
             continue;
         }
         seen.push_back(context.identity);
-        context.values.clear();
-        for (const auto id : context.ids) {
-            context.values.push_back(member.registers.at(id));
+        store_context(member, context);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::store_context(
+    const Member& member, CallableContext& context)
+{
+    context.values.clear();
+    for (const auto id : context.ids) {
+        context.values.push_back(member.registers.at(id));
+    }
+    context.strings.clear();
+    for (const auto id : context.string_ids) {
+        context.strings.push_back(member.strings.at(id));
+    }
+    context.arrays.resize(context.container_ids.size());
+    for (std::size_t at = 0U; at < context.container_ids.size(); ++at) {
+        const auto id = context.container_ids[at];
+        auto& words = context.arrays[at];
+        words.clear();
+        if (id >= member.container_registers.size()
+            || member.container_registers[id] == no_container) {
+            continue;
         }
-        context.strings.clear();
-        for (const auto id : context.string_ids) {
-            context.strings.push_back(member.strings.at(id));
+        const auto& storage = containers_[member.container_registers[id]];
+        if (storage.object != no_container_object) {
+            continue;
         }
-        context.stored = true;
+        const auto* begin = arena_.data() + storage.element_offset;
+        words.assign(begin, begin + 2U * storage.element_words * storage.count);
+    }
+    context.stored = true;
+}
+
+void Interpreter::Impl::StaticKernel::load_context(
+    Member& member, const CallableContext& context)
+{
+    for (std::size_t at = 0U; at < context.ids.size(); ++at) {
+        member.registers.at(context.ids[at]) = context.values[at];
+    }
+    for (std::size_t at = 0U; at < context.string_ids.size(); ++at) {
+        member.strings.at(context.string_ids[at]) = context.strings[at];
+    }
+    for (std::size_t at = 0U; at < context.container_ids.size(); ++at) {
+        const auto id = context.container_ids[at];
+        const auto& words = context.arrays[at];
+        if (words.empty() || id >= member.container_registers.size()
+            || member.container_registers[id] == no_container) {
+            continue;
+        }
+        const auto& storage = containers_[member.container_registers[id]];
+        if (storage.object != no_container_object
+            || words.size() != 2U * storage.element_words * storage.count) {
+            continue;
+        }
+        std::ranges::copy(words, arena_.begin() + storage.element_offset);
     }
 }
 
@@ -380,12 +427,7 @@ void Interpreter::Impl::StaticKernel::load_contexts(
         if (!context.stored || (escaping_only && !context.escaping)) {
             continue;
         }
-        for (std::size_t at = 0U; at < context.ids.size(); ++at) {
-            member.registers.at(context.ids[at]) = context.values[at];
-        }
-        for (std::size_t at = 0U; at < context.string_ids.size(); ++at) {
-            member.strings.at(context.string_ids[at]) = context.strings[at];
-        }
+        load_context(member, context);
     }
 }
 
@@ -686,7 +728,11 @@ void Interpreter::Impl::StaticKernel::emit_lane_output(const LaneOutput& output)
             output.newline);
         break;
     case LaneOutput::Kind::report:
-        if (impl_.report_hook) {
+        if (member.vhdl_2019) {
+            const auto& op = operation_get<Report>(member.operations[output.pc]);
+            report_vhdl(output.member, output.pc, op.message.str(), op.severity,
+                op.source, true);
+        } else if (impl_.report_hook) {
             const auto& op = operation_get<Report>(member.operations[output.pc]);
             impl_.report_hook(member.process, op.message.str(), op.severity,
                 op.source, kernel_now(), warp_time_ ? 0U : impl_.scheduler.delta());
@@ -725,6 +771,81 @@ Interpreter::Impl::StaticKernel::behavioral_operation_steps()
     }(std::make_index_sequence<operation_kind_count>());
     return steps;
 }
+
+void Interpreter::Impl::StaticKernel::report_vhdl(const std::uint32_t member_index,
+    const std::uint32_t pc, const std::string_view message,
+    const AssertionSeverity severity, const SourceLocation& source,
+    const bool standalone)
+{
+    const auto& member = members_[member_index];
+    impl_.report_vhdl(member.process,
+        impl_.processes.program_view(member.process).name(),
+        pc < member.origin.size() ? member.origin[pc] : pc, message, severity,
+        source, standalone, kernel_now(),
+        warp_time_ ? 0U : impl_.scheduler.delta());
+}
+
+struct Interpreter::Impl::StaticKernel::MemberFileStorage final
+    : FileOperationStorage {
+    MemberFileStorage(StaticKernel& kernel_value,
+        const std::uint32_t member_value, const std::uint32_t pc_value) noexcept
+        : kernel { kernel_value }, member { member_value }, pc { pc_value }
+    {
+    }
+    [[nodiscard]] ProcessId process() const noexcept override
+    {
+        return kernel.members_[member].process;
+    }
+    [[nodiscard]] PackedLogic4& packed(const RegisterId id) override
+    {
+        auto& registers = kernel.members_[member].registers;
+        if (id >= registers.size()) {
+            kernel.fail(member, pc, "invalid register ID");
+        }
+        return registers[id];
+    }
+    [[nodiscard]] std::string& text(const StringRegisterId id) override
+    {
+        auto& strings = kernel.members_[member].strings;
+        if (id >= strings.size()) {
+            kernel.fail(member, pc, "invalid string register ID");
+        }
+        return strings[id];
+    }
+    [[nodiscard]] PackedLogic4 handle(const RegisterId id) override
+    {
+        return packed(id);
+    }
+    // commit_driver's immediate write, as the member's blocking writes make
+    // it (step_operation).
+    void commit(const SignalId signal, PackedLogic4 value) override
+    {
+        if (!kernel.owned(signal)) {
+            kernel.write_host(member, signal, std::move(value), std::nullopt,
+                true, SignalUpdateDomain::systemverilog_active);
+            return;
+        }
+        if (kernel.members_[member].vhdl) {
+            const auto slot = kernel.slot_of_signal_[signal];
+            if (slot == static_kernel_detail::no_slot) {
+                kernel.fail(member, pc,
+                    "static kernel VHDL write targets an aggregate proxy");
+            }
+            kernel.write_slot_immediate(slot, std::move(value), std::nullopt,
+                member, pc);
+            return;
+        }
+        kernel.write_signal_owned(signal, std::move(value), std::nullopt,
+            member, pc);
+    }
+    [[noreturn]] void fail(const std::string& message) override
+    {
+        kernel.fail(member, pc, message);
+    }
+    StaticKernel& kernel;
+    std::uint32_t member;
+    std::uint32_t pc;
+};
 
 template <typename Op>
 bool Interpreter::Impl::StaticKernel::behavioral_operation(
@@ -853,9 +974,13 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
             behavioral_output(member_index, time_display_text(op), op.newline);
         } else if constexpr (std::is_same_v<T, Report>) {
-            // A VHDL report statement (IEEE 1076-2019 10.9, 10.8): the
-            // planner admits it only outside the 2019 mode, where the
-            // reference evaluator emits it through the same hook.
+            // A VHDL report statement (IEEE 1076-2019 10.9, 10.8), as the
+            // reference evaluator emits it.
+            if (member.vhdl_2019) {
+                report_vhdl(member_index, pc, op.message.str(), op.severity,
+                    op.source, true);
+                return;
+            }
             if (impl_.report_hook) {
                 impl_.report_hook(member.process, op.message.str(),
                     op.severity, op.source, kernel_now(),
@@ -867,6 +992,42 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     op.message.empty() ? std::string { "report failure" }
                                        : op.message.str(),
                     op.severity, op.source, true);
+            }
+        } else if constexpr (std::is_same_v<T, FileOpen>
+            || std::is_same_v<T, FileClose>
+            || std::is_same_v<T, FileWriteLiteral>
+            || std::is_same_v<T, FileWriteFormatted>
+            || std::is_same_v<T, FileWriteString>
+            || std::is_same_v<T, FileReadLine>
+            || std::is_same_v<T, FileEndOfFile>
+            || std::is_same_v<T, FileErrorStatus>
+            || std::is_same_v<T, FileScan>
+            || std::is_same_v<T, FilePosition>
+            || std::is_same_v<T, FileFlush>) {
+            // File input and output (IEEE 1800-2023 21.3, 1076-2019 16.4):
+            // the reference's operations on the thread's registers. The file
+            // table, the standard streams and string objects are the host's;
+            // a member that uses them runs on the leader, in its serial
+            // place (the parallel plan treats the step as opaque).
+            MemberFileStorage storage { *this, member_index, pc };
+            try {
+                impl_.run_file(storage, op);
+            } catch (const InterpreterError&) {
+                throw;
+            } catch (const std::exception& error) {
+                fail(member_index, pc, error.what());
+            }
+        } else if constexpr (std::is_same_v<T, ReadStringObject>) {
+            // A string variable (IEEE 1800-2023 6.16) is host storage with
+            // no events: the member reads and writes it in its serial place.
+            string_register(op.destination) = impl_.string_object_storage(op.object);
+        } else if constexpr (std::is_same_v<T, WriteStringObject>) {
+            // Blocking only (the planner hosts `s <= v`).
+            if (impl_.package_static_initialization_active) {
+                impl_.initialize_package_static_string_object(
+                    op.object, string_register(op.source), member.process);
+            } else {
+                impl_.string_object_storage(op.object) = string_register(op.source);
             }
         } else if constexpr (std::is_same_v<T, LoadStringConstant>) {
             if (op.value.size() > maximum_string_bytes) {
@@ -880,6 +1041,117 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             string_register(op.destination) = op.value;
         } else if constexpr (std::is_same_v<T, CopyStringRegister>) {
             string_register(op.destination) = string_register(op.source);
+        } else if constexpr (std::is_same_v<T, CompareStrings>) {
+            // The reference evaluator's string equality (IEEE 1800-2023
+            // 6.16; VHDL string `=` and `/=` as lowered, 1076-2019 9.2.3).
+            bool equal { };
+            try {
+                equal = systemverilog_string_compare(string_register(op.lhs),
+                            string_register(op.rhs))
+                    == 0;
+            } catch (const std::invalid_argument& error) {
+                fail(member_index, pc, error.what());
+            }
+            packed_register(op.destination) = PackedLogic4 { 1,
+                equal != op.not_equal ? Logic4::one : Logic4::zero };
+        } else if constexpr (std::is_same_v<T, StringLength>) {
+            std::size_t size { };
+            try {
+                size = systemverilog_string_length(string_register(op.source));
+            } catch (const std::invalid_argument& error) {
+                fail(member_index, pc, error.what());
+            }
+            packed_register(op.destination) = PackedLogic4::from_aval_bval(
+                32, static_cast<std::uint32_t>(size), 0);
+        } else if constexpr (std::is_same_v<T, StringIndex>
+            || std::is_same_v<T, StringReplaceByte>) {
+            constexpr bool read = std::is_same_v<T, StringIndex>;
+            auto& text = [&]() -> std::string& {
+                if constexpr (read) {
+                    return string_register(op.source);
+                } else {
+                    return string_register(op.target);
+                }
+            }();
+            std::size_t size { };
+            try {
+                size = systemverilog_string_length(text);
+            } catch (const std::invalid_argument& error) {
+                fail(member_index, pc, error.what());
+            }
+            // An unknown, negative or out-of-range index selects no
+            // character: a read gives 0, a write changes nothing (6.16).
+            const auto& index_value = packed_register(op.index);
+            if (index_value.width() == 0U || index_value.width() > 64U) {
+                fail(member_index, pc,
+                    "string index must be a nonempty value of at most 64 bits");
+            }
+            const auto word = index_value.low_word();
+            std::optional<std::size_t> index;
+            if (word.bval == 0U
+                && !(op.signed_index && word.width != 0U
+                    && ((word.aval >> (word.width - 1U)) & 1U) != 0U)
+                && word.aval < size) {
+                index = static_cast<std::size_t>(word.aval);
+            }
+            if constexpr (read) {
+                std::uint32_t byte { };
+                try {
+                    byte = index ? systemverilog_string_at(text, *index) : 0U;
+                } catch (const std::invalid_argument& error) {
+                    fail(member_index, pc, error.what());
+                }
+                packed_register(op.destination)
+                    = PackedLogic4::from_aval_bval(32, byte, 0);
+            } else if (index) {
+                const auto byte = packed_register(op.source).low_word();
+                if (byte.bval != 0U) {
+                    fail(member_index, pc, "string replacement byte contains X or Z");
+                }
+                try {
+                    systemverilog_string_replace(text, *index,
+                        static_cast<std::uint32_t>(byte.aval), maximum_string_bytes);
+                } catch (const std::exception& error) {
+                    fail(member_index, pc, error.what());
+                }
+            }
+        } else if constexpr (std::is_same_v<T, StringReport>) {
+            // A VHDL report or assertion with a computed message (IEEE
+            // 1076-2019 10.8, 10.9), as the reference emits it.
+            const auto& encoded = packed_register(op.severity);
+            if (encoded.width() != 2U || encoded.get(0) == Logic4::x
+                || encoded.get(0) == Logic4::z || encoded.get(1) == Logic4::x
+                || encoded.get(1) == Logic4::z) {
+                fail(member_index, pc,
+                    "VHDL severity expression produced an invalid value");
+            }
+            const auto severity = static_cast<AssertionSeverity>(
+                (encoded.get(0) == Logic4::one ? 1U : 0U)
+                | (encoded.get(1) == Logic4::one ? 2U : 0U));
+            const auto& message = string_register(op.message);
+            if (member.vhdl_2019) {
+                report_vhdl(member_index, pc, message, severity, op.source,
+                    op.standalone);
+                return;
+            }
+            const auto delta = warp_time_ ? 0U : impl_.scheduler.delta();
+            if (severity == AssertionSeverity::failure) {
+                if (op.standalone && impl_.report_hook) {
+                    impl_.report_hook(member.process, message, severity, op.source,
+                        kernel_now(), delta);
+                }
+                throw AssertionError(member.process,
+                    pc < member.origin.size() ? member.origin[pc] : pc,
+                    message.empty()
+                        ? std::string { op.standalone ? "report failure"
+                                                      : "assertion failed" }
+                        : message,
+                    severity, op.source, op.standalone);
+            }
+            if (impl_.report_hook) {
+                impl_.report_hook(member.process, message, severity, op.source,
+                    kernel_now(), delta);
+            }
         } else if constexpr (std::is_same_v<T, ConcatenateStrings>) {
             std::string result;
             for (const auto operand : op.operands) {
@@ -1086,9 +1358,29 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 context->identity = op.identity;
                 context->ids.assign(op.packed.begin(), op.packed.end());
                 context->string_ids.assign(op.strings.begin(), op.strings.end());
+                context->container_ids.assign(
+                    op.containers.begin(), op.containers.end());
                 threads_[thread].contexts.push_back(std::move(context));
             }
         } else if constexpr (std::is_same_v<T, CallableFramePop>) {
+            const auto context_thread = member.thread_contexts
+                    && running_thread_ != no_slot
+                    && threads_[running_thread_].member == member_index
+                ? running_thread_
+                : no_slot;
+            if (context_thread != no_slot) {
+                // The activation ends for this thread; fork children still
+                // inside it keep its final values (6.21), taken before the
+                // frame restores the caller's.
+                auto& contexts = threads_[context_thread].contexts;
+                if (contexts.empty() || contexts.back()->identity != op.identity) {
+                    fail(member_index, pc, "automatic callable context stack mismatch");
+                }
+                if (contexts.back()->escaping) {
+                    store_context(member, *contexts.back());
+                }
+                contexts.pop_back();
+            }
             if (member.private_frame(op.identity)) {
                 if (member.saved_array_marks.empty()) {
                     fail(member_index, pc, "automatic callable frame stack mismatch");
@@ -1112,32 +1404,6 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             if (member.frames.empty()
                 || member.frames.back().identity != op.identity) {
                 fail(member_index, pc, "automatic callable frame stack mismatch");
-            }
-            const auto context_thread = member.thread_contexts
-                    && running_thread_ != no_slot
-                    && threads_[running_thread_].member == member_index
-                ? running_thread_
-                : no_slot;
-            if (context_thread != no_slot) {
-                // The activation ends for this thread; fork children still
-                // inside it keep its final values (6.21).
-                auto& contexts = threads_[context_thread].contexts;
-                if (contexts.empty() || contexts.back()->identity != op.identity) {
-                    fail(member_index, pc, "automatic callable context stack mismatch");
-                }
-                if (contexts.back()->escaping) {
-                    auto& context = *contexts.back();
-                    context.values.clear();
-                    for (const auto id : context.ids) {
-                        context.values.push_back(packed_register(id));
-                    }
-                    context.strings.clear();
-                    for (const auto id : context.string_ids) {
-                        context.strings.push_back(string_register(id));
-                    }
-                    context.stored = true;
-                }
-                contexts.pop_back();
             }
             std::vector<PackedLogic4> packed;
             for (const auto id : op.preserve_packed) {
@@ -1224,13 +1490,33 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
             // The write-back of a binding to its own design memory (the
             // $readmem lowering): the binding aliases the memory, so there
-            // is nothing to copy.
+            // is nothing to copy. A private array of the memory's type (a
+            // task's output array, IEEE 1800-2023 13.5) is written element by
+            // element, as element writes would be.
             if (op.nonblocking || op.transaction_signal
                 || op.object >= container_of_object_.size()
-                || container_of_object_[op.object] == no_container
-                || container_register(op.source) != container_of_object_[op.object]) {
+                || container_of_object_[op.object] == no_container) {
                 fail(member_index, pc,
                     "static kernel container write is not a write-back of its binding");
+            }
+            const auto source = container_register(op.source);
+            auto& target = containers_[container_of_object_[op.object]];
+            if (source != container_of_object_[op.object]) {
+                if (source == no_container
+                    || containers_[source].object != no_container_object
+                    || !(containers_[source].type == target.type)
+                    || containers_[source].count != target.count) {
+                    fail(member_index, pc,
+                        "static kernel container write needs a private array of its type");
+                }
+                const auto& from = containers_[source];
+                for (std::uint32_t ordinal = 0U; ordinal < target.count; ++ordinal) {
+                    auto value = container_element(from, ordinal);
+                    if (!(value == container_element(target, ordinal))) {
+                        write_container_element(target, ordinal, std::move(value),
+                            member_index, pc);
+                    }
+                }
             }
         } else {
             handled = false;
