@@ -138,6 +138,64 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — callable arrays, strings, file I/O, VHDL-2019 reports (`24f1a3ca`, sweep `v4c35`)
+
+**`24f1a3ca`**
+- **Private arrays in callable contexts** (IEEE 1800-2023 6.21, 13.4.2). A suspending automatic task with array arguments or array locals now stays a member; its activation saves the arrays when the thread parks.
+- **Array copy-in and copy-out** (13.5). An array argument may be copied in from a design array. A task's output array is copied out to the design array element by element, notifying the array's readers. The planner admits plain copies of equal type and size. These are the rs decoder/parlen and corrbits/param shapes.
+- **VHDL strings** (IEEE 1076-2019 5.3.2.4, 9.2.3, 10.9). `'image`/`'value`, concatenation, comparison, length, indexing and computed report messages run on the thread's string registers, and frames may save them.
+- **File I/O** (1800-2023 21.3, 1076-2019 16.4).
+  - The file operations' bodies move into `Impl::run_file` over a `FileOperationStorage`, which both the reference (`execute_file`) and the kernel (a member's registers and blocking writes) implement.
+  - `$fopen`/`$fclose`/`$fdisplay`/`$fwrite`/`$fgets`/`$fscanf`/`$sscanf`/`$feof`/`$ferror`/`$fseek`/`$ftell`/`$fflush` and TEXTIO run in the kernel; `$fread` stays on the host.
+  - A file read into a host signal leaves the kernel open, so time does not warp past it.
+- **SystemVerilog string variables** (6.16). Blocking reads and writes run in the kernel; `s <= v` stays on the host.
+- **VHDL-2019 reports and assertions** (16.5.6).
+  - `Impl::report_vhdl` holds the `std.env` controls, counts and message format for both the reference and the kernel.
+  - A 2019 member's failure report may be disabled, so its check halts are no longer assumed unreachable.
+- **FSIM-ART-0014** names the hierarchy-path table limit it hit.
+
+**Commit-program census.** A role census of the 293 `commit_program` cases:
+
+| Role | Processes | Cases |
+|---|---:|---:|
+| port-association conversion | 1606 | 100 |
+| switch (`commit_program_switch`) | 494 | 39 |
+| stub (`commit_program_stub`) | 345 | 36 |
+| resolver | 180 | 74 |
+| driver | 37 | |
+| formal | 12 | |
+
+No other resolution role appears. Conversions are the next family (E1).
+
+**Validation.** ctest 1087/1087 in all four gate variants. Targeted runs on the live build all had 0 losses vs `b96x1`: file I/O 228 cases, string objects 80, VHDL-2019 91. Sweep `v4c35` (frozen `24f1a3ca`) has 0 losses:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2641 / 2641 | 270 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+Hosted processes in the sweep: 7,041 (v4c34 7,925). The top remaining reasons:
+
+| Reason | Cases | Processes |
+|---|---:|---:|
+| `opaque_access:ClassAllocate` | 590 | 636 |
+| `commit_program` | 179 | 1848 |
+| `behavioral_vhdl_container_register` | 171 | 203 |
+| `WriteProjected` | 153 | 296 |
+| `behavioral_observed` | 141 | 1031 |
+| `behavioral_final` | 137 | 576 |
+
+**Next.** E1 runs port-association conversions as kernel update-phase members:
+- each runs once per update commit, in FIFO order, and commits immediately;
+- initial values are a quiet fixed point at construction, together with the wires;
+- it is in the working tree.
+
+After that come the commit-program stubs and switches, then projected writes.
+
 ### 2026-10-28: hosted kinds into the kernel — lane output, fork random, disable, real math, callable contexts (`58b54e17`, `1f30cf98`, sweeps `v4c33`, `v4c34`)
 
 The hosted-process work (owner 2026-10-28), measured on the rs suite, LDPC and the RISC-V SoC first, then the corpus. An agent assessment (`.local-artifacts/v4-migration/hosted-feasibility.md`) finds that every process can become a kernel member. Services held in `Impl` (files, class heap, SVA tables, mailboxes, VPI/DPI) stay host-owned in a serial lane, and forced, strength-resolved and switch signals stay host signals.

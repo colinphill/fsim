@@ -696,63 +696,46 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             }
             execute_sampled_read(process, op);
             ++process.pc;
-        } else if constexpr (std::is_same_v<OperationType, SignalEvent>) {
-            (void)get_signal(op.signal);
-            const auto* selected = op.selection
-                ? find_signal_selection_history(
-                      op.signal, *op.selection)
-                : nullptr;
-            if (op.selection && selected == nullptr) {
-                fail(process,
-                    "selected SimIR event range was not registered");
+        } else if constexpr (std::is_same_v<OperationType, SignalEvent>
+            || std::is_same_v<OperationType, SignalActive>) {
+            bool value {};
+            try {
+                if constexpr (std::is_same_v<OperationType, SignalEvent>) {
+                    value = signal_event_attribute(op.signal, op.selection);
+                } else {
+                    value = signal_active_attribute(op.signal, op.selection);
+                }
+            } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
             }
-            const auto& event = selected != nullptr
-                ? selected->last_event
-                : signal_events[op.signal];
-            const auto active
-                = signal_attribute_detail::in_current_delta(
-                    *this, event);
-            get_register(process, op.destination) = PackedLogic4(
-                1, active ? Logic4::one : Logic4::zero);
+            get_register(process, op.destination)
+                = PackedLogic4(1, value ? Logic4::one : Logic4::zero);
             ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
-            (void)get_signal(op.signal);
-            if (op.selection) {
-                const auto* selected = find_signal_selection_history(
-                    op.signal, *op.selection);
-                if (selected == nullptr) {
-                    fail(process,
-                        "selected SimIR last-value range was not registered");
-                }
-                get_register(process, op.destination)
-                    = coerce_value_kind(
-                        selected->last_value,
-                        register_value_kind(
-                            process, op.destination));
-                ++process.pc;
-                return;
+            try {
+                get_register(process, op.destination) = coerce_value_kind(
+                    signal_last_value_attribute(op.signal, op.selection),
+                    register_value_kind(process, op.destination));
+            } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
             }
-            get_register(process, op.destination) = coerce_value_kind(
-                logical_signal_last_value(op.signal),
-                register_value_kind(
-                    process, op.destination));
             ++process.pc;
-        } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
-            (void)get_signal(op.signal);
-            const auto* selected = op.selection
-                ? find_signal_selection_history(
-                      op.signal, *op.selection)
-                : nullptr;
-            if (op.selection && selected == nullptr) {
-                fail(process,
-                    "selected SimIR last-event range was not registered");
+        } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>
+            || std::is_same_v<OperationType, SignalLastActive>) {
+            SimulationTick elapsed {};
+            try {
+                if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
+                    elapsed = signal_last_event_attribute(
+                        op.signal, op.selection);
+                } else {
+                    elapsed = signal_last_active_attribute(
+                        op.signal, op.selection);
+                }
+            } catch (const std::invalid_argument& error) {
+                fail(process, error.what());
             }
-            const auto& event = selected != nullptr
-                ? selected->last_event
-                : signal_events[op.signal];
-            const auto elapsed
-                = signal_attribute_detail::elapsed_since(*this, event);
-            get_register(process, op.destination) = PackedLogic4::from_aval_bval(64, elapsed, 0);
+            get_register(process, op.destination)
+                = PackedLogic4::from_aval_bval(64, elapsed, 0);
             ++process.pc;
         } else if constexpr (
             std::is_same_v<OperationType, ReadSimulationTime>) {
@@ -768,43 +751,6 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, VitalDelay>) {
             execute_vital_delay_operation(id, process, instruction, op);
-            ++process.pc;
-        } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
-            (void)get_signal(op.signal);
-            const auto* selected = op.selection
-                ? find_signal_selection_history(
-                      op.signal, *op.selection)
-                : nullptr;
-            if (op.selection && selected == nullptr) {
-                fail(process,
-                    "selected SimIR active range was not registered");
-            }
-            const auto& transaction = selected != nullptr
-                ? selected->last_transaction
-                : signal_transactions[op.signal];
-            const auto active
-                = signal_attribute_detail::in_current_delta(
-                    *this, transaction);
-            get_register(process, op.destination) = PackedLogic4(
-                1, active ? Logic4::one : Logic4::zero);
-            ++process.pc;
-        } else if constexpr (
-            std::is_same_v<OperationType, SignalLastActive>) {
-            SimulationTick elapsed { };
-            if (op.selection) {
-                const auto* selected = find_signal_selection_history(
-                    op.signal, *op.selection);
-                if (selected == nullptr) {
-                    fail(process,
-                        "selected SimIR last-active range was not registered");
-                }
-                elapsed = signal_attribute_detail::elapsed_since(
-                    *this, selected->last_transaction);
-            } else {
-                elapsed = signal_attribute_detail::last_active(
-                    *this, op.signal);
-            }
-            get_register(process, op.destination) = PackedLogic4::from_aval_bval(64, elapsed, 0);
             ++process.pc;
         } else if constexpr (
             std::is_same_v<OperationType, SignalDriving>) {
@@ -2738,12 +2684,21 @@ SimulationTick Interpreter::Impl::projected_element_delay(
     if (!element.delay_source) {
         return element.delay;
     }
+    return projected_element_delay(
+        element, get_register(process, *element.delay_source));
+}
+
+SimulationTick Interpreter::Impl::projected_element_delay(
+    const ProjectedWaveformElement& element, const PackedLogic4& payload)
+{
+    if (!element.delay_source) {
+        return element.delay;
+    }
     WaitFor wait;
     wait.delay = element.delay;
     wait.source = element.delay_source;
     wait.source_width = element.delay_source_width;
     wait.source_signed = true;
-    const auto payload = get_register(process, *element.delay_source);
     // An unknown or negative TIME is an error the bounded runtime treats as
     // an immediate transaction.
     if (payload.width() != element.delay_source_width
@@ -2763,6 +2718,73 @@ SimulationTick Interpreter::Impl::projected_rejection(
         return rejection;
     }
     return elements.empty() ? SimulationTick { 0U } : elements.front().delay;
+}
+
+
+const Interpreter::Impl::SignalSelectionHistory*
+Interpreter::Impl::selected_attribute_history(const SignalId signal,
+    const std::optional<SignalSelection>& selection,
+    const char* attribute) const
+{
+    (void)get_signal(signal);
+    if (!selection) {
+        return nullptr;
+    }
+    const auto* selected = find_signal_selection_history(signal, *selection);
+    if (selected == nullptr) {
+        throw std::invalid_argument(std::string("selected SimIR ")
+            + attribute + " range was not registered");
+    }
+    return selected;
+}
+
+bool Interpreter::Impl::signal_event_attribute(const SignalId signal,
+    const std::optional<SignalSelection>& selection) const
+{
+    const auto* selected
+        = selected_attribute_history(signal, selection, "event");
+    return signal_attribute_detail::in_current_delta(*this,
+        selected != nullptr ? selected->last_event : signal_events[signal]);
+}
+
+bool Interpreter::Impl::signal_active_attribute(const SignalId signal,
+    const std::optional<SignalSelection>& selection) const
+{
+    const auto* selected
+        = selected_attribute_history(signal, selection, "active");
+    return signal_attribute_detail::in_current_delta(*this,
+        selected != nullptr ? selected->last_transaction
+                            : signal_transactions[signal]);
+}
+
+const PackedLogic4& Interpreter::Impl::signal_last_value_attribute(
+    const SignalId signal, const std::optional<SignalSelection>& selection)
+{
+    const auto* selected
+        = selected_attribute_history(signal, selection, "last-value");
+    return selected != nullptr ? selected->last_value
+                               : logical_signal_last_value(signal);
+}
+
+SimulationTick Interpreter::Impl::signal_last_event_attribute(
+    const SignalId signal,
+    const std::optional<SignalSelection>& selection) const
+{
+    const auto* selected
+        = selected_attribute_history(signal, selection, "last-event");
+    return signal_attribute_detail::elapsed_since(*this,
+        selected != nullptr ? selected->last_event : signal_events[signal]);
+}
+
+SimulationTick Interpreter::Impl::signal_last_active_attribute(
+    const SignalId signal, const std::optional<SignalSelection>& selection)
+{
+    const auto* selected = selected_attribute_history(
+        signal, selection, "last-active");
+    return selected != nullptr
+        ? signal_attribute_detail::elapsed_since(
+              *this, selected->last_transaction)
+        : signal_attribute_detail::last_active(*this, signal);
 }
 
 } // namespace fsim::runtime::simir

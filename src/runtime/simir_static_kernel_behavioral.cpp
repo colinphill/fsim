@@ -1904,6 +1904,11 @@ PackedLogic4 Interpreter::Impl::StaticKernel::debug_register(
         throw std::logic_error { "debug process is not a kernel member" };
     }
     const auto& member = *found;
+    if (width == 0U) {
+        // A null array (IEEE 1076-2019 5.3.2.2) has no elements to leave
+        // uninitialized; the reference shows it empty.
+        return PackedLogic4 { };
+    }
     if (!debug_register_defined(member, reg)) {
         throw std::logic_error { "SimIR debug local has not been initialized" };
     }

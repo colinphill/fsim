@@ -1956,6 +1956,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // valued (IEEE 1076-2008 10.5.2.1).
     [[nodiscard]] SimulationTick projected_element_delay(
         ProcessState& process, const ProjectedWaveformElement& element);
+    // The same from the delay source's value (`payload`, ignored for a
+    // constant delay); the kernel's members evaluate their own registers.
+    [[nodiscard]] static SimulationTick projected_element_delay(
+        const ProjectedWaveformElement& element, const PackedLogic4& payload);
     // The rejection limit; the sentinel maximum takes the first element's
     // delay (the default inertial rejection, 10.5.2.1).
     [[nodiscard]] static SimulationTick projected_rejection(
@@ -2777,10 +2781,30 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal_id,
         bool notify_fanout,
         SignalChangeOrigin origin = { });
+    // A process queries the signal's transactions ('ACTIVE, 'LAST_ACTIVE or
+    // a transaction wait): its commits stamp them.
+    void observe_signal_transaction(SignalId signal);
     void register_signal_selection(
         SignalId signal_id, SignalSelection selection);
     [[nodiscard]] const SignalSelectionHistory* find_signal_selection_history(
         SignalId signal_id, SignalSelection selection) const noexcept;
+    // A signal's or selected range's attributes in the current simulation
+    // cycle (IEEE 1076-2019 16.2.4): 'EVENT, 'ACTIVE, 'LAST_VALUE,
+    // 'LAST_EVENT and 'LAST_ACTIVE. A selection must have been registered;
+    // otherwise std::invalid_argument.
+    [[nodiscard]] const SignalSelectionHistory* selected_attribute_history(
+        SignalId signal, const std::optional<SignalSelection>& selection,
+        const char* attribute) const;
+    [[nodiscard]] bool signal_event_attribute(
+        SignalId signal, const std::optional<SignalSelection>& selection) const;
+    [[nodiscard]] bool signal_active_attribute(
+        SignalId signal, const std::optional<SignalSelection>& selection) const;
+    [[nodiscard]] const PackedLogic4& signal_last_value_attribute(
+        SignalId signal, const std::optional<SignalSelection>& selection);
+    [[nodiscard]] SimulationTick signal_last_event_attribute(
+        SignalId signal, const std::optional<SignalSelection>& selection) const;
+    [[nodiscard]] SimulationTick signal_last_active_attribute(
+        SignalId signal, const std::optional<SignalSelection>& selection);
     void stage_selected_signal_transaction(
         SignalId signal_id, std::size_t offset, std::size_t width);
     void stage_selected_signal_transaction_mask(

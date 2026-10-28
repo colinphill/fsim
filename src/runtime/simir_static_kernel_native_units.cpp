@@ -2325,7 +2325,8 @@ void Interpreter::Impl::StaticKernel::build_partitions(
     for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
         auto& slot = slots_[index];
         if (slot.output || !slot.edges.empty()
-            || (index < slot_waitable_.size() && slot_waitable_[index] != 0U)) {
+            || (index < slot_waitable_.size() && slot_waitable_[index] != 0U)
+            || (index < slot_conversions_.size() && !slot_conversions_[index].empty())) {
             continue;
         }
         if (slot.readers.empty()) {

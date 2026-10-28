@@ -260,9 +260,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         containers_.push_back(std::move(container));
     }
     // Behavioral members own the fixed arrays they use directly (ContainerRead
-    // and ContainerWrite without a design-memory binding; see the planner).
+    // and ContainerWrite without a design-memory binding; see the planner),
+    // and the copies of design memories they write elements of: a binding
+    // copies its memory into such storage, as the reference's does.
     std::vector<std::vector<std::pair<ContainerRegisterId, std::uint32_t>>>
         private_containers(spec.members.size());
+    std::vector<std::vector<ContainerRegisterId>> copied_containers(
+        spec.members.size());
     for (std::size_t index = 0U; index < spec.members.size(); ++index) {
         const auto& member_spec = spec.members[index];
         if (member_spec.kind != StaticKernelMemberKind::behavioral) {
@@ -276,6 +280,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         const auto& operations = program.operations();
         std::vector<std::uint8_t> bound(program.container_register_count(), 0U);
         std::vector<std::uint8_t> used(program.container_register_count(), 0U);
+        std::vector<std::uint8_t> written(program.container_register_count(), 0U);
         // Register operands are body fields: no instance expansion needed.
         for (std::size_t op = 0U; op < operations.size(); ++op) {
             const auto& operation = operations[op];
@@ -290,6 +295,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             } else if (const auto* store = operation_get_if<ContainerWrite>(&operation)) {
                 if (store->target < used.size()) {
                     used[store->target] = 1U;
+                    written[store->target] = 1U;
                 }
             } else if (const auto* memory_load = operation_get_if<LoadMemory>(&operation)) {
                 if (memory_load->target < used.size()) {
@@ -308,8 +314,12 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         const auto types = process_layout_detail::ProcessLayoutAccess::view(
             program.container_register_types());
         for (std::size_t id = 0U; id < used.size(); ++id) {
-            if (used[id] == 0U || bound[id] != 0U || id >= types.size()) {
+            if (used[id] == 0U || (bound[id] != 0U && written[id] == 0U)
+                || id >= types.size()) {
                 continue;
+            }
+            if (bound[id] != 0U) {
+                copied_containers[index].push_back(static_cast<ContainerRegisterId>(id));
             }
             const auto initial = impl_.default_container_register(types[id]);
             Container container;
@@ -471,6 +481,37 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             member.operations.push_back(operations.expanded(op));
         }
         member.body_identity = operations.body_identity();
+        if (const auto target = member_spec.conversion_target;
+            target != std::numeric_limits<SignalId>::max()) {
+            // A port-association conversion's resolver program (IEEE
+            // 1076-2008 14.7.3.3): each halt ends a pass with the output
+            // register as the formal's effective value
+            // (Interpreter::Impl::run_vhdl_resolver), so it becomes a jump
+            // to the formal's write, followed by a wait and the loop jump: a
+            // combinational member's shape. The host no longer runs it.
+            const auto resolver = impl_.vhdl_resolvers.find(target);
+            if (resolver == impl_.vhdl_resolvers.end()
+                || resolver->second.process != member.process
+                || target >= signal_count || slot_of_signal_[target] == no_slot
+                || member.body_begin != 0U
+                || member.body_end != member.operations.size() + 1U) {
+                throw std::invalid_argument(
+                    "static kernel conversion does not fit its signal");
+            }
+            const auto write = static_cast<InstructionIndex>(member.operations.size());
+            for (auto& operation : member.operations) {
+                if (operation_holds<Halt>(operation)) {
+                    operation = Operation { Jump { write } };
+                }
+            }
+            member.operations.emplace_back(WriteUpdate { target,
+                resolver->second.output, SignalUpdateDomain::generic });
+            member.operations.emplace_back(WaitSensitivity { });
+            member.operations.emplace_back(Jump { 0U });
+            member.body_identity = nullptr;
+            member.conversion = true;
+            conversion_members_.push_back(static_cast<std::uint32_t>(members_.size()));
+        }
         if (!member.vhdl && member.kind == StaticKernelMemberKind::behavioral) {
             bool fork = false;
             bool push = false;
@@ -525,6 +566,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             program.container_register_count(), no_container);
         for (const auto& [id, container] : private_containers[members_.size()]) {
             member.container_registers[id] = container;
+        }
+        if (!copied_containers[members_.size()].empty()) {
+            member.copy_storage.assign(
+                program.container_register_count(), no_container);
+            for (const auto id : copied_containers[members_.size()]) {
+                member.copy_storage[id] = member.container_registers[id];
+            }
         }
         for (const auto& operation : member.operations) {
             const auto* push = operation_get_if<CallableFramePush>(&operation);
@@ -855,6 +903,46 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
     }
 
+    // Conversions: each source slot runs its conversion members in the
+    // order the host queues the formals it converts (its dependents list);
+    // the host resolves none of them again.
+    if (!conversion_members_.empty()) {
+        slot_conversions_.assign(slots_.size(), { });
+        conversion_queued_.assign(members_.size(), 0U);
+        std::unordered_map<SignalId, std::uint32_t> member_of_target;
+        for (const auto index : conversion_members_) {
+            const auto& write = operation_get<WriteUpdate>(
+                members_[index].operations[members_[index].body_end - 1U]);
+            member_of_target.emplace(write.signal, index);
+        }
+        std::vector<SignalId> sources;
+        for (const auto& [target, index] : member_of_target) {
+            const auto& resolver = impl_.vhdl_resolvers.at(target);
+            sources.insert(sources.end(), resolver.sources.begin(),
+                resolver.sources.end());
+        }
+        std::ranges::sort(sources);
+        sources.erase(std::ranges::unique(sources).begin(), sources.end());
+        for (const auto source : sources) {
+            if (source >= signal_count || slot_of_signal_[source] == no_slot) {
+                throw std::invalid_argument(
+                    "static kernel conversion source is not a kernel slot");
+            }
+            auto& dependents = impl_.vhdl_conversion_dependents[source];
+            for (const auto target : dependents) {
+                if (const auto found = member_of_target.find(target);
+                    found != member_of_target.end()) {
+                    slot_conversions_[slot_of_signal_[source]].push_back(found->second);
+                }
+            }
+            std::erase_if(dependents, [&](const SignalId target) {
+                return member_of_target.contains(target);
+            });
+        }
+        for (const auto& [target, index] : member_of_target) {
+            impl_.vhdl_resolvers.erase(target);
+        }
+    }
     // Wired formals: an owned signal whose host resolver is a pure-routing
     // program over an owned source (static_kernel_wiring) is driven by the
     // kernel from now on; the host does not resolve it again.
@@ -1192,8 +1280,47 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     || std::is_same_v<T, WriteAfter>
                     || std::is_same_v<T, WriteAfterSlice>
                     || std::is_same_v<T, WriteAfterDynamicSlice>
-                    || std::is_same_v<T, WriteAfterDynamicPartSlice>) {
+                    || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                    || std::is_same_v<T, WriteProjected>
+                    || std::is_same_v<T, WriteProjectedSlice>
+                    || std::is_same_v<T, WriteProjectedDynamicSlice>
+                    || std::is_same_v<T, WriteProjectedWaveform>
+                    || std::is_same_v<T, WriteProjectedWaveformSlice>
+                    || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
                     host_written = host_written || !owned(op.signal);
+                    if constexpr (!std::is_same_v<T, WriteBlocking>
+                        && !std::is_same_v<T, WriteBlockingSlice>
+                        && !std::is_same_v<T, WriteBlockingDynamicSlice>
+                        && !std::is_same_v<T, WriteBlockingDynamicPartSlice>) {
+                        vhdl_host_cycles_ = vhdl_host_cycles_
+                            || (member.vhdl && !owned(op.signal));
+                    }
+                } else if constexpr (std::is_same_v<T, ForceSignalSlice>
+                    || std::is_same_v<T, ReleaseSignalSlice>) {
+                    // A VHDL force applies in the host's update phase.
+                    host_written = host_written || !owned(op.signal);
+                    vhdl_host_cycles_ = vhdl_host_cycles_
+                        || (member.vhdl && !owned(op.signal));
+                } else if constexpr (std::is_same_v<T, SignalEvent>
+                    || std::is_same_v<T, SignalActive>
+                    || std::is_same_v<T, SignalLastValue>
+                    || std::is_same_v<T, SignalLastEvent>
+                    || std::is_same_v<T, SignalLastActive>) {
+                    // The host's history of the cycles it ran. The host
+                    // keeps a selected range's history and a signal's
+                    // transactions for the processes that query them; the
+                    // host member's original program is not registered
+                    // with the host (its stub is), so the kernel registers
+                    // every member's queries.
+                    vhdl_host_cycles_ = vhdl_host_cycles_
+                        || (member.vhdl && !owned(op.signal));
+                    if (op.selection) {
+                        impl_.register_signal_selection(op.signal, *op.selection);
+                    }
+                    if constexpr (std::is_same_v<T, SignalActive>
+                        || std::is_same_v<T, SignalLastActive>) {
+                        impl_.observe_signal_transaction(op.signal);
+                    }
                 } else if constexpr (std::is_same_v<T, FileReadLine>
                     || std::is_same_v<T, FileErrorStatus>) {
                     // A text read into a signal (commit_driver).
@@ -1211,9 +1338,6 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                 }
             }, operation);
         }
-        if (host_written) {
-            break;
-        }
     }
     // A hosted VHDL process writes through the host's update phase, so every
     // round is a host delta.
@@ -1223,7 +1347,10 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         || std::ranges::any_of(slots_, [](const Slot& slot) { return slot.output; });
     // Every process is a member and nothing crosses the host boundary.
     closed_ = !host_boundary_ && !has_hosted_ && !host_written
-        && impl_.processes.size() == members_.size();
+        && !vhdl_host_cycles_ && impl_.processes.size() == members_.size();
+    if (!conversion_members_.empty()) {
+        settle_conversions();
+    }
     plan_delta_collapse();
     if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
         report_interpreted_sites();
@@ -2183,6 +2310,10 @@ void Interpreter::Impl::StaticKernel::commit_writes()
             same = before[word] == current[word];
         }
         if (!same) {
+            if (quiet_commit_) {
+                ++quiet_changes_;
+                continue;
+            }
             if (trace_) {
                 std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
                           << " commit "
@@ -2191,6 +2322,14 @@ void Interpreter::Impl::StaticKernel::commit_writes()
                           << '\n';
             }
             slot_changed(slot_index, 0U, before);
+            if (!slot_conversions_.empty()) {
+                for (const auto member : slot_conversions_[slot_index]) {
+                    if (conversion_queued_[member] == 0U) {
+                        conversion_queued_[member] = 1U;
+                        conversion_queue_.push_back(member);
+                    }
+                }
+            }
         }
     }
     if (trace_) {
@@ -2199,6 +2338,71 @@ void Interpreter::Impl::StaticKernel::commit_writes()
     }
     touched_.clear();
     round_before_.clear();
+    if (!conversion_queue_.empty() && !running_conversions_) {
+        run_conversions();
+    }
+}
+
+void Interpreter::Impl::StaticKernel::run_conversions()
+{
+    // The formal's effective value is the conversion of its actual's in
+    // the same update phase (IEEE 1076-2008 14.7.3.3), so a conversion's
+    // change may queue further conversions. As the host's drain, each
+    // formal is converted at most once per update phase.
+    struct Running {
+        StaticKernel& kernel;
+        ~Running()
+        {
+            kernel.running_conversions_ = false;
+            for (const auto member : kernel.conversion_queue_) {
+                kernel.conversion_queued_[member] = 0U;
+            }
+            kernel.conversion_queue_.clear();
+        }
+    } running { *this };
+    running_conversions_ = true;
+    for (std::size_t at = 0U; at < conversion_queue_.size(); ++at) {
+        run(conversion_queue_[at]);
+        commit_writes();
+    }
+}
+
+void Interpreter::Impl::StaticKernel::settle_conversions()
+{
+    // A converted formal starts at the conversion of its sources' initial
+    // values (IEEE 1076-2008 14.7.5.2); conversions and wires chain, so
+    // repeat until the values settle, as the host's initial resolution does.
+    quiet_commit_ = true;
+    const auto bound = conversion_members_.size() + wires_.size() + 1U;
+    for (std::size_t pass = 0U; pass <= bound; ++pass) {
+        quiet_changes_ = 0U;
+        for (const auto member : conversion_members_) {
+            run(member);
+            commit_writes();
+        }
+        bool changed = quiet_changes_ != 0U;
+        for (const auto& wire : wires_) {
+            changed = copy_wire(wire) || changed;
+        }
+        if (!changed) {
+            break;
+        }
+    }
+    quiet_commit_ = false;
+    // The host's copies of the formals: what a host process reads before
+    // the kernel's first activation publishes them.
+    for (const auto member : conversion_members_) {
+        const auto& write = operation_get<WriteUpdate>(
+            members_[member].operations[members_[member].body_end - 1U]);
+        const auto signal = write.signal;
+        auto value = Impl::coerce_value_kind(slot_value(slot_of_signal_[signal]),
+            impl_.signals[signal].value_kind);
+        if (signal < impl_.driven_values.size()) {
+            impl_.driven_values[signal] = value;
+        }
+        impl_.signals[signal].initial_value = std::move(value);
+        impl_.refresh_direct_signal_planes(signal);
+    }
 }
 
 void Interpreter::Impl::StaticKernel::write_signal_owned(const SignalId signal,
@@ -2311,6 +2515,26 @@ void Interpreter::Impl::StaticKernel::write_host(const std::uint32_t member,
     } else {
         impl_.stage_update(process, signal, std::move(value), domain, order);
     }
+}
+
+void Interpreter::Impl::StaticKernel::write_host_projected(
+    const std::uint32_t member, const SignalId signal,
+    const std::vector<ProjectedWaveformValue>& elements,
+    const std::optional<std::size_t> offset, const SimulationTick rejection,
+    const ProjectedDelayMode mode)
+{
+    if (trace_) {
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+"
+                  << impl_.scheduler.delta() << " host-projected "
+                  << impl_.get_signal_cold(signal).name << '\n';
+    }
+    // A zero-delay transaction updates the signal in the host's next update
+    // phase, before the next delta's processes run (IEEE 1076-2019 14.7.5.3).
+    // The kernel's rounds are host deltas (vhdl_host_cycles_): a round with
+    // more work yields to the host, and the update wakes the signal's
+    // kernel readers in its delta, so no further activation is needed.
+    impl_.schedule_projected_waveform(members_[member].process, signal,
+        elements, offset, rejection, mode);
 }
 
 Interpreter::Impl::StaticKernel::Word
@@ -3810,6 +4034,40 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
             write_signal_owned(signal, std::move(value), offset, member_index,
                 pc);
         };
+        // A signal assignment (IEEE 1076-2019 10.5.2): a kernel-owned target
+        // takes only the single zero-delay inertial element the planner
+        // admits for it (applied in the round's update phase); a host
+        // target's transactions go to the member's host driver.
+        const auto projected_write = [&](const SignalId signal,
+                                         std::vector<ProjectedWaveformValue> elements,
+                                         const std::optional<std::uint32_t> offset,
+                                         const SimulationTick rejection,
+                                         const ProjectedDelayMode mode) {
+            if (!owned(signal)) {
+                write_host_projected(member_index, signal, elements,
+                    offset ? std::optional<std::size_t> { *offset } : std::nullopt,
+                    rejection, mode);
+                return;
+            }
+            if (elements.size() != 1U || elements.front().delay != 0U
+                || rejection != 0U || mode != ProjectedDelayMode::inertial) {
+                fail(member_index, pc,
+                    "static kernel delayed assignment targets a kernel-owned signal");
+            }
+            signal_write(signal, std::move(elements.front().value), offset, false,
+                SignalUpdateDomain::generic);
+        };
+        const auto waveform = [&](const std::vector<ProjectedWaveformElement>& source) {
+            std::vector<ProjectedWaveformValue> elements;
+            elements.reserve(source.size());
+            for (const auto& element : source) {
+                elements.push_back({ reg(element.source, pc),
+                    Impl::projected_element_delay(element,
+                        element.delay_source ? reg(*element.delay_source, pc)
+                                             : reg(element.source, pc)) });
+            }
+            return elements;
+        };
         const auto dynamic_offset = [&](const DynamicIndex& selection) {
             try {
                 return dynamic_index_offset(
@@ -4087,17 +4345,101 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                         static_cast<std::uint32_t>(write->offset), false,
                         op.domain);
                 }
+            } else if constexpr (std::is_same_v<T, SignalEvent>
+                || std::is_same_v<T, SignalActive>
+                || std::is_same_v<T, SignalLastValue>
+                || std::is_same_v<T, SignalLastEvent>
+                || std::is_same_v<T, SignalLastActive>) {
+                // Attributes of a host signal (static_kernel_host_signal)
+                // from the host's history; the kernel's rounds are host
+                // cycles (vhdl_host_cycles_), so the current one is the
+                // host's (IEEE 1076-2019 16.2.4).
+                if (owned(op.signal)) {
+                    fail(member_index, pc,
+                        "static kernel attribute of a kernel signal");
+                }
+                try {
+                    if constexpr (std::is_same_v<T, SignalEvent>
+                        || std::is_same_v<T, SignalActive>) {
+                        const auto value = std::is_same_v<T, SignalEvent>
+                            ? impl_.signal_event_attribute(op.signal, op.selection)
+                            : impl_.signal_active_attribute(op.signal, op.selection);
+                        reg(op.destination, pc) = PackedLogic4(
+                            1, value ? Logic4::one : Logic4::zero);
+                    } else if constexpr (std::is_same_v<T, SignalLastValue>) {
+                        reg(op.destination, pc) = Impl::coerce_value_kind(
+                            impl_.signal_last_value_attribute(
+                                op.signal, op.selection),
+                            kind_of(op.destination));
+                    } else {
+                        const auto elapsed = std::is_same_v<T, SignalLastEvent>
+                            ? impl_.signal_last_event_attribute(
+                                  op.signal, op.selection)
+                            : impl_.signal_last_active_attribute(
+                                  op.signal, op.selection);
+                        reg(op.destination, pc)
+                            = PackedLogic4::from_aval_bval(64, elapsed, 0);
+                    }
+                } catch (const std::invalid_argument& error) {
+                    fail(member_index, pc, error.what());
+                }
+            } else if constexpr (std::is_same_v<T, ForceSignalSlice>
+                || std::is_same_v<T, ReleaseSignalSlice>) {
+                // The host's force or release of a host signal
+                // (static_kernel_host_signal): a SystemVerilog one at once
+                // (IEEE 1800-2023 10.6.2), visible to the kernel's readers
+                // like a blocking write; a VHDL one in the host's update
+                // phase (1076-2019 10.5.2.1), like a projected write.
+                if (owned(op.signal)) {
+                    fail(member_index, pc, "static kernel force of a kernel signal");
+                }
+                const auto offset = op.selection
+                    ? dynamic_offset(*op.selection) : op.offset;
+                try {
+                    if constexpr (std::is_same_v<T, ForceSignalSlice>) {
+                        impl_.force_slice_from_process(member.process, op.signal,
+                            reg(op.source, pc), offset, op.driving_value,
+                            op.port_segment);
+                    } else {
+                        impl_.release_slice_from_process(member.process,
+                            op.signal, offset, op.width, op.driving_value,
+                            op.port_segment);
+                    }
+                } catch (const std::invalid_argument& error) {
+                    fail(member_index, pc, error.what());
+                }
+                if (!member.vhdl) {
+                    if (const auto input = input_of_signal_[op.signal];
+                        input != no_slot) {
+                        (void)refresh_input(inputs_[input]);
+                    }
+                }
             } else if constexpr (std::is_same_v<T, WriteProjected>) {
-                signal_write(op.signal, reg(op.source, pc), std::nullopt, false,
-                    SignalUpdateDomain::generic);
+                projected_write(op.signal, { { reg(op.source, pc), op.delay } },
+                    std::nullopt, op.rejection, op.mode);
             } else if constexpr (std::is_same_v<T, WriteProjectedSlice>) {
-                signal_write(op.signal, reg(op.source, pc), op.offset, false,
-                    SignalUpdateDomain::generic);
+                projected_write(op.signal, { { reg(op.source, pc), op.delay } },
+                    op.offset, op.rejection, op.mode);
             } else if constexpr (std::is_same_v<T, WriteProjectedDynamicSlice>) {
-                auto value = reg(op.source, pc);
-                signal_write(op.signal, std::move(value),
-                    dynamic_offset(op.selection), false,
-                    SignalUpdateDomain::generic);
+                const auto offset = dynamic_offset(op.selection);
+                projected_write(op.signal, { { reg(op.source, pc), op.delay } },
+                    offset, op.rejection, op.mode);
+            } else if constexpr (std::is_same_v<T, WriteProjectedWaveform>) {
+                auto elements = waveform(op.elements);
+                const auto rejection = Impl::projected_rejection(op.rejection, elements);
+                projected_write(op.signal, std::move(elements), std::nullopt,
+                    rejection, op.mode);
+            } else if constexpr (std::is_same_v<T, WriteProjectedWaveformSlice>) {
+                auto elements = waveform(op.elements);
+                const auto rejection = Impl::projected_rejection(op.rejection, elements);
+                projected_write(op.signal, std::move(elements), op.offset,
+                    rejection, op.mode);
+            } else if constexpr (std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+                auto elements = waveform(op.elements);
+                const auto rejection = Impl::projected_rejection(op.rejection, elements);
+                const auto offset = dynamic_offset(op.selection);
+                projected_write(op.signal, std::move(elements), offset,
+                    rejection, op.mode);
             } else if constexpr (std::is_same_v<T, IntegerUnary>) {
                 try {
                     reg(op.destination, pc)
@@ -4345,8 +4687,17 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                     fail(member_index, pc,
                         "static kernel container is not kernel-owned");
                 }
-                member.container_registers[op.destination]
-                    = container_of_object_[op.object];
+                const auto object = container_of_object_[op.object];
+                if (op.destination < member.copy_storage.size()
+                    && member.copy_storage[op.destination] != no_container) {
+                    // The register is the reference's copy of the memory
+                    // (an element write follows): the binding copies it.
+                    const auto copy = member.copy_storage[op.destination];
+                    copy_container(copy, object, member_index, pc);
+                    member.container_registers[op.destination] = copy;
+                } else {
+                    member.container_registers[op.destination] = object;
+                }
             } else if constexpr (std::is_same_v<T, ContainerRead>) {
                 const auto& container = container_at(op.source);
                 const auto& type = container.type;
@@ -5012,6 +5363,13 @@ bool Interpreter::Impl::StaticKernel::activate()
     if (profile_) {
         profile_activations_ += 1U;
     }
+    if (trace_) {
+        std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+"
+                  << impl_.scheduler.delta() << " activate phase="
+                  << (impl_.scheduler.current_phase()
+                             ? static_cast<int>(*impl_.scheduler.current_phase()) : -1)
+                  << '\n';
+    }
     // Hosted wakes during this activation wait for its drain loop instead of
     // waking the host process again.
     struct HostedActivation {
@@ -5177,7 +5535,11 @@ void Interpreter::Impl::StaticKernel::activate_step()
                     break;
                 }
                 commit_round();
-                if (queued_count_ != 0U || !triggered_.empty()
+                // A round whose members staged updates of host signals the
+                // kernel reads (write_host) also ends here: those updates
+                // apply in the host's update phase before the next delta's
+                // round.
+                if (yield_requested_ || queued_count_ != 0U || !triggered_.empty()
                     || !trigger_queue_.empty()
                     || !vhdl_ready_threads_.empty()
                     || !hosted_active_.empty()) {

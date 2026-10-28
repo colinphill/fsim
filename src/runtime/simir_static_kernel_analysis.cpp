@@ -1121,11 +1121,13 @@ void Interpreter::Impl::StaticKernel::plan_delta_collapse()
     // run only in a time step's first round, after signals that only
     // delay-only threads write, which the kernel runs before that round.
     // That needs every delta to be the kernel's: a host process at the
-    // boundary or a hosted process could run between its rounds. Members
-    // whose compiled code is not pure leave the set, and so do the
+    // boundary or a hosted process could run between its rounds, and a
+    // host signal's attributes count the host's deltas (vhdl_host_cycles_).
+    // Members whose compiled code is not pure leave the set, and so do the
     // collapsed writers of what they read (they become ordinary readers).
     const auto count = static_cast<std::uint32_t>(members_.size());
-    const bool allowed = vhdl_ && !host_boundary_ && !has_hosted_;
+    const bool allowed = vhdl_ && !host_boundary_ && !has_hosted_
+        && !vhdl_host_cycles_;
     std::vector<std::uint8_t> keep(count, 0U);
     std::vector<std::uint32_t> dropped;
     std::uint32_t planned = 0U;

@@ -11,6 +11,7 @@
 
 #include "fsim/runtime/simir.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -79,6 +80,12 @@ struct StaticKernelMemberSpec {
     /// time step's first delta. The kernel may evaluate it in the update
     /// phase that changed its inputs (StaticKernel::plan_delta_collapse).
     bool collapse { };
+    /// A VHDL port-association conversion (IEEE 1076-2008 6.5.7.1,
+    /// 14.7.3.3): the member is the program of this signal's resolver,
+    /// which the kernel runs in the update phase that changes one of its
+    /// sources and whose result is the signal's new effective value. The
+    /// maximum means none.
+    SignalId conversion_target { std::numeric_limits<SignalId>::max() };
 };
 
 /// A kernel-owned aggregate proxy: its value is the concatenation of its
@@ -537,6 +544,11 @@ struct StaticKernelInlinedProgram {
         } else if constexpr (std::is_same_v<T, WriteStringObject>) {
             // A nonblocking string write matures in the host's NBA region.
             return !value.nonblocking;
+        } else if constexpr (std::is_same_v<T, ForceSignalSlice>
+            || std::is_same_v<T, ReleaseSignalSlice>) {
+            // The host's force of a host signal (static_kernel_host_signal);
+            // a port segment force reaches a net by another name.
+            return !value.port_segment;
         } else {
             return std::is_same_v<T, WaitFor>
                 || std::is_same_v<T, WaitSensitivity>
@@ -641,6 +653,36 @@ struct StaticKernelInlinedProgram {
     }, operation);
 }
 
+/// An operation a port-association conversion program (a resolver with
+/// sources and no drivers, IEEE 1076-2008 6.5.7.1) may use in the kernel: a
+/// pure delta-mode value operation, a read of one of its sources, or a halt,
+/// which ends the pass with the output register as the result
+/// (Interpreter::Impl::run_vhdl_resolver). Signal writes stay on the host.
+[[nodiscard]] inline bool static_kernel_conversion_operation(
+    const Operation& operation, std::span<const SignalId> sources)
+{
+    if (const auto* halt = operation_get_if<Halt>(&operation)) {
+        return !halt->program_exit;
+    }
+    if (const auto* read = operation_get_if<ReadSignal>(&operation)) {
+        if (std::ranges::find(sources, read->signal) == sources.end()) {
+            return false;
+        }
+    }
+    return static_kernel_vhdl_operation_supported(operation)
+        && !operation_holds<WriteUpdate>(operation)
+        && !operation_holds<WriteUpdateSlice>(operation)
+        && !operation_holds<WriteUpdateDynamicSlice>(operation)
+        && !operation_holds<WriteUpdateDynamicPartSlice>(operation)
+        && !operation_holds<WriteBlocking>(operation)
+        && !operation_holds<WriteBlockingSlice>(operation)
+        && !operation_holds<WriteBlockingDynamicSlice>(operation)
+        && !operation_holds<WriteBlockingDynamicPartSlice>(operation)
+        && !operation_holds<WriteProjected>(operation)
+        && !operation_holds<WriteProjectedSlice>(operation)
+        && !operation_holds<WriteProjectedDynamicSlice>(operation);
+}
+
 /// A halt that follows a failure-severity report, as the VHDL lowering emits
 /// for its runtime checks (value length, slice bounds, loop iteration limit):
 /// the report ends the simulation (the kernel raises the assertion failure,
@@ -659,9 +701,14 @@ struct StaticKernelInlinedProgram {
 /// the VHDL delta-mode set plus the wait statement (`wait for`, `wait on`,
 /// `wait until` lowered as a WaitOn loop, with or without a timeout, bare
 /// `wait`), reports and `std.env` stop/finish. Signal assignments stay the
-/// zero-delay inertial ones the delta-mode set already admits; delayed,
-/// transport and waveform assignments, attribute queries and container
-/// registers stay on the host. String registers carry `'image`, `'value`,
+/// zero-delay inertial ones the delta-mode set already admits on kernel
+/// signals; delayed, transport and waveform assignments and the signal
+/// attributes 'EVENT, 'ACTIVE, 'LAST_VALUE, 'LAST_EVENT and 'LAST_ACTIVE
+/// (16.2.4) and forces keep their signal a host signal
+/// (static_kernel_host_signal) and use the host's driver, history and
+/// force. Container registers hold private arrays and protected-type state
+/// (6.5.2, 5.6.2) as the SystemVerilog threads' do. String registers carry
+/// `'image`, `'value`,
 /// concatenation, comparison and computed report messages (5.3.2.4, 16.2,
 /// 10.9), and automatic frames may save them. TEXTIO and typed files run
 /// the reference's file operations (16.4, static_kernel_file_operation).
@@ -700,14 +747,42 @@ struct StaticKernelInlinedProgram {
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
             // `now` (IEEE 1076-2019 16.3): the time query.
             return value.function >= SystemVerilogMathFunction::Time;
-        } else if constexpr (std::is_same_v<T, CallableFramePush>) {
-            return value.containers.empty();
-        } else if constexpr (std::is_same_v<T, CallableFramePop>) {
-            return value.preserve_containers.empty();
+        } else if constexpr (std::is_same_v<T, ContainerWrite>) {
+            // Process-private arrays and copies of protected-type state
+            // (see the planner's container rule).
+            return !value.string_index && !value.associative_default;
+        } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
+            return !value.nonblocking && !value.transaction_signal;
+        } else if constexpr (std::is_same_v<T, WriteProjected>
+            || std::is_same_v<T, WriteProjectedSlice>
+            || std::is_same_v<T, WriteProjectedDynamicSlice>
+            || std::is_same_v<T, WriteProjectedWaveform>
+            || std::is_same_v<T, WriteProjectedWaveformSlice>
+            || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+            // Delayed, transport and waveform assignments go to the
+            // member's host driver of a host signal
+            // (static_kernel_host_signal).
+            (void)value;
+            return true;
+        } else if constexpr (std::is_same_v<T, ForceSignalSlice>
+            || std::is_same_v<T, ReleaseSignalSlice>) {
+            // Forces scheduled for the host's update phase (10.5.2.1).
+            return !value.port_segment;
         } else {
             return std::is_same_v<T, WaitFor>
+                || std::is_same_v<T, SignalEvent>
+                || std::is_same_v<T, SignalActive>
+                || std::is_same_v<T, SignalLastValue>
+                || std::is_same_v<T, SignalLastEvent>
+                || std::is_same_v<T, SignalLastActive>
                 || std::is_same_v<T, WaitSensitivity>
                 || std::is_same_v<T, WaitForever>
+                // Automatic frames save their container registers too.
+                || std::is_same_v<T, CallableFramePush>
+                || std::is_same_v<T, CallableFramePop>
+                || std::is_same_v<T, ContainerRead>
+                || std::is_same_v<T, ReadContainerObject>
+                || std::is_same_v<T, CopyContainerRegister>
                 || std::is_same_v<T, Report>
                 || std::is_same_v<T, Stop>
                 || std::is_same_v<T, LoadStringConstant>
@@ -719,6 +794,47 @@ struct StaticKernelInlinedProgram {
                 || std::is_same_v<T, StringLength>
                 || std::is_same_v<T, StringIndex>
                 || std::is_same_v<T, StringReplaceByte>;
+        }
+    }, operation);
+}
+
+/// The signal a behavioral member's operation keeps on the host: the target
+/// of a VHDL signal assignment other than a single zero-delay inertial
+/// element without a rejection limit, which has transactions in the
+/// projected output waveform of its driver (IEEE 1076-2019 10.5.2.2); the
+/// prefix of 'EVENT, 'ACTIVE, 'LAST_VALUE, 'LAST_EVENT or 'LAST_ACTIVE
+/// (16.2.4), whose event and transaction history the host keeps; and the
+/// target of a force or release (IEEE 1800-2023 10.6.2, 1076-2019
+/// 10.5.2.1), whose forced value hides its drivers' in the host's
+/// resolution.
+[[nodiscard]] inline std::optional<SignalId> static_kernel_host_signal(
+    const Operation& operation)
+{
+    return visit_operation([](const auto& value) -> std::optional<SignalId> {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, ForceSignalSlice>
+            || std::is_same_v<T, ReleaseSignalSlice>) {
+            return value.signal;
+        } else if constexpr (std::is_same_v<T, SignalEvent>
+            || std::is_same_v<T, SignalActive>
+            || std::is_same_v<T, SignalLastValue>
+            || std::is_same_v<T, SignalLastEvent>
+            || std::is_same_v<T, SignalLastActive>) {
+            return value.signal;
+        } else if constexpr (std::is_same_v<T, WriteProjected>
+            || std::is_same_v<T, WriteProjectedSlice>
+            || std::is_same_v<T, WriteProjectedDynamicSlice>) {
+            if (value.delay != 0U || value.rejection != 0U
+                || value.mode != ProjectedDelayMode::inertial) {
+                return value.signal;
+            }
+            return std::nullopt;
+        } else if constexpr (std::is_same_v<T, WriteProjectedWaveform>
+            || std::is_same_v<T, WriteProjectedWaveformSlice>
+            || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+            return value.signal;
+        } else {
+            return std::nullopt;
         }
     }, operation);
 }

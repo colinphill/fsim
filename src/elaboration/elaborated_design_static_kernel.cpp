@@ -460,15 +460,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 && hit("static_trigger_regions")) {
                 return first;
             }
-            if (vhdl) {
-                // VHDL behavioral threads keep their registers and strings in
-                // the member's reference-format files (any value kind);
-                // containers stay on the host.
-                if (view.container_register_count() != 0U
-                    && hit("vhdl_container_register")) {
-                    return first;
-                }
-            } else if (non_logic4 && hit("register_kind")) {
+            // VHDL behavioral threads keep their registers and strings in the
+            // member's reference-format files (any value kind); their
+            // container registers follow the container rule.
+            if (!vhdl && non_logic4 && hit("register_kind")) {
                 return first;
             }
             if (std::ranges::any_of(view.static_sensitivity(),
@@ -864,6 +859,182 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             rejection[index].clear();
         }
     }
+    // The container registers of a behavioral member: arrays bound to design
+    // memories or protected-type state (ReadContainerObject), used directly
+    // (the kernel gives each private register its own storage) and saved by
+    // automatic frames. Returns the reason the kernel cannot hold them, or
+    // nullptr.
+    const auto container_rule = [&](const auto& view, const bool vhdl) -> const char* {
+        const auto& operations = view.operations();
+        const auto count = operations.size();
+        std::set<ContainerRegisterId> bound_containers;
+        std::set<ContainerRegisterId> private_containers;
+        // Registers an element write targets.
+        std::set<ContainerRegisterId> written_containers;
+        // Registers element values move through (ContainerRead destinations,
+        // ContainerWrite sources).
+        std::set<RegisterId> element_registers;
+        // Whole-register copies (CopyContainerRegister) between arrays of
+        // one shape, and whether the next operation writes the destination
+        // back to the memory it is bound to.
+        struct ContainerCopy {
+            ContainerRegisterId destination { };
+            ContainerRegisterId source { };
+            std::optional<ContainerObjectId> written_back;
+        };
+        std::vector<ContainerCopy> container_copies;
+        // Registers bound to each design memory, and whole writes of a
+        // register to a memory: the kernel supports the write-back of a
+        // binding to its own memory (the $readmem lowering, a protected
+        // method's update of its state) and the blocking write of a private
+        // array of the memory's type (a task's output array copied out, IEEE
+        // 1800-2023 13.5).
+        std::map<ContainerRegisterId, std::set<ContainerObjectId>> binding_objects;
+        struct ObjectWrite {
+            ContainerObjectId object { };
+            ContainerRegisterId source { };
+            bool plain { };
+        };
+        std::vector<ObjectWrite> object_writes;
+        for (std::size_t op = 0U; op < count; ++op) {
+            const auto operation = operations.expanded(op);
+            visit_operation([&](const auto& value) {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, ReadContainerObject>) {
+                    bound_containers.insert(value.destination);
+                    binding_objects[value.destination].insert(value.object);
+                } else if constexpr (std::is_same_v<T, LoadMemory>) {
+                    private_containers.insert(value.target);
+                } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
+                    object_writes.push_back({ value.object, value.source,
+                        !value.nonblocking && !value.transaction_signal });
+                } else if constexpr (std::is_same_v<T, ContainerRead>) {
+                    private_containers.insert(value.source);
+                    element_registers.insert(value.destination);
+                } else if constexpr (std::is_same_v<T, ContainerWrite>) {
+                    private_containers.insert(value.target);
+                    written_containers.insert(value.target);
+                    element_registers.insert(value.source);
+                } else if constexpr (std::is_same_v<T, CopyContainerRegister>) {
+                    private_containers.insert(value.destination);
+                    private_containers.insert(value.source);
+                    std::optional<ContainerObjectId> written_back;
+                    if (op + 1U < count) {
+                        const auto next = operations.expanded(op + 1U);
+                        if (const auto* write
+                            = operation_get_if<WriteContainerObject>(&next);
+                            write != nullptr
+                            && write->source == value.destination
+                            && !write->nonblocking
+                            && !write->transaction_signal) {
+                            written_back = write->object;
+                        }
+                    }
+                    container_copies.push_back({ value.destination,
+                        value.source, written_back });
+                }
+            }, operation);
+        }
+        const auto types = process_layout_detail::ProcessLayoutAccess::view(
+            view.container_register_types());
+        // Private storage must be a fixed packed array. A register both
+        // bound and element-written is the reference's copy of its memory
+        // (IEEE 1800-2023 7.4, 7.6; IEEE 1076-2019 6.4.2.4): the kernel gives
+        // it private storage that each binding copies the memory into, and
+        // its write-back copies it out.
+        for (const auto id : private_containers) {
+            if (bound_containers.contains(id) && !written_containers.contains(id)) {
+                continue;
+            }
+            const bool fixed = id < types.size() && types[id].fixed
+                && !types[id].associative && !types[id].vhdl_shaped
+                && (types[id].element_kind == ContainerElementKind::Packed
+                    || types[id].element_kind == ContainerElementKind::Scalar);
+            if (!fixed) {
+                return "private_container_shape";
+            }
+        }
+        for (const auto id : written_containers) {
+            if (!bound_containers.contains(id)) {
+                continue;
+            }
+            for (const auto object : binding_objects[id]) {
+                if (object >= container_objects_.size()
+                    || !(container_objects_[object].initial_value.type == types[id])) {
+                    return "bound_container_write";
+                }
+            }
+        }
+        for (const auto& [object, source, plain] : object_writes) {
+            const auto found = binding_objects.find(source);
+            const bool write_back = found != binding_objects.end()
+                && found->second.size() == 1U
+                && *found->second.begin() == object;
+            const bool copy_out = plain && found == binding_objects.end()
+                && source < types.size() && object < container_objects_.size()
+                && types[source] == container_objects_[object].initial_value.type
+                && types[source].fixed && !types[source].sparse;
+            if (!write_back && !copy_out) {
+                return "container_object_write";
+            }
+        }
+        // A copy keeps the reference semantics between registers of
+        // identical type (the reference requires the same type, IEEE
+        // 1800-2023 7.6); its source may be bound to a design memory (an
+        // array argument copied in, 13.5). The reference copies into a
+        // binding's own copy of its memory and stores it at the write-back;
+        // the kernel's binding aliases the memory, so a bound destination
+        // needs the write-back of the binding to its one memory as the next
+        // operation (a static task's array argument, 13.5).
+        for (const auto& [destination, source, written_back] : container_copies) {
+            const auto bound = binding_objects.find(destination);
+            const bool published = written_back
+                && bound != binding_objects.end()
+                && bound->second.size() == 1U
+                && *bound->second.begin() == *written_back;
+            if ((bound_containers.contains(destination) && !published)
+                || destination >= types.size() || source >= types.size()
+                || !(types[destination] == types[source])
+                || types[destination].sparse
+                || types[destination].vhdl_shaped) {
+                return "container_copy_shape";
+            }
+        }
+        if (vhdl) {
+            // Kernel arrays hold two-plane (Logic4) elements: a VHDL array of
+            // std_logic values (IEEE 1076-2019 16.7) keeps its nine-value
+            // elements on the host, as do arrays with run-time ranges.
+            for (const auto reg : element_registers) {
+                if (process_layout_detail::ProcessLayoutAccess::copy_at_or(
+                        view.register_value_kinds(), reg, ValueKind::logic4)
+                    != ValueKind::logic4) {
+                    return "container_value_kind";
+                }
+            }
+            for (const auto& [id, objects] : binding_objects) {
+                for (const auto object : objects) {
+                    if (object >= container_objects_.size()) {
+                        return "container_value_kind";
+                    }
+                    const auto& value = container_objects_[object].initial_value;
+                    if (value.type.vhdl_shaped
+                        || std::ranges::any_of(value.elements,
+                            [](const runtime::PackedLogic4& element) {
+                                return element.is_logic9();
+                            })) {
+                        return "container_value_kind";
+                    }
+                }
+            }
+            for (const auto& write : object_writes) {
+                if (write.object >= container_objects_.size()
+                    || container_objects_[write.object].initial_value.type.vhdl_shaped) {
+                    return "container_value_kind";
+                }
+            }
+        }
+        return nullptr;
+    };
     // Behavioral members: SystemVerilog testbench processes that run as
     // resumable kernel threads (plan §3.5). FSIM_STATIC_KERNEL_BEHAVIORAL=0
     // keeps them on the host.
@@ -899,34 +1070,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             bool supported = count != 0U;
             std::size_t failed_at = count;
             const char* failed_reason = "";
-            // Container registers bound to design memories, used directly
-            // (the kernel gives each such private register its own storage),
-            // and saved by automatic frames.
-            std::set<ContainerRegisterId> bound_containers;
-            std::set<ContainerRegisterId> private_containers;
-            // Registers an element write targets.
-            std::set<ContainerRegisterId> written_containers;
-            // Whole-register copies (CopyContainerRegister) between arrays of
-            // one shape, and whether the next operation writes the
-            // destination back to the memory it is bound to.
-            struct ContainerCopy {
-                ContainerRegisterId destination { };
-                ContainerRegisterId source { };
-                std::optional<ContainerObjectId> written_back;
-            };
-            std::vector<ContainerCopy> container_copies;
-            // Registers bound to each design memory, and whole writes of a
-            // register to a memory: the kernel supports the write-back of a
-            // binding to its own memory (the $readmem lowering) and the
-            // blocking write of a private array of the memory's type (a
-            // task's output array copied out, IEEE 1800-2023 13.5).
-            std::map<ContainerRegisterId, std::set<ContainerObjectId>> binding_objects;
-            struct ObjectWrite {
-                ContainerObjectId object { };
-                ContainerRegisterId source { };
-                bool plain { };
-            };
-            std::vector<ObjectWrite> object_writes;
             for (std::size_t op = 0U; op < count && supported; ++op) {
                 const auto operation = operations.expanded(op);
                 failed_at = op;
@@ -953,36 +1096,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     if constexpr (std::is_same_v<T, Call>) {
                         supported = supported && value.target < count
                             && value.return_target < count;
-                    } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
-                        bound_containers.insert(value.destination);
-                        binding_objects[value.destination].insert(value.object);
-                    } else if constexpr (std::is_same_v<T, LoadMemory>) {
-                        private_containers.insert(value.target);
-                    } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
-                        object_writes.push_back({ value.object, value.source,
-                            !value.nonblocking && !value.transaction_signal });
-                    } else if constexpr (std::is_same_v<T, ContainerRead>) {
-                        private_containers.insert(value.source);
-                    } else if constexpr (std::is_same_v<T, ContainerWrite>) {
-                        private_containers.insert(value.target);
-                        written_containers.insert(value.target);
-                    } else if constexpr (std::is_same_v<T, CopyContainerRegister>) {
-                        private_containers.insert(value.destination);
-                        private_containers.insert(value.source);
-                        std::optional<ContainerObjectId> written_back;
-                        if (op + 1U < count) {
-                            const auto next = operations.expanded(op + 1U);
-                            if (const auto* write
-                                = operation_get_if<WriteContainerObject>(&next);
-                                write != nullptr
-                                && write->source == value.destination
-                                && !write->nonblocking
-                                && !write->transaction_signal) {
-                                written_back = write->object;
-                            }
-                        }
-                        container_copies.push_back({ value.destination,
-                            value.source, written_back });
                     } else if constexpr (std::is_same_v<T, Fork>) {
                         supported = supported
                             && std::ranges::all_of(value.branches,
@@ -1010,86 +1123,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }, operation);
             }
             if (supported) {
-                // A register both bound and written would alias the design
-                // memory, which the interpreter copies. Private storage must
-                // be a fixed packed array.
-                const auto types = process_layout_detail::ProcessLayoutAccess::view(
-                    view.container_register_types());
-                for (const auto id : private_containers) {
-                    if (bound_containers.contains(id)) {
-                        continue;
-                    }
-                    const bool fixed = id < types.size() && types[id].fixed
-                        && !types[id].associative
-                        && (types[id].element_kind == ContainerElementKind::Packed
-                            || types[id].element_kind
-                                == ContainerElementKind::Scalar);
-                    if (!fixed) {
-                        supported = false;
-                        failed_at = count;
-                        failed_reason = "private_container_shape";
-                        break;
-                    }
-                }
-                // An element write into a binding of a design memory edits
-                // the reference's copy, which a later write-back stores
-                // whole (IEEE 1800-2023 7.4); the kernel's binding aliases
-                // the memory, so reads of the memory between the two would
-                // differ. Such a process stays on the host.
-                for (const auto id : written_containers) {
-                    if (supported && bound_containers.contains(id)) {
-                        supported = false;
-                        failed_at = count;
-                        failed_reason = "bound_container_write";
-                    }
-                }
-                for (const auto& [object, source, plain] : object_writes) {
-                    if (!supported) {
-                        break;
-                    }
-                    const auto found = binding_objects.find(source);
-                    const bool write_back = found != binding_objects.end()
-                        && found->second.size() == 1U
-                        && *found->second.begin() == object;
-                    const bool copy_out = plain && found == binding_objects.end()
-                        && source < types.size() && object < container_objects_.size()
-                        && types[source] == container_objects_[object].initial_value.type
-                        && types[source].fixed && !types[source].sparse;
-                    if (!write_back && !copy_out) {
-                        supported = false;
-                        failed_at = count;
-                        failed_reason = "container_object_write";
-                        break;
-                    }
-                }
-                // A copy keeps the reference semantics between registers of
-                // identical type (the reference requires the same type, IEEE
-                // 1800-2023 7.6); its source may be bound to a design memory
-                // (an array argument copied in, 13.5). The reference copies
-                // into a binding's own copy of its memory and stores it at
-                // the write-back; the kernel's binding aliases the memory, so
-                // a bound destination needs the write-back of the binding to
-                // its one memory as the next operation (a static task's array
-                // argument, 13.5).
-                for (const auto& [destination, source, written_back]
-                     : container_copies) {
-                    if (!supported) {
-                        break;
-                    }
-                    const auto bound = binding_objects.find(destination);
-                    const bool published = written_back
-                        && bound != binding_objects.end()
-                        && bound->second.size() == 1U
-                        && *bound->second.begin() == *written_back;
-                    if ((bound_containers.contains(destination) && !published)
-                        || destination >= types.size() || source >= types.size()
-                        || !(types[destination] == types[source])
-                        || types[destination].sparse
-                        || types[destination].vhdl_shaped) {
-                        supported = false;
-                        failed_at = count;
-                        failed_reason = "container_copy_shape";
-                    }
+                if (const char* reason = container_rule(view, false)) {
+                    supported = false;
+                    failed_at = count;
+                    failed_reason = reason;
                 }
             }
             if (!supported && census) {
@@ -1232,6 +1269,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     }
                 }, operation);
             }
+            if (supported) {
+                if (const char* reason = container_rule(view, true)) {
+                    supported = false;
+                    failed_at = count;
+                    failed_reason = reason;
+                }
+            }
             if (!supported && census) {
                 rejection[index] = std::string { "behavioral_" } + failed_reason
                     + (failed_at < count
@@ -1244,6 +1288,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
             if (supported) {
                 candidates[index] = std::move(member);
+                if (census) {
+                    rejection[index].clear();
+                }
             } else if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
                 std::cerr << "fsim-kernel-plan: vhdl behavioral rejected process="
                           << view.name() << " op=" << failed_at
@@ -1524,6 +1571,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             && !(packed_alias[object] && has_element_alias[object])
             ? 1U : 0U;
     }
+    std::vector<std::uint8_t> vhdl_variable_storage(object_count, 0U);
+    for (std::size_t object = 0U; object < object_count; ++object) {
+        const auto& value = container_objects_[object].initial_value;
+        vhdl_variable_storage[object] = !packed_alias[object]
+                && has_element_alias[object] == 0U && !value.type.vhdl_shaped
+                && std::ranges::none_of(value.elements,
+                    [](const runtime::PackedLogic4& element) {
+                        return element.is_logic9();
+                    })
+            ? 1U : 0U;
+    }
     std::vector<std::vector<ProcessId>> accessors(object_count);
     for (std::size_t index = 0U; index < process_count; ++index) {
         for (const auto object : container_uses[index]) {
@@ -1539,6 +1597,23 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     std::vector<std::uint8_t> host_touched(signal_count, 0U);
     if (host_signals) {
         std::ranges::fill(host_touched, 1U);
+    }
+    // A member's delayed, transport or waveform signal assignment keeps its
+    // target a host signal, an attribute query its prefix and a force its
+    // target: the host holds the projected output waveform of the member's
+    // driver, the signal's history and the force (static_kernel_host_signal).
+    for (std::size_t index = 0U; index < process_count; ++index) {
+        if (!candidates[index]) {
+            continue;
+        }
+        const auto& operations = views[index].operations();
+        for (std::size_t op = 0U; op < operations.size(); ++op) {
+            if (const auto target = static_kernel_host_signal(
+                    operations.expanded(op));
+                target && *target < signal_count) {
+                host_touched[*target] = 1U;
+            }
+        }
     }
     // A file trace's fixed selection: its signals are host signals, which
     // the trace observes through the host commit path (plan §3.6).
@@ -1755,6 +1830,49 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         wirings.push_back({ target, source, resolver->process, true });
         wiring_program[resolver->process] = 1U;
     }
+    // A port-association conversion (IEEE 1076-2008 6.5.7.1, 14.7.3.3): a
+    // resolver with sources and no drivers whose program is a pure function
+    // of its sources (static_kernel_conversion_operation). The kernel runs
+    // it in the update phase that changes a source, as the host's update
+    // commit does, so the formal updates in the same simulation cycle. It
+    // needs its sources and its formal kernel-owned; otherwise it reverts
+    // to a host program below.
+    struct Conversion {
+        SignalId target { };
+        ProcessId program { };
+        std::vector<SignalId> sources;
+        bool live { };
+    };
+    std::vector<Conversion> conversions;
+    std::vector<std::int32_t> conversion_of_target(signal_count, -1);
+    for (SignalId target = 0U; vhdl_mode && !mixed && target < signal_count;
+         ++target) {
+        const auto& resolver = signals_[target].vhdl_resolver;
+        if (!resolver || resolver->sources.empty() || !resolver->drivers.empty()
+            || !resolver->variants.empty() || resolver->guarded_kind != 0U
+            || resolver->driving_mirror
+            || !signals_[target].vhdl_conversion_drivers.empty()
+            || wiring_of_target[target] >= 0
+            || resolver->process >= process_count
+            || !views[resolver->process].valid()
+            || std::ranges::any_of(resolver->sources, [&](const SignalId source) {
+                   return source >= signal_count || source == target;
+               })) {
+            continue;
+        }
+        const auto& operations = views[resolver->process].operations();
+        bool pure = operations.size() != 0U;
+        for (std::size_t op = 0U; op < operations.size() && pure; ++op) {
+            pure = static_kernel_conversion_operation(
+                operations.expanded(op), resolver->sources);
+        }
+        if (!pure) {
+            continue;
+        }
+        conversion_of_target[target] = static_cast<std::int32_t>(conversions.size());
+        conversions.push_back({ target, resolver->process, resolver->sources, true });
+        wiring_program[resolver->process] = 1U;
+    }
     for (SignalId index = 0U; index < signal_count; ++index) {
         const auto& signal = signals_[index];
         if (!signal.vhdl_resolver || signal.vhdl_resolver->sources.empty()) {
@@ -1763,7 +1881,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         if (signal.vhdl_resolver->process < process_count) {
             host_program[signal.vhdl_resolver->process] = 1U;
         }
-        if (wiring_of_target[index] >= 0) {
+        if (wiring_of_target[index] >= 0 || conversion_of_target[index] >= 0) {
             continue;
         }
         for (const auto source : signal.vhdl_resolver->sources) {
@@ -2036,13 +2154,41 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 owned[wiring.target] = 1U;
                 again = true;
             }
+            // A converted formal likewise, with every source: plain
+            // signals, which the kernel reads in its update phase.
+            for (const auto& conversion : conversions) {
+                if (!conversion.live || owned[conversion.target] != 0U
+                    || alias_role[conversion.target] != 0U
+                    || proxy_signal[conversion.target] != 0U
+                    || !basic_ok(conversion.target)
+                    || !std::ranges::all_of(conversion.sources,
+                        [&](const SignalId source) {
+                            return owned[source] != 0U && alias_role[source] == 0U
+                                && proxy_signal[source] == 0U;
+                        })
+                    || !std::ranges::all_of(
+                        graph_signals[conversion.target].writers,
+                        [&](const auto& writer) {
+                            return writer.process == conversion.program;
+                        })) {
+                    continue;
+                }
+                owned[conversion.target] = 1U;
+                again = true;
+            }
         }
         for (std::size_t object = 0U; object < object_count; ++object) {
-            if (container_shape_ok[object] == 0U || (vhdl_mode && !mixed)
+            // A VHDL variable's storage (a shared variable, protected-type
+            // state; IEEE 1076-2019 6.4.2.4, 5.6.2) is kernel storage when
+            // its elements are two-plane values; containers that alias VHDL
+            // signals stay on the host.
+            const bool vhdl_accessed = (vhdl_mode && !mixed)
                 || (mixed && std::ranges::any_of(accessors[object],
                     [&](const ProcessId process) {
                         return candidates[process] && candidates[process]->vhdl;
-                    }))
+                    }));
+            if (container_shape_ok[object] == 0U
+                || (vhdl_accessed && !vhdl_variable_storage[object])
                 || std::ranges::any_of(accessors[object],
                     [&](const ProcessId process) {
                         return !candidates[process];
@@ -2142,6 +2288,21 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             wiring_program[wiring.program] = 0U;
             host_touched[wiring.source] = 1U;
             wiring_of_target[wiring.target] = -1;
+            revalidate = true;
+        }
+    }
+    for (auto& conversion : conversions) {
+        if (conversion.live
+            && (owned[conversion.target] == 0U
+                || std::ranges::any_of(conversion.sources,
+                    [&](const SignalId source) { return owned[source] == 0U; }))) {
+            conversion.live = false;
+            wiring_program[conversion.program] = 0U;
+            for (const auto source : conversion.sources) {
+                host_touched[source] = 1U;
+            }
+            host_touched[conversion.target] = 1U;
+            conversion_of_target[conversion.target] = -1;
             revalidate = true;
         }
     }
@@ -3303,13 +3464,67 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         plan.collapse_members += collapse[index];
         spec->members.push_back(std::move(runtime_member));
     }
+    // Live conversions: members the kernel runs in its update phase, never
+    // scheduled. The body is the program followed by the formal's write, a
+    // wait and the loop jump the kernel appends (StaticKernel), so it has a
+    // combinational member's shape.
+    for (const auto& conversion : conversions) {
+        if (!conversion.live || member[conversion.program] != 0U) {
+            continue;
+        }
+        member[conversion.program] = 1U;
+        StaticKernelMemberSpec runtime_member;
+        runtime_member.process = conversion.program;
+        runtime_member.kind = StaticKernelMemberKind::combinational;
+        runtime_member.body_begin = 0U;
+        runtime_member.body_end = static_cast<std::uint32_t>(
+            views[conversion.program].operations().size() + 1U);
+        runtime_member.vhdl = true;
+        runtime_member.conversion_target = conversion.target;
+        spec->members.push_back(std::move(runtime_member));
+    }
     // Commit programs (S25b): the programs of the update commit (resolvers,
     // conversion drivers and their stubs) are not scheduled processes; the
     // census counts them as kernel-owned rows of their program kind, never
     // as host processes. Whatever the candidate classification said about
     // their operations is replaced by that kind.
     const auto census_commit_programs = [&](std::vector<std::uint8_t>& kernel_rows) {
-        for (std::size_t index = 0U; census && index < process_count; ++index) {
+        if (!census) {
+            return;
+        }
+        // The program's role in the update commit (IEEE 1076-2008 14.7.3):
+        // a conversion of one source (an input port's conversion function),
+        // a resolution function over drivers, a guarded variant, or an
+        // output port's conversion driver.
+        std::vector<const char*> role(process_count, nullptr);
+        for (std::size_t signal = 0U; signal < signals_.size(); ++signal) {
+            if (const auto& resolver = signals_[signal].vhdl_resolver) {
+                if (resolver->process < process_count) {
+                    role[resolver->process] = resolver->driving_mirror
+                        ? "commit_program:formal"
+                        : !resolver->drivers.empty()
+                        ? "commit_program:resolution"
+                        : resolver->sources.size() == 1U
+                            && resolver->variants.empty()
+                            && resolver->guarded_kind == 0U
+                        ? "commit_program:conversion"
+                        : "commit_program:resolver";
+                }
+                for (const auto& variant : resolver->variants) {
+                    if (variant.process < process_count) {
+                        role[variant.process] = "commit_program:guarded";
+                    }
+                }
+            }
+            for (const auto& driver : signals_[signal].vhdl_conversion_drivers) {
+                if (driver.program < process_count) {
+                    role[driver.program] = driver.sources.size() == 1U
+                        ? "commit_program:driver"
+                        : "commit_program:driver_multi";
+                }
+            }
+        }
+        for (std::size_t index = 0U; index < process_count; ++index) {
             if (member[index] != 0U || host_program[index] == 0U) {
                 continue;
             }
@@ -3320,6 +3535,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 ? "commit_program_switch"
                 : !view.initialize() && view.operations().size() == 1U
                 ? "commit_program_stub"
+                : role[index] != nullptr ? role[index]
                 : "commit_program";
         }
     };
@@ -3387,6 +3603,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     for (const auto& wiring : driver_wirings) {
         if (wiring.live) {
             wired_program[wiring.program] = 1U;
+        }
+    }
+    for (const auto& conversion : conversions) {
+        if (conversion.live) {
+            wired_program[conversion.program] = 1U;
         }
     }
     std::vector<std::uint8_t> virtual_owned(signal_count, 0U);
@@ -3478,6 +3699,19 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 0U,
                 static_cast<std::uint32_t>(
                     signals_[wiring.target].initial_value.width()) });
+        }
+    }
+    // A conversion member is its formal's only writer.
+    for (const auto& conversion : conversions) {
+        if (conversion.live
+            && std::ranges::none_of(spec->writer_regions,
+                [&](const auto& region) {
+                    return region.signal == conversion.target;
+                })) {
+            spec->writer_regions.push_back({ conversion.target,
+                conversion.program, 0U,
+                static_cast<std::uint32_t>(
+                    signals_[conversion.target].initial_value.width()) });
         }
     }
     std::vector<std::uint8_t> input(signal_count, 0U);
@@ -3607,7 +3841,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
 namespace detail {
 namespace {
 
-constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v6" };
+constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v7" };
 
 class PlanWriter {
 public:
@@ -3755,6 +3989,7 @@ std::string serialize_static_kernel_plan(const StaticKernelPlan& plan)
         out.put(member.start_late);
         out.put(member.lazy);
         out.put(member.collapse);
+        out.put(member.conversion_target);
     });
     out.list(spec.hosted, [&](const runtime::simir::StaticKernelMemberSpec& member) {
         out.put(member.process);
@@ -3828,7 +4063,11 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
                    && sensitivity_ok(member.sensitivity)
                    && in.get(member.partition) && in.get(member.vhdl)
                    && in.get(member.start_late) && in.get(member.lazy)
-                   && in.get(member.collapse);
+                   && in.get(member.collapse)
+                   && in.get(member.conversion_target)
+                   && (member.conversion_target
+                           == std::numeric_limits<SignalId>::max()
+                       || signal_ok(member.conversion_target));
            })
         && in.list(spec->hosted, [&](StaticKernelMemberSpec& member) {
                member.kind = StaticKernelMemberKind::hosted;

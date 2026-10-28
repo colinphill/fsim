@@ -234,7 +234,7 @@ public:
     /// Interpreter::start queues its first activation instead of running it.
     [[nodiscard]] bool queues_first_activation() const noexcept
     {
-        return mixed_ && host_boundary_;
+        return (mixed_ && host_boundary_) || vhdl_host_cycles_;
     }
     /// The host process the kernel runs as, a member's or the synthetic one
     /// of a design whose processes are all hosted.
@@ -321,6 +321,10 @@ private:
         bool collapse { };
         std::vector<std::uint32_t> collapse_inputs;
         std::vector<std::uint32_t> collapse_outputs;
+        /// A port-association conversion (StaticKernelMemberSpec::
+        /// conversion_target): never scheduled; run_conversions runs it in
+        /// the update phase that changes one of its sources.
+        bool conversion { };
         std::uint32_t body_begin { };
         std::uint32_t body_end { };
         std::uint32_t exit_alt { static_kernel_detail::no_slot };
@@ -330,6 +334,10 @@ private:
         /// Register value kinds (VHDL delta mode; empty means Logic4).
         std::vector<ValueKind> register_kinds;
         std::vector<std::uint32_t> container_registers;
+        /// Per container register: the private storage a ReadContainerObject
+        /// binding copies its memory into (a register the member writes
+        /// elements of), or no_container; empty when there is none.
+        std::vector<std::uint32_t> copy_storage;
         /// The program's shared operation body while `operations` still
         /// expands it (null once specialization rewrote them); members
         /// with equal bodies share prune_operations results.
@@ -613,9 +621,28 @@ private:
     /// The VHDL update phase: commit_writes, then the collapsed members its
     /// changes woke, each set of them committed in turn (run_collapsed).
     void commit_round();
-    /// Applies the queued VHDL assignments and reports the changed slots.
+    /// Applies the queued VHDL assignments and reports the changed slots;
+    /// then runs the conversions the changes queued (run_conversions).
     void commit_writes();
     void run_collapsed();
+    /// Port-association conversions (IEEE 1076-2008 14.7.3.3), as the
+    /// host's update commit runs them (drain_vhdl_resolutions): first in,
+    /// first out, each committed before the next runs and each at most once
+    /// per update phase.
+    void run_conversions();
+    /// The conversions' initial values (14.7.5.2), with the wires', before
+    /// any activation: no events; the host's copies of the formals follow.
+    void settle_conversions();
+    /// Each slot's conversion members, in the host's dependents order.
+    std::vector<std::vector<std::uint32_t>> slot_conversions_;
+    std::vector<std::uint32_t> conversion_members_;
+    std::vector<std::uint32_t> conversion_queue_;
+    std::vector<std::uint8_t> conversion_queued_;
+    bool running_conversions_ { };
+    /// settle_conversions: commit_writes counts changed slots instead of
+    /// reporting them.
+    bool quiet_commit_ { };
+    std::uint32_t quiet_changes_ { };
     /// Keeps the planner's collapsed members whose compiled code is pure,
     /// closes the set under the reader rule and levels it.
     void plan_delta_collapse();
@@ -683,6 +710,12 @@ private:
     void write_host(std::uint32_t member, SignalId signal, PackedLogic4 value,
         std::optional<std::uint32_t> offset, bool blocking,
         SignalUpdateDomain domain);
+    /// A VHDL signal assignment to a host signal: the member's driver of it
+    /// is the host's projected driver (IEEE 1076-2019 10.5.2.2, 14.7.2).
+    void write_host_projected(std::uint32_t member, SignalId signal,
+        const std::vector<ProjectedWaveformValue>& elements,
+        std::optional<std::size_t> offset, SimulationTick rejection,
+        ProjectedDelayMode mode);
 
     // Scheduling.
     void schedule(std::uint32_t member);
@@ -2096,6 +2129,12 @@ private:
     /// Members that start after the procedures (Member::after_procedures).
     std::vector<std::uint32_t> after_procedure_members_;
     bool yield_requested_ { };
+    /// A VHDL member stages updates of host signals (a delayed assignment's
+    /// target), which the host applies in its update phase, or reads a host
+    /// signal's attributes from the host's history: the kernel's rounds are
+    /// the host's deltas from the initialization on (queues_first_activation)
+    /// and the kernel never owns time.
+    bool vhdl_host_cycles_ { };
     /// Behavioral threads waiting for the delta after time zero to start
     /// (Member::start_late), in member order.
     std::vector<std::uint32_t> late_members_;

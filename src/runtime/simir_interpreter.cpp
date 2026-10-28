@@ -1389,6 +1389,26 @@ const Interpreter::Impl::OperationBodyKinds* Interpreter::Impl::body_kinds(
     return &summary;
 }
 
+void Interpreter::Impl::observe_signal_transaction(const SignalId signal)
+{
+    if (signal >= signals.size()) {
+        throw std::invalid_argument(
+            "process transaction observation references invalid signal");
+    }
+    if (signal_transaction_observed[signal]) {
+        return;
+    }
+    signal_transaction_observed[signal] = true;
+    stable_single_writer_processes[signal]
+        = std::numeric_limits<ProcessId>::max();
+    ++signal_writer_revision;
+    if (signal_writer_revision == 0U) {
+        throw std::overflow_error {
+            "SimIR signal-writer topology revision overflow"
+        };
+    }
+}
+
 ProcessId Interpreter::Impl::add_process_program_impl(
     ProcessProgramView process,
     std::shared_ptr<const ProcessProgramTemplate> common_program,
@@ -1643,24 +1663,6 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         throw std::invalid_argument(
             "SimIR register value-kind count does not match register_count");
     }
-    const auto observe_signal_transaction = [&](const SignalId signal) {
-        if (signal >= signals.size()) {
-            throw std::invalid_argument(
-                "process transaction observation references invalid signal");
-        }
-        if (signal_transaction_observed[signal]) {
-            return;
-        }
-        signal_transaction_observed[signal] = true;
-        stable_single_writer_processes[signal]
-            = std::numeric_limits<ProcessId>::max();
-        ++signal_writer_revision;
-        if (signal_writer_revision == 0U) {
-            throw std::overflow_error {
-                "SimIR signal-writer topology revision overflow"
-            };
-        }
-    };
     const auto register_signal_selection = [&](
         const SignalId signal,
         const std::optional<SignalSelection>& selection) {
