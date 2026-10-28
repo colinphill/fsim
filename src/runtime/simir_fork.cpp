@@ -594,16 +594,7 @@ void Interpreter::Impl::complete_process(
     }
     if (const auto* query = fsim::runtime::simir::operation_get_if<EventTriggered>(
             &operation)) {
-        (void)get_signal(query->event);
-        const auto& signal = get_signal(query->event);
-        const auto identity = signal.event_variable
-            ? event_identities.at(query->event)
-            : query->event;
-        const auto& event = identity
-            ? signal_events[*identity]
-            : std::optional<std::pair<SimulationTick, std::uint64_t>> { };
-        const bool triggered = event
-            && event->first == scheduler.now();
+        const bool triggered = event_triggered_now(query->event);
         write_process_register(
             process,
             query->destination,

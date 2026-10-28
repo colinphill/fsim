@@ -730,7 +730,13 @@ void Interpreter::Impl::StaticKernel::run_merged_active()
     std::ranges::stable_sort(threads, std::less { }, thread_order);
     std::size_t next_hosted = 0U;
     std::size_t next_thread = 0U;
-    while (next_hosted < hosted.size() || next_thread < threads.size()) {
+    // Time zero's once members (start_once_) run in the same order; those
+    // not yet run stay listed across a stop or a yield to the host.
+    const auto once_order = [&] {
+        return StableOrder { members_[start_once_[start_once_next_]].process };
+    };
+    while (next_hosted < hosted.size() || next_thread < threads.size()
+        || start_once_pending()) {
         if (impl_.scheduler.stop_requested() || stopped_) {
             // $stop or $finish: the rest is kept for a resumed run, ahead of
             // what this round woke.
@@ -742,12 +748,21 @@ void Interpreter::Impl::StaticKernel::run_merged_active()
                 threads.end());
             return;
         }
-        const bool take_hosted = next_thread == threads.size()
-            || (next_hosted < hosted.size()
-                && hosted[next_hosted].order
-                    <= thread_order(threads[next_thread]));
-        const auto order = take_hosted ? hosted[next_hosted].order
+        const bool hosted_or_thread
+            = next_hosted < hosted.size() || next_thread < threads.size();
+        const bool take_hosted = hosted_or_thread
+            && (next_thread == threads.size()
+                || (next_hosted < hosted.size()
+                    && hosted[next_hosted].order
+                        <= thread_order(threads[next_thread])));
+        auto order = !hosted_or_thread ? once_order()
+            : take_hosted              ? hosted[next_hosted].order
                                        : thread_order(threads[next_thread]);
+        const bool take_once = start_once_pending()
+            && (!hosted_or_thread || once_order() < order);
+        if (take_once) {
+            order = once_order();
+        }
         if (host_batch_ahead(order)) {
             batch_hosted_.assign(
                 hosted.begin() + static_cast<std::ptrdiff_t>(next_hosted),
@@ -757,6 +772,14 @@ void Interpreter::Impl::StaticKernel::run_merged_active()
                 threads.end());
             host_batch_resume_ = order;
             return;
+        }
+        if (take_once) {
+            run(start_once_[start_once_next_++]);
+            if (!start_once_pending()) {
+                start_once_.clear();
+                start_once_next_ = 0U;
+            }
+            continue;
         }
         if (take_hosted) {
             if (!output_queue_.empty()) {

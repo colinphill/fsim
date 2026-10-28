@@ -2307,6 +2307,18 @@ void Interpreter::Impl::set_event_identity(
     current_identity = identity;
 }
 
+bool Interpreter::Impl::event_triggered_now(const SignalId event) const
+{
+    const auto& signal = get_signal(event);
+    const auto identity = signal.event_variable
+        ? event_identities.at(event)
+        : std::optional<SignalId> { event };
+    const auto& stamp = identity
+        ? signal_events[*identity]
+        : std::optional<std::pair<SimulationTick, std::uint64_t>> { };
+    return stamp && stamp->first == scheduler.now();
+}
+
 void Interpreter::Impl::trigger_event(
     const SignalId event,
     const SignalChangeOrigin origin)
@@ -2317,6 +2329,7 @@ void Interpreter::Impl::trigger_event(
     }
     const auto update_member = [&](const SignalId member) {
         record_signal_event(member, scheduler.delta(), origin);
+        note_event_trigger(member);
         for (const auto& sensitivity : static_fanout_for(member)) {
             auto& process = get_process(sensitivity.process);
             process.static_trigger_mask |= sensitivity.static_trigger_mask;

@@ -255,6 +255,7 @@ void Interpreter::Impl::commit(
             publish_normalized(
                 member, apply_force(member, value), false, origin);
             mark_switch_network_dirty(member);
+            note_event_trigger(member);
         }
         auto transition = StaticTransitionMatches { };
         if (old_value.width() == 1U && value.width() == 1U) {

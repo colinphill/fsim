@@ -1162,6 +1162,8 @@ src/runtime/simir_cohort_snapshot_pool.hpp
 src/runtime/simir_container_algorithms.cpp
 src/runtime/simir_container_bridge.cpp
 src/runtime/simir_container_helpers.hpp
+src/runtime/simir_container_ops.cpp
+src/runtime/simir_container_ops.hpp
 src/runtime/simir_container_values.cpp
 src/runtime/simir_containers.cpp
 src/runtime/simir_containers_part2.cpp

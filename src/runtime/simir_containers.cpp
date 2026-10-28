@@ -2898,38 +2898,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ResizeContainer& operation)
 {
-    auto& target = get_container_register(process, operation.target);
-    if ((target.type.queue && !operation.allow_queue)
-        || target.type.associative || target.type.fixed) {
-        container_error(
-            process.id, process.pc,
-            target.type.queue
-                ? "new[size] cannot resize a queue"
-                : target.type.associative
-                ? "new[size] cannot resize an associative array"
-                : "new[size] cannot resize a static array");
-    }
-    const auto size = known_index(
-        process.id, process.pc,
-        get_register(process, operation.size),
-        false, "dynamic-array size");
-    const ContainerValue* initializer { };
-    if (operation.initializer) {
-        const auto& source = read_container_register(
-            process, *operation.initializer);
-        if (!new_initializer_compatible(source.type, target.type)) {
-            container_error(
-                process.id, process.pc,
-                "dynamic-array initializer type mismatch");
-        }
-        initializer = &source;
-    }
-    try {
-        resize_container_value(target, size, initializer);
-    } catch (const std::exception& error) {
-        container_error(
-            process.id, process.pc, error.what());
-    }
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -2937,12 +2907,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const CopyContainerRegister& operation)
 {
-    auto& destination = get_container_register(process, operation.destination);
-    const auto& source = read_container_register(process, operation.source);
-    require_same_type(
-        process.id, process.pc,
-        destination.type, source.type);
-    destination = source;
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -2950,17 +2916,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ConditionalContainerSelect& operation)
 {
-    auto& destination = get_container_register(process, operation.destination);
-    const auto& when_true = read_container_register(process, operation.when_true);
-    const auto& when_false = read_container_register(process, operation.when_false);
-    const auto& condition = get_register(process, operation.condition);
-    try {
-        select_container_value(
-            destination, condition, when_true, when_false);
-    } catch (const std::exception& error) {
-        container_error(
-            process.id, process.pc, error.what());
-    }
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -2968,15 +2925,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const CompareContainers& operation)
 {
-    try {
-        get_register(process, operation.destination) = compare_container_values(
-            read_container_register(process, operation.lhs),
-            read_container_register(process, operation.rhs),
-            operation.case_equal);
-    } catch (const std::exception& error) {
-        container_error(
-            process.id, process.pc, error.what());
-    }
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -3053,9 +3003,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerSize& operation)
 {
-    const auto size = container_value_size(read_container_register(
-        process, operation.source));
-    get_register(process, operation.destination) = PackedLogic4::from_aval_bval(32, size, 0);
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -3063,9 +3012,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerReduction& operation)
 {
-    get_register(process, operation.destination) = reduce_container_value(
-        read_container_register(process, operation.source),
-        operation.operation, operation.transformation);
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -3073,10 +3021,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const OrderContainer& operation)
 {
-    auto& target = get_container_register(process, operation.target);
-    order_container_value(
-        target, operation.operation, operation.key,
-        [&]() { return next_random(process); });
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -3084,11 +3030,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const LocateContainer& operation)
 {
-    auto& destination = get_container_register(process, operation.destination);
-    const auto& source = read_container_register(process, operation.source);
-    locate_container_values(
-        destination, source, operation.operation,
-        operation.predicate, operation.transformation);
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -3096,103 +3039,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerRead& operation)
 {
-    const auto& source = read_container_register(process, operation.source);
-    if (source.type.associative) {
-        if (operation.string_index) {
-            const auto& key = associative_string_key(
-                process.id, process.pc, source.type,
-                get_string_register(process, operation.index));
-            const auto at = lower_string_key(source, key);
-            get_register(process, operation.destination) = at < source.string_keys.size()
-                    && source.string_keys[at] == key
-                ? source.elements[at]
-                : source.associative_default.value_or(
-                    default_container_element(source.type));
-            ++process.pc;
-            return;
-        }
-        const auto key = associative_key(
-            process.id, process.pc, source.type,
-            get_register(process, operation.index));
-        const auto at = lower_key(source, key);
-        get_register(process, operation.destination) = at < source.keys.size() && key_equal(source.keys[at], key)
-            ? source.elements[at]
-            : source.associative_default.value_or(
-                    default_container_element(source.type));
-        ++process.pc;
-        return;
-    }
-    if (source.type.fixed) {
-        const auto& index_value = get_register(
-            process, operation.index);
-        if (source.type.sparse) {
-            const auto index = index_value.known_signed_value();
-            const auto low = std::min(
-                source.type.index_left, source.type.index_right);
-            const auto high = std::max(
-                source.type.index_left, source.type.index_right);
-            const auto ordinal = !index ? std::nullopt
-                : operation.linear_index
-                ? *index >= 0 ? std::optional { static_cast<std::uint64_t>(*index) }
-                              : std::nullopt
-                : *index >= low && *index <= high
-                ? std::optional { sparse_offset(process.id, process.pc,
-                      source.type, index_value) }
-                : std::nullopt;
-            get_register(process, operation.destination)
-                = ordinal
-                    && *ordinal < sparse_container_element_count(source.type)
-                ? read_sparse_container_element(source, *ordinal)
-                : PackedLogic4(source.type.element_width,
-                      source.type.two_state ? Logic4::zero : Logic4::x);
-            ++process.pc;
-            return;
-        }
-        if (operation.linear_index) {
-            const auto index = index_value.known_signed_value();
-            if (!index || *index < 0
-                || static_cast<std::uint64_t>(*index)
-                    >= source.elements.size()) {
-                get_register(process, operation.destination) = PackedLogic4(
-                    source.type.element_width,
-                    source.type.two_state
-                        ? Logic4::zero
-                        : Logic4::x);
-                ++process.pc;
-                return;
-            }
-            get_register(process, operation.destination) = source.elements[static_cast<std::size_t>(*index)];
-            ++process.pc;
-            return;
-        }
-        const auto index = index_value.known_signed_value();
-        const auto low = std::min(
-            source.type.index_left, source.type.index_right);
-        const auto high = std::max(
-            source.type.index_left, source.type.index_right);
-        if (!index || *index < low || *index > high) {
-            get_register(process, operation.destination) = PackedLogic4(
-                source.type.element_width,
-                source.type.two_state
-                    ? Logic4::zero
-                    : Logic4::x);
-            ++process.pc;
-            return;
-        }
-        get_register(process, operation.destination) = source.elements[fixed_offset(source.type, static_cast<std::int32_t>(*index))];
-        ++process.pc;
-        return;
-    }
-    const auto index = known_index(
-        process.id, process.pc,
-        get_register(process, operation.index),
-        operation.signed_index, "container index");
-    if (index >= source.elements.size()) {
-        container_error(
-            process.id, process.pc,
-            "container index is out of range");
-    }
-    get_register(process, operation.destination) = source.elements[index];
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -3200,144 +3048,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerWrite& operation)
 {
-    auto& target = get_container_register(process, operation.target);
-    const auto& source = get_register(process, operation.source);
-    if (source.width() != target.type.element_width
-        || source.is_logic9()
-        || (target.type.two_state && has_unknown(source))) {
-        container_error(
-            process.id, process.pc,
-            "container element write type mismatch");
-    }
-    if (operation.associative_default) {
-        if (!target.type.associative) {
-            container_error(process.id, process.pc,
-                "a container default requires an associative array");
-        }
-        target.associative_default = source;
-        ++process.pc;
-        return;
-    }
-    if (target.type.associative) {
-        if (operation.string_index) {
-            const auto& key = associative_string_key(
-                process.id, process.pc, target.type,
-                get_string_register(process, operation.index));
-            const auto at = lower_string_key(target, key);
-            if (at < target.string_keys.size()
-                && target.string_keys[at] == key) {
-                target.elements[at] = source;
-            } else {
-                if (target.elements.size()
-                    >= maximum_container_elements(target.type)) {
-                    container_error(
-                        process.id, process.pc,
-                        "associative array exceeds the per-container "
-                        "owning-storage budget");
-                }
-                target.string_keys.insert(
-                    iterator_at(target.string_keys, at), key);
-                target.elements.insert(
-                    iterator_at(target.elements, at), source);
-            }
-            validate_container_value(target);
-            ++process.pc;
-            return;
-        }
-        const auto key = associative_key(
-            process.id, process.pc, target.type,
-            get_register(process, operation.index));
-        const auto at = lower_key(target, key);
-        if (at < target.keys.size()
-            && key_equal(target.keys[at], key)) {
-            target.elements[at] = source;
-        } else {
-            if (target.elements.size()
-                >= maximum_container_elements(target.type)) {
-                container_error(
-                    process.id, process.pc,
-                    "associative array exceeds the per-container "
-                    "owning-storage budget");
-            }
-            target.keys.insert(iterator_at(target.keys, at), key);
-            target.elements.insert(iterator_at(target.elements, at), source);
-        }
-        ++process.pc;
-        return;
-    }
-    if (target.type.sparse) {
-        const auto ordinal = operation.linear_index
-            ? known_index(
-                  process.id, process.pc,
-                  get_register(process, operation.index),
-                  true, "multidimensional linear index")
-            : sparse_offset(process.id, process.pc, target.type,
-                  get_register(process, operation.index));
-        if (ordinal >= sparse_container_element_count(target.type)) {
-            container_error(
-                process.id, process.pc,
-                "multidimensional linear index is out of range");
-        }
-        static_cast<void>(
-            write_sparse_container_element(target, ordinal, source));
-        ++process.pc;
-        return;
-    }
-    if (target.type.fixed) {
-        if (operation.linear_index) {
-            const auto index = known_index(
-                process.id, process.pc,
-                get_register(process, operation.index),
-                true, "multidimensional linear index");
-            if (index >= target.elements.size()) {
-                container_error(
-                    process.id, process.pc,
-                    "multidimensional linear index is out of range");
-            }
-            target.elements[index] = source;
-            ++process.pc;
-            return;
-        }
-        target.elements[fixed_offset(
-            process.id, process.pc, target.type,
-            get_register(process, operation.index))] = source;
-        ++process.pc;
-        return;
-    }
-    // Local sequence registers follow the same indexed-write rules as
-    // container objects: invalid writes do nothing, and writing the next
-    // queue index appends one element (IEEE 1800-2017 7.4.6, 7.10.1).
-    const auto& index_value = get_register(process, operation.index);
-    const auto requested = operation.signed_index
-        ? index_value.known_signed_value()
-        : [&]() -> std::optional<std::int64_t> {
-              const auto value = index_value.known_unsigned_value();
-              if (!value
-                  || *value > static_cast<std::uint64_t>(
-                         std::numeric_limits<std::int64_t>::max())) {
-                  return std::nullopt;
-              }
-              return static_cast<std::int64_t>(*value);
-          }();
-    const auto size = target.elements.size();
-    if (!requested || *requested < 0
-        || static_cast<std::uint64_t>(*requested) > size
-        || (static_cast<std::uint64_t>(*requested) == size
-            && (!target.type.queue
-                || (target.type.maximum_elements
-                    && size >= *target.type.maximum_elements)))) {
-        ++process.pc;
-        return;
-    }
-    if (static_cast<std::uint64_t>(*requested) == size) {
-        if (size >= maximum_container_elements(target.type)) {
-            container_error(process.id, process.pc,
-                "queue exceeds the per-container owning-storage budget");
-        }
-        target.elements.push_back(source);
-    } else {
-        target.elements[static_cast<std::size_t>(*requested)] = source;
-    }
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -3466,62 +3178,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const AppendContainer& operation)
 {
-    auto& target = get_container_register(process, operation.target);
-    if (target.type.fixed || target.type.associative
-        || target.type.aggregate_value) {
-        container_error(process.id, process.pc,
-            "an unpacked array concatenation requires a queue or dynamic array");
-    }
-    if (operation.clear) {
-        target.elements.clear();
-        target.string_elements.clear();
-        target.nested_elements.clear();
-    }
-    if (operation.container) {
-        const auto source
-            = read_container_register(process, *operation.container);
-        if (source.type.element_kind != target.type.element_kind
-            || source.type.associative
-            || ((target.type.element_kind == ContainerElementKind::Packed
-                    || target.type.element_kind
-                        == ContainerElementKind::Scalar)
-                && source.type.element_width != target.type.element_width)) {
-            container_error(process.id, process.pc,
-                "an unpacked array concatenation operand has an incompatible element type");
-        }
-        target.elements.insert(target.elements.end(),
-            source.elements.begin(), source.elements.end());
-        target.string_elements.insert(target.string_elements.end(),
-            source.string_elements.begin(), source.string_elements.end());
-        target.nested_elements.insert(target.nested_elements.end(),
-            source.nested_elements.begin(), source.nested_elements.end());
-    }
-    if (operation.value) {
-        auto value = get_register(process, *operation.value);
-        if (value.width() != target.type.element_width) {
-            container_error(process.id, process.pc,
-                "an unpacked array concatenation element has the wrong width");
-        }
-        target.elements.push_back(std::move(value));
-    }
-    if (operation.text) {
-        target.string_elements.push_back(
-            get_string_register(process, *operation.text));
-    }
-    // A bounded queue keeps its first elements (7.10.5).
-    if (target.type.maximum_elements) {
-        const auto limit = static_cast<std::size_t>(
-            *target.type.maximum_elements);
-        if (target.elements.size() > limit) {
-            target.elements.resize(limit);
-        }
-        if (target.string_elements.size() > limit) {
-            target.string_elements.resize(limit);
-        }
-        if (target.nested_elements.size() > limit) {
-            target.nested_elements.resize(limit);
-        }
-    }
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -3529,9 +3187,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const FormatContainerPattern& operation)
 {
-    get_string_register(process, operation.destination)
-        = format_container_assignment_pattern(
-            read_container_register(process, operation.source));
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 
@@ -3539,124 +3196,8 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const ContainerStringRead& operation)
 {
-    const auto& source = read_container_register(process, operation.source);
-    if (!operation.members.empty()) {
-        if (source.type.element_kind != ContainerElementKind::Aggregate
-            || source.type.associative || operation.string_index) {
-            container_error(
-                process.id, process.pc,
-                "aggregate string member read requires an indexed aggregate container");
-        }
-        // A structure value is its own element.
-        const auto at = source.type.aggregate_value ? std::size_t { }
-            : source.type.fixed
-            ? operation.linear_index
-                ? known_index(
-                      process.id, process.pc,
-                      get_register(process, operation.index), true,
-                      "multidimensional linear index")
-                : fixed_offset(
-                      process.id, process.pc, source.type,
-                      get_register(process, operation.index))
-            : known_index(
-                  process.id, process.pc,
-                  get_register(process, operation.index),
-                  operation.signed_index, "container index");
-        if (!source.type.aggregate_value
-            && at >= source.nested_elements.size()) {
-            container_error(
-                process.id, process.pc,
-                "aggregate container index is out of range");
-        }
-        const auto* selected = source.type.aggregate_value
-            ? &source
-            : &source.nested_elements[at];
-        for (const auto member : operation.members) {
-            if (selected->type.element_kind != ContainerElementKind::Aggregate
-                || member >= selected->nested_elements.size()) {
-                container_error(
-                    process.id, process.pc,
-                    "aggregate string member read path is invalid");
-            }
-            selected = &selected->nested_elements[member];
-        }
-        if (selected->type.element_kind != ContainerElementKind::String
-            || !selected->type.fixed
-            || selected->string_elements.size() != 1U) {
-            container_error(
-                process.id, process.pc,
-                "aggregate string member read requires a scalar string leaf");
-        }
-        get_string_register(process, operation.destination)
-            = selected->string_elements.front();
-        ++process.pc;
-        return;
-    }
-    if (source.type.element_kind != ContainerElementKind::String) {
-        container_error(
-            process.id, process.pc,
-            "string element read requires a string container");
-    }
-    if (source.type.associative) {
-        if (operation.string_index) {
-            const auto& key = associative_string_key(
-                process.id, process.pc, source.type,
-                get_string_register(process, operation.index));
-            const auto at = lower_string_key(source, key);
-            get_string_register(process, operation.destination) = at < source.string_keys.size()
-                    && source.string_keys[at] == key
-                ? source.string_elements[at]
-                : source.associative_default_text.value_or(std::string { });
-            ++process.pc;
-            return;
-        }
-        const auto key = associative_key(
-            process.id, process.pc, source.type,
-            get_register(process, operation.index));
-        const auto at = lower_key(source, key);
-        get_string_register(process, operation.destination) = at < source.keys.size() && key_equal(source.keys[at], key)
-            ? source.string_elements[at]
-            : source.associative_default_text.value_or(std::string { });
-        ++process.pc;
-        return;
-    }
-    // Reading an invalid index yields the empty string (IEEE 1800-2017
-    // 7.4.6): an unknown or negative index of a queue or dynamic array too.
-    if (!source.type.fixed) {
-        const auto& raw = get_register(process, operation.index);
-        std::optional<std::int64_t> requested;
-        if (operation.signed_index) {
-            requested = raw.known_signed_value();
-        } else if (const auto value = raw.known_unsigned_value();
-                   value
-                   && *value <= static_cast<std::uint64_t>(
-                          std::numeric_limits<std::int64_t>::max())) {
-            requested = static_cast<std::int64_t>(*value);
-        }
-        if (!requested || *requested < 0) {
-            get_string_register(process, operation.destination)
-                = std::string { };
-            ++process.pc;
-            return;
-        }
-    }
-    const auto at = source.type.fixed
-        ? operation.linear_index
-            ? known_index(
-                  process.id, process.pc,
-                  get_register(process, operation.index), true,
-                  "multidimensional linear index")
-            : fixed_offset(
-                  process.id, process.pc, source.type,
-                  get_register(process, operation.index))
-        : known_index(
-              process.id, process.pc,
-              get_register(process, operation.index),
-              operation.signed_index, "container index");
-    get_string_register(process, operation.destination)
-        = at < source.string_elements.size()
-        ? source.string_elements[at]
-        : std::string { };
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 

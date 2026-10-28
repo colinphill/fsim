@@ -30,7 +30,8 @@ inline constexpr bool behavioral_suspension = std::is_same_v<T, WaitFor>
     || std::is_same_v<T, Fork> || std::is_same_v<T, ForkEnd>
     || std::is_same_v<T, Stop> || std::is_same_v<T, Pause>
     // A disable may end or move other threads, or this one.
-    || std::is_same_v<T, DisableBlock>;
+    || std::is_same_v<T, DisableBlock>
+    || std::is_same_v<T, DisableFork> || std::is_same_v<T, WaitFork>;
 
 [[nodiscard]] inline bool comparison(const BinaryOperator operation) noexcept
 {

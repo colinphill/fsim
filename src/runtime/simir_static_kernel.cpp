@@ -153,6 +153,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
            })) {
         host_original_ = spec.host_original;
     }
+    if (std::ranges::any_of(spec.members, [&](const auto& member) {
+            return member.process == spec.host;
+        })) {
+        host_program_ = spec.host_original;
+    }
     const auto signal_count = impl_.signals.size();
     slot_of_signal_.assign(signal_count, no_slot);
     slots_.reserve(spec.owned_signals.size());
@@ -267,6 +272,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         private_containers(spec.members.size());
     std::vector<std::vector<ContainerRegisterId>> copied_containers(
         spec.members.size());
+    // SystemVerilog behavioral members hold other registers in reference
+    // format (static_kernel_dynamic_container_registers): their initial
+    // values.
+    std::vector<std::vector<std::pair<ContainerRegisterId, SharedContainerValue>>>
+        dynamic_containers(spec.members.size());
     for (std::size_t index = 0U; index < spec.members.size(); ++index) {
         const auto& member_spec = spec.members[index];
         if (member_spec.kind != StaticKernelMemberKind::behavioral) {
@@ -313,9 +323,25 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
         const auto types = process_layout_detail::ProcessLayoutAccess::view(
             program.container_register_types());
+        std::vector<std::uint8_t> dynamic;
+        if (program.scheduling_domain() == ProcessSchedulingDomain::systemverilog) {
+            dynamic = static_kernel_dynamic_container_registers(operations.size(),
+                [&](const std::size_t op) -> const Operation& {
+                    return operations[op];
+                },
+                types);
+        }
+        for (std::size_t id = 0U; id < dynamic.size(); ++id) {
+            if (dynamic[id] != 0U) {
+                dynamic_containers[index].emplace_back(
+                    static_cast<ContainerRegisterId>(id),
+                    impl_.default_container_register(types[id]));
+            }
+        }
         for (std::size_t id = 0U; id < used.size(); ++id) {
             if (used[id] == 0U || (bound[id] != 0U && written[id] == 0U)
-                || id >= types.size()) {
+                || id >= types.size()
+                || (id < dynamic.size() && dynamic[id] != 0U)) {
                 continue;
             }
             if (bound[id] != 0U) {
@@ -574,6 +600,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             program.container_register_count(), no_container);
         for (const auto& [id, container] : private_containers[members_.size()]) {
             member.container_registers[id] = container;
+        }
+        if (!dynamic_containers[members_.size()].empty()) {
+            member.dynamic_containers.assign(
+                program.container_register_count(), nullptr);
+            for (auto& [id, value] : dynamic_containers[members_.size()]) {
+                member.dynamic_containers[id] = std::move(value);
+            }
         }
         if (!copied_containers[members_.size()].empty()) {
             member.copy_storage.assign(
@@ -1289,6 +1322,9 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     || std::is_same_v<T, WriteAfterSlice>
                     || std::is_same_v<T, WriteAfterDynamicSlice>
                     || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                    || std::is_same_v<T, WriteDelayed>
+                    || std::is_same_v<T, WriteInertial>
+                    || std::is_same_v<T, WriteInertialSlice>
                     || std::is_same_v<T, WriteProjected>
                     || std::is_same_v<T, WriteProjectedSlice>
                     || std::is_same_v<T, WriteProjectedDynamicSlice>
@@ -1296,6 +1332,17 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     || std::is_same_v<T, WriteProjectedWaveformSlice>
                     || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
                     host_written = host_written || !owned(op.signal);
+                    if constexpr (std::is_same_v<T, WriteAfter>
+                        || std::is_same_v<T, WriteAfterSlice>
+                        || std::is_same_v<T, WriteAfterDynamicSlice>
+                        || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                        || std::is_same_v<T, WriteDelayed>
+                        || std::is_same_v<T, WriteInertial>
+                        || std::is_same_v<T, WriteInertialSlice>) {
+                        // The host matures the update at its writer's
+                        // stable order (run_merged_active).
+                        host_delayed_writes_ = host_delayed_writes_ || !member.vhdl;
+                    }
                     if constexpr (!std::is_same_v<T, WriteBlocking>
                         && !std::is_same_v<T, WriteBlockingSlice>
                         && !std::is_same_v<T, WriteBlockingDynamicSlice>
@@ -1320,10 +1367,31 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                         || (member.vhdl && !owned(op.signal));
                     host_written = host_written || !owned(op.signal);
                 } else if constexpr (std::is_same_v<T, MonitorInstall>
-                    || std::is_same_v<T, MonitorControl>) {
+                    || std::is_same_v<T, MonitorControl>
+                    || std::is_same_v<T, EventTriggered>) {
                     // The host's monitor prints in the host's time steps
-                    // (IEEE 1800-2023 21.2.3): no time warp.
+                    // (IEEE 1800-2023 21.2.3), and an event's triggered
+                    // state is of the host's time step (15.5.3): no time
+                    // warp.
                     host_written = true;
+                } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
+                    // A host object read into a reference-format register.
+                    host_written = host_written
+                        || (member.dynamic_container(op.destination)
+                            && (op.object >= container_of_object_.size()
+                                || container_of_object_[op.object] == no_container));
+                } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+                    // An element write of a host object.
+                    host_written = host_written
+                        || (!member.vhdl
+                            && (op.object >= container_of_object_.size()
+                                || container_of_object_[op.object] == no_container));
+                } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
+                    // A host object written from a reference-format register.
+                    host_written = host_written
+                        || (member.dynamic_container(op.source)
+                            && (op.object >= container_of_object_.size()
+                                || container_of_object_[op.object] == no_container));
                 } else if constexpr (std::is_same_v<T, FileReadLine>
                     || std::is_same_v<T, FileErrorStatus>) {
                     // A text read into a signal (commit_driver).
@@ -5134,9 +5202,29 @@ void Interpreter::Impl::StaticKernel::initialize()
     if (behavioral_) {
         prepare_behavioral();
     }
+    // The reference queues time zero's ordinary processes in stable order
+    // (Interpreter::start; IEEE 1800-2023 4.7). A once member (an initial
+    // procedure that never waits) that triggers a named event runs at its
+    // place among the threads and hosted procedures (run_merged_active): a
+    // trigger is no lasting value, so it wakes exactly the procedures before
+    // it that wait (15.5.1). The others run here, ahead of them; what they
+    // write persists for the procedures that read it.
+    const bool ordered_once = (behavioral_ || has_hosted_) && !vhdl_ && !mixed_;
+    const auto triggers_event = [&](const Member& member) {
+        return std::ranges::any_of(member.operations,
+            [&](const Operation& operation) {
+                const auto* write = operation_get_if<WriteBlocking>(&operation);
+                return write != nullptr
+                    && impl_.get_signal(write->signal).event_variable;
+            });
+    };
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         if (members_[index].kind == StaticKernelMemberKind::once) {
             if (after_procedures(members_[index])) {
+                continue;
+            }
+            if (ordered_once && triggers_event(members_[index])) {
+                start_once_.push_back(index);
                 continue;
             }
             if (mixed_ && members_[index].vhdl) {
@@ -5151,6 +5239,8 @@ void Interpreter::Impl::StaticKernel::initialize()
             run(index);
         }
     }
+    std::ranges::stable_sort(start_once_, std::less { },
+        [&](const std::uint32_t member) { return members_[member].process; });
     // Initializing members have run to completion; later host processes
     // read what they wrote.
     publish(true);
@@ -5234,6 +5324,7 @@ bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
                   << impl_.get_signal_cold(input.signal).name
                   << " changed without a revision bump\n";
     }
+    const bool bumped = revision != input.revision;
     input.revision = revision;
     const auto seen = std::exchange(
         input.event_seen, impl_.signal_events[input.signal]);
@@ -5258,6 +5349,20 @@ bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
             }
         }
     } hold_woken_scope { *this, next_delta, members, threads };
+    if (bumped && current == input.cached && !vhdl_
+        && impl_.get_signal(input.signal).event_variable) {
+        // A trigger of a named event the kernel waits on (its value stays
+        // 1): every trigger is an event (IEEE 1800-2023 15.5.1), including
+        // a member's own, which the host committed before this refresh.
+        if (trace_) {
+            std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
+                      << " input " << impl_.get_signal_cold(input.signal).name
+                      << " triggered\n";
+        }
+        auto same = current;
+        apply_input(input, std::move(same), true);
+        return true;
+    }
     if (current == input.cached) {
         // A VHDL signal can change and return to the scanned value inside one
         // update phase (two force assignments of one cycle apply one after
@@ -5589,9 +5694,15 @@ void Interpreter::Impl::StaticKernel::activate_step()
                 }
                 return host_batch_ahead(StableOrder { last });
             };
-            if (has_hosted_ && !in_host_nonblocking_region_
+            // A member's delayed write matures as a host task at the
+            // writer's stable order, among the kernel's threads of its time
+            // step (IEEE 1800-2023 4.7, 10.3.3): their round runs in order
+            // with the host's batch, as with hosted processes.
+            if ((has_hosted_ || host_delayed_writes_ || start_once_pending())
+                && !in_host_nonblocking_region_
                 && !hosted_inactive_task_
                 && (!batch_hosted_.empty() || !batch_threads_.empty()
+                    || start_once_pending()
                     || (behavioral_ && !ready_threads_.empty()
                         && !hosted_active_.empty())
                     || threads_behind_host())) {
@@ -5639,7 +5750,11 @@ void Interpreter::Impl::StaticKernel::activate_step()
                 }
             }
             active = start_after_procedures() || active;
-            if (ran_hosted && yield_to_host_active()) {
+            // What the round's hosted processes queued, and the zero-delay
+            // updates its members' delayed writes mature (10.3.3, 28.16),
+            // run before the processes the round woke (4.5, 4.7).
+            if ((ran_hosted || (host_delayed_writes_ && active))
+                && yield_to_host_active()) {
                 break;
             }
             // The Active region drains (combinational settling included)

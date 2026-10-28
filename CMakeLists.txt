@@ -810,6 +810,7 @@ add_library(
     src/runtime/simir_callable_context.cpp
     src/runtime/simir_container_algorithms.cpp
     src/runtime/simir_container_bridge.cpp
+    src/runtime/simir_container_ops.cpp
     src/runtime/simir_containers.cpp
     src/runtime/simir_containers_part2.cpp
     src/runtime/simir_containers_shaped.cpp

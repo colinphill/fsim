@@ -6,6 +6,7 @@
 // join, a halt or $finish; waits on kernel-owned slots and on host inputs, and
 // delays on a kernel timer queue, make it ready again.
 #include "fsim/runtime/file_scanning.hpp"
+#include "simir_container_ops.hpp"
 #include "simir_execution_shared.hpp"
 #include "simir_static_kernel_state.hpp"
 
@@ -52,6 +53,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     thread.alive = true;
     thread.order = members_[member].process;
     if (parent != no_slot) {
+        ++threads_[parent].child_records;
         // A fork child is a process of its own, numbered after the processes
         // that exist (Interpreter::spawn_fork): its updates and its place in
         // a round follow that number.
@@ -339,7 +341,23 @@ void Interpreter::Impl::StaticKernel::release_thread(const std::uint32_t index)
     thread.saved_array_marks.clear();
     thread.stack.clear();
     thread.contexts.clear();
+    if (thread.child_records != 0U) {
+        // Its descendants still name it as their ancestor.
+        thread.ended_record = true;
+        return;
+    }
     free_threads_.push_back(index);
+    // Ended ancestors whose last descendant record this was go too.
+    for (auto parent = thread.parent; parent != no_slot;) {
+        auto& record = threads_[parent];
+        --record.child_records;
+        if (!record.ended_record || record.child_records != 0U) {
+            break;
+        }
+        record.ended_record = false;
+        free_threads_.push_back(parent);
+        parent = record.parent;
+    }
 }
 
 void Interpreter::Impl::StaticKernel::store_contexts(const std::uint32_t index)
@@ -371,10 +389,16 @@ void Interpreter::Impl::StaticKernel::store_context(
         context.strings.push_back(member.strings.at(id));
     }
     context.arrays.resize(context.container_ids.size());
+    context.dynamic.assign(context.container_ids.size(), nullptr);
     for (std::size_t at = 0U; at < context.container_ids.size(); ++at) {
         const auto id = context.container_ids[at];
         auto& words = context.arrays[at];
         words.clear();
+        if (member.dynamic_container(id)) {
+            // Shared: the next write copies (get_container_register).
+            context.dynamic[at] = member.dynamic_containers[id];
+            continue;
+        }
         if (id >= member.container_registers.size()
             || member.container_registers[id] == no_container) {
             continue;
@@ -400,6 +424,11 @@ void Interpreter::Impl::StaticKernel::load_context(
     }
     for (std::size_t at = 0U; at < context.container_ids.size(); ++at) {
         const auto id = context.container_ids[at];
+        if (at < context.dynamic.size() && context.dynamic[at]
+            && member.dynamic_container(id)) {
+            member.dynamic_containers[id] = context.dynamic[at];
+            continue;
+        }
         const auto& words = context.arrays[at];
         if (words.empty() || id >= member.container_registers.size()
             || member.container_registers[id] == no_container) {
@@ -447,12 +476,96 @@ std::vector<std::uint32_t> Interpreter::Impl::StaticKernel::live_children(
     return children;
 }
 
+std::vector<std::uint32_t> Interpreter::Impl::StaticKernel::child_records(
+    const std::uint32_t parent) const
+{
+    std::vector<std::uint32_t> children;
+    for (std::uint32_t index = 0U; index < threads_.size(); ++index) {
+        const auto& thread = threads_[index];
+        if ((thread.alive || thread.ended_record) && thread.parent == parent) {
+            children.push_back(index);
+        }
+    }
+    std::ranges::sort(children, std::less { },
+        [&](const std::uint32_t index) { return threads_[index].order; });
+    return children;
+}
+
 void Interpreter::Impl::StaticKernel::cancel_thread_descendants(
     const std::uint32_t parent)
 {
-    for (const auto child : live_children(parent)) {
+    // Like the reference's cancel_fork_descendants: the descendants of an
+    // ended child end too.
+    for (const auto child : child_records(parent)) {
         cancel_thread_descendants(child);
         kill_thread(child);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::disable_fork_site(
+    const std::uint32_t index, const std::uint32_t site)
+{
+    // The reference's DisableFork of a named fork (simir_fork.cpp): the
+    // nearest thread, this one or an ancestor, with live children of the
+    // site owns it.
+    const auto has_site = [&](const std::uint32_t owner) {
+        return std::ranges::any_of(live_children(owner),
+            [&](const std::uint32_t child) {
+                return threads_[child].fork_site == site;
+            });
+    };
+    auto owner = index;
+    while (!has_site(owner) && threads_[owner].parent != no_slot) {
+        owner = threads_[owner].parent;
+    }
+    const auto cancel_site = [&](const std::uint32_t site_owner) {
+        for (const auto child : live_children(site_owner)) {
+            if (threads_[child].fork_site != site) {
+                continue;
+            }
+            cancel_thread_descendants(child);
+            kill_thread(child);
+        }
+    };
+    cancel_site(owner);
+    // Threads an ended branch of the fork left running (its own join_none
+    // children) belong to the disabled fork too.
+    std::vector<std::uint32_t> descendants;
+    for (std::uint32_t thread = 0U; thread < threads_.size(); ++thread) {
+        if (!threads_[thread].alive) {
+            continue;
+        }
+        for (auto link = thread; threads_[link].parent != no_slot;
+             link = threads_[link].parent) {
+            if (threads_[link].parent == owner
+                && threads_[link].fork_site == site) {
+                descendants.push_back(thread);
+                break;
+            }
+        }
+    }
+    std::ranges::sort(descendants, std::less { },
+        [&](const std::uint32_t thread) { return threads_[thread].order; });
+    for (const auto thread : descendants) {
+        if (threads_[thread].alive) {
+            cancel_thread_descendants(thread);
+            kill_thread(thread);
+        }
+    }
+    // The fork ends in every concurrent activation of the code that holds
+    // it (9.6.2), such as each call of an automatic task in another branch.
+    const auto member = threads_[index].member;
+    std::vector<std::uint32_t> activations;
+    for (std::uint32_t thread = 0U; thread < threads_.size(); ++thread) {
+        if (thread != owner && threads_[thread].alive
+            && threads_[thread].member == member && has_site(thread)) {
+            activations.push_back(thread);
+        }
+    }
+    std::ranges::sort(activations, std::less { },
+        [&](const std::uint32_t thread) { return threads_[thread].order; });
+    for (const auto thread : activations) {
+        cancel_site(thread);
     }
 }
 
@@ -627,6 +740,13 @@ void Interpreter::Impl::StaticKernel::finish_thread(const std::uint32_t index)
 void Interpreter::Impl::StaticKernel::fork_child_done(const std::uint32_t parent,
     const std::uint32_t group)
 {
+    if (parent != no_slot && threads_[parent].alive
+        && threads_[parent].waiting_children
+        && live_children(parent).empty()) {
+        // wait fork (IEEE 1800-2023 9.6.1) ends with the last child.
+        threads_[parent].waiting_children = false;
+        ready_thread(parent);
+    }
     if (parent == no_slot || group == no_slot) {
         return;
     }
@@ -849,6 +969,85 @@ struct Interpreter::Impl::StaticKernel::MemberFileStorage final
     std::uint32_t pc;
 };
 
+// The member's registers for the reference's container operations
+// (simir_container_ops): packed and string registers as the reference's
+// frame holds them, and the reference-format container registers
+// (Member::dynamic_containers), copied before a write when shared as the
+// reference's get_container_register does.
+struct Interpreter::Impl::StaticKernel::MemberContainerAccess final
+    : ContainerRegisterAccess {
+    MemberContainerAccess(StaticKernel& kernel_value,
+        const std::uint32_t member_value, const std::uint32_t pc_value) noexcept
+        : kernel { kernel_value }, member { member_value }, pc { pc_value }
+    {
+    }
+    [[nodiscard]] PackedLogic4& packed(const RegisterId id)
+    {
+        auto& registers = kernel.members_[member].registers;
+        if (id >= registers.size()) {
+            kernel.fail(member, pc, "invalid register ID");
+        }
+        return registers[id];
+    }
+    [[nodiscard]] const PackedLogic4& read(const RegisterId id) override
+    {
+        return packed(id);
+    }
+    void write(const RegisterId id, PackedLogic4 value) override
+    {
+        packed(id) = std::move(value);
+    }
+    [[nodiscard]] std::string& string(const StringRegisterId id) override
+    {
+        auto& strings = kernel.members_[member].strings;
+        if (id >= strings.size()) {
+            kernel.fail(member, pc, "invalid string register ID");
+        }
+        return strings[id];
+    }
+    [[nodiscard]] const std::string& read_string(const StringRegisterId id) override
+    {
+        return string(id);
+    }
+    [[nodiscard]] ContainerValue& container(const ContainerRegisterId id) override
+    {
+        auto& state = kernel.members_[member];
+        if (!state.dynamic_container(id)) {
+            kernel.fail(member, pc, "invalid container register ID");
+        }
+        auto& storage = state.dynamic_containers[id];
+        if (storage.use_count() != 1) {
+            storage = std::make_shared<ContainerValue>(*storage);
+        }
+        return *storage;
+    }
+    [[nodiscard]] const ContainerValue& read_container(
+        const ContainerRegisterId id) override
+    {
+        const auto& state = kernel.members_[member];
+        if (!state.dynamic_container(id)) {
+            kernel.fail(member, pc, "invalid container register ID");
+        }
+        return *state.dynamic_containers[id];
+    }
+    // The stream RandomValue draws from: a fork child's own, else the
+    // process's.
+    [[nodiscard]] std::uint32_t next_random() override
+    {
+        const auto thread = kernel.running_thread_;
+        if (thread != static_kernel_detail::no_slot
+            && kernel.threads_[thread].member == member
+            && kernel.threads_[thread].parent != static_kernel_detail::no_slot) {
+            return Impl::next_random(kernel.threads_[thread].random_state);
+        }
+        return Impl::next_random(kernel.impl_.get_process(
+            kernel.members_[member].process).cold().random_state);
+    }
+    StaticKernel& kernel;
+    std::uint32_t member;
+    std::uint32_t pc;
+};
+
 template <typename Op>
 bool Interpreter::Impl::StaticKernel::behavioral_operation(
     const std::uint32_t member_index, const std::uint32_t pc, const Op& op)
@@ -876,6 +1075,131 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
     bool handled = true;
     [&] {
         using T = Op;
+        // Reference-format registers (Member::dynamic_containers) run the
+        // reference's container operations.
+        if constexpr (static_kernel_reference_container_operation<T>
+            || std::is_same_v<T, ContainerRead>
+            || std::is_same_v<T, ContainerWrite>
+            || std::is_same_v<T, CopyContainerRegister>) {
+            bool dynamic = static_kernel_reference_container_operation<T>;
+            if constexpr (std::is_same_v<T, ContainerRead>) {
+                dynamic = member.dynamic_container(op.source);
+            } else if constexpr (std::is_same_v<T, ContainerWrite>) {
+                dynamic = member.dynamic_container(op.target);
+            } else if constexpr (std::is_same_v<T, CopyContainerRegister>) {
+                dynamic = member.dynamic_container(op.destination);
+            }
+            if (dynamic) {
+                MemberContainerAccess access { *this, member_index, pc };
+                execute_container_operation(op, access, member.process,
+                    pc < member.origin.size() ? member.origin[pc] : pc);
+                return;
+            }
+        } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
+            if (member.dynamic_container(op.destination)) {
+                // The object's value (IEEE 1800-2023 7.6): a kernel array's
+                // elements in ordinal order, else the host's.
+                auto& storage = member.dynamic_containers[op.destination];
+                ContainerValue value;
+                if (op.object < container_of_object_.size()
+                    && container_of_object_[op.object] != no_container) {
+                    const auto& container = containers_[container_of_object_[op.object]];
+                    value.type = container.type;
+                    value.elements.reserve(container.count);
+                    for (std::uint32_t ordinal = 0U; ordinal < container.count;
+                         ++ordinal) {
+                        value.elements.push_back(container_element(container, ordinal));
+                    }
+                } else {
+                    value = impl_.read_container_object_value(op.object);
+                }
+                if (!(value.type == storage->type)) {
+                    fail(member_index, pc, "container register type mismatch");
+                }
+                if (storage.use_count() == 1) {
+                    *storage = std::move(value);
+                } else {
+                    storage = std::make_shared<ContainerValue>(std::move(value));
+                }
+                return;
+            }
+        } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+            if (op.object >= container_of_object_.size()
+                || container_of_object_[op.object] == no_container) {
+                // A blocking element write of a host object (the planner
+                // admits plain dynamic ones), as the reference makes it.
+                const auto instruction
+                    = pc < member.origin.size() ? member.origin[pc] : pc;
+                const auto index = packed_register(op.index);
+                const auto value = packed_register(op.source);
+                const auto base = op.dynamic_part
+                    ? std::optional { packed_register(op.dynamic_part->base) }
+                    : std::nullopt;
+                const auto origin = impl_.capture_signal_change_origin(
+                    member.process, SignalUpdateDomain::systemverilog_active);
+                if (!op.levels.empty()) {
+                    std::vector<PackedLogic4> level_indices;
+                    level_indices.reserve(op.levels.size());
+                    for (const auto& level : op.levels) {
+                        level_indices.push_back(packed_register(level.index));
+                    }
+                    impl_.write_container_object_path_value(op.object, op.levels,
+                        level_indices, index, op.signed_index, op.linear_index,
+                        op.members, value, base ? &*base : nullptr,
+                        op.dynamic_part ? &*op.dynamic_part : nullptr,
+                        member.process, instruction, origin);
+                } else if (!op.members.empty()) {
+                    impl_.write_container_object_member_value(op.object, index,
+                        op.signed_index, op.linear_index, op.members, value,
+                        member.process, instruction, origin);
+                } else if (op.dynamic_part) {
+                    impl_.write_container_object_dynamic_part_element_value(
+                        op.object, index, op.signed_index, op.linear_index, value,
+                        *base, *op.dynamic_part, member.process, instruction,
+                        origin);
+                } else {
+                    impl_.write_container_object_element_value(op.object, index,
+                        op.signed_index, op.linear_index, value, member.process,
+                        instruction, origin);
+                }
+                return;
+            }
+        } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
+            if (member.dynamic_container(op.source)) {
+                const auto& value = *member.dynamic_containers[op.source];
+                if (op.object < container_of_object_.size()
+                    && container_of_object_[op.object] != no_container) {
+                    // A kernel array (a fixed array of the arena's shape):
+                    // changed elements are written as element writes, which
+                    // notify its readers (copy_container).
+                    auto& to = containers_[container_of_object_[op.object]];
+                    if (!(to.type == value.type)
+                        || to.count != value.elements.size()) {
+                        fail(member_index, pc,
+                            "static kernel container copy needs arrays of one type");
+                    }
+                    for (std::uint32_t ordinal = 0U; ordinal < to.count; ++ordinal) {
+                        const auto& element = value.elements[ordinal];
+                        if (!(element == container_element(to, ordinal))) {
+                            write_container_element(to, ordinal, element,
+                                member_index, pc);
+                        }
+                    }
+                    return;
+                }
+                // A blocking write of a host object (the planner keeps the
+                // object on the host), as the reference makes it.
+                const auto origin = impl_.capture_signal_change_origin(
+                    member.process, SignalUpdateDomain::systemverilog_active);
+                try {
+                    impl_.write_container_object_value(op.object, value,
+                        member.process, origin);
+                } catch (const std::invalid_argument& error) {
+                    fail(member_index, pc, error.what());
+                }
+                return;
+            }
+        }
         if constexpr (std::is_same_v<T, Display>) {
             behavioral_output(member_index, op.text, op.newline);
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
@@ -1070,6 +1394,69 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             } catch (const std::invalid_argument& error) {
                 fail(member_index, pc, error.what());
             }
+        } else if constexpr (std::is_same_v<T, WriteAfter>
+            || std::is_same_v<T, WriteAfterSlice>) {
+            // A delayed update of a host signal (IEEE 1800-2023 10.3.3,
+            // static_kernel_host_signal): the host schedules and matures it
+            // for the member's driver, as for the reference process.
+            std::optional<std::uint32_t> offset;
+            if constexpr (std::is_same_v<T, WriteAfterSlice>) {
+                offset = op.offset;
+            }
+            impl_.schedule_after_update(member.process, op.signal,
+                packed_register(op.source), offset, op.domain, op.delay);
+        } else if constexpr (std::is_same_v<T, WriteAfterDynamicSlice>) {
+            // A write outside the declared range has no effect (IEEE
+            // 1800-2017 11.5.1).
+            std::optional<std::uint32_t> offset;
+            try {
+                offset = dynamic_index_offset(
+                    packed_register(op.selection.index), op.selection);
+            } catch (const std::invalid_argument& error) {
+                if (op.selection.strict) {
+                    fail(member_index, pc, error.what());
+                }
+            }
+            if (offset) {
+                impl_.schedule_after_update(member.process, op.signal,
+                    packed_register(op.source), *offset, op.domain, op.delay);
+            }
+        } else if constexpr (std::is_same_v<T, WriteAfterDynamicPartSlice>) {
+            std::optional<DynamicPartWrite> write;
+            try {
+                write = dynamic_part_write_value(packed_register(op.source),
+                    packed_register(op.selection.base), op.selection);
+            } catch (const std::invalid_argument& error) {
+                fail(member_index, pc, error.what());
+            }
+            if (write) {
+                impl_.schedule_after_update(member.process, op.signal,
+                    std::move(write->value),
+                    static_cast<std::uint32_t>(write->offset), op.domain,
+                    op.delay);
+            }
+        } else if constexpr (std::is_same_v<T, WriteDelayed>) {
+            // A gate or net delay (28.16): the transition's delay from the
+            // operation's rise/fall/turn-off registers.
+            const auto delays = Impl::write_delayed_delays(op,
+                [&](const RegisterId id) -> const PackedLogic4& {
+                    return packed_register(id);
+                });
+            impl_.schedule_write_delayed(member.process, op,
+                packed_register(op.source), delays);
+        } else if constexpr (std::is_same_v<T, WriteInertial>
+            || std::is_same_v<T, WriteInertialSlice>) {
+            std::optional<std::uint32_t> offset;
+            if constexpr (std::is_same_v<T, WriteInertialSlice>) {
+                offset = op.offset;
+            }
+            impl_.schedule_inertial(member.process, op.signal,
+                packed_register(op.source), offset, op.delays, op.domain);
+        } else if constexpr (std::is_same_v<T, EventTriggered>) {
+            // .triggered (IEEE 1800-2023 15.5.3) of an event, a host signal:
+            // the host stamps each trigger, the kernel's own included.
+            packed_register(op.destination) = PackedLogic4(1,
+                impl_.event_triggered_now(op.event) ? Logic4::one : Logic4::zero);
         } else if constexpr (std::is_same_v<T, SignalStrengthText>) {
             // %v (IEEE 1800-2023 21.2.1.5) of a host signal: the host holds
             // its drivers and their strengths.
@@ -1397,6 +1784,14 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             frame.container_ids.assign(op.containers.begin(), op.containers.end());
             for (const auto id : frame.container_ids) {
                 frame.containers.push_back(container_register(id));
+                if (member.dynamic_container(id)) {
+                    const auto& value = member.dynamic_containers[id];
+                    frame.bytes += sizeof(ContainerValue)
+                        + container_value_storage_bytes(*value);
+                    frame.dynamic.push_back(value);
+                } else {
+                    frame.dynamic.push_back(nullptr);
+                }
             }
             if (frame.bytes > maximum_container_storage_bytes
                     - std::min(member.frame_bytes,
@@ -1472,8 +1867,11 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 strings.push_back(string_register(id));
             }
             std::vector<std::uint32_t> containers;
+            std::vector<SharedContainerValue> dynamic;
             for (const auto id : op.preserve_containers) {
                 containers.push_back(container_register(id));
+                dynamic.push_back(member.dynamic_container(id)
+                        ? member.dynamic_containers[id] : nullptr);
             }
             auto frame = std::move(member.frames.back());
             member.frames.pop_back();
@@ -1487,6 +1885,10 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             for (std::size_t entry = 0U; entry < frame.container_ids.size(); ++entry) {
                 container_register(frame.container_ids[entry])
                     = frame.containers[entry];
+                if (entry < frame.dynamic.size() && frame.dynamic[entry]) {
+                    member.dynamic_containers[frame.container_ids[entry]]
+                        = std::move(frame.dynamic[entry]);
+                }
             }
             member.frame_bytes -= frame.bytes;
             if (context_thread != no_slot) {
@@ -1502,6 +1904,10 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
             for (std::size_t entry = 0U; entry < op.preserve_containers.size(); ++entry) {
                 container_register(op.preserve_containers[entry]) = containers[entry];
+                if (dynamic[entry]) {
+                    member.dynamic_containers[op.preserve_containers[entry]]
+                        = std::move(dynamic[entry]);
+                }
             }
         } else if constexpr (std::is_same_v<T, LoadMemory>) {
             // $readmemb/$readmemh (IEEE 1800-2023 21.4) into a kernel array:
@@ -1674,8 +2080,8 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                     const auto now = kernel_now();
                     // A wait beyond TIME'HIGH never resumes (14.7.5.1).
                     if (delay <= std::numeric_limits<SimulationTick>::max() - now) {
-                        vhdl_timers_.push({ now + delay, timer_sequence_++,
-                            index, threads_[index].epoch });
+                        vhdl_timers_.push({ now + delay, threads_[index].order,
+                            timer_sequence_++, index, threads_[index].epoch });
                     }
                 }
             } else if (delay == 0U) {
@@ -1685,8 +2091,8 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                 const auto now = kernel_now();
                 // A wait beyond the last representable time never resumes.
                 if (delay <= std::numeric_limits<SimulationTick>::max() - now) {
-                    timers_.push({ now + delay, timer_sequence_++, index,
-                        threads_[index].epoch });
+                    timers_.push({ now + delay, threads_[index].order,
+                        timer_sequence_++, index, threads_[index].epoch });
                 }
             }
             outcome = Boundary::suspend;
@@ -1741,8 +2147,8 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                     if (*thread.deadline <= now) {
                         ready_thread(index);
                     } else {
-                        vhdl_timers_.push({ *thread.deadline, timer_sequence_++,
-                            index, thread.epoch });
+                        vhdl_timers_.push({ *thread.deadline, thread.order,
+                            timer_sequence_++, index, thread.epoch });
                     }
                 }
             }
@@ -1758,6 +2164,31 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
         } else if constexpr (std::is_same_v<T, WaitForever>) {
             suspend_point = true;
             outcome = Boundary::suspend;
+        } else if constexpr (std::is_same_v<T, WaitFork>) {
+            // wait fork (IEEE 1800-2023 9.6.1): until the thread's live
+            // children end; without any, the reference requeues the process
+            // in the current region (queue_current), which the next round is.
+            suspend_point = true;
+            if (live_children(index).empty()) {
+                ready_thread(index);
+            } else {
+                threads_[index].waiting_children = true;
+            }
+            outcome = Boundary::suspend;
+        } else if constexpr (std::is_same_v<T, DisableFork>) {
+            // disable fork (9.6.3), as the reference's DisableFork: every
+            // descendant, the process then requeued in the current region;
+            // or the children of one named fork, the process continuing.
+            if (!op.site) {
+                suspend_point = true;
+                cancel_thread_descendants(index);
+                ready_thread(index);
+                outcome = Boundary::suspend;
+            } else {
+                disable_fork_site(index, static_cast<std::uint32_t>(*op.site));
+                outcome = threads_[index].alive ? Boundary::advance
+                                                : Boundary::killed;
+            }
         } else if constexpr (std::is_same_v<T, Halt>
             || std::is_same_v<T, ForkEnd>) {
             suspend_point = true;
@@ -2020,6 +2451,9 @@ ContainerValue Interpreter::Impl::StaticKernel::debug_container_register(
     const auto found = std::ranges::find_if(members_, [&](const Member& member) {
         return member.process == process;
     });
+    if (found != members_.end() && found->dynamic_container(reg)) {
+        return *found->dynamic_containers[reg];
+    }
     if (found == members_.end() || reg >= found->container_registers.size()
         || found->container_registers[reg] == no_container) {
         throw std::logic_error { "SimIR debug container local is unbound" };
@@ -2426,14 +2860,9 @@ void Interpreter::Impl::StaticKernel::vhdl_timer_due(const SimulationTick time)
 
 void Interpreter::Impl::StaticKernel::arm_timer()
 {
-    while (!timers_.empty()) {
-        const auto& top = timers_.top();
-        const auto& thread = threads_[top.thread];
-        if (thread.alive && !thread.queued && thread.epoch == top.epoch) {
-            break;
-        }
-        timers_.pop();
-    }
+    // A timer whose thread was killed or moved on (disable, disable fork)
+    // still holds its time step, as the reference's scheduled resumption of
+    // the process does: simulation time reaches it (collect_timers drops it).
     if (stopped_) {
         return;
     }
@@ -2478,15 +2907,12 @@ void Interpreter::Impl::StaticKernel::arm_timer()
 
 std::optional<SimulationTick> Interpreter::Impl::StaticKernel::next_timer()
 {
-    while (!timers_.empty()) {
-        const auto& top = timers_.top();
-        const auto& thread = threads_[top.thread];
-        if (thread.alive && !thread.queued && thread.epoch == top.epoch) {
-            return top.time;
-        }
-        timers_.pop();
+    // Lapsed timers included (arm_timer): the time steps they hold are the
+    // reference's too.
+    if (timers_.empty()) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    return timers_.top().time;
 }
 
 void Interpreter::Impl::StaticKernel::schedule_stop_at(const SimulationTick time)

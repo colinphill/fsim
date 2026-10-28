@@ -495,6 +495,165 @@ struct StaticKernelInlinedProgram {
     }, operation);
 }
 
+/// A container register type the kernel's arena holds: a fixed array of
+/// packed or scalar elements. A SystemVerilog behavioral member holds
+/// other registers in the reference's format (Member::dynamic_containers).
+[[nodiscard]] inline bool static_kernel_arena_container_type(
+    const ContainerType& type)
+{
+    return type.fixed && !type.associative && !type.vhdl_shaped
+        && (type.element_kind == ContainerElementKind::Packed
+            || type.element_kind == ContainerElementKind::Scalar);
+}
+
+/// SystemVerilog container operations the kernel runs with the reference's
+/// own code (simir_container_ops) on reference-format registers: dynamic
+/// arrays, queues and associative arrays and their methods (IEEE 1800-2023
+/// 7.5-7.12), array patterns, streaming (11.4.14) and element access to
+/// unpacked aggregates.
+template <typename T>
+inline constexpr bool static_kernel_reference_container_operation
+    = std::is_same_v<T, ResizeContainer>
+    || std::is_same_v<T, ConditionalContainerSelect>
+    || std::is_same_v<T, CompareContainers>
+    || std::is_same_v<T, ContainerSize>
+    || std::is_same_v<T, ContainerReduction>
+    || std::is_same_v<T, OrderContainer>
+    || std::is_same_v<T, LocateContainer>
+    || std::is_same_v<T, ContainerStringRead>
+    || std::is_same_v<T, ContainerStringWrite>
+    || std::is_same_v<T, FormatContainerPattern>
+    || std::is_same_v<T, ContainerElementRead>
+    || std::is_same_v<T, ContainerElementWrite>
+    || std::is_same_v<T, ContainerAggregateRead>
+    || std::is_same_v<T, ContainerAggregateWrite>
+    || std::is_same_v<T, CopyContainerAggregateElement>
+    || std::is_same_v<T, DeleteContainer>
+    || std::is_same_v<T, ContainerExists>
+    || std::is_same_v<T, TraverseContainer>
+    || std::is_same_v<T, PushContainer>
+    || std::is_same_v<T, PopContainer>
+    || std::is_same_v<T, AppendContainer>
+    || std::is_same_v<T, ContainerBitstream>;
+
+/// Calls `visit(id)` for each container register a reference container
+/// operation, ContainerRead, ContainerWrite or CopyContainerRegister names.
+template <typename Visit>
+inline void static_kernel_container_operands(
+    const Operation& operation, Visit&& visit)
+{
+    visit_operation([&](const auto& op) {
+        using T = std::decay_t<decltype(op)>;
+        if constexpr (std::is_same_v<T, ResizeContainer>) {
+            visit(op.target);
+            if (op.initializer) {
+                visit(*op.initializer);
+            }
+        } else if constexpr (std::is_same_v<T, ConditionalContainerSelect>) {
+            visit(op.destination);
+            visit(op.when_true);
+            visit(op.when_false);
+        } else if constexpr (std::is_same_v<T, CompareContainers>) {
+            visit(op.lhs);
+            visit(op.rhs);
+        } else if constexpr (std::is_same_v<T, LocateContainer>
+            || std::is_same_v<T, ContainerElementRead>
+            || std::is_same_v<T, CopyContainerRegister>) {
+            visit(op.destination);
+            visit(op.source);
+        } else if constexpr (std::is_same_v<T, ContainerElementWrite>
+            || std::is_same_v<T, CopyContainerAggregateElement>) {
+            visit(op.target);
+            visit(op.source);
+        } else if constexpr (std::is_same_v<T, AppendContainer>) {
+            visit(op.target);
+            if (op.container) {
+                visit(*op.container);
+            }
+        } else if constexpr (std::is_same_v<T, ContainerBitstream>) {
+            visit(op.bits);
+            visit(op.container);
+        } else if constexpr (std::is_same_v<T, ContainerSize>
+            || std::is_same_v<T, ContainerReduction>
+            || std::is_same_v<T, ContainerStringRead>
+            || std::is_same_v<T, FormatContainerPattern>
+            || std::is_same_v<T, ContainerAggregateRead>
+            || std::is_same_v<T, ContainerExists>
+            || std::is_same_v<T, TraverseContainer>
+            || std::is_same_v<T, ContainerRead>) {
+            visit(op.source);
+        } else if constexpr (std::is_same_v<T, OrderContainer>
+            || std::is_same_v<T, ContainerStringWrite>
+            || std::is_same_v<T, ContainerAggregateWrite>
+            || std::is_same_v<T, DeleteContainer>
+            || std::is_same_v<T, PushContainer>
+            || std::is_same_v<T, PopContainer>
+            || std::is_same_v<T, ContainerWrite>) {
+            visit(op.target);
+        }
+    }, operation);
+}
+
+/// The container registers a SystemVerilog behavioral member holds in
+/// reference format: those of a type the arena does not hold that the
+/// member uses, those a reference container operation names, and those a
+/// copy connects to either. `operation_at(op)` is the member's operation
+/// `op` of `count`; `types` its container register types.
+template <typename OperationAt, typename Types>
+[[nodiscard]] std::vector<std::uint8_t> static_kernel_dynamic_container_registers(
+    const std::size_t count, OperationAt&& operation_at, const Types& types)
+{
+    std::vector<std::uint8_t> dynamic(types.size(), 0U);
+    const auto mark = [&](const ContainerRegisterId id) {
+        if (id < dynamic.size() && dynamic[id] == 0U) {
+            dynamic[id] = 1U;
+            return true;
+        }
+        return false;
+    };
+    std::vector<std::pair<ContainerRegisterId, ContainerRegisterId>> copies;
+    for (std::size_t op = 0U; op < count; ++op) {
+        const auto& operation = operation_at(op);
+        const bool reference = visit_operation([](const auto& value) {
+            return static_kernel_reference_container_operation<
+                std::decay_t<decltype(value)>>;
+        }, operation);
+        static_kernel_container_operands(operation,
+            [&](const ContainerRegisterId id) {
+                if (reference
+                    || (id < types.size()
+                        && !static_kernel_arena_container_type(types[id]))) {
+                    mark(id);
+                }
+            });
+        if (const auto* bind = operation_get_if<ReadContainerObject>(&operation);
+            bind != nullptr && bind->destination < types.size()
+            && !static_kernel_arena_container_type(types[bind->destination])) {
+            mark(bind->destination);
+        } else if (const auto* write
+                   = operation_get_if<WriteContainerObject>(&operation);
+                   write != nullptr && write->source < types.size()
+                   && !static_kernel_arena_container_type(types[write->source])) {
+            mark(write->source);
+        } else if (const auto* copy
+                   = operation_get_if<CopyContainerRegister>(&operation)) {
+            copies.emplace_back(copy->destination, copy->source);
+        }
+    }
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& [destination, source] : copies) {
+            if (destination < dynamic.size() && source < dynamic.size()
+                && dynamic[destination] != dynamic[source]) {
+                changed = mark(destination) || changed;
+                changed = mark(source) || changed;
+            }
+        }
+    }
+    return dynamic;
+}
+
+
 /// Operations a behavioral member may use: the static set plus waits,
 /// fork/join, calls with automatic frames of packed registers, integer
 /// arithmetic, immediate runtime-library output, string constants and copies,
@@ -528,9 +687,11 @@ struct StaticKernelInlinedProgram {
             // A named block of the process's own code (IEEE 1800-2023
             // 9.6.2); a scope of another process stays on the host.
             return value.scopes.empty();
-        } else if constexpr (std::is_same_v<T, ContainerWrite>) {
-            // Process-private fixed arrays (see the planner).
-            return !value.string_index;
+        } else if constexpr (std::is_same_v<T, ContainerWrite>
+            || static_kernel_reference_container_operation<T>) {
+            // Process-private fixed arrays, or reference-format registers
+            // (static_kernel_dynamic_container_registers; see the planner).
+            return true;
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
             // $time, $stime and $realtime.
             return value.function >= SystemVerilogMathFunction::Time;
@@ -559,6 +720,10 @@ struct StaticKernelInlinedProgram {
                 || std::is_same_v<T, WaitSensitivity>
                 || std::is_same_v<T, WaitForever>
                 || std::is_same_v<T, ForkEnd>
+                // wait fork and disable fork (IEEE 1800-2023 9.6.1, 9.6.3)
+                // of the member's own threads.
+                || std::is_same_v<T, WaitFork>
+                || std::is_same_v<T, DisableFork>
                 || std::is_same_v<T, Stop>
                 || std::is_same_v<T, Pause>
                 || std::is_same_v<T, Report>
@@ -585,6 +750,18 @@ struct StaticKernelInlinedProgram {
                 || std::is_same_v<T, CountBits>
                 // %v of a host signal (21.2.1.5, static_kernel_host_signal).
                 || std::is_same_v<T, SignalStrengthText>
+                // An event's triggered state (15.5.3), from the host's
+                // event history (static_kernel_host_signal).
+                || std::is_same_v<T, EventTriggered>
+                // Delayed, gate-delay and inertial updates of host signals
+                // (10.3.3, 28.16, static_kernel_host_signal).
+                || std::is_same_v<T, WriteAfter>
+                || std::is_same_v<T, WriteAfterSlice>
+                || std::is_same_v<T, WriteAfterDynamicSlice>
+                || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                || std::is_same_v<T, WriteDelayed>
+                || std::is_same_v<T, WriteInertial>
+                || std::is_same_v<T, WriteInertialSlice>
                 // Between equal-shape private arrays (see the planner).
                 || std::is_same_v<T, CopyContainerRegister>
                 || std::is_same_v<T, PlusArgSelect>
@@ -907,6 +1084,10 @@ struct StaticKernelInlinedProgram {
             // 1800-2023 21.2.1.5).
             || std::is_same_v<T, SignalStrengthText>) {
             return value.signal;
+        } else if constexpr (std::is_same_v<T, EventTriggered>) {
+            // The triggered state of an event (IEEE 1800-2023 15.5.3) is
+            // the host's history of its synchronization object.
+            return value.event;
         } else if constexpr (std::is_same_v<T, WriteProjected>
             || std::is_same_v<T, WriteProjectedSlice>
             || std::is_same_v<T, WriteProjectedDynamicSlice>) {
@@ -917,7 +1098,17 @@ struct StaticKernelInlinedProgram {
             return std::nullopt;
         } else if constexpr (std::is_same_v<T, WriteProjectedWaveform>
             || std::is_same_v<T, WriteProjectedWaveformSlice>
-            || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+            || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>
+            // SystemVerilog delayed, gate-delay and inertial updates (IEEE
+            // 1800-2023 10.3.3, 28.16): the host holds the driver's pending
+            // updates and matures them.
+            || std::is_same_v<T, WriteAfter>
+            || std::is_same_v<T, WriteAfterSlice>
+            || std::is_same_v<T, WriteAfterDynamicSlice>
+            || std::is_same_v<T, WriteAfterDynamicPartSlice>
+            || std::is_same_v<T, WriteDelayed>
+            || std::is_same_v<T, WriteInertial>
+            || std::is_same_v<T, WriteInertialSlice>) {
             return value.signal;
         } else {
             return std::nullopt;

@@ -412,6 +412,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     };
 
     using SharedContainerValue = std::shared_ptr<ContainerValue>;
+    // The reference's register file for the shared container operations
+    // (simir_container_helpers.hpp).
+    class ProcessContainerAccess;
 
     static constexpr std::size_t no_systemverilog_update_slot
         = std::numeric_limits<std::size_t>::max();
@@ -1438,6 +1441,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
             static_kernel_dirty_inputs.push_back(signal);
         }
     }
+    /// A named event's trigger is an event of the event variable whatever
+    /// its value (IEEE 1800-2023 15.5.1): each one bumps its revision, so
+    /// revision readers (the static kernel's inputs) see every trigger.
+    void note_event_trigger(const SignalId signal)
+    {
+        if (++signal_value_revisions[signal] == 0U) {
+            signal_value_revisions[signal] = 1U;
+            std::ranges::fill(container_materialized_revisions, std::nullopt);
+        }
+        note_signal_revision(signal);
+    }
     std::vector<PackedLogic4> sampled_values;
     std::vector<PackedLogic4> sampled_defaults;
     // SignalId-indexed dependency mask for historical ReadSignal operations.
@@ -2109,17 +2123,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process,
         InstructionIndex instruction,
         SignalChangeOrigin origin = { });
-    // Update one member of an unpacked aggregate element of a container
-    // value (index, then member path).
-    void apply_container_aggregate_member(
-        ContainerValue& target,
-        const PackedLogic4& index,
-        bool signed_index,
-        bool linear_index,
-        std::span<const std::uint32_t> members,
-        const PackedLogic4& value,
-        ProcessId process,
-        InstructionIndex instruction);
     void write_container_object_member_value(
         ContainerObjectId id,
         const PackedLogic4& index,
@@ -2146,16 +2149,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process,
         InstructionIndex instruction,
         SignalChangeOrigin origin = { });
-    // The nested element of `target` a write selects (adding an associative
-    // or appended queue element); null when the write is ignored.
-    [[nodiscard]] ContainerValue* select_container_element_for_write(
-        ContainerValue& target,
-        const PackedLogic4& index,
-        bool signed_index,
-        bool linear_index,
-        ProcessId process,
-        InstructionIndex instruction,
-        const std::string* string_key = nullptr);
     void write_container_object_dynamic_part_element_value(
         ContainerObjectId id,
         const PackedLogic4& index,
@@ -2674,6 +2667,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void set_event_identity(
         SignalId signal, std::optional<SignalId> identity);
+
+    /// A named event's triggered state (IEEE 1800-2023 15.5.3): its
+    /// synchronization object triggered in the current time step.
+    [[nodiscard]] bool event_triggered_now(SignalId event) const;
 
     [[nodiscard]] std::uint64_t invalidate_event(
         const SignalId event);

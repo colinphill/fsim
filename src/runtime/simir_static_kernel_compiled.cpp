@@ -127,6 +127,12 @@ void Interpreter::Impl::StaticKernel::compile_members()
             not_compiled_reason_[index] = "thread_contexts";
             continue;
         }
+        // Reference-format container registers run the reference's
+        // container operations on the operation tier.
+        if (!members_[index].dynamic_containers.empty()) {
+            not_compiled_reason_[index] = "dynamic_containers";
+            continue;
+        }
         if (only != nullptr || skip != nullptr) {
             const auto name
                 = impl_.processes.program_view(members_[index].process).name();

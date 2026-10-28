@@ -252,9 +252,14 @@ public:
     /// initialization, runs in the first delta after the host's time-zero
     /// SystemVerilog work it reads (vhdl_round_waits_for_host), so
     /// Interpreter::start queues its first activation instead of running it.
+    /// A kernel whose members make delayed writes likewise: their time-zero
+    /// updates mature as host tasks of the Active region, which run between
+    /// the kernel's rounds (IEEE 1800-2023 4.5, 4.7), not before the
+    /// scheduler starts.
     [[nodiscard]] bool queues_first_activation() const noexcept
     {
-        return (mixed_ && host_boundary_) || vhdl_host_cycles_;
+        return (mixed_ && host_boundary_) || vhdl_host_cycles_
+            || host_delayed_writes_;
     }
     /// The host process the kernel runs as, a member's or the synthetic one
     /// of a design whose processes are all hosted.
@@ -276,6 +281,15 @@ public:
     /// The original program of the host process when it is a member (its
     /// scheduler program is the kernel stub); null for every other process
     /// and outside a debugger plan.
+    /// The original program of the host process when it is a member, for
+    /// the time-zero start's late-start rule (systemverilog_late_starters),
+    /// which the planner applies to the original programs; null for every
+    /// other process.
+    [[nodiscard]] const Process* startup_program(ProcessId process) const noexcept
+    {
+        return host_program_ && process == host_process_ ? &*host_program_
+                                                         : nullptr;
+    }
     [[nodiscard]] const Process* debug_program(ProcessId process) const noexcept
     {
         return host_original_ && process == host_process_ ? &*host_original_
@@ -363,6 +377,15 @@ private:
         /// binding copies its memory into (a register the member writes
         /// elements of), or no_container; empty when there is none.
         std::vector<std::uint32_t> copy_storage;
+        /// Per container register: its reference-format value (a dynamic
+        /// array, queue, associative array or other shape the arena does
+        /// not hold), copy-on-write as the reference's register file keeps
+        /// it; null for the kernel's arrays. Empty when there is none.
+        std::vector<SharedContainerValue> dynamic_containers;
+        [[nodiscard]] bool dynamic_container(const ContainerRegisterId id) const
+        {
+            return id < dynamic_containers.size() && dynamic_containers[id];
+        }
         /// The program's shared operation body while `operations` still
         /// expands it (null once specialization rewrote them); members
         /// with equal bodies share prune_operations results.
@@ -379,6 +402,9 @@ private:
             std::vector<std::string> strings;
             std::vector<ContainerRegisterId> container_ids;
             std::vector<std::uint32_t> containers;
+            /// Per container_ids entry: the saved reference-format value,
+            /// or null.
+            std::vector<SharedContainerValue> dynamic;
             std::size_t bytes { };
         };
         std::vector<Frame> frames;
@@ -1026,6 +1052,8 @@ private:
         /// arena words; registers bound to design arrays are not saved.
         std::vector<ContainerRegisterId> container_ids;
         std::vector<std::vector<std::uint64_t>> arrays;
+        /// Per container_ids entry: the reference-format value, or null.
+        std::vector<SharedContainerValue> dynamic;
         bool stored { };
         bool escaping { };
     };
@@ -1050,6 +1078,15 @@ private:
         std::vector<std::shared_ptr<CallableContext>> contexts;
         /// Live children; the parent of a join-all fork resumes at zero.
         std::uint32_t children { };
+        /// Fork children whose records exist (alive, or ended with
+        /// descendants of their own): an ended thread keeps its record while
+        /// this is non-zero, as the reference keeps a halted process's, so
+        /// a disable fork reaches every descendant (IEEE 1800-2023 9.6.3).
+        std::uint32_t child_records { };
+        /// Ended, its record kept for its descendants (child_records).
+        bool ended_record { };
+        /// Suspended in wait fork (9.6.1) until its children end.
+        bool waiting_children { };
         /// A fork child's random stream (IEEE 1800-2023 18.14: each thread
         /// has its own), seeded as the reference seeds the child process.
         std::uint64_t random_state { };
@@ -1111,15 +1148,23 @@ private:
         std::uint64_t changed_mask { };
         bool event { };
     };
+    /// A delay's resumption. Those due at one time resume in their
+    /// threads' stable order, first-queued first among equal orders, as the
+    /// reference queues each process's timeout at its own order (IEEE
+    /// 1800-2023 4.7).
     struct Timer {
         SimulationTick time { };
+        ProcessId order { };
         std::uint64_t sequence { };
         std::uint32_t thread { };
         std::uint64_t epoch { };
         friend bool operator>(const Timer& left, const Timer& right)
         {
-            return left.time != right.time ? left.time > right.time
-                                            : left.sequence > right.sequence;
+            if (left.time != right.time) {
+                return left.time > right.time;
+            }
+            return left.order != right.order ? left.order > right.order
+                                              : left.sequence > right.sequence;
         }
     };
     std::vector<Thread> threads_;
@@ -1248,6 +1293,7 @@ private:
     /// A member's registers and blocking writes as the reference's file
     /// operations (run_file) use them.
     struct MemberFileStorage;
+    struct MemberContainerAccess;
     /// A VHDL-2019 member's report or assertion violation (Impl::report_vhdl)
     /// at the kernel's time.
     void report_vhdl(std::uint32_t member, std::uint32_t pc,
@@ -1359,7 +1405,12 @@ private:
         std::optional<std::uint32_t>& running_redirect);
     /// The live fork children of a thread, in process order.
     [[nodiscard]] std::vector<std::uint32_t> live_children(std::uint32_t thread) const;
+    /// The fork children with records, live or ended (Thread::child_records),
+    /// in stable order.
+    [[nodiscard]] std::vector<std::uint32_t> child_records(std::uint32_t thread) const;
     void cancel_thread_descendants(std::uint32_t thread);
+    /// disable fork (IEEE 1800-2023 9.6.3) of one fork site.
+    void disable_fork_site(std::uint32_t thread, std::uint32_t site);
     /// Ends a fork child as killed (complete_fork_child): its fork group
     /// counts it, its waits lapse.
     void kill_thread(std::uint32_t thread);
@@ -1679,6 +1730,9 @@ private:
     /// Debugger plan: the program the host member ran before its scheduler
     /// program became the kernel stub.
     std::optional<Process> host_original_;
+    /// The program the host member ran before its scheduler program became
+    /// the kernel stub (startup_program).
+    std::optional<Process> host_program_;
     [[nodiscard]] ProcessProgramView program_of(const Member& member) const
     {
         return host_original_ && member.process == host_process_
@@ -2153,6 +2207,15 @@ private:
     bool in_host_nonblocking_region_ { };
     /// Members that start after the procedures (Member::after_procedures).
     std::vector<std::uint32_t> after_procedure_members_;
+    /// The once members of time zero that run in stable order with the
+    /// kernel's threads and hosted processes (run_merged_active), from
+    /// start_once_next_ on.
+    std::vector<std::uint32_t> start_once_;
+    std::size_t start_once_next_ { };
+    [[nodiscard]] bool start_once_pending() const
+    {
+        return start_once_next_ < start_once_.size();
+    }
     bool yield_requested_ { };
     /// A VHDL member stages updates of host signals (a delayed assignment's
     /// target), which the host applies in its update phase, or reads a host
@@ -2246,6 +2309,9 @@ private:
     /// The final members' processes and member indices (run_finals).
     std::vector<std::pair<ProcessId, std::uint32_t>> final_members_;
     std::vector<StartupMember> startup_members_;
+    /// A SystemVerilog member makes delayed writes (after, delayed and
+    /// inertial updates), which the host matures at the writer's order.
+    bool host_delayed_writes_ { };
     std::optional<SimulationTick> armed_hosted_timer_;
     /// Marks the specification's hosted processes in the interpreter.
     void adopt_hosted(const std::vector<StaticKernelMemberSpec>& hosted);

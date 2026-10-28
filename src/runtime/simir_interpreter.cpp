@@ -3385,6 +3385,14 @@ void Interpreter::start()
     const auto late_start = systemverilog_late_starters(
         impl_->processes.size(), impl_->signals.size(),
         [&](const std::size_t id) {
+            // The kernel's host runs the kernel stub; the rule reads the
+            // program it was shaped from, as the planner does.
+            if (impl_->static_kernel) {
+                if (const auto* original = impl_->static_kernel->startup_program(
+                        static_cast<ProcessId>(id))) {
+                    return ProcessProgramView { *original };
+                }
+            }
             return impl_->processes.program_view(static_cast<ProcessId>(id));
         },
         [&](const std::size_t id) {

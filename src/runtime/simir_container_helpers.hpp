@@ -2,6 +2,7 @@
 #pragma once
 
 #include "simir_internal.hpp"
+#include "simir_container_ops.hpp"
 
 #include <algorithm>
 
@@ -391,5 +392,59 @@ inline void require_same_type(
             value.string_keys.begin(), value.string_keys.end(), key)
         - value.string_keys.begin());
 }
+
+// The reference interpreter's register file for the shared container
+// operations: a process's frame, reached the way its handlers always did.
+class Interpreter::Impl::ProcessContainerAccess final
+    : public ContainerRegisterAccess {
+public:
+    ProcessContainerAccess(Impl& impl, ProcessState& process)
+        : impl_(impl)
+        , process_(process)
+    {
+    }
+
+    [[nodiscard]] const PackedLogic4& read(const RegisterId id) override
+    {
+        return impl_.get_register(process_, id);
+    }
+
+    void write(const RegisterId id, PackedLogic4 value) override
+    {
+        impl_.get_register(process_, id) = std::move(value);
+    }
+
+    [[nodiscard]] const std::string& read_string(
+        const StringRegisterId id) override
+    {
+        return impl_.get_string_register(process_, id);
+    }
+
+    [[nodiscard]] std::string& string(const StringRegisterId id) override
+    {
+        return impl_.get_string_register(process_, id);
+    }
+
+    [[nodiscard]] ContainerValue& container(
+        const ContainerRegisterId id) override
+    {
+        return impl_.get_container_register(process_, id);
+    }
+
+    [[nodiscard]] const ContainerValue& read_container(
+        const ContainerRegisterId id) override
+    {
+        return impl_.read_container_register(process_, id);
+    }
+
+    [[nodiscard]] std::uint32_t next_random() override
+    {
+        return Impl::next_random(process_);
+    }
+
+private:
+    Impl& impl_;
+    ProcessState& process_;
+};
 
 } // namespace fsim::runtime::simir
