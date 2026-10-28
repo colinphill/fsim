@@ -1068,7 +1068,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 object_writes;
             bool has_fork = false;
             bool has_frame_push = false;
-            bool has_random = false;
             for (std::size_t op = 0U; op < count && supported; ++op) {
                 const auto operation = operations.expanded(op);
                 failed_at = op;
@@ -1114,8 +1113,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             value.destination, value.source);
                     } else if constexpr (std::is_same_v<T, CallableFramePush>) {
                         has_frame_push = true;
-                    } else if constexpr (std::is_same_v<T, RandomValue>) {
-                        has_random = true;
                     } else if constexpr (std::is_same_v<T, Fork>) {
                         has_fork = true;
                         supported = supported
@@ -1142,14 +1139,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         }
                     }
                 }, operation);
-            }
-            if (supported && has_fork && has_random) {
-                // A fork child is a reference process with its own identity
-                // and random stream (IEEE 1800-2023 18.14); kernel threads
-                // have neither.
-                supported = false;
-                failed_at = count;
-                failed_reason = "fork_random";
             }
             if (supported && has_fork && has_frame_push
                 && fork_holds_suspended_frame(operations, count)) {

@@ -6,7 +6,14 @@
 // clock, a stimulus table built by an automatic task calling an automatic
 // function, repeat/@(edge) waits, a fork/join of a driver loop and a checker
 // loop, a level wait, formatted $display (including %t, %b, %h and a string),
-// a timeout initial block and $finish.
+// a timeout initial block and $finish. The clocked $display blocks are
+// sequential members; a forced, shuffled multithreaded run logs their output
+// on workers and must print it in the serial order, with a %t argument
+// formatted after the $timeformat that precedes it. A third process disables
+// a sibling fork branch's block and its own forever loop (IEEE 1800-2023
+// 9.6.2), draws $urandom in a fork child (each thread its own stream, 18.14)
+// and computes with reals ($rtoi, $ln, real arithmetic): it stays a kernel
+// member too.
 #include "fsim/app/application.hpp"
 
 #include "../../src/runtime/simir_static_kernel.hpp"
@@ -113,6 +120,13 @@ module bk_top;
   always @(posedge clk)
     if (vout) $display("%0t out acc=%h mix=%b", $time, acc, mix);
 
+  reg [63:0] stamp = 0;
+  always @(posedge clk) stamp <= stamp + 64'd10;
+  always @(posedge clk)
+    if (vout) $display("tf %t din=%h", stamp, din);
+  always @(negedge clk)
+    if (seen == 8) $timeformat(0, 2, " s", 14);
+
   initial begin
     rst_n = 0; din = 0; vin = 0; done = 0; seen = 0; sum_out = 0;
     build(32'h12345678);
@@ -144,6 +158,35 @@ module bk_top;
     done = 1;
     repeat (2) @(posedge clk);
     $finish;
+  end
+
+  integer dcount;
+  real r;
+  initial begin
+    dcount = 0; r = 1.0;
+    #3;
+    fork
+      begin : watch
+        repeat (4) @(posedge clk);
+        $display("%0t watch timeout", $time);
+      end
+      begin
+        repeat (2) @(posedge clk);
+        disable watch;
+        r = r * 2.5 + 0.25;
+        $display("%0t disabled watch r=%0d u=%0d", $time, $rtoi(r * 100.0),
+                 $urandom % 1000);
+      end
+    join
+    begin : loop
+      forever begin
+        @(posedge clk);
+        dcount = dcount + 1 + ($urandom % 2);
+        if (dcount > 5) disable loop;
+      end
+    end
+    r = $ln(r + 1.0);
+    $display("%0t loop done dcount=%0d lr=%0d", $time, dcount, $rtoi(r * 1000.0));
   end
 
   initial begin
@@ -194,7 +237,7 @@ endmodule
 }
 
 [[nodiscard]] std::vector<std::string> run(const std::filesystem::path& root,
-    const SimulationEngine engine, const bool kernel)
+    const SimulationEngine engine, const bool kernel, const bool threads = false)
 {
     auto project = build(root);
     if (kernel) {
@@ -210,16 +253,34 @@ endmodule
                     == fsim::runtime::simir::StaticKernelMemberKind::behavioral
                 ? 1U : 0U;
         }
-        require(behavioral >= 4U,
+        require(behavioral >= 5U,
             "the testbench processes must be behavioral kernel members");
+        std::size_t sequential = 0U;
+        for (const auto& member : plan.spec->members) {
+            sequential += member.kind
+                    == fsim::runtime::simir::StaticKernelMemberKind::sequential
+                ? 1U : 0U;
+        }
+        require(sequential >= 5U,
+            "the clocked $display blocks must be sequential kernel members");
         for (const auto& row : plan.hosted_reasons) {
             require(row.reason.find("LoadMemory") == std::string::npos
                     && row.reason.find("container_unowned") == std::string::npos,
                 "$readmemh and the memories it loads must stay in the kernel");
+            require(row.reason.find("DisableBlock") == std::string::npos
+                    && row.reason.find("fork_random") == std::string::npos
+                    && row.reason.find("SystemVerilogMath") == std::string::npos
+                    && row.reason.find("SystemVerilogScalarBinary")
+                        == std::string::npos,
+                "disable, fork-child $urandom and real arithmetic must stay in "
+                "the kernel: " + row.reason);
         }
     }
     project.cone_fusion = kernel;
     set_environment("FSIM_STATIC_KERNEL", kernel ? "1" : "0");
+    set_environment("FSIM_KERNEL_THREADS", threads ? "4" : nullptr);
+    set_environment("FSIM_KERNEL_MT_FORCE", threads ? "1" : nullptr);
+    set_environment("FSIM_KERNEL_MT_SHUFFLE", threads ? "1" : nullptr);
     Simulation simulation(std::move(project), 100'000U, engine,
         SystemVerilogVpiRuntimeUpdates::omitted);
     std::vector<std::string> lines;
@@ -237,6 +298,9 @@ endmodule
     (void)simulation.run();
     require(simulation.finished(), "the testbench must reach $finish");
     set_environment("FSIM_STATIC_KERNEL_BEHAVIORAL", nullptr);
+    set_environment("FSIM_KERNEL_THREADS", nullptr);
+    set_environment("FSIM_KERNEL_MT_FORCE", nullptr);
+    set_environment("FSIM_KERNEL_MT_SHUFFLE", nullptr);
     return lines;
 }
 
@@ -254,6 +318,9 @@ int main()
         { SimulationEngine::interpreter, SimulationEngine::compiled }) {
         const auto reference = run(root / "reference", engine, false);
         const auto kernel = run(root / "kernel", engine, true);
+        const auto threaded = run(root / "threaded", engine, true, true);
+        require(threaded == kernel,
+            "a multithreaded kernel must print the serial kernel's transcript");
         bool done = false;
         for (const auto& line : reference) {
             done = done || line.starts_with("DONE ");

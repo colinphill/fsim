@@ -249,7 +249,8 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
                 || operation_holds<Return>(operation)
                 || operation_holds<Halt>(operation)
                 || operation_holds<Fork>(operation)
-                || operation_holds<ForkEnd>(operation)) {
+                || operation_holds<ForkEnd>(operation)
+                || operation_holds<DisableBlock>(operation)) {
                 return true;
             }
         }
@@ -299,6 +300,11 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
                     next.insert(next.end(), op.branches.begin(),
                         op.branches.end());
                     next.push_back(pc + 1U);
+                } else if constexpr (std::is_same_v<T, DisableBlock>) {
+                    // The thread continues after the disable or at the end
+                    // of its own block.
+                    next.push_back(pc + 1U);
+                    next.push_back(op.end);
                 } else if constexpr (std::is_same_v<T, Halt>
                     || std::is_same_v<T, ForkEnd>) {
                 } else {

@@ -400,7 +400,15 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
             };
             const auto known = visit_operation([&](const auto& op) {
                 using T = std::decay_t<decltype(op)>;
-                if constexpr (std::is_same_v<T, Report>) {
+                if constexpr (std::is_same_v<T, Report>
+                    || std::is_same_v<T, Display>
+                    || std::is_same_v<T, FormatDisplay>
+                    || std::is_same_v<T, TimeDisplay>
+                    || std::is_same_v<T, SystemVerilogMath>
+                    || std::is_same_v<T, SystemVerilogScalarBinary>) {
+                    // Output only (a worker logs it for the replay,
+                    // LaneOutput), or a register written from the time or
+                    // from a real-number computation.
                     return true;
                 } else if constexpr (std::is_same_v<T, IntegerBinary>
                     || std::is_same_v<T, IntegerUnary>
@@ -538,6 +546,15 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 ok = false;
                 break;
             case KOp::generic:
+                touch_operation(current, inst.x);
+                // A sequential member's output and severity messages wait
+                // in the lane for the replay; every other generic operation
+                // runs on the leader.
+                ok = ok && group[unit] == sequential_group && current < member_count
+                    && inst.x < members_[current].operations.size()
+                    && static_kernel_sequential_operation_supported(
+                        members_[current].operations[inst.x]);
+                break;
             case KOp::step:
                 touch_operation(current, inst.x);
                 ok = false;
@@ -2710,7 +2727,8 @@ void Interpreter::Impl::StaticKernel::run_batch_item(const std::uint32_t lane_in
     if (domain_index == no_slot) {
         run_in_lane(lane, entry, run);
         run.effects = run.changes_begin != run.changes_end || run.writes_begin != run.writes_end
-            || run.status != 0U || run.frame.status != 0U;
+            || run.outputs_begin != run.outputs_end || run.status != 0U
+            || run.frame.status != 0U;
         lane.item_state[item] = run.effects ? 2U : 0U;
         worker_lane_ = nullptr;
         return;
@@ -2814,7 +2832,8 @@ void Interpreter::Impl::StaticKernel::run_batch_item(const std::uint32_t lane_in
         lane.writes.count = kept;
     }
     run.effects = run.changes_begin != run.changes_end || run.writes_begin != run.writes_end
-        || run.status != 0U || run.frame.status != 0U;
+        || run.outputs_begin != run.outputs_end || run.status != 0U
+        || run.frame.status != 0U;
     lane.item_state[item] = run.effects ? 2U : 0U;
     if (lane.private_count != private_before) {
         if (domain_index < 64U) {
@@ -2832,6 +2851,7 @@ void Interpreter::Impl::StaticKernel::run_in_lane(Lane& lane,
 {
     run.changes_begin = static_cast<std::uint32_t>(lane.changes.size());
     run.writes_begin = lane.writes.count;
+    run.outputs_begin = static_cast<std::uint32_t>(lane.outputs.size());
     auto& frame = run.frame;
     frame = StaticKernelNativeFrame { };
     frame.arena = arena_.data();
@@ -2875,6 +2895,7 @@ void Interpreter::Impl::StaticKernel::run_in_lane(Lane& lane,
     }
     run.changes_end = static_cast<std::uint32_t>(lane.changes.size());
     run.writes_end = lane.writes.count;
+    run.outputs_end = static_cast<std::uint32_t>(lane.outputs.size());
 }
 
 void Interpreter::Impl::StaticKernel::log_change(Lane& lane,
@@ -2912,6 +2933,10 @@ void Interpreter::Impl::StaticKernel::replay(const std::uint32_t entry, LaneRun&
         scratch().running_member = entry;
     }
     try {
+        // The unit's output first: it precedes any error the run raised.
+        for (auto index = run.outputs_begin; index < run.outputs_end; ++index) {
+            emit_lane_output(lane.outputs[index]);
+        }
         for (auto index = run.changes_begin; index < run.changes_end; ++index) {
             replay_change(lane, lane.changes[index]);
         }

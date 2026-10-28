@@ -232,8 +232,15 @@ struct StaticKernelRuntimeSpec {
             return value.domain != SignalUpdateDomain::generic;
         } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
             return !value.transaction_signal;
+        } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+            // The math and conversion functions (IEEE 1800-2023 20.5, 20.8);
+            // the time queries read the time (see the sequential set).
+            return value.function < SystemVerilogMathFunction::Time;
         } else {
             return std::is_same_v<T, DebugPoint>
+                // Real, shortreal and time arithmetic, comparisons and
+                // conversions (6.12, 11.3.1) on the operation step.
+                || std::is_same_v<T, SystemVerilogScalarBinary>
                 // A code coverage counter bump (host data, no registers).
                 || std::is_same_v<T, CodeCoverageHit>
                 || std::is_same_v<T, LoadConstant>
@@ -267,15 +274,30 @@ struct StaticKernelRuntimeSpec {
 
 /// Operations a SystemVerilog sequential member may use beyond the static
 /// set: a severity message below failure (an immediate assertion's $info,
-/// $warning or $error action, IEEE 1800-2023 16.3, 20.10). The member runs
-/// once per triggering edge, as the process does on the host, so the
-/// message is emitted as often; the kernel's operation step emits it through
-/// the report hook.
+/// $warning or $error action, IEEE 1800-2023 16.3, 20.10) and immediate
+/// output ($display and $write, 21.2.1; $strobe and $monitor are postponed
+/// and stay off), and the time queries $time, $stime and $realtime (20.3).
+/// The member runs once per triggering edge, as the process does on the
+/// host, so the text is emitted as often; the kernel's operation step emits
+/// it through the report and output hooks, and a parallel batch emits it in
+/// the replay (StaticKernel::LaneOutput).
 [[nodiscard]] inline bool static_kernel_sequential_operation_supported(
     const Operation& operation)
 {
-    const auto* report = operation_get_if<Report>(&operation);
-    return report != nullptr && report->severity != AssertionSeverity::failure;
+    return visit_operation([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, Report>) {
+            return value.severity != AssertionSeverity::failure;
+        } else if constexpr (std::is_same_v<T, Display>
+            || std::is_same_v<T, FormatDisplay>
+            || std::is_same_v<T, TimeDisplay>) {
+            return !value.postponed;
+        } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+            return value.function >= SystemVerilogMathFunction::Time;
+        } else {
+            return false;
+        }
+    }, operation);
 }
 
 /// A SystemVerilog combinational or sequential member's program with every
@@ -330,6 +352,10 @@ struct StaticKernelInlinedProgram {
         } else if constexpr (std::is_same_v<T, Fork>) {
             return !value.isolate_register_frame
                 && !value.branches.empty();
+        } else if constexpr (std::is_same_v<T, DisableBlock>) {
+            // A named block of the process's own code (IEEE 1800-2023
+            // 9.6.2); a scope of another process stays on the host.
+            return value.scopes.empty();
         } else if constexpr (std::is_same_v<T, ContainerWrite>) {
             // Process-private fixed arrays (see the planner).
             return !value.string_index;
@@ -406,8 +432,14 @@ struct StaticKernelInlinedProgram {
         } else if constexpr (std::is_same_v<T, CallableFramePop>) {
             return value.preserve_strings.empty()
                 && value.preserve_containers.empty();
+        } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+            // REAL math (IEEE 1076-2019 16.3 MATH_REAL as lowered) and
+            // conversions; the time queries are SystemVerilog only.
+            return value.function < SystemVerilogMathFunction::Time;
         } else {
             return std::is_same_v<T, DebugPoint>
+                // REAL arithmetic, comparisons and conversions (5.2.5, 9.2).
+                || std::is_same_v<T, SystemVerilogScalarBinary>
                 // A code coverage counter bump (host data, no registers).
                 || std::is_same_v<T, CodeCoverageHit>
                 || std::is_same_v<T, LoadConstant>

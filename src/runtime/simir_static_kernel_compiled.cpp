@@ -535,6 +535,9 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                                 work.push_back(branch);
                             }
                             work.push_back(pc + 1U);
+                        } else if constexpr (std::is_same_v<T, DisableBlock>) {
+                            work.push_back(pc + 1U);
+                            work.push_back(op.end);
                         } else if constexpr (std::is_same_v<T, Return>
                             || std::is_same_v<T, WaitSensitivity>
                             || std::is_same_v<T, Halt>
@@ -699,6 +702,45 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 } else if constexpr (std::is_same_v<T, PlusArgSelect>
                     || std::is_same_v<T, RandomValue>) {
                     define(op.destination, 32U);
+                } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+                    // The time queries (IEEE 1800-2023 20.3): $stime is 32
+                    // bits, $time 64 and $realtime a 64-bit real payload.
+                    // The others (20.8, 20.9): $rtoi an int, the
+                    // shortreal results 32 bits, every other result a
+                    // 64-bit real payload (systemverilog_math_payload).
+                    define(op.destination,
+                        op.function == SystemVerilogMathFunction::Stime
+                                || op.function == SystemVerilogMathFunction::Rtoi
+                                || op.function
+                                    == SystemVerilogMathFunction::BitsToShortReal
+                                || op.function
+                                    == SystemVerilogMathFunction::ShortRealToBits
+                            ? 32U
+                            : 64U);
+                } else if constexpr (std::is_same_v<T, SystemVerilogScalarBinary>) {
+                    // systemverilog_scalar_binary_payload: a comparison is
+                    // one bit, a conversion to an integral a 64-bit value;
+                    // other results are the payload of their kind, which an
+                    // arithmetic result without a declared kind only has at
+                    // run time (the member then runs uncompiled).
+                    const auto payload = [](const SystemVerilogScalarKind kind) {
+                        return kind == SystemVerilogScalarKind::ShortReal ? 32U
+                            : kind == SystemVerilogScalarKind::Real
+                                || kind == SystemVerilogScalarKind::Realtime
+                                || kind == SystemVerilogScalarKind::Time
+                                || kind == SystemVerilogScalarKind::Chandle
+                            ? 64U
+                            : 0U;
+                    };
+                    if (op.operation >= SystemVerilogScalarBinaryOperator::Equal
+                        && op.operation != SystemVerilogScalarBinaryOperator::Convert) {
+                        define(op.destination, 1U);
+                    } else if (op.operation == SystemVerilogScalarBinaryOperator::Convert
+                        && op.result_kind == SystemVerilogScalarKind::None) {
+                        define(op.destination, 64U);
+                    } else {
+                        define(op.destination, payload(op.result_kind));
+                    }
                 } else if constexpr (std::is_same_v<T, StringMethod>) {
                     // Operand registers depend on the method; the member
                     // runs uncompiled on the reference operation semantics.
@@ -1700,10 +1742,23 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 } else if constexpr (std::is_same_v<T, ContainerRead>) {
                     generic = generic || op.string_index;
                 } else if constexpr (std::is_same_v<T, Report>
-                    || std::is_same_v<T, CodeCoverageHit>) {
-                    // A VHDL report statement (IEEE 1076-2019 10.9) emits,
-                    // and a coverage hit bumps its host counter, through the
-                    // kernel's operation step.
+                    || std::is_same_v<T, CodeCoverageHit>
+                    || std::is_same_v<T, Display>
+                    || std::is_same_v<T, TimeDisplay>
+                    || std::is_same_v<T, SystemVerilogMath>
+                    || std::is_same_v<T, SystemVerilogScalarBinary>) {
+                    // A report statement (IEEE 1076-2019 10.9; a SystemVerilog
+                    // severity message) and immediate output emit, a time
+                    // query reads the kernel's time, a real-number operation
+                    // runs the shared scalar library, and a coverage hit
+                    // bumps its host counter, through the kernel's operation
+                    // step.
+                    generic = true;
+                } else if constexpr (std::is_same_v<T, FormatDisplay>) {
+                    if (op.source >= register_count || width[op.source] == 0U
+                        || width[op.source] == polymorphic) {
+                        throw reject("display_source");
+                    }
                     generic = true;
                 }
             }, operation);
@@ -2329,6 +2384,10 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.x = op.source;
                 inst.y = op.selection.base;
                 inst.width = w(op.source);
+                // As for store_slot_dynamic: the slot's words per plane and
+                // width, for native stores (Logic4 slots only).
+                inst.imm_a = slots_[*slot].words;
+                inst.imm_b = slots_[*slot].planes == 2U ? slots_[*slot].width : 0U;
                 inst.aux = static_cast<std::uint32_t>(body.parts.size());
                 body.parts.push_back(op.selection);
                 if constexpr (!blocking) {
@@ -2500,6 +2559,10 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 if constexpr (std::is_same_v<T, Fork>) {
                     body.resume_entries.insert(body.resume_entries.end(),
                         op.branches.begin(), op.branches.end());
+                }
+                if constexpr (std::is_same_v<T, DisableBlock>) {
+                    // A disabled block's threads resume at its end.
+                    body.resume_entries.push_back(op.end);
                 }
                 if constexpr (behavioral_suspension<T>
                     || std::is_same_v<T, WaitSensitivity>) {

@@ -2673,12 +2673,22 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     [[nodiscard]] static std::uint32_t next_random(
         ProcessState& process) noexcept;
+    /// The next draw of a process random stream held outside a
+    /// ProcessState (a kernel fork child's).
+    [[nodiscard]] static std::uint32_t next_random(
+        std::uint64_t& state) noexcept;
 
     [[nodiscard]] static std::optional<std::uint32_t>
     known_random_bound(const PackedLogic4& value);
 
     [[nodiscard]] PackedLogic4 random_value(
         const ProcessId process_id,
+        const RandomKind kind,
+        const std::optional<PackedLogic4>& maximum,
+        const std::optional<PackedLogic4>& minimum);
+    /// random_value on the process stream `state`.
+    [[nodiscard]] PackedLogic4 random_value(
+        std::uint64_t& state,
         const RandomKind kind,
         const std::optional<PackedLogic4>& maximum,
         const std::optional<PackedLogic4>& minimum);

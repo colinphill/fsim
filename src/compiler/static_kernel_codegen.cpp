@@ -1912,6 +1912,85 @@ private:
         builder_.SetInsertPoint(done);
     }
 
+    /// A dynamic part-select write (kernel_word::dynamic_part_write) whose
+    /// selected bits all lie inside the declared range writes the whole value
+    /// at one offset when the range's right bound is its low bound
+    /// (descending) or its high bound (ascending): blocking writes store in
+    /// place, nonblocking ones append to the deferred queue. A partial or
+    /// empty selection, an unknown base, a write past the slot and a Logic9
+    /// slot (imm_b 0) take the helper.
+    void emit_store_slot_part(const KInst& inst, const std::uint32_t at)
+    {
+        const auto value = load_register(inst.x);
+        const auto base_register = load_register(inst.y);
+        const auto& part = body_.parts[inst.aux];
+        const auto lower = std::min(part.left, part.right);
+        const auto upper = std::max(part.left, part.right);
+        const bool descending = part.source_descending;
+        if (inst.imm_b == 0U || inst.width == 0U || inst.width > 64U
+            || part.width != inst.width
+            || !((descending && part.right == lower)
+                || (!descending && part.right == upper))) {
+            call_effect(at, value, base_register, zero_pair());
+            return;
+        }
+        const auto edge = static_cast<std::int64_t>(inst.width) - 1;
+        const auto signed_constant = [&](const std::int64_t number) {
+            return constant(static_cast<std::uint64_t>(number));
+        };
+        auto* known = builder_.CreateICmpEQ(
+            builder_.CreateAnd(base_register.b, constant(mask_of(32U))),
+            constant(0U));
+        auto* base = builder_.CreateSExt(
+            builder_.CreateTrunc(base_register.a, i32_), i64_);
+        auto* selected_right = part.increasing
+            ? builder_.CreateAdd(base, signed_constant(descending ? 0 : edge))
+            : builder_.CreateSub(base, signed_constant(descending ? edge : 0));
+        // Selected bit i is selected_right + i (descending) or
+        // selected_right - i (ascending): all of them in [lower, upper].
+        auto* in_range = descending
+            ? builder_.CreateAnd(
+                  builder_.CreateICmpSGE(selected_right, signed_constant(lower)),
+                  builder_.CreateICmpSLE(selected_right, signed_constant(upper - edge)))
+            : builder_.CreateAnd(
+                  builder_.CreateICmpSLE(selected_right, signed_constant(upper)),
+                  builder_.CreateICmpSGE(selected_right, signed_constant(lower + edge)));
+        // first = base_offset + (descending ? sr - right : right - sr), at
+        // least base_offset when in range.
+        auto* first = builder_.CreateAdd(
+            signed_constant(static_cast<std::int64_t>(part.base_offset)),
+            descending ? builder_.CreateSub(selected_right, signed_constant(part.right))
+                       : builder_.CreateSub(signed_constant(part.right), selected_right));
+        auto* fits = builder_.CreateICmpULE(first,
+            constant(std::uint64_t { inst.imm_b } - std::min<std::uint64_t>(inst.width, inst.imm_b)));
+        auto* ok = builder_.CreateAnd(builder_.CreateAnd(known, in_range),
+            builder_.CreateAnd(fits,
+                llvm::ConstantInt::getBool(context_, inst.width <= inst.imm_b)));
+        auto* offset = builder_.CreateSelect(ok, first, constant(0U));
+        auto* fast = llvm::BasicBlock::Create(context_, "part_store", &function_);
+        auto* slow = llvm::BasicBlock::Create(context_, "part_store_slow", &function_);
+        auto* done = llvm::BasicBlock::Create(context_, "part_stored", &function_);
+        builder_.CreateCondBr(ok, fast, slow);
+        builder_.SetInsertPoint(fast);
+        if ((inst.flags & detail::flag_nba) != 0U) {
+            emit_deferred_store(inst, at, builder_.CreateTrunc(offset, i32_));
+            builder_.CreateBr(done);
+        } else {
+            auto* info = binding(inst.d, 1U);
+            emit_store_field(inst.width, builder_.CreateZExt(binding(inst.d, 0U), i64_),
+                constant(inst.imm_a), offset,
+                builder_.CreateAnd(info, llvm::ConstantInt::get(i32_, ~silent_bit)),
+                builder_.CreateICmpNE(
+                    builder_.CreateAnd(info, llvm::ConstantInt::get(i32_, silent_bit)),
+                    llvm::ConstantInt::get(i32_, 0U)),
+                value, done);
+        }
+        builder_.SetInsertPoint(slow);
+        call_effect(at, value, base_register, zero_pair());
+        builder_.CreateBr(done);
+        builder_.SetInsertPoint(done);
+    }
+
     /// dynamic_part_select (sub 1) from a wide slot with z planes, when result
     /// bit i reads source bit first + i (the declared right bound is the
     /// low bound of a descending range or the high bound of an ascending
@@ -2108,8 +2187,10 @@ private:
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
         builder_.CreateBr(done);
         builder_.SetInsertPoint(slow);
+        // y: a dynamic index (store_vhdl sub 1) or a part-select base.
         call_effect(at, value,
-            inst.sub == 1U ? load_register(inst.y) : zero_pair(),
+            inst.sub == 1U || inst.op == KOp::store_slot_part ? load_register(inst.y)
+                                                               : zero_pair(),
             Pair { unknown, constant(0U) });
         builder_.CreateBr(done);
         builder_.SetInsertPoint(done);
@@ -2932,8 +3013,7 @@ private:
             emit_store_slot_dynamic(inst, at);
             break;
         case KOp::store_slot_part:
-            call_effect(at, load_register(inst.x), load_register(inst.y),
-                zero_pair());
+            emit_store_slot_part(inst, at);
             break;
         case KOp::mem_write:
             emit_mem_write(inst, at);

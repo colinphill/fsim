@@ -4079,9 +4079,29 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                             std::string { message }, op.severity, op.source);
                     }
                 }
+            } else if constexpr (std::is_same_v<T, Display>
+                || std::is_same_v<T, FormatDisplay>
+                || std::is_same_v<T, TimeDisplay>
+                || std::is_same_v<T, SystemVerilogMath>
+                || std::is_same_v<T, SystemVerilogScalarBinary>) {
+                // A sequential member's immediate output, time queries and
+                // real-number operations: the behavioral tier's semantics, on
+                // the member's registers.
+                (void)(this->*behavioral_operation_steps()[operation_kind_of<T>])(
+                    member_index, pc);
             } else if constexpr (std::is_same_v<T, Report>) {
                 // IEEE 1076-2019 10.9 (the planner keeps 2019 mode on the
-                // host): the message goes through the assertion hook.
+                // host): the message goes through the assertion hook. On a
+                // worker the leader emits it in the replay.
+                if (auto* const lane = worker_lane_;
+                    lane != nullptr && op.severity != AssertionSeverity::failure) {
+                    LaneOutput output;
+                    output.kind = LaneOutput::Kind::report;
+                    output.member = member_index;
+                    output.pc = pc;
+                    lane->outputs.push_back(std::move(output));
+                    return;
+                }
                 if (impl_.report_hook) {
                     impl_.report_hook(member.process, op.message.str(),
                         op.severity, op.source, kernel_now(),

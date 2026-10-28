@@ -746,7 +746,6 @@ private:
         const static_kernel_detail::KInst& inst, std::uint32_t member,
         const char* mangled, const std::vector<RegisterId>& reads,
         std::optional<RegisterId> write);
-    std::vector<RegisterId> generic_reads_;
     /// step_operation and behavioral_operation by operation ordinal
     /// (simir_static_kernel.cpp, simir_static_kernel_behavioral.cpp).
     using OperationStep = std::uint32_t (StaticKernel::*)(std::uint32_t member,
@@ -957,13 +956,22 @@ private:
         /// The forking thread and the fork group this child belongs to.
         std::uint32_t parent { static_kernel_detail::no_slot };
         std::uint32_t group { static_kernel_detail::no_slot };
+        /// A fork child's Fork operation (the reference's fork_site), for
+        /// disable (IEEE 1800-2023 9.6.2).
+        std::uint32_t fork_site { static_kernel_detail::no_slot };
         /// Live children; the parent of a join-all fork resumes at zero.
         std::uint32_t children { };
+        /// A fork child's random stream (IEEE 1800-2023 18.14: each thread
+        /// has its own), seeded as the reference seeds the child process.
+        std::uint64_t random_state { };
         /// Bumped whenever the thread resumes, so stale waiter and timer
         /// entries from an earlier wait are ignored.
         std::uint64_t epoch { };
         bool alive { };
         bool queued { };
+        /// Killed while a ready list still names it: the slot is freed when
+        /// that entry is taken (take_ready), never reused before.
+        bool reclaim { };
         /// VHDL wait with timeout (IEEE 1076-2019 10.2): the absolute
         /// deadline of the current wait statement (kept across the re-waits
         /// of a wait-until condition) and the register that receives
@@ -1132,7 +1140,11 @@ private:
     /// Runs the VHDL threads of this round; false when none was ready.
     [[nodiscard]] bool run_vhdl_threads();
 
-    enum class Boundary : std::uint8_t { none, advance, suspend, finish };
+    /// redirect: the thread continues at redirect_pc_ (a disabled block's
+    /// end); killed: a disable ended the running thread itself.
+    enum class Boundary : std::uint8_t { none, advance, suspend, finish, redirect,
+        killed };
+    std::uint32_t redirect_pc_ { };
     /// Behavioral: the thread and position compiled code starts at, and the
     /// suspension operation it stopped at.
     std::uint32_t behavioral_entry_ { };
@@ -1234,12 +1246,35 @@ private:
     [[nodiscard]] bool start_after_procedures();
     void start_behavioral();
     [[nodiscard]] std::uint32_t spawn_thread(std::uint32_t member,
-        std::uint32_t pc, std::uint32_t parent, std::uint32_t group);
+        std::uint32_t pc, std::uint32_t parent, std::uint32_t group,
+        std::uint32_t fork_site = static_kernel_detail::no_slot);
+    /// A thread taken from a ready list: false when it is not alive (a
+    /// killed thread's slot is freed here).
+    [[nodiscard]] bool take_ready(std::uint32_t thread);
+    /// disable of a named block of the running thread's process (IEEE
+    /// 1800-2023 9.6.2), as Interpreter::Impl::handle_fork_boundary.
+    [[nodiscard]] Boundary disable_block(std::uint32_t thread, std::uint32_t pc,
+        const DisableBlock& op);
+    /// Interpreter::Impl::disable_process_interval on kernel threads; the
+    /// running thread's position is `running_pc`.
+    void disable_thread_interval(std::uint32_t running, std::uint32_t running_pc,
+        std::uint32_t owner, std::uint32_t begin, std::uint32_t end,
+        std::optional<std::uint32_t>& running_redirect);
+    /// The live fork children of a thread, in process order.
+    [[nodiscard]] std::vector<std::uint32_t> live_children(std::uint32_t thread) const;
+    void cancel_thread_descendants(std::uint32_t thread);
+    /// Ends a fork child as killed (complete_fork_child): its fork group
+    /// counts it, its waits lapse.
+    void kill_thread(std::uint32_t thread);
+    void release_thread(std::uint32_t thread);
     void ready_thread(std::uint32_t thread);
     [[nodiscard]] bool run_ready_threads();
     void run_thread(std::uint32_t thread);
     void wait_on(std::uint32_t thread, std::span<const Sensitivity> entries);
     void finish_thread(std::uint32_t thread);
+    /// A fork child of `parent` in fork group `group` ended: the parent
+    /// resumes as its join requires.
+    void fork_child_done(std::uint32_t parent, std::uint32_t group);
     void wake_waiters(std::vector<Waiter>& waiters, const WaitChange& change);
     [[nodiscard]] bool waiter_range_changed(const Waiter& waiter,
         const WaitChange& change) const;
@@ -1247,6 +1282,9 @@ private:
     void arm_timer();
     void behavioral_output(std::uint32_t member, std::string_view text,
         bool newline);
+    [[nodiscard]] std::string format_display_text(const FormatDisplay& op,
+        const PackedLogic4& value) const;
+    [[nodiscard]] std::string time_display_text(const TimeDisplay& op) const;
     std::vector<ScheduleTarget> notify_targets_;
     std::vector<std::unique_ptr<CompiledBody>> templates_;
     /// Owns the generated code.
@@ -1296,7 +1334,23 @@ private:
         std::vector<std::uint64_t> wide_move;
         /// KOp::wide_concat result (aval, bval and 'U' words).
         std::vector<std::uint64_t> wide_concat;
+        /// The operand registers of the generic instruction running.
+        std::vector<RegisterId> generic_reads;
     };
+    /// Output a worker's unit made, which the leader emits in the replay at
+    /// the unit's place in the serial order: text, a %t argument (formatted
+    /// at the replay, after any earlier $timeformat), a $time display, or a
+    /// severity message (the member's Report at `pc`).
+    struct LaneOutput {
+        enum class Kind : std::uint8_t { text, format, time, report };
+        Kind kind { Kind::text };
+        bool newline { };
+        std::uint32_t member { };
+        std::uint32_t pc { };
+        std::string text;
+        PackedLogic4 value;
+    };
+    void emit_lane_output(const LaneOutput& output);
     /// A change notification made on a worker; the leader replays it.
     struct LaneChange {
         std::uint64_t changed { };
@@ -1320,6 +1374,7 @@ private:
         StaticKernelWriteQueue writes;
         std::vector<NbaEntry> elements;
         std::vector<Pending> generic;
+        std::vector<LaneOutput> outputs;
         /// The domain this lane is settling (no_slot: a level or triggered
         /// batch, whose units schedule nothing).
         std::uint32_t domain { static_kernel_detail::no_slot };
@@ -1343,6 +1398,8 @@ private:
         std::uint32_t changes_end { };
         std::uint32_t writes_begin { };
         std::uint32_t writes_end { };
+        std::uint32_t outputs_begin { };
+        std::uint32_t outputs_end { };
         /// Not eligible: the leader runs it at its place in the replay.
         bool serial { };
         /// A batch item with something for the leader's replay: logged
@@ -1368,6 +1425,7 @@ private:
             lane.words.clear();
             lane.elements.clear();
             lane.generic.clear();
+            lane.outputs.clear();
             lane.writes.count = 0U;
             lane.private_count = 0U;
             lane.private_domains = 0U;

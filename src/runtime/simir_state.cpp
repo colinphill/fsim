@@ -3086,7 +3086,13 @@ void Interpreter::Impl::set_time_format(
 [[nodiscard]] std::uint32_t Interpreter::Impl::next_random(
     Interpreter::Impl::ProcessState& process) noexcept
 {
-    auto value = (process.cold().random_state += UINT64_C(0x9e3779b97f4a7c15));
+    return next_random(process.cold().random_state);
+}
+
+[[nodiscard]] std::uint32_t Interpreter::Impl::next_random(
+    std::uint64_t& state) noexcept
+{
+    auto value = (state += UINT64_C(0x9e3779b97f4a7c15));
     value = (value ^ (value >> 30U))
         * UINT64_C(0xbf58476d1ce4e5b9);
     value = (value ^ (value >> 27U))
@@ -3121,7 +3127,16 @@ Interpreter::Impl::known_random_bound(const PackedLogic4& value)
     const std::optional<PackedLogic4>& maximum,
     const std::optional<PackedLogic4>& minimum)
 {
-    auto& process = get_process(process_id);
+    return random_value(get_process(process_id).cold().random_state, kind,
+        maximum, minimum);
+}
+
+[[nodiscard]] PackedLogic4 Interpreter::Impl::random_value(
+    std::uint64_t& state,
+    const RandomKind kind,
+    const std::optional<PackedLogic4>& maximum,
+    const std::optional<PackedLogic4>& minimum)
+{
     if (kind == RandomKind::random) {
         const auto result = evaluate_random_distribution(
             RandomDistributionKind::uniform, system_random_seed,
@@ -3133,7 +3148,7 @@ Interpreter::Impl::known_random_bound(const PackedLogic4& value)
     }
     if (kind != RandomKind::urandom_range) {
         return PackedLogic4::from_aval_bval(
-            32, next_random(process), 0);
+            32, next_random(state), 0);
     }
     if (!maximum) {
         throw std::logic_error {
@@ -3156,12 +3171,12 @@ Interpreter::Impl::known_random_bound(const PackedLogic4& value)
         - static_cast<std::uint64_t>(low) + 1U;
     std::uint32_t sample { };
     if (span == (UINT64_C(1) << 32U)) {
-        sample = next_random(process);
+        sample = next_random(state);
     } else {
         const auto full_range = UINT64_C(1) << 32U;
         const auto accepted = full_range - full_range % span;
         do {
-            sample = next_random(process);
+            sample = next_random(state);
         } while (static_cast<std::uint64_t>(sample) >= accepted);
         sample = static_cast<std::uint32_t>(
             static_cast<std::uint64_t>(low)

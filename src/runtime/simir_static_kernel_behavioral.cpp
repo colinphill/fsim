@@ -12,6 +12,7 @@
 #include "fsim/runtime/output_format.hpp"
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/string_methods.hpp"
+#include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
@@ -28,7 +29,8 @@ using namespace static_kernel_detail;
 
 std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     const std::uint32_t member, const std::uint32_t pc,
-    const std::uint32_t parent, const std::uint32_t group)
+    const std::uint32_t parent, const std::uint32_t group,
+    const std::uint32_t fork_site)
 {
     std::uint32_t index { };
     if (!free_threads_.empty()) {
@@ -45,6 +47,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     thread.pc = pc;
     thread.parent = parent;
     thread.group = group;
+    thread.fork_site = fork_site;
     thread.epoch = epoch;
     thread.alive = true;
     thread.order = members_[member].process;
@@ -56,6 +59,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
             std::max(impl_.processes.size(), next_child_process_));
         next_child_process_ = static_cast<std::size_t>(id) + 1U;
         thread.order = id;
+        thread.random_state = Impl::initial_random_state(impl_.root_seed, id);
         if (debug_points_) {
             thread.debug_process = id;
             debug_children_[id] = member;
@@ -225,12 +229,24 @@ bool Interpreter::Impl::StaticKernel::run_ready_threads()
                 ready.end());
             break;
         }
-        threads_[index].queued = false;
-        if (threads_[index].alive) {
+        if (take_ready(index)) {
             run_thread(index);
         }
     }
     return true;
+}
+
+bool Interpreter::Impl::StaticKernel::take_ready(const std::uint32_t index)
+{
+    auto& thread = threads_[index];
+    thread.queued = false;
+    if (thread.reclaim) {
+        // Killed while queued: this was the last list naming it.
+        thread.reclaim = false;
+        release_thread(index);
+        return false;
+    }
+    return thread.alive;
 }
 
 bool Interpreter::Impl::StaticKernel::run_vhdl_threads()
@@ -252,8 +268,7 @@ bool Interpreter::Impl::StaticKernel::run_vhdl_threads()
                 ready.end());
             break;
         }
-        threads_[index].queued = false;
-        if (threads_[index].alive) {
+        if (take_ready(index)) {
             run_thread(index);
         }
     }
@@ -297,7 +312,7 @@ void Interpreter::Impl::StaticKernel::wake_waiters(std::vector<Waiter>& waiters,
     waiters.resize(kept);
 }
 
-void Interpreter::Impl::StaticKernel::finish_thread(const std::uint32_t index)
+void Interpreter::Impl::StaticKernel::release_thread(const std::uint32_t index)
 {
     auto& thread = threads_[index];
     thread.alive = false;
@@ -305,9 +320,204 @@ void Interpreter::Impl::StaticKernel::finish_thread(const std::uint32_t index)
     thread.frames.clear();
     thread.saved_arrays.clear();
     thread.saved_array_marks.clear();
+    thread.stack.clear();
+    free_threads_.push_back(index);
+}
+
+std::vector<std::uint32_t> Interpreter::Impl::StaticKernel::live_children(
+    const std::uint32_t parent) const
+{
+    std::vector<std::uint32_t> children;
+    for (std::uint32_t index = 0U; index < threads_.size(); ++index) {
+        if (threads_[index].alive && threads_[index].parent == parent) {
+            children.push_back(index);
+        }
+    }
+    std::ranges::sort(children, std::less { },
+        [&](const std::uint32_t index) { return threads_[index].order; });
+    return children;
+}
+
+void Interpreter::Impl::StaticKernel::cancel_thread_descendants(
+    const std::uint32_t parent)
+{
+    for (const auto child : live_children(parent)) {
+        cancel_thread_descendants(child);
+        kill_thread(child);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::kill_thread(const std::uint32_t index)
+{
+    auto& thread = threads_[index];
+    if (!thread.alive) {
+        return;
+    }
+    // Its waiter and timer entries lapse.
+    ++thread.epoch;
     const auto parent = thread.parent;
     const auto group = thread.group;
-    free_threads_.push_back(index);
+    if (index == running_thread_) {
+        // run_thread parks and releases it (Boundary::killed).
+        thread.alive = false;
+    } else if (thread.queued) {
+        thread.alive = false;
+        thread.reclaim = true;
+    } else {
+        std::erase(inactive_threads_, index);
+        release_thread(index);
+    }
+    fork_child_done(parent, group);
+}
+
+Interpreter::Impl::StaticKernel::Boundary
+Interpreter::Impl::StaticKernel::disable_block(const std::uint32_t index,
+    const std::uint32_t pc, const DisableBlock& op)
+{
+    // A local named block (the planner keeps a disable naming another
+    // process's scope on the host). The running thread's position is past
+    // the disable, as the reference's process counter is.
+    const auto member_index = threads_[index].member;
+    const auto& operations = members_[member_index].operations;
+    if (!op.scopes.empty() || op.begin >= op.end || op.end > operations.size()) {
+        fail(member_index, pc, "DisableBlock has an invalid lexical interval");
+    }
+    const auto begin = op.begin;
+    const auto end = op.end;
+    const auto running_pc = pc + 1U;
+    const auto pc_of = [&](const std::uint32_t thread) {
+        return thread == index ? running_pc : threads_[thread].pc;
+    };
+    const auto forked_inside = [&](const std::uint32_t thread) {
+        const auto& state = threads_[thread];
+        return state.parent != no_slot && state.fork_site != no_slot
+            && state.fork_site >= begin && state.fork_site < end;
+    };
+    // The thread that runs the block: a fork child spawned inside it belongs
+    // to its forking ancestor.
+    auto owner = index;
+    while (forked_inside(owner)) {
+        owner = threads_[owner].parent;
+    }
+    std::optional<std::uint32_t> redirect;
+    disable_thread_interval(index, running_pc, owner, begin, end, redirect);
+    // The block may run in a sibling fork branch (IEEE 1800-2023 9.6.2): an
+    // ancestor owns that branch.
+    for (auto ancestor = owner;
+         threads_[index].alive && threads_[ancestor].parent != no_slot;) {
+        ancestor = threads_[ancestor].parent;
+        disable_thread_interval(index, running_pc, ancestor, begin, end, redirect);
+        for (const auto sibling : live_children(ancestor)) {
+            if (sibling == index || !threads_[sibling].alive
+                || pc_of(sibling) < begin || pc_of(sibling) >= end) {
+                continue;
+            }
+            // A block that is the branch's whole body ends the branch.
+            auto next = static_cast<std::size_t>(end);
+            while (next < operations.size()
+                && operation_holds<DebugPoint>(operations[next])) {
+                ++next;
+            }
+            if (next < operations.size()
+                && operation_holds<ForkEnd>(operations[next])) {
+                cancel_thread_descendants(sibling);
+                kill_thread(sibling);
+            } else {
+                disable_thread_interval(index, running_pc, sibling, begin, end,
+                    redirect);
+            }
+        }
+    }
+    // The block ends in every concurrent activation of the code that
+    // declares it, such as each call of an automatic task running in
+    // another fork branch.
+    std::vector<std::uint32_t> candidates;
+    for (std::uint32_t thread = 0U; thread < threads_.size(); ++thread) {
+        if (thread != index && threads_[thread].alive
+            && threads_[thread].member == member_index
+            && pc_of(thread) >= begin && pc_of(thread) < end) {
+            candidates.push_back(thread);
+        }
+    }
+    std::ranges::sort(candidates, std::less { },
+        [&](const std::uint32_t thread) { return threads_[thread].order; });
+    std::vector<std::uint32_t> other_owners;
+    for (const auto thread : candidates) {
+        auto other = thread;
+        while (forked_inside(other)) {
+            other = threads_[other].parent;
+        }
+        bool related = other == owner;
+        for (auto ancestor = owner; !related && threads_[ancestor].parent != no_slot;) {
+            ancestor = threads_[ancestor].parent;
+            related = ancestor == other;
+        }
+        if (!related && std::ranges::find(other_owners, other) == other_owners.end()) {
+            other_owners.push_back(other);
+        }
+    }
+    for (const auto other : other_owners) {
+        if (threads_[other].alive) {
+            disable_thread_interval(index, running_pc, other, begin, end, redirect);
+        }
+    }
+    if (!threads_[index].alive) {
+        return Boundary::killed;
+    }
+    if (redirect) {
+        redirect_pc_ = *redirect;
+        return Boundary::redirect;
+    }
+    return Boundary::advance;
+}
+
+void Interpreter::Impl::StaticKernel::disable_thread_interval(
+    const std::uint32_t running, const std::uint32_t running_pc,
+    const std::uint32_t owner, const std::uint32_t begin, const std::uint32_t end,
+    std::optional<std::uint32_t>& running_redirect)
+{
+    // Fork children spawned inside the block end with their descendants.
+    std::vector<std::uint32_t> scoped;
+    for (const auto child : live_children(owner)) {
+        const auto site = threads_[child].fork_site;
+        if (site != no_slot && site >= begin && site < end) {
+            scoped.push_back(child);
+        }
+    }
+    for (const auto child : scoped) {
+        cancel_thread_descendants(child);
+        kill_thread(child);
+    }
+    auto& thread = threads_[owner];
+    const auto at = owner == running ? running_pc : thread.pc;
+    if (!thread.alive || at < begin || at >= end) {
+        return;
+    }
+    if (owner == running) {
+        running_redirect = end;
+        return;
+    }
+    // A suspended owner resumes at the block's end now, not when its wait
+    // ends; one already ready (or resuming in the Inactive region) resumes
+    // there when it runs.
+    thread.pc = end;
+    if (!thread.queued
+        && std::ranges::find(inactive_threads_, owner) == inactive_threads_.end()) {
+        ready_thread(owner);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::finish_thread(const std::uint32_t index)
+{
+    const auto parent = threads_[index].parent;
+    const auto group = threads_[index].group;
+    release_thread(index);
+    fork_child_done(parent, group);
+}
+
+void Interpreter::Impl::StaticKernel::fork_child_done(const std::uint32_t parent,
+    const std::uint32_t group)
+{
     if (parent == no_slot || group == no_slot) {
         return;
     }
@@ -331,10 +541,92 @@ void Interpreter::Impl::StaticKernel::finish_thread(const std::uint32_t index)
 void Interpreter::Impl::StaticKernel::behavioral_output(
     const std::uint32_t member, const std::string_view text, const bool newline)
 {
+    if (auto* const lane = worker_lane_; lane != nullptr) {
+        // A worker's output waits for the leader's replay, which emits it at
+        // the member's place in the serial order.
+        if (impl_.output_hook) {
+            LaneOutput output;
+            output.member = member;
+            output.newline = newline;
+            output.text = text;
+            lane->outputs.push_back(std::move(output));
+        }
+        return;
+    }
     if (impl_.output_hook) {
         // A warped time step is the first delta of its time slot.
         impl_.output_hook(members_[member].process, text, newline,
             kernel_now(), warp_time_ ? 0U : impl_.scheduler.delta());
+    }
+}
+
+std::string Interpreter::Impl::StaticKernel::format_display_text(
+    const FormatDisplay& op, const PackedLogic4& value) const
+{
+    // %t follows $timeformat; an integral argument is in its module's time
+    // unit (IEEE 1800-2017 21.2.1.3).
+    std::optional<SimulationTick> tick;
+    if (op.format == OutputFormat::time) {
+        if (op.scalar_kind == SystemVerilogScalarKind::None
+            || (op.scalar_kind != SystemVerilogScalarKind::Chandle
+                && op.time_unit_femtoseconds != 0U)) {
+            tick = integral_time_ticks(value, op.signed_decimal,
+                op.time_unit_femtoseconds, impl_.time_format, op.scalar_kind);
+        } else if (const auto decoded
+            = decode_systemverilog_scalar_payload(value, op.scalar_kind)) {
+            tick = decoded.value.as_time();
+        }
+    }
+    return tick
+        ? make_time_output(op.prefix, op.suffix, *tick, impl_.time_format,
+              op.minimum_width == 0 && !op.suppress_leading_zero,
+              op.minimum_width, op.left_justify, op.zero_pad)
+        : make_formatted_output(op.prefix, op.suffix,
+              op.format == OutputFormat::time
+                      && op.scalar_kind == SystemVerilogScalarKind::None
+                  ? OutputFormat::decimal
+                  : op.format,
+              value, op.signed_decimal, op.suppress_leading_zero,
+              op.minimum_width, op.left_justify, op.zero_pad, op.scalar_kind,
+              op.precision);
+}
+
+std::string Interpreter::Impl::StaticKernel::time_display_text(
+    const TimeDisplay& op) const
+{
+    return make_time_output(op.prefix, op.suffix, kernel_now(),
+        impl_.time_format, op.use_timeformat_width, op.minimum_width,
+        op.left_justify, op.zero_pad);
+}
+
+void Interpreter::Impl::StaticKernel::emit_lane_output(const LaneOutput& output)
+{
+    const auto& member = members_[output.member];
+    switch (output.kind) {
+    case LaneOutput::Kind::text:
+        behavioral_output(output.member, output.text, output.newline);
+        break;
+    case LaneOutput::Kind::format:
+        // Formatted here: a $timeformat earlier in the replay applies.
+        behavioral_output(output.member,
+            format_display_text(
+                operation_get<FormatDisplay>(member.operations[output.pc]),
+                output.value),
+            output.newline);
+        break;
+    case LaneOutput::Kind::time:
+        behavioral_output(output.member,
+            time_display_text(
+                operation_get<TimeDisplay>(member.operations[output.pc])),
+            output.newline);
+        break;
+    case LaneOutput::Kind::report:
+        if (impl_.report_hook) {
+            const auto& op = operation_get<Report>(member.operations[output.pc]);
+            impl_.report_hook(member.process, op.message.str(), op.severity,
+                op.source, kernel_now(), warp_time_ ? 0U : impl_.scheduler.delta());
+        }
+        break;
     }
 }
 
@@ -399,44 +691,61 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         if constexpr (std::is_same_v<T, Display>) {
             behavioral_output(member_index, op.text, op.newline);
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
-            // %t follows $timeformat; an integral argument is in its
-            // module's time unit (IEEE 1800-2017 21.2.1.3).
-            std::optional<SimulationTick> tick;
-            if (op.format == OutputFormat::time) {
-                if (op.scalar_kind == SystemVerilogScalarKind::None
-                    || (op.scalar_kind != SystemVerilogScalarKind::Chandle
-                        && op.time_unit_femtoseconds != 0U)) {
-                    tick = integral_time_ticks(packed_register(op.source),
-                        op.signed_decimal, op.time_unit_femtoseconds,
-                        impl_.time_format, op.scalar_kind);
-                } else if (const auto decoded
-                    = decode_systemverilog_scalar_payload(
-                        packed_register(op.source), op.scalar_kind)) {
-                    tick = decoded.value.as_time();
+            if (auto* const lane = worker_lane_;
+                lane != nullptr && op.format == OutputFormat::time) {
+                // $timeformat may change before the replay reaches it.
+                if (impl_.output_hook) {
+                    LaneOutput output;
+                    output.kind = LaneOutput::Kind::format;
+                    output.member = member_index;
+                    output.pc = pc;
+                    output.newline = op.newline;
+                    output.value = packed_register(op.source);
+                    lane->outputs.push_back(std::move(output));
                 }
+                return;
             }
-            const auto text = tick
-                ? make_time_output(op.prefix, op.suffix, *tick,
-                      impl_.time_format,
-                      op.minimum_width == 0 && !op.suppress_leading_zero,
-                      op.minimum_width, op.left_justify, op.zero_pad)
-                : make_formatted_output(op.prefix, op.suffix,
-                      op.format == OutputFormat::time
-                              && op.scalar_kind
-                                  == SystemVerilogScalarKind::None
-                          ? OutputFormat::decimal
-                          : op.format,
-                      packed_register(op.source), op.signed_decimal,
-                      op.suppress_leading_zero, op.minimum_width,
-                      op.left_justify, op.zero_pad, op.scalar_kind,
-                      op.precision);
+            const auto text = format_display_text(op, packed_register(op.source));
             behavioral_output(member_index, text, op.newline);
         } else if constexpr (std::is_same_v<T, StringDisplay>) {
             const auto text = op.prefix + string_register(op.source) + op.suffix;
             behavioral_output(member_index, text, op.newline);
+        } else if constexpr (std::is_same_v<T, SystemVerilogScalarBinary>) {
+            // Real, shortreal and time arithmetic, comparisons and
+            // conversions (IEEE 1800-2023 6.12, 11.3.1), as the reference
+            // evaluates them.
+            const auto result = systemverilog_scalar_binary_payload(op.operation,
+                packed_register(op.lhs), op.lhs_kind, packed_register(op.rhs),
+                op.rhs_kind, op.result_kind);
+            if (!result) {
+                fail(member_index, pc,
+                    "SystemVerilog scalar binary operation failed (error "
+                        + std::to_string(static_cast<unsigned>(result.error))
+                        + ", lhs kind "
+                        + std::to_string(static_cast<unsigned>(op.lhs_kind))
+                        + ", rhs kind "
+                        + std::to_string(static_cast<unsigned>(op.rhs_kind)) + ")");
+            }
+            packed_register(op.destination) = result.value;
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
-            // $time, $stime and $realtime (IEEE 1800-2017 20.3); the
-            // planner admits no other function.
+            if (op.function < SystemVerilogMathFunction::Time) {
+                // The math and conversion functions (IEEE 1800-2023 20.5,
+                // 20.8), as the reference evaluates them.
+                const auto* second
+                    = op.second_width == 0U ? nullptr : &packed_register(op.second);
+                const auto result = systemverilog_math_payload(op.function,
+                    packed_register(op.first), op.first_kind, op.first_signed,
+                    second, op.second_kind, op.second_signed);
+                if (!result) {
+                    fail(member_index, pc,
+                        "SystemVerilog math function failed (error "
+                            + std::to_string(static_cast<unsigned>(result.error))
+                            + ")");
+                }
+                packed_register(op.destination) = result.value;
+                return;
+            }
+            // $time, $stime and $realtime (IEEE 1800-2017 20.3).
             const auto function = op.function == SystemVerilogMathFunction::Time
                 ? SystemVerilogTimeFunction::Time
                 : op.function == SystemVerilogMathFunction::Stime
@@ -466,11 +775,18 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                           : ValueKind::logic4)
                 : encoded.value;
         } else if constexpr (std::is_same_v<T, TimeDisplay>) {
-            const auto text = make_time_output(op.prefix, op.suffix,
-                kernel_now(), impl_.time_format,
-                op.use_timeformat_width, op.minimum_width, op.left_justify,
-                op.zero_pad);
-            behavioral_output(member_index, text, op.newline);
+            if (auto* const lane = worker_lane_; lane != nullptr) {
+                if (impl_.output_hook) {
+                    LaneOutput output;
+                    output.kind = LaneOutput::Kind::time;
+                    output.member = member_index;
+                    output.pc = pc;
+                    output.newline = op.newline;
+                    lane->outputs.push_back(std::move(output));
+                }
+                return;
+            }
+            behavioral_output(member_index, time_display_text(op), op.newline);
         } else if constexpr (std::is_same_v<T, Report>) {
             // A VHDL report statement (IEEE 1076-2019 10.9, 10.8): the
             // planner admits it only outside the 2019 mode, where the
@@ -627,17 +943,21 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         } else if constexpr (std::is_same_v<T, RandomValue>) {
             // $urandom, $urandom_range and $random (IEEE 1800-2023 18.13,
             // 20.15) draw from the process's own stream, like the reference
-            // evaluator. The planner keeps processes with fork threads off
-            // the kernel: a reference fork child has its own process
-            // identity and stream.
+            // evaluator; a fork child's is its thread's (18.14).
             const auto maximum = op.maximum
                 ? std::optional<PackedLogic4> { packed_register(*op.maximum) }
                 : std::nullopt;
             const auto minimum = op.minimum
                 ? std::optional<PackedLogic4> { packed_register(*op.minimum) }
                 : std::nullopt;
-            packed_register(op.destination) = impl_.random_value(
-                members_[member_index].process, op.kind, maximum, minimum);
+            const auto thread = running_thread_;
+            packed_register(op.destination)
+                = thread != no_slot && threads_[thread].member == member_index
+                    && threads_[thread].parent != no_slot
+                ? impl_.random_value(threads_[thread].random_state, op.kind,
+                      maximum, minimum)
+                : impl_.random_value(members_[member_index].process, op.kind,
+                      maximum, minimum);
         } else if constexpr (std::is_same_v<T, CallableFramePush>) {
             if (member.private_frame(op.identity)) {
                 member.saved_array_marks.push_back(member.saved_arrays.size());
@@ -1037,6 +1357,8 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             stopped_ = true;
             paused_thread_ = index;
             outcome = Boundary::suspend;
+        } else if constexpr (std::is_same_v<T, DisableBlock>) {
+            outcome = disable_block(index, pc, op);
         } else if constexpr (std::is_same_v<T, Fork>) {
             std::uint32_t group = no_slot;
             if (op.join != ForkJoinKind::none) {
@@ -1051,7 +1373,7 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                     static_cast<std::uint32_t>(op.branches.size()), false };
             }
             for (const auto branch : op.branches) {
-                ready_thread(spawn_thread(member_index, branch, index, group));
+                ready_thread(spawn_thread(member_index, branch, index, group, pc));
             }
             outcome = op.join == ForkJoinKind::none ? Boundary::advance
                                                     : Boundary::suspend;
@@ -1431,6 +1753,15 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
         case Boundary::finish:
             park(pc);
             finish_thread(index);
+            return;
+        case Boundary::redirect:
+            // A disable ended the block the thread runs in.
+            pc = redirect_pc_;
+            continue;
+        case Boundary::killed:
+            // A disable ended the thread (its fork group already counts it).
+            park(pc);
+            release_thread(index);
             return;
         }
     }

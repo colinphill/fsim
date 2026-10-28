@@ -28,7 +28,9 @@ template <typename T>
 inline constexpr bool behavioral_suspension = std::is_same_v<T, WaitFor>
     || std::is_same_v<T, WaitOn> || std::is_same_v<T, WaitForever>
     || std::is_same_v<T, Fork> || std::is_same_v<T, ForkEnd>
-    || std::is_same_v<T, Stop> || std::is_same_v<T, Pause>;
+    || std::is_same_v<T, Stop> || std::is_same_v<T, Pause>
+    // A disable may end or move other threads, or this one.
+    || std::is_same_v<T, DisableBlock>;
 
 [[nodiscard]] inline bool comparison(const BinaryOperator operation) noexcept
 {
@@ -122,6 +124,21 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
             reads.push_back(op.source);
         } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+            // The time queries read no register.
+            if (op.function < SystemVerilogMathFunction::Time) {
+                reads.push_back(op.first);
+                if (op.second_width != 0U) {
+                    reads.push_back(op.second);
+                }
+            }
+            write = op.destination;
+        } else if constexpr (std::is_same_v<T, SystemVerilogScalarBinary>) {
+            reads.push_back(op.lhs);
+            if (op.operation != SystemVerilogScalarBinaryOperator::Convert) {
+                reads.push_back(op.rhs);
+            }
             write = op.destination;
         } else if constexpr (std::is_same_v<T, RandomValue>) {
             if (op.maximum) {

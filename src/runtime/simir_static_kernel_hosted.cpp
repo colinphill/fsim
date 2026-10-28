@@ -384,7 +384,7 @@ void Interpreter::Impl::StaticKernel::discard_hosted()
     for (auto* threads : { &ready_threads_, &batch_threads_,
              &inactive_threads_ }) {
         for (const auto thread : *threads) {
-            threads_[thread].queued = false;
+            (void)take_ready(thread);
         }
         threads->clear();
     }
@@ -708,8 +708,7 @@ void Interpreter::Impl::StaticKernel::run_merged_active()
             continue;
         }
         const auto index = threads[next_thread++];
-        threads_[index].queued = false;
-        if (threads_[index].alive) {
+        if (take_ready(index)) {
             run_thread(index);
         }
     }

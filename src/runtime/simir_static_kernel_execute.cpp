@@ -768,7 +768,7 @@ bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
 {
     auto& member = members_[member_index];
     const auto& operation = member.operations[inst.x];
-    auto& reads = generic_reads_;
+    auto& reads = scratch().generic_reads;
     std::optional<RegisterId> write;
     operation_registers(operation, reads, write);
     if (profile_) {
@@ -803,7 +803,7 @@ bool Interpreter::Impl::StaticKernel::execute_generic_kind(CompiledBody& body,
     using T = OperationKindAt<K>;
     auto& member = members_[member_index];
     const auto& op = operation_get<T>(member.operations[inst.x]);
-    auto& reads = generic_reads_;
+    auto& reads = scratch().generic_reads;
     std::optional<RegisterId> write;
     operation_registers_of(op, reads, write);
     if (profile_) {

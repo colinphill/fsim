@@ -166,7 +166,10 @@ inline constexpr bool specialize_effect = std::is_same_v<T, ReadSignal>
     || std::is_same_v<T, WriteProjected> || std::is_same_v<T, WriteProjectedSlice>
     || std::is_same_v<T, WriteProjectedDynamicSlice> || std::is_same_v<T, Assert>
     || std::is_same_v<T, Report> || std::is_same_v<T, ContainerRead>
-    || std::is_same_v<T, WriteContainerObjectElement>;
+    || std::is_same_v<T, WriteContainerObjectElement> || std::is_same_v<T, Display>
+    || std::is_same_v<T, FormatDisplay> || std::is_same_v<T, TimeDisplay>
+    || std::is_same_v<T, SystemVerilogMath>
+    || std::is_same_v<T, SystemVerilogScalarBinary>;
 
 /// The specialized body of one operation list. Operations flagged verbatim
 /// are copies of original operation origin[i] (signals, report texts and
