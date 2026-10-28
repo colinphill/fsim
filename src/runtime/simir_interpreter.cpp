@@ -3074,7 +3074,24 @@ void Interpreter::start()
     package_startup_actions.reserve(
         impl_->processes.size()
         + impl_->package_static_startup_callbacks.size());
+    // A static kernel member's startup action is the kernel's: the kernel
+    // lists its package static initializers (the host's own program is the
+    // kernel's stub).
+    const auto kernel_member = [&](const ProcessId id) {
+        return impl_->static_kernel && id < impl_->fusion_dormant_process.size()
+            && impl_->fusion_dormant_process[id] != 0U;
+    };
+    if (impl_->static_kernel) {
+        for (const auto& member : impl_->static_kernel->startup_members()) {
+            package_startup_actions.push_back({
+                member.order, member.process,
+                std::numeric_limits<std::size_t>::max() });
+        }
+    }
     for (ProcessId id = 0U; id < impl_->processes.size(); ++id) {
+        if (kernel_member(id)) {
+            continue;
+        }
         const auto program = impl_->processes.program_view(id);
         if (program.startup_phase()
             == ProcessStartupPhase::package_static_initializer) {
@@ -3159,7 +3176,9 @@ void Interpreter::start()
             }
             impl_->package_static_initialization_process = id;
             try {
-                if (impl_->static_kernel_hosts(id)) {
+                if (kernel_member(id)) {
+                    impl_->static_kernel->run_startup_member(id);
+                } else if (impl_->static_kernel_hosts(id)) {
                     // Hosted tier: the kernel runs the initializer (S25).
                     impl_->static_kernel->execute_hosted_startup(id);
                 } else {
@@ -3175,7 +3194,8 @@ void Interpreter::start()
                 = std::numeric_limits<ProcessId>::max();
         }
         impl_->package_static_initialization_active = false;
-        if (action.process != std::numeric_limits<ProcessId>::max()) {
+        if (action.process != std::numeric_limits<ProcessId>::max()
+            && !kernel_member(action.process)) {
             const auto& process = impl_->get_process(action.process);
             if (!process.halted || process.suspended
                 || process.status != ProcessStatus::finished) {

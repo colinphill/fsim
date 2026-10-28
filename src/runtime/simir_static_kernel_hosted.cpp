@@ -460,6 +460,24 @@ void Interpreter::Impl::StaticKernel::run_final_member(const std::uint32_t membe
         static_kernel_detail::no_slot));
 }
 
+void Interpreter::Impl::StaticKernel::run_startup_member(const ProcessId process)
+{
+    const auto entry = std::ranges::find(startup_members_, process,
+        &StartupMember::process);
+    if (entry == startup_members_.end()) {
+        throw std::logic_error("static kernel startup member is not installed");
+    }
+    // A package static initializer neither waits nor forks (the planner's
+    // startup rule): it runs to its end or to a $finish.
+    const auto thread = spawn_thread(entry->member, 0U,
+        static_kernel_detail::no_slot, static_kernel_detail::no_slot);
+    run_thread(thread);
+    if (threads_[thread].alive && threads_[thread].member == entry->member
+        && !impl_.stopped_by_design) {
+        throw std::logic_error("package static initializer did not finish synchronously");
+    }
+}
+
 void Interpreter::Impl::StaticKernel::collect_hosted()
 {
     const auto now = impl_.scheduler.now();

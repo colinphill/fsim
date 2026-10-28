@@ -131,6 +131,7 @@ void Interpreter::Impl::StaticKernel::prepare_behavioral()
         auto& member = members_[index];
         if (member.kind != StaticKernelMemberKind::behavioral
             || member.start_late || member.final_block
+            || member.package_startup
             || member.wait_sensitivity.empty()
             || member.operations.empty()
             || !operation_holds<WaitSensitivity>(member.operations.front())) {
@@ -154,6 +155,7 @@ void Interpreter::Impl::StaticKernel::start_behavioral()
             const auto& member = members_[index];
             if (member.kind != StaticKernelMemberKind::behavioral
                 || member.prearmed || member.final_block
+                || member.package_startup
                 || (member.after_procedures && !member.vhdl)
                     != after_procedures) {
                 continue;
@@ -1068,6 +1070,11 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             } catch (const std::invalid_argument& error) {
                 fail(member_index, pc, error.what());
             }
+        } else if constexpr (std::is_same_v<T, SignalStrengthText>) {
+            // %v (IEEE 1800-2023 21.2.1.5) of a host signal: the host holds
+            // its drivers and their strengths.
+            string_register(op.destination) = impl_.signal_strength_text(
+                op.signal, op.offset, op.width);
         } else if constexpr (std::is_same_v<T, ReadStringObject>) {
             // A string variable (IEEE 1800-2023 6.16) is host storage with
             // no events: the member reads and writes it in its serial place.
@@ -1801,6 +1808,10 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             }
             stopped_ = true;
             paused_thread_ = index;
+            // A $stop in a final procedure leaves the simulation paused
+            // although it has finished (the reference's paused_in_final).
+            impl_.paused_in_final = impl_.paused_in_final
+                || members_[member_index].final_block;
             outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, DisableBlock>) {
             outcome = disable_block(index, pc, op);

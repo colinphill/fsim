@@ -231,6 +231,21 @@ public:
     /// Runs a final member's procedure to its end (a host task of
     /// run_finals, or a hosted wake when the kernel hosts processes).
     void run_final_member(std::uint32_t member);
+    /// The package static initializers that are members, with their startup
+    /// orders: the host runs each at its startup action
+    /// (run_startup_member), among the other initializers and callbacks.
+    struct StartupMember {
+        ProcessId process { };
+        std::uint32_t member { };
+        std::uint64_t order { };
+    };
+    [[nodiscard]] const std::vector<StartupMember>& startup_members() const noexcept
+    {
+        return startup_members_;
+    }
+    /// Runs a package static initializer member to its end, before time
+    /// zero (IEEE 1800-2023 6.21).
+    void run_startup_member(ProcessId process);
     /// Debugger plan: members stop at their debug points.
     [[nodiscard]] bool debug_points() const noexcept { return debug_points_; }
     /// A mixed kernel with a host boundary: its first round, the VHDL
@@ -317,6 +332,8 @@ private:
         /// A final procedure (IEEE 1800-2023 9.2.3): never starts with the
         /// others; run_finals schedules it at the end of simulation.
         bool final_block { };
+        /// A package static initializer (run_startup_member).
+        bool package_startup { };
         /// Dead logic: never scheduled; materialize evaluates it from the
         /// slots in lazy_inputs (its whole sensitivity) when a slot it
         /// writes is read. lazy_stamp is the lazy_epoch_ of its last run.
@@ -2228,6 +2245,7 @@ private:
     std::uint64_t hosted_sequence_ { };
     /// The final members' processes and member indices (run_finals).
     std::vector<std::pair<ProcessId, std::uint32_t>> final_members_;
+    std::vector<StartupMember> startup_members_;
     std::optional<SimulationTick> armed_hosted_timer_;
     /// Marks the specification's hosted processes in the interpreter.
     void adopt_hosted(const std::vector<StaticKernelMemberSpec>& hosted);

@@ -460,6 +460,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.after_procedures = program.startup_phase()
             == ProcessStartupPhase::after_procedures;
         member.final_block = program.final();
+        member.package_startup = program.startup_phase()
+            == ProcessStartupPhase::package_static_initializer;
+        if (member.package_startup) {
+            startup_members_.push_back({ member.process,
+                static_cast<std::uint32_t>(members_.size()),
+                program.startup_order() });
+        }
         member.partition_key = member.lazy ? no_slot : member_spec.partition;
         member.body_begin = member_spec.body_begin;
         member.prologue_end = member_spec.body_begin;

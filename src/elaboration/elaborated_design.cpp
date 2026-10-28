@@ -1033,7 +1033,10 @@ void ElaboratedDesign::populate_interpreter(
             auto process = materialize();
             process.static_sensitivity.clear();
             process.static_trigger_regions = { };
-            process.initialize = false;
+            // A package static initializer keeps its startup metadata: the
+            // static kernel runs it at its startup action.
+            process.initialize = process.startup_phase
+                == runtime::simir::ProcessStartupPhase::package_static_initializer;
             return process;
         }
         return std::nullopt;
@@ -1092,7 +1095,8 @@ void ElaboratedDesign::populate_interpreter(
                 // instance loses sensitivity and initialization.
                 auto instance = row.instance;
                 instance.static_sensitivity.clear();
-                instance.initialize = false;
+                instance.initialize = instance.startup_phase
+                    == runtime::simir::ProcessStartupPhase::package_static_initializer;
                 (void)runtime::simir::InterpreterProgramAccess::add_program(
                     *interpreter, common, std::move(instance));
                 continue;

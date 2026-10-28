@@ -172,8 +172,14 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
     stub.container_register_count = 0U;
     stub.initialize = true;
     // The host process starts at time zero even when the member it replaces
-    // is a final procedure (the kernel runs that one in run_finals).
+    // is a final procedure (the kernel runs that one in run_finals) or a
+    // package static initializer (the kernel runs it at its startup action).
     stub.final = false;
+    stub.startup_phase = ProcessStartupPhase::ordinary;
+    stub.startup_order = 0U;
+    stub.startup_package_owner_id = 0U;
+    stub.startup_writable_string_object_ids.clear();
+    stub.startup_writable_container_object_ids.clear();
     std::vector<Operation> body;
     // Without boundary inputs nothing on the host wakes the kernel; it runs at
     // start and then by its own timers (behavioral delays).
@@ -445,10 +451,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             return first;
         }
         // Package static initializers run once, before time zero, in the
-        // host's startup order (IEEE 1800-2023 6.21, 26.3); the host owns
-        // their startup metadata and a synchronous finish.
+        // host's startup order (IEEE 1800-2023 6.21, 26.3): a SystemVerilog
+        // behavioral member runs one at its startup action (its body rule
+        // is static_kernel_startup_operation).
         if (view.startup_phase()
                 == ProcessStartupPhase::package_static_initializer
+            && (!behavioral || vhdl)
             && hit("package_static_initializer")) {
             return first;
         }
@@ -458,7 +466,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             && hit("switch")) {
             return first;
         }
-        if (view.drive_strength() != DriveStrength { } && hit("drive_strength")) {
+        // A driver with a drive strength (IEEE 1800-2023 28.11, 28.14) is
+        // a SystemVerilog behavioral member only: its targets stay host
+        // signals, whose drivers the host resolves by strength.
+        if (view.drive_strength() != DriveStrength { } && (!behavioral || vhdl)
+            && hit("drive_strength")) {
             return first;
         }
         if (behavioral) {
@@ -1139,6 +1151,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     failed_reason = "final_body";
                 }
             }
+            for (std::size_t op = 0U; supported
+                 && view.startup_phase()
+                     == ProcessStartupPhase::package_static_initializer
+                 && op < count; ++op) {
+                if (!static_kernel_startup_operation(operations.expanded(op))) {
+                    supported = false;
+                    failed_at = op;
+                    failed_reason = "package_static_initializer_body";
+                }
+            }
             if (supported) {
                 if (const char* reason = container_rule(view, false)) {
                     supported = false;
@@ -1486,29 +1508,22 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // most recent transition of a path source (IEEE 1800-2023 30.4, 30.5).
     // The host applies that delay when the driver of the destination writes
     // it, and finds the source transition only once the source's own update
-    // has committed: the driver runs in a later delta than the update that
-    // changed the source. A kernel member evaluates the whole combinational
-    // cone from the source to the destination in one run, so the source
-    // update is still staged when the destination is written and the host
-    // sees no source transition (the delay is lost or taken from the wrong
-    // path). The processes that drive a path destination therefore stay off
-    // the native members, where they wake after the source commits.
+    // has committed. Path terminals are host signals (host_touched below),
+    // and a path source is never a sole-writer input (sole_writer_inputs):
+    // a member reading a source wakes only after the host commits its
+    // update, as the reference's driver does, so a member may drive a
+    // destination.
     std::vector<std::uint8_t> path_destination(signal_count, 0U);
+    std::vector<std::uint8_t> path_source(signal_count, 0U);
     for (const auto& path : verilog_specify_paths_) {
         for (const auto& terminal : path.destinations) {
             if (terminal.signal < signal_count) {
                 path_destination[terminal.signal] = 1U;
             }
         }
-    }
-    for (SignalId signal = 0U; signal < signal_count; ++signal) {
-        if (path_destination[signal] == 0U) {
-            continue;
-        }
-        for (const auto& writer : graph_signals[signal].writers) {
-            if (writer.process < process_count && candidates[writer.process]) {
-                candidates[writer.process].reset();
-                reject(writer.process, "path_destination_driver");
+        for (const auto& terminal : path.sources) {
+            if (terminal.signal < signal_count) {
+                path_source[terminal.signal] = 1U;
             }
         }
     }
@@ -1630,6 +1645,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 target && *target < signal_count) {
                 host_touched[*target] = 1U;
             }
+
             // A member's $monitor or $strobe: the host's monitor watches
             // its signals through the host commit path and reads them when
             // it prints (IEEE 1800-2023 21.2.2, 21.2.3).
@@ -1641,6 +1657,26 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     }
                 }
             }
+        }
+    }
+    // A package static initializer runs before the kernel's first
+    // activation and establishes the host's baseline (IEEE 1800-2023 6.21);
+    // a final procedure runs after its last round (9.2.3). Their members
+    // write host signals, which the host commits at once. A member driving
+    // with a strength writes host signals too: the host resolves its
+    // driver by strength (28.11-28.14).
+    for (SignalId signal = 0U; signal < signal_count; ++signal) {
+        if (std::ranges::any_of(graph_signals[signal].writers,
+                [&](const auto& writer) {
+                    return writer.process < process_count
+                        && candidates[writer.process]
+                        && (views[writer.process].final()
+                            || views[writer.process].startup_phase()
+                                == ProcessStartupPhase::package_static_initializer
+                            || views[writer.process].drive_strength()
+                                != DriveStrength { });
+                })) {
+            host_touched[signal] = 1U;
         }
     }
     // A file trace's fixed selection: its signals are host signals, which
@@ -3857,6 +3893,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             mark(operation_get_if<SignalLastValue>(&operation));
             mark(operation_get_if<SignalLastEvent>(&operation));
             mark(operation_get_if<SignalLastActive>(&operation));
+            mark(operation_get_if<SignalStrengthText>(&operation));
         }
     }
     for (SignalId signal = 0U; signal < signal_count; ++signal) {
@@ -3884,7 +3921,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // update would wake a member whose history query (history_read) does
         // not see it yet.
         if (!forces && !access.foreign && path_destination[signal] == 0U
-            && history_read[signal] == 0U
+            && path_source[signal] == 0U && history_read[signal] == 0U
             && owned[signal] == 0U && virtual_owned[signal] == 0U
             && !node.writers.empty()
             // One driver of an unresolved variable or a plain net (no pull,
@@ -3894,9 +3931,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     && !signals_[signal].implicit_driver
                     && !signals_[signal].charge_strength))
             && std::ranges::all_of(node.writers, [&](const auto& writer) {
+                   // A driver with a drive strength resolves to a value
+                   // its own may not be (a highz0 driver of 0 is z).
                    return writer.process == node.writers.front().process
                        && writer.process < process_count
-                       && member[writer.process] != 0U;
+                       && member[writer.process] != 0U
+                       && views[writer.process].drive_strength()
+                           == DriveStrength { };
                })
             && std::ranges::any_of(node.readers, [&](const auto& reader) {
                    return reader.process < process_count && member[reader.process] != 0U;

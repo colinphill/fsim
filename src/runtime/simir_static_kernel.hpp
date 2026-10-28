@@ -583,6 +583,8 @@ struct StaticKernelInlinedProgram {
                 // $countones and $countbits (20.9).
                 || std::is_same_v<T, CountOnes>
                 || std::is_same_v<T, CountBits>
+                // %v of a host signal (21.2.1.5, static_kernel_host_signal).
+                || std::is_same_v<T, SignalStrengthText>
                 // Between equal-shape private arrays (see the planner).
                 || std::is_same_v<T, CopyContainerRegister>
                 || std::is_same_v<T, PlusArgSelect>
@@ -825,7 +827,9 @@ struct StaticKernelInlinedProgram {
 /// An operation a final procedure's member may use (IEEE 1800-2023 9.2.3):
 /// a final procedure runs once, without delays, at the end of simulation,
 /// where the kernel runs it outside its rounds (run_finals). It reads
-/// signals but writes, forces and waits on none, and fills no design memory.
+/// signals, makes blocking writes to host signals (see the planner) and
+/// may $stop, but forces, waits on and schedules no signal, and fills no
+/// design memory.
 [[nodiscard]] inline bool static_kernel_final_operation(
     const Operation& operation)
 {
@@ -836,7 +840,11 @@ struct StaticKernelInlinedProgram {
             || std::is_same_v<T, SignalActive>
             || std::is_same_v<T, SignalLastValue>
             || std::is_same_v<T, SignalLastEvent>
-            || std::is_same_v<T, SignalLastActive>) {
+            || std::is_same_v<T, SignalLastActive>
+            || std::is_same_v<T, WriteBlocking>
+            || std::is_same_v<T, WriteBlockingSlice>
+            || std::is_same_v<T, WriteBlockingDynamicSlice>
+            || std::is_same_v<T, WriteBlockingDynamicPartSlice>) {
             return true;
         } else if constexpr (requires { value.signal; }) {
             return false;
@@ -844,7 +852,7 @@ struct StaticKernelInlinedProgram {
             return !(std::is_same_v<T, WaitFor> || std::is_same_v<T, WaitOn>
                 || std::is_same_v<T, WaitSensitivity>
                 || std::is_same_v<T, WaitForever> || std::is_same_v<T, Fork>
-                || std::is_same_v<T, ForkEnd> || std::is_same_v<T, Pause>
+                || std::is_same_v<T, ForkEnd>
                 || std::is_same_v<T, WriteContainerObject>
                 || std::is_same_v<T, WriteContainerObjectElement>
                 || std::is_same_v<T, WriteStringObject>
@@ -852,6 +860,24 @@ struct StaticKernelInlinedProgram {
                 || std::is_same_v<T, FileErrorStatus>
                 || std::is_same_v<T, LoadMemory>);
         }
+    }, operation);
+}
+
+/// An operation a package static initializer's member may use (IEEE
+/// 1800-2023 6.21, 26.3): the initializer runs once, before time zero, in
+/// the host's startup order, and finishes without suspending, so it neither
+/// waits nor forks. Its writes reach host signals (see the planner).
+[[nodiscard]] inline bool static_kernel_startup_operation(
+    const Operation& operation)
+{
+    return visit_operation([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        return !(std::is_same_v<T, WaitFor> || std::is_same_v<T, WaitOn>
+            || std::is_same_v<T, WaitSensitivity>
+            || std::is_same_v<T, WaitForever> || std::is_same_v<T, Fork>
+            || std::is_same_v<T, ForkEnd> || std::is_same_v<T, Pause>
+            || std::is_same_v<T, MonitorInstall>
+            || std::is_same_v<T, MonitorControl>);
     }, operation);
 }
 
@@ -876,7 +902,10 @@ struct StaticKernelInlinedProgram {
             || std::is_same_v<T, SignalActive>
             || std::is_same_v<T, SignalLastValue>
             || std::is_same_v<T, SignalLastEvent>
-            || std::is_same_v<T, SignalLastActive>) {
+            || std::is_same_v<T, SignalLastActive>
+            // %v reads the host's drivers and their strengths (IEEE
+            // 1800-2023 21.2.1.5).
+            || std::is_same_v<T, SignalStrengthText>) {
             return value.signal;
         } else if constexpr (std::is_same_v<T, WriteProjected>
             || std::is_same_v<T, WriteProjectedSlice>
