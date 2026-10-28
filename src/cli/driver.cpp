@@ -2249,7 +2249,7 @@ namespace {
             if (output_is_terminal && invocation->verbosity != Verbosity::quiet) {
                 output
                     << "FSIM: Free mixed-language HDL simulator, version "
-                    << fsim::version << "\nCopyright (c) 2026 Colin Hill\n\n";
+                    << fsim::version << "\n\n";
             }
             if (invocation->help) {
                 print_help(output, invocation->program_name);
