@@ -236,7 +236,9 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 break;
             }
         }
-        profile_operations_ += profile_ ? 1U : 0U;
+        if (profile_) {
+            profile_operations_ += 1U;
+        }
         switch (inst.op) {
         case KOp::nop:
         case KOp::mem_bind:

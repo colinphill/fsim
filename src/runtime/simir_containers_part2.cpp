@@ -942,6 +942,72 @@ void Interpreter::Impl::execute_container(
     ++process.pc;
 }
 
+void Interpreter::Impl::read_memory_file(const ProcessId process,
+    const InstructionIndex pc, const std::string& path, ContainerValue& target,
+    const bool hexadecimal, const std::optional<std::int32_t> start,
+    const std::optional<std::int32_t> finish)
+{
+    const auto handle = open_file(process, path, "r");
+    // A file that cannot be opened loads nothing; say so rather than
+    // reporting an empty file's word count (IEEE 1800-2023 21.4).
+    if (handle == 0) {
+        const auto message
+            = "cannot open read-memory file '" + path + "'";
+        if (!report_hook) {
+            container_error(process, pc, message);
+        } else {
+            report_hook(process, message, AssertionSeverity::error,
+                SourceLocation { }, scheduler.now(), scheduler.delta());
+        }
+        return;
+    }
+    std::string text;
+    try {
+        while (!file_end_of_file(process, handle)) {
+            std::uint32_t count { };
+            auto line = read_file_line(
+                process, handle, count);
+            if (text.size() + line.size()
+                > maximum_memory_file_bytes) {
+                throw std::length_error {
+                    "read-memory file exceeds the 1 MiB limit"
+                };
+            }
+            text += line;
+        }
+        close_file(process, handle);
+    } catch (...) {
+        try {
+            close_file(process, handle);
+        } catch (...) {
+        }
+        throw;
+    }
+    try {
+        const auto load = load_memory_text_with_status(
+            target, text, hexadecimal, start, finish);
+        if (load.word_count_mismatch && report_hook) {
+            report_hook(
+                process,
+                "read-memory file word count differs from the selected range",
+                AssertionSeverity::warning,
+                SourceLocation { },
+                scheduler.now(), scheduler.delta());
+        }
+    } catch (const std::exception& error) {
+        // A malformed file or an address outside the range ends the load
+        // with an error message; simulation continues (IEEE 1800-2017
+        // 21.4).
+        if (!report_hook) {
+            container_error(
+                process, pc, error.what());
+        } else {
+            report_hook(process, error.what(), AssertionSeverity::error,
+                SourceLocation { }, scheduler.now(), scheduler.delta());
+        }
+    }
+}
+
 void Interpreter::Impl::execute_container(
     ProcessState& process,
     const LoadMemory& operation)
@@ -989,67 +1055,9 @@ void Interpreter::Impl::execute_container(
         ++process.pc;
         return;
     }
-    const auto& read_path = get_string_register(process, operation.path);
-    const auto handle = open_file(process.id, read_path, "r");
-    // A file that cannot be opened loads nothing; say so rather than
-    // reporting an empty file's word count (IEEE 1800-2023 21.4).
-    if (handle == 0) {
-        const auto message
-            = "cannot open read-memory file '" + read_path + "'";
-        if (!report_hook) {
-            container_error(process.id, process.pc, message);
-        } else {
-            report_hook(process.id, message, AssertionSeverity::error,
-                SourceLocation { }, scheduler.now(), scheduler.delta());
-        }
-        ++process.pc;
-        return;
-    }
-    std::string text;
-    try {
-        while (!file_end_of_file(process.id, handle)) {
-            std::uint32_t count { };
-            auto line = read_file_line(
-                process.id, handle, count);
-            if (text.size() + line.size()
-                > maximum_memory_file_bytes) {
-                throw std::length_error {
-                    "read-memory file exceeds the 1 MiB limit"
-                };
-            }
-            text += line;
-        }
-        close_file(process.id, handle);
-    } catch (...) {
-        try {
-            close_file(process.id, handle);
-        } catch (...) {
-        }
-        throw;
-    }
-    try {
-        const auto load = load_memory_text_with_status(
-            target, text, operation.hexadecimal, start, finish);
-        if (load.word_count_mismatch && report_hook) {
-            report_hook(
-                process.id,
-                "read-memory file word count differs from the selected range",
-                AssertionSeverity::warning,
-                SourceLocation { },
-                scheduler.now(), scheduler.delta());
-        }
-    } catch (const std::exception& error) {
-        // A malformed file or an address outside the range ends the load
-        // with an error message; simulation continues (IEEE 1800-2017
-        // 21.4).
-        if (!report_hook) {
-            container_error(
-                process.id, process.pc, error.what());
-        } else {
-            report_hook(process.id, error.what(), AssertionSeverity::error,
-                SourceLocation { }, scheduler.now(), scheduler.delta());
-        }
-    }
+    read_memory_file(process.id, process.pc,
+        get_string_register(process, operation.path), target,
+        operation.hexadecimal, start, finish);
     ++process.pc;
 }
 

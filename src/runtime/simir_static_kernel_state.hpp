@@ -1323,10 +1323,21 @@ private:
         /// The domain this lane is settling (no_slot: a level or triggered
         /// batch, whose units schedule nothing).
         std::uint32_t domain { static_kernel_detail::no_slot };
+        /// A triggered batch: the writes the lane queued to domains'
+        /// private queues, and those domains (bit per domain below 64;
+        /// private_more: others).
+        std::uint32_t private_count { };
+        std::uint64_t private_domains { };
+        bool private_more { };
+        /// The batch items it ran, as it left them: 1 serial (the leader
+        /// runs it), 2 something to replay.
+        std::vector<std::uint8_t> item_state;
+        /// The dispatch (lane_epoch_) its logs belong to.
+        std::uint64_t epoch { };
     };
     /// A unit of a parallel batch: where its records are and how its native
     /// run ended (a nonzero status is finished by the leader in the replay).
-    struct LaneRun {
+    struct alignas(64) LaneRun {
         std::uint32_t lane { };
         std::uint32_t changes_begin { };
         std::uint32_t changes_end { };
@@ -1334,8 +1345,9 @@ private:
         std::uint32_t writes_end { };
         /// Not eligible: the leader runs it at its place in the replay.
         bool serial { };
-        /// A domain run of two-state code (counted by the leader).
-        bool two_state { };
+        /// A batch item with something for the leader's replay: logged
+        /// changes or writes, or a status to finish.
+        bool effects { };
         std::uint32_t status { };
         StaticKernelNativeFrame frame;
         std::optional<static_kernel_detail::KernelDeopt> deopt;
@@ -1345,6 +1357,23 @@ private:
     /// The lane of the parallel batch this thread is running; null outside
     /// one (the leader's serial path).
     FSIM_STATIC_KERNEL_TLS static thread_local Lane* worker_lane_;
+    /// Counts the pool's dispatches: a lane clears its logs when it first
+    /// runs in one (the leader does not touch the workers' lines).
+    std::uint64_t lane_epoch_ { };
+    void prepare_lane(Lane& lane) noexcept
+    {
+        if (lane.epoch != lane_epoch_) {
+            lane.epoch = lane_epoch_;
+            lane.changes.clear();
+            lane.words.clear();
+            lane.elements.clear();
+            lane.generic.clear();
+            lane.writes.count = 0U;
+            lane.private_count = 0U;
+            lane.private_domains = 0U;
+            lane.private_more = false;
+        }
+    }
     [[nodiscard]] RunScratch& scratch() noexcept
     {
         auto* const lane = worker_lane_;
@@ -1386,6 +1415,16 @@ private:
     /// Replay of a logged change: its edge bit plus one (slot_changed_general).
     std::uint8_t replay_edge_ { };
     void build_parallel_plan();
+    /// Domain components grouped by instance: each component root's cluster
+    /// representative, and each sequential member's (no_slot: none).
+    struct Clusters {
+        std::vector<std::uint32_t> of_root;
+        std::vector<std::uint32_t> of_member;
+    };
+    /// component_of maps a unit to its component root (no_slot: not a
+    /// domain unit).
+    [[nodiscard]] Clusters cluster_components(
+        const std::vector<std::uint32_t>& component_of) const;
     /// FSIM_KERNEL_MT_STATS: per batch phase, the batches offered, those run
     /// in parallel, their units and eligible units, and the time on the pool
     /// and in the replay.
@@ -1419,6 +1458,17 @@ private:
         /// The leader's time in settle(), run_triggered() and activations.
         std::array<std::uint64_t, 3> phase_ns { };
         std::uint64_t domain_work_ns { };
+        /// Commits offered to the domains, declined (too few domain entries,
+        /// or a leader write a committing domain reads), run; their domain
+        /// and leader entries and the leader's commit merge time.
+        std::uint64_t commit_offered { };
+        std::uint64_t commit_small { };
+        std::uint64_t commit_read { };
+        std::uint64_t commit_parallel { };
+        std::uint64_t commit_domain_entries { };
+        std::uint64_t commit_leader_entries { };
+        std::uint64_t commit_private_entries { };
+        std::uint64_t commit_merge_ns { };
     } mt_stats_;
     /// Adds the scope's time to one of MtStats::phase_ns.
     struct MtPhaseTimer {
@@ -1668,32 +1718,83 @@ private:
         /// deoptimized run or ran a unit without native code).
         bool continued { };
     };
+    /// Writes [begin, end) of a domain's private queue, queued by one run:
+    /// where they go in the serial NBA queue is the queue length when the
+    /// run's lane writes were replayed (step_item_base_[item]) plus `before`,
+    /// the run's writes queued ahead of them there; they keep queue order.
+    struct PrivateSegment {
+        std::uint32_t item { };
+        std::uint32_t before { };
+        std::uint32_t begin { };
+        std::uint32_t end { };
+    };
+    /// A committed write with logged changes: its serial place (queue
+    /// position; private writes first at a position, by item and order),
+    /// its changes on the domain's lane, and whether it raised the error.
+    struct LoggedCommit {
+        std::uint32_t position { };
+        std::uint32_t queued { };
+        std::uint32_t item { };
+        std::uint32_t before { };
+        /// A private write's index in its domain's queue.
+        std::uint32_t order { };
+        std::uint32_t begin { };
+        std::uint32_t end { };
+        bool error { };
+    };
     struct alignas(64) Domain {
+        /// The line its lane writes and the leader reads after a dispatch:
+        /// the lane, how the lane stopped (DomainStop: the leader finishes
+        /// the last record's run or runs the next unit, then the domain
+        /// continues), the lane's summary of the records (evaluations, and
+        /// whether any logged changes or writes), the commit's progress (how
+        /// many of its writes in sequence it committed: an element write on
+        /// the reference path stops it for the leader) and error, the
+        /// settle's time on the lane (FSIM_KERNEL_MT_STATS), and the
+        /// committed writes whose changes the leader delivers.
+        std::uint32_t lane { };
+        std::uint8_t stop { };
+        bool effects { };
+        std::size_t evaluated { };
+        std::uint32_t commit_done { };
+        std::uint32_t commit_total { };
+        std::exception_ptr commit_error;
+        std::uint64_t run_ns { };
+        std::vector<LoggedCommit> logged;
+        /// commit_domains: the NBA queue entries the lane commits (indices
+        /// in writes_), which the leader fills.
+        alignas(64) std::vector<std::uint32_t> commit;
         /// Its levels, ascending, and one queue per level: the domain's
         /// units of the level in global queue order. A unit's bit is its
         /// queued flag while the lanes run (the shared flags stay clear).
-        std::vector<std::uint32_t> levels;
+        alignas(64) std::vector<std::uint32_t> levels;
         std::vector<LevelQueue> buckets;
         std::uint32_t scan { };
         std::uint32_t queued { };
-        /// This settle: the lane, the passes (level, first record), the
-        /// records and their runs, the running snapshot, and how it stopped.
-        std::uint32_t lane { };
+        /// This settle: the passes (level, first record), the records and
+        /// their runs, and the running snapshot.
         std::vector<std::pair<std::uint32_t, std::uint32_t>> passes;
         std::vector<DomainRecord> records;
         std::vector<LaneRun> runs;
         std::vector<std::uint32_t> snapshot;
         std::uint32_t next { };
         std::size_t evaluations { };
-        /// Why the lane stopped (DomainStop): the leader finishes the last
-        /// record's run or runs the next unit, then the domain continues.
-        std::uint8_t stop { };
         /// The leader's merge: the next pass.
         std::uint32_t pass { };
         /// Code size of its units: lanes take the largest domains first.
         std::uint64_t cost { };
-        /// FSIM_KERNEL_MT_STATS: this settle's time on its lane.
-        std::uint64_t run_ns { };
+        /// Private NBA queue: writes its own sequential members queued to its
+        /// slots and containers on its lane (element entries in
+        /// nba_elements), in segments keyed by their place in the serial
+        /// queue. A member that queues only to its domain swaps the queue
+        /// into its lane while it runs.
+        std::vector<StaticKernelWrite> nba_storage;
+        StaticKernelWriteQueue nba;
+        std::vector<NbaEntry> nba_elements;
+        std::vector<PrivateSegment> segments;
+        /// commit_in_domain: the domain's writes in serial order (private
+        /// ones tagged) when writes_ has some (else the segments' order).
+        std::vector<std::uint32_t> sequence;
     };
     enum DomainStop : std::uint8_t {
         domain_running,
@@ -1729,6 +1830,61 @@ private:
     std::vector<MergeItem> merge_items_;
     std::size_t domain_limit_ { };
     static_kernel_detail::KernelPool::Body domain_body_;
+    /// Domain time steps (commit_domains): per slot and container, the
+    /// domain whose lane commits its queued writes (no_slot: the leader),
+    /// and the domain of its combinational readers (no_slot: none,
+    /// domain_many: several or a serial one).
+    std::vector<std::uint32_t> slot_commit_domain_;
+    std::vector<std::uint32_t> container_commit_domain_;
+    std::vector<std::uint32_t> slot_reader_domain_;
+    std::vector<std::uint32_t> container_reader_domain_;
+    static constexpr std::uint32_t domain_many = static_kernel_detail::no_slot - 1U;
+    /// The committing domain of each entry of the NBA queue.
+    std::vector<std::uint32_t> commit_owner_;
+    /// Domain time steps: each sequential member's domain (no_slot: none),
+    /// the NBA queue length when each triggered-batch item of this step was
+    /// replayed (items number on across the step's batches), and the
+    /// writes waiting in domains' private queues.
+    std::vector<std::uint32_t> member_domain_;
+    /// Per sequential member: every write it queues goes to its domain.
+    std::vector<std::uint8_t> member_private_;
+    /// Its queued writes' targets another domain or the leader commits:
+    /// slots, and containers tagged private_tag.
+    std::vector<std::vector<std::uint32_t>> member_foreign_;
+    std::vector<std::uint32_t> step_item_base_;
+    std::size_t private_writes_ { };
+    /// The domains with private writes (bit per domain below 64), and
+    /// whether others have some.
+    std::uint64_t private_domains_ { };
+    bool private_more_ { };
+    /// The lane that ran (or would have run) a batch item.
+    [[nodiscard]] std::uint32_t item_lane(std::uint32_t item) const noexcept;
+    enum class BatchDispatch : std::uint8_t { dynamic, pinned, inline_items };
+    BatchDispatch batch_dispatch_ { };
+    /// Moves the private queues' writes into writes_ at their serial places.
+    void materialize_private_writes();
+    [[nodiscard]] bool nba_pending() const noexcept
+    {
+        return writes_.count != 0U || private_writes_ != 0U;
+    }
+    static_kernel_detail::KernelPool::Body commit_body_;
+    /// FSIM_KERNEL_MT_AFFINITY (default on): each domain runs on one lane
+    /// (balanced by cost), so its slots stay in that core's cache across
+    /// settles and commits; otherwise lanes take domains as they come.
+    bool mt_affinity_ { };
+    bool mt_fused_ { };
+    std::vector<std::uint32_t> domain_lane_;
+    /// run_domain_items: the pinned body's item count and item body.
+    std::uint32_t pinned_items_ { };
+    const static_kernel_detail::KernelPool::Body* pinned_target_ { };
+    static_kernel_detail::KernelPool::Body pinned_body_;
+    /// Runs body(lane, item) for each active domain item, on the pool.
+    void run_domain_items(const static_kernel_detail::KernelPool::Body& body,
+        std::uint32_t count);
+    /// FSIM_KERNEL_MT_COMMIT_MIN: the least domain-owned entries a commit
+    /// runs in parallel (FSIM_KERNEL_MT_COMMIT=0: never).
+    std::size_t mt_commit_min_ { };
+    bool mt_commit_ { };
     /// The leader replays domain logs: combinational targets were scheduled
     /// in the domain already.
     bool replay_external_ { };
@@ -1754,6 +1910,8 @@ private:
     /// Settles nothing more: the domains' queued units are dropped (an
     /// error aborts the settle).
     void abandon_domains() noexcept;
+    /// The units domain lanes queued in their domains go to the global queue.
+    void drain_domain_queues() noexcept;
     /// Replays a domain record and its continuations at their place in the
     /// merge; an error the record raised is rethrown there.
     void replay_domain_record(Domain& domain, std::uint32_t record,
@@ -1761,7 +1919,44 @@ private:
     /// settle() through the domains; false when fewer than two domains have
     /// queued units (nothing has moved).
     [[nodiscard]] bool settle_domains(std::size_t& evaluations, std::size_t limit);
+    /// The active domains after the pool: the leader finishes what lanes
+    /// could not, merges their passes with the serial units' and counts.
+    void finish_domains(std::size_t& evaluations, std::size_t limit,
+        std::chrono::steady_clock::time_point run_started);
+    /// A triggered batch's item on a lane (run_parallel_batch).
+    void run_batch_item(std::uint32_t lane, std::uint32_t item);
+    static_kernel_detail::KernelPool::Body batch_pinned_body_;
+    bool batch_private_ { };
+    std::uint32_t step_item_offset_ { };
+    /// One of the domain's writes in sequence: the write and its element.
+    /// False: an element write needs the reference path (not on a lane).
+    [[nodiscard]] bool commit_write(Domain& domain, std::uint32_t at, bool reference);
+    /// Records a committed write's changes (from `begin` on the domain's
+    /// lane) for the leader to deliver at its serial place.
+    void log_commit(Domain& domain, std::uint32_t at, std::uint32_t begin, bool error);
+    /// Domain::sequence from the sorted segments and writes_ entries.
+    void build_commit_sequence(Domain& domain);
+    /// Appends a write to the domain's private queue.
+    void push_private(Domain& domain, std::uint32_t item, std::uint32_t before,
+        const StaticKernelWrite& write);
+    /// Domain::sequence: a private write's index carries this bit.
+    static constexpr std::uint32_t private_tag = std::uint32_t { 1 } << 31U;
+    /// commit_pending() and the settle after it through the domains: each
+    /// domain's lane commits the queued writes of its slots and settles;
+    /// the leader commits the rest in queue order with the domains' logged
+    /// changes, then merges the settle. False when declined (nothing done).
+    [[nodiscard]] bool commit_domains();
+    /// A lane's share: the domain's entries in queue order, up to an element
+    /// write on the reference path.
+    void commit_in_domain(std::uint32_t domain);
+    /// The leader on the domain's lane: the rest of its commit, then its
+    /// settle.
+    void resume_commit(std::uint32_t domain, std::size_t limit);
+    /// A logged change, delivered as the leader would have made it.
+    void replay_change(const Lane& lane, const LaneChange& change);
     void run_domain(std::uint32_t domain, std::size_t limit);
+    /// Domain::evaluated and Domain::effects from its records.
+    void summarize_domain(Domain& domain) noexcept;
     /// FSIM_KERNEL_MT_SHUFFLE: a random order of `count` batch items.
     void shuffle_items(std::uint32_t count);
     void resume_domain(std::uint32_t domain, std::size_t limit);

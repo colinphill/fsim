@@ -291,6 +291,10 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                 if (store->target < used.size()) {
                     used[store->target] = 1U;
                 }
+            } else if (const auto* memory_load = operation_get_if<LoadMemory>(&operation)) {
+                if (memory_load->target < used.size()) {
+                    used[memory_load->target] = 1U;
+                }
             } else if (const auto* copy
                 = operation_get_if<CopyContainerRegister>(&operation)) {
                 if (copy->destination < used.size()) {
@@ -1509,12 +1513,17 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
         if (notify.general) {
             slot_changed_general(slot_index, changed_mask, before, field_offset);
         }
-        if (slot_logged_[slot_index] != 0U) {
+        // A triggered member's write can reach another domain's units: the
+        // leader schedules them from the log.
+        const auto readers = slot_reader_domain_[slot_index];
+        if (slot_logged_[slot_index] != 0U || (readers != lane->domain && readers != no_slot)) {
             log_change(*lane, slot_index, changed_mask, before, field_offset);
         }
         return;
     }
-    profile_slot_changes_ += profile_ ? 1U : 0U;
+    if (profile_) {
+        profile_slot_changes_ += 1U;
+    }
     if (profile_ && slot_index < profile_slot_change_counts_.size()) {
         ++profile_slot_change_counts_[slot_index];
     }
@@ -1973,7 +1982,9 @@ void Interpreter::Impl::StaticKernel::run_collapsed()
             member_schedule_[member].collapse_queued = false;
             run(member);
         }
-        profile_collapsed_runs_ += profile_ ? collapse_batch_.size() : 0U;
+        if (profile_) {
+            profile_collapsed_runs_ += collapse_batch_.size();
+        }
         collapse_batch_.clear();
         commit_writes();
     }
@@ -2596,8 +2607,12 @@ void Interpreter::Impl::StaticKernel::write_element(const Pending& pending)
 void Interpreter::Impl::StaticKernel::enqueue(const std::uint32_t level,
     const std::uint32_t entry)
 {
-    if (reconstructing_ && unit_domain_[unit_of_entry(entry)] != no_slot) {
-        throw std::logic_error("static kernel: a serial unit woke a domain unit");
+    if (reconstructing_) {
+        // A domain in the merge scheduled all of its units itself.
+        const auto domain = unit_domain_[unit_of_entry(entry)];
+        if (domain != no_slot && domain_seen_[domain] == domain_epoch_) {
+            throw std::logic_error("static kernel: a serial unit woke a domain unit");
+        }
     }
     auto& queue = buckets_[level];
     const auto slot = (entry & partition_tag) != 0U
@@ -2613,7 +2628,9 @@ void Interpreter::Impl::StaticKernel::enqueue(const std::uint32_t level,
 
 void Interpreter::Impl::StaticKernel::schedule_target(const ScheduleTarget& target)
 {
-    profile_schedules_ += profile_ ? 1U : 0U;
+    if (profile_) {
+        profile_schedules_ += 1U;
+    }
     if ((target.id & partition_tag) != 0U) {
         if (committing_round_) {
             deferred_targets_.push_back(target);
@@ -2938,7 +2955,9 @@ bool Interpreter::Impl::StaticKernel::target_pending(const std::uint32_t id) con
 
 void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
 {
-    profile_schedules_ += profile_ ? 1U : 0U;
+    if (profile_) {
+        profile_schedules_ += 1U;
+    }
     auto& state = member_schedule_[member];
     if (state.collapse && collapsing_) {
         // Runs in this update phase (run_collapsed).
@@ -3032,7 +3051,9 @@ void Interpreter::Impl::StaticKernel::schedule_edge(const std::uint32_t id)
         }
         return;
     }
-    profile_schedules_ += profile_ ? 1U : 0U;
+    if (profile_) {
+        profile_schedules_ += 1U;
+    }
     if (!group.triggered) {
         group.triggered = true;
         triggered_.push_back(id);
@@ -3274,7 +3295,9 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
         // activation (IEEE 1076-2019 14.7.5.2: each process runs until it
         // suspends).
         member.fresh = false;
-        profile_compiled_runs_ += profile_ ? 1U : 0U;
+        if (profile_) {
+            profile_compiled_runs_ += 1U;
+        }
         run_compiled(member_index, first_run_is_activation(member)
                 ? 0U : static_kernel_prologue_entry);
         return;
@@ -3309,7 +3332,9 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
             sync_compiled_registers(member_index);
             return;
         }
-        profile_compiled_runs_ += profile_ ? 1U : 0U;
+        if (profile_) {
+            profile_compiled_runs_ += 1U;
+        }
         run_compiled(member_index);
         return;
     }
@@ -3326,7 +3351,9 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
         return;
     }
     if (member.compiled) {
-        profile_compiled_runs_ += profile_ ? 1U : 0U;
+        if (profile_) {
+            profile_compiled_runs_ += 1U;
+        }
         if (verify_ && member.vhdl) {
             verify_run(member_index);
             return;
@@ -3613,7 +3640,9 @@ std::uint32_t Interpreter::Impl::StaticKernel::run_generic_from(
 std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
     const std::uint32_t member_index, const std::uint32_t pc)
 {
-    profile_operations_ += profile_ ? 1U : 0U;
+    if (profile_) {
+        profile_operations_ += 1U;
+    }
     ++interpreted_operations_;
     ++interpreted_by_cause_[static_cast<std::size_t>(interpreting_)];
     return visit_operation([&](const auto& op) {
@@ -4448,6 +4477,7 @@ void Interpreter::Impl::StaticKernel::commit_pending()
 {
     // NBA region: apply the queued writes in execution order, each one
     // notifying its readers as it lands.
+    materialize_private_writes();
     const auto count = writes_.count;
     writes_.count = 0U;
     host_nba_staged_ = false;
@@ -4530,7 +4560,9 @@ void Interpreter::Impl::StaticKernel::publish(
                 arena_.begin() + slot.published)) {
             continue;
         }
-        profile_publishes_ += profile_ ? 1U : 0U;
+        if (profile_) {
+            profile_publishes_ += 1U;
+        }
         const auto value = slot_value(slot_index);
         // A blocking Active-region write of an initializing member commits
         // at once, as the reference process does, so that the host
@@ -4779,7 +4811,9 @@ bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
     }
     auto value = vhdl_ ? current
                        : Impl::coerce_value_kind(current, ValueKind::logic4);
-    profile_input_changes_ += profile_ ? 1U : 0U;
+    if (profile_) {
+        profile_input_changes_ += 1U;
+    }
     if (trace_) {
         std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
                   << " input " << impl_.get_signal_cold(input.signal).name
@@ -4871,7 +4905,9 @@ bool Interpreter::Impl::StaticKernel::activate()
     warp_time_.reset();
     nonblocking_committed_ = false;
     yield_requested_ = false;
-    profile_activations_ += profile_ ? 1U : 0U;
+    if (profile_) {
+        profile_activations_ += 1U;
+    }
     // Hosted wakes during this activation wait for its drain loop instead of
     // waking the host process again.
     struct HostedActivation {
@@ -4920,7 +4956,7 @@ bool Interpreter::Impl::StaticKernel::activate()
         // with them, before anything that either wakes runs.
         host_nba_staged_ = false;
         host_nba_wakes_ = false;
-        if (writes_.count != 0U) {
+        if (nba_pending()) {
             nonblocking_region_ = false;
             nonblocking_committed_ = true;
             commit_pending();
@@ -4959,7 +4995,9 @@ bool Interpreter::Impl::StaticKernel::activate()
         }
         warp_time_ = *next;
         nonblocking_committed_ = false;
-        profile_warps_ += profile_ ? 1U : 0U;
+        if (profile_) {
+            profile_warps_ += 1U;
+        }
         activate_step();
     }
     if (behavioral_) {
@@ -5157,13 +5195,15 @@ void Interpreter::Impl::StaticKernel::activate_step()
                 }
                 continue;
             }
-            if (writes_.count != 0U || host_nba_wakes_) {
+            if (nba_pending() || host_nba_wakes_) {
                 if (defer_nonblocking()) {
                     break;
                 }
-                if (writes_.count != 0U) {
+                if (nba_pending()) {
                     nonblocking_committed_ = true;
-                    commit_pending();
+                    if (!commit_domains()) {
+                        commit_pending();
+                    }
                     continue;
                 }
                 // Not deferred: run again once the host applies them.
@@ -5369,7 +5409,7 @@ void Interpreter::Impl::StaticKernel::sv_drain()
             }
             continue;
         }
-        if (writes_.count != 0U) {
+        if (nba_pending()) {
             nonblocking_committed_ = true;
             commit_pending();
             continue;

@@ -336,6 +336,13 @@ struct StaticKernelInlinedProgram {
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
             // $time, $stime and $realtime.
             return value.function >= SystemVerilogMathFunction::Time;
+        } else if constexpr (std::is_same_v<T, LoadMemory>) {
+            // $readmemb/$readmemh; $writemem* stays on the host.
+            return !value.write;
+        } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
+            // Only the write-back of a binding to its own memory (see the
+            // planner).
+            return !value.nonblocking && !value.transaction_signal;
         } else {
             return std::is_same_v<T, WaitFor>
                 || std::is_same_v<T, WaitSensitivity>

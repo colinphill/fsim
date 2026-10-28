@@ -223,7 +223,9 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     CompiledBody& body, const std::uint32_t member, const bool full,
     const std::uint32_t start)
 {
-    profile_native_calls_[4] += profile_ ? 1U : 0U;
+    if (profile_) {
+        profile_native_calls_[4] += 1U;
+    }
     if (profile_) {
         ++profile_template_runs_[unit.program];
     }
@@ -242,7 +244,9 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     // Behavioral bodies start at a resume point and return 3 when they
     // reach a suspension, whose operation index comes back in `reserved`.
     frame.reserved = behavioral ? behavioral_entry_ : start;
-    profile_operations_ += profile_ ? body.code.size() : 0U;
+    if (profile_) {
+        profile_operations_ += body.code.size();
+    }
     const bool two_state = unit.two_state && !full;
     scratch().two_state_running = two_state;
     const auto status = (full ? unit.full_entry : unit.entry)(

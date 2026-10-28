@@ -1003,6 +1003,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             // must be process-private arrays of one shape.
             std::vector<std::pair<ContainerRegisterId, ContainerRegisterId>>
                 container_copies;
+            // Registers bound to each design memory, and whole writes of a
+            // register to a memory: the kernel supports only the write-back
+            // of a binding to its own memory (the $readmem lowering).
+            std::map<ContainerRegisterId, std::set<ContainerObjectId>> binding_objects;
+            std::vector<std::pair<ContainerObjectId, ContainerRegisterId>>
+                object_writes;
             bool has_fork = false;
             bool has_frame_push = false;
             bool has_random = false;
@@ -1034,6 +1040,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             && value.return_target < count;
                     } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
                         bound_containers.insert(value.destination);
+                        binding_objects[value.destination].insert(value.object);
+                    } else if constexpr (std::is_same_v<T, LoadMemory>) {
+                        private_containers.insert(value.target);
+                    } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
+                        object_writes.emplace_back(value.object, value.source);
                     } else if constexpr (std::is_same_v<T, ContainerRead>) {
                         private_containers.insert(value.source);
                     } else if constexpr (std::is_same_v<T, ContainerWrite>) {
@@ -1125,6 +1136,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         supported = false;
                         failed_at = count;
                         failed_reason = "private_container_shape";
+                        break;
+                    }
+                }
+                for (const auto& [object, source] : object_writes) {
+                    const auto found = binding_objects.find(source);
+                    if (found == binding_objects.end() || found->second.size() != 1U
+                        || *found->second.begin() != object) {
+                        supported = false;
+                        failed_at = count;
+                        failed_reason = "container_object_write";
                         break;
                     }
                 }

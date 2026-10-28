@@ -751,6 +751,59 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             for (std::size_t entry = 0U; entry < op.preserve_containers.size(); ++entry) {
                 container_register(op.preserve_containers[entry]) = containers[entry];
             }
+        } else if constexpr (std::is_same_v<T, LoadMemory>) {
+            // $readmemb/$readmemh (IEEE 1800-2023 21.4) into a kernel array:
+            // a private one, or the design memory a ReadContainerObject
+            // binding aliases. The file loads into the current contents,
+            // written back element by element as element writes would be.
+            // An I/O error leaves the array as it was (the reference loads
+            // a copy and never writes it back).
+            const auto index = container_register(op.target);
+            if (op.write || index == no_container) {
+                fail(member_index, pc, "static kernel container register is not bound");
+            }
+            const auto bound = [&](const std::optional<RegisterId> source,
+                                   const char* role) -> std::optional<std::int32_t> {
+                if (!source) {
+                    return std::nullopt;
+                }
+                const auto converted = packed_register(*source).known_signed_value();
+                if (!converted
+                    || *converted < std::numeric_limits<std::int32_t>::min()
+                    || *converted > std::numeric_limits<std::int32_t>::max()) {
+                    fail(member_index, pc,
+                        std::string { role } + " must be a known 32-bit integral value");
+                }
+                return static_cast<std::int32_t>(*converted);
+            };
+            const auto start = bound(op.start, "read-memory start");
+            const auto finish = bound(op.finish, "read-memory finish");
+            auto& container = containers_[index];
+            ContainerValue value;
+            value.type = container.type;
+            value.elements.reserve(container.count);
+            for (std::uint32_t ordinal = 0U; ordinal < container.count; ++ordinal) {
+                value.elements.push_back(container_element(container, ordinal));
+            }
+            impl_.read_memory_file(member.process, pc, string_register(op.path), value,
+                op.hexadecimal, start, finish);
+            for (std::uint32_t ordinal = 0U; ordinal < container.count; ++ordinal) {
+                if (!(value.elements[ordinal] == container_element(container, ordinal))) {
+                    write_container_element(container, ordinal, value.elements[ordinal],
+                        member_index, pc);
+                }
+            }
+        } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
+            // The write-back of a binding to its own design memory (the
+            // $readmem lowering): the binding aliases the memory, so there
+            // is nothing to copy.
+            if (op.nonblocking || op.transaction_signal
+                || op.object >= container_of_object_.size()
+                || container_of_object_[op.object] == no_container
+                || container_register(op.source) != container_of_object_[op.object]) {
+                fail(member_index, pc,
+                    "static kernel container write is not a write-back of its binding");
+            }
         } else {
             handled = false;
         }

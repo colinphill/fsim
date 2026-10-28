@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -41,6 +42,9 @@ public:
     /// the lanes, and returns when every item has finished. `body` must not
     /// throw; `count` is below 2^24.
     void run(std::uint32_t count, const Body& body);
+    /// Runs `body(lane, lane)` once on every lane (pinned work: each lane
+    /// takes its own share), and returns when all have finished.
+    void run_lanes(const Body& body);
 
 private:
     void work(std::uint32_t lane);
@@ -59,7 +63,26 @@ private:
     static constexpr std::uint64_t epoch_mask = 0xffffU;
     alignas(64) std::atomic<std::uint64_t> state_ { };
     alignas(64) std::atomic<std::uint32_t> completed_ { };
+    /// run_lanes: each lane stores the batch number it finished on its own
+    /// cache line (no counter all lanes contend for).
+    struct alignas(64) LaneDone {
+        std::atomic<std::uint64_t> epoch { ~std::uint64_t { 0 } };
+        /// FSIM_KERNEL_MT_TRACE: this dispatch's start and end (TSC), and
+        /// the sums of their offsets from the dispatch.
+        std::uint64_t start { };
+        std::uint64_t end { };
+        std::uint64_t start_sum { };
+        std::uint64_t end_sum { };
+    };
+    bool trace_ { };
+    std::uint64_t trace_dispatches_ { };
+    std::uint64_t trace_wait_sum_ { };
+    std::uint64_t trace_latest_sum_ { };
+    std::uint64_t trace_longest_sum_ { };
+    std::unique_ptr<LaneDone[]> done_;
     std::atomic<std::uint32_t> chunk_ { 1U };
+    /// run_lanes: lane L takes item L only.
+    std::atomic<bool> pinned_ { };
     std::atomic<const Body*> body_ { };
     std::atomic<bool> stop_ { };
     std::vector<std::thread> threads_;

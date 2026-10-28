@@ -2240,6 +2240,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute_container(ProcessState&, const ContainerExists&);
     void execute_container(ProcessState&, const TraverseContainer&);
     void execute_container(ProcessState&, const LoadMemory&);
+    /// $readmemb/$readmemh (IEEE 1800-2023 21.4): loads the file at `path`
+    /// into `target`. A file that cannot be opened, a malformed file or an
+    /// address outside the range is reported and the load ends; the words
+    /// loaded before an error stay.
+    void read_memory_file(ProcessId process, InstructionIndex pc,
+        const std::string& path, ContainerValue& target, bool hexadecimal,
+        std::optional<std::int32_t> start, std::optional<std::int32_t> finish);
     void execute_container(ProcessState&, const VitalMemoryDeclare&);
     void execute_container(ProcessState&, const PushContainer&);
     void execute_container(ProcessState&, const AppendContainer&);

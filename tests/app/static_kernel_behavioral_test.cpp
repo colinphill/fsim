@@ -78,6 +78,15 @@ module bk_top;
   reg [7:0] table_q [0:31];
   integer seen, sum_out, k;
   reg done;
+  // $readmemh in the kernel (IEEE 1800-2023 21.4): a whole load read by
+  // combinational logic, and a ranged load.
+  reg [7:0] rom [0:7];
+  reg [7:0] rom_part [0:7];
+  initial $readmemh("bk_rom.hex", rom);
+  initial $readmemh("bk_rom.hex", rom_part, 2, 5);
+  wire [7:0] rom_pick = rom[din[2:0]];
+  always @(posedge clk)
+    if (vout) $display("%0t rom=%h", $time, rom_pick);
 
   function automatic [31:0] xorshift32(input [31:0] x);
     reg [31:0] y;
@@ -130,6 +139,7 @@ module bk_top;
       end
     join
     wait (seen == 22);
+    $display("ROM part=%h %h %h %h", rom_part[1], rom_part[2], rom_part[5], rom_part[6]);
     $display("DONE seen=%0d sum=%0d acc=%h tag=%s", seen, sum_out, acc, "ok");
     done = 1;
     repeat (2) @(posedge clk);
@@ -152,6 +162,11 @@ endmodule
         std::ofstream file(path);
         file << source;
         require(static_cast<bool>(file), "the source must be written");
+    }
+    {
+        std::ofstream file(root / "bk_rom.hex");
+        file << "3c a5 // words\n5a 0f\n@4 e1 7e 99 c3\n";
+        require(static_cast<bool>(file), "the memory file must be written");
     }
     fsim::project::Config config;
     config.project.name = "static-kernel-behavioral";
@@ -197,6 +212,11 @@ endmodule
         }
         require(behavioral >= 4U,
             "the testbench processes must be behavioral kernel members");
+        for (const auto& row : plan.hosted_reasons) {
+            require(row.reason.find("LoadMemory") == std::string::npos
+                    && row.reason.find("container_unowned") == std::string::npos,
+                "$readmemh and the memories it loads must stay in the kernel");
+        }
     }
     project.cone_fusion = kernel;
     set_environment("FSIM_STATIC_KERNEL", kernel ? "1" : "0");
