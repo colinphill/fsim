@@ -138,6 +138,55 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: domain-private settle (MT Phase 5) (`12facb6a`, sweep `v4c30`)
+
+**Domains** (`build_parallel_plan`, proposal §2.4). Union-find joins combinational units in two ways:
+- **Shared resources:** units that touch a common slot, container or host signal, where at least one of them writes it.
+- **Notifications:** a writer and its whole-slot targets and ranged readers.
+
+A component whose units all pass the lane code scan is a domain. Any other component stays in the global queue, and so does every unit if any combinational unit is opaque (`FSIM_KERNEL_MT_DOMAINS=0`: no domains). By construction no combinational notification crosses a domain boundary.
+- The plan also marks the slots whose changes the leader must deliver (`slot_logged_`): a reader outside the domain, an output, edges, or waiters.
+- Blocking `mem_write` became lane-eligible: its reference path writes through `slot_changed`.
+
+**Settle.** A settle whose queued domain units span at least two domains and reach the cost threshold works in four steps:
+1. **Move.** The queued domain units move into their domains' level queues. The shared queued flags are cleared; a unit's domain bit is its flag while the lanes run.
+2. **Run.** Each lane settles whole domains with settle()'s snapshot passes, scheduling only inside its domain. It records each pass (level, first record) and each run (LaneRun). It logs only the changes on marked slots and its queued writes. Domains run largest first.
+3. **Leader finish.** The leader finishes, on the domain's lane, what a lane cannot do: deoptimized or two-state runs (`finish_native`), and units without native code. The domain then continues on the leader in lane mode.
+4. **Merge.** The leader merges the domains' passes with the serial units' passes by lowest level. Within a pass the order is global queue position, which is the serial kernel's order.
+   - Domain records are replayed with combinational scheduling suppressed (`replay_external_`). Serial units run live.
+   - A serial unit that wakes a domain unit throws `logic_error`.
+   - Errors are rethrown at their record.
+   - The evaluation limit counts in the merged order.
+   - When nothing was logged and no serial unit is queued, the merge only counts evaluations.
+
+Settle level batches are off when domains exist. Merged and flagged triggered batches stay on.
+
+**Measurements** (simulate; codec `original_codec` seed 1831565813, LDPC `tb_decoder_long`; results identical at every thread count, with `FORCE`+`SHUFFLE`, and inline):
+
+| Simulate | t1 | t2 | t4 | t8 |
+|---|---:|---:|---:|---:|
+| codec | 2.50 s | 2.37 s | 2.21 s | 2.26 s |
+| LDPC | 1.68 s | 1.74 s | 1.77 s | 2.07 s |
+
+- **Codec.** 728 domains plus 1 serial component of 42 units.
+  - 12358 domain settles; 36587 settles are declined (below threshold).
+  - 1.75M domain runs. Only 22 changes were logged, and 1062 settles needed a full merge.
+  - Domain work: 516 ms inline. At t4 it inflates to 654 ms; the critical path is 178 ms and the pool phase 244 ms.
+  - Leader time at t4 vs serial: settle 736 → 505 ms, triggered 329 → 229 ms, activations 1345 → 1001 ms (×1.34).
+  - The rest of simulate (about 1.25 s) is load and code generation.
+- **LDPC.** 9 domains; one domain holds the critical path (292 of 298 ms). No gain until process_28 is lane-sliced (deferred by the owner).
+
+**Plan diagnostics.** `FSIM_KERNEL_MT_STATS` now also prints:
+- the components by cost, and which unit makes a component serial;
+- per settle, the domain settles, merges, work, critical path and run/merge time;
+- the leader's settle, triggered and activation time.
+
+**Validation.** ctest 1087/1087 normal, `FSIM_V4_STRICT=1`, `FSIM_KERNEL_VERIFY=1`, and `FSIM_KERNEL_THREADS=4 FSIM_KERNEL_MT_FORCE=1 FSIM_KERNEL_MT_SHUFFLE=1`. Sweep `v4c30` (frozen `12facb6a`): nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495, 0 failures (the same as `v4c29`).
+
+**Perf `v4c29`** (`tools/perf.sh`, the Phase 2–3 commit): geomean ×3.655 vs xsim (`v4c28` ×3.681, noise). mixed_codec 8.93 s ×2.76, original_codec 10.96 s ×2.63, mixed_throughput 4.37 s ×2.88, original_throughput 5.14 s ×3.12, codex 2.06–2.52 s ×3.88–4.77.
+
+**Next.** A multi-core RISC-V SoC as the next go/no-go design (owner 2026-10-28): 8 PicoRV32 cores (ISC, downloaded to `.local-artifacts/riscv-mt`), a C program built with clang-22 for rv32im, a host-built reference for every report. The first run matched the reference and xsim (1,735,537 cycles), but simulate took 99 s against xsim's 58 s: `$readmemh` in an `initial` kept the loader on the host, so each core memory was host-owned and its bus process hosted. Kernel `$readmemh` support follows.
+
 ### 2026-10-27: snapshot settle, parallel level and triggered batches (MT Phases 2–3) (`85f50430`, sweep `v4c29`)
 
 **Serial order.** Each `settle()` pass now takes a snapshot: every unit queued at the level when the pass starts, with their queued bits cleared first. The pass runs the snapshot in canonical order, and anything queued during it runs in a later pass. This is the last serial-order change the threads need (IEEE 1800-2023 4.7 leaves this order open; owner decision D4, option B).
