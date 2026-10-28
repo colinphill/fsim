@@ -138,6 +138,53 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — delayed writes, named events, fork control, dynamic containers (`ac40c7cd`, sweep `v4c40`)
+
+**`ac40c7cd`** (five changesets)
+- **SystemVerilog delayed, gate-delay and inertial writes** in behavioral members (IEEE 1800-2023 4.5, 10.3.3, 28.16).
+  - Kernel timers order resumptions due at one time by (time, process order, sequence), as the reference's queue does.
+- **Named events** (15.5).
+  - A member waits on a fixed event (`@ev`), and a trigger bumps the event's revision so the waiter wakes.
+  - Once members that trigger an event run in process order within the first Active pass (`start_once_`).
+  - `.triggered` (15.5.3) reads the host's event history (`Impl::event_triggered_now`).
+- **wait fork and disable fork** (9.6.1, 9.6.3) on a member's threads.
+  - An ended child keeps its record while it has live descendants, so a disable fork reaches every descendant.
+  - A killed thread's lapsed timer still holds its time step.
+- **SystemVerilog dynamic containers** in members (7.5, 7.8, 7.10).
+  - The reference's register-only container operations moved to `simir_container_ops.{hpp,cpp}`. The interpreter (`ProcessContainerAccess`) and the kernel (`MemberContainerAccess`) share them.
+  - A member holds its non-arena container registers in reference format (`Member::dynamic_containers`, copy-on-write). Frames and fork contexts save them.
+  - Fixed-shape design arrays stay kernel storage, written element by element.
+  - Other design containers without signal aliases are host objects, which the member reads and writes through the host.
+  - Members with dynamic containers run on the operation tier.
+- **The time-zero late-start rule** reads the kernel host's original program (`StaticKernel::startup_program`), as the planner does.
+  - The host stub's sensitivity had made readers start a delta late. ct4 caught this in `fsim.application.assertions`.
+
+**Validation.**
+- Targeted runs on the live build had 0 losses. On the 362 cases blocked by containers, hosted processes went 565 → 319.
+- ct4: 1087/1087 in all four variants.
+- Sweep `v4c40` (frozen `ac40c7cd`) has 0 losses vs `b96x1`:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- ivtest `fork3.19A`, `fork3.19B` and `pr1862744a` now print the reference evaluator's output, where v4c39's kernel had diverged from it. They are Icarus process-order races (excluded), so they move from pass to excluded.
+- Hosted processes in the sweep: 2,778 (v4c39 3,514).
+
+**Next.** Observed-region assertion processes as members (`behavioral_observed`, 1,031 processes in 141 cases).
+- Kernel threads run in the observed and reactive regions through the hosted region lists.
+- `WaitRegion`, `SvaOperation` and sampled reads run in the kernel, through shared storage interfaces.
+- Open leads:
+  - aliased host containers (a member's host write does not wake kernel readers in the same step);
+  - nonblocking element writes to host objects;
+  - VHDL `ContainerSize`/`ContainerExists`;
+  - `DisableBlock`.
+
 ### 2026-10-28: hosted kinds into the kernel — package initializers, final writes, drive strength, path drivers (`1bd6bbf4`, sweep `v4c39`)
 
 **`1bd6bbf4`** (five changesets)
