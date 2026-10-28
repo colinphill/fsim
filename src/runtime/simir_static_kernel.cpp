@@ -1184,6 +1184,9 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
     }
     std::cerr << "fsim-kernel: deopts=" << profile_deopts_
               << " generic_runs=" << profile_generic_runs_ << '\n';
+    if (std::getenv("FSIM_PROFILE_KERNEL_MT") != nullptr) {
+        report_mt_plan();
+    }
     if (vhdl_) {
         // Members that deoptimize or run generically most often.
         std::vector<std::pair<std::uint64_t, std::string>> generic;
@@ -2529,10 +2532,13 @@ void Interpreter::Impl::StaticKernel::write_element(const Pending& pending)
 void Interpreter::Impl::StaticKernel::enqueue(const std::uint32_t level,
     const std::uint32_t entry)
 {
-    if (level >= buckets_.size()) {
-        buckets_.resize(static_cast<std::size_t>(level) + 1U);
-    }
-    buckets_[level].push_back(entry);
+    auto& queue = buckets_[level];
+    const auto slot = (entry & partition_tag) != 0U
+        ? partition_queue_slot_[entry & ~partition_tag]
+        : member_schedule_[entry].queue_slot;
+    queue.bits[slot / 64U] |= std::uint64_t { 1 } << (slot % 64U);
+    ++queue.count;
+    queue.cursor = std::min(queue.cursor, slot / 64U);
     if (queued_count_++ == 0U || level < scan_level_) {
         scan_level_ = level;
     }
@@ -2783,6 +2789,32 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
     partition_level_.resize(partitions_.size());
     for (std::size_t index = 0U; index < partitions_.size(); ++index) {
         partition_level_[index] = partitions_[index].level;
+    }
+    // Level queues over every unit settle can queue.
+    buckets_.clear();
+    const auto add_unit = [&](const std::uint32_t level, const std::uint32_t entry) {
+        if (level >= buckets_.size()) {
+            buckets_.resize(static_cast<std::size_t>(level) + 1U);
+        }
+        auto& queue = buckets_[level];
+        queue.entries.push_back(entry);
+        return static_cast<std::uint32_t>(queue.entries.size() - 1U);
+    };
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        auto& state = member_schedule_[index];
+        if (state.kind == StaticKernelMemberKind::combinational
+            && state.partition == no_slot) {
+            state.queue_slot = add_unit(state.level, index);
+        }
+    }
+    partition_queue_slot_.resize(partitions_.size());
+    for (std::uint32_t index = 0U; index < partitions_.size(); ++index) {
+        partition_queue_slot_[index] = add_unit(partition_level_[index],
+            index | partition_tag);
+    }
+    for (auto& queue : buckets_) {
+        queue.bits.assign((queue.entries.size() + 63U) / 64U, 0U);
+        queue.cursor = static_cast<std::uint32_t>(queue.bits.size());
     }
     slot_notify_.resize(slots_.size());
     notify_targets_.clear();
@@ -4183,16 +4215,25 @@ void Interpreter::Impl::StaticKernel::settle()
         batch_started = now;
     };
     while (queued_count_ != 0U) {
-        while (buckets_[scan_level_].empty()) {
+        while (buckets_[scan_level_].count == 0U) {
             ++scan_level_;
         }
         if (batches && scan_level_ != batch_level) {
             close_batch();
             batch_level = scan_level_;
         }
-        auto& bucket = buckets_[scan_level_];
-        const auto entry = bucket.back();
-        bucket.pop_back();
+        // Within a level the units run in ascending order, members by index
+        // and then partitions: one canonical order for what IEEE 1800-2023
+        // 4.7 leaves unspecified, independent of the order they were woken.
+        auto& queue = buckets_[scan_level_];
+        while (queue.bits[queue.cursor] == 0U) {
+            ++queue.cursor;
+        }
+        auto& word = queue.bits[queue.cursor];
+        const auto entry = queue.entries[queue.cursor * 64U
+            + static_cast<std::uint32_t>(std::countr_zero(word))];
+        word &= word - 1U;
+        --queue.count;
         --queued_count_;
         if ((entry & partition_tag) != 0U) {
             const auto partition = entry & ~partition_tag;

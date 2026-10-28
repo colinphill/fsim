@@ -9,6 +9,8 @@
 #include <limits>
 #include <map>
 #include <queue>
+#include <string>
+#include <tuple>
 #include <typeinfo>
 #include <unordered_map>
 
@@ -1233,6 +1235,238 @@ void Interpreter::Impl::StaticKernel::plan_delta_collapse()
             std::cerr << ' ' << reason << '=' << members;
         }
         std::cerr << '\n';
+    }
+}
+
+void Interpreter::Impl::StaticKernel::report_mt_plan() const
+{
+    // Units are what one native call runs: a partition, a loose
+    // combinational member or a sequential member (multithread proposal
+    // §2.2). A unit is eligible for a parallel batch when its compiled code
+    // stays on the native tier and owns every slot it writes; domains are
+    // the connected components of the settle graph over combinational units
+    // (§2.4). Cost is observed runs times code size.
+    const auto member_count = static_cast<std::uint32_t>(members_.size());
+    const auto unit_total = member_count + static_cast<std::uint32_t>(partitions_.size());
+    const auto unit_of = [&](const std::uint32_t member) {
+        return members_[member].partition != no_slot
+            ? member_count + members_[member].partition : member;
+    };
+    std::vector<const char*> reason(unit_total, nullptr);
+    std::vector<std::uint8_t> kind(unit_total, 0U); // 0 none, 1 comb, 2 seq
+    std::vector<std::uint64_t> cost(unit_total, 0U);
+    // A generic severity message (an assertion's action block) runs only
+    // when the assertion fails; like assert_check it is a logged effect
+    // (proposal §4.3), not a reason to stay serial.
+    const auto scan = [&](const CompiledBody& body, std::uint32_t member) -> const char* {
+        for (const auto& inst : body.code) {
+            switch (inst.op) {
+            case KOp::mark:
+                member = inst.x;
+                break;
+            case KOp::store_host:
+                return "store_host";
+            case KOp::generic:
+                if (member < members_.size()
+                    && inst.x < members_[member].operations.size()
+                    && operation_holds<Report>(members_[member].operations[inst.x])) {
+                    break;
+                }
+                return "generic";
+            case KOp::step:
+                return "step";
+            case KOp::deopt:
+                return "deopt";
+            case KOp::suspend:
+                return "suspend";
+            case KOp::mem_copy:
+                return "mem_copy";
+            default:
+                break;
+            }
+        }
+        return nullptr;
+    };
+    for (std::uint32_t index = 0U; index < member_count; ++index) {
+        const auto& member = members_[index];
+        if (member.partition != no_slot || member.lazy
+            || (member.kind != StaticKernelMemberKind::combinational
+                && member.kind != StaticKernelMemberKind::sequential)) {
+            continue;
+        }
+        kind[index] = member.kind == StaticKernelMemberKind::combinational ? 1U : 2U;
+        cost[index] = (index < profile_member_runs_.size() ? profile_member_runs_[index] : 0U)
+            * (member.compiled ? member.compiled->code.size()
+                               : member.body_end - member.body_begin);
+        reason[index] = !member.compiled ? "uncompiled"
+            : member.generic_mode        ? "generic_mode"
+            : member.rewrites_signal     ? "rewrites_signal"
+                                         : scan(*member.compiled, index);
+    }
+    for (std::uint32_t partition = 0U; partition < partitions_.size(); ++partition) {
+        const auto unit = member_count + partition;
+        kind[unit] = 1U;
+        cost[unit] = partition < profile_partition_operations_.size()
+            ? profile_partition_operations_[partition] : 0U;
+        reason[unit] = scan(partitions_[partition].program, no_slot);
+    }
+    std::unordered_map<ProcessId, std::uint32_t> member_of_process;
+    for (std::uint32_t index = 0U; index < member_count; ++index) {
+        member_of_process.emplace(members_[index].process, index);
+    }
+    // Ownership: the combinational writers of one slot share a domain (one
+    // worker runs them, in order); a slot written by two sequential units
+    // makes them ineligible (two triggered-batch writers could race).
+    std::vector<std::uint32_t> parent(unit_total);
+    for (std::uint32_t unit = 0U; unit < unit_total; ++unit) {
+        parent[unit] = unit;
+    }
+    const auto find = [&](std::uint32_t at) {
+        while (parent[at] != at) {
+            parent[at] = parent[parent[at]];
+            at = parent[at];
+        }
+        return at;
+    };
+    std::vector<std::uint32_t> writers;
+    std::vector<std::uint32_t> readers;
+    for (const auto& slot : slots_) {
+        writers.clear();
+        for (const auto& region : slot.writers) {
+            if (const auto found = member_of_process.find(region.process);
+                found != member_of_process.end()) {
+                writers.push_back(unit_of(found->second));
+            }
+        }
+        std::ranges::sort(writers);
+        writers.erase(std::ranges::unique(writers).begin(), writers.end());
+        if (std::ranges::count_if(writers, [&](const std::uint32_t unit) {
+                return kind[unit] == 2U;
+            }) > 1) {
+            for (const auto unit : writers) {
+                if (kind[unit] == 2U && reason[unit] == nullptr) {
+                    reason[unit] = "shared_writer";
+                }
+            }
+        }
+        std::uint32_t first_comb = no_slot;
+        for (const auto unit : writers) {
+            if (kind[unit] != 1U) {
+                continue;
+            }
+            if (first_comb == no_slot) {
+                first_comb = unit;
+                continue;
+            }
+            const auto left = find(first_comb);
+            const auto right = find(unit);
+            if (left != right) {
+                parent[std::max(left, right)] = std::min(left, right);
+            }
+        }
+        if (slot.deferred_write) {
+            continue;
+        }
+        readers.clear();
+        for (const auto& reader : slot.readers) {
+            const auto unit = unit_of(reader.member);
+            if (kind[unit] == 1U) {
+                readers.push_back(unit);
+            }
+        }
+        for (const auto writer : writers) {
+            if (kind[writer] != 1U) {
+                continue;
+            }
+            for (const auto reader : readers) {
+                const auto left = find(writer);
+                const auto right = find(reader);
+                if (left != right) {
+                    parent[std::max(left, right)] = std::min(left, right);
+                }
+            }
+        }
+    }
+    struct Totals {
+        std::uint64_t units { };
+        std::uint64_t eligible { };
+        std::uint64_t cost { };
+        std::uint64_t eligible_cost { };
+    };
+    Totals totals[3] { };
+    std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> reasons;
+    for (std::uint32_t unit = 0U; unit < unit_total; ++unit) {
+        if (kind[unit] == 0U) {
+            continue;
+        }
+        auto& total = totals[kind[unit]];
+        ++total.units;
+        total.cost += cost[unit];
+        if (reason[unit] == nullptr) {
+            ++total.eligible;
+            total.eligible_cost += cost[unit];
+        } else {
+            auto& entry = reasons[std::string { kind[unit] == 1U ? "comb " : "seq " }
+                + reason[unit]];
+            ++entry.first;
+            entry.second += cost[unit];
+        }
+    }
+    const auto percent = [](const std::uint64_t part, const std::uint64_t whole) {
+        return whole == 0U ? 0.0 : 100.0 * static_cast<double>(part)
+                / static_cast<double>(whole);
+    };
+    for (const std::uint32_t phase : { 1U, 2U }) {
+        const auto& total = totals[phase];
+        std::cerr << "fsim-kernel: mt " << (phase == 1U ? "comb" : "seq")
+                  << " units=" << total.units << " eligible=" << total.eligible
+                  << " cost=" << total.cost << " eligible_cost%="
+                  << percent(total.eligible_cost, total.cost) << '\n';
+    }
+    for (const auto& [name, entry] : reasons) {
+        std::cerr << "fsim-kernel: mt ineligible " << name << " units=" << entry.first
+                  << " cost=" << entry.second << '\n';
+    }
+    // Domains over combinational units, by cost.
+    std::map<std::uint32_t, std::pair<std::uint64_t, std::uint32_t>> domains;
+    for (std::uint32_t unit = 0U; unit < unit_total; ++unit) {
+        if (kind[unit] == 1U) {
+            auto& domain = domains[find(unit)];
+            domain.first += cost[unit];
+            ++domain.second;
+        }
+    }
+    std::vector<std::tuple<std::uint64_t, std::uint32_t, std::uint32_t>> ranked;
+    for (const auto& [root, domain] : domains) {
+        ranked.emplace_back(domain.first, domain.second, root);
+    }
+    std::ranges::sort(ranked, std::greater<> { });
+    const auto comb_cost = totals[1].cost;
+    std::cerr << "fsim-kernel: mt domains=" << ranked.size() << " comb_cost=" << comb_cost;
+    for (const std::uint32_t threads : { 2U, 4U, 8U, 16U }) {
+        // Domain-parallel settle bound: the largest domain or an even share.
+        const auto largest = ranked.empty() ? 0U : std::get<0>(ranked.front());
+        const auto share = static_cast<double>(comb_cost) / threads;
+        const auto bound = std::max(static_cast<double>(largest), share);
+        std::cerr << " t" << threads << "=x"
+                  << (bound == 0.0 ? 1.0 : static_cast<double>(comb_cost) / bound);
+    }
+    std::cerr << '\n';
+    for (std::size_t rank = 0U; rank < ranked.size() && rank < 8U; ++rank) {
+        const auto [domain_cost, units, root] = ranked[rank];
+        // The domain's heaviest unit names it.
+        std::uint32_t heaviest = root;
+        for (std::uint32_t unit = 0U; unit < unit_total; ++unit) {
+            if (kind[unit] == 1U && find(unit) == root && cost[unit] > cost[heaviest]) {
+                heaviest = unit;
+            }
+        }
+        const auto named = heaviest < member_count ? heaviest
+                                                   : partitions_[heaviest - member_count].members.front();
+        std::cerr << "fsim-kernel: mt domain cost%=" << percent(domain_cost, comb_cost)
+                  << " units=" << units << " heaviest="
+                  << (named < profile_names_.size() ? profile_names_[named] : std::string { "?" })
+                  << (heaviest < member_count ? "" : " (partition)") << '\n';
     }
 }
 

@@ -176,6 +176,9 @@ public:
 
     StaticKernel(Impl& impl, StaticKernelRuntimeSpec spec);
     ~StaticKernel();
+    /// FSIM_PROFILE_KERNEL_MT (with FSIM_PROFILE_KERNEL): multi-threading
+    /// Phase 0 plan report, from the compiled units and the observed runs.
+    void report_mt_plan() const;
     StaticKernel(const StaticKernel&) = delete;
     StaticKernel& operator=(const StaticKernel&) = delete;
 
@@ -922,6 +925,8 @@ private:
         bool collapse { };
         bool collapse_queued { };
         std::uint32_t collapse_level { };
+        /// Position in its level's queue (LevelQueue::entries).
+        std::uint32_t queue_slot { static_kernel_detail::no_slot };
     };
     /// Whole-slot targets [begin, end) in notify_targets_. `general` marks
     /// a slot that also has ranged readers, an output, edges or several
@@ -934,6 +939,7 @@ private:
     std::vector<MemberSchedule> member_schedule_;
     std::vector<std::uint8_t> partition_queued_;
     std::vector<std::uint32_t> partition_level_;
+    std::vector<std::uint32_t> partition_queue_slot_;
     std::vector<SlotNotify> slot_notify_;
 
     /// Behavioral tier. A thread is one resumable execution context of a
@@ -1459,9 +1465,18 @@ private:
     };
     std::vector<DispatchGroup> dispatch_groups_;
     std::vector<std::uint32_t> expanded_groups_;
+    /// One level's dirty queue: the units that can be queued at the level
+    /// in ascending order (members by index, then partitions) and a bit per
+    /// unit; every set bit is in a word at or after `cursor`.
+    struct LevelQueue {
+        std::vector<std::uint32_t> entries;
+        std::vector<std::uint64_t> bits;
+        std::uint32_t count { };
+        std::uint32_t cursor { };
+    };
     /// Level-bucketed dirty queue; `scan_level_` is the lowest level that may
     /// hold entries.
-    std::vector<std::vector<std::uint32_t>> buckets_;
+    std::vector<LevelQueue> buckets_;
     std::uint32_t scan_level_ { };
     std::size_t queued_count_ { };
     bool initialized_ { };
