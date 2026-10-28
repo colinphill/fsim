@@ -138,6 +138,38 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: canonical within-level settle order, MT Phase 0 plan report (`9fe536ac`, sweep `v4c28`)
+
+This is the first step of the multi-threading proposal (`.local-artifacts/v4-migration/design-opt/multithread-proposal.md`), under the owner's option B: canonicalize the serial order first.
+
+**What changed.**
+- **Canonical order.** `settle()` used to run each level's bucket in LIFO enqueue order. Each level now has a `LevelQueue`: a bitset over a fixed ascending list (comb members outside partitions by index, then partitions). Enqueue sets a bit and lowers the cursor; settle takes the lowest set bit. The order within a level is therefore a function of the design alone, not of which writer woke a member first. That is what threaded execution has to reproduce. The order among processes that are runnable together is undefined (IEEE 1800-2023 4.7; IEEE 1076-2019 14.7.5), so the change is exact.
+  - A first version sorted each bucket before running it. That cost about 6% on LDPC (1.53 → 1.62 s). The bitset version measures 1.56–1.59 s, with identical run counts.
+- **Plan report** (`FSIM_PROFILE_KERNEL_MT`, `report_mt_plan`). At kernel teardown it lists the units threading would schedule: partitions, loose comb members and sequential members. It also reports:
+  - eligibility, by count and by measured cost (runs × code size);
+  - ineligibility reasons: host stores, generic ops other than `Report`, step/deopt/suspend, memory copies, uncompiled members, generic mode, members that rewrite a signal;
+  - sequential slots with more than one writer unit;
+  - domains: union-find over comb writer → comb reader edges, with deferred-write slots cut. Writers of one comb slot share a domain;
+  - a t2..t16 bound from the largest domain, and the top 8 domains with their heaviest unit.
+
+**Phase 0 numbers.**
+
+| Design | Comb units | Eligible comb cost | Seq units eligible | Domains | Largest domain | Comb bound @8 |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 2798 | 100% | 253 / 100% | 1378 | 6.5% | ×8 |
+| LDPC, 20 frames | 1556 | 61% | 519 / 99.8% | 1041 | 43.8% | ×2.28 |
+
+- On LDPC, 39% of comb cost is in 6 units that rewrite a signal. Most of it is `process_28`, the memory-control `always_comb`. Its domain also holds the lanes' port actuals.
+- The batch model for original_codec is ×2.24 at 8 threads: settle 764 ms, triggered 417 ms, residue 308 ms.
+- The largest single LDPC member is still the lane-math `always_comb` (0.39 s serial).
+
+**LDPC and codec.** The LDPC checksum is unchanged (`8a01ac745376f2b0`), and codec parity holds (ok=11 done=1 pass=75).
+
+**Validation.** Full ctest passes 1087/1087 in normal mode, with `FSIM_V4_STRICT=1`, and with `FSIM_KERNEL_VERIFY=1`. Sweep `v4c28` shows 0 losses against `b96x1`:
+- Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+
+**Next.** The serial order changes once more before threads run: `settle()` will run a snapshot of each level (every unit queued at that level when the pass starts) before anything queued during the pass. Units of one level share no slot, so a snapshot can run on worker threads that log their notifications, and the leader replays the logs in canonical order.
+
 ### 2026-10-27: SV calls in static members, SCC levels, always_comb written exclusion (`965ac9e7`, sweep `v4c27`)
 
 The work came out of multi-threading Phase 0 on LDPC. The batch profile showed that LDPC's time sits in a few processes that were not static members, and in levelization that serialized everything downstream of a cycle.
