@@ -138,6 +138,46 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — package initializers, final writes, drive strength, path drivers (`1bd6bbf4`, sweep `v4c39`)
+
+**`1bd6bbf4`** (five changesets)
+- **Package static initializers as members** (IEEE 1800-2023 6.21, 26.3).
+  - An SV initializer whose body neither waits nor forks (`static_kernel_startup_operation`) is a behavioral member.
+  - The interpreter's package startup lists such members from the kernel (`StaticKernel::startup_members`), and the kernel runs each at its startup action (`run_startup_member`). No initializer runs on the reference evaluator any more; before this, `execute_hosted_startup` called `Impl::execute`.
+  - The signals an initializer writes are host signals.
+  - The host stub is an ordinary program without startup permissions.
+  - A dormant member keeps its initializer's startup metadata. The interpreter's validator rejects a package initializer that does not initialize, which broke the first build in every case.
+- **Final procedures may make blocking writes and call `$stop`** (9.2.3, 20.2).
+  - Their write targets are host signals, which the host commits at once.
+  - A `$stop` in a final member sets the reference's `paused_in_final`, so a batch run still reports "$stop paused the simulation".
+- **Drivers with a drive strength** (28.11-28.14) are behavioral members.
+  - Their targets stay host signals, which the host resolves by strength from the member's process.
+  - A strength driver is never a mirrored sole writer: a `highz0` driver of 0 resolves to z.
+- **`%v`** (21.2.1.5) of a host signal reads the host's strength text (`Impl::signal_strength_text`), and that signal is never a sole-writer input.
+- **Drivers of module path destinations** (30.4, 30.5) are members.
+  - A path source is never a sole-writer input. A member reading it therefore wakes only after the host commits the source's update, and the host measures the path delay from that transition, as for the reference's driver.
+
+**Validation.**
+- Targeted runs on the live build had 0 losses: package initializers (110 cases, hosted 314 → 108), finals (247, 661 → 184), drive strength (85, 1,220 → 164), and a combined list including path and timing cases (392, 1,987 → 367).
+- ct4: 1087/1087 in all four variants.
+- Sweep `v4c39` (frozen `1bd6bbf4`) has 0 losses vs `b96x1`:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2641 / 2641 | 270 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+Hosted processes in the sweep: 3,514 (v4c38 5,125).
+
+**Next.** SystemVerilog delayed, gate-delay and inertial writes in members (family D 5b).
+- A member's delayed update matures as a host task at the writer's order.
+- The kernel's rounds must interleave with those tasks as the reference's Active batches do.
+- The kernel's first activation must run in the scheduler's Active region, not in the pre-time-zero static-wait prearm.
+
 ### 2026-10-28: hosted kinds into the kernel — final procedures, `$monitor`, undriven actuals, startup order (`9b7961df`, sweep `v4c38`)
 
 **`9b7961df`** (six changesets)
