@@ -1496,7 +1496,22 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
     const std::uint32_t field_offset)
 {
     if (auto* const lane = worker_lane_) {
-        log_change(*lane, slot_index, changed_mask, before, field_offset);
+        if (lane->domain == no_slot) {
+            log_change(*lane, slot_index, changed_mask, before, field_offset);
+            return;
+        }
+        // A domain lane schedules its domain's readers and logs the change
+        // for the leader when anything outside the domain hears of it.
+        const auto notify = slot_notify_[slot_index];
+        for (auto index = notify.begin; index < notify.end; ++index) {
+            schedule_target(notify_targets_[index]);
+        }
+        if (notify.general) {
+            slot_changed_general(slot_index, changed_mask, before, field_offset);
+        }
+        if (slot_logged_[slot_index] != 0U) {
+            log_change(*lane, slot_index, changed_mask, before, field_offset);
+        }
         return;
     }
     profile_slot_changes_ += profile_ ? 1U : 0U;
@@ -1577,13 +1592,13 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
                 scan = count * static_cast<std::size_t>(std::bit_width(count))
                     >= slot.readers.size();
                 if (!scan) {
-                    ranged_candidates_.assign(
+                    scratch().ranged_candidates.assign(
                         slot.chunk_readers.begin() + slot.chunk_begin[first],
                         slot.chunk_readers.begin() + slot.chunk_begin[last + 1U]);
-                    std::ranges::sort(ranged_candidates_);
-                    const auto [end, unused] = std::ranges::unique(ranged_candidates_);
-                    ranged_candidates_.erase(end, ranged_candidates_.end());
-                    candidates = ranged_candidates_;
+                    std::ranges::sort(scratch().ranged_candidates);
+                    const auto [end, unused] = std::ranges::unique(scratch().ranged_candidates);
+                    scratch().ranged_candidates.erase(end, scratch().ranged_candidates.end());
+                    candidates = scratch().ranged_candidates;
                 }
             }
             for (const auto index : candidates) {
@@ -1632,6 +1647,10 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
                 }
             }
         }
+    }
+    if (worker_lane_ != nullptr) {
+        // A domain lane: the rest is the leader's, from the logged change.
+        return;
     }
     if (slot.output) {
         if (!slot.output_pending) {
@@ -2577,6 +2596,9 @@ void Interpreter::Impl::StaticKernel::write_element(const Pending& pending)
 void Interpreter::Impl::StaticKernel::enqueue(const std::uint32_t level,
     const std::uint32_t entry)
 {
+    if (reconstructing_ && unit_domain_[unit_of_entry(entry)] != no_slot) {
+        throw std::logic_error("static kernel: a serial unit woke a domain unit");
+    }
     auto& queue = buckets_[level];
     const auto slot = (entry & partition_tag) != 0U
         ? partition_queue_slot_[entry & ~partition_tag]
@@ -2597,14 +2619,22 @@ void Interpreter::Impl::StaticKernel::schedule_target(const ScheduleTarget& targ
             deferred_targets_.push_back(target);
             return;
         }
+        if (replay_external_) {
+            // A replayed domain change: the domain scheduled its partitions.
+            return;
+        }
         const auto partition = target.id & ~partition_tag;
-        if (partition == running_partition_
+        if (partition == scratch().running_partition
             && target.min_position >= scratch().running_position) {
             // Later readers run in this pass; the running member itself does
             // not wake on its own writes (it is not waiting while it runs).
             return;
         }
         if (partition_queued_[partition] == 0U) {
+            if (auto* const lane = worker_lane_) {
+                schedule_in_domain(*lane, target.id);
+                return;
+            }
             partition_queued_[partition] = 1U;
             enqueue(partition_level_[partition], target.id);
         }
@@ -2881,6 +2911,17 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
 
 bool Interpreter::Impl::StaticKernel::target_pending(const std::uint32_t id) const
 {
+    if (const auto* const lane = worker_lane_) {
+        // A domain lane: the domain's bit is a unit's queued flag; what the
+        // lane does not schedule is never pending for it.
+        const auto unit = unit_of_entry(id);
+        if (unit >= unit_domain_.size() || unit_domain_[unit] != lane->domain) {
+            return false;
+        }
+        const auto& queue = domains_[lane->domain].buckets[unit_bucket_[unit]];
+        const auto bit = unit_bit_[unit];
+        return ((queue.bits[bit / 64U] >> (bit % 64U)) & 1U) != 0U;
+    }
     if ((id & partition_tag) != 0U) {
         return partition_queued_[id & ~partition_tag] != 0U;
     }
@@ -2928,23 +2969,38 @@ void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
         }
     }
     if (state.kind == StaticKernelMemberKind::combinational) {
+        if (replay_external_) {
+            // A replayed domain change: the domain scheduled its members.
+            return;
+        }
         if (state.partition != no_slot) {
-            if (state.partition == running_partition_
+            if (state.partition == scratch().running_partition
                 && state.position >= scratch().running_position) {
                 // Runs later in the current partition pass.
                 return;
             }
             if (partition_queued_[state.partition] == 0U) {
+                if (auto* const lane = worker_lane_) {
+                    schedule_in_domain(*lane, state.partition | partition_tag);
+                    return;
+                }
                 partition_queued_[state.partition] = 1U;
                 enqueue(partition_level_[state.partition],
                     state.partition | partition_tag);
             }
             return;
         }
-        if (!state.queued && member != running_member_) {
+        if (!state.queued && member != scratch().running_member) {
+            if (auto* const lane = worker_lane_) {
+                schedule_in_domain(*lane, member);
+                return;
+            }
             state.queued = true;
             enqueue(state.level, member);
         }
+    } else if (worker_lane_ != nullptr) {
+        // A domain lane: the leader schedules the rest from the log.
+        return;
     } else if (state.kind == StaticKernelMemberKind::sequential) {
         if (!state.triggered) {
             state.triggered = true;
@@ -2985,6 +3041,7 @@ void Interpreter::Impl::StaticKernel::schedule_edge(const std::uint32_t id)
 
 void Interpreter::Impl::StaticKernel::run_triggered()
 {
+    const MtPhaseTimer timer { mt_stats_, 1U };
     if (batch_profile_.enabled) {
         // FSIM_PROFILE_KERNEL_BATCHES: a triggered round is one batch.
         const auto runs = [&] {
@@ -3149,7 +3206,7 @@ void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
         frame.kernel = this;
         frame.program = fast.program;
         frame.instance = fast.body;
-        frame.writes = &writes_;
+        frame.writes = &write_queue();
         frame.containers = container_info_.data();
         frame.member = member_index;
         frame.position = 0U;
@@ -4255,6 +4312,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
 
 void Interpreter::Impl::StaticKernel::settle()
 {
+    const MtPhaseTimer timer { mt_stats_, 0U };
     std::size_t evaluations = 0U;
     const auto limit = members_.size() * 64U + 1'000'000U;
     // FSIM_PROFILE_KERNEL_BATCHES: one batch per level snapshot.
@@ -4265,6 +4323,10 @@ void Interpreter::Impl::StaticKernel::settle()
     };
     if (!parallel_planned_) {
         build_parallel_plan();
+    }
+    if (!domains_.empty() && queued_count_ != 0U && !batches
+        && settle_domains(evaluations, limit)) {
+        return;
     }
     while (queued_count_ != 0U) {
         while (buckets_[scan_level_].count == 0U) {
@@ -4304,7 +4366,9 @@ void Interpreter::Impl::StaticKernel::settle()
         const auto first_run = batches ? batch_runs() : 0U;
         const auto pass_started = batches ? std::chrono::steady_clock::now()
                                           : std::chrono::steady_clock::time_point { };
-        if (pool_ == nullptr
+        // With domains the snapshot runs serially: a domain's level batches
+        // cost more in replay than they save.
+        if (pool_ == nullptr || !domains_.empty()
             || !run_parallel_batch(BatchPhase::settle, evaluations, limit)) {
             for (const auto entry : batch_) {
                 run_settle_entry(entry, evaluations, limit);
@@ -4318,9 +4382,12 @@ void Interpreter::Impl::StaticKernel::settle()
             if (runs == 1U && batch_.size() == 1U
                 && (batch_.front() & partition_tag) == 0U
                 && batch_.front() < profile_names_.size()) {
+                // FSIM_PROFILE_KERNEL_SINGLES_EXACT keeps the digits.
+                static const bool exact
+                    = std::getenv("FSIM_PROFILE_KERNEL_SINGLES_EXACT") != nullptr;
                 std::string name;
                 for (const auto character : profile_names_[batch_.front()]) {
-                    if (std::isdigit(static_cast<unsigned char>(character)) == 0) {
+                    if (exact || std::isdigit(static_cast<unsigned char>(character)) == 0) {
                         name += character;
                     } else if (name.empty() || name.back() != 'N') {
                         name += 'N';
@@ -4355,9 +4422,9 @@ void Interpreter::Impl::StaticKernel::run_settle_entry(const std::uint32_t entry
             "static kernel combinational logic did not settle");
     }
     // A combinational member does not wake on its own writes.
-    running_member_ = entry;
+    scratch().running_member = entry;
     run(entry);
-    running_member_ = no_slot;
+    scratch().running_member = no_slot;
 }
 
 void Interpreter::Impl::StaticKernel::check_owned_edges()
@@ -4926,6 +4993,7 @@ bool Interpreter::Impl::StaticKernel::activate()
 
 void Interpreter::Impl::StaticKernel::activate_step()
 {
+    const MtPhaseTimer timer { mt_stats_, 2U };
     if (behavioral_) {
         collect_timers();
     }

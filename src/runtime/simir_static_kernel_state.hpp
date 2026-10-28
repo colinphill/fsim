@@ -17,6 +17,7 @@
 #include "simir_static_kernel.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -1117,8 +1118,6 @@ private:
     std::vector<std::uint32_t> held_round_;
     std::vector<std::uint32_t> held_threads_;
     void activate_mixed();
-    /// The combinational member settle() is running (no_slot otherwise).
-    std::uint32_t running_member_ { static_kernel_detail::no_slot };
     ProcessId host_process_ { };
     /// Slots a behavioral thread may wait on: never silent, always on the
     /// general notify path; the edge bit last seen by dynamic waiters.
@@ -1274,12 +1273,17 @@ private:
     std::size_t executed_steps_ { };
     StaticKernelNativeHelpers native_helpers_;
     std::size_t native_units_ { };
-    std::uint32_t running_partition_ { static_kernel_detail::no_slot };
     /// What native code running on one thread reads and writes besides the
     /// arena and its unit's registers: the leader's is scratch_, a worker's
     /// lives in its lane (multithread proposal §2.3).
     struct RunScratch {
         std::uint32_t running_position { };
+        /// The combinational member settle() is running, and the partition
+        /// running (no_slot otherwise).
+        std::uint32_t running_member { static_kernel_detail::no_slot };
+        std::uint32_t running_partition { static_kernel_detail::no_slot };
+        /// slot_changed_general's indexed readers of a change spanning chunks.
+        std::vector<std::uint32_t> ranged_candidates;
         /// The native code running now is two-state.
         bool two_state_running { };
         /// 'U' mask of the last slow-path result (U-aware instructions).
@@ -1308,7 +1312,7 @@ private:
     };
     /// One thread's share of a parallel batch: its run state and the
     /// effects its units logged instead of applying.
-    struct Lane {
+    struct alignas(64) Lane {
         RunScratch scratch;
         std::vector<LaneChange> changes;
         std::vector<std::uint64_t> words;
@@ -1316,6 +1320,9 @@ private:
         StaticKernelWriteQueue writes;
         std::vector<NbaEntry> elements;
         std::vector<Pending> generic;
+        /// The domain this lane is settling (no_slot: a level or triggered
+        /// batch, whose units schedule nothing).
+        std::uint32_t domain { static_kernel_detail::no_slot };
     };
     /// A unit of a parallel batch: where its records are and how its native
     /// run ended (a nonzero status is finished by the leader in the replay).
@@ -1327,6 +1334,8 @@ private:
         std::uint32_t writes_end { };
         /// Not eligible: the leader runs it at its place in the replay.
         bool serial { };
+        /// A domain run of two-state code (counted by the leader).
+        bool two_state { };
         std::uint32_t status { };
         StaticKernelNativeFrame frame;
         std::optional<static_kernel_detail::KernelDeopt> deopt;
@@ -1340,6 +1349,12 @@ private:
     {
         auto* const lane = worker_lane_;
         return lane != nullptr ? lane->scratch : scratch_;
+    }
+    /// Where a run's queued writes go: the lane's in a parallel batch.
+    [[nodiscard]] StaticKernelWriteQueue& write_queue() noexcept
+    {
+        auto* const lane = worker_lane_;
+        return lane != nullptr ? lane->writes : writes_;
     }
     std::unique_ptr<static_kernel_detail::KernelPool> pool_;
     std::vector<Lane> lanes_;
@@ -1388,7 +1403,46 @@ private:
         std::array<std::uint64_t, 3> declined_cost { };
         /// Eligible units each lane ran.
         std::vector<std::uint64_t> lane_units;
+        /// Domain settles: count, active domains, records, logged changes,
+        /// time on the pool and in the merge.
+        std::uint64_t domain_settles { };
+        std::uint64_t domain_active { };
+        std::uint64_t domain_records { };
+        std::uint64_t domain_changes { };
+        std::uint64_t domain_run_ns { };
+        std::uint64_t domain_merge_ns { };
+        std::uint64_t domain_declined { };
+        /// Per settle, the longest domain run (the critical path) and the
+        /// sum of the domain runs.
+        std::uint64_t domain_critical_ns { };
+        std::uint64_t domain_merges { };
+        /// The leader's time in settle(), run_triggered() and activations.
+        std::array<std::uint64_t, 3> phase_ns { };
+        std::uint64_t domain_work_ns { };
     } mt_stats_;
+    /// Adds the scope's time to one of MtStats::phase_ns.
+    struct MtPhaseTimer {
+        MtStats& stats;
+        std::size_t phase;
+        std::chrono::steady_clock::time_point started;
+        MtPhaseTimer(MtStats& owner, const std::size_t index)
+            : stats(owner)
+            , phase(index)
+            , started(owner.enabled ? std::chrono::steady_clock::now()
+                                    : std::chrono::steady_clock::time_point { })
+        {
+        }
+        ~MtPhaseTimer()
+        {
+            if (stats.enabled && started != std::chrono::steady_clock::time_point { }) {
+                stats.phase_ns[phase] += static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - started).count());
+            }
+        }
+        MtPhaseTimer(const MtPhaseTimer&) = delete;
+        MtPhaseTimer& operator=(const MtPhaseTimer&) = delete;
+    };
     void report_mt_stats() const;
     /// What batch_ holds: a settle snapshot, or a triggered round's members
     /// in run order, from merged dispatch groups (batch_groups_ names each
@@ -1556,8 +1610,6 @@ private:
     /// element tables it points into.
     std::vector<StaticKernelContainerInfo> container_info_;
     std::vector<std::uint32_t> container_elements_;
-    /// slot_changed_general's indexed readers of a change spanning chunks.
-    std::vector<std::uint32_t> ranged_candidates_;
     /// members_[i].process, dense: hot paths record slot writers without
     /// touching the large member records.
     std::vector<ProcessId> member_process_;
@@ -1600,6 +1652,119 @@ private:
     std::vector<LevelQueue> buckets_;
     std::uint32_t scan_level_ { };
     std::size_t queued_count_ { };
+    /// Domain-private settle (multithread proposal §2.4). A domain is a
+    /// connected component of the combinational units over the slots,
+    /// containers and host signals they share with a write, and over the
+    /// notifications between them; no combinational notification leaves it.
+    /// A lane settles a domain level by level with its own queues, scheduling
+    /// inside the domain and logging what the leader must deliver (changes
+    /// with other targets or general effects, queued writes). The leader then
+    /// merges the domains' passes with the serial units' passes by level and
+    /// queue position, which is the serial kernel's order, and replays the
+    /// logs in it.
+    struct DomainRecord {
+        std::uint32_t entry { };
+        /// A continuation of the record before it (the leader finished a
+        /// deoptimized run or ran a unit without native code).
+        bool continued { };
+    };
+    struct alignas(64) Domain {
+        /// Its levels, ascending, and one queue per level: the domain's
+        /// units of the level in global queue order. A unit's bit is its
+        /// queued flag while the lanes run (the shared flags stay clear).
+        std::vector<std::uint32_t> levels;
+        std::vector<LevelQueue> buckets;
+        std::uint32_t scan { };
+        std::uint32_t queued { };
+        /// This settle: the lane, the passes (level, first record), the
+        /// records and their runs, the running snapshot, and how it stopped.
+        std::uint32_t lane { };
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> passes;
+        std::vector<DomainRecord> records;
+        std::vector<LaneRun> runs;
+        std::vector<std::uint32_t> snapshot;
+        std::uint32_t next { };
+        std::size_t evaluations { };
+        /// Why the lane stopped (DomainStop): the leader finishes the last
+        /// record's run or runs the next unit, then the domain continues.
+        std::uint8_t stop { };
+        /// The leader's merge: the next pass.
+        std::uint32_t pass { };
+        /// Code size of its units: lanes take the largest domains first.
+        std::uint64_t cost { };
+        /// FSIM_KERNEL_MT_STATS: this settle's time on its lane.
+        std::uint64_t run_ns { };
+    };
+    enum DomainStop : std::uint8_t {
+        domain_running,
+        /// The last record's native run ended with a status to finish.
+        domain_finish,
+        /// The next unit has no native code to run on a lane.
+        domain_unit,
+        /// The evaluation limit: the merge reports the failure.
+        domain_limit,
+        /// The last record raised an error: the merge rethrows it there.
+        domain_error,
+    };
+    std::vector<Domain> domains_;
+    /// Per unit (members by index, then partitions): its domain (no_slot:
+    /// the global queue), its bucket in the domain and its bit there.
+    std::vector<std::uint32_t> unit_domain_;
+    std::vector<std::uint32_t> unit_bucket_;
+    std::vector<std::uint32_t> unit_bit_;
+    /// A change of the slot has a target or effect outside its writers'
+    /// domain: a domain lane logs it for the leader.
+    std::vector<std::uint8_t> slot_logged_;
+    std::vector<std::uint32_t> active_domains_;
+    /// settle_domains: the queued domain units it moves, as (level, entry).
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> domain_moves_;
+    std::vector<std::uint32_t> domain_seen_;
+    std::uint32_t domain_epoch_ { };
+    /// The merge's pass: (queue position, domain or no_slot, record or entry).
+    struct MergeItem {
+        std::uint32_t position { };
+        std::uint32_t domain { };
+        std::uint32_t item { };
+    };
+    std::vector<MergeItem> merge_items_;
+    std::size_t domain_limit_ { };
+    static_kernel_detail::KernelPool::Body domain_body_;
+    /// The leader replays domain logs: combinational targets were scheduled
+    /// in the domain already.
+    bool replay_external_ { };
+    /// The leader merges domain passes: a serial unit cannot reach a domain.
+    bool reconstructing_ { };
+    [[nodiscard]] std::uint32_t unit_of_entry(std::uint32_t entry) const noexcept
+    {
+        return (entry & static_kernel_detail::partition_tag) != 0U
+            ? static_cast<std::uint32_t>(members_.size())
+                + (entry & ~static_kernel_detail::partition_tag)
+            : entry;
+    }
+    [[nodiscard]] std::uint32_t queue_position(std::uint32_t entry) const noexcept;
+    void enqueue_domain(Domain& domain, std::uint32_t entry);
+    /// A domain lane's schedule of a combinational unit: queued in the
+    /// lane's domain (every combinational reader of a domain's writes is in
+    /// it).
+    void schedule_in_domain(Lane& lane, std::uint32_t entry);
+    /// The domain's next record and its run.
+    LaneRun& add_domain_record(Domain& domain, std::uint32_t entry, bool continued);
+    /// The unit's native code, if any (what a lane can run).
+    [[nodiscard]] bool native_ready(std::uint32_t entry) const noexcept;
+    /// Settles nothing more: the domains' queued units are dropped (an
+    /// error aborts the settle).
+    void abandon_domains() noexcept;
+    /// Replays a domain record and its continuations at their place in the
+    /// merge; an error the record raised is rethrown there.
+    void replay_domain_record(Domain& domain, std::uint32_t record,
+        std::size_t& evaluations, std::size_t limit);
+    /// settle() through the domains; false when fewer than two domains have
+    /// queued units (nothing has moved).
+    [[nodiscard]] bool settle_domains(std::size_t& evaluations, std::size_t limit);
+    void run_domain(std::uint32_t domain, std::size_t limit);
+    /// FSIM_KERNEL_MT_SHUFFLE: a random order of `count` batch items.
+    void shuffle_items(std::uint32_t count);
+    void resume_domain(std::uint32_t domain, std::size_t limit);
     bool initialized_ { };
     /// Mixed kernels with a host boundary: a round's VHDL work waits in the
     /// delta's generic Active queue for its SystemVerilog Active work

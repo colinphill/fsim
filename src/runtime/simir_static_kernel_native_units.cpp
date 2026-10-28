@@ -233,7 +233,7 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     frame.kernel = this;
     frame.program = unit.program;
     frame.instance = &body;
-    frame.writes = &writes_;
+    frame.writes = &write_queue();
     frame.containers = container_info_.data();
     frame.member = member;
     frame.position = 0U;
@@ -518,7 +518,7 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_operation_tier
     frame.kernel = this;
     frame.program = &tier->body;
     frame.instance = &tier->body;
-    frame.writes = &writes_;
+    frame.writes = &write_queue();
     frame.containers = container_info_.data();
     frame.member = member_index;
     frame.reserved = pc;
@@ -637,7 +637,7 @@ bool Interpreter::Impl::StaticKernel::run_hosted_tier(ProcessState& process)
     frame.kernel = this;
     frame.program = &tier->body;
     frame.instance = &process;
-    frame.writes = &writes_;
+    frame.writes = &write_queue();
     frame.containers = container_info_.data();
     frame.member = process.id;
     // The process runs to its next suspension. A step that leaves the
@@ -1459,7 +1459,7 @@ void Interpreter::Impl::StaticKernel::run_partition(const std::uint32_t partitio
         }
         ++profile_partition_counts_[partition];
     }
-    running_partition_ = partition;
+    scratch().running_partition = partition;
     scratch().running_position = 0U;
     try {
         if (state.native.entry != nullptr) {
@@ -1468,10 +1468,10 @@ void Interpreter::Impl::StaticKernel::run_partition(const std::uint32_t partitio
             execute(state.program, state.members.front());
         }
     } catch (...) {
-        running_partition_ = no_slot;
+        scratch().running_partition = no_slot;
         throw;
     }
-    running_partition_ = no_slot;
+    scratch().running_partition = no_slot;
     if (profile_) {
         profile_partition_operations_[partition]
             += profile_operations_ - operations_before;

@@ -1328,9 +1328,30 @@ void Interpreter::Impl::StaticKernel::report_mt_plan() const
         }
         return at;
     };
+    // A slot's reader units: its whole-slot targets (notify_targets_ after
+    // build_schedule_targets) and its ranged readers.
+    const auto reader_units = [&](const std::uint32_t slot, std::vector<std::uint32_t>& out) {
+        out.clear();
+        if (slot < slot_notify_.size()) {
+            const auto notify = slot_notify_[slot];
+            for (auto index = notify.begin; index < notify.end; ++index) {
+                const auto id = notify_targets_[index].id;
+                out.push_back((id & partition_tag) != 0U
+                        ? member_count + (id & ~partition_tag)
+                        : unit_of(id));
+            }
+        }
+        for (const auto& reader : slots_[slot].readers) {
+            out.push_back(unit_of(reader.member));
+        }
+        std::ranges::sort(out);
+        out.erase(std::ranges::unique(out).begin(), out.end());
+    };
     std::vector<std::uint32_t> writers;
     std::vector<std::uint32_t> readers;
-    for (const auto& slot : slots_) {
+    std::vector<std::uint32_t> slot_domain_writer(slots_.size(), no_slot);
+    for (std::uint32_t slot_index = 0U; slot_index < slots_.size(); ++slot_index) {
+        const auto& slot = slots_[slot_index];
         writers.clear();
         for (const auto& region : slot.writers) {
             if (const auto found = member_of_process.find(region.process);
@@ -1356,6 +1377,7 @@ void Interpreter::Impl::StaticKernel::report_mt_plan() const
             }
             if (first_comb == no_slot) {
                 first_comb = unit;
+                slot_domain_writer[slot_index] = unit;
                 continue;
             }
             const auto left = find(first_comb);
@@ -1367,13 +1389,8 @@ void Interpreter::Impl::StaticKernel::report_mt_plan() const
         if (slot.deferred_write) {
             continue;
         }
-        readers.clear();
-        for (const auto& reader : slot.readers) {
-            const auto unit = unit_of(reader.member);
-            if (kind[unit] == 1U) {
-                readers.push_back(unit);
-            }
-        }
+        reader_units(slot_index, readers);
+        std::erase_if(readers, [&](const std::uint32_t unit) { return kind[unit] != 1U; });
         for (const auto writer : writers) {
             if (kind[writer] != 1U) {
                 continue;
@@ -1436,6 +1453,74 @@ void Interpreter::Impl::StaticKernel::report_mt_plan() const
             ++domain.second;
         }
     }
+    // Runs per domain, and slot changes by what a domain-private settle
+    // would do with them (proposal §2.4): every target in the writer's
+    // domain (private), some target elsewhere or a general effect (logged
+    // for the leader), or a change from a sequential unit, the host or a
+    // thread (the leader's commit).
+    const auto runs_of = [&](const std::uint32_t unit) -> std::uint64_t {
+        if (unit < member_count) {
+            return unit < profile_member_runs_.size() ? profile_member_runs_[unit] : 0U;
+        }
+        const auto partition = unit - member_count;
+        return partition < profile_partition_counts_.size()
+            ? profile_partition_counts_[partition] : 0U;
+    };
+    std::unordered_map<std::uint32_t, std::uint64_t> domain_runs;
+    std::unordered_map<std::uint32_t, std::uint64_t> domain_changes;
+    std::uint64_t comb_runs = 0U;
+    std::uint64_t seq_runs = 0U;
+    for (std::uint32_t unit = 0U; unit < unit_total; ++unit) {
+        if (kind[unit] == 1U) {
+            domain_runs[find(unit)] += runs_of(unit);
+            comb_runs += runs_of(unit);
+        } else if (kind[unit] == 2U) {
+            seq_runs += runs_of(unit);
+        }
+    }
+    std::uint64_t private_changes = 0U;
+    std::uint64_t crossing_changes = 0U;
+    std::uint64_t commit_changes = 0U;
+    std::uint64_t private_targets = 0U;
+    std::uint64_t external_targets = 0U;
+    const bool slot_counts = profile_slot_change_counts_.size() == slots_.size();
+    for (std::uint32_t slot_index = 0U; slot_counts && slot_index < slots_.size(); ++slot_index) {
+        const auto changes = profile_slot_change_counts_[slot_index];
+        if (changes == 0U) {
+            continue;
+        }
+        const auto& slot = slots_[slot_index];
+        reader_units(slot_index, readers);
+        const auto writer = slot_domain_writer[slot_index];
+        if (writer == no_slot) {
+            commit_changes += changes;
+            external_targets += changes * readers.size();
+            continue;
+        }
+        const auto domain = find(writer);
+        domain_changes[domain] += changes;
+        std::uint64_t inside = 0U;
+        for (const auto unit : readers) {
+            inside += kind[unit] == 1U && find(unit) == domain ? 1U : 0U;
+        }
+        const auto outside = readers.size() - inside;
+        private_targets += changes * inside;
+        external_targets += changes * outside;
+        // Outputs, edges and thread waiters are the leader's.
+        const bool general = slot.output || !slot.edges.empty()
+            || (slot_index < slot_waitable_.size() && slot_waitable_[slot_index] != 0U);
+        (outside == 0U && !general ? private_changes : crossing_changes) += changes;
+    }
+    std::cerr << "fsim-kernel: mt runs comb=" << comb_runs << " seq=" << seq_runs << '\n';
+    if (slot_counts) {
+        const auto all = private_changes + crossing_changes + commit_changes;
+        std::cerr << "fsim-kernel: mt changes=" << all
+                  << " private%=" << percent(private_changes, all)
+                  << " crossing%=" << percent(crossing_changes, all)
+                  << " commit%=" << percent(commit_changes, all)
+                  << " targets private%="
+                  << percent(private_targets, private_targets + external_targets) << '\n';
+    }
     std::vector<std::tuple<std::uint64_t, std::uint32_t, std::uint32_t>> ranked;
     for (const auto& [root, domain] : domains) {
         ranked.emplace_back(domain.first, domain.second, root);
@@ -1463,7 +1548,14 @@ void Interpreter::Impl::StaticKernel::report_mt_plan() const
         }
         const auto named = heaviest < member_count ? heaviest
                                                    : partitions_[heaviest - member_count].members.front();
+        const auto found_runs = domain_runs.find(root);
+        const auto found_changes = domain_changes.find(root);
         std::cerr << "fsim-kernel: mt domain cost%=" << percent(domain_cost, comb_cost)
+                  << " runs%=" << percent(found_runs == domain_runs.end() ? 0U
+                                                  : found_runs->second, comb_runs)
+                  << " changes%=" << percent(found_changes == domain_changes.end() ? 0U
+                                                     : found_changes->second,
+                                         private_changes + crossing_changes)
                   << " units=" << units << " heaviest="
                   << (named < profile_names_.size() ? profile_names_[named] : std::string { "?" })
                   << (heaviest < member_count ? "" : " (partition)") << '\n';
