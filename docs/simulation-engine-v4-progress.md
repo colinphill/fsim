@@ -138,6 +138,49 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — lane output, fork random, disable, real math, callable contexts (`58b54e17`, `1f30cf98`, sweeps `v4c33`, `v4c34`)
+
+The hosted-process work (owner 2026-10-28), measured on the rs suite, LDPC and the RISC-V SoC first, then the corpus. An agent assessment (`.local-artifacts/v4-migration/hosted-feasibility.md`) finds that every process can become a kernel member. Services held in `Impl` (files, class heap, SVA tables, mailboxes, VPI/DPI) stay host-owned in a serial lane, and forced, strength-resolved and switch signals stay host signals.
+
+**`58b54e17`**
+- **Worker-lane output.** `$display`, `$write`, `%t`, time displays and severity reports from MT worker lanes are queued per lane. The leader's replay emits them in serial order; `%t` text is formatted at replay, after any `$timeformat`. Sequential members admit immediate output and `$time`/`$stime`/`$realtime`.
+- **Fork-child random.** Each kernel fork child seeds its own stream as the reference seeds the child process (IEEE 1800-2023 18.14).
+- **`disable` of a local named block** (9.6.2). Threads record their fork sites, and the kernel mirrors the reference: owner, ancestor and sibling branches, other activations, and killed fork children counted by their join.
+- **Real arithmetic and math functions** (`SystemVerilogScalarBinary`, non-time `SystemVerilogMath`; 6.12, 20.8) run on the kernel operation step for SV and VHDL members. Result widths are inferred for compiled members.
+- **Native `store_slot_part`.** On the RISC-V SoC this removes 102M slow effect calls: t1 25.6 → 23.6 s, t8 13.7 → 12.25 s.
+
+**`1f30cf98`**
+- **Per-thread callable contexts** (6.21, 9.3.2, 13.4.2).
+  - Each thread keeps the activations of the automatic callables it is inside. Their packed and string registers are stored when it parks and loaded when it resumes.
+  - A fork marks its activation escaping and the children share it, like the reference's escaping contexts. Escaping activations are reloaded after a callee returns.
+  - Such members keep their frames and run on the operation tier.
+  - The planner no longer hosts these processes except when a suspending callable saves a private array.
+- **Time warp and host writes.** A member that writes a signal the kernel does not own (a `real` variable) now leaves the kernel not closed. Before, the warp loop advanced time past the staged host update and the update was lost. The v4c33 sweep found this in 9 cases (pr973, br_gh979, implicit_cast2, verilator real tests); these processes had been hosted until real math moved into the kernel.
+- **Out-of-range writes.** A fixed-array element write through an unknown or out-of-range index writes nothing (7.4.6).
+- **`#0` loops.** The Active-region iteration limit restarts after each Inactive (`#0`) region (pow_ca_signed and pow_ca_unsigned pass through `#0` millions of times at time 0).
+
+**rs suite** (design census, `FSIM_PROFILE_KERNEL_BLOCKERS`). codec, encoder and thru (SV and VHDL TBs) have no hosted processes, and symsize now has none either (24 PASS on SV and VHDL). The remaining reasons:
+- decoder, parlen: copy-out of a task's output array to a design array (`behavioral_container_object_write`);
+- corrbits, param: suspending tasks with private array arguments (`fork_callable_frames`);
+- rs_param_tb (SV): still fails elaboration with FSIM-ART-0014 (the hierarchy-path table bound).
+
+**Validation.** ctest 1087/1087 in all four gate variants. Sweep `v4c33` (`58b54e17`) had 11 losses vs `b96x1`; all are fixed in `1f30cf98`. Sweep `v4c34` (frozen `1f30cf98`) has 0 losses:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2641 / 2641 | 270 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+Hosted processes in the sweep: 7,925 (v4c33 7,939).
+
+Perf runs are deferred until the hosted-process work ends (owner 2026-10-28).
+
+**Next.** Callable contexts gain private arrays (corrbits, param), and output arrays are copied out to design arrays (decoder, parlen); both are in the working tree. After that, the remaining families in the assessment's order: SV string/report, VHDL strings/textio, commit programs, projected writes.
+
 ### 2026-10-28: domain time steps (MT Phase 5c), kernel `$readmemh` (`e219e002`, sweep `v4c31`)
 
 **Kernel `$readmemh`/`$readmemb`** (IEEE 1800-2023 21.4). `LoadMemory` and the write-back `WriteContainerObject` of a binding to its own memory run in the behavioral tier, so a memory loaded from an `initial` is kernel-owned and the processes that read it are members. The file loads into the current contents and changed elements are written back as element writes; an I/O error leaves the array unchanged, as on the reference. An element write into a binding of a design memory (`ContainerWrite` on a `ReadContainerObject` register) stays hosted (`behavioral_bound_container_write`): the reference edits a copy and stores it whole, and the kernel binding aliases the memory. The sweep's one loss (verilator `t_mem_packed`) was this case; it is fixed in the follow-up commit.
