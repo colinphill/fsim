@@ -94,148 +94,6 @@ void collect_container_objects(
     }, operation);
 }
 
-/// Whether a fork child of a program can hold an automatic callable frame
-/// across a suspension. An operation that returns a behavioral thread to its
-/// runner (a wait, fork, join, halt, $stop or $pause) reachable from a Call
-/// target before its Return, or from a frame push before the pop of the same
-/// callable, makes that callable suspending. A SystemVerilog function never
-/// is (IEEE 1800-2023 13.4: no timing controls in a function); a task may
-/// (13.3). The hazard is a fork child entering a suspending callable, or a
-/// fork the parent does not join (join_any, join_none) while a suspending
-/// callable exists: only then may two threads of the member be inside one
-/// callable's registers with one of them suspended.
-template <typename Operations>
-[[nodiscard]] bool fork_holds_suspended_frame(
-    const Operations& operations, const std::size_t count)
-{
-    struct Entry {
-        InstructionIndex pc { };
-        std::optional<std::uint32_t> frame;
-        bool suspends { };
-        std::vector<std::size_t> callees;
-    };
-    std::vector<Entry> entries;
-    std::unordered_map<InstructionIndex, std::size_t> call_entry;
-    std::unordered_map<std::uint32_t, std::size_t> frame_entry;
-    std::vector<InstructionIndex> branches;
-    bool unjoined_fork = false;
-    for (std::size_t op = 0U; op < count; ++op) {
-        const auto operation = operations.expanded(op);
-        if (const auto* call = operation_get_if<Call>(&operation)) {
-            if (call_entry.try_emplace(call->target, entries.size()).second) {
-                entries.push_back({ call->target, std::nullopt, false, { } });
-            }
-        } else if (const auto* push
-                   = operation_get_if<CallableFramePush>(&operation)) {
-            if (frame_entry.try_emplace(push->identity, entries.size()).second) {
-                entries.push_back({ static_cast<InstructionIndex>(op + 1U),
-                    push->identity, false, { } });
-            }
-        } else if (const auto* fork = operation_get_if<Fork>(&operation)) {
-            branches.insert(branches.end(), fork->branches.begin(),
-                fork->branches.end());
-            unjoined_fork = unjoined_fork
-                || fork->join != runtime::simir::ForkJoinKind::all;
-        }
-    }
-    if (entries.empty() || branches.empty()) {
-        return false;
-    }
-    // One callable's own operations: a Call continues at its return target
-    // (the callee is its own entry), a Return or the matching pop ends it.
-    std::vector<std::uint32_t> seen(count, 0U);
-    std::uint32_t epoch = 0U;
-    const auto walk = [&](const InstructionIndex begin,
-                          const std::optional<std::uint32_t> frame,
-                          const bool branch, const auto& visit) {
-        ++epoch;
-        std::vector<InstructionIndex> work { begin };
-        while (!work.empty()) {
-            const auto pc = work.back();
-            work.pop_back();
-            if (pc >= count || seen[pc] == epoch) {
-                continue;
-            }
-            seen[pc] = epoch;
-            const auto operation = operations.expanded(pc);
-            if (frame) {
-                if (const auto* pop
-                    = operation_get_if<CallableFramePop>(&operation);
-                    pop != nullptr && pop->identity == *frame) {
-                    continue;
-                }
-            }
-            if (visit(operation)) {
-                return true;
-            }
-            if (operation_holds<Return>(operation)
-                || (branch && operation_holds<ForkEnd>(operation))) {
-                continue;
-            }
-            if (const auto* jump = operation_get_if<Jump>(&operation)) {
-                work.push_back(jump->target);
-            } else if (const auto* branch_op
-                       = operation_get_if<Branch>(&operation)) {
-                work.push_back(branch_op->when_true);
-                work.push_back(branch_op->when_false);
-            } else if (const auto* call = operation_get_if<Call>(&operation)) {
-                work.push_back(call->return_target);
-            } else {
-                work.push_back(static_cast<InstructionIndex>(pc + 1U));
-            }
-        }
-        return false;
-    };
-    for (auto& entry : entries) {
-        entry.suspends = walk(entry.pc, entry.frame, false,
-            [&](const auto& operation) {
-                if (const auto* call = operation_get_if<Call>(&operation)) {
-                    entry.callees.push_back(call_entry.at(call->target));
-                }
-                return operation_holds<WaitFor>(operation)
-                    || operation_holds<WaitOn>(operation)
-                    || operation_holds<WaitForever>(operation)
-                    || operation_holds<WaitSensitivity>(operation)
-                    || operation_holds<Fork>(operation)
-                    || operation_holds<ForkEnd>(operation)
-                    || operation_holds<Halt>(operation)
-                    || operation_holds<Stop>(operation)
-                    || operation_holds<Pause>(operation);
-            });
-    }
-    // A callable calling a suspending callable suspends.
-    for (bool changed = true; changed;) {
-        changed = false;
-        for (auto& entry : entries) {
-            if (!entry.suspends
-                && std::ranges::any_of(entry.callees, [&](const std::size_t callee) {
-                       return entries[callee].suspends;
-                   })) {
-                entry.suspends = true;
-                changed = true;
-            }
-        }
-    }
-    if (std::ranges::none_of(entries, &Entry::suspends)) {
-        return false;
-    }
-    if (unjoined_fork) {
-        return true;
-    }
-    return std::ranges::any_of(branches, [&](const InstructionIndex begin) {
-        return walk(begin, std::nullopt, true, [&](const auto& operation) {
-            if (const auto* call = operation_get_if<Call>(&operation)) {
-                return entries[call_entry.at(call->target)].suspends;
-            }
-            if (const auto* push
-                = operation_get_if<CallableFramePush>(&operation)) {
-                return entries[frame_entry.at(push->identity)].suspends;
-            }
-            return false;
-        });
-    });
-}
-
 struct Candidate {
     ProcessId process { };
     std::uint8_t kind { };
@@ -1140,29 +998,38 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     }
                 }, operation);
             }
+            std::vector<std::uint32_t> suspending;
             if (supported && has_fork && has_frame_push
-                && fork_holds_suspended_frame(operations, count)) {
+                && static_kernel_fork_holds_suspended_frame(
+                    operations, count, &suspending)) {
                 // Fork children and the activation that joins them observe
                 // the automatic variables of the enclosing callable frames
                 // (IEEE 1800-2023 6.21, 9.3.2), and concurrent activations of
                 // one automatic task each own their arguments and locals
-                // (13.4.2). The reference evaluator gives every thread its
-                // own callable context (escaping contexts, suspended
-                // contexts); kernel threads share one register file with a
-                // single frame stack per thread, so a thread suspended inside
-                // a callable would see a sibling's values on resume. Such
-                // processes stay on the host until the kernel's behavioral
-                // tier gains per-thread callable contexts. A callable that
-                // cannot suspend (every function, 13.4, and any task without
-                // a timing control) runs from frame push to pop without
-                // another thread of the member running in between, so it
-                // shares nothing observable; a joined fork whose children
-                // enter only such callables leaves at most the parent inside
-                // a suspending one, and the children share its frame as
-                // 9.3.2 requires.
-                supported = false;
-                failed_at = count;
-                failed_reason = "fork_callable_frames";
+                // (13.4.2). The kernel gives such a member per-thread callable
+                // contexts (StaticKernel::Thread::contexts) for packed and
+                // string registers. The frame of a callable that cannot
+                // suspend is pushed and popped within one run of its thread,
+                // and a container register bound to a design array names the
+                // same array in every activation; a suspending callable's
+                // frame that saves a private array keeps the process on the
+                // host.
+                for (std::size_t op = 0U; op < count && supported; ++op) {
+                    const auto operation = operations.expanded(op);
+                    if (const auto* push
+                        = operation_get_if<CallableFramePush>(&operation);
+                        push != nullptr
+                        && std::ranges::find(suspending, push->identity)
+                            != suspending.end()
+                        && std::ranges::any_of(push->containers,
+                            [&](const ContainerRegisterId id) {
+                                return !bound_containers.contains(id);
+                            })) {
+                        supported = false;
+                        failed_at = count;
+                        failed_reason = "fork_callable_frames";
+                    }
+                }
             }
             if (supported) {
                 // A register both bound and written would alias the design

@@ -470,6 +470,17 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             member.operations.push_back(operations.expanded(op));
         }
         member.body_identity = operations.body_identity();
+        if (!member.vhdl && member.kind == StaticKernelMemberKind::behavioral) {
+            bool fork = false;
+            bool push = false;
+            for (const auto& operation : member.operations) {
+                fork = fork || operation_holds<Fork>(operation);
+                push = push || operation_holds<CallableFramePush>(operation);
+            }
+            member.thread_contexts = fork && push
+                && static_kernel_fork_holds_suspended_frame(
+                    operations, operations.size());
+        }
         if (stage_profile) {
             expand_seconds += std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - expand_started).count();
@@ -1161,6 +1172,34 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     if (!spec.hosted.empty()) {
         adopt_hosted(spec.hosted);
     }
+    // A member's write to a signal the kernel does not own (a real variable,
+    // say) is staged on the host and matures in the host's regions of its
+    // time step: the kernel is not closed.
+    bool host_written = false;
+    for (const auto& member : members_) {
+        for (const auto& operation : member.operations) {
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, WriteBlocking>
+                    || std::is_same_v<T, WriteBlockingSlice>
+                    || std::is_same_v<T, WriteBlockingDynamicSlice>
+                    || std::is_same_v<T, WriteBlockingDynamicPartSlice>
+                    || std::is_same_v<T, WriteUpdate>
+                    || std::is_same_v<T, WriteUpdateSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicPartSlice>
+                    || std::is_same_v<T, WriteAfter>
+                    || std::is_same_v<T, WriteAfterSlice>
+                    || std::is_same_v<T, WriteAfterDynamicSlice>
+                    || std::is_same_v<T, WriteAfterDynamicPartSlice>) {
+                    host_written = host_written || !owned(op.signal);
+                }
+            }, operation);
+        }
+        if (host_written) {
+            break;
+        }
+    }
     // A hosted VHDL process writes through the host's update phase, so every
     // round is a host delta.
     host_boundary_ = has_hosted_
@@ -1168,7 +1207,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             [](const Input& input) { return !input.unwritten; })
         || std::ranges::any_of(slots_, [](const Slot& slot) { return slot.output; });
     // Every process is a member and nothing crosses the host boundary.
-    closed_ = !host_boundary_ && !has_hosted_
+    closed_ = !host_boundary_ && !has_hosted_ && !host_written
         && impl_.processes.size() == members_.size();
     plan_delta_collapse();
     if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
@@ -2572,6 +2611,10 @@ void Interpreter::Impl::StaticKernel::write_element(const Pending& pending)
             fail(member, instruction,
                 "dynamic part-select container element write type mismatch");
         }
+        if (!pending.linear_index && !fixed_index_in_range(type, pending.index)) {
+            // An unknown or out-of-range index writes nothing (7.4.6).
+            return;
+        }
         const auto selected = pending.linear_index
             ? known_index(process, instruction, pending.index, true,
                   "multidimensional linear index")
@@ -2593,6 +2636,11 @@ void Interpreter::Impl::StaticKernel::write_element(const Pending& pending)
         || value.width() != type.element_width || value.is_logic9()
         || (type.two_state && has_unknown(value))) {
         fail(member, instruction, "container element write type mismatch");
+    }
+    if (!pending.linear_index && !fixed_index_in_range(type, pending.index)) {
+        // A fixed-size array ignores a write through an unknown or
+        // out-of-range index (IEEE 1800-2023 7.4.6).
+        return;
     }
     const auto selected = pending.linear_index
         ? known_index(process, instruction, pending.index, true,
@@ -4994,6 +5042,8 @@ bool Interpreter::Impl::StaticKernel::activate()
     // to that time, runs its next time steps itself instead of handing each
     // one to the host scheduler. Nothing outside the kernel can observe the
     // steps in between; time and $finish are kept at their exact values.
+    // Writes staged to host signals (a real variable's update, say) belong
+    // to this time step's regions, which only the host scheduler runs.
     const bool observed = static_cast<bool>(impl_.signal_change_hook)
         || static_cast<bool>(impl_.stored_signal_change_hook)
         || static_cast<bool>(impl_.scalar_signal_change_hook)
@@ -5004,6 +5054,8 @@ bool Interpreter::Impl::StaticKernel::activate()
          && !observed && behavioral_
          && !vhdl_threads_ && !stopped_ && !nonblocking_deferred_
          && !yield_requested_ && !late_start_armed_
+         && !host_active_staged_
+         && !(host_nba_staged_ && host_nba_time_ == impl_.scheduler.now())
          && step < max_warp_steps; ++step) {
         const auto next = next_timer();
         if (!next) {
@@ -5213,6 +5265,9 @@ void Interpreter::Impl::StaticKernel::activate_step()
                 if (impl_.scheduler.stop_requested()) {
                     break;
                 }
+                // The limit guards the Active region's settling; a thread
+                // may pass through #0 any number of times in one time slot.
+                iteration = 0U;
                 continue;
             }
             if (nba_pending() || host_nba_wakes_) {
@@ -5427,6 +5482,9 @@ void Interpreter::Impl::StaticKernel::sv_drain()
             if (impl_.scheduler.stop_requested()) {
                 return;
             }
+            // The limit guards the Active region's settling; a thread may
+            // pass through #0 any number of times in one time slot.
+            iteration = 0U;
             continue;
         }
         if (nba_pending()) {

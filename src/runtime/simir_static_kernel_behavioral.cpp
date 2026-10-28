@@ -60,6 +60,21 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
         next_child_process_ = static_cast<std::size_t>(id) + 1U;
         thread.order = id;
         thread.random_state = Impl::initial_random_state(impl_.root_seed, id);
+        if (members_[member].thread_contexts) {
+            // The activation the fork runs in escapes: the child shares it,
+            // and those its parent shares, holding their current values
+            // (Interpreter::spawn_fork).
+            store_contexts(parent);
+            auto& inherited = threads_[parent].contexts;
+            if (!inherited.empty()) {
+                inherited.back()->escaping = true;
+            }
+            for (const auto& context : inherited) {
+                if (context->escaping) {
+                    threads_[index].contexts.push_back(context);
+                }
+            }
+        }
         if (debug_points_) {
             thread.debug_process = id;
             debug_children_[id] = member;
@@ -321,7 +336,57 @@ void Interpreter::Impl::StaticKernel::release_thread(const std::uint32_t index)
     thread.saved_arrays.clear();
     thread.saved_array_marks.clear();
     thread.stack.clear();
+    thread.contexts.clear();
     free_threads_.push_back(index);
+}
+
+void Interpreter::Impl::StaticKernel::store_contexts(const std::uint32_t index)
+{
+    auto& member = members_[threads_[index].member];
+    const auto& contexts = threads_[index].contexts;
+    std::vector<std::uint32_t> seen;
+    for (auto entry = contexts.rbegin(); entry != contexts.rend(); ++entry) {
+        auto& context = **entry;
+        if (std::ranges::find(seen, context.identity) != seen.end()) {
+            // An outer activation of a recursive callable: its values are
+            // in the inner activation's frame.
+            continue;
+        }
+        seen.push_back(context.identity);
+        context.values.clear();
+        for (const auto id : context.ids) {
+            context.values.push_back(member.registers.at(id));
+        }
+        context.strings.clear();
+        for (const auto id : context.string_ids) {
+            context.strings.push_back(member.strings.at(id));
+        }
+        context.stored = true;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::load_contexts(
+    const std::uint32_t index, const bool escaping_only)
+{
+    auto& member = members_[threads_[index].member];
+    const auto& contexts = threads_[index].contexts;
+    std::vector<std::uint32_t> seen;
+    for (auto entry = contexts.rbegin(); entry != contexts.rend(); ++entry) {
+        const auto& context = **entry;
+        if (std::ranges::find(seen, context.identity) != seen.end()) {
+            continue;
+        }
+        seen.push_back(context.identity);
+        if (!context.stored || (escaping_only && !context.escaping)) {
+            continue;
+        }
+        for (std::size_t at = 0U; at < context.ids.size(); ++at) {
+            member.registers.at(context.ids[at]) = context.values[at];
+        }
+        for (std::size_t at = 0U; at < context.string_ids.size(); ++at) {
+            member.strings.at(context.string_ids[at]) = context.strings[at];
+        }
+    }
 }
 
 std::vector<std::uint32_t> Interpreter::Impl::StaticKernel::live_children(
@@ -1011,6 +1076,18 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
             member.frame_bytes += frame.bytes;
             member.frames.push_back(std::move(frame));
+            if (const auto thread = running_thread_; member.thread_contexts
+                && thread != no_slot && threads_[thread].member == member_index) {
+                // The callee may shadow the caller's registers: escaping
+                // activations keep the caller's writes since its last
+                // suspension.
+                store_contexts(thread);
+                auto context = std::make_shared<CallableContext>();
+                context->identity = op.identity;
+                context->ids.assign(op.packed.begin(), op.packed.end());
+                context->string_ids.assign(op.strings.begin(), op.strings.end());
+                threads_[thread].contexts.push_back(std::move(context));
+            }
         } else if constexpr (std::is_same_v<T, CallableFramePop>) {
             if (member.private_frame(op.identity)) {
                 if (member.saved_array_marks.empty()) {
@@ -1035,6 +1112,32 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             if (member.frames.empty()
                 || member.frames.back().identity != op.identity) {
                 fail(member_index, pc, "automatic callable frame stack mismatch");
+            }
+            const auto context_thread = member.thread_contexts
+                    && running_thread_ != no_slot
+                    && threads_[running_thread_].member == member_index
+                ? running_thread_
+                : no_slot;
+            if (context_thread != no_slot) {
+                // The activation ends for this thread; fork children still
+                // inside it keep its final values (6.21).
+                auto& contexts = threads_[context_thread].contexts;
+                if (contexts.empty() || contexts.back()->identity != op.identity) {
+                    fail(member_index, pc, "automatic callable context stack mismatch");
+                }
+                if (contexts.back()->escaping) {
+                    auto& context = *contexts.back();
+                    context.values.clear();
+                    for (const auto id : context.ids) {
+                        context.values.push_back(packed_register(id));
+                    }
+                    context.strings.clear();
+                    for (const auto id : context.string_ids) {
+                        context.strings.push_back(string_register(id));
+                    }
+                    context.stored = true;
+                }
+                contexts.pop_back();
             }
             std::vector<PackedLogic4> packed;
             for (const auto id : op.preserve_packed) {
@@ -1062,6 +1165,11 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     = frame.containers[entry];
             }
             member.frame_bytes -= frame.bytes;
+            if (context_thread != no_slot) {
+                // Fork children may have written the escaping activations
+                // the frame restore shadowed.
+                load_contexts(context_thread, true);
+            }
             for (std::size_t entry = 0U; entry < op.preserve_packed.size(); ++entry) {
                 packed_register(op.preserve_packed[entry]) = std::move(packed[entry]);
             }
@@ -1661,6 +1769,9 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
     std::swap(member.frame_bytes, threads_[index].frame_bytes);
     std::swap(member.saved_arrays, threads_[index].saved_arrays);
     std::swap(member.saved_array_marks, threads_[index].saved_array_marks);
+    if (member.thread_contexts) {
+        load_contexts(index);
+    }
     if (threads_[index].timeout_result) {
         // A VHDL wait with timeout resumed: the result register tells the
         // timeout from an event (an event at the deadline counts as the
@@ -1681,6 +1792,9 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
     auto pc = threads_[index].pc;
     const auto size = static_cast<std::uint32_t>(member.operations.size());
     const auto park = [&](const std::uint32_t resume) {
+        if (member.thread_contexts) {
+            store_contexts(index);
+        }
         auto& thread = threads_[index];
         std::swap(member.call_stack, thread.call_stack);
         std::swap(member.frames, thread.frames);

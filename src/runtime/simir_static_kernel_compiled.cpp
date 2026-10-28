@@ -121,6 +121,12 @@ void Interpreter::Impl::StaticKernel::compile_members()
             not_compiled_reason_[index] = "vhdl_behavioral";
             continue;
         }
+        // Per-thread callable contexts need the automatic frames the
+        // compiled bodies elide: such a member runs on the operation tier.
+        if (members_[index].thread_contexts) {
+            not_compiled_reason_[index] = "thread_contexts";
+            continue;
+        }
         if (only != nullptr || skip != nullptr) {
             const auto name
                 = impl_.processes.program_view(members_[index].process).name();

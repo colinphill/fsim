@@ -396,6 +396,11 @@ private:
         /// Automatic frames are no-ops (isolated callables, no recursion);
         /// both tiers skip them so a deoptimization can continue mid-call.
         bool frames_elided { };
+        /// Threads of this member can hold an automatic callable frame
+        /// across a suspension (static_kernel_fork_holds_suspended_frame):
+        /// each thread keeps its callable contexts (Thread::contexts), and
+        /// the member runs on the operation tier.
+        bool thread_contexts { };
         /// Behavioral members: string registers shared by the member's
         /// threads, and the signal/edge list of WaitSensitivity.
         std::vector<std::string> strings;
@@ -945,6 +950,20 @@ private:
     /// Behavioral tier. A thread is one resumable execution context of a
     /// behavioral member; fork children are threads of the same member and
     /// share its registers.
+    /// One activation of an automatic callable (IEEE 1800-2023 13.4.2): the
+    /// values of its packed and string registers while the threads inside it
+    /// are suspended. Once a fork runs inside it, the activation escapes:
+    /// the fork's children share it with their parent (6.21, 9.3.2), as the
+    /// reference's escaping callable contexts.
+    struct CallableContext {
+        std::uint32_t identity { };
+        std::vector<RegisterId> ids;
+        std::vector<PackedLogic4> values;
+        std::vector<StringRegisterId> string_ids;
+        std::vector<std::string> strings;
+        bool stored { };
+        bool escaping { };
+    };
     struct Thread {
         std::uint32_t member { };
         std::uint32_t pc { };
@@ -959,6 +978,11 @@ private:
         /// A fork child's Fork operation (the reference's fork_site), for
         /// disable (IEEE 1800-2023 9.6.2).
         std::uint32_t fork_site { static_kernel_detail::no_slot };
+        /// thread_contexts members: the callable activations the thread is
+        /// inside (the escaping ones inherited from its forking parent, then
+        /// its own frames, innermost last); stored when it parks, loaded
+        /// when it resumes.
+        std::vector<std::shared_ptr<CallableContext>> contexts;
         /// Live children; the parent of a join-all fork resumes at zero.
         std::uint32_t children { };
         /// A fork child's random stream (IEEE 1800-2023 18.14: each thread
@@ -1267,6 +1291,11 @@ private:
     /// counts it, its waits lapse.
     void kill_thread(std::uint32_t thread);
     void release_thread(std::uint32_t thread);
+    /// Copies the running thread's innermost activation of each callable
+    /// between the member's registers and its contexts (load: only the
+    /// escaping ones when `escaping_only`).
+    void store_contexts(std::uint32_t thread);
+    void load_contexts(std::uint32_t thread, bool escaping_only = false);
     void ready_thread(std::uint32_t thread);
     [[nodiscard]] bool run_ready_threads();
     void run_thread(std::uint32_t thread);

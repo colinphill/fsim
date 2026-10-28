@@ -13,7 +13,11 @@
 // a sibling fork branch's block and its own forever loop (IEEE 1800-2023
 // 9.6.2), draws $urandom in a fork child (each thread its own stream, 18.14)
 // and computes with reals ($rtoi, $ln, real arithmetic): it stays a kernel
-// member too.
+// member too. A fourth runs one automatic task with delays in two fork
+// branches at once (each activation its own locals, 13.4.2) and calls a task
+// whose join_none child outlives its activation and still updates the
+// activation's locals (6.21, 9.3.2): per-thread callable contexts keep it in
+// the kernel.
 #include "fsim/app/application.hpp"
 
 #include "../../src/runtime/simir_static_kernel.hpp"
@@ -189,6 +193,61 @@ module bk_top;
     $display("%0t loop done dcount=%0d lr=%0d", $time, dcount, $rtoi(r * 1000.0));
   end
 
+  task automatic slow(input integer id, input integer n, output integer res);
+    integer i, t;
+    begin
+      t = id * 100;
+      for (i = 0; i < n; i = i + 1) begin
+        #(3 + id);
+        t = t + i + id + table_q[i];
+      end
+      res = t;
+    end
+  endtask
+
+  task automatic tally(input integer base);
+    integer a;
+    begin
+      a = base;
+      fork
+        begin
+          #7;
+          a = a + 1;
+          $display("%0t tally child a=%0d", $time, a);
+        end
+      join_none
+      #2;
+      a = a + 10;
+      $display("%0t tally parent a=%0d", $time, a);
+    end
+  endtask
+
+  // A task that cannot suspend may keep an automatic array: its frame lives
+  // within one run of its thread.
+  task automatic blend(output integer m);
+    integer i;
+    reg [7:0] w [0:3];
+    begin
+      for (i = 0; i < 4; i = i + 1) w[i] = i * 7 + 1;
+      m = w[0] + w[1] * w[2] - w[3];
+    end
+  endtask
+
+  integer ra, rb, rm;
+  initial begin
+    blend(rm);
+    #1;
+    fork
+      slow(1, 4, ra);
+      slow(2, 3, rb);
+    join
+    $display("%0t slow ra=%0d rb=%0d rm=%0d", $time, ra, rb, rm);
+    tally(5);
+    tally(20);
+    #20;
+    $display("%0t tallies done", $time);
+  end
+
   initial begin
     #100000;
     $display("TIMEOUT");
@@ -253,7 +312,7 @@ endmodule
                     == fsim::runtime::simir::StaticKernelMemberKind::behavioral
                 ? 1U : 0U;
         }
-        require(behavioral >= 5U,
+        require(behavioral >= 6U,
             "the testbench processes must be behavioral kernel members");
         std::size_t sequential = 0U;
         for (const auto& member : plan.spec->members) {
@@ -271,9 +330,11 @@ endmodule
                     && row.reason.find("fork_random") == std::string::npos
                     && row.reason.find("SystemVerilogMath") == std::string::npos
                     && row.reason.find("SystemVerilogScalarBinary")
+                        == std::string::npos
+                    && row.reason.find("fork_callable_frames")
                         == std::string::npos,
-                "disable, fork-child $urandom and real arithmetic must stay in "
-                "the kernel: " + row.reason);
+                "disable, fork-child $urandom, real arithmetic and automatic "
+                "tasks in fork branches must stay in the kernel: " + row.reason);
         }
     }
     project.cone_fusion = kernel;
