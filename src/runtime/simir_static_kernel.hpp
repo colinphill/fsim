@@ -551,6 +551,11 @@ struct StaticKernelInlinedProgram {
             return !value.port_segment;
         } else {
             return std::is_same_v<T, WaitFor>
+                // History queries of host signals
+                // (static_kernel_host_signal).
+                || std::is_same_v<T, SignalLastValue>
+                || std::is_same_v<T, SignalLastEvent>
+                || std::is_same_v<T, SignalLastActive>
                 || std::is_same_v<T, WaitSensitivity>
                 || std::is_same_v<T, WaitForever>
                 || std::is_same_v<T, ForkEnd>
@@ -562,7 +567,18 @@ struct StaticKernelInlinedProgram {
                 || std::is_same_v<T, StringMethod>
                 || std::is_same_v<T, LoadStringConstant>
                 || std::is_same_v<T, CopyStringRegister>
+                || std::is_same_v<T, CompareStrings>
+                || std::is_same_v<T, StringLength>
+                || std::is_same_v<T, StringIndex>
+                || std::is_same_v<T, StringReplaceByte>
                 || std::is_same_v<T, ReadStringObject>
+                // $timeformat (20.4.2).
+                || std::is_same_v<T, TimeFormatControl>
+                // $dist_* (20.14.2).
+                || std::is_same_v<T, RandomDistribution>
+                // $countones and $countbits (20.9).
+                || std::is_same_v<T, CountOnes>
+                || std::is_same_v<T, CountBits>
                 // Between equal-shape private arrays (see the planner).
                 || std::is_same_v<T, CopyContainerRegister>
                 || std::is_same_v<T, PlusArgSelect>
@@ -770,6 +786,8 @@ struct StaticKernelInlinedProgram {
             return !value.port_segment;
         } else {
             return std::is_same_v<T, WaitFor>
+                // std.env.stop (16.5.6 STOP): the run pauses at the thread.
+                || std::is_same_v<T, Pause>
                 || std::is_same_v<T, SignalEvent>
                 || std::is_same_v<T, SignalActive>
                 || std::is_same_v<T, SignalLastValue>
@@ -793,7 +811,9 @@ struct StaticKernelInlinedProgram {
                 || std::is_same_v<T, CompareStrings>
                 || std::is_same_v<T, StringLength>
                 || std::is_same_v<T, StringIndex>
-                || std::is_same_v<T, StringReplaceByte>;
+                || std::is_same_v<T, StringReplaceByte>
+                || std::is_same_v<T, CountOnes>
+                || std::is_same_v<T, CountBits>;
         }
     }, operation);
 }

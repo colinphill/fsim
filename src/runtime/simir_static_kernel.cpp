@@ -1306,21 +1306,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     || std::is_same_v<T, SignalLastValue>
                     || std::is_same_v<T, SignalLastEvent>
                     || std::is_same_v<T, SignalLastActive>) {
-                    // The host's history of the cycles it ran. The host
-                    // keeps a selected range's history and a signal's
-                    // transactions for the processes that query them; the
-                    // host member's original program is not registered
-                    // with the host (its stub is), so the kernel registers
-                    // every member's queries.
+                    // The host's history of the cycles it ran, which
+                    // counts the host's time: no time warp.
                     vhdl_host_cycles_ = vhdl_host_cycles_
                         || (member.vhdl && !owned(op.signal));
-                    if (op.selection) {
-                        impl_.register_signal_selection(op.signal, *op.selection);
-                    }
-                    if constexpr (std::is_same_v<T, SignalActive>
-                        || std::is_same_v<T, SignalLastActive>) {
-                        impl_.observe_signal_transaction(op.signal);
-                    }
+                    host_written = host_written || !owned(op.signal);
                 } else if constexpr (std::is_same_v<T, FileReadLine>
                     || std::is_same_v<T, FileErrorStatus>) {
                     // A text read into a signal (commit_driver).
@@ -4130,6 +4120,12 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
             } else if constexpr (std::is_same_v<T, Reduction>) {
                 reg(op.destination, pc)
                     = reduce_value(op.operation, reg(op.source, pc));
+            } else if constexpr (std::is_same_v<T, CountOnes>) {
+                // $countones and $countbits (IEEE 1800-2023 20.9).
+                reg(op.destination, pc) = count_ones_value(reg(op.source, pc));
+            } else if constexpr (std::is_same_v<T, CountBits>) {
+                reg(op.destination, pc)
+                    = count_bits_value(reg(op.source, pc), op.state_mask);
             } else if constexpr (std::is_same_v<T, Shift>) {
                 reg(op.destination, pc) = shift_value(op.operation,
                     reg(op.value, pc), reg(op.amount, pc), op.signed_amount);

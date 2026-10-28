@@ -77,6 +77,8 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             || std::is_same_v<T, ConvertToTwoState>
             || std::is_same_v<T, LogicalNot>
             || std::is_same_v<T, Reduction>
+            || std::is_same_v<T, CountOnes>
+            || std::is_same_v<T, CountBits>
             || std::is_same_v<T, Extract>) {
             reads.push_back(op.source);
             write = op.destination;

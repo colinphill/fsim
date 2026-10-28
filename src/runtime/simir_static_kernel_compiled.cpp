@@ -706,7 +706,9 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 } else if constexpr (std::is_same_v<T, IntegerUnary>) {
                     define(op.destination, of(op.source));
                 } else if constexpr (std::is_same_v<T, PlusArgSelect>
-                    || std::is_same_v<T, RandomValue>) {
+                    || std::is_same_v<T, RandomValue>
+                    || std::is_same_v<T, CountOnes>
+                    || std::is_same_v<T, CountBits>) {
                     define(op.destination, 32U);
                 } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
                     // The time queries (IEEE 1800-2023 20.3): $stime is 32
@@ -1342,6 +1344,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     || std::is_same_v<T, TimeDisplay>
                     || std::is_same_v<T, Report>
                     || std::is_same_v<T, RandomValue>
+                    || std::is_same_v<T, CountOnes>
+                    || std::is_same_v<T, CountBits>
                     || std::is_same_v<T, ConcatenateStrings>
                     || std::is_same_v<T, LoadStringConstant>
                     || std::is_same_v<T, CopyStringRegister>

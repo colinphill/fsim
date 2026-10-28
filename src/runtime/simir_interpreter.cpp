@@ -1414,7 +1414,8 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     std::shared_ptr<const ProcessProgramTemplate> common_program,
     Process* const owned_process,
     ProcessInstanceProgram* const owned_instance,
-    const bool executable)
+    const bool executable,
+    const ProcessProgramView* const registration)
 {
     if (owned_process != nullptr && owned_instance != nullptr) {
         throw std::logic_error {
@@ -1704,9 +1705,20 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             || (kinds->kinds.test(static_kernel_detail::operation_kind_of<Kinds>)
                 || ...);
     };
-    const bool scan_registration = kinds == nullptr
-        || kinds->transaction_wait
-        || has_kind.template operator()<MailboxCreate, MailboxPut, MailboxGet,
+    // The operations whose registrations the process carries (see
+    // add_process_program_impl's `registration`).
+    const auto& registered = registration != nullptr ? *registration : process;
+    const auto* const registered_kinds = registration != nullptr
+        ? body_kinds(registered.operations()) : kinds;
+    const auto has_registered_kind = [&]<typename... Kinds>() {
+        return registered_kinds == nullptr
+            || (registered_kinds->kinds.test(
+                    static_kernel_detail::operation_kind_of<Kinds>)
+                || ...);
+    };
+    const bool scan_registration = registered_kinds == nullptr
+        || registered_kinds->transaction_wait
+        || has_registered_kind.template operator()<MailboxCreate, MailboxPut, MailboxGet,
             MailboxNum, DynamicEvent, SignalActive, SignalLastActive,
             SignalEvent, SignalLastValue, SignalLastEvent, SignalDriving,
             SignalDrivingValue>();
@@ -1714,9 +1726,9 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     // edge vectors during registration, while OperationList::signal is
     // allocation-free and preserves per-instance signal identities.
     for (std::size_t instruction = 0U;
-         scan_registration && instruction < process.operations().size();
+         scan_registration && instruction < registered.operations().size();
          ++instruction) {
-        const auto& operation = process.operations()[instruction];
+        const auto& operation = registered.operations()[instruction];
         const auto valid_mailbox_kind = [](const MailboxElementKind kind) {
             return kind == MailboxElementKind::packed
                 || kind == MailboxElementKind::string;
@@ -1732,86 +1744,86 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         if (const auto* create = operation_get_if<MailboxCreate>(&operation)) {
             if (!valid_mailbox_shape(
                     create->element_kind, create->element_width)
-                || create->destination >= process.register_count()
-                || create->capacity >= process.register_count()) {
+                || create->destination >= registered.register_count()
+                || create->capacity >= registered.register_count()) {
                 throw std::invalid_argument {
                     "SimIR MailboxCreate has invalid typed registers or shape"
                 };
             }
         } else if (const auto* put = operation_get_if<MailboxPut>(&operation)) {
             if (!valid_mailbox_shape(put->element_kind, put->element_width)
-                || put->receiver >= process.register_count()
+                || put->receiver >= registered.register_count()
                 || (put->result
-                    && *put->result >= process.register_count())
+                    && *put->result >= registered.register_count())
                 || (put->element_kind == MailboxElementKind::packed
-                    ? put->source >= process.register_count()
-                    : put->string_source >= process.string_register_count())) {
+                    ? put->source >= registered.register_count()
+                    : put->string_source >= registered.string_register_count())) {
                 throw std::invalid_argument {
                     "SimIR MailboxPut has invalid typed registers or shape"
                 };
             }
         } else if (const auto* get = operation_get_if<MailboxGet>(&operation)) {
             if (!valid_mailbox_shape(get->element_kind, get->element_width)
-                || get->receiver >= process.register_count()
+                || get->receiver >= registered.register_count()
                 || (get->result
-                    && *get->result >= process.register_count())
+                    && *get->result >= registered.register_count())
                 || (get->element_kind == MailboxElementKind::packed
-                    ? get->destination >= process.register_count()
+                    ? get->destination >= registered.register_count()
                     : get->string_destination
-                        >= process.string_register_count())) {
+                        >= registered.string_register_count())) {
                 throw std::invalid_argument {
                     "SimIR MailboxGet has invalid typed registers or shape"
                 };
             }
         } else if (const auto* num = operation_get_if<MailboxNum>(&operation)) {
-            if (num->receiver >= process.register_count()
-                || num->destination >= process.register_count()) {
+            if (num->receiver >= registered.register_count()
+                || num->destination >= registered.register_count()) {
                 throw std::invalid_argument {
                     "SimIR MailboxNum has an invalid register ID"
                 };
             }
         } else if (const auto* event = operation_get_if<DynamicEvent>(&operation)) {
-            if (event->receiver >= process.register_count()
-                || event->destination >= process.register_count()) {
+            if (event->receiver >= registered.register_count()
+                || event->destination >= registered.register_count()) {
                 throw std::invalid_argument {
                     "SimIR DynamicEvent has an invalid register ID"
                 };
             }
         }
         if (const auto* active = operation_get_if<SignalActive>(&operation)) {
-            const auto signal = process.operations().signal(active->signal);
+            const auto signal = registered.operations().signal(active->signal);
             observe_signal_transaction(signal);
             register_signal_selection(signal, active->selection);
         } else if (const auto* last_active
                    = operation_get_if<SignalLastActive>(&operation)) {
             const auto signal
-                = process.operations().signal(last_active->signal);
+                = registered.operations().signal(last_active->signal);
             observe_signal_transaction(signal);
             register_signal_selection(signal, last_active->selection);
         } else if (const auto* event
                    = operation_get_if<SignalEvent>(&operation)) {
             register_signal_selection(
-                process.operations().signal(event->signal),
+                registered.operations().signal(event->signal),
                 event->selection);
         } else if (const auto* last_value
                    = operation_get_if<SignalLastValue>(&operation)) {
             register_signal_selection(
-                process.operations().signal(last_value->signal),
+                registered.operations().signal(last_value->signal),
                 last_value->selection);
         } else if (const auto* last_event
                    = operation_get_if<SignalLastEvent>(&operation)) {
             register_signal_selection(
-                process.operations().signal(last_event->signal),
+                registered.operations().signal(last_event->signal),
                 last_event->selection);
         } else if (const auto* driving
                    = operation_get_if<SignalDriving>(&operation)) {
             register_signal_selection(
-                process.operations().signal(driving->signal),
+                registered.operations().signal(driving->signal),
                 driving->selection);
         } else if (const auto* driving_value
                    = operation_get_if<SignalDrivingValue>(&operation)) {
             register_signal_selection(
-                process.operations().signal(driving_value->signal),
+                registered.operations().signal(driving_value->signal),
                 driving_value->selection);
         }
         const auto* wait = operation_get_if<WaitOn>(&operation);
@@ -1820,7 +1832,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         }
         for (std::size_t index = 0; index < wait->edges.size(); ++index) {
             if (wait->edges[index] == EdgeKind::transaction) {
-                observe_signal_transaction(process.operations().signal(
+                observe_signal_transaction(registered.operations().signal(
                     wait->signals.at(index)));
             }
         }
@@ -1899,14 +1911,14 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     // A delayed continuous assignment or gate drives X until its first
     // delayed value matures (see register_driver).
     bool delayed_writer = false;
-    if (kinds != nullptr) {
-        delayed_writer
-            = has_kind.template operator()<WriteInertial, WriteInertialSlice>();
+    if (registered_kinds != nullptr) {
+        delayed_writer = has_registered_kind.template
+            operator()<WriteInertial, WriteInertialSlice>();
     } else {
         for (std::size_t instruction = 0;
-             instruction < process.operations().size() && !delayed_writer;
+             instruction < registered.operations().size() && !delayed_writer;
              ++instruction) {
-            const auto& operation = process.operations()[instruction];
+            const auto& operation = registered.operations()[instruction];
             delayed_writer = operation_holds<WriteInertial>(operation)
                 || operation_holds<WriteInertialSlice>(operation);
         }

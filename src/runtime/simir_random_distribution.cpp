@@ -278,18 +278,14 @@ std::string_view random_distribution_issue_message(
     return "random distribution reported an invalid issue";
 }
 
-void Interpreter::Impl::execute_random_distribution(
-    ProcessState& process,
-    const RandomDistribution& operation)
+RandomDistributionStep random_distribution_step(
+    const RandomDistribution& operation, const PackedLogic4& seed_value,
+    const PackedLogic4& first_value, const PackedLogic4* second_value)
 {
-    const auto integer_operand = [&](const RegisterId register_id)
+    const auto integer_operand = [](const PackedLogic4& operand)
         -> std::optional<std::int32_t> {
-        const auto operand = process.executor
-            ? process.executor->read_register(register_id, 32U)
-            : get_register(process, register_id);
         if (operand.width() != 32U || operand.is_logic9()) {
-            fail(
-                process,
+            throw std::invalid_argument(
                 "random distribution operand must be a 32-bit integer");
         }
         if (operand.low_word().bval != 0U) {
@@ -298,50 +294,71 @@ void Interpreter::Impl::execute_random_distribution(
         return std::bit_cast<std::int32_t>(
             static_cast<std::uint32_t>(operand.low_word().aval));
     };
-    const auto report_warning = [&](const std::string_view message) {
-        if (report_hook) {
-            report_hook(
-                process.id, message, AssertionSeverity::warning,
-                operation.source, scheduler.now(), scheduler.delta());
-        }
-    };
-    const auto seed = integer_operand(operation.seed);
-    const auto first = integer_operand(operation.first);
-    const auto second = operation.second
-        ? integer_operand(*operation.second)
+    const auto seed = integer_operand(seed_value);
+    const auto first = integer_operand(first_value);
+    const auto second = second_value != nullptr
+        ? integer_operand(*second_value)
         : std::nullopt;
     // $dist_uniform with start >= end returns start without reading the
     // seed (IEEE 1800-2017 Annex N, rtl_dist_uniform).
     if (!seed && first && second
         && operation.kind == RandomDistributionKind::uniform
         && *first >= *second) {
-        write_process_register(
-            process, operation.destination,
-            PackedLogic4::from_aval_bval(
-                32U, std::bit_cast<std::uint32_t>(*first), 0U));
-        return;
+        return { std::bit_cast<std::uint32_t>(*first), std::nullopt,
+            std::nullopt };
     }
-    if (!seed || !first || (operation.second && !second)) {
-        report_warning(
-            "random distribution arguments must not contain X or Z");
-        write_process_register(
-            process, operation.destination,
-            PackedLogic4::from_aval_bval(32U, 0U, 0U));
-        return;
+    if (!seed || !first || (second_value != nullptr && !second)) {
+        return { 0U, std::nullopt,
+            "random distribution arguments must not contain X or Z" };
     }
     const auto evaluated = evaluate_random_distribution(
         operation.kind, *seed, *first, second);
+    RandomDistributionStep step {
+        std::bit_cast<std::uint32_t>(evaluated.value),
+        std::bit_cast<std::uint32_t>(evaluated.seed),
+        std::nullopt,
+    };
     if (evaluated.issue != RandomDistributionIssue::none) {
-        report_warning(random_distribution_issue_message(evaluated.issue));
+        step.warning = random_distribution_issue_message(evaluated.issue);
+    }
+    return step;
+}
+
+void Interpreter::Impl::execute_random_distribution(
+    ProcessState& process,
+    const RandomDistribution& operation)
+{
+    const auto operand = [&](const RegisterId register_id) {
+        return process.executor
+            ? process.executor->read_register(register_id, 32U)
+            : get_register(process, register_id);
+    };
+    RandomDistributionStep step;
+    try {
+        const auto seed = operand(operation.seed);
+        const auto first = operand(operation.first);
+        if (operation.second) {
+            const auto second = operand(*operation.second);
+            step = random_distribution_step(operation, seed, first, &second);
+        } else {
+            step = random_distribution_step(operation, seed, first, nullptr);
+        }
+    } catch (const std::invalid_argument& error) {
+        fail(process, error.what());
+    }
+    if (step.warning && report_hook) {
+        report_hook(
+            process.id, *step.warning, AssertionSeverity::warning,
+            operation.source, scheduler.now(), scheduler.delta());
     }
     write_process_register(
         process, operation.destination,
-        PackedLogic4::from_aval_bval(
-            32U, std::bit_cast<std::uint32_t>(evaluated.value), 0U));
-    write_process_register(
-        process, operation.seed,
-        PackedLogic4::from_aval_bval(
-            32U, std::bit_cast<std::uint32_t>(evaluated.seed), 0U));
+        PackedLogic4::from_aval_bval(32U, step.value, 0U));
+    if (step.seed) {
+        write_process_register(
+            process, operation.seed,
+            PackedLogic4::from_aval_bval(32U, *step.seed, 0U));
+    }
 }
 
 } // namespace fsim::runtime::simir

@@ -1552,75 +1552,16 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
         } else if constexpr (std::is_same_v<OperationType, WriteAfter>) {
             auto value = get_register(process, op.source);
             ++process.pc;
-            if (op.domain
-                != SignalUpdateDomain::generic) {
-                schedule_systemverilog_update(
-                    process.id, op.signal, std::move(value),
-                    std::nullopt, op.domain, op.delay);
-            } else {
-                scheduler.schedule_after(
-                    op.delay, SchedulerPhase::update, process.id,
-                    [this,
-                        driver = process.id,
-                        signal = op.signal,
-                        value = std::move(value)](Scheduler&) mutable {
-                        stage_update(
-                            driver, signal, std::move(value));
-                    });
-            }
+            schedule_after_update(process.id, op.signal, std::move(value),
+                std::nullopt, op.domain, op.delay);
         } else if constexpr (std::is_same_v<OperationType, WriteDelayed>) {
             auto value = get_register(process, op.source);
-            const auto evaluate_delay = [&](const WaitFor& wait) {
-                if (!wait.source) {
-                    return wait.delay;
-                }
-                const auto payload
-                    = get_register(process, *wait.source);
-                // An unknown integral delay counts as zero (9.4.1).
-                return wait.source_kind
-                            == SystemVerilogScalarKind::None
-                        && payload.low_word().bval != 0U
-                    ? SimulationTick { 0U }
-                    : normalized_dynamic_wait_delay(wait, payload);
-            };
-            const auto delay = evaluate_delay(op.delay);
-            const auto fall = op.fall
-                ? evaluate_delay(*op.fall)
-                : delay;
-            const auto turnoff = op.turnoff
-                ? evaluate_delay(*op.turnoff)
-                : std::min(delay, fall);
+            const auto delays = write_delayed_delays(op,
+                [&](const RegisterId id) -> const PackedLogic4& {
+                    return get_register(process, id);
+                });
             ++process.pc;
-            if (op.inertial) {
-                schedule_inertial(
-                    process.id,
-                    op.signal,
-                    std::move(value),
-                    op.offset,
-                    TransitionDelays { delay, fall, turnoff },
-                    op.domain);
-            } else if (op.domain != SignalUpdateDomain::generic) {
-                schedule_systemverilog_update(
-                    process.id, op.signal, std::move(value),
-                    op.offset, op.domain, delay);
-            } else {
-                scheduler.schedule_after(
-                    delay, SchedulerPhase::update, process.id,
-                    [this,
-                        driver = process.id,
-                        signal = op.signal,
-                        offset = op.offset,
-                        value = std::move(value)](Scheduler&) mutable {
-                        if (offset) {
-                            stage_update_slice(
-                                driver, signal, std::move(value),
-                                *offset);
-                        } else {
-                            stage_update(
-                                driver, signal, std::move(value));
-                        }
-                    });
-            }
+            schedule_write_delayed(process.id, op, std::move(value), delays);
         } else if constexpr (std::is_same_v<OperationType, WriteInertial>) {
             auto value = get_register(process, op.source);
             ++process.pc;
@@ -1680,29 +1621,8 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
         } else if constexpr (std::is_same_v<OperationType, WriteAfterSlice>) {
             auto value = get_register(process, op.source);
             ++process.pc;
-            if (op.domain
-                != SignalUpdateDomain::generic) {
-                schedule_systemverilog_update(
-                    process.id, op.signal, std::move(value),
-                    op.offset, op.domain, op.delay);
-            } else {
-                scheduler.schedule_after(
-                    op.delay,
-                    SchedulerPhase::update,
-                    process.id,
-                    [this,
-                        driver = process.id,
-                        signal = op.signal,
-                        offset = op.offset,
-                        value = std::move(value)](
-                        Scheduler&) mutable {
-                        stage_update_slice(
-                            driver,
-                            signal,
-                            std::move(value),
-                            offset);
-                    });
-            }
+            schedule_after_update(process.id, op.signal, std::move(value),
+                op.offset, op.domain, op.delay);
         } else if constexpr (std::is_same_v<OperationType, WriteInertialSlice>) {
             auto value = get_register(process, op.source);
             ++process.pc;
@@ -1771,31 +1691,9 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             // no effect (IEEE 1800-2017 11.5.1).
             const auto written = written_offset(op.selection);
             ++process.pc;
-            const auto offset = written.value_or(0U);
-            if (!written) {
-                // Nothing to schedule.
-            } else if (op.domain
-                != SignalUpdateDomain::generic) {
-                schedule_systemverilog_update(
-                    process.id, op.signal, std::move(value),
-                    offset, op.domain, op.delay);
-            } else {
-                scheduler.schedule_after(
-                    op.delay,
-                    SchedulerPhase::update,
-                    process.id,
-                    [this,
-                        driver = process.id,
-                        signal = op.signal,
-                        offset,
-                        value = std::move(value)](
-                        Scheduler&) mutable {
-                        stage_update_slice(
-                            driver,
-                            signal,
-                            std::move(value),
-                            offset);
-                    });
+            if (written) {
+                schedule_after_update(process.id, op.signal,
+                    std::move(value), *written, op.domain, op.delay);
             }
         } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicPartSlice>) {
             try {
@@ -1840,29 +1738,9 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
                     op.selection);
                 ++process.pc;
                 if (write) {
-                    if (op.domain
-                        != SignalUpdateDomain::generic) {
-                        schedule_systemverilog_update(
-                            process.id, op.signal,
-                            std::move(write->value), write->offset,
-                            op.domain, op.delay);
-                    } else {
-                        scheduler.schedule_after(
-                            op.delay,
-                            SchedulerPhase::update,
-                            process.id,
-                            [this,
-                                driver = process.id,
-                                signal = op.signal,
-                                write = std::move(*write)](
-                                Scheduler&) mutable {
-                                stage_update_slice(
-                                    driver,
-                                    signal,
-                                    std::move(write.value),
-                                    write.offset);
-                            });
-                    }
+                    schedule_after_update(process.id, op.signal,
+                        std::move(write->value), write->offset, op.domain,
+                        op.delay);
                 }
             } catch (const std::invalid_argument& error) {
                 fail(process, error.what());
@@ -2785,6 +2663,63 @@ SimulationTick Interpreter::Impl::signal_last_active_attribute(
         ? signal_attribute_detail::elapsed_since(
               *this, selected->last_transaction)
         : signal_attribute_detail::last_active(*this, signal);
+}
+
+
+void Interpreter::Impl::schedule_after_update(const ProcessId driver,
+    const SignalId signal, PackedLogic4 value,
+    const std::optional<std::size_t> offset,
+    const SignalUpdateDomain domain, const SimulationTick delay)
+{
+    if (domain != SignalUpdateDomain::generic) {
+        schedule_systemverilog_update(
+            driver, signal, std::move(value), offset, domain, delay);
+        return;
+    }
+    scheduler.schedule_after(delay, SchedulerPhase::update, driver,
+        [this, driver, signal, offset, value = std::move(value)](
+            Scheduler&) mutable {
+            if (offset) {
+                stage_update_slice(driver, signal, std::move(value), *offset);
+            } else {
+                stage_update(driver, signal, std::move(value));
+            }
+        });
+}
+
+TransitionDelays Interpreter::Impl::write_delayed_delays(
+    const WriteDelayed& operation,
+    const std::function<const PackedLogic4&(RegisterId)>& read)
+{
+    const auto evaluate = [&](const WaitFor& wait) {
+        if (!wait.source) {
+            return wait.delay;
+        }
+        const auto& payload = read(*wait.source);
+        // An unknown integral delay counts as zero (9.4.1).
+        return wait.source_kind == SystemVerilogScalarKind::None
+                && payload.low_word().bval != 0U
+            ? SimulationTick { 0U }
+            : normalized_dynamic_wait_delay(wait, payload);
+    };
+    const auto rise = evaluate(operation.delay);
+    const auto fall = operation.fall ? evaluate(*operation.fall) : rise;
+    const auto turnoff = operation.turnoff ? evaluate(*operation.turnoff)
+                                           : std::min(rise, fall);
+    return TransitionDelays { rise, fall, turnoff };
+}
+
+void Interpreter::Impl::schedule_write_delayed(const ProcessId driver,
+    const WriteDelayed& operation, PackedLogic4 value,
+    const TransitionDelays& delays)
+{
+    if (operation.inertial) {
+        schedule_inertial(driver, operation.signal, std::move(value),
+            operation.offset, delays, operation.domain);
+    } else {
+        schedule_after_update(driver, operation.signal, std::move(value),
+            operation.offset, operation.domain, delays.rise);
+    }
 }
 
 } // namespace fsim::runtime::simir

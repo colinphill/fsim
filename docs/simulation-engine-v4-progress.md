@@ -138,6 +138,67 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — conversions, VHDL containers, projected writes, attributes, forces (`65711fa4`, sweep `v4c36`)
+
+**`65711fa4`** (five changesets)
+- **Port-association conversions** (IEEE 1076-2019 6.5.7.1, 14.7.3, family E1).
+  - A conversion program is a kernel update-phase member. It runs once per update commit of its sources, in FIFO order, and commits at once.
+  - Initial values settle to a quiet fixed point at construction, together with the wires (planner `Conversion`, spec `conversion_target`, plan magic v7).
+- **VHDL array and protected-type variables** (5.3.2, 5.6.2) in container registers.
+  - Private arrays are kernel storage.
+  - A bound register that is also element-written gets a private copy of its object (`copy_storage`).
+  - One planner container rule now serves both languages and admits fixed packed or scalar logic4 storage only.
+- **Delayed, transport and waveform assignments** (10.5.2.2, family D).
+  - A member's assignment goes to its host driver of a host signal through `Impl::schedule_projected_waveform`; `projected_element_delay` and `projected_rejection` are shared with the reference.
+  - The target stays a host signal.
+- **`'EVENT`, `'ACTIVE`, `'LAST_VALUE`, `'LAST_EVENT`, `'LAST_ACTIVE`** (16.2.4) of host signals.
+  - `Impl::signal_*_attribute` hold the reference's queries for the interpreter and the kernel.
+  - The kernel registers its members' selected ranges and transaction observation itself. The host member's original program is never registered with the host (its stub is), so before this its selections were missing.
+- **Force and release** (IEEE 1800-2023 10.6.2, 1076-2019 10.5.2.1, family H).
+  - A member forces a host signal through the host's `force_slice_from_process`/`release_slice_from_process`.
+  - A SystemVerilog force refreshes the kernel's readers at once; a VHDL force applies in the host's update phase.
+  - Port-segment forces stay on the host.
+- **Host cycles.** A kernel whose VHDL members stage host updates or read host attributes:
+  - queues its first activation;
+  - keeps its rounds equal to the host's deltas (no delta collapse);
+  - never owns time (`vhdl_host_cycles_`).
+  - `static_kernel_host_signal` names the signal each such operation keeps on the host.
+- **Debugger.** A debugger read of a member's null-array local returns it empty, as the reference does.
+
+**ct4 findings fixed before the commit.**
+- `systemc_matrix_scheduling` showed 59 scheduler callbacks against the reference's 55: a projected host write forced a re-activation every time step. The round already yields when the kernel has work, and the host wakes kernel readers when it applies the update, so the forced yield was removed (the issue1143 reduction still matches).
+- `vhdl_arrays` threw "debug local has not been initialized" for a zero-width local once its process became a member.
+
+**Validation.** ctest 1087/1087 in all four gate variants. Targeted runs on the live build had 0 losses vs `b96x1`: the union of the changeset case lists, 801 cases. Within those cases, hosted processes fell from 1,233 to 519 for attributes and forces, and from 1,254 to 744 for changesets 1–3. Sweep `v4c36` (frozen `65711fa4`) has 0 losses:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2641 / 2641 | 270 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+Hosted processes in the sweep: 5,857 (v4c35 7,041). The top remaining reasons:
+
+| Reason | Cases | Processes |
+|---|---:|---:|
+| `opaque_access:ClassAllocate` | 590 | 636 |
+| `behavioral_observed` | 141 | 1031 |
+| `behavioral_final` | 137 | 576 |
+| `behavioral_package_static_initializer` | 110 | 207 |
+| `behavioral_drive_strength` | 85 | 1068 |
+| `commit_program:conversion` | 82 | 1028 |
+
+**Next.** In the tree:
+- SystemVerilog delayed assignments (`WriteAfter*`, `WriteInertial*`, `WriteDelayed`) through shared `Impl::schedule_after_update`/`schedule_write_delayed`;
+- SystemVerilog `'LAST_*`-style history queries;
+- vector edges in thread waits (the LSB, 9.4.2);
+- VHDL `std.env.stop`.
+
+Then family F (final, package initializers, region processes).
+
 ### 2026-10-28: hosted kinds into the kernel — callable arrays, strings, file I/O, VHDL-2019 reports (`24f1a3ca`, sweep `v4c35`)
 
 **`24f1a3ca`**

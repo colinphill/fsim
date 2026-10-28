@@ -1108,13 +1108,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             const auto signal = value.signals[entry];
                             const auto edge = value.edges.empty()
                                 ? EdgeKind::any : value.edges[entry];
+                            // A vector's edge is its least significant
+                            // bit's (IEEE 1800-2023 9.4.2), bit 0 of the
+                            // signal's own slot or input.
                             supported = signal < signal_count
                                 && !signals_[signal].event_variable
                                 && (edge == EdgeKind::any
                                     || ((edge == EdgeKind::posedge
                                             || edge == EdgeKind::negedge)
                                         && signals_[signal].initial_value.width()
-                                            == 1U));
+                                            != 0U));
                             if (supported) {
                                 member.waited.push_back(signal);
                             }
@@ -3758,6 +3761,28 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
             return false;
         });
+    // A member reading a host signal's history ('EVENT, $last_event...)
+    // reads the host's, which records an update when the host commits it.
+    std::vector<std::uint8_t> history_read(signal_count, 0U);
+    for (std::size_t index = 0U; index < process_count; ++index) {
+        if (member[index] == 0U || !views[index].valid()) {
+            continue;
+        }
+        const auto& operations = views[index].operations();
+        for (std::size_t op = 0U; op < operations.size(); ++op) {
+            const auto& operation = operations.expanded(op);
+            const auto mark = [&](const auto* query) {
+                if (query != nullptr && query->signal < signal_count) {
+                    history_read[query->signal] = 1U;
+                }
+            };
+            mark(operation_get_if<SignalEvent>(&operation));
+            mark(operation_get_if<SignalActive>(&operation));
+            mark(operation_get_if<SignalLastValue>(&operation));
+            mark(operation_get_if<SignalLastEvent>(&operation));
+            mark(operation_get_if<SignalLastActive>(&operation));
+        }
+    }
     for (SignalId signal = 0U; signal < signal_count; ++signal) {
         const auto& node = graph_signals[signal];
         // A foreign library may deposit into a signal no process writes
@@ -3779,8 +3804,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // kernel can mirror its staged Active updates at once.
         // A foreign library may deposit or release a signal, and a module
         // path delays the host's commit of its destination, so the host
-        // does not apply a member's update unchanged and at once.
+        // does not apply a member's update unchanged and at once. A mirrored
+        // update would wake a member whose history query (history_read) does
+        // not see it yet.
         if (!forces && !access.foreign && path_destination[signal] == 0U
+            && history_read[signal] == 0U
             && owned[signal] == 0U && virtual_owned[signal] == 0U
             && !node.writers.empty()
             // One driver of an unresolved variable or a plain net (no pull,

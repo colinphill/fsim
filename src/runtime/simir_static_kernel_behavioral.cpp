@@ -1017,6 +1017,44 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             } catch (const std::exception& error) {
                 fail(member_index, pc, error.what());
             }
+        } else if constexpr (std::is_same_v<T, RandomDistribution>) {
+            // $dist_* (IEEE 1800-2023 20.14.2): the reference's step on the
+            // member's registers; the seed is the caller's inout variable.
+            RandomDistributionStep step;
+            try {
+                step = random_distribution_step(op, packed_register(op.seed),
+                    packed_register(op.first),
+                    op.second ? &packed_register(*op.second) : nullptr);
+            } catch (const std::invalid_argument& error) {
+                fail(member_index, pc, error.what());
+            }
+            if (step.warning && impl_.report_hook) {
+                impl_.report_hook(member.process, *step.warning,
+                    AssertionSeverity::warning, op.source, kernel_now(),
+                    warp_time_ ? 0U : impl_.scheduler.delta());
+            }
+            const auto store = [&](const RegisterId id, const std::uint32_t value) {
+                packed_register(id) = Impl::coerce_value_kind(
+                    PackedLogic4::from_aval_bval(32U, value, 0U),
+                    id < member.register_kinds.size() ? member.register_kinds[id]
+                                                      : ValueKind::logic4);
+            };
+            store(op.destination, step.value);
+            if (step.seed) {
+                store(op.seed, *step.seed);
+            }
+        } else if constexpr (std::is_same_v<T, TimeFormatControl>) {
+            // $timeformat (IEEE 1800-2023 20.4.2) sets the host's format in
+            // the member's serial place (the parallel plan treats the step
+            // as opaque).
+            try {
+                impl_.apply_time_format(packed_register(op.units),
+                    packed_register(op.precision),
+                    packed_register(op.minimum_width),
+                    string_register(op.suffix));
+            } catch (const std::invalid_argument& error) {
+                fail(member_index, pc, error.what());
+            }
         } else if constexpr (std::is_same_v<T, ReadStringObject>) {
             // A string variable (IEEE 1800-2023 6.16) is host storage with
             // no events: the member reads and writes it in its serial place.

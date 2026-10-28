@@ -1038,6 +1038,20 @@ void ElaboratedDesign::populate_interpreter(
         }
         return std::nullopt;
     };
+    // A fused sink (a cone's or the static kernel's host) runs its
+    // substitute but stands for its original program, whose drivers and
+    // queries the interpreter registers.
+    const auto add_replacement = [&](const runtime::simir::ProcessId id,
+                                     runtime::simir::Process replacement) {
+        if (const auto found = fused_by_sink.find(id);
+            found != fused_by_sink.end()) {
+            (void)runtime::simir::InterpreterProgramAccess::
+                add_substituted_process(*interpreter, std::move(replacement),
+                    fused_sink_originals_[found->second]);
+        } else {
+            (void)interpreter->add_process(std::move(replacement));
+        }
+    };
     if (interpreter == nullptr) {
         throw std::invalid_argument("cannot populate a null SimIR interpreter");
     }
@@ -1088,7 +1102,7 @@ void ElaboratedDesign::populate_interpreter(
                         return runtime::simir::ProcessProgramView {
                             *common, row.instance }.materialize();
                     })) {
-                    (void)interpreter->add_process(std::move(*replacement));
+                    add_replacement(row.instance.id, std::move(*replacement));
                     continue;
                 }
             }
@@ -1106,7 +1120,7 @@ void ElaboratedDesign::populate_interpreter(
             // dormant member or fused sink takes it without a copy.
             if (auto replacement = substitute(process.id,
                     [&] { return std::move(process); })) {
-                (void)interpreter->add_process(std::move(*replacement));
+                add_replacement(process.id, std::move(*replacement));
                 continue;
             }
             (void)interpreter->add_process(std::move(process));
@@ -1119,7 +1133,7 @@ void ElaboratedDesign::populate_interpreter(
                 (void)interpreter->validate_process(process);
             } else if (auto replacement = substitute(process.id,
                            [&] { return process; })) {
-                (void)interpreter->add_process(std::move(*replacement));
+                add_replacement(process.id, std::move(*replacement));
             } else {
                 (void)interpreter->add_process(process);
             }

@@ -164,6 +164,20 @@ struct RandomDistributionResult {
 [[nodiscard]] std::string_view random_distribution_issue_message(
     RandomDistributionIssue issue) noexcept;
 
+/// One $dist_* call (IEEE 1800-2023 20.14.2, Annex N) on its operand values:
+/// the result, the seed to write back (none when the seed was not read) and
+/// the warning to report. Throws std::invalid_argument for an operand that
+/// is not a 32-bit integer.
+struct RandomDistributionStep {
+    std::uint32_t value { };
+    std::optional<std::uint32_t> seed;
+    std::optional<std::string_view> warning;
+};
+
+[[nodiscard]] RandomDistributionStep random_distribution_step(
+    const RandomDistribution& operation, const PackedLogic4& seed,
+    const PackedLogic4& first, const PackedLogic4* second);
+
 void validate_container_value(const ContainerValue& value);
 
 [[nodiscard]] std::string error_text(ProcessId process,
@@ -2022,12 +2036,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalChangeOrigin origin = { });
     [[nodiscard]] bool can_stage_container_alias_deposit(
         ContainerObjectId object) const;
+    // `registration`, when given, is the program the process stands for: a
+    // fused cone's sink or the static kernel's host runs a substitute
+    // program, but the drivers, history queries, transaction observations
+    // and mailbox shapes registered from operations are the original's.
     [[nodiscard]] ProcessId add_process_program_impl(
         ProcessProgramView process,
         std::shared_ptr<const ProcessProgramTemplate> common_program,
         Process* owned_process,
         ProcessInstanceProgram* owned_instance,
-        bool executable);
+        bool executable,
+        const ProcessProgramView* registration = nullptr);
     [[nodiscard]] std::map<SignalId, std::vector<Process::DriverRegion>>
     expanded_driver_regions(const ProcessProgramView& process) const;
     void write_container_alias_deposit(
@@ -2712,6 +2731,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void set_time_format(
         ProcessState& process,
         const TimeFormatControl& operation);
+    /// $timeformat (IEEE 1800-2023 20.4.2) from its argument values;
+    /// throws std::invalid_argument for arguments outside the profile.
+    void apply_time_format(const PackedLogic4& units,
+        const PackedLogic4& precision, const PackedLogic4& minimum_width,
+        const std::string& suffix);
 
     [[nodiscard]] static std::uint64_t initial_random_state(
         const std::uint64_t seed,
@@ -3178,6 +3202,21 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] bool stage_validated_logic9_update_batches(
         std::span<const ProcessLogic9UpdateBatch> batches);
 
+    // An assignment with an intra-assignment or net delay (IEEE 1800-2023
+    // 10.3.3, 10.4.1-2): the update matures `delay` later, in its domain's
+    // region, or in the generic update phase.
+    void schedule_after_update(ProcessId driver, SignalId signal,
+        PackedLogic4 value, std::optional<std::size_t> offset,
+        SignalUpdateDomain domain, SimulationTick delay);
+    // A WriteDelayed's rise, fall and turn-off delays from its delay
+    // expressions; `read` gives a delay source register's value.
+    [[nodiscard]] static TransitionDelays write_delayed_delays(
+        const WriteDelayed& operation,
+        const std::function<const PackedLogic4&(RegisterId)>& read);
+    // Schedules a WriteDelayed's update (inertial for a net delay, 28.16).
+    void schedule_write_delayed(ProcessId driver,
+        const WriteDelayed& operation, PackedLogic4 value,
+        const TransitionDelays& delays);
     void schedule_inertial(
         const ProcessId process,
         const SignalId signal,

@@ -328,6 +328,11 @@ public:
         Interpreter& interpreter,
         std::shared_ptr<const ProcessProgramTemplate> common,
         ProcessInstanceProgram instance);
+    /// Add `substitute` as the process `original` stands for (a fused
+    /// cone's sink, the static kernel's host): it runs the substitute and
+    /// registers what the original's operations register.
+    [[nodiscard]] static ProcessId add_substituted_process(
+        Interpreter& interpreter, Process substitute, const Process& original);
     [[nodiscard]] static ProcessId validate_program(
         Interpreter& interpreter,
         std::shared_ptr<const ProcessProgramTemplate> common,

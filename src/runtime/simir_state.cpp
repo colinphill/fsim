@@ -3038,29 +3038,37 @@ void Interpreter::Impl::set_time_format(
     ProcessState& process,
     const TimeFormatControl& operation)
 {
-    const auto decode = [&](const RegisterId id, const char* name) {
-        const auto& value = get_register(process, id);
+    try {
+        apply_time_format(get_register(process, operation.units),
+            get_register(process, operation.precision),
+            get_register(process, operation.minimum_width),
+            get_string_register(process, operation.suffix));
+    } catch (const std::invalid_argument& error) {
+        fail(process, error.what());
+    }
+}
+
+void Interpreter::Impl::apply_time_format(const PackedLogic4& units_value,
+    const PackedLogic4& precision_value,
+    const PackedLogic4& minimum_width_value, const std::string& suffix)
+{
+    const auto decode = [&](const PackedLogic4& value, const char* name) {
         const auto word = value.low_word();
         if (value.width() != 32 || word.bval != 0) {
-            fail(
-                process,
-                std::string { "$timeformat " } + name
-                    + " must be a known 32-bit value");
+            throw std::invalid_argument(std::string { "$timeformat " } + name
+                + " must be a known 32-bit value");
         }
         return static_cast<std::uint32_t>(word.aval);
     };
     const auto units = static_cast<std::int32_t>(
-        decode(operation.units, "units"));
-    const auto precision = decode(operation.precision, "precision");
-    const auto minimum_width = decode(
-        operation.minimum_width, "minimum width");
-    const auto& suffix = get_string_register(process, operation.suffix);
+        decode(units_value, "units"));
+    const auto precision = decode(precision_value, "precision");
+    const auto minimum_width = decode(minimum_width_value, "minimum width");
     if (units < -15 || units > 0
         || precision > maximum_string_bytes
         || minimum_width > maximum_string_bytes
         || suffix.size() > maximum_string_bytes) {
-        fail(
-            process,
+        throw std::invalid_argument(
             "$timeformat arguments exceed their supported IEEE profile");
     }
     time_format.units = units;

@@ -924,6 +924,21 @@ ProcessId InterpreterProgramAccess::add_program(
         program, std::move(common), nullptr, &instance, true);
 }
 
+ProcessId InterpreterProgramAccess::add_substituted_process(
+    Interpreter& interpreter, Process substitute, const Process& original)
+{
+    if (interpreter.impl_->start_in_progress
+        || interpreter.impl_->validation_only) {
+        throw std::logic_error {
+            "cannot add a substituted SimIR process to this interpreter"
+        };
+    }
+    const ProcessProgramView registration { original };
+    return interpreter.impl_->add_process_program_impl(
+        ProcessProgramView { substitute }, { }, &substitute, nullptr, true,
+        &registration);
+}
+
 ProcessId InterpreterProgramAccess::validate_program(
     Interpreter& interpreter,
     std::shared_ptr<const ProcessProgramTemplate> common,
