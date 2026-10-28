@@ -353,6 +353,10 @@ struct HirCallableBodyRecording {
         semantic::DeclarationId declaration;
         std::string name;
         std::string result;
+        // A formal's debug name takes the frame's invocation identity on a
+        // collision (lower_hir_callable_body) rather than
+        // hir_callable_debug_local_name's suffix.
+        bool formal { };
     };
     std::vector<DebugName> debug_names;
     // The debug locals the body added, each with the index of its name.
@@ -383,6 +387,11 @@ public:
     /// Lowerer.
     void set_specialized_hir_unit(
         const semantic::SpecializedHirUnit* unit) noexcept;
+    // The module instance whose module-level SystemVerilog function bodies
+    // this Lowerer may record and replay (unit_callable_body_scope_); set
+    // after the specialization, which every lowering of the instance shares
+    // apart from generate identities.
+    void set_unit_callable_body_scope(std::string_view instance);
     void set_ancestor_systemverilog_specializations(
         const std::vector<const semantic::SpecializedHirUnit*>* contexts)
         noexcept;
@@ -5296,8 +5305,8 @@ private:
         std::unordered_map<std::uint32_t, HirVhdlShapedLocal>
             vhdl_shaped_formals;
         std::string debug_name;
-        // The frame key of a VHDL function call, from which
-        // hir_callable_body_memo_key derives the design-wide body key.
+        // The frame key of a function call, from which
+        // hir_callable_body_memo_key derives the body key.
         std::string memo_key;
         // Signal-class procedure formals denote their actual signal for the
         // whole call. Frames are specialized per actual signal set.
@@ -5340,11 +5349,17 @@ private:
     };
     void inherit_enclosing_hir_frame_facts(HirCallableFrame& frame) const;
     // The design-wide key under which the body of `frame` may be recorded
-    // and replayed: a package-level VHDL function whose frame reads no
-    // process state (signals, protected objects, generics bound from an
-    // instance, enclosing callables) and holds no string or container.
+    // and replayed: a package-level VHDL function, or a SystemVerilog
+    // function declared at the top of the module being lowered, within
+    // unit_callable_body_scope_; its frame reads no process state
+    // (signals, protected objects, generics bound from an instance,
+    // enclosing callables) and holds no string or container.
     [[nodiscard]] std::optional<std::string> hir_callable_body_memo_key(
         const HirCallableFrame& frame) const;
+    // The module instance whose processes, its generate blocks' included,
+    // share the recorded bodies of its module-level functions; empty when
+    // none is set. Changing the specialization clears it.
+    std::string unit_callable_body_scope_;
     // Counts of the lowering state a recordable body leaves unchanged.
     [[nodiscard]] std::vector<std::size_t>
     hir_callable_body_side_state() const;
@@ -5367,6 +5382,11 @@ private:
     // `name` of the callable `callable`; logged while a body is recorded.
     [[nodiscard]] std::string hir_callable_debug_local_name(
         std::size_t callable, semantic::DeclarationId declaration,
+        std::string_view name);
+    // The debug name of a formal of `callable`'s body: the frame's name and
+    // the formal's, with the invocation identity on a collision.
+    [[nodiscard]] std::string hir_callable_formal_debug_name(
+        std::size_t callable, semantic::DeclarationId formal,
         std::string_view name);
     std::vector<HirCallableBodyRecording::DebugName>*
         hir_callable_debug_name_log_ { };

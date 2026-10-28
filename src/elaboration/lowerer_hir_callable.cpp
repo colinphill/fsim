@@ -18973,9 +18973,7 @@ Lowerer::lower_hir_function_call_value(
         frame.type = *type;
         frame.vhdl_result_subtype = result_context;
         frame.vhdl_shaped_result = shaped_result;
-        if (declaration->vhdl != nullptr) {
-            frame.memo_key = callable_key;
-        }
+        frame.memo_key = callable_key;
         if (interface_callable) {
             frame.interface_receiver = interface_callable->receiver;
             frame.callee_unit = callee_unit;
@@ -24088,13 +24086,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 : std::string { };
             const auto span = hir_source_span(source);
             const auto storage = initial_frame->arguments[index];
-            auto debug_name = initial_frame->debug_name + "." + name;
-            if (!debug_local_names_.emplace(debug_name).second) {
-                debug_name += "@hir-callable-"
-                    + std::to_string(
-                        initial_frame->invocation_identity);
-                debug_local_names_.emplace(debug_name);
-            }
+            auto debug_name = hir_callable_formal_debug_name(
+                callable_index, formal, name);
             process_.debug_locals.push_back(DebugLocal {
                 std::move(debug_name),
                 type_name,

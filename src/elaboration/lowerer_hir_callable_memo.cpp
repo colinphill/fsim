@@ -372,13 +372,30 @@ std::optional<std::string> Lowerer::hir_callable_body_memo_key(
         return refuse("scope");
     }
     const auto unit = scopes[frame.scope.value()].unit;
-    if (!unit.valid() || unit.value() >= semantics.units().size()
-        || semantics.units()[unit.value()].kind
-            != semantic::UnitKind::vhdl_package
-        || specialized_hir_unit_->unit() == unit) {
+    if (!unit.valid() || unit.value() >= semantics.units().size()) {
         return refuse("unit");
     }
-    auto key = frame.memo_key;
+    const auto& declaring_unit = semantics.units()[unit.value()];
+    std::string key;
+    if (declaring_unit.kind == semantic::UnitKind::vhdl_package
+        && specialized_hir_unit_->unit() != unit) {
+        key = frame.memo_key;
+    } else if ((declaring_unit.language == semantic::Language::verilog
+                   || declaring_unit.language
+                       == semantic::Language::system_verilog)
+        && specialized_hir_unit_->unit() == unit
+        && !unit_callable_body_scope_.empty()
+        && scopes[frame.scope.value()].parent
+            == std::optional { declaring_unit.scope }) {
+        // Declared at the top of the module being lowered, outside any
+        // generate block, so its body names only the module's parameters
+        // and objects, the same in every generate block of the instance
+        // (IEEE 1800-2017 13.4, 27.3); a recorded body holds no object.
+        key = "module-function|" + frame.memo_key + "|instance:"
+            + unit_callable_body_scope_;
+    } else {
+        return refuse("unit");
+    }
     key += "|language:";
     key += std::to_string(static_cast<int>(language_));
     if (coverage_hir_process_active_) {
@@ -657,8 +674,11 @@ void Lowerer::replay_hir_callable_body(
     std::vector<std::string> names;
     names.reserve(body.debug_names.size());
     for (const auto& entry : body.debug_names) {
-        names.push_back(hir_callable_debug_local_name(
-            callable, entry.declaration, entry.name));
+        names.push_back(entry.formal
+                ? hir_callable_formal_debug_name(
+                      callable, entry.declaration, entry.name)
+                : hir_callable_debug_local_name(
+                      callable, entry.declaration, entry.name));
     }
     for (auto& [name, local] : body.debug_locals) {
         local.name = names[name];

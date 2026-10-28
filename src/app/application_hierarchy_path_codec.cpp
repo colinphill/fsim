@@ -40,7 +40,19 @@ constexpr std::uint32_t kInvalidId
     const auto continuation = [](const unsigned char byte) {
         return byte >= 0x80U && byte <= 0xbfU;
     };
+    constexpr std::uint64_t low_bits { 0x0101010101010101ULL };
+    constexpr std::uint64_t high_bits { 0x8080808080808080ULL };
     for (std::size_t index = 0; index < path.size();) {
+        // Eight ASCII bytes without a NUL at a time.
+        if (path.size() - index >= sizeof(std::uint64_t)) {
+            std::uint64_t word { };
+            std::memcpy(&word, path.data() + index, sizeof(word));
+            if ((word & high_bits) == 0U
+                && ((word - low_bits) & ~word & high_bits) == 0U) {
+                index += sizeof(word);
+                continue;
+            }
+        }
         const auto first = static_cast<unsigned char>(path[index]);
         if (first == 0U) {
             return Error::embedded_nul;

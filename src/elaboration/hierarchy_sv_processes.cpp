@@ -296,6 +296,9 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
     std::vector<DeferredGeneratedSystemVerilogItem>* const
         deferred_generated)
 {
+    // The instance's processes and its generate blocks' share the lowered
+    // bodies of its module-level functions.
+    lowerer.set_unit_callable_body_scope(path);
     std::unordered_map<const semantic::sv::GenerateRegion*,
         std::vector<semantic::DeclarationId>> generated_signal_declarations;
     const auto collect_generate_declarations = [&]
@@ -555,6 +558,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             &materialization.container_declaration_bindings);
         generated_lowerer.set_specialized_hir_unit(
             occurrence.specialization.get());
+        generated_lowerer.set_unit_callable_body_scope(path);
         generated_lowerer.set_ancestor_systemverilog_specializations(
             &materialization.type_owner_contexts);
         generated_lowerer.set_hir_code_coverage_context(

@@ -891,6 +891,23 @@ std::string Lowerer::hir_callable_debug_local_name(
     return result;
 }
 
+std::string Lowerer::hir_callable_formal_debug_name(
+    const std::size_t callable, const semantic::DeclarationId formal,
+    const std::string_view name)
+{
+    const auto& frame = hir_callable_frames_[callable];
+    auto result = frame.debug_name + "." + std::string { name };
+    if (!debug_local_names_.emplace(result).second) {
+        result += "@hir-callable-" + std::to_string(frame.invocation_identity);
+        debug_local_names_.emplace(result);
+    }
+    if (hir_callable_debug_name_log_ != nullptr) {
+        hir_callable_debug_name_log_->push_back(
+            { formal, std::string { name }, result, true });
+    }
+    return result;
+}
+
 bool Lowerer::initialize_hir_declarations(
     const std::span<const semantic::DeclarationId> declarations)
 {

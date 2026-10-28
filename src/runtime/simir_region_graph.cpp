@@ -909,6 +909,22 @@ bool ownership_matches_operations(const ProcessProgramView& process,
             }
         }
     }
+    // The fixpoint below visits every operation once per pass: expand each
+    // one that has instance fields once. A plain register operation names no
+    // signal, container or debug scope, so it is its own expansion.
+    std::vector<std::optional<Operation>> expansions(operations.size());
+    const auto expanded_at = [&](const std::size_t index) -> const Operation& {
+        const auto& stored = operations.at(index);
+        if (plain_register_operation(stored)
+            && !operation_holds<DebugPoint>(stored)) {
+            return stored;
+        }
+        auto& expansion = expansions[index];
+        if (!expansion) {
+            expansion = operations.expanded(index);
+        }
+        return *expansion;
+    };
     // Flow-insensitive mode (set below) proves one agreed width per register
     // for the whole program, so a suspension boundary forgets nothing; there
     // a reset would also keep the fixpoint from converging.
@@ -990,7 +1006,7 @@ bool ownership_matches_operations(const ProcessProgramView& process,
             // Source markers do not define or consume register widths.
             return true;
         }
-        const auto operation = operations.expanded(index);
+        const auto& operation = expanded_at(index);
         return visit_operation([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, LoadConstant>) {
@@ -1164,7 +1180,7 @@ bool ownership_matches_operations(const ProcessProgramView& process,
         if (index + 1U != operations.size()) {
             return false;
         }
-        const auto tail = operations.expanded(index);
+        const auto& tail = expanded_at(index);
         const auto* jump = operation_get_if<Jump>(&tail);
         return jump != nullptr && jump->target == 0U && static_loop(process);
     };
@@ -1193,7 +1209,7 @@ bool ownership_matches_operations(const ProcessProgramView& process,
     // definitions to a fixpoint, then validate every instruction against the
     // agreed widths. Each pass is linear in the program length.
     for (std::size_t index = 0; index < operations.size(); ++index) {
-        const auto operation = operations.expanded(index);
+        const auto& operation = expanded_at(index);
         if (const auto* jump = operation_get_if<Jump>(&operation)) {
             if (!final_loop_jump(index)
                 && (jump->target <= index

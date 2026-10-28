@@ -1195,6 +1195,11 @@ void Lowerer::set_ancestor_systemverilog_specializations(
     ancestor_systemverilog_specializations_ = contexts;
 }
 
+void Lowerer::set_unit_callable_body_scope(const std::string_view instance)
+{
+    unit_callable_body_scope_ = std::string { instance };
+}
+
 void Lowerer::set_specialized_hir_unit(
     const semantic::SpecializedHirUnit* const unit) noexcept
 {
@@ -1203,6 +1208,7 @@ void Lowerer::set_specialized_hir_unit(
     clear_hir_vhdl_subtype_name_cache();
     clear_hir_pure_integral_attempt_cache();
     clear_hir_vhdl_callable_cache();
+    unit_callable_body_scope_.clear();
     specialized_hir_unit_ = unit;
     vhdl_standard_ = frontend::VhdlStandard::Vhdl2008;
     systemverilog_standard_
