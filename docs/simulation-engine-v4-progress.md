@@ -138,6 +138,35 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: SV calls in static members, SCC levels, always_comb written exclusion (`965ac9e7`, sweep `v4c27`)
+
+The work came out of multi-threading Phase 0 on LDPC. The batch profile showed that LDPC's time sits in a few processes that were not static members, and in levelization that serialized everything downstream of a cycle.
+
+**What changed.**
+- **SCC-condensed levels** (`static_kernel_detail::condensed_levels`; used by the kernel constructor and `build_partitions`).
+  - Kahn layering used to give every node it could not place its own level, in index order: a cycle's members and everything after them. On LDPC that was 128 lane port actuals per time step, run as 4.66M batches of one.
+  - A member outside every cycle now takes its longest-path depth. The members of one cycle take consecutive levels in index order, and the nodes after a cycle start past its last level.
+- **SystemVerilog calls in static members** (`static_kernel_inline_calls`, `simir_static_kernel_analysis.cpp`). A combinational or sequential SV member may now call functions:
+  - Each non-recursive call whose frames are `native_isolated` is expanded in place: the callee's code replaces the `Call`, each `Return` becomes a jump to the return target, and the frame push and pop are dropped. The compiled kernel already elided those frames, so the expanded program runs the same operations in the same order (IEEE 1800-2023 13.4).
+  - The planner checks operation support on the expanded program. The kernel applies the same deterministic rewrite at construction, so the plan format is unchanged.
+  - LDPC's lane-math and v-math `always_comb` blocks and its main `always_ff` used to run as behavioral threads, because they call `sat_msg`, `magnitude` and similar functions. They are now static members.
+- **`always_comb`/`always_latch` sensitivity** (`lowerer_hir_process.cpp`). The implicit sensitivity now leaves out what the block, or a function it calls, writes at static positions: whole-signal or constant-slice writes that cover the dependency (IEEE 1800-2023 9.2.2.2.1 a), 9.2.2.3). The new flag `excludes_written_dependencies` is set only for source `always_comb`/`always_latch`, not for the derived driver processes that share `always_comb_or_latch`. LDPC's module-scope loop temporaries (`lane_math`, `variable_index`, `q_wide`, …) then have no readers and become silent slots (plain stores).
+- **Partitions.** A member with a loop in its body stays out of its instance's partition. Otherwise the lane-math loop joined all 128 lanes' cones into one 1163-member component, which reran whole 114k times (simulate 2.8 s).
+- **Assertions.** Non-failure `Report` (an immediate assertion's `$info/$warning/$error`) is admitted in SV sequential members. The per-lane RAM assertion blocks were behavioral threads only because of it.
+- **Profiles.**
+  - `FSIM_PROFILE_KERNEL_BATCHES` now also names the members behind batches of one (count and time).
+  - `FSIM_PROFILE_KERNEL_SLOTS` ranks slots by change count, with their notify shape.
+  - `FSIM_PROFILE_KERNEL` prints `levels=` and `cyclic_members=`.
+
+**LDPC, 20 frames.** The checksum is unchanged (`8a01ac745376f2b0`).
+- Simulate: 1.77 s → 1.53 s.
+- Slot changes: 58.3M → 33.4M.
+- Batch model at 8 threads: ×1.32 → ×1.86. Settle is 1.14 s and triggered 0.40 s; the residue is 0.22 s (was 0.67 s).
+- The largest remaining batch of one is the lane-math `always_comb`: 21.6k runs, 0.39 s. It is one member that loops over 128 lanes, so member-level threading cannot split it.
+
+**Validation.** Full ctest passes 1087/1087 in normal mode, with `FSIM_V4_STRICT=1`, and with `FSIM_KERNEL_VERIFY=1`. Codec parity holds (ok=11 done=1 pass=75). Sweep `v4c27` shows 0 losses against `b96x1`:
+- Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+
 ### 2026-10-27: SystemVerilog module-function body memo, end of the codec elaboration work (`a8e0eda7`, sweep `v4c26`)
 
 **What changed.**
