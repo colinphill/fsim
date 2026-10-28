@@ -133,6 +133,18 @@ void Interpreter::Impl::StaticKernel::compile_members()
             not_compiled_reason_[index] = "dynamic_containers";
             continue;
         }
+        // Assertion operations and other regions run the reference's
+        // assertion services on the operation tier.
+        if (members_[index].assertion) {
+            not_compiled_reason_[index] = "assertion";
+            continue;
+        }
+        // A program's end (complete_program_member) runs on the operation
+        // tier.
+        if (members_[index].program_owner) {
+            not_compiled_reason_[index] = "program";
+            continue;
+        }
         if (only != nullptr || skip != nullptr) {
             const auto name
                 = impl_.processes.program_view(members_[index].process).name();
@@ -549,7 +561,9 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                             work.push_back(pc + 1U);
                         } else if constexpr (std::is_same_v<T, DisableBlock>) {
                             work.push_back(pc + 1U);
-                            work.push_back(op.end);
+                            if (op.scopes.empty()) {
+                                work.push_back(op.end);
+                            }
                         } else if constexpr (std::is_same_v<T, Return>
                             || std::is_same_v<T, WaitSensitivity>
                             || std::is_same_v<T, Halt>
@@ -2573,8 +2587,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         op.branches.begin(), op.branches.end());
                 }
                 if constexpr (std::is_same_v<T, DisableBlock>) {
-                    // A disabled block's threads resume at its end.
-                    body.resume_entries.push_back(op.end);
+                    // A disabled block's threads resume at its end (a block
+                    // named by hierarchical name: its block_exit below).
+                    if (op.scopes.empty()) {
+                        body.resume_entries.push_back(op.end);
+                    }
                 }
                 if constexpr (behavioral_suspension<T>
                     || std::is_same_v<T, WaitSensitivity>) {
@@ -2583,6 +2600,12 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 if constexpr (std::is_same_v<T, DebugPoint>) {
                     if (debug_points_ && debug_point_executable(op.kind)) {
                         body.resume_entries.push_back(pc + 1U);
+                    }
+                    // A disable naming this block by hierarchical name, in
+                    // any member, resumes its threads at the block's end
+                    // (disable_named_scope).
+                    if (named_disable_ && op.kind == DebugPointKind::block_exit) {
+                        body.resume_entries.push_back(pc);
                     }
                 }
             }, member.operations[pc]);

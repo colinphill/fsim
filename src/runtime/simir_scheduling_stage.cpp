@@ -1185,7 +1185,10 @@ SignalChangeOrigin Interpreter::Impl::capture_signal_change_origin(
     const ProcessId process,
     const SignalUpdateDomain update_domain) const
 {
-    const auto process_origin = processes.scheduling_origin(process);
+    auto process_origin = processes.scheduling_origin(process);
+    if (static_kernel_region_host == process) {
+        process_origin.phase = static_kernel_region_host_phase;
+    }
     const auto process_domain = process_origin.process_domain;
     // A process that moved to a later region, such as an assertion action
     // block resumed in the Reactive region, writes from that region.

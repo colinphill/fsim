@@ -1409,6 +1409,41 @@ void Interpreter::Impl::observe_signal_transaction(const SignalId signal)
     }
 }
 
+void Interpreter::Impl::record_sampled_dependencies(
+    const ProcessProgramView& process)
+{
+    const auto record_sampled_dependency = [&](const SignalId signal) {
+        if (signal >= signals.size()
+            || signal >= sampled_value_dependency_mask.size()) {
+            sampled_value_dependencies_unknown = true;
+            return;
+        }
+        sampled_value_dependency_mask[signal] = 1U;
+    };
+    // Like transaction observation in add_process_program_impl, map just
+    // the IDs that contribute to the sampled-value mask without copying
+    // expanded operation payloads.
+    for (std::size_t instruction = 0U;
+         instruction < process.operations().size(); ++instruction) {
+        const auto& operation = process.operations()[instruction];
+        const auto* read = operation_get_if<ReadSignal>(&operation);
+        if (read == nullptr || read->kind == SignalReadKind::current) {
+            continue;
+        }
+        requires_sampled_values = true;
+        record_sampled_dependency(
+            process.operations().signal(read->signal));
+        if (read->clock) {
+            record_sampled_dependency(
+                process.operations().signal(*read->clock));
+        }
+        if (read->gate) {
+            record_sampled_dependency(
+                process.operations().signal(*read->gate));
+        }
+    }
+}
+
 ProcessId Interpreter::Impl::add_process_program_impl(
     ProcessProgramView process,
     std::shared_ptr<const ProcessProgramTemplate> common_program,
@@ -1956,36 +1991,8 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     if (process.program_owner()) {
         program_owners.insert(*process.program_owner());
     }
-    const auto record_sampled_dependency = [&](const SignalId signal) {
-        if (signal >= signals.size()
-            || signal >= sampled_value_dependency_mask.size()) {
-            sampled_value_dependencies_unknown = true;
-            return;
-        }
-        sampled_value_dependency_mask[signal] = 1U;
-    };
-    // Like transaction observation above, map just the IDs that contribute
-    // to the sampled-value mask without copying expanded operation payloads.
-    for (std::size_t instruction = 0U;
-         (kinds == nullptr || kinds->sampled_read)
-         && instruction < process.operations().size();
-         ++instruction) {
-        const auto& operation = process.operations()[instruction];
-        const auto* read = operation_get_if<ReadSignal>(&operation);
-        if (read == nullptr || read->kind == SignalReadKind::current) {
-            continue;
-        }
-        requires_sampled_values = true;
-        record_sampled_dependency(
-            process.operations().signal(read->signal));
-        if (read->clock) {
-            record_sampled_dependency(
-                process.operations().signal(*read->clock));
-        }
-        if (read->gate) {
-            record_sampled_dependency(
-                process.operations().signal(*read->gate));
-        }
+    if (kinds == nullptr || kinds->sampled_read) {
+        record_sampled_dependencies(process);
     }
     if (has_switch_metadata && !switch_connection) {
         if (switch_source_readers.size() < signals.size()) {

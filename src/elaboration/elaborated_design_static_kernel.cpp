@@ -175,6 +175,11 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
     // is a final procedure (the kernel runs that one in run_finals) or a
     // package static initializer (the kernel runs it at its startup action).
     stub.final = false;
+    // The kernel activates in the Active region even when the member it
+    // replaces is an assertion's process (that one resumes in its own
+    // region, StaticKernel::ready_thread_in).
+    stub.observed = false;
+    stub.reactive = false;
     stub.startup_phase = ProcessStartupPhase::ordinary;
     stub.startup_order = 0U;
     stub.startup_package_owner_id = 0U;
@@ -444,6 +449,35 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         return signal < signal_count && (*aliased_events)[signal] == 0U;
     };
+    // A SystemVerilog process that runs in the Observed or Reactive region:
+    // its own region, or one a WaitRegion moves it to (IEEE 1800-2023 4.4.2,
+    // 16.4). As a member it runs outside the kernel's rounds.
+    const auto region_member = [](const ProcessProgramView& view) {
+        if (view.observed() || view.reactive()) {
+            return true;
+        }
+        const auto& operations = view.operations();
+        for (std::size_t op = 0U; op < operations.size(); ++op) {
+            if (operation_holds<WaitRegion>(operations[op])) {
+                return true;
+            }
+        }
+        return false;
+    };
+    // A process with assertion operations (static_kernel_assertion_operation)
+    // or a region of its own.
+    const auto assertion_member = [&](const ProcessProgramView& view) {
+        if (region_member(view)) {
+            return true;
+        }
+        const auto& operations = view.operations();
+        for (std::size_t op = 0U; op < operations.size(); ++op) {
+            if (static_kernel_assertion_operation(operations[op])) {
+                return true;
+            }
+        }
+        return false;
+    };
     // The first property that keeps a process off the kernel whatever its
     // body, or nullptr; `behavioral` applies the behavioral tier's rules.
     // With `all`, every such property is appended to it (the blockers
@@ -465,10 +499,19 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         };
         const auto non_logic4 = std::ranges::any_of(view.register_value_kinds(),
             [](const ValueKind kind) { return kind != ValueKind::logic4; });
-        if (view.observed() && hit("observed")) {
+        // A SystemVerilog behavioral member runs in its process's region
+        // (IEEE 1800-2023 4.4.2; StaticKernel::ready_thread_in).
+        if (view.observed() && (!behavioral || vhdl) && hit("observed")) {
             return first;
         }
-        if (view.reactive() && hit("reactive")) {
+        if (view.reactive() && (!behavioral || vhdl) && hit("reactive")) {
+            return first;
+        }
+        // A program's processes end the program, and with the last program
+        // the simulation (IEEE 1800-2023 24.7): a SystemVerilog behavioral
+        // member through the kernel (StaticKernel::complete_program_member),
+        // any other through the host's process records.
+        if (view.program_owner() && (!behavioral || vhdl) && hit("program")) {
             return first;
         }
         if (view.postponed() && hit("postponed")) {
@@ -1307,6 +1350,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
             }
             std::set<ContainerObjectId> dynamic_written;
+            // Container writes that change a reference-format register or a
+            // host object (the planner keeps written objects on the host):
+            // none notifies a kernel reader.
+            std::vector<std::uint8_t> host_container_write(count, 0U);
             if (supported) {
                 if (const char* reason
                     = container_rule(view, false, &dynamic_written)) {
@@ -1329,6 +1376,23 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 const auto is_dynamic = [&](const ContainerRegisterId id) {
                     return id < dynamic.size() && dynamic[id] != 0U;
                 };
+                for (std::size_t op = 0U; op < count; ++op) {
+                    const auto operation = operations.expanded(op);
+                    if (const auto* write
+                        = operation_get_if<ContainerWrite>(&operation)) {
+                        host_container_write[op] = is_dynamic(write->target);
+                    } else if (const auto* object
+                        = operation_get_if<WriteContainerObject>(&operation)) {
+                        host_container_write[op] = is_dynamic(object->source)
+                            && !static_kernel_arena_container_type(
+                                types[object->source]);
+                    } else if (const auto* element
+                        = operation_get_if<WriteContainerObjectElement>(
+                            &operation)) {
+                        host_container_write[op]
+                            = dynamic_written.contains(element->object);
+                    }
+                }
                 auto& uses = container_uses[index];
                 const bool rebuild = !dynamic_written.empty()
                     || std::ranges::any_of(dynamic,
@@ -1364,6 +1428,48 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 uses.erase(std::unique(uses.begin(), uses.end()), uses.end());
                 for (const auto object : dynamic_written) {
                     host_container_object[object] = 1U;
+                }
+            }
+            // A region member runs outside the kernel's rounds: it writes
+            // host signals (marked below), blocking assignments committed at
+            // once and updates staged from its own region; its fork
+            // children run in its region (the reference's queue_active_
+            // current), and a constant delay resumes it there. It neither
+            // waits #0, forces, disables nor writes design memories and
+            // kernel containers (host_container_write).
+            for (std::size_t op = 0U; supported && op < count
+                 && region_member(view); ++op) {
+                const auto operation = operations.expanded(op);
+                const bool denied = visit_operation([](const auto& value) {
+                    using T = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<T, WaitFor>) {
+                        // A delay resumes the thread in its region at the
+                        // later time (Impl::queue_at); a #0 resumes it in
+                        // this time step's Inactive region instead.
+                        return value.source.has_value() || value.delay == 0U;
+                    }
+                    return std::is_same_v<T, WriteAfter>
+                        || std::is_same_v<T, WriteAfterSlice>
+                        || std::is_same_v<T, WriteAfterDynamicSlice>
+                        || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                        || std::is_same_v<T, WriteDelayed>
+                        || std::is_same_v<T, WriteInertial>
+                        || std::is_same_v<T, WriteInertialSlice>
+                        || std::is_same_v<T, ForceSignalSlice>
+                        || std::is_same_v<T, ReleaseSignalSlice>
+                        || std::is_same_v<T, DisableBlock>
+                        || std::is_same_v<T, LoadMemory>
+                        || std::is_same_v<T, FileReadLine>
+                        || std::is_same_v<T, FileErrorStatus>
+                        || std::is_same_v<T, FileScan>
+                        || std::is_same_v<T, ContainerWrite>
+                        || std::is_same_v<T, WriteContainerObject>
+                        || std::is_same_v<T, WriteContainerObjectElement>;
+                }, operation);
+                if (denied && host_container_write[op] == 0U) {
+                    supported = false;
+                    failed_at = op;
+                    failed_reason = "region_operation";
                 }
             }
             if (!supported && census) {
@@ -1552,15 +1658,52 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     if (deferred_refusal != nullptr) {
         return disable(deferred_refusal);
     }
-    // A named block or task that a disable statement of another process
-    // names (IEEE 1800-2023 9.6.2) is terminated through the host scheduler's
-    // process records, which a kernel member does not have: a member holding
-    // such a block would keep running. The process stays on the host until
-    // the kernel itself can terminate a named scope (breadth workstream C3,
-    // SystemVerilog breadth: disable and process control).
+    // A disable naming a block or task by hierarchical name (IEEE 1800-2023
+    // 9.6.2) ends, for the first of its candidate names that a process
+    // declares, that interval in every activation of the declaring
+    // processes (Impl::disable_named_scope). The kernel does so for its
+    // members (StaticKernel::disable_named_scope) and the host for its
+    // processes: the disabling process and the declaring ones are members
+    // together, or all stay on the host. So are a program's processes, whose
+    // last one to end ends the program (IEEE 1800-2023 24.7; StaticKernel::
+    // complete_program_member). enforce_process_groups is applied again
+    // wherever a later rule drops a candidate.
+    struct ProcessGroup {
+        const char* reason { };
+        std::vector<std::size_t> processes;
+    };
+    std::vector<ProcessGroup> process_groups;
+    const auto enforce_process_groups = [&] {
+        bool any = false;
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (const auto& [reason, group] : process_groups) {
+                if (std::ranges::all_of(group, [&](const std::size_t index) {
+                        return candidates[index].has_value();
+                    })) {
+                    continue;
+                }
+                for (const auto index : group) {
+                    if (candidates[index]) {
+                        if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
+                            std::cerr << "fsim-kernel-plan: rejected process="
+                                      << views[index].name()
+                                      << " reason=" << reason << '\n';
+                        }
+                        candidates[index].reset();
+                        reject(index, reason);
+                        changed = true;
+                        any = true;
+                    }
+                }
+            }
+        }
+        return any;
+    };
     {
-        std::set<std::string> disabled_scopes;
-        for (const auto& view : views) {
+        std::vector<std::pair<std::size_t, std::vector<std::string>>> disables;
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            const auto& view = views[index];
             if (!view.valid()) {
                 continue;
             }
@@ -1571,46 +1714,72 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
                 const auto expanded = operations.expanded(op);
                 if (const auto* statement
-                    = operation_get_if<DisableBlock>(&expanded)) {
-                    disabled_scopes.insert(
-                        statement->scopes.begin(), statement->scopes.end());
+                    = operation_get_if<DisableBlock>(&expanded);
+                    statement != nullptr && !statement->scopes.empty()) {
+                    disables.emplace_back(index, statement->scopes);
                 }
             }
         }
-        if (!disabled_scopes.empty()) {
-            for (std::size_t index = 0U; index < process_count; ++index) {
-                if (!candidates[index]) {
+        // The processes declaring each named interval, as the reference
+        // pairs block_entry and block_exit points.
+        std::map<std::string, std::set<std::size_t>> declaring;
+        for (std::size_t index = 0U; !disables.empty() && index < process_count;
+             ++index) {
+            const auto& view = views[index];
+            if (!view.valid()) {
+                continue;
+            }
+            const auto& operations = view.operations();
+            std::vector<std::string> open;
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                const auto* point = operation_get_if<DebugPoint>(&operations[op]);
+                if (point == nullptr
+                    || (point->kind != DebugPointKind::block_entry
+                        && point->kind != DebugPointKind::block_exit)) {
                     continue;
                 }
-                const auto& operations = views[index].operations();
-                std::string named;
-                for (std::size_t op = 0U; op < operations.size() && named.empty();
-                     ++op) {
-                    const auto* point
-                        = operation_get_if<DebugPoint>(&operations[op]);
-                    if (point == nullptr
-                        || point->kind != DebugPointKind::block_entry) {
-                        continue;
-                    }
-                    const auto& actual = operations.debug_point(op, *point);
-                    const auto& scope
-                        = operations.debug_scope(actual.scope).str();
-                    if (disabled_scopes.contains(scope)) {
-                        named = scope;
-                    }
+                const auto& actual = operations.debug_point(op, *point);
+                const auto& scope = operations.debug_scope(actual.scope).str();
+                if (point->kind == DebugPointKind::block_entry) {
+                    open.push_back(scope);
+                    continue;
                 }
-                if (!named.empty()) {
-                    if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
-                        std::cerr << "fsim-kernel-plan: rejected process="
-                                  << views[index].name()
-                                  << " reason=disabled_scope scope=" << named
-                                  << '\n';
+                for (auto entry = open.rbegin(); entry != open.rend(); ++entry) {
+                    if (*entry == scope) {
+                        declaring[scope].insert(index);
+                        open.erase(std::next(entry).base());
+                        break;
                     }
-                    candidates[index].reset();
-                    reject(index, "disabled_scope");
                 }
             }
         }
+        for (const auto& [disabler, scopes] : disables) {
+            std::vector<std::size_t> group { disabler };
+            for (const auto& scope : scopes) {
+                if (const auto found = declaring.find(scope);
+                    found != declaring.end()) {
+                    group.insert(group.end(), found->second.begin(),
+                        found->second.end());
+                    break;
+                }
+            }
+            if (group.size() > 1U) {
+                process_groups.push_back({ "disabled_scope", std::move(group) });
+            }
+        }
+        std::map<std::uint32_t, std::vector<std::size_t>> programs;
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            const auto& view = views[index];
+            if (view.valid() && view.program_owner() && !view.final()) {
+                programs[*view.program_owner()].push_back(index);
+            }
+        }
+        for (auto& [owner, group] : programs) {
+            if (group.size() > 1U) {
+                process_groups.push_back({ "program", std::move(group) });
+            }
+        }
+        static_cast<void>(enforce_process_groups());
     }
     // A SystemC process is neither a member nor a hosted step: its body is
     // native SystemC code that its process executor resumes (S26).
@@ -1701,7 +1870,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             candidate.reset();
             reject(index, "language_mode");
         }
+        // Assertion members run in the SystemVerilog kernel's regions only.
+        if (candidate && (mixed || vhdl_mode) && !candidate->vhdl
+            && assertion_member(views[index])) {
+            candidate.reset();
+            reject(index, "assertion_language_mode");
+        }
     }
+    static_cast<void>(enforce_process_groups());
     // A module path delays the commit of its destination, measured from the
     // most recent transition of a path source (IEEE 1800-2023 30.4, 30.5).
     // The host applies that delay when the driver of the destination writes
@@ -1954,6 +2130,54 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         if (value.signal < signal_count) {
                             host_touched[value.signal] = 1U;
                         }
+                    }
+                }
+            }, operations.expanded(op));
+        }
+    }
+    // Assertion members read the host's sampled state (run_sampled_read):
+    // a sampled signal, its sampling clock and its gate are host signals,
+    // whose values, histories and events the host keeps (IEEE 1800-2023
+    // 16.5.1, 16.9.3). A region member's writes are the host's: blocking
+    // ones commit at once, updates are staged from the member's region
+    // (StaticKernel::write_host, Impl::capture_signal_change_origin).
+    for (std::size_t index = 0U; index < process_count; ++index) {
+        if (!candidates[index] || candidates[index]->vhdl
+            || candidates[index]->kind != behavioral_kind
+            || !assertion_member(views[index])) {
+            continue;
+        }
+        const bool region = region_member(views[index]);
+        const auto touch = [&](const SignalId signal) {
+            if (signal < signal_count) {
+                host_touched[signal] = 1U;
+            }
+        };
+        const auto& operations = views[index].operations();
+        for (std::size_t op = 0U; op < operations.size(); ++op) {
+            visit_operation([&](const auto& value) {
+                using T = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<T, ReadSignal>) {
+                    if (value.kind != SignalReadKind::current
+                        || value.ticks != 1U || value.clock || value.gate) {
+                        touch(value.signal);
+                        if (value.clock) {
+                            touch(*value.clock);
+                        }
+                        if (value.gate) {
+                            touch(*value.gate);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, WriteBlocking>
+                    || std::is_same_v<T, WriteBlockingSlice>
+                    || std::is_same_v<T, WriteBlockingDynamicSlice>
+                    || std::is_same_v<T, WriteBlockingDynamicPartSlice>
+                    || std::is_same_v<T, WriteUpdate>
+                    || std::is_same_v<T, WriteUpdateSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
+                    if (region) {
+                        touch(value.signal);
                     }
                 }
             }, operations.expanded(op));
@@ -2575,6 +2799,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 changed = true;
             }
         }
+        changed = enforce_process_groups() || changed;
     }
     // A wiring needs its source and its formal kernel-owned; otherwise its
     // program runs on the host and the source stays a host signal. A driver

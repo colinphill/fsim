@@ -653,6 +653,22 @@ template <typename OperationAt, typename Types>
     return dynamic;
 }
 
+/// The assertion operations of a SystemVerilog behavioral member: sampled
+/// value reads (IEEE 1800-2023 16.5.1, 16.9.3), concurrent assertion
+/// monitors (SvaOperation; 16.14) and a move to a later region (WaitRegion;
+/// 4.4.2, 16.4). They read the host's sampled state and run in the host's
+/// regions, so their member runs on the operation tier and keeps no time
+/// warp.
+[[nodiscard]] inline bool static_kernel_assertion_operation(
+    const Operation& operation)
+{
+    if (const auto* read = operation_get_if<ReadSignal>(&operation)) {
+        return read->kind != SignalReadKind::current || read->ticks != 1U
+            || read->clock || read->gate;
+    }
+    return operation_holds<SvaOperation>(operation)
+        || operation_holds<WaitRegion>(operation);
+}
 
 /// Operations a behavioral member may use: the static set plus waits,
 /// fork/join, calls with automatic frames of packed registers, integer
@@ -674,19 +690,34 @@ template <typename OperationAt, typename Types>
                 && (value.edges.empty()
                     || value.edges.size() == value.signals.size());
         } else if constexpr (std::is_same_v<T, Halt>) {
-            return !value.program_exit;
+            // $exit ends the member's program (StaticKernel::exit_program).
+            return true;
         } else if constexpr (std::is_same_v<T, Display>
             || std::is_same_v<T, FormatDisplay>
             || std::is_same_v<T, StringDisplay>
             || std::is_same_v<T, TimeDisplay>) {
             return !value.postponed;
+        } else if constexpr (std::is_same_v<T, ReadSignal>
+            || std::is_same_v<T, SvaOperation>) {
+            // Assertion operations (static_kernel_assertion_operation); the
+            // planner keeps sampled signals on the host.
+            return true;
+        } else if constexpr (std::is_same_v<T, WaitRegion>) {
+            // The later regions' hosted lists (a deferred assertion's
+            // action runs in the Reactive or Postponed region; IEEE
+            // 1800-2023 16.4.2).
+            return value.phase == SchedulerPhase::observed
+                || value.phase == SchedulerPhase::reactive
+                || value.phase == SchedulerPhase::re_inactive
+                || value.phase == SchedulerPhase::postponed;
         } else if constexpr (std::is_same_v<T, Fork>) {
             return !value.isolate_register_frame
                 && !value.branches.empty();
         } else if constexpr (std::is_same_v<T, DisableBlock>) {
-            // A named block of the process's own code (IEEE 1800-2023
-            // 9.6.2); a scope of another process stays on the host.
-            return value.scopes.empty();
+            // A named block (IEEE 1800-2023 9.6.2): of the process's own
+            // code, or named by hierarchical name, whose declaring
+            // processes the planner keeps members with the disabler.
+            return true;
         } else if constexpr (std::is_same_v<T, ContainerWrite>
             || static_kernel_reference_container_operation<T>) {
             // Process-private fixed arrays, or reference-format registers

@@ -91,6 +91,14 @@ void Interpreter::Impl::StaticKernel::ready_thread(const std::uint32_t index)
     if (!thread.alive || thread.queued) {
         return;
     }
+    if (const auto phase = members_[thread.member].phase;
+        phase != SchedulerPhase::active) {
+        // A wake schedules the process in its own region (the reference's
+        // execution phase; IEEE 1800-2023 4.4.2), at its stable order among
+        // that region's processes.
+        ready_thread_in(index, phase);
+        return;
+    }
     // A resumed thread abandons every other registration of its wait.
     ++thread.epoch;
     thread.queued = true;
@@ -107,6 +115,30 @@ void Interpreter::Impl::StaticKernel::ready_thread(const std::uint32_t index)
         return;
     }
     ready_threads_.push_back(index);
+    if (hosted_running_region_) {
+        // Woken from a later region's run (a thread there ended a fork,
+        // say): the host runs the kernel's Active work again, as
+        // enqueue_hosted does for a hosted process.
+        impl_.queue_active_current(host_process_);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::ready_thread_in(const std::uint32_t index,
+    const SchedulerPhase phase)
+{
+    auto& thread = threads_[index];
+    if (!thread.alive || thread.queued) {
+        return;
+    }
+    // A resumed thread abandons every other registration of its wait.
+    ++thread.epoch;
+    thread.queued = true;
+    HostedReady ready;
+    ready.order = thread.order;
+    ready.process = members_[thread.member].process;
+    ready.thread = index;
+    ready.phase = phase;
+    push_hosted_region(ready);
 }
 
 void Interpreter::Impl::StaticKernel::prepare_behavioral()
@@ -575,6 +607,10 @@ void Interpreter::Impl::StaticKernel::kill_thread(const std::uint32_t index)
     if (!thread.alive) {
         return;
     }
+    if (thread.parent == no_slot && members_[thread.member].program_owner) {
+        // A killed program process no longer keeps its program running.
+        members_[thread.member].program_ended = true;
+    }
     // Its waiter and timer entries lapse.
     ++thread.epoch;
     const auto parent = thread.parent;
@@ -596,9 +632,9 @@ Interpreter::Impl::StaticKernel::Boundary
 Interpreter::Impl::StaticKernel::disable_block(const std::uint32_t index,
     const std::uint32_t pc, const DisableBlock& op)
 {
-    // A local named block (the planner keeps a disable naming another
-    // process's scope on the host). The running thread's position is past
-    // the disable, as the reference's process counter is.
+    // A named block of the running thread's own code (one named by
+    // hierarchical name is disable_named_scope's). The running thread's
+    // position is past the disable, as the reference's process counter is.
     const auto member_index = threads_[index].member;
     const auto& operations = members_[member_index].operations;
     if (!op.scopes.empty() || op.begin >= op.end || op.end > operations.size()) {
@@ -693,10 +729,102 @@ Interpreter::Impl::StaticKernel::disable_block(const std::uint32_t index,
     return Boundary::advance;
 }
 
+Interpreter::Impl::StaticKernel::Boundary
+Interpreter::Impl::StaticKernel::disable_named_scope(const std::uint32_t index,
+    const std::uint32_t pc, const std::vector<std::string>& scopes)
+{
+    if (!named_scopes_) {
+        // The named intervals of the members' programs, in process order,
+        // as the reference indexes its processes' programs.
+        auto& named = named_scopes_.emplace();
+        std::vector<std::uint32_t> order;
+        for (std::uint32_t member = 0U; member < members_.size(); ++member) {
+            if (members_[member].kind == StaticKernelMemberKind::behavioral
+                && !members_[member].vhdl) {
+                order.push_back(member);
+            }
+        }
+        std::ranges::sort(order, std::less { },
+            [&](const std::uint32_t member) { return members_[member].process; });
+        for (const auto member : order) {
+            const auto process = members_[member].process;
+            const auto* original = startup_program(process);
+            const auto program = original != nullptr
+                ? ProcessProgramView { *original }
+                : impl_.processes.program_view(process);
+            const auto& operations = program.operations();
+            std::vector<std::pair<std::string, InstructionIndex>> open;
+            for (std::size_t instruction = 0U; instruction < operations.size();
+                 ++instruction) {
+                const auto* point = operation_get_if<DebugPoint>(
+                    &std::as_const(operations)[instruction]);
+                if (point == nullptr
+                    || (point->kind != DebugPointKind::block_entry
+                        && point->kind != DebugPointKind::block_exit)) {
+                    continue;
+                }
+                const auto& actual = operations.debug_point(
+                    static_cast<InstructionIndex>(instruction), *point);
+                const auto& scope = operations.debug_scope(actual.scope).str();
+                if (point->kind == DebugPointKind::block_entry) {
+                    open.emplace_back(scope,
+                        static_cast<InstructionIndex>(instruction));
+                    continue;
+                }
+                for (auto entry = open.rbegin(); entry != open.rend(); ++entry) {
+                    if (entry->first == scope) {
+                        named[scope].push_back({ member, entry->second,
+                            static_cast<std::uint32_t>(instruction) });
+                        open.erase(std::next(entry).base());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    const auto running_pc = pc + 1U;
+    std::optional<std::uint32_t> redirect;
+    for (const auto& scope : scopes) {
+        const auto found = named_scopes_->find(scope);
+        if (found == named_scopes_->end()) {
+            continue;
+        }
+        const auto intervals = found->second;
+        // The threads alive when the disable runs, in process order.
+        std::vector<std::uint32_t> live;
+        for (std::uint32_t thread = 0U; thread < threads_.size(); ++thread) {
+            if (threads_[thread].alive) {
+                live.push_back(thread);
+            }
+        }
+        std::ranges::sort(live, std::less { },
+            [&](const std::uint32_t thread) { return threads_[thread].order; });
+        for (const auto& interval : intervals) {
+            for (const auto thread : live) {
+                if (!threads_[thread].alive
+                    || threads_[thread].member != interval.member) {
+                    continue;
+                }
+                disable_thread_interval(index, running_pc, thread,
+                    interval.begin, interval.end, redirect, thread != index);
+            }
+        }
+        break;
+    }
+    if (!threads_[index].alive) {
+        return Boundary::killed;
+    }
+    if (redirect) {
+        redirect_pc_ = *redirect;
+        return Boundary::redirect;
+    }
+    return Boundary::advance;
+}
+
 void Interpreter::Impl::StaticKernel::disable_thread_interval(
     const std::uint32_t running, const std::uint32_t running_pc,
     const std::uint32_t owner, const std::uint32_t begin, const std::uint32_t end,
-    std::optional<std::uint32_t>& running_redirect)
+    std::optional<std::uint32_t>& running_redirect, const bool include_end)
 {
     // Fork children spawned inside the block end with their descendants.
     std::vector<std::uint32_t> scoped;
@@ -712,7 +840,7 @@ void Interpreter::Impl::StaticKernel::disable_thread_interval(
     }
     auto& thread = threads_[owner];
     const auto at = owner == running ? running_pc : thread.pc;
-    if (!thread.alive || at < begin || at >= end) {
+    if (!thread.alive || at < begin || at > end || (at == end && !include_end)) {
         return;
     }
     if (owner == running) {
@@ -733,8 +861,67 @@ void Interpreter::Impl::StaticKernel::finish_thread(const std::uint32_t index)
 {
     const auto parent = threads_[index].parent;
     const auto group = threads_[index].group;
+    const auto member = threads_[index].member;
     release_thread(index);
     fork_child_done(parent, group);
+    if (parent == no_slot && members_[member].program_owner) {
+        complete_program_member(member);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::complete_program_member(
+    const std::uint32_t member)
+{
+    // A program ends when the last of its processes ends (the fork children
+    // they leave running do not keep it), as the reference's
+    // complete_program_process.
+    members_[member].program_ended = true;
+    const auto owner = *members_[member].program_owner;
+    if (std::ranges::none_of(program_members_.at(owner),
+            [&](const std::uint32_t other) {
+                return !members_[other].program_ended;
+            })) {
+        exit_program(owner);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::exit_program(const std::uint32_t owner)
+{
+    // The reference's exit_program: each live process of the program ends as
+    // killed, with its fork descendants; the last program to end stops the
+    // simulation (IEEE 1800-2023 24.7).
+    if (impl_.exited_programs.contains(owner)) {
+        return;
+    }
+    auto owned = program_members_.at(owner);
+    std::ranges::sort(owned, std::less { },
+        [&](const std::uint32_t member) { return members_[member].process; });
+    for (const auto member : owned) {
+        if (members_[member].program_ended) {
+            continue;
+        }
+        members_[member].program_ended = true;
+        // A member that has not started yet never does.
+        std::erase(late_members_, member);
+        for (std::uint32_t thread = 0U; thread < threads_.size(); ++thread) {
+            if (threads_[thread].alive && threads_[thread].member == member
+                && threads_[thread].parent == no_slot) {
+                cancel_thread_descendants(thread);
+                kill_thread(thread);
+            }
+        }
+    }
+    impl_.exited_programs.insert(owner);
+    if (!impl_.program_owners.empty()
+        && impl_.exited_programs.size() == impl_.program_owners.size()) {
+        impl_.stopped_by_design = true;
+        if (warp_time_) {
+            schedule_stop_at(*warp_time_);
+        } else {
+            impl_.scheduler.request_stop();
+        }
+        stopped_ = true;
+    }
 }
 
 void Interpreter::Impl::StaticKernel::fork_child_done(const std::uint32_t parent,
@@ -963,6 +1150,58 @@ struct Interpreter::Impl::StaticKernel::MemberFileStorage final
     [[noreturn]] void fail(const std::string& message) override
     {
         kernel.fail(member, pc, message);
+    }
+    StaticKernel& kernel;
+    std::uint32_t member;
+    std::uint32_t pc;
+};
+
+// A member thread's registers for the reference's assertion operations
+// (run_sva, run_sampled_read). A directive's monitor belongs to the thread
+// as a reference process: its stable order.
+struct Interpreter::Impl::StaticKernel::MemberAssertionStorage final
+    : AssertionStorage {
+    MemberAssertionStorage(StaticKernel& kernel_value,
+        const std::uint32_t member_value, const std::uint32_t pc_value) noexcept
+        : kernel { kernel_value }, member { member_value }, pc { pc_value }
+    {
+    }
+    [[nodiscard]] ProcessId process() const noexcept override
+    {
+        const auto thread = kernel.running_thread_;
+        return thread != static_kernel_detail::no_slot
+                && kernel.threads_[thread].member == member
+            ? kernel.threads_[thread].order
+            : kernel.members_[member].process;
+    }
+    [[nodiscard]] ProcessId design_process() const noexcept override
+    {
+        return kernel.members_[member].process;
+    }
+    [[nodiscard]] ProcessSchedulingDomain domain() const noexcept override
+    {
+        return ProcessSchedulingDomain::systemverilog;
+    }
+    [[nodiscard]] PackedLogic4 read(const RegisterId id,
+        const std::size_t) override
+    {
+        return packed(id);
+    }
+    void write(const RegisterId id, const PackedLogic4& value) override
+    {
+        packed(id) = value;
+    }
+    [[noreturn]] void fail(const std::string& message) override
+    {
+        kernel.fail(member, pc, message);
+    }
+    [[nodiscard]] PackedLogic4& packed(const RegisterId id)
+    {
+        auto& registers = kernel.members_[member].registers;
+        if (id >= registers.size()) {
+            kernel.fail(member, pc, "invalid register ID");
+        }
+        return registers[id];
     }
     StaticKernel& kernel;
     std::uint32_t member;
@@ -1982,6 +2221,20 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     }
                 }
             }
+        } else if constexpr (std::is_same_v<T, ReadSignal>) {
+            // A sampled value (IEEE 1800-2023 16.5.1, 16.9.3) from the
+            // host's sampled state; its signals are host signals.
+            if (op.kind == SignalReadKind::current && op.ticks == 1U
+                && !op.clock && !op.gate) {
+                handled = false;
+                return;
+            }
+            MemberAssertionStorage storage { *this, member_index, pc };
+            impl_.run_sampled_read(storage, op);
+        } else if constexpr (std::is_same_v<T, SvaOperation>) {
+            // A concurrent assertion's monitor (16.14), the reference's.
+            MemberAssertionStorage storage { *this, member_index, pc };
+            impl_.run_sva(storage, op);
         } else {
             handled = false;
         }
@@ -2096,6 +2349,18 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                 }
             }
             outcome = Boundary::suspend;
+        } else if constexpr (std::is_same_v<T, WaitRegion>) {
+            // A later region of this time step (IEEE 1800-2023 4.4.2, 16.4),
+            // or the region the thread runs in, where it continues after
+            // the processes already queued there.
+            suspend_point = true;
+            const auto current = impl_.scheduler.current_phase();
+            if (!current || op.phase < *current) {
+                fail(member_index, pc,
+                    "WaitRegion must target a later scheduler region");
+            }
+            ready_thread_in(index, op.phase);
+            outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, WaitOn>) {
             suspend_point = true;
             std::vector<Sensitivity> entries;
@@ -2189,8 +2454,23 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                 outcome = threads_[index].alive ? Boundary::advance
                                                 : Boundary::killed;
             }
-        } else if constexpr (std::is_same_v<T, Halt>
-            || std::is_same_v<T, ForkEnd>) {
+        } else if constexpr (std::is_same_v<T, Halt>) {
+            suspend_point = true;
+            outcome = Boundary::finish;
+            if (op.program_exit) {
+                // $exit (IEEE 1800-2023 24.7) ends the program's threads,
+                // this one among them.
+                const auto& owner = members_[member_index].program_owner;
+                if (!owner) {
+                    fail(member_index, pc,
+                        "$exit requires a SystemVerilog program owner");
+                }
+                exit_program(*owner);
+                if (!threads_[index].alive) {
+                    outcome = Boundary::killed;
+                }
+            }
+        } else if constexpr (std::is_same_v<T, ForkEnd>) {
             suspend_point = true;
             outcome = Boundary::finish;
         } else if constexpr (std::is_same_v<T, Stop>) {
@@ -2245,7 +2525,8 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                 || members_[member_index].final_block;
             outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, DisableBlock>) {
-            outcome = disable_block(index, pc, op);
+            outcome = op.scopes.empty() ? disable_block(index, pc, op)
+                                        : disable_named_scope(index, pc, op.scopes);
         } else if constexpr (std::is_same_v<T, Fork>) {
             std::uint32_t group = no_slot;
             if (op.join != ForkJoinKind::none) {

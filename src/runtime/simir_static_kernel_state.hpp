@@ -348,6 +348,18 @@ private:
         bool final_block { };
         /// A package static initializer (run_startup_member).
         bool package_startup { };
+        /// The scheduler region its threads resume in (IEEE 1800-2023 4.4.2):
+        /// a concurrent assertion's process runs in the Observed region, a
+        /// program's in the Reactive region. Such threads run from the
+        /// hosted region lists (ready_thread), outside the kernel's rounds.
+        SchedulerPhase phase { SchedulerPhase::active };
+        /// Runs assertion operations (sampled reads, SvaOperation) or leaves
+        /// the Active region (WaitRegion): it runs on the operation tier.
+        bool assertion { };
+        /// A non-final process of a program (program_members_), and whether
+        /// its thread has ended (the reference's halted program process).
+        std::optional<std::uint32_t> program_owner;
+        bool program_ended { };
         /// Dead logic: never scheduled; materialize evaluates it from the
         /// slots in lazy_inputs (its whole sensitivity) when a slot it
         /// writes is read. lazy_stamp is the lazy_epoch_ of its last run.
@@ -1294,6 +1306,7 @@ private:
     /// operations (run_file) use them.
     struct MemberFileStorage;
     struct MemberContainerAccess;
+    struct MemberAssertionStorage;
     /// A VHDL-2019 member's report or assertion violation (Impl::report_vhdl)
     /// at the kernel's time.
     void report_vhdl(std::uint32_t member, std::uint32_t pc,
@@ -1400,9 +1413,31 @@ private:
         const DisableBlock& op);
     /// Interpreter::Impl::disable_process_interval on kernel threads; the
     /// running thread's position is `running_pc`.
+    /// With `include_end`, an owner waiting right at the block's end is
+    /// inside it too (a block of another process).
     void disable_thread_interval(std::uint32_t running, std::uint32_t running_pc,
         std::uint32_t owner, std::uint32_t begin, std::uint32_t end,
-        std::optional<std::uint32_t>& running_redirect);
+        std::optional<std::uint32_t>& running_redirect, bool include_end = false);
+    /// disable of a block or task named by hierarchical name (IEEE 1800-2023
+    /// 9.6.2), as Interpreter::Impl::disable_named_scope: the first name
+    /// that a member's program declares ends that interval in each of the
+    /// member's threads. The planner keeps every process declaring a
+    /// disabled name a member when the disabling process is one.
+    [[nodiscard]] Boundary disable_named_scope(std::uint32_t thread,
+        std::uint32_t pc, const std::vector<std::string>& scopes);
+    /// A named block_entry..block_exit interval of a member's program.
+    struct ScopeInterval {
+        std::uint32_t member { };
+        std::uint32_t begin { };
+        std::uint32_t end { };
+    };
+    /// A member disables a block named by hierarchical name: compiled
+    /// members resume at their block ends.
+    bool named_disable_ { };
+    /// The members' named intervals by scope name, built at the first
+    /// named disable.
+    std::optional<std::unordered_map<std::string, std::vector<ScopeInterval>>>
+        named_scopes_;
     /// The live fork children of a thread, in process order.
     [[nodiscard]] std::vector<std::uint32_t> live_children(std::uint32_t thread) const;
     /// The fork children with records, live or ended (Thread::child_records),
@@ -1423,10 +1458,22 @@ private:
     void store_context(const Member& member, CallableContext& context);
     void load_context(Member& member, const CallableContext& context);
     void ready_thread(std::uint32_t thread);
+    /// Resumes a thread in a later region of this time step (WaitRegion),
+    /// or in its member's region (ready_thread), through the hosted region
+    /// lists.
+    void ready_thread_in(std::uint32_t thread, SchedulerPhase phase);
     [[nodiscard]] bool run_ready_threads();
     void run_thread(std::uint32_t thread);
     void wait_on(std::uint32_t thread, std::span<const Sensitivity> entries);
     void finish_thread(std::uint32_t thread);
+    /// A program's members (IEEE 1800-2023 24.7), as the reference's
+    /// complete_program_process and exit_program: the program ends when the
+    /// last of its members' threads ends, or at $exit, which ends them all;
+    /// the simulation ends with the last program.
+    void complete_program_member(std::uint32_t member);
+    void exit_program(std::uint32_t owner);
+    /// The non-final members of each program, in process order.
+    std::map<std::uint32_t, std::vector<std::uint32_t>> program_members_;
     /// A fork child of `parent` in fork group `group` ended: the parent
     /// resumes as its join requires.
     void fork_child_done(std::uint32_t parent, std::uint32_t group);
@@ -2251,6 +2298,9 @@ private:
         /// The region the wake runs in (the process's execution phase, or the
         /// region a WaitRegion or the current region names).
         SchedulerPhase phase { SchedulerPhase::active };
+        /// A member thread resuming in the region (ready_thread_in), not a
+        /// hosted process.
+        std::uint32_t thread { static_kernel_detail::no_slot };
     };
     struct HostedDelayed {
         SimulationTick time { };

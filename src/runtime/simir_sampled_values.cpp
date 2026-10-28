@@ -253,13 +253,13 @@ void Interpreter::Impl::capture_sampled_history_clock(
     }
 }
 
-void Interpreter::Impl::execute_sampled_read(
-    ProcessState& process,
+void Interpreter::Impl::run_sampled_read(
+    AssertionStorage& storage,
     const ReadSignal& operation)
 {
     (void)get_signal(operation.signal);
     if (operation.kind == SignalReadKind::current) {
-        fail(process, "current signal read reached the sampled-read service");
+        storage.fail("current signal read reached the sampled-read service");
     }
     const auto has_sampled_value = [this](const SignalId signal) {
         return signal < sampled_values.size()
@@ -269,7 +269,7 @@ void Interpreter::Impl::execute_sampled_read(
                     && sampled_value_dependency_mask[signal] != 0U));
     };
     if (!has_sampled_value(operation.signal)) {
-        fail(process, "sampled signal state is unavailable");
+        storage.fail("sampled signal state is unavailable");
     }
     const auto& slot_value = sampled_values[operation.signal];
     if (operation.kind == SignalReadKind::future
@@ -279,7 +279,7 @@ void Interpreter::Impl::execute_sampled_read(
         || operation.kind == SignalReadKind::changing) {
         const auto& future = logical_signal_value(operation.signal);
         if (operation.kind == SignalReadKind::future) {
-            write_process_register(process, operation.destination, future);
+            storage.write(operation.destination, future);
             return;
         }
         const auto equal = future == slot_value;
@@ -292,36 +292,34 @@ void Interpreter::Impl::execute_sampled_read(
             : operation.kind == SignalReadKind::steady
             ? equal
             : !equal;
-        write_process_register(
-            process,
-            operation.destination,
+        storage.write(operation.destination,
             PackedLogic4(1U, value ? Logic4::one : Logic4::zero));
         return;
     }
     if (operation.kind == SignalReadKind::sampled && !operation.clock) {
-        write_process_register(process, operation.destination, slot_value);
+        storage.write(operation.destination, slot_value);
         return;
     }
     if (operation.ticks == 0U) {
-        fail(process, "sampled history depth is zero");
+        storage.fail("sampled history depth is zero");
     }
     if (operation.clock) {
         if (!has_sampled_value(*operation.clock)
             || *operation.clock >= signal_events.size()
             || *operation.clock >= signal_event_scheduling_stamps.size()) {
-            fail(process, "sampled clock state is unavailable");
+            storage.fail("sampled clock state is unavailable");
         }
         if (logical_signal_value(*operation.clock).width() == 0U
             || logical_signal_last_value(*operation.clock).width() == 0U) {
-            fail(process, "sampled clock must have a nonzero width");
+            storage.fail("sampled clock must have a nonzero width");
         }
     }
     if (operation.gate) {
         if (!has_sampled_value(*operation.gate)) {
-            fail(process, "sampled gating state is unavailable");
+            storage.fail("sampled gating state is unavailable");
         }
         if (sampled_values[*operation.gate].width() == 0U) {
-            fail(process, "sampled gate must have a nonzero width");
+            storage.fail("sampled gate must have a nonzero width");
         }
     }
     const SampledHistoryKey key {
@@ -329,14 +327,14 @@ void Interpreter::Impl::execute_sampled_read(
         operation.clock,
         operation.clock_edge,
         operation.gate,
-        process.program().scheduling_domain()
+        storage.domain()
     };
     auto& history = sampled_histories[key];
     ensure_sampled_history_capacity(
         history,
         sampled_history_capacity(operation),
         sampled_defaults[operation.signal]);
-    const auto process_domain = process.program().scheduling_domain();
+    const auto process_domain = storage.domain();
     auto slot = make_sampled_history_slot(
         scheduler.now(), process_domain, SignalChangeOrigin { }, 0U);
     bool sample = !operation.clock;
@@ -382,7 +380,7 @@ void Interpreter::Impl::execute_sampled_read(
         ? sampled_defaults[operation.signal]
         : sampled_history_value(history, history.value_count - 1U);
     if (operation.kind == SignalReadKind::sampled) {
-        write_process_register(process, operation.destination, current);
+        storage.write(operation.destination, current);
         return;
     }
     const auto& previous = history.value_count < 2U
@@ -413,7 +411,7 @@ void Interpreter::Impl::execute_sampled_read(
             : !equal;
         result = PackedLogic4(1U, value ? Logic4::one : Logic4::zero);
     }
-    write_process_register(process, operation.destination, result);
+    storage.write(operation.destination, result);
 }
 
 } // namespace fsim::runtime::simir

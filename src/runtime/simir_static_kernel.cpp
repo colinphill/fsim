@@ -486,8 +486,20 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.after_procedures = program.startup_phase()
             == ProcessStartupPhase::after_procedures;
         member.final_block = program.final();
+        member.phase = process_execution_phase(
+            program.observed(), program.reactive(), false);
+        if (member.process == spec.host
+            && member.phase != SchedulerPhase::active) {
+            impl_.static_kernel_region_host = member.process;
+            impl_.static_kernel_region_host_phase = member.phase;
+        }
         member.package_startup = program.startup_phase()
             == ProcessStartupPhase::package_static_initializer;
+        if (program.program_owner() && !program.final()) {
+            member.program_owner = program.program_owner();
+            program_members_[*member.program_owner].push_back(
+                static_cast<std::uint32_t>(members_.size()));
+        }
         if (member.package_startup) {
             startup_members_.push_back({ member.process,
                 static_cast<std::uint32_t>(members_.size()),
@@ -556,6 +568,17 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             member.thread_contexts = fork && push
                 && static_kernel_fork_holds_suspended_frame(
                     operations, operations.size());
+            named_disable_ = named_disable_
+                || std::ranges::any_of(member.operations,
+                    [](const Operation& operation) {
+                        const auto* disable = operation_get_if<DisableBlock>(&operation);
+                        return disable != nullptr && !disable->scopes.empty();
+                    });
+            member.assertion = member.phase != SchedulerPhase::active
+                || std::ranges::any_of(member.operations,
+                    [](const Operation& operation) {
+                        return static_kernel_assertion_operation(operation);
+                    });
         }
         if (stage_profile) {
             expand_seconds += std::chrono::duration<double>(
@@ -1417,7 +1440,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             [](const Input& input) { return !input.unwritten; })
         || std::ranges::any_of(slots_, [](const Slot& slot) { return slot.output; });
     // Every process is a member and nothing crosses the host boundary.
-    closed_ = !host_boundary_ && !has_hosted_ && !host_written
+    // Assertion members run in the host's regions and read its sampled
+    // state, which follow the host's time.
+    const bool assertions = std::ranges::any_of(members_,
+        [](const Member& member) { return member.assertion; });
+    closed_ = !host_boundary_ && !has_hosted_ && !host_written && !assertions
         && !vhdl_host_cycles_ && impl_.processes.size() == members_.size();
     if (!conversion_members_.empty()) {
         settle_conversions();
@@ -2529,6 +2556,22 @@ void Interpreter::Impl::StaticKernel::write_host(const std::uint32_t member,
                   << " host-write " << impl_.get_signal_cold(signal).name
                   << (blocking ? " blocking " : " staged ")
                   << value.to_msb_string() << '\n';
+    }
+    // An Observed or Reactive member, or a thread a WaitRegion moved to a
+    // later region, runs outside the kernel's activations: its updates are
+    // staged from its region (capture_signal_change_origin), and the host
+    // wakes their readers when it applies them.
+    const bool region = members_[member].phase != SchedulerPhase::active
+        || hosted_running_region_.has_value();
+    if (!blocking && region) {
+        if (offset) {
+            impl_.stage_update_slice(process, signal, std::move(value),
+                *offset, domain, order);
+        } else {
+            impl_.stage_update(process, signal, std::move(value), domain,
+                order);
+        }
+        return;
     }
     if (!blocking && domain == SignalUpdateDomain::systemverilog_active) {
         // An Active event behind this activation: #0 threads (Inactive
@@ -6405,6 +6448,10 @@ void InterpreterProgramAccess::install_static_kernel(
     if (impl.fusion_dormant_process.size() != impl.processes.size()) {
         impl.fusion_dormant_process.assign(impl.processes.size(), 0U);
     }
+    // The host was added with its stub in place of the host member's
+    // program: the histories that member's sampled reads need are
+    // registered from its original.
+    impl.record_sampled_dependencies(ProcessProgramView { spec.host_original });
     for (const auto& member : spec.members) {
         if (member.process >= impl.processes.size()) {
             throw std::out_of_range("static kernel member is not installed");

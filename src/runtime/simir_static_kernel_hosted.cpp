@@ -371,6 +371,13 @@ void Interpreter::Impl::StaticKernel::discard_hosted()
     hosted_inactive_.clear();
     hosted_next_delta_.clear();
     for (auto& list : hosted_regions_) {
+        for (const auto& ready : list) {
+            // A member thread's entry: it is no longer queued (a killed
+            // one is reclaimed).
+            if (ready.thread != static_kernel_detail::no_slot) {
+                static_cast<void>(take_ready(ready.thread));
+            }
+        }
         list.clear();
     }
     hosted_region_bell_.fill(false);
@@ -861,6 +868,16 @@ void Interpreter::Impl::StaticKernel::run_hosted_initializers()
 
 void Interpreter::Impl::StaticKernel::run_hosted(const HostedReady& ready)
 {
+    if (ready.thread != static_kernel_detail::no_slot) {
+        // A member thread resuming in this region (ready_thread_in). A
+        // delay it waits on is a kernel timer, armed here as at the end of
+        // an activation.
+        if (take_ready(ready.thread)) {
+            run_thread(ready.thread);
+            arm_timer();
+        }
+        return;
+    }
     if (const auto final = std::ranges::find(final_members_, ready.process,
             &std::pair<ProcessId, std::uint32_t>::first);
         final != final_members_.end()) {

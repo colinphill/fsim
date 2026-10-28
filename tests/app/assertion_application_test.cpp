@@ -722,7 +722,9 @@ endmodule
     assert(std::ranges::find(
                reference.phases, fsim::runtime::SchedulerPhase::reactive)
         != reference.phases.end());
-    assert(reference.phases == compiled.phases);
+    // The kernel runs a region's assertion members in one scheduler
+    // callback (phase_shape).
+    assert(phase_shape(reference.phases) == phase_shape(compiled.phases));
     const std::vector<std::string> expected_outputs {
         "assert pass", "cover hit",
         "assert pass", "cover hit"

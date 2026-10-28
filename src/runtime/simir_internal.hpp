@@ -1798,6 +1798,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// publish_value_change hands host commits to kernel-owned signals to the
     /// kernel. One flag test guards the hook; it is false otherwise.
     bool static_kernel_import_enabled { };
+    /// The kernel's host process runs a stub scheduled in the Active
+    /// region. When the member it replaces is an Observed or Reactive
+    /// process, that member's updates keep its own region
+    /// (capture_signal_change_origin).
+    std::optional<ProcessId> static_kernel_region_host;
+    SchedulerPhase static_kernel_region_host_phase { SchedulerPhase::active };
     /// True while StaticKernel::publish commits its own outputs under the
     /// member driver identities; those commits must not be imported back.
     bool static_kernel_publishing { };
@@ -2054,6 +2060,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // fused cone's sink or the static kernel's host runs a substitute
     // program, but the drivers, history queries, transaction observations
     // and mailbox shapes registered from operations are the original's.
+    /// Registers the signals a program's sampled reads need histories of
+    /// (sampled_value_dependency_mask).
+    void record_sampled_dependencies(const ProcessProgramView& process);
     [[nodiscard]] ProcessId add_process_program_impl(
         ProcessProgramView process,
         std::shared_ptr<const ProcessProgramTemplate> common_program,
@@ -2304,6 +2313,23 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute_string(ProcessState&, const StringMethod&);
     void execute_stochastic_queue(
         ProcessState&, const StochasticQueueOperation&);
+    // The storage of an assertion operation (SvaOperation, a sampled
+    // read): its process's registers and errors at the running instruction.
+    // A reference process and a static kernel thread provide it.
+    struct AssertionStorage {
+        virtual ~AssertionStorage() = default;
+        // The owner of the directive's monitor: the process, or the number
+        // the reference gives a fork child.
+        [[nodiscard]] virtual ProcessId process() const noexcept = 0;
+        [[nodiscard]] virtual ProcessId design_process() const noexcept = 0;
+        [[nodiscard]] virtual ProcessSchedulingDomain domain() const noexcept = 0;
+        [[nodiscard]] virtual PackedLogic4 read(RegisterId id, std::size_t width) = 0;
+        virtual void write(RegisterId id, const PackedLogic4& value) = 0;
+        [[noreturn]] virtual void fail(const std::string& message) = 0;
+    };
+    struct ProcessAssertionStorage;
+    void run_sva(AssertionStorage&, const SvaOperation&);
+    void run_sampled_read(AssertionStorage&, const ReadSignal&);
     void execute_sva(ProcessState&, const SvaOperation&);
     void execute_pla(ProcessState&, const PlaEvaluate&);
     void execute_random_distribution(ProcessState&, const RandomDistribution&);
