@@ -138,6 +138,40 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: domain time steps (MT Phase 5c), kernel `$readmemh` (`e219e002`, sweep `v4c31`)
+
+**Kernel `$readmemh`/`$readmemb`** (IEEE 1800-2023 21.4). `LoadMemory` and the write-back `WriteContainerObject` of a binding to its own memory run in the behavioral tier, so a memory loaded from an `initial` is kernel-owned and the processes that read it are members. The file loads into the current contents and changed elements are written back as element writes; an I/O error leaves the array unchanged, as on the reference. An element write into a binding of a design memory (`ContainerWrite` on a `ReadContainerObject` register) stays hosted (`behavioral_bound_container_write`): the reference edits a copy and stores it whole, and the kernel binding aliases the memory. The sweep's one loss (verilator `t_mem_packed`) was this case; it is fixed in the follow-up commit.
+
+**Domain time steps** (owner 2026-10-28). Each commit domain owns its sequential members and an NBA queue. One clock edge's triggered batch runs pinned to the domains' lanes:
+1. **Triggered.** A private member (it has a domain, and at most four NBA targets outside it) swaps its lane's write queue for its domain's queue while it runs. Writes to targets outside the domain are moved to the lane's shared log after the run.
+2. **Commit.** Each domain commits its own queue in serial order, then settles privately (Phase 5). The order is reconstructed from segments `(batch item, position)` merged with the leader's shared queue.
+3. **Merge.** Effects the leader must see (foreign NBAs, host-visible changes, wakes of other domains' units) are replayed in batch order. Under `FSIM_KERNEL_MT_SHUFFLE` the plan's ownership claims are checked, and a private write to a foreign target throws `logic_error`.
+
+Other changes:
+- per-lane completion flags and epochs instead of clear loops;
+- per-lane item state;
+- cache-line aligned `LaneRun` and domain state;
+- profiling counters no longer store to shared lines from lanes (`x += profile_ ? a : 0` was a shared store on every schedule call);
+- `wide_store` sub-word NBAs are now tracked as NBA targets, and packed-array container NBAs key their packed and element slots (both were found by the shuffle ownership check);
+- instance clustering for commit domains;
+- diagnostics `FSIM_KERNEL_MT_FUSED=0` (log every triggered change instead of domain mode) and `FSIM_KERNEL_MT_TRACE` (pool dispatch TSC trace).
+
+**Measurements.** 8-core PicoRV32 SoC (1,735,537 cycles, checksum `43a243a2`, equal to the host-built reference and xsim; simulate, minimum of 2):
+
+| Simulate | t1 | t4 | t8 |
+|---|---:|---:|---:|
+| RISC-V SoC before (`v4c30`, `$readmemh` hosted) | 99 s | — | — |
+| RISC-V SoC, domain time steps | 25.6 s | 15.8 s | 14.35 s |
+
+- xsim takes 58 s on this design. At t8, simulate is ×1.79 faster than t1 and ×4.0 faster than xsim.
+- The SoC's `$display` member stays serial on the leader (generic host op). A TB variant without it runs t8 in 13.25 s.
+- Remaining limit is per-dispatch imbalance: the slowest lane averages ~8,950 TSC ticks per dispatch against a ~5,400 mean, with 2 dispatches per cycle. Cross-CCX cache fills at t8 are about 640 per cycle.
+- Codec t4 2.45 s vs t1 2.87 s; LDPC unchanged (one domain holds the critical path).
+
+**Validation.** ctest 1087/1087 normal, `FSIM_V4_STRICT=1`, `FSIM_KERNEL_VERIFY=1`, and `FSIM_KERNEL_THREADS=4 FSIM_KERNEL_MT_FORCE=1 FSIM_KERNEL_MT_SHUFFLE=1`. RISC-V, codec and LDPC are identical at t1/t2/t4/t8, with `FORCE`+`SHUFFLE`, inline, `FUSED=0` and `AFFINITY=0`. Sweep `v4c31` (frozen `e219e002`): nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2070, sv-tests 1495. The one loss against `b96x1` (`t_mem_packed`) is fixed in the follow-up commit and rerun; all 20 `$readmem` and packed-memory cases pass.
+
+**Next.** The hosted-process work (owner 2026-10-28): a census of every reason that keeps a process hosted, then those kinds move into the kernel. `v4c31` still has hosted processes in 3,507 of 7,626 cases (124 first reasons). `FSIM_PROFILE_KERNEL_BLOCKERS=1` (with `FSIM_PROFILE_PHASES`) prints every flag and unsupported operation of each rejected process (`static-kernel-blockers` rows), so the work can be ranked by the cases each step would close.
+
 ### 2026-10-28: domain-private settle (MT Phase 5) (`12facb6a`, sweep `v4c30`)
 
 **Domains** (`build_parallel_plan`, proposal §2.4). Union-find joins combinational units in two ways:
@@ -184,6 +218,8 @@ Settle level batches are off when domains exist. Merged and flagged triggered ba
 **Validation.** ctest 1087/1087 normal, `FSIM_V4_STRICT=1`, `FSIM_KERNEL_VERIFY=1`, and `FSIM_KERNEL_THREADS=4 FSIM_KERNEL_MT_FORCE=1 FSIM_KERNEL_MT_SHUFFLE=1`. Sweep `v4c30` (frozen `12facb6a`): nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495, 0 failures (the same as `v4c29`).
 
 **Perf `v4c29`** (`tools/perf.sh`, the Phase 2–3 commit): geomean ×3.655 vs xsim (`v4c28` ×3.681, noise). mixed_codec 8.93 s ×2.76, original_codec 10.96 s ×2.63, mixed_throughput 4.37 s ×2.88, original_throughput 5.14 s ×3.12, codex 2.06–2.52 s ×3.88–4.77.
+
+**Perf `v4c30`** (`tools/perf.sh`, this commit, default single thread): geomean ×3.663 vs xsim (`v4c29` ×3.655). mixed_codec 9.18 s ×2.75, original_codec 12.07 s ×2.67 (xsim slower by the same factor: host load), mixed_throughput 4.57 s ×2.81, original_throughput 5.19 s ×3.06, codex 2.16–2.41 s ×4.06–4.61.
 
 **Next.** A multi-core RISC-V SoC as the next go/no-go design (owner 2026-10-28): 8 PicoRV32 cores (ISC, downloaded to `.local-artifacts/riscv-mt`), a C program built with clang-22 for rv32im, a host-built reference for every report. The first run matched the reference and xsim (1,735,537 cycles), but simulate took 99 s against xsim's 58 s: `$readmemh` in an `initial` kept the loader on the host, so each core memory was host-owned and its bus process hosted. Kernel `$readmemh` support follows.
 
