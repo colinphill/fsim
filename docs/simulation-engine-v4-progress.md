@@ -138,6 +138,45 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — history queries, strings, `$dist`, `$timeformat`, host registration (`d688d7d8`, sweep `v4c37`)
+
+**`d688d7d8`**
+- **SystemVerilog history queries** (`SignalLastValue`, `SignalLastEvent`, `SignalLastActive`) of host signals run in the kernel, on the shared `Impl::signal_*_attribute`. A clocking drive uses one to test whether its clocking event occurred in the current time step.
+- **History-read signals are never sole-writer inputs.** The kernel mirrors a sole writer's staged update at once, so it would wake the reading member before the host commits the update and records the event. This was the `t_virtual_interface_nba_assign` loss in the targeted runs: the clocking drive read `$last_event` of its clock before the edge was committed, and the drive never matured.
+- **Host registration of the host member.** The kernel's host member registers its original program with the host (`InterpreterProgramAccess::add_substituted_process`). The selections, transaction observation, mailbox checks and delayed-writer state that `add_process` derives from a program's operations now come from the original program, not the stub. This replaces the kernel-side registration of attribute selections from v4c36.
+- **More operations in the kernel**, each on the shared reference functions:
+  - VHDL `std.env.stop`;
+  - posedge/negedge waits on vectors in thread waits (the LSB, IEEE 1800-2023 9.4.2);
+  - string equality, `len()`, indexing and byte replacement (6.16);
+  - `$countones`/`$countbits` (20.9);
+  - `$timeformat` (20.4.2, `Impl::apply_time_format`);
+  - `$dist_*` (20.14.2, `random_distribution_step`).
+- **SystemVerilog delayed and inertial writes stay hosted.** They were admitted in the tree, but the first ct4 run failed `transition_delays`, `procedural_assignments`, `named_events` and `core_simulation` on change order.
+  - The host orders same-time tasks by process, and a matured delayed update runs at its writer's order.
+  - The kernel runs all its timer-woken threads in one task at the host member's order, so the two interleave differently from the reference.
+  - Making this exact needs kernel-owned delayed updates ordered by process (family D step 5b). The interpreter's delayed-write handlers keep the shared `Impl::schedule_after_update`/`write_delayed_delays`/`schedule_write_delayed`.
+
+**Validation.**
+- The four tests pass in all four ctest variants after the change.
+- The second full ct4 run was skipped at the owner's direction.
+- Targeted runs on the live build (376 cases: the changeset lists and the attribute cases) had 0 losses vs `b96x1`, with 1 gain. Hosted processes in those cases fell from 923 to 386.
+- Sweep `v4c37` (frozen `d688d7d8`) has 0 losses:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2641 / 2641 | 270 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+Hosted processes in the sweep: 5,579 (v4c36 5,857).
+
+**Next.** Final procedures as members (family F), in the tree:
+- The behavioral tier admits a final procedure whose body neither writes, forces nor waits (`static_kernel_final_operation`).
+- `run_finals` runs it in its process's place among the final blocks: through the kernel's sorted hosted Active list when the kernel hosts processes, otherwise as a host task at the process's order. A `$finish` therefore stops the finals after it, as in the reference.
+
 ### 2026-10-28: hosted kinds into the kernel — conversions, VHDL containers, projected writes, attributes, forces (`65711fa4`, sweep `v4c36`)
 
 **`65711fa4`** (five changesets)
