@@ -138,6 +138,40 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: compiled SystemVerilog constant functions (`0a3d90ef`, sweep `v4c25`)
+
+**What changed** (`src/elaboration/hierarchy_sv_constant_program.{hpp,cpp}`, `hierarchy_sv_constant_evaluator.cpp`). A constant function whose formals, locals and result hold at most 64 bits is now compiled once per specialization to register code, which later calls run in place of the interpreter.
+- **Folding.** Subexpressions that read no frame value are folded at compile time by `evaluate()` itself. A fold is refused if it read a frame active at compile time, a hierarchy identity, or work units. Frames pushed by calls inside the fold are its own (`frame_read_floor_`), so a fold may call other constant functions.
+- **Semantics.** The remaining expressions mirror the evaluator: binary operand contexts and extensions (`evaluate_binary`, `small_binary`), unary operators, `?:`, `$signed`/`$unsigned`, bit-selects and part-selects (`normalized_index`), and concatenation/replication.
+- **Statements.** Assignments are converted to an explicit integral type as `assign_target` does, and bit and part writes are supported. So are `return`, `if`, blocks with locals, `for`/`while`/`do`/`repeat` with `break`/`continue`, and exact or wildcard `case`.
+- **Value profiles.** Each slot's profile (width, signedness, domain, nominal type, packed range) is fixed at compile time. A slot that takes more than one profile is checked at every read.
+- **Fallback.** A run is abandoned, and the call interpreted as before, whenever its value would hold an x or z bit, a profile it was not compiled for, a negative shift count, or a non-integer part-select index.
+- **Sharing.** Programs are shared like `unit_calls` (`SpecializationConstants::unit_programs`).
+- **Controls.** `FSIM_SV_CONST_PROGRAM=0` disables the path. `FSIM_SV_CONST_PROGRAM_VERIFY=1` runs both paths on every call and aborts on any difference. `FSIM_SV_CONST_PROGRAM_TRACE` reports compiled and refused functions.
+- original_codec: 80 functions compiled. `gen_poly` and `gen_table` were refused because they hold wide values. Elaboration instructions went from 41.25G to 35.83G (−13%). In callgrind, constant evaluation went from 6.68G to 1.33G.
+
+**Measured.** original_codec elaborates in 9.62 s with AOT and simulates in 2.31 s, and the transcript is unchanged (ok=11, done=1, pass=75). LDPC simulates in 1.98 s, and checksum `8a01ac745376f2b0` is unchanged.
+
+**Validation.** Full ctest passes 1087/1087 in normal mode, strict mode, and with `FSIM_SV_CONST_PROGRAM_VERIFY=1` (0 mismatches). Sweep `v4c25` shows 0 losses against `b96x1`:
+- Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+
+`tools/perf.sh` campaign `v4c25` (3 samples, `v4_o2_aot`, end-to-end median). The host was quieter than for `v4c24`, and the unchanged codex cases ran 4–8% faster, so the ratios are the better comparison:
+
+| Case | v4c24 fsim | × xsim | v4c25 fsim | × xsim |
+|---|---:|---:|---:|---:|
+| mixed_codec | 10.14 s | 2.68 | 9.39 s | 2.76 |
+| original_codec | 12.97 s | 2.48 | 11.31 s | 2.55 |
+| mixed_throughput | 4.93 s | 2.79 | 4.52 s | 2.91 |
+| original_throughput | 5.65 s | 3.10 | 5.35 s | 3.13 |
+| codex reference/throughput (6 cases) | 2.42–2.72 s | 3.81–4.26 | 2.22–2.62 s | 3.86–4.45 |
+
+The geometric mean of the × xsim ratios went from 3.48 to 3.59.
+
+**Next.** callgrind on `v4c25` totals 37.4G instructions:
+- 2.99G go to lowering SystemVerilog function bodies. Most of it is `mul_by_basis`, called from generate-loop continuous assigns; one body is lowered 160 times.
+- 1.6G go to expression widths.
+- 1.0G go to the interpreted constant calls that remain.
+
 ### 2026-10-27: generate-iteration sharing (`52b7fc26`, sweep `v4c24`)
 
 **Elaboration item 3: queries shared between generate iterations.** Every iteration of a VHDL `for ... generate` gets its own specialization, which differs from its siblings only in hierarchy identity values (the iterator). Two parts:
