@@ -170,6 +170,8 @@ Other changes:
 
 **Validation.** ctest 1087/1087 normal, `FSIM_V4_STRICT=1`, `FSIM_KERNEL_VERIFY=1`, and `FSIM_KERNEL_THREADS=4 FSIM_KERNEL_MT_FORCE=1 FSIM_KERNEL_MT_SHUFFLE=1`. RISC-V, codec and LDPC are identical at t1/t2/t4/t8, with `FORCE`+`SHUFFLE`, inline, `FUSED=0` and `AFFINITY=0`. Sweep `v4c31` (frozen `e219e002`): nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2070, sv-tests 1495. The one loss against `b96x1` (`t_mem_packed`) is fixed in the follow-up commit and rerun; all 20 `$readmem` and packed-memory cases pass.
 
+**Perf `v4c32b`** (`tools/perf.sh`, frozen `dbab5581`, default single thread): geomean ×3.551 vs xsim (`v4c30` ×3.663). codex 2.27–2.52 s ×4.02–4.58, mixed_codec 9.19 s ×2.74, mixed_throughput 4.52 s ×2.82, original_throughput 5.20 s ×3.11, original_codec 13.28 s ×2.16. The original_codec drop is in elaborate (samples 9.7–10.9 s, `v4c29` 8.4 s); simulate is unchanged at 2.2–2.4 s. A direct A/B of that elaborate (same workspace, phase profile on) takes 12.5 s on `v4c29`, 11.5 s on `v4c30` and 11.5 s on `v4c32`, so the drop is host variance (AOT code generation), not a regression.
+
 **Next.** The hosted-process work (owner 2026-10-28): a census of every reason that keeps a process hosted, then those kinds move into the kernel. `v4c31` still has hosted processes in 3,507 of 7,626 cases (124 first reasons). `FSIM_PROFILE_KERNEL_BLOCKERS=1` (with `FSIM_PROFILE_PHASES`) prints every flag and unsupported operation of each rejected process (`static-kernel-blockers` rows), so the work can be ranked by the cases each step would close.
 
 ### 2026-10-28: domain-private settle (MT Phase 5) (`12facb6a`, sweep `v4c30`)
