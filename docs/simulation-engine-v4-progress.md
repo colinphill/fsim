@@ -138,6 +138,58 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: SystemVerilog module-function body memo, end of the codec elaboration work (`a8e0eda7`, sweep `v4c26`)
+
+**What changed.**
+- **Module-function bodies** (`lowerer_hir_callable.cpp`, `lowerer_hir_callable_memo.cpp`, `hierarchy_sv_processes.cpp`). A SystemVerilog function declared at module level is now recorded and replayed like a package VHDL function. The key adds the instance path: `module-function|<frame key>|instance:<path>`. `HierarchyBuilder` sets the path for the processes of the unit's root scope; generated-scope processes stay unscoped. Formal debug names are logged and replayed too (`hir_callable_formal_debug_name`), since the first version refused every body over them. original_codec still refuses 11 bodies each for side state and for `CallableFramePush`.
+- **Region graph** (`simir_region_graph.cpp`). `ownership_matches_operations` expands each operation at most once; it used to expand some three times. That cost about 0.8G per elaboration.
+- **Path codec** (`application_hierarchy_path_codec.cpp`). `validate_path` skips 8-byte words that are all printable ASCII.
+- original_codec elaboration: 35.83G → 34.69G instructions.
+
+**Validation.** Full ctest passes 1087/1087 in normal mode, strict mode, and with `FSIM_HIR_BODY_MEMO_VERIFY=1` (0 mismatches). Sweep `v4c26` shows 0 losses against `b96x1`:
+- Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+
+`tools/perf.sh` campaign `v4c26` (3 samples, `v4_o2_aot`, end-to-end median; noise clear on every case). xsim ran slower than in `v4c25` as well, so compare the ratios:
+
+| Case | v4c25 fsim | × xsim | v4c26 fsim | × xsim |
+|---|---:|---:|---:|---:|
+| mixed_codec | 9.39 s | 2.76 | 9.29 s | 2.76 |
+| original_codec | 11.31 s | 2.55 | 11.92 s | 2.56 |
+| mixed_throughput | 4.52 s | 2.91 | 4.47 s | 2.91 |
+| original_throughput | 5.35 s | 3.13 | 5.20 s | 3.16 |
+| codex reference/throughput (6 cases) | 2.22–2.62 s | 3.86–4.45 | 2.11–2.57 s | 3.94–4.56 |
+
+The geometric mean of the × xsim ratios went from 3.59 to 3.65.
+
+**Where original_codec's time goes now, and why this line of work stops here.** In the campaign, elaborate takes 8.4 s of the 11.3 s:
+- **Front end and publish, about 4.9 s.** The remaining costs are spread out:
+  - SV expression queries (width, signedness, domain) total about 3.0G. Each is a chain of classifier probes.
+  - 7.8k SV concurrent-template misses cost about 4.9G. They come mostly from generate iterations whose overlays really do differ.
+  - The rest is flat.
+- **AOT native code generation, about 3.3 s** under `--jobs 1`. Cold templates take 2.46 s even at O0 with fast ISel:
+  - The cold module holds 983k LLVM instructions. Five testbench processes of about 85k each are one testbench compiled once per parameter set (register widths differ).
+  - The fixture's `perf_seed_for` case table is only about 16k of each. A switch lowering of `case` would save about 4% of cold IR.
+  - Removing duplicate constant GEPs within a block would save under 2%.
+  - In `llc -time-passes`, instruction selection takes 35%, the fast register allocator 13% and the assembly printer 10%, roughly in proportion to IR size.
+- **The AOT reload, about 0.5 s.** `--aot` reloads the artifact it has just written. The in-memory project cannot stand in for it, because publishing moves the design and the HIR out of it.
+
+None of these is a contained cut, so the codec elaboration work stops at this point and multi-threading Phase 0 starts.
+
+**Multi-threading Phase 0, first measurement.** `FSIM_PROFILE_KERNEL_BATCHES=1` (with `FSIM_PROFILE_KERNEL`) reports the batches a parallel kernel could run at once. A batch is one visit of a settle level, or one triggered round. For each size class (log2) the report gives the batches, units and time. It also models the time per thread count: each batch's time is divided over min(threads, size) workers, a barrier pair is added, and the serial residue outside batches is kept. `FSIM_PROFILE_KERNEL_BARRIER_NS` sets the barrier cost (default 500).
+- **Barrier micro-benchmark** (spin fork/join, scratchpad `mt/barrier_bench.cpp`). Per pair with no work: 98 ns at 2 threads, 188 ns at 4, 380 ns at 8. With 2 µs of work per worker the overhead is 248, 322 and 512 ns.
+- **original_codec.** Activation time is 1.80 s:
+  - in batches: settle 0.73 s, triggered 0.69 s;
+  - residue 0.38 s;
+  - batches of 128+ units: 0.77 s;
+  - modeled speedup: ×1.49 at 2 threads, ×2.08 at 4, ×2.55 at 8, ×2.85 at 16.
+- **LDPC, 20 frames.** Activation time is 2.65 s:
+  - batches of one: 0.99 s, from 4.66M batches (47 per time step);
+  - residue: 0.94 s;
+  - modeled speedup: ×1.29 at 8 threads.
+  - Cause: the per-lane memories (`g_lane[*].u_app`, `u_channel`) run as behavioral threads, 256 per time step. Each thread run wakes its own combinational unit, which runs as a batch of one before the next thread runs. Level batching therefore finds no width.
+  - So LDPC needs the threads of a time step batched first (all ready threads, then one settle), or their processes made members.
+- These models are upper bounds. They ignore commit serialization and intra-batch blocking-write order.
+
 ### 2026-10-27: compiled SystemVerilog constant functions (`0a3d90ef`, sweep `v4c25`)
 
 **What changed** (`src/elaboration/hierarchy_sv_constant_program.{hpp,cpp}`, `hierarchy_sv_constant_evaluator.cpp`). A constant function whose formals, locals and result hold at most 64 bits is now compiled once per specialization to register code, which later calls run in place of the interpreter.
