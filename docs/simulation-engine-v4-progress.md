@@ -138,6 +138,51 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-27: snapshot settle, parallel level and triggered batches (MT Phases 2–3) (`85f50430`, sweep `v4c29`)
+
+**Serial order.** Each `settle()` pass now takes a snapshot: every unit queued at the level when the pass starts, with their queued bits cleared first. The pass runs the snapshot in canonical order, and anything queued during it runs in a later pass. This is the last serial-order change the threads need (IEEE 1800-2023 4.7 leaves this order open; owner decision D4, option B).
+
+**Threads.** `FSIM_KERNEL_THREADS=N` (default 1, which is the serial kernel) starts a pool of N lanes (`simir_static_kernel_pool.hpp`, `simir_static_kernel_parallel.cpp`). The calling thread is lane 0. One compare-and-swap on a packed word (epoch, count, next item) both claims items and checks the batch. Workers spin, then wait on the futex.
+- **Plan** (`build_parallel_plan`, built at the first activation). Units are grouped by comb level, plus one group for all sequential members. For each unit, the plan collects the slots, containers and host signals its native code touches. It maps generic and step instructions through their SimIR operation: signal reads and writes, container reads and writes through private or `ReadContainerObject`-bound registers, `WriteContainerObjectElement`. A write plus any other touch of the same resource in one group makes every unit involved serial. An unknown operation makes its whole group serial.
+- **Batches.**
+  - A settle snapshot, or a triggered round (merged dispatch groups, or flagged members), runs its eligible units on the lanes in "lane mode". In lane mode, `slot_changed` logs the change (before and after words for slow-path slots, plus the edge bit), and `push_write`, `push_element_write` and `push_generic_pending` go to the lane's queues.
+  - The leader then replays the units in canonical order. It sets the running member, partition and position, delivers each logged change through `slot_changed`, and moves the queued writes into the kernel queues. It also finishes deopts and errors through `finish_native` at the unit's place.
+  - Ineligible units run live at their place in the replay.
+- **Scratch.** Per-run scratch moved into `RunScratch`, one per lane. The kernel-global wide move and concat scratch caused a codec mismatch at 4 threads.
+- **Off for:** VHDL and mixed designs, profiles, traces, the verifier and the debugger.
+- **Switches** (all `FSIM_KERNEL_MT_*`):
+  - `FORCE`: no cost threshold.
+  - `MIN`: the cost threshold, in code size; default 2048.
+  - `SPIN`: pause iterations before a worker sleeps; default 20000.
+  - `SHUFFLE`: workers take items in a random order.
+  - `INLINE`: the leader logs and replays without concurrency.
+  - `PHASES`: a mask: 1 settle, 2 merged, 4 flagged.
+  - `STATS`: batch statistics and plan diagnostics at teardown.
+
+**Go/no-go on the large design (owner decision 3).** LDPC `tb_decoder_long`: 20 frames, 21440 cycles, checksum `8a01ac745376f2b0` at every thread count, with shuffle. The codec is the `original_codec` simulate phase.
+
+| Simulate | t1 | t2 | t4 | t8 |
+|---|---:|---:|---:|---:|
+| LDPC | 1.57 s | 1.65 s | 1.71 s | 1.96 s |
+| codec | 2.50 s | 2.46 s | 2.42 s | 2.55 s |
+
+Threads give no net gain. The statistics show why:
+- **LDPC.** 21440 triggered rounds of 519 sequential members each; 5.55M eligible runs.
+  - Run phase: 154 ms inline, 90 ms at t4. Replay: about 125 ms either way.
+  - Settle: 8.8M of its 11.8M comb runs fall in snapshots below the threshold. They average about 5 instructions each, so the per-unit batch overhead (about 13 ns) exceeds the work.
+  - Inline mode, which has no concurrency, costs 1.75 s against 1.57 s serial. That 180 ms is more than the 70 ms that parallel execution saves.
+- **Codec.**
+  - Merged rounds: the run phase drops from 338 ms inline to 152 ms at t4. Settle: from 129 ms to 84 ms.
+  - Replay costs 63 ms and 127 ms, and the log overhead about 130 ms.
+  - Net: about 5% at t4.
+
+Per-level and triggered batches parallelize only the generated code. Notification, scheduling and the replay stay on the leader, as proposal §2.4 predicted. A real gain needs Phase 5 (domain-private settle with push logs) or Phase 1 (VHDL rounds, whose effects are queued writes rather than notifications). The perf cases leave little room either way: elaboration (run with `--jobs 1`) is 3.6–9.6 s of the four RS cases, and simulate is 1.6–2.4 s.
+
+**Validation.** Full ctest passes 1087/1087 in normal mode, with `FSIM_V4_STRICT=1`, with `FSIM_KERNEL_VERIFY=1`, and with `FSIM_KERNEL_THREADS=4 FSIM_KERNEL_MT_FORCE=1 FSIM_KERNEL_MT_SHUFFLE=1`. Sweep `v4c29` shows 0 losses against `b96x1`:
+- Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+
+**Next (owner decision 2026-10-28).** Measure the domain structure first: instance subtrees merged across combinational edges, reported per case with the share of runs and notifications inside each domain. That data decides Phase 5.
+
 ### 2026-10-27: canonical within-level settle order, MT Phase 0 plan report (`9fe536ac`, sweep `v4c28`)
 
 This is the first step of the multi-threading proposal (`.local-artifacts/v4-migration/design-opt/multithread-proposal.md`), under the owner's option B: canonicalize the serial order first.
@@ -167,6 +212,16 @@ This is the first step of the multi-threading proposal (`.local-artifacts/v4-mig
 
 **Validation.** Full ctest passes 1087/1087 in normal mode, with `FSIM_V4_STRICT=1`, and with `FSIM_KERNEL_VERIFY=1`. Sweep `v4c28` shows 0 losses against `b96x1`:
 - Passes: nvc 1259, vhdl-compliance 65, vests 3663, ivtest 2640, verilator 2071, sv-tests 1495.
+
+`tools/perf.sh` campaign `v4c28` (3 samples, `v4_o2_aot`) is within noise of `v4c27` on every case. The geometric mean of the × xsim ratios is 3.68 (was 3.66):
+
+| Case | v4c27 fsim | × xsim | v4c28 fsim | × xsim |
+|---|---:|---:|---:|---:|
+| mixed_codec | 9.14 s | 2.79 | 9.95 s | 2.77 |
+| original_codec | 11.47 s | 2.62 | 12.02 s | 2.67 |
+| mixed_throughput | 4.48 s | 2.93 | 4.78 s | 2.84 |
+| original_throughput | 5.30 s | 3.15 | 5.50 s | 3.16 |
+| codex reference/throughput (6 cases) | 2.22–2.57 s | 3.98–4.67 | 2.17–2.47 s | 3.96–4.66 |
 
 **Next.** The serial order changes once more before threads run: `settle()` will run a snapshot of each level (every unit queued at that level when the pass starts) before anything queued during the pass. Units of one level share no slot, so a snapshot can run on worker threads that log their notifications, and the leader replays the logs in canonical order.
 
