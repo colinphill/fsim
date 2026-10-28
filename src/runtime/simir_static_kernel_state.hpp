@@ -151,6 +151,19 @@ struct WriterRegion {
         std::span { &words[2], 1U }, std::span { &words[3], 1U });
 }
 
+/// Levels of a combinational dependency graph: each node runs after every
+/// node it depends on, condensed over strongly connected components. A
+/// node outside every cycle takes its longest-path depth; the members of
+/// one cycle take consecutive levels in index order, and the nodes after a
+/// cycle start past its last level. `cyclic` counts the nodes on cycles.
+struct NodeLevels {
+    std::vector<std::uint32_t> level;
+    std::uint32_t count { };
+    std::uint32_t cyclic { };
+};
+[[nodiscard]] NodeLevels condensed_levels(
+    const std::vector<std::vector<std::uint32_t>>& successors);
+
 } // namespace static_kernel_detail
 
 class Interpreter::Impl::StaticKernel {
@@ -667,6 +680,7 @@ private:
     void build_dispatch_groups();
     /// Runs the triggered sequential members in index order.
     void run_triggered();
+    void run_triggered_round();
     [[nodiscard]] bool target_pending(std::uint32_t id) const;
     void run(std::uint32_t member);
     void run_member(std::uint32_t member);
@@ -1611,11 +1625,37 @@ private:
     void finish_hosted();
     bool profile_ { };
     bool trace_ { };
+    /// FSIM_PROFILE_KERNEL_BATCHES (diagnostic, multi-threading plan): the
+    /// batches a parallel kernel could run at once. A batch is one settle
+    /// level visit or one triggered round; per size class (log2 buckets)
+    /// it keeps the batches, units and time, and per thread count the time a
+    /// batch would take split over min(threads, size) workers plus a barrier
+    /// pair.
+    struct BatchProfile {
+        static constexpr std::size_t classes = 10U;
+        static constexpr std::array<std::uint32_t, 4> threads { 2U, 4U, 8U, 16U };
+        bool enabled { };
+        /// Cost of one fork/join barrier pair (FSIM_PROFILE_KERNEL_BARRIER_NS).
+        double barrier_pair_ns { 500.0 };
+        std::array<std::uint64_t, classes> batches { };
+        std::array<std::uint64_t, classes> units { };
+        std::array<std::uint64_t, classes> ns { };
+        std::array<double, threads.size()> modeled_ns { };
+        std::uint64_t settle_ns { };
+        std::uint64_t triggered_ns { };
+        /// Settle batches of one member (count, ns), by member name with digits
+        /// folded.
+        std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> singles;
+        std::uint32_t last_member { 0xffffffffU };
+        void record(std::uint64_t size, std::uint64_t elapsed, bool settle);
+    } batch_profile_;
     std::uint64_t profile_activations_ { };
     std::uint64_t profile_activation_ns_ { };
     std::uint64_t profile_native_calls_[6] { };
     std::unordered_map<const void*, std::uint64_t> profile_template_runs_;
     std::uint64_t profile_slot_changes_ { };
+    /// FSIM_PROFILE_KERNEL_SLOTS: changes per slot.
+    std::vector<std::uint64_t> profile_slot_change_counts_;
     std::uint64_t profile_schedules_ { };
     std::uint64_t profile_collapsed_runs_ { };
     std::map<std::string, std::uint64_t> profile_generic_ops_;

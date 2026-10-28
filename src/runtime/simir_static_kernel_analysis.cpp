@@ -14,6 +14,193 @@
 
 namespace fsim::runtime::simir {
 
+std::optional<StaticKernelInlinedProgram> static_kernel_inline_calls(
+    const std::span<const Operation> operations, const std::uint32_t wait,
+    const std::uint32_t jump)
+{
+    const auto size = static_cast<std::uint32_t>(operations.size());
+    if (wait >= size || jump >= size || (jump != wait + 1U && wait != 0U)) {
+        return std::nullopt;
+    }
+    // Code positions are labels (context, operation): context 0 is the
+    // program from operation 0 to the loop jump, each expanded call a new
+    // context. Targets hold label numbers until every position is known.
+    constexpr std::size_t size_limit = std::size_t { 1 } << 18U;
+    struct Context {
+        std::uint32_t return_label { std::numeric_limits<std::uint32_t>::max() };
+    };
+    std::vector<Context> contexts(1U);
+    std::unordered_map<std::uint64_t, std::uint32_t> label_of;
+    std::vector<std::uint64_t> labels;
+    std::unordered_map<std::uint64_t, std::uint32_t> position;
+    const auto key = [](const std::uint32_t context, const std::uint32_t pc) {
+        return (std::uint64_t { context } << 32U) | pc;
+    };
+    const auto label = [&](const std::uint32_t context, const std::uint32_t pc) {
+        const auto [found, inserted] = label_of.try_emplace(key(context, pc),
+            static_cast<std::uint32_t>(labels.size()));
+        if (inserted) {
+            labels.push_back(key(context, pc));
+        }
+        return found->second;
+    };
+    StaticKernelInlinedProgram result;
+    auto& out = result.operations;
+    std::vector<std::uint32_t> active;
+    bool called = false;
+    // A callee's code: what its entry reaches without entering further
+    // calls, up to its returns.
+    const auto callee_region = [&](const std::uint32_t entry)
+        -> std::optional<std::vector<std::uint32_t>> {
+        std::vector<std::uint8_t> seen(size, 0U);
+        std::vector<std::uint32_t> work { entry };
+        std::vector<std::uint32_t> region;
+        while (!work.empty()) {
+            const auto pc = work.back();
+            work.pop_back();
+            if (pc >= size) {
+                return std::nullopt;
+            }
+            if (seen[pc] != 0U) {
+                continue;
+            }
+            seen[pc] = 1U;
+            region.push_back(pc);
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, Jump>) {
+                    work.push_back(op.target);
+                } else if constexpr (std::is_same_v<T, Branch>) {
+                    work.push_back(op.when_true);
+                    work.push_back(op.when_false);
+                } else if constexpr (std::is_same_v<T, Call>) {
+                    work.push_back(op.return_target);
+                } else if constexpr (std::is_same_v<T, Return>
+                    || std::is_same_v<T, Halt>) {
+                } else {
+                    work.push_back(pc + 1U);
+                }
+            }, operations[pc]);
+        }
+        std::ranges::sort(region);
+        return region;
+    };
+    const auto emit = [&](const auto& self, const std::uint32_t context,
+                          const std::vector<std::uint32_t>& region) -> bool {
+        for (std::size_t at = 0U; at < region.size(); ++at) {
+            const auto pc = region[at];
+            position.emplace(key(context, pc), static_cast<std::uint32_t>(out.size()));
+            if (out.size() > size_limit) {
+                return false;
+            }
+            bool falls_through = true;
+            bool ok = true;
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, CallableFramePush>) {
+                    ok = op.native_isolated;
+                } else if constexpr (std::is_same_v<T, CallableFramePop>) {
+                } else if constexpr (std::is_same_v<T, Call>) {
+                    called = true;
+                    falls_through = false;
+                    if (std::ranges::find(active, op.target) != active.end()) {
+                        ok = false;
+                        return;
+                    }
+                    const auto region = callee_region(op.target);
+                    if (!region) {
+                        ok = false;
+                        return;
+                    }
+                    const auto callee = static_cast<std::uint32_t>(contexts.size());
+                    contexts.push_back({ label(context, op.return_target) });
+                    active.push_back(op.target);
+                    ok = self(self, callee, *region);
+                    active.pop_back();
+                } else if constexpr (std::is_same_v<T, Return>) {
+                    falls_through = false;
+                    ok = contexts[context].return_label
+                        != std::numeric_limits<std::uint32_t>::max();
+                    out.emplace_back(Jump { contexts[context].return_label });
+                } else if constexpr (std::is_same_v<T, Jump>) {
+                    falls_through = false;
+                    out.emplace_back(Jump { label(context, op.target) });
+                } else if constexpr (std::is_same_v<T, Branch>) {
+                    falls_through = false;
+                    auto branch = op;
+                    branch.when_true = label(context, op.when_true);
+                    branch.when_false = label(context, op.when_false);
+                    out.emplace_back(branch);
+                } else if constexpr (std::is_same_v<T, Halt>) {
+                    falls_through = false;
+                    out.emplace_back(op);
+                } else {
+                    out.emplace_back(op);
+                }
+            }, operations[pc]);
+            if (!ok) {
+                return false;
+            }
+            if (falls_through
+                && (at + 1U == region.size() || region[at + 1U] != pc + 1U)) {
+                out.emplace_back(Jump { label(context, pc + 1U) });
+            }
+        }
+        return true;
+    };
+    std::vector<std::uint32_t> program(jump + 1U);
+    for (std::uint32_t pc = 0U; pc <= jump; ++pc) {
+        program[pc] = pc;
+    }
+    if (!emit(emit, 0U, program) || !called) {
+        return std::nullopt;
+    }
+    // The loop jump ends the program.
+    if (out.empty() || !operation_holds<Jump>(out.back())) {
+        return std::nullopt;
+    }
+    for (auto& operation : out) {
+        const auto resolve = [&](InstructionIndex& target) {
+            if (target >= labels.size()) {
+                return false;
+            }
+            const auto found = position.find(labels[target]);
+            if (found == position.end()) {
+                return false;
+            }
+            target = found->second;
+            return true;
+        };
+        bool ok = true;
+        if (auto* value = operation_get_if<Jump>(&operation)) {
+            ok = resolve(value->target);
+        } else if (auto* branch = operation_get_if<Branch>(&operation)) {
+            ok = resolve(branch->when_true) && resolve(branch->when_false);
+        }
+        if (!ok) {
+            return std::nullopt;
+        }
+    }
+    const auto new_wait = position.at(key(0U, wait));
+    const auto new_jump = position.at(key(0U, jump));
+    if (new_jump + 1U != out.size()) {
+        return std::nullopt;
+    }
+    if (wait == 0U) {
+        result.body_begin = 1U;
+        result.body_end = new_jump;
+        result.exit_alt = 0U;
+    } else {
+        result.body_begin = 0U;
+        result.body_end = new_wait;
+        result.exit_alt = new_wait + 1U;
+        if (new_jump != new_wait + 1U) {
+            return std::nullopt;
+        }
+    }
+    return result;
+}
+
 using namespace static_kernel_detail;
 using namespace static_kernel_compiled_detail;
 namespace kw = kernel_word;

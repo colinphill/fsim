@@ -134,6 +134,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     , trace_(std::getenv("FSIM_KERNEL_TRACE") != nullptr)
 {
     verify_ = std::getenv("FSIM_KERNEL_VERIFY") != nullptr;
+    batch_profile_.enabled = profile_
+        && std::getenv("FSIM_PROFILE_KERNEL_BATCHES") != nullptr;
+    if (const char* barrier = std::getenv("FSIM_PROFILE_KERNEL_BARRIER_NS")) {
+        batch_profile_.barrier_pair_ns = std::strtod(barrier, nullptr);
+    }
     check_inputs_ = std::getenv("FSIM_KERNEL_CHECK_INPUTS") != nullptr;
     host_process_ = spec.host;
     mixed_ = spec.mixed;
@@ -467,6 +472,30 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             || member.body_begin > (member.vhdl ? member.operations.size()
                                                 : member.body_end)) {
             throw std::invalid_argument("static kernel member body is invalid");
+        }
+        // A SystemVerilog member's calls run expanded in its body, as the
+        // planner admitted them (static_kernel_inline_calls).
+        if (!member.vhdl
+            && (member.kind == StaticKernelMemberKind::combinational
+                || member.kind == StaticKernelMemberKind::sequential)
+            && std::any_of(member.operations.begin() + member.body_begin,
+                member.operations.begin() + member.body_end,
+                [](const Operation& operation) {
+                    return operation_holds<Call>(operation);
+                })) {
+            const bool wait_first = member.exit_alt == 0U;
+            auto inlined = static_kernel_inline_calls(member.operations,
+                wait_first ? 0U : member.body_end,
+                wait_first ? member.body_end : member.exit_alt);
+            if (!inlined) {
+                throw std::invalid_argument(
+                    "static kernel member calls cannot be expanded");
+            }
+            member.operations = std::move(inlined->operations);
+            member.body_begin = inlined->body_begin;
+            member.prologue_end = inlined->body_begin;
+            member.body_end = inlined->body_end;
+            member.exit_alt = inlined->exit_alt;
         }
         if (keep_names) {
             profile_names_.push_back(program.name());
@@ -912,7 +941,6 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     // Level combinational members: writer before reader, cycles last.
     const auto count = members_.size();
     std::vector<std::vector<std::uint32_t>> successors(count);
-    std::vector<std::uint32_t> indegree(count, 0U);
     std::unordered_map<SignalId, std::vector<std::uint32_t>> signal_writers;
     // A combinational member may read more than it is sensitive to (`@(d iff
     // enable)`, an incomplete event list): only its sensitivity wakes it, but
@@ -1011,13 +1039,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     && members_[reader.member].kind
                         == StaticKernelMemberKind::combinational) {
                     successors[index].push_back(reader.member);
-                    ++indegree[reader.member];
                 }
             }
             for (const auto reader : slot_readers[slot]) {
                 if (reader != index) {
                     successors[index].push_back(reader);
-                    ++indegree[reader];
                 }
             }
         }
@@ -1049,7 +1075,6 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             for (const auto reader : readers) {
                 if (reader != writer) {
                     successors[writer].push_back(reader);
-                    ++indegree[reader];
                 }
             }
         }
@@ -1060,34 +1085,16 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         });
         for (std::size_t position = 1U; position < writers.size(); ++position) {
             successors[writers[position - 1U]].push_back(writers[position]);
-            ++indegree[writers[position]];
         }
     }
-    std::vector<std::uint32_t> ready;
-    for (std::uint32_t index = 0U; index < count; ++index) {
-        if (indegree[index] == 0U) {
-            ready.push_back(index);
+    {
+        const auto levels = condensed_levels(successors);
+        for (std::uint32_t index = 0U; index < count; ++index) {
+            members_[index].level = levels.level[index];
         }
-    }
-    std::uint32_t level = 0U;
-    std::vector<std::uint8_t> placed(count, 0U);
-    while (!ready.empty()) {
-        std::vector<std::uint32_t> next;
-        for (const auto index : ready) {
-            members_[index].level = level;
-            placed[index] = 1U;
-            for (const auto successor : successors[index]) {
-                if (--indegree[successor] == 0U) {
-                    next.push_back(successor);
-                }
-            }
-        }
-        ready = std::move(next);
-        ++level;
-    }
-    for (std::uint32_t index = 0U; index < count; ++index) {
-        if (placed[index] == 0U) {
-            members_[index].level = level++;
+        if (profile_) {
+            std::cerr << "fsim-kernel: levels=" << levels.count
+                      << " cyclic_members=" << levels.cyclic << '\n';
         }
     }
     if (stage_profile) {
@@ -1217,6 +1224,68 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
               << " schedules=" << profile_schedules_
               << " dispatch_groups=" << dispatch_groups_.size()
               << " collapsed=" << profile_collapsed_runs_ << '\n';
+    if (batch_profile_.enabled) {
+        const auto& batches = batch_profile_;
+        for (std::size_t bucket = 0U; bucket < BatchProfile::classes; ++bucket) {
+            if (batches.batches[bucket] == 0U) {
+                continue;
+            }
+            std::cerr << "fsim-kernel: batch size>=" << (std::uint64_t { 1 } << bucket)
+                      << " batches=" << batches.batches[bucket]
+                      << " units=" << batches.units[bucket]
+                      << " ms=" << static_cast<double>(batches.ns[bucket]) / 1e6 << '\n';
+        }
+        const auto in_batches = batches.settle_ns + batches.triggered_ns;
+        const auto residue = profile_activation_ns_ > in_batches
+            ? profile_activation_ns_ - in_batches : 0U;
+        std::cerr << "fsim-kernel: batch settle_ms="
+                  << static_cast<double>(batches.settle_ns) / 1e6
+                  << " triggered_ms=" << static_cast<double>(batches.triggered_ns) / 1e6
+                  << " residue_ms=" << static_cast<double>(residue) / 1e6
+                  << " barrier_pair_ns=" << batches.barrier_pair_ns;
+        for (std::size_t index = 0U; index < BatchProfile::threads.size(); ++index) {
+            const auto modeled = static_cast<double>(residue) + batches.modeled_ns[index];
+            std::cerr << " t" << BatchProfile::threads[index] << "_ms=" << modeled / 1e6
+                      << " (x" << (modeled > 0.0
+                                 ? static_cast<double>(profile_activation_ns_) / modeled
+                                 : 0.0)
+                      << ')';
+        }
+        std::cerr << '\n';
+        std::vector<std::tuple<std::uint64_t, std::uint64_t, std::string>> singles;
+        for (const auto& [name, single] : batches.singles) {
+            singles.emplace_back(single.second, single.first, name);
+        }
+        std::ranges::sort(singles, std::greater<> { });
+        for (std::size_t rank = 0U; rank < singles.size() && rank < 12U; ++rank) {
+            const auto& [ns, count, name] = singles[rank];
+            std::cerr << "fsim-kernel: batch single ms="
+                      << static_cast<double>(ns) / 1e6 << " count=" << count << ' '
+                      << name << '\n';
+        }
+    }
+    if (!profile_slot_change_counts_.empty()) {
+        std::vector<std::pair<std::uint64_t, std::uint32_t>> ranked;
+        for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
+            if (profile_slot_change_counts_[index] != 0U) {
+                ranked.emplace_back(profile_slot_change_counts_[index], index);
+            }
+        }
+        std::ranges::sort(ranked, std::greater<> { });
+        for (std::size_t rank = 0U; rank < ranked.size() && rank < 16U; ++rank) {
+            const auto& slot = slots_[ranked[rank].second];
+            std::cerr << "fsim-kernel: slot changes=" << ranked[rank].first
+                      << " signal=" << slot.signal << " width=" << slot.width
+                      << " general=" << (slot_notify_[ranked[rank].second].general ? 1 : 0)
+                      << " silent=" << (slot.silent ? 1 : 0)
+                      << " readers=" << slot.readers.size()
+                      << " targets=" << slot.targets.size()
+                      << " ranged=" << slot.ranged.size()
+                      << " output=" << (slot.output ? 1 : 0)
+                      << " edges=" << slot.edges.size()
+                      << " single_writer=" << (slot.single_writer ? 1 : 0) << '\n';
+        }
+    }
     std::cerr << "fsim-kernel: activations=" << profile_activations_
               << " combinational_runs=" << profile_runs_[0]
               << " sequential_runs=" << profile_runs_[1]
@@ -1417,6 +1486,9 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
     const std::uint32_t field_offset)
 {
     profile_slot_changes_ += profile_ ? 1U : 0U;
+    if (profile_ && slot_index < profile_slot_change_counts_.size()) {
+        ++profile_slot_change_counts_[slot_index];
+    }
     const auto notify = slot_notify_[slot_index];
     for (auto index = notify.begin; index < notify.end; ++index) {
         schedule_target(notify_targets_[index]);
@@ -2725,6 +2797,9 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
             || !slot.edges.empty() || !slot.single_writer
             || (index < slot_waitable_.size() && slot_waitable_[index] != 0U);
     }
+    if (profile_ && std::getenv("FSIM_PROFILE_KERNEL_SLOTS") != nullptr) {
+        profile_slot_change_counts_.assign(slots_.size(), 0U);
+    }
 }
 
 bool Interpreter::Impl::StaticKernel::target_pending(const std::uint32_t id) const
@@ -2832,6 +2907,48 @@ void Interpreter::Impl::StaticKernel::schedule_edge(const std::uint32_t id)
 }
 
 void Interpreter::Impl::StaticKernel::run_triggered()
+{
+    if (batch_profile_.enabled) {
+        // FSIM_PROFILE_KERNEL_BATCHES: a triggered round is one batch.
+        const auto runs = [&] {
+            return profile_runs_[0] + profile_runs_[1] + profile_runs_[2]
+                + profile_partition_runs_;
+        };
+        const auto first_run = runs();
+        const auto round_started = std::chrono::steady_clock::now();
+        run_triggered_round();
+        if (runs() != first_run) {
+            batch_profile_.record(runs() - first_run,
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - round_started).count()),
+                false);
+        }
+        return;
+    }
+    run_triggered_round();
+}
+
+void Interpreter::Impl::StaticKernel::BatchProfile::record(
+    const std::uint64_t size, const std::uint64_t elapsed, const bool settle)
+{
+    const auto bucket = std::min<std::size_t>(
+        static_cast<std::size_t>(std::bit_width(size)) - 1U, classes - 1U);
+    ++batches[bucket];
+    units[bucket] += size;
+    ns[bucket] += elapsed;
+    (settle ? settle_ns : triggered_ns) += elapsed;
+    // A batch of one runs on the leader without a barrier.
+    for (std::size_t index = 0U; index < threads.size(); ++index) {
+        const auto workers = std::min<std::uint64_t>(threads[index], size);
+        modeled_ns[index] += workers <= 1U
+            ? static_cast<double>(elapsed)
+            : static_cast<double>(elapsed) / static_cast<double>(workers)
+                + barrier_pair_ns;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::run_triggered_round()
 {
     auto triggered = std::move(triggered_);
     triggered_.clear();
@@ -4025,9 +4142,53 @@ void Interpreter::Impl::StaticKernel::settle()
 {
     std::size_t evaluations = 0U;
     const auto limit = members_.size() * 64U + 1'000'000U;
+    // FSIM_PROFILE_KERNEL_BATCHES: one batch per visit of a level.
+    const bool batches = batch_profile_.enabled;
+    auto batch_level = scan_level_;
+    const auto batch_runs = [&] {
+        return profile_runs_[0] + profile_runs_[1] + profile_runs_[2]
+            + profile_partition_runs_;
+    };
+    auto batch_first_run = batches ? batch_runs() : 0U;
+    auto batch_started = batches ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point { };
+    const auto close_batch = [&] {
+        const auto runs = batch_runs();
+        const auto now = std::chrono::steady_clock::now();
+        if (runs - batch_first_run == 1U
+            && batch_profile_.last_member < profile_names_.size()) {
+            std::string name;
+            for (const auto character : profile_names_[batch_profile_.last_member]) {
+                if (std::isdigit(static_cast<unsigned char>(character)) == 0) {
+                    name += character;
+                } else if (name.empty() || name.back() != 'N') {
+                    name += 'N';
+                }
+            }
+            auto& single = batch_profile_.singles[name];
+            ++single.first;
+            single.second += static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    now - batch_started).count());
+        }
+        batch_profile_.last_member = no_slot;
+        if (runs != batch_first_run) {
+            batch_profile_.record(runs - batch_first_run,
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        now - batch_started).count()),
+                true);
+        }
+        batch_first_run = runs;
+        batch_started = now;
+    };
     while (queued_count_ != 0U) {
         while (buckets_[scan_level_].empty()) {
             ++scan_level_;
+        }
+        if (batches && scan_level_ != batch_level) {
+            close_batch();
+            batch_level = scan_level_;
         }
         auto& bucket = buckets_[scan_level_];
         const auto entry = bucket.back();
@@ -4049,10 +4210,16 @@ void Interpreter::Impl::StaticKernel::settle()
             fail(entry, members_[entry].body_begin,
                 "static kernel combinational logic did not settle");
         }
+        if (batches) {
+            batch_profile_.last_member = entry;
+        }
         // A combinational member does not wake on its own writes.
         running_member_ = entry;
         run(entry);
         running_member_ = no_slot;
+    }
+    if (batches) {
+        close_batch();
     }
 }
 

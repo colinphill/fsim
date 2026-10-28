@@ -900,6 +900,10 @@ private:
         // initial and always procedure has started (IEEE 1800-2017
         // 9.2.2.2.2).
         bool start_after_procedures { };
+        // A source always_comb or always_latch is not sensitive to what it
+        // writes, or what a function it calls writes (IEEE 1800-2023
+        // 9.2.2.2.1 a), 9.2.2.3).
+        bool excludes_written_dependencies { };
         bool wait_before_first_execution { };
         bool concurrent_assertion { };
         bool vhdl_guarded_assignment { };

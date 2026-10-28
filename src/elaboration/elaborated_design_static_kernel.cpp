@@ -747,6 +747,27 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // Structural operations excluded from the supported-operation check.
         std::size_t structural_a = count;
         std::size_t structural_b = count;
+        // A SystemVerilog body that calls functions runs them expanded in
+        // place (static_kernel_inline_calls); its callees follow the loop
+        // jump.
+        std::optional<StaticKernelInlinedProgram> inlined;
+        const auto inline_calls = [&](const std::size_t at_wait,
+                                      const std::size_t at_jump) {
+            if (vhdl || std::ranges::none_of(std::views::iota(std::size_t { 0 }, count),
+                    [&](const std::size_t op) {
+                        return operation_holds<Call>(operations[op]);
+                    })) {
+                return false;
+            }
+            std::vector<Operation> expanded;
+            expanded.reserve(count);
+            for (std::size_t op = 0U; op < count; ++op) {
+                expanded.push_back(operations.expanded(op));
+            }
+            inlined = static_kernel_inline_calls(expanded,
+                static_cast<std::uint32_t>(at_wait), static_cast<std::uint32_t>(at_jump));
+            return inlined.has_value();
+        };
         if (vhdl) {
             // A VHDL process with one static wait W runs from operation 0 to
             // W at initialization; each activation resumes at W + 1 and runs
@@ -821,7 +842,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             // SystemVerilog bodies end at the loop jump. VHDL subprogram
             // bodies may follow it and are reached only through Call.
             if (*wait != 0U && any && loop_jump(*wait + 1U)
-                && (vhdl || *wait == count - 2U)) {
+                && (vhdl || *wait == count - 2U || inline_calls(*wait, *wait + 1U))) {
                 member.kind = 0U;
                 member.run_at_start = true;
                 member.body_begin = 0U;
@@ -834,7 +855,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 while (jump < count && !loop_jump(jump)) {
                     ++jump;
                 }
-                if (jump == count || (!vhdl && jump != count - 1U)) {
+                if (jump == count
+                    || (!vhdl && jump != count - 1U && !inline_calls(0U, jump))) {
                     reject(index, "shape_loop");
                     continue;
                 }
@@ -858,7 +880,42 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         bool supported = true;
         std::size_t unsupported_at = count;
-        for (std::size_t op = 0U; op < count && supported; ++op) {
+        if (inlined) {
+            // The expanded program replaces the stored one: its operations
+            // are expanded, so their signals need no remapping.
+            const auto wait_first = inlined->exit_alt == 0U;
+            const auto inlined_a = wait_first ? 0U : inlined->body_end;
+            const auto inlined_b = wait_first ? inlined->body_end : inlined->exit_alt;
+            const auto inlined_count = inlined->operations.size();
+            for (std::size_t op = 0U; op < inlined_count && supported; ++op) {
+                if (op == inlined_a || op == inlined_b) {
+                    continue;
+                }
+                const auto& operation = inlined->operations[op];
+                supported = (static_kernel_operation_supported(operation)
+                                || (member.kind == 1U
+                                    && static_kernel_sequential_operation_supported(
+                                        operation)))
+                    && !branch_target_outside(operation, inlined_count);
+                if (supported) {
+                    visit_operation([&](const auto& value) {
+                        if constexpr (requires { value.signal; }) {
+                            if constexpr (std::is_same_v<
+                                              std::decay_t<decltype(value.signal)>,
+                                              SignalId>) {
+                                supported = value.signal < signal_count;
+                            }
+                        }
+                    }, operation);
+                }
+            }
+            // The stored callee code is checked as expanded above.
+            structural_a = structural_b = count;
+            if (!supported && census && rejection[index].empty()) {
+                rejection[index] = "inlined_operation";
+            }
+        }
+        for (std::size_t op = 0U; op < count && supported && !inlined; ++op) {
             if (op == structural_a || op == structural_b) {
                 continue;
             }
@@ -867,7 +924,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             const bool overridden = &operation != operations.data() + op;
             supported = (vhdl ? static_kernel_vhdl_operation_supported(operation)
                                   || unreachable_halt(op)
-                              : static_kernel_operation_supported(operation))
+                              : static_kernel_operation_supported(operation)
+                                  || (member.kind == 1U
+                                      && static_kernel_sequential_operation_supported(
+                                          operation)))
                 && !branch_target_outside(operation, count);
             if (supported) {
                 visit_operation([&](const auto& value) {

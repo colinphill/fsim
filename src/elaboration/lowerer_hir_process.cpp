@@ -2407,6 +2407,8 @@ std::optional<Process> Lowerer::lower_hir_process(
             || input.kind == semantic::sv::ProcessKind::always_latch;
         description.start_after_procedures
             = description.always_comb_or_latch;
+        description.excludes_written_dependencies
+            = description.always_comb_or_latch;
         description.concurrent_assertion = input.concurrent_assertion;
         // An upward or downward hierarchical name (`t.clk`, IEEE 1800-2017
         // 23.6, 23.8), resolved against each enclosing instance in turn.
@@ -5745,8 +5747,59 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     }
     bool wildcard_never_runs { };
     if (description.wildcard_sensitivity) {
+        // Bits the block writes at static positions, by signal (zero width:
+        // the whole signal). A dependency they cover is left out.
+        std::unordered_map<SignalId,
+            std::vector<std::pair<std::uint32_t, std::uint32_t>>> written;
+        if (description.excludes_written_dependencies) {
+            for (const auto& operation : process_.operations) {
+                runtime::simir::visit_operation([&](const auto& op) {
+                    using T = std::decay_t<decltype(op)>;
+                    if constexpr (std::is_same_v<T, runtime::simir::WriteBlocking>
+                        || std::is_same_v<T, runtime::simir::WriteUpdate>) {
+                        written[op.signal].emplace_back(0U, 0U);
+                    } else if constexpr (std::is_same_v<T,
+                                             runtime::simir::WriteBlockingSlice>
+                        || std::is_same_v<T, runtime::simir::WriteUpdateSlice>) {
+                        written[op.signal].emplace_back(op.offset,
+                            static_cast<std::uint32_t>(register_width(op.source)));
+                    }
+                }, operation);
+            }
+        }
+        const auto covered = [&](const runtime::simir::Sensitivity& dependency) {
+            const auto found = written.find(dependency.signal);
+            if (dependency.edge != runtime::simir::EdgeKind::any
+                || found == written.end()) {
+                return false;
+            }
+            auto ranges = found->second;
+            if (std::ranges::any_of(ranges, [](const auto& range) {
+                    return range.second == 0U;
+                })) {
+                return true;
+            }
+            if (dependency.width == 0U) {
+                return false;
+            }
+            std::ranges::sort(ranges);
+            auto next = dependency.offset;
+            const auto end = dependency.offset + dependency.width;
+            for (const auto& [offset, width] : ranges) {
+                if (offset > next) {
+                    break;
+                }
+                next = std::max(next, offset + width);
+                if (next >= end) {
+                    return true;
+                }
+            }
+            return false;
+        };
         for (const auto dependency : implicit_signal_dependencies_) {
-            process_.static_sensitivity.push_back(dependency);
+            if (!covered(dependency)) {
+                process_.static_sensitivity.push_back(dependency);
+            }
         }
         if (description.require_wildcard_dependency
             && !description.always_comb_or_latch

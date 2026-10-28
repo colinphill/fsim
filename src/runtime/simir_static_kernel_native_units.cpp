@@ -1582,6 +1582,95 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
     }
 }
 
+NodeLevels static_kernel_detail::condensed_levels(
+    const std::vector<std::vector<std::uint32_t>>& successors)
+{
+    // Tarjan's algorithm emits each component after every component it
+    // reaches, so the emission order reversed is a topological order.
+    constexpr auto unvisited = std::numeric_limits<std::uint32_t>::max();
+    const auto node_total = static_cast<std::uint32_t>(successors.size());
+    std::vector<std::uint32_t> order(node_total, unvisited);
+    std::vector<std::uint32_t> low(node_total, 0U);
+    std::vector<std::uint8_t> stacked(node_total, 0U);
+    std::vector<std::uint32_t> stack;
+    std::vector<std::uint32_t> component_of(node_total, 0U);
+    std::vector<std::vector<std::uint32_t>> components;
+    std::uint32_t counter = 0U;
+    struct Frame {
+        std::uint32_t node;
+        std::size_t next;
+    };
+    std::vector<Frame> frames;
+    for (std::uint32_t root = 0U; root < node_total; ++root) {
+        if (order[root] != unvisited) {
+            continue;
+        }
+        frames.push_back({ root, 0U });
+        order[root] = low[root] = counter++;
+        stack.push_back(root);
+        stacked[root] = 1U;
+        while (!frames.empty()) {
+            auto& frame = frames.back();
+            const auto node = frame.node;
+            if (frame.next < successors[node].size()) {
+                const auto successor = successors[node][frame.next++];
+                if (order[successor] == unvisited) {
+                    order[successor] = low[successor] = counter++;
+                    stack.push_back(successor);
+                    stacked[successor] = 1U;
+                    frames.push_back({ successor, 0U });
+                } else if (stacked[successor] != 0U) {
+                    low[node] = std::min(low[node], order[successor]);
+                }
+                continue;
+            }
+            if (low[node] == order[node]) {
+                const auto component = static_cast<std::uint32_t>(components.size());
+                auto& members = components.emplace_back();
+                for (;;) {
+                    const auto top = stack.back();
+                    stack.pop_back();
+                    stacked[top] = 0U;
+                    component_of[top] = component;
+                    members.push_back(top);
+                    if (top == node) {
+                        break;
+                    }
+                }
+                std::ranges::sort(members);
+            }
+            frames.pop_back();
+            if (!frames.empty()) {
+                low[frames.back().node] = std::min(low[frames.back().node], low[node]);
+            }
+        }
+    }
+    NodeLevels result;
+    result.level.assign(node_total, 0U);
+    std::vector<std::uint32_t> base(components.size(), 0U);
+    for (auto component = components.size(); component-- > 0U;) {
+        const auto& members = components[component];
+        const auto first = base[component];
+        const auto span = static_cast<std::uint32_t>(members.size());
+        if (span > 1U) {
+            result.cyclic += span;
+        }
+        for (std::uint32_t position = 0U; position < span; ++position) {
+            result.level[members[position]] = first + position;
+        }
+        result.count = std::max(result.count, first + span);
+        for (const auto member : members) {
+            for (const auto successor : successors[member]) {
+                if (const auto target = component_of[successor];
+                    target != component) {
+                    base[target] = std::max(base[target], first + span);
+                }
+            }
+        }
+    }
+    return result;
+}
+
 void Interpreter::Impl::StaticKernel::build_partitions(
     const std::vector<std::vector<std::uint32_t>>& successors)
 {
@@ -1662,13 +1751,34 @@ void Interpreter::Impl::StaticKernel::build_partitions(
             }
         }
     }
+    // A member with a loop in its body (a procedural for or while) stays
+    // out: a partition pass runs every member of its component, and such a
+    // member usually spans many otherwise separate cones (one per array
+    // element it iterates over), joining them into one component.
+    const auto loops = [](const Member& member) {
+        for (auto pc = member.body_begin; pc < member.body_end; ++pc) {
+            bool backward = false;
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, Jump>) {
+                    backward = op.target <= pc;
+                } else if constexpr (std::is_same_v<T, Branch>) {
+                    backward = op.when_true <= pc || op.when_false <= pc;
+                }
+            }, member.operations[pc]);
+            if (backward) {
+                return true;
+            }
+        }
+        return false;
+    };
     // Group compiled combinational members by key.
     std::map<std::uint32_t, std::vector<std::uint32_t>> groups;
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         const auto& member = members_[index];
         if (member.kind == StaticKernelMemberKind::combinational && !member.vhdl
             && member.compiled && member.partition_key != no_slot
-            && on_cycle[index] == 0U) {
+            && on_cycle[index] == 0U && !loops(member)) {
             groups[member.partition_key].push_back(index);
         }
     }
@@ -1806,7 +1916,6 @@ void Interpreter::Impl::StaticKernel::build_partitions(
             ? count + members_[member].partition : member;
     };
     std::vector<std::vector<std::uint32_t>> node_successors(node_count);
-    std::vector<std::uint32_t> indegree(node_count, 0U);
     for (std::uint32_t member = 0U; member < count; ++member) {
         for (const auto successor : successors[member]) {
             const auto from = node_of(member);
@@ -1819,38 +1928,9 @@ void Interpreter::Impl::StaticKernel::build_partitions(
     for (auto& list : node_successors) {
         std::ranges::sort(list);
         list.erase(std::unique(list.begin(), list.end()), list.end());
-        for (const auto to : list) {
-            ++indegree[to];
-        }
     }
-    std::vector<std::uint32_t> node_level(node_count, 0U);
-    std::vector<std::uint8_t> placed(node_count, 0U);
-    std::vector<std::uint32_t> ready;
-    for (std::uint32_t node = 0U; node < node_count; ++node) {
-        if (indegree[node] == 0U) {
-            ready.push_back(node);
-        }
-    }
-    std::uint32_t level = 0U;
-    while (!ready.empty()) {
-        std::vector<std::uint32_t> next;
-        for (const auto node : ready) {
-            node_level[node] = level;
-            placed[node] = 1U;
-            for (const auto successor : node_successors[node]) {
-                if (--indegree[successor] == 0U) {
-                    next.push_back(successor);
-                }
-            }
-        }
-        ready = std::move(next);
-        ++level;
-    }
-    for (std::uint32_t node = 0U; node < node_count; ++node) {
-        if (placed[node] == 0U) {
-            node_level[node] = level++;
-        }
-    }
+    const auto node_level = static_kernel_detail::condensed_levels(
+        node_successors).level;
     for (std::uint32_t member = 0U; member < count; ++member) {
         if (members_[member].partition == no_slot) {
             members_[member].level = node_level[member];

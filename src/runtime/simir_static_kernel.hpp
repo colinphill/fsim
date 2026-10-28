@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -263,6 +264,43 @@ struct StaticKernelRuntimeSpec {
         }
     }, operation);
 }
+
+/// Operations a SystemVerilog sequential member may use beyond the static
+/// set: a severity message below failure (an immediate assertion's $info,
+/// $warning or $error action, IEEE 1800-2023 16.3, 20.10). The member runs
+/// once per triggering edge, as the process does on the host, so the
+/// message is emitted as often; the kernel's operation step emits it through
+/// the report hook.
+[[nodiscard]] inline bool static_kernel_sequential_operation_supported(
+    const Operation& operation)
+{
+    const auto* report = operation_get_if<Report>(&operation);
+    return report != nullptr && report->severity != AssertionSeverity::failure;
+}
+
+/// A SystemVerilog combinational or sequential member's program with every
+/// call in its body expanded in place. A function call runs to completion
+/// inside its caller's activation (IEEE 1800-2023 13.4), and an acyclic
+/// chain of callables whose frames own their registers (native_isolated)
+/// needs no frame save or restore, so the expanded body runs the same
+/// operations in the same order: each Call becomes its callee's code, each
+/// Return a jump to the call's return target, and the frame pushes and pops
+/// are dropped. The program keeps its shape, the wait and the loop jump to
+/// operation 0, and leaves out the callee code after the loop jump.
+struct StaticKernelInlinedProgram {
+    std::vector<Operation> operations;
+    std::uint32_t body_begin { };
+    std::uint32_t body_end { };
+    std::uint32_t exit_alt { };
+};
+
+/// `wait` is the program's static wait and `jump` its loop jump: either the
+/// body precedes the wait (`jump` is `wait` + 1) or the wait is operation 0
+/// and the body runs to `jump`. Empty when the body makes no call, a call
+/// recurses, a frame is not native_isolated, control leaves a callee other
+/// than by Return or the expansion exceeds its size limit.
+[[nodiscard]] std::optional<StaticKernelInlinedProgram> static_kernel_inline_calls(
+    std::span<const Operation> operations, std::uint32_t wait, std::uint32_t jump);
 
 /// Operations a behavioral member may use: the static set plus waits,
 /// fork/join, calls with automatic frames of packed registers, integer
