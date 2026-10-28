@@ -242,7 +242,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
         case KOp::mem_bind:
             break;
         case KOp::mark:
-            running_position_ = inst.d;
+            scratch().running_position = inst.d;
             member_index = inst.x;
             current = &members_[member_index];
             break;
@@ -306,7 +306,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
                         || body.tracked[inst.d] == 0U)) {
                     throw KernelDeopt { at, false };
                 }
-                last_unknown_ = field.unknown;
+                scratch().last_unknown = field.unknown;
                 registers[inst.d] = field.value;
                 break;
             }
@@ -340,7 +340,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
             break;
         case KOp::dynamic_extract:
         case KOp::dynamic_part_select:
-            wide_file_ = registers;
+            scratch().wide_file = registers;
             registers[inst.d] = inst.sub == 1U
                 ? evaluate_slow(body, inst, at, member_index,
                       origin, { }, registers[inst.y], { }, inst.x,
@@ -518,10 +518,10 @@ void Interpreter::Impl::StaticKernel::execute_body(
             case KOp::load_host:
             case KOp::dynamic_extract:
             case KOp::dynamic_part_select:
-                set_unknown(inst.d, last_unknown_);
+                set_unknown(inst.d, scratch().last_unknown);
                 break;
             case KOp::extract:
-                set_unknown(inst.d, inst.sub >= 2U ? last_unknown_ : result_unknown);
+                set_unknown(inst.d, inst.sub >= 2U ? scratch().last_unknown : result_unknown);
                 break;
             case KOp::store_vhdl:
             case KOp::generic:
@@ -829,22 +829,24 @@ void Interpreter::Impl::StaticKernel::native_generic_kind(
     StaticKernelNativeFrame* frame, Word* registers, const std::uint32_t at)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
-    kernel.profile_native_calls_[3] += kernel.profile_ ? 1U : 0U;
+    if (kernel.profile_) {
+        ++kernel.profile_native_calls_[3];
+    }
     try {
         const auto& program = *static_cast<const CompiledBody*>(frame->program);
-        kernel.running_position_ = frame->position;
+        kernel.scratch().running_position = frame->position;
         if (kernel.execute_generic_kind<K>(
                 *static_cast<CompiledBody*>(frame->instance), registers,
-                program.code[at], frame->member, kernel.two_state_running_)) {
+                program.code[at], frame->member, kernel.scratch().two_state_running)) {
             // The template's full code continues after the instruction.
             frame->reserved = at + 1U;
             frame->status = 4U;
         }
     } catch (const KernelDeopt& deopt) {
-        kernel.pending_deopt_ = deopt;
+        kernel.scratch().pending_deopt = deopt;
         frame->status = 2U;
     } catch (...) {
-        kernel.native_exception_ = std::current_exception();
+        kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
     }
 }
@@ -860,7 +862,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_step_kind(
         }
         return (kernel.*operation_steps()[K])(frame->member, pc);
     } catch (...) {
-        kernel.native_exception_ = std::current_exception();
+        kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
         return operation_tier_stop;
     }
@@ -889,7 +891,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_thread_step_kind(
         kernel.operation_tier_pc_ = pc;
         return operation_tier_stop;
     } catch (...) {
-        kernel.native_exception_ = std::current_exception();
+        kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
         return operation_tier_stop;
     }
@@ -916,7 +918,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::native_hosted_step_kind(
         auto& process = *static_cast<ProcessState*>(frame->instance);
         return (kernel.impl_.*Impl::hosted_steps()[K])(process, pc);
     } catch (...) {
-        kernel.native_exception_ = std::current_exception();
+        kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
         return operation_tier_stop;
     }
@@ -971,7 +973,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
         }
         if (inst.sub == 3U) {
             // A wide register's chunks (imm_b of them; imm_a: 'U' masks).
-            const auto field = wide_field(wide_file_, inst.x,
+            const auto field = wide_field(scratch().wide_file, inst.x,
                 static_cast<std::uint32_t>(inst.imm_b), inst.imm_a != 0U, offset,
                 width);
             if (field.unknown != 0U && !tracks(inst.d)) {
@@ -1029,7 +1031,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
     switch (Op) {
     case KOp::load_field9: {
         const auto field = source_field(inst.offset, inst.width);
-        last_unknown_ = field.unknown;
+        scratch().last_unknown = field.unknown;
         return field.value;
     }
     case KOp::branch: {
@@ -1066,7 +1068,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
     case KOp::load_slot9: {
         const auto& slot = slots_[resolved];
         const auto* planes = arena_.data() + slot.offset;
-        last_unknown_ = 0U;
+        scratch().last_unknown = 0U;
         if (inst.sub == 1U) {
             return kw::logic9_coerced(planes[0], planes[1], planes[2], planes[3],
                 inst.width);
@@ -1074,7 +1076,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
         if (const auto word = kw::logic9_uword(planes[0], planes[1], planes[2],
                 planes[3], inst.width);
             word && (word->unknown == 0U || tracks(inst.d))) {
-            last_unknown_ = word->unknown;
+            scratch().last_unknown = word->unknown;
             return word->value;
         }
         throw KernelDeopt { at, false };
@@ -1115,11 +1117,11 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
     }
     case KOp::load_host: {
         const auto& current = impl_.logical_signal_value(resolved);
-        last_unknown_ = 0U;
+        scratch().last_unknown = 0U;
         if (inst.sub == 1U && current.is_logic9()) {
             if (const auto word = exact_uword(current);
                 word && (word->unknown == 0U || tracks(inst.d))) {
-                last_unknown_ = word->unknown;
+                scratch().last_unknown = word->unknown;
                 return word->value;
             }
             throw KernelDeopt { at, false };
@@ -1138,15 +1140,15 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
     case KOp::extract: {
         // A selection from a wide register (sub 2).
         const auto field = source_field(inst.offset, inst.width);
-        last_unknown_ = field.unknown;
+        scratch().last_unknown = field.unknown;
         return field.value;
     }
     case KOp::dynamic_extract: {
-        last_unknown_ = 0U;
+        scratch().last_unknown = 0U;
         const auto offset = kw::dynamic_index(y, body.indices[inst.aux]);
         if (inst.sub != 0U && offset && *offset < inst.width) {
             const auto field = source_field(*offset, 1U);
-            last_unknown_ = field.unknown;
+            scratch().last_unknown = field.unknown;
             return field.value;
         }
         if (!offset || *offset >= inst.width) {
@@ -1159,7 +1161,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
             return kw::all_x(1U);
         }
         // z holds the source register's 'U' mask.
-        last_unknown_ = (z.a >> *offset) & 1U;
+        scratch().last_unknown = (z.a >> *offset) & 1U;
         return kw::extract(x, *offset, 1U);
     }
     case KOp::dynamic_part_select: {
@@ -1182,7 +1184,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
             const auto selected_right = increasing
                 ? signed_base + (descending ? 0 : edge)
                 : signed_base - (descending ? edge : 0);
-            last_unknown_ = 0U;
+            scratch().last_unknown = 0U;
             if ((descending && part.right == lower)
                 || (!descending && part.right == upper)) {
                 // Result bit i is source bit first + i: one field read.
@@ -1206,7 +1208,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
                     const auto m = kw::mask(count) << shift;
                     result.a = (result.a & ~m) | (source.value.a << shift);
                     result.b = (result.b & ~m) | (source.value.b << shift);
-                    last_unknown_ = source.unknown << shift;
+                    scratch().last_unknown = source.unknown << shift;
                 }
                 return result;
             }
@@ -1229,13 +1231,13 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
                 const auto one = std::uint64_t { 1 } << bit;
                 result.a = (result.a & ~one) | (source.value.a << bit);
                 result.b = (result.b & ~one) | (source.value.b << bit);
-                last_unknown_ |= source.unknown << bit;
+                scratch().last_unknown |= source.unknown << bit;
             }
             return result;
         }
         // z holds the source register's 'U' mask: the same selection of it,
         // with bits outside the source not 'U'.
-        last_unknown_ = kw::dynamic_part_select({ z.a, 0U }, inst.offset, y,
+        scratch().last_unknown = kw::dynamic_part_select({ z.a, 0U }, inst.offset, y,
             part.left, part.right, part.base_offset, inst.width,
             (inst.flags & flag_increasing) != 0U,
             (inst.flags & flag_descending) != 0U, true).a;
@@ -1615,7 +1617,9 @@ void Interpreter::Impl::StaticKernel::native_evaluate(
     std::uint64_t* out)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
-    kernel.profile_native_calls_[0] += kernel.profile_ ? 1U : 0U;
+    if (kernel.profile_) {
+        ++kernel.profile_native_calls_[0];
+    }
     try {
         const auto& body = *static_cast<const CompiledBody*>(frame->program);
         const auto inst = with_bound_offset(body.code[at], frame->bindings);
@@ -1648,17 +1652,17 @@ void Interpreter::Impl::StaticKernel::native_evaluate(
             &static_cast<CompiledBody*>(frame->instance)->wide_registers);
         out[0] = result.a;
         out[1] = result.b;
-        out[2] = kernel.last_unknown_;
+        out[2] = kernel.scratch().last_unknown;
     } catch (const KernelDeopt& deopt) {
-        kernel.pending_deopt_ = deopt;
-        if (kernel.pending_deopt_->resume == 0xffffffffU) {
-            kernel.pending_deopt_->resume = at;
+        kernel.scratch().pending_deopt = deopt;
+        if (kernel.scratch().pending_deopt->resume == 0xffffffffU) {
+            kernel.scratch().pending_deopt->resume = at;
         }
         frame->status = 2U;
         out[0] = 0U;
         out[1] = 0U;
     } catch (...) {
-        kernel.native_exception_ = std::current_exception();
+        kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
         out[0] = 0U;
         out[1] = 0U;
@@ -1673,7 +1677,9 @@ void Interpreter::Impl::StaticKernel::native_effect(
     std::uint64_t* out)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
-    kernel.profile_native_calls_[1] += kernel.profile_ ? 1U : 0U;
+    if (kernel.profile_) {
+        ++kernel.profile_native_calls_[1];
+    }
     out[0] = 0U;
     out[1] = 0U;
     try {
@@ -1712,18 +1718,18 @@ void Interpreter::Impl::StaticKernel::native_effect(
             // x carries the source slot.
             source = { frame->bindings[2U * inst.x + 1U] & ~partition_tag, 0U };
         }
-        kernel.running_position_ = frame->position;
+        kernel.scratch().running_position = frame->position;
         kernel.effect_slow_op<Op>(body, inst, at, frame->member,
             kernel.members_[frame->member].vhdl ? 0U : kernel.members_[frame->member].body_begin,
             source, { ya, yb }, { za, zb }, resolved);
     } catch (const KernelDeopt& deopt) {
-        kernel.pending_deopt_ = deopt;
-        if (kernel.pending_deopt_->resume == 0xffffffffU) {
-            kernel.pending_deopt_->resume = at;
+        kernel.scratch().pending_deopt = deopt;
+        if (kernel.scratch().pending_deopt->resume == 0xffffffffU) {
+            kernel.scratch().pending_deopt->resume = at;
         }
         frame->status = 2U;
     } catch (...) {
-        kernel.native_exception_ = std::current_exception();
+        kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
     }
 }
@@ -1794,7 +1800,7 @@ void Interpreter::Impl::StaticKernel::move_wide(const CompiledBody& body,
     const auto* source_b = source_a + source.words;
     const auto width = inst.width;
     const auto words = (width + 63U) / 64U;
-    auto& value = wide_move_scratch_;
+    auto& value = scratch().wide_move;
     value.assign(2U * words, 0U);
     auto* value_a = value.data();
     auto* value_b = value_a + words;
@@ -2050,7 +2056,7 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
         return;
     case KOp::wide_concat: {
         // Into scratch first: an operand may be the destination.
-        auto& value = wide_concat_scratch_;
+        auto& value = scratch().wide_concat;
         value.assign(3U * chunks, 0U);
         const auto place = [&](const Word bits, const std::uint64_t unknown,
                                const std::uint32_t width,
@@ -2204,7 +2210,9 @@ void Interpreter::Impl::StaticKernel::native_wide(StaticKernelNativeFrame* frame
     const std::uint64_t za, const std::uint64_t zb, std::uint64_t* out)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
-    kernel.profile_native_calls_[1] += kernel.profile_ ? 1U : 0U;
+    if (kernel.profile_) {
+        ++kernel.profile_native_calls_[1];
+    }
     out[0] = 0U;
     out[1] = 0U;
     out[2] = 0U;
@@ -2213,15 +2221,15 @@ void Interpreter::Impl::StaticKernel::native_wide(StaticKernelNativeFrame* frame
         const auto& inst = body.code[at];
         const auto& member = kernel.members_[frame->member];
         const auto body_begin = member.vhdl ? 0U : member.body_begin;
-        kernel.running_position_ = frame->position;
+        kernel.scratch().running_position = frame->position;
         if constexpr (Op == KOp::dynamic_extract || Op == KOp::dynamic_part_select) {
-            kernel.wide_file_ = registers;
+            kernel.scratch().wide_file = registers;
             const auto result = kernel.evaluate_slow_op<Op>(body, inst, at,
                 frame->member, body_begin, { }, { ya, yb }, { }, 0U,
                 &static_cast<CompiledBody*>(frame->instance)->wide_registers);
             out[0] = result.a;
             out[1] = result.b;
-            out[2] = kernel.last_unknown_;
+            out[2] = kernel.scratch().last_unknown;
         } else {
             std::uint32_t resolved = 0U;
             if constexpr (Op == KOp::wide_load) {
@@ -2235,13 +2243,13 @@ void Interpreter::Impl::StaticKernel::native_wide(StaticKernelNativeFrame* frame
                 { ya, yb }, xa, { za, zb }, resolved);
         }
     } catch (const KernelDeopt& deopt) {
-        kernel.pending_deopt_ = deopt;
-        if (kernel.pending_deopt_->resume == 0xffffffffU) {
-            kernel.pending_deopt_->resume = at;
+        kernel.scratch().pending_deopt = deopt;
+        if (kernel.scratch().pending_deopt->resume == 0xffffffffU) {
+            kernel.scratch().pending_deopt->resume = at;
         }
         frame->status = 2U;
     } catch (...) {
-        kernel.native_exception_ = std::current_exception();
+        kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
     }
 }

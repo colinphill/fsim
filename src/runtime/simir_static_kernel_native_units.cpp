@@ -244,10 +244,10 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     frame.reserved = behavioral ? behavioral_entry_ : start;
     profile_operations_ += profile_ ? body.code.size() : 0U;
     const bool two_state = unit.two_state && !full;
-    two_state_running_ = two_state;
+    scratch().two_state_running = two_state;
     const auto status = (full ? unit.full_entry : unit.entry)(
         &frame, body.registers.data());
-    two_state_running_ = false;
+    scratch().two_state_running = false;
     if (two_state) {
         ++fast_runs_[member].two_state_runs;
     }
@@ -527,7 +527,7 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_operation_tier
     const auto status = tier->entry(&frame, nullptr);
     operation_tier_steps_ = steps;
     if (frame.status != 0U || status != 3U) {
-        auto error = std::exchange(native_exception_, nullptr);
+        auto error = std::exchange(scratch().native_exception, nullptr);
         if (error) {
             std::rethrow_exception(error);
         }
@@ -648,7 +648,7 @@ bool Interpreter::Impl::StaticKernel::run_hosted_tier(ProcessState& process)
         frame.reserved = process.pc;
         const auto status = tier->entry(&frame, nullptr);
         if (frame.status != 0U || status != 3U) {
-            auto error = std::exchange(native_exception_, nullptr);
+            auto error = std::exchange(scratch().native_exception, nullptr);
             if (error) {
                 std::rethrow_exception(error);
             }
@@ -730,12 +730,12 @@ void Interpreter::Impl::StaticKernel::finish_native(NativeUnit& unit,
             continued = true;
         }
     }
-    if (frame.status == 2U && pending_deopt_) {
+    if (frame.status == 2U && scratch().pending_deopt) {
         if (behavioral) {
             return;
         }
-        const auto deopt = *pending_deopt_;
-        pending_deopt_.reset();
+        const auto deopt = *scratch().pending_deopt;
+        scratch().pending_deopt.reset();
         handle_deopt(frame.member, body, deopt);
         if (unit.two_state) {
             members_[member].registers_known = registers_known(body);
@@ -751,7 +751,7 @@ void Interpreter::Impl::StaticKernel::finish_native(NativeUnit& unit,
         return;
     }
     if (status != 0U || frame.status != 0U) {
-        auto error = std::exchange(native_exception_, nullptr);
+        auto error = std::exchange(scratch().native_exception, nullptr);
         if (error) {
             std::rethrow_exception(error);
         }
@@ -767,7 +767,7 @@ void Interpreter::Impl::StaticKernel::native_fail(
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
     if (reason == 2U) {
         // An operand holds 'U' where compiled code needs a known kind.
-        kernel.pending_deopt_ = KernelDeopt { at, false };
+        kernel.scratch().pending_deopt = KernelDeopt { at, false };
         frame->status = 2U;
         return;
     }
@@ -776,7 +776,7 @@ void Interpreter::Impl::StaticKernel::native_fail(
             (kernel.members_[frame->member].vhdl ? 0U : kernel.members_[frame->member].body_begin) + at,
             "branch condition is unknown or high impedance");
     } catch (...) {
-        kernel.native_exception_ = std::current_exception();
+        kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
     }
 }
@@ -1460,7 +1460,7 @@ void Interpreter::Impl::StaticKernel::run_partition(const std::uint32_t partitio
         ++profile_partition_counts_[partition];
     }
     running_partition_ = partition;
-    running_position_ = 0U;
+    scratch().running_position = 0U;
     try {
         if (state.native.entry != nullptr) {
             run_native(state.native, state.program, state.members.front());

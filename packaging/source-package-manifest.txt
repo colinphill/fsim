@@ -1222,6 +1222,8 @@ src/runtime/simir_static_kernel_hosted.cpp
 src/runtime/simir_static_kernel_ir.hpp
 src/runtime/simir_static_kernel_native.hpp
 src/runtime/simir_static_kernel_native_units.cpp
+src/runtime/simir_static_kernel_parallel.cpp
+src/runtime/simir_static_kernel_pool.hpp
 src/runtime/simir_static_kernel_specialize.cpp
 src/runtime/simir_static_kernel_state.hpp
 src/runtime/simir_storage_census_internal.hpp

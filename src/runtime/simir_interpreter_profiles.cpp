@@ -686,9 +686,11 @@ Interpreter::~Interpreter()
     }
     impl_->report_process_profile();
     impl_->report_update_profile();
-    // The kernel reports its diagnostic profile from its destructor.
+    // The kernel reports its diagnostic profile and its multithreading
+    // statistics from its destructor.
     if (impl_->retain_state_until_exit && support::exit_without_teardown()
-        && std::getenv("FSIM_PROFILE_KERNEL") == nullptr) {
+        && std::getenv("FSIM_PROFILE_KERNEL") == nullptr
+        && std::getenv("FSIM_KERNEL_MT_STATS") == nullptr) {
         // Freeing the design state only delays exit. HDL files are the one
         // destructor side effect, so flush them first.
         for (auto& [handle, file] : impl_->files) {

@@ -1423,11 +1423,11 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
             }
         }
     } catch (const KernelDeopt& deopt) {
-        pending_deopt_ = deopt;
+        scratch().pending_deopt = deopt;
     }
-    if (pending_deopt_) {
-        const auto deopt = *pending_deopt_;
-        pending_deopt_.reset();
+    if (scratch().pending_deopt) {
+        const auto deopt = *scratch().pending_deopt;
+        scratch().pending_deopt.reset();
         // Every thread of this member continues on the reference evaluator:
         // move the compiled registers and this thread's stack into the
         // member's reference state.

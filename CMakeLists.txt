@@ -826,6 +826,7 @@ add_library(
     src/runtime/simir_static_kernel_execute.cpp
     src/runtime/simir_static_kernel_hosted.cpp
     src/runtime/simir_static_kernel_native_units.cpp
+    src/runtime/simir_static_kernel_parallel.cpp
     src/runtime/simir_static_kernel_specialize.cpp
     src/runtime/simir_execution_context.cpp
     src/runtime/simir_execution_boundaries.cpp

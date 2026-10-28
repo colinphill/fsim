@@ -13,12 +13,14 @@
 #include "simir_operation_kinds.hpp"
 #include "simir_static_kernel_ir.hpp"
 #include "simir_static_kernel_native.hpp"
+#include "simir_static_kernel_pool.hpp"
 #include "simir_static_kernel.hpp"
 
 #include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <tuple>
 #include <limits>
 #include <optional>
@@ -866,8 +868,6 @@ private:
         const Word* registers, std::uint32_t reg, ValueKind kind);
     [[nodiscard]] static bool set_wide_value(const CompiledBody& body,
         Word* registers, std::uint32_t reg, const PackedLogic4& value);
-    /// The register file sub 3 selections read (evaluate_slow_op).
-    const Word* wide_file_ { };
     static void native_fail(StaticKernelNativeFrame* frame, std::uint32_t at,
         std::uint32_t reason);
     void compile_members();
@@ -1268,17 +1268,143 @@ private:
     /// Per template: the instructions its full code continues two-state
     /// code at (StaticKernelTemplate::resume_points); sized once.
     std::vector<std::vector<std::uint32_t>> continuations_;
-    /// The native code running now is two-state.
-    bool two_state_running_ { };
     std::vector<std::uint32_t> lazy_pending_;
     std::uint32_t lazy_threshold_ { };
     /// Instructions the last execute_body run interpreted.
     std::size_t executed_steps_ { };
     StaticKernelNativeHelpers native_helpers_;
-    std::exception_ptr native_exception_;
     std::size_t native_units_ { };
     std::uint32_t running_partition_ { static_kernel_detail::no_slot };
-    std::uint32_t running_position_ { };
+    /// What native code running on one thread reads and writes besides the
+    /// arena and its unit's registers: the leader's is scratch_, a worker's
+    /// lives in its lane (multithread proposal §2.3).
+    struct RunScratch {
+        std::uint32_t running_position { };
+        /// The native code running now is two-state.
+        bool two_state_running { };
+        /// 'U' mask of the last slow-path result (U-aware instructions).
+        std::uint64_t last_unknown { };
+        /// The register file sub 3 selections read (evaluate_slow_op).
+        const Word* wide_file { };
+        std::exception_ptr native_exception;
+        std::optional<static_kernel_detail::KernelDeopt> pending_deopt;
+        /// KOp::wide_move value planes.
+        std::vector<std::uint64_t> wide_move;
+        /// KOp::wide_concat result (aval, bval and 'U' words).
+        std::vector<std::uint64_t> wide_concat;
+    };
+    /// A change notification made on a worker; the leader replays it.
+    struct LaneChange {
+        std::uint64_t changed { };
+        std::uint32_t slot { };
+        std::uint32_t field_offset { };
+        std::uint32_t position { };
+        /// Where Lane::words holds the slot's words before and after the
+        /// change, for notifications that pass the old words; else no_slot.
+        std::uint32_t words { static_kernel_detail::no_slot };
+        /// The slot's edge bit right after the change, plus one (0: the slot
+        /// is not waitable).
+        std::uint8_t edge { };
+    };
+    /// One thread's share of a parallel batch: its run state and the
+    /// effects its units logged instead of applying.
+    struct Lane {
+        RunScratch scratch;
+        std::vector<LaneChange> changes;
+        std::vector<std::uint64_t> words;
+        std::vector<StaticKernelWrite> write_storage;
+        StaticKernelWriteQueue writes;
+        std::vector<NbaEntry> elements;
+        std::vector<Pending> generic;
+    };
+    /// A unit of a parallel batch: where its records are and how its native
+    /// run ended (a nonzero status is finished by the leader in the replay).
+    struct LaneRun {
+        std::uint32_t lane { };
+        std::uint32_t changes_begin { };
+        std::uint32_t changes_end { };
+        std::uint32_t writes_begin { };
+        std::uint32_t writes_end { };
+        /// Not eligible: the leader runs it at its place in the replay.
+        bool serial { };
+        std::uint32_t status { };
+        StaticKernelNativeFrame frame;
+        std::optional<static_kernel_detail::KernelDeopt> deopt;
+        std::exception_ptr exception;
+    };
+    RunScratch scratch_;
+    /// The lane of the parallel batch this thread is running; null outside
+    /// one (the leader's serial path).
+    FSIM_STATIC_KERNEL_TLS static thread_local Lane* worker_lane_;
+    [[nodiscard]] RunScratch& scratch() noexcept
+    {
+        auto* const lane = worker_lane_;
+        return lane != nullptr ? lane->scratch : scratch_;
+    }
+    std::unique_ptr<static_kernel_detail::KernelPool> pool_;
+    std::vector<Lane> lanes_;
+    std::vector<LaneRun> lane_runs_;
+    /// The level snapshot settle() is running, in canonical order.
+    std::vector<std::uint32_t> batch_;
+    /// Per unit (members by index, then partitions): may run in a parallel
+    /// level batch (build_parallel_plan), and its code size.
+    std::vector<std::uint8_t> unit_parallel_;
+    std::vector<std::uint32_t> unit_cost_;
+    bool parallel_planned_ { };
+    /// FSIM_KERNEL_THREADS: lanes for parallel batches (1: serial).
+    std::uint32_t mt_threads_ { 1U };
+    static_kernel_detail::KernelPool::Body parallel_body_;
+    /// The slot's last words of a batch while a replayed change sees the
+    /// words its write left.
+    std::vector<std::uint64_t> replay_words_;
+    /// The entry may run on a worker now: eligible and on native code.
+    [[nodiscard]] bool parallel_now(std::uint32_t entry) const noexcept;
+    /// FSIM_KERNEL_MT_MIN: the least code size of a batch's eligible units
+    /// that runs in parallel; FSIM_KERNEL_MT_FORCE: every batch with two.
+    std::uint64_t mt_min_cost_ { };
+    bool mt_force_ { };
+    /// FSIM_KERNEL_MT_SHUFFLE: workers take a batch's units in a random
+    /// order and pause at random, to expose any dependence on the order.
+    bool mt_shuffle_ { };
+    std::vector<std::uint32_t> shuffle_order_;
+    std::uint64_t shuffle_state_ { 0x9e3779b97f4a7c15ULL };
+    /// Replay of a logged change: its edge bit plus one (slot_changed_general).
+    std::uint8_t replay_edge_ { };
+    void build_parallel_plan();
+    /// FSIM_KERNEL_MT_STATS: per batch phase, the batches offered, those run
+    /// in parallel, their units and eligible units, and the time on the pool
+    /// and in the replay.
+    struct MtStats {
+        bool enabled { };
+        std::array<std::uint64_t, 3> offered { };
+        std::array<std::uint64_t, 3> batches { };
+        std::array<std::uint64_t, 3> units { };
+        std::array<std::uint64_t, 3> eligible { };
+        std::array<std::uint64_t, 3> run_ns { };
+        std::array<std::uint64_t, 3> replay_ns { };
+        /// Batches run serially: their units, eligible units and cost.
+        std::array<std::uint64_t, 3> declined_units { };
+        std::array<std::uint64_t, 3> declined_eligible { };
+        std::array<std::uint64_t, 3> declined_cost { };
+        /// Eligible units each lane ran.
+        std::vector<std::uint64_t> lane_units;
+    } mt_stats_;
+    void report_mt_stats() const;
+    /// What batch_ holds: a settle snapshot, or a triggered round's members
+    /// in run order, from merged dispatch groups (batch_groups_ names each
+    /// member's group) or from member flags.
+    enum class BatchPhase : std::uint8_t { settle, merged, flagged };
+    /// Runs batch_ on the pool and replays it; false when the batch is not
+    /// worth it (the caller runs it serially).
+    [[nodiscard]] bool run_parallel_batch(BatchPhase phase, std::size_t& evaluations,
+        std::size_t limit);
+    void run_in_lane(Lane& lane, std::uint32_t entry, LaneRun& run);
+    void replay(std::uint32_t entry, LaneRun& run, bool settle);
+    void log_change(Lane& lane, std::uint32_t slot, std::uint64_t changed,
+        const std::uint64_t* before, std::uint32_t field_offset);
+    /// Runs one settle entry (a member or partition | partition_tag).
+    void run_settle_entry(std::uint32_t entry, std::size_t& evaluations,
+        std::size_t limit);
     std::vector<std::uint64_t> arena_;
     /// VHDL delta mode (StaticKernelRuntimeSpec::vhdl).
     bool vhdl_ { };
@@ -1317,14 +1443,11 @@ private:
     void debug_stop(std::uint32_t paused);
     std::vector<std::uint32_t> touched_;
     std::vector<std::uint64_t> round_before_;
-    std::optional<static_kernel_detail::KernelDeopt> pending_deopt_;
     /// VHDL delta mode: the round's assignments (word writes and references
     /// to pending_generic_), in program order.
     std::vector<StaticKernelWrite> write_storage_;
     StaticKernelWriteQueue writes_;
     void push_write(const StaticKernelWrite& write);
-    /// 'U' mask of the last slow-path result (U-aware instructions).
-    std::uint64_t last_unknown_ { };
     std::uint64_t profile_deopts_ { };
     std::uint64_t profile_generic_runs_ { };
     /// Interpretive work, always counted (engine v4 gate: all zero in a
@@ -1433,12 +1556,8 @@ private:
     /// element tables it points into.
     std::vector<StaticKernelContainerInfo> container_info_;
     std::vector<std::uint32_t> container_elements_;
-    /// KOp::wide_move value planes.
-    std::vector<std::uint64_t> wide_move_scratch_;
     /// slot_changed_general's indexed readers of a change spanning chunks.
     std::vector<std::uint32_t> ranged_candidates_;
-    /// KOp::wide_concat result (aval, bval and 'U' words).
-    std::vector<std::uint64_t> wide_concat_scratch_;
     /// members_[i].process, dense: hot paths record slot writers without
     /// touching the large member records.
     std::vector<ProcessId> member_process_;
@@ -1465,6 +1584,8 @@ private:
     };
     std::vector<DispatchGroup> dispatch_groups_;
     std::vector<std::uint32_t> expanded_groups_;
+    /// A merged triggered batch: the group of each member in batch_.
+    std::vector<DispatchGroup*> batch_groups_;
     /// One level's dirty queue: the units that can be queued at the level
     /// in ascending order (members by index, then partitions) and a bit per
     /// unit; every set bit is in a word at or after `cursor`.
@@ -1661,7 +1782,6 @@ private:
         /// Settle batches of one member (count, ns), by member name with digits
         /// folded.
         std::map<std::string, std::pair<std::uint64_t, std::uint64_t>> singles;
-        std::uint32_t last_member { 0xffffffffU };
         void record(std::uint64_t size, std::uint64_t elapsed, bool settle);
     } batch_profile_;
     std::uint64_t profile_activations_ { };

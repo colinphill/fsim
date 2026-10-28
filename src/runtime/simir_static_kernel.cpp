@@ -140,6 +140,10 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         batch_profile_.barrier_pair_ns = std::strtod(barrier, nullptr);
     }
     check_inputs_ = std::getenv("FSIM_KERNEL_CHECK_INPUTS") != nullptr;
+    if (const char* threads = std::getenv("FSIM_KERNEL_THREADS")) {
+        mt_threads_ = static_cast<std::uint32_t>(
+            std::clamp(std::strtol(threads, nullptr, 10), 1L, 256L));
+    }
     host_process_ = spec.host;
     mixed_ = spec.mixed;
     debug_points_ = spec.debug_points;
@@ -1170,6 +1174,9 @@ Interpreter::Impl::StaticKernel::StaticKernel(
 
 Interpreter::Impl::StaticKernel::~StaticKernel()
 {
+    if (mt_stats_.enabled) {
+        report_mt_stats();
+    }
     if (!profile_) {
         return;
     }
@@ -1488,6 +1495,10 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
     const std::uint64_t changed_mask, const std::uint64_t* before,
     const std::uint32_t field_offset)
 {
+    if (auto* const lane = worker_lane_) {
+        log_change(*lane, slot_index, changed_mask, before, field_offset);
+        return;
+    }
     profile_slot_changes_ += profile_ ? 1U : 0U;
     if (profile_ && slot_index < profile_slot_change_counts_.size()) {
         ++profile_slot_change_counts_[slot_index];
@@ -1635,7 +1646,11 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
     }
     if (slot_index < slot_wait_seen_.size() && slot_waitable_[slot_index] != 0U) {
         const auto seen = slot_wait_seen_[slot_index];
-        const auto current = slot_edge_bit(slot_index);
+        // A replayed change carries the edge bit its write left (a worker's
+        // unit may have written the slot again since).
+        const auto current = replay_edge_ != 0U
+            ? static_cast<Logic4>(replay_edge_ - 1U)
+            : slot_edge_bit(slot_index);
         slot_wait_seen_[slot_index] = current;
         if (!slot_waiters_[slot_index].empty()) {
             WaitChange change;
@@ -1655,15 +1670,18 @@ void Interpreter::Impl::StaticKernel::slot_changed_general(
 }
 
 // Native code's change notifications live beside slot_changed so the
-// notify-target loop inlines into them.
+// notify-target loop inlines into them. On a worker (a parallel batch)
+// slot_changed logs the change for the leader's replay.
 void Interpreter::Impl::StaticKernel::native_notify(
     StaticKernelNativeFrame* frame, const std::uint32_t slot,
     const std::uint64_t changed)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
-    kernel.profile_native_calls_[2] += kernel.profile_ ? 1U : 0U;
+    if (kernel.profile_) {
+        ++kernel.profile_native_calls_[2];
+    }
     try {
-        kernel.running_position_ = frame->position;
+        kernel.scratch().running_position = frame->position;
         // Only a general slot can have several writers.
         if (kernel.slot_notify_[slot].general) {
             if (auto& state = kernel.slots_[slot]; !state.single_writer) {
@@ -1672,7 +1690,7 @@ void Interpreter::Impl::StaticKernel::native_notify(
         }
         kernel.slot_changed(slot, changed, nullptr);
     } catch (...) {
-        kernel.native_exception_ = std::current_exception();
+        kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
     }
 }
@@ -1682,9 +1700,11 @@ void Interpreter::Impl::StaticKernel::native_notify_field(
     const std::uint64_t changed, const std::uint32_t field_offset)
 {
     auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
-    kernel.profile_native_calls_[2] += kernel.profile_ ? 1U : 0U;
+    if (kernel.profile_) {
+        ++kernel.profile_native_calls_[2];
+    }
     try {
-        kernel.running_position_ = frame->position;
+        kernel.scratch().running_position = frame->position;
         if (kernel.slot_notify_[slot].general) {
             if (auto& state = kernel.slots_[slot]; !state.single_writer) {
                 state.last_writer = kernel.member_process_[frame->member];
@@ -1692,7 +1712,7 @@ void Interpreter::Impl::StaticKernel::native_notify_field(
         }
         kernel.slot_changed(slot, changed, nullptr, field_offset);
     } catch (...) {
-        kernel.native_exception_ = std::current_exception();
+        kernel.scratch().native_exception = std::current_exception();
         frame->status = 1U;
     }
 }
@@ -2454,6 +2474,17 @@ void Interpreter::Impl::StaticKernel::write_element_entry(const NbaEntry& entry)
 
 void Interpreter::Impl::StaticKernel::push_write(const StaticKernelWrite& write)
 {
+    if (auto* const lane = worker_lane_) {
+        auto& queue = lane->writes;
+        if (queue.count == queue.capacity) {
+            lane->write_storage.resize(std::max<std::size_t>(256U,
+                2U * lane->write_storage.size()));
+            queue.data = lane->write_storage.data();
+            queue.capacity = static_cast<std::uint32_t>(lane->write_storage.size());
+        }
+        queue.data[queue.count++] = write;
+        return;
+    }
     if (writes_.count == writes_.capacity) {
         write_storage_.resize(std::max<std::size_t>(256U,
             2U * write_storage_.size()));
@@ -2467,6 +2498,13 @@ void Interpreter::Impl::StaticKernel::push_generic_pending(Pending pending)
 {
     StaticKernelWrite write;
     write.kind = 1U;
+    if (auto* const lane = worker_lane_) {
+        // The replay moves the write into pending_generic_ and renumbers it.
+        write.member = static_cast<std::uint32_t>(lane->generic.size());
+        lane->generic.push_back(std::move(pending));
+        push_write(write);
+        return;
+    }
     write.member = static_cast<std::uint32_t>(pending_generic_.size());
     pending_generic_.push_back(std::move(pending));
     push_write(write);
@@ -2476,6 +2514,13 @@ void Interpreter::Impl::StaticKernel::push_element_write(const NbaEntry& entry)
 {
     StaticKernelWrite write;
     write.kind = 2U;
+    if (auto* const lane = worker_lane_) {
+        // The replay moves the entry into nba_ and renumbers the write.
+        write.member = static_cast<std::uint32_t>(lane->elements.size());
+        lane->elements.push_back(entry);
+        push_write(write);
+        return;
+    }
     write.member = static_cast<std::uint32_t>(nba_.size());
     nba_.push_back(entry);
     push_write(write);
@@ -2554,7 +2599,7 @@ void Interpreter::Impl::StaticKernel::schedule_target(const ScheduleTarget& targ
         }
         const auto partition = target.id & ~partition_tag;
         if (partition == running_partition_
-            && target.min_position >= running_position_) {
+            && target.min_position >= scratch().running_position) {
             // Later readers run in this pass; the running member itself does
             // not wake on its own writes (it is not waiting while it runs).
             return;
@@ -2885,7 +2930,7 @@ void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
     if (state.kind == StaticKernelMemberKind::combinational) {
         if (state.partition != no_slot) {
             if (state.partition == running_partition_
-                && state.position >= running_position_) {
+                && state.position >= scratch().running_position) {
                 // Runs later in the current partition pass.
                 return;
             }
@@ -2999,6 +3044,37 @@ void Interpreter::Impl::StaticKernel::run_triggered_round()
             group.next = 0U;
             groups[entry] = &group;
         }
+        if (pool_ != nullptr) {
+            // The merged order is fixed before any member runs (a member
+            // scheduled again in this pass waits for the next round).
+            std::array<std::uint32_t, merge_limit> next { };
+            batch_.clear();
+            batch_groups_.clear();
+            for (;;) {
+                std::size_t first = merge_limit;
+                for (std::size_t entry = 0U; entry < count; ++entry) {
+                    const auto& members = groups[entry]->members;
+                    if (next[entry] < members.size()
+                        && (first == merge_limit
+                            || members[next[entry]]
+                                < groups[first]->members[next[first]])) {
+                        first = entry;
+                    }
+                }
+                if (first == merge_limit) {
+                    break;
+                }
+                batch_.push_back(groups[first]->members[next[first]++]);
+                batch_groups_.push_back(groups[first]);
+            }
+            std::size_t unused = 0U;
+            if (run_parallel_batch(BatchPhase::merged, unused, 0U)) {
+                for (std::size_t entry = 0U; entry < count; ++entry) {
+                    groups[entry]->running = false;
+                }
+                return;
+            }
+        }
         for (;;) {
             DispatchGroup* first = nullptr;
             for (std::size_t entry = 0U; entry < count; ++entry) {
@@ -3047,7 +3123,14 @@ void Interpreter::Impl::StaticKernel::run_triggered_round()
         });
     }
     std::ranges::sort(triggered);
-    for (const auto member : triggered) {
+    bool ran = false;
+    if (pool_ != nullptr) {
+        batch_.assign(triggered.begin(), triggered.end());
+        std::size_t unused = 0U;
+        ran = run_parallel_batch(BatchPhase::flagged, unused, 0U);
+    }
+    for (const auto member : ran ? std::span<const std::uint32_t> { }
+                                 : std::span<const std::uint32_t> { triggered }) {
         member_schedule_[member].triggered = false;
         run(member);
     }
@@ -3072,9 +3155,9 @@ void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
         frame.position = 0U;
         frame.status = 0U;
         frame.reserved = 0U;
-        two_state_running_ = fast.two_state;
+        scratch().two_state_running = fast.two_state;
         const auto status = fast.entry(&frame, fast.registers);
-        two_state_running_ = false;
+        scratch().two_state_running = false;
         if (fast.two_state) {
             ++fast_runs_[member_index].two_state_runs;
         }
@@ -4174,94 +4257,107 @@ void Interpreter::Impl::StaticKernel::settle()
 {
     std::size_t evaluations = 0U;
     const auto limit = members_.size() * 64U + 1'000'000U;
-    // FSIM_PROFILE_KERNEL_BATCHES: one batch per visit of a level.
+    // FSIM_PROFILE_KERNEL_BATCHES: one batch per level snapshot.
     const bool batches = batch_profile_.enabled;
-    auto batch_level = scan_level_;
     const auto batch_runs = [&] {
         return profile_runs_[0] + profile_runs_[1] + profile_runs_[2]
             + profile_partition_runs_;
     };
-    auto batch_first_run = batches ? batch_runs() : 0U;
-    auto batch_started = batches ? std::chrono::steady_clock::now()
-                                 : std::chrono::steady_clock::time_point { };
-    const auto close_batch = [&] {
-        const auto runs = batch_runs();
-        const auto now = std::chrono::steady_clock::now();
-        if (runs - batch_first_run == 1U
-            && batch_profile_.last_member < profile_names_.size()) {
-            std::string name;
-            for (const auto character : profile_names_[batch_profile_.last_member]) {
-                if (std::isdigit(static_cast<unsigned char>(character)) == 0) {
-                    name += character;
-                } else if (name.empty() || name.back() != 'N') {
-                    name += 'N';
-                }
-            }
-            auto& single = batch_profile_.singles[name];
-            ++single.first;
-            single.second += static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    now - batch_started).count());
-        }
-        batch_profile_.last_member = no_slot;
-        if (runs != batch_first_run) {
-            batch_profile_.record(runs - batch_first_run,
-                static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        now - batch_started).count()),
-                true);
-        }
-        batch_first_run = runs;
-        batch_started = now;
-    };
+    if (!parallel_planned_) {
+        build_parallel_plan();
+    }
     while (queued_count_ != 0U) {
         while (buckets_[scan_level_].count == 0U) {
             ++scan_level_;
         }
-        if (batches && scan_level_ != batch_level) {
-            close_batch();
-            batch_level = scan_level_;
-        }
-        // Within a level the units run in ascending order, members by index
-        // and then partitions: one canonical order for what IEEE 1800-2023
-        // 4.7 leaves unspecified, independent of the order they were woken.
+        // A pass runs a snapshot of the level: every unit queued there now,
+        // in ascending order (members by index, then partitions). Units
+        // queued while it runs, at this level or a lower one, wait for a
+        // later pass. This is one canonical order for what IEEE 1800-2023
+        // 4.7 leaves unspecified, independent of the order units were woken
+        // and of how many threads run the snapshot.
         auto& queue = buckets_[scan_level_];
-        while (queue.bits[queue.cursor] == 0U) {
-            ++queue.cursor;
-        }
-        auto& word = queue.bits[queue.cursor];
-        const auto entry = queue.entries[queue.cursor * 64U
-            + static_cast<std::uint32_t>(std::countr_zero(word))];
-        word &= word - 1U;
-        --queue.count;
-        --queued_count_;
-        if ((entry & partition_tag) != 0U) {
-            const auto partition = entry & ~partition_tag;
-            partition_queued_[partition] = 0U;
-            if (++evaluations > limit) {
-                const auto member = partitions_[partition].members.front();
-                fail(member, members_[member].body_begin,
-                    "static kernel combinational logic did not settle");
+        batch_.clear();
+        auto remaining = queue.count;
+        queued_count_ -= remaining;
+        queue.count = 0U;
+        for (auto word_index = queue.cursor; remaining != 0U; ++word_index) {
+            auto word = queue.bits[word_index];
+            if (word == 0U) {
+                continue;
             }
-            run_partition(partition);
-            continue;
+            queue.bits[word_index] = 0U;
+            remaining -= static_cast<std::uint32_t>(std::popcount(word));
+            for (; word != 0U; word &= word - 1U) {
+                batch_.push_back(queue.entries[word_index * 64U
+                    + static_cast<std::uint32_t>(std::countr_zero(word))]);
+            }
         }
-        member_schedule_[entry].queued = false;
-        if (++evaluations > limit) {
-            fail(entry, members_[entry].body_begin,
-                "static kernel combinational logic did not settle");
+        queue.cursor = static_cast<std::uint32_t>(queue.bits.size());
+        for (const auto entry : batch_) {
+            if ((entry & partition_tag) != 0U) {
+                partition_queued_[entry & ~partition_tag] = 0U;
+            } else {
+                member_schedule_[entry].queued = false;
+            }
+        }
+        const auto first_run = batches ? batch_runs() : 0U;
+        const auto pass_started = batches ? std::chrono::steady_clock::now()
+                                          : std::chrono::steady_clock::time_point { };
+        if (pool_ == nullptr
+            || !run_parallel_batch(BatchPhase::settle, evaluations, limit)) {
+            for (const auto entry : batch_) {
+                run_settle_entry(entry, evaluations, limit);
+            }
         }
         if (batches) {
-            batch_profile_.last_member = entry;
+            const auto elapsed = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - pass_started).count());
+            const auto runs = batch_runs() - first_run;
+            if (runs == 1U && batch_.size() == 1U
+                && (batch_.front() & partition_tag) == 0U
+                && batch_.front() < profile_names_.size()) {
+                std::string name;
+                for (const auto character : profile_names_[batch_.front()]) {
+                    if (std::isdigit(static_cast<unsigned char>(character)) == 0) {
+                        name += character;
+                    } else if (name.empty() || name.back() != 'N') {
+                        name += 'N';
+                    }
+                }
+                auto& single = batch_profile_.singles[name];
+                ++single.first;
+                single.second += elapsed;
+            }
+            if (runs != 0U) {
+                batch_profile_.record(runs, elapsed, true);
+            }
         }
-        // A combinational member does not wake on its own writes.
-        running_member_ = entry;
-        run(entry);
-        running_member_ = no_slot;
     }
-    if (batches) {
-        close_batch();
+}
+
+void Interpreter::Impl::StaticKernel::run_settle_entry(const std::uint32_t entry,
+    std::size_t& evaluations, const std::size_t limit)
+{
+    if ((entry & partition_tag) != 0U) {
+        const auto partition = entry & ~partition_tag;
+        if (++evaluations > limit) {
+            const auto member = partitions_[partition].members.front();
+            fail(member, members_[member].body_begin,
+                "static kernel combinational logic did not settle");
+        }
+        run_partition(partition);
+        return;
     }
+    if (++evaluations > limit) {
+        fail(entry, members_[entry].body_begin,
+            "static kernel combinational logic did not settle");
+    }
+    // A combinational member does not wake on its own writes.
+    running_member_ = entry;
+    run(entry);
+    running_member_ = no_slot;
 }
 
 void Interpreter::Impl::StaticKernel::check_owned_edges()
