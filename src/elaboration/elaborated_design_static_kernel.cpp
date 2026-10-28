@@ -546,86 +546,138 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     }
     // The first property that keeps a process off the kernel whatever its
     // body, or nullptr; `behavioral` applies the behavioral tier's rules.
+    // With `all`, every such property is appended to it (the blockers
+    // census).
     const auto flag_rejection = [&](const ProcessProgramView& view,
                                     const bool vhdl,
-                                    const bool behavioral) -> const char* {
+                                    const bool behavioral,
+                                    std::vector<const char*>* all
+                                    = nullptr) -> const char* {
+        const char* first = nullptr;
+        const auto hit = [&](const char* flag) {
+            if (first == nullptr) {
+                first = flag;
+            }
+            if (all != nullptr) {
+                all->push_back(flag);
+            }
+            return all == nullptr;
+        };
         const auto non_logic4 = std::ranges::any_of(view.register_value_kinds(),
             [](const ValueKind kind) { return kind != ValueKind::logic4; });
-        if (view.observed()) {
-            return "observed";
+        if (view.observed() && hit("observed")) {
+            return first;
         }
-        if (view.reactive()) {
-            return "reactive";
+        if (view.reactive() && hit("reactive")) {
+            return first;
         }
-        if (view.postponed()) {
-            return "postponed";
+        if (view.postponed() && hit("postponed")) {
+            return first;
         }
-        if (view.final()) {
-            return "final";
+        if (view.final() && hit("final")) {
+            return first;
         }
-        if (!view.initialize()) {
-            return "not_initialized";
+        if (!view.initialize() && hit("not_initialized")) {
+            return first;
         }
         // Package static initializers run once, before time zero, in the
         // host's startup order (IEEE 1800-2023 6.21, 26.3); the host owns
         // their startup metadata and a synchronous finish.
         if (view.startup_phase()
-            == ProcessStartupPhase::package_static_initializer) {
-            return "package_static_initializer";
+                == ProcessStartupPhase::package_static_initializer
+            && hit("package_static_initializer")) {
+            return first;
         }
-        if (view.switch_source() || view.switch_target()
-            || view.switch_control() || view.switch_bidirectional()
-            || view.switch_resistive()) {
-            return "switch";
+        if ((view.switch_source() || view.switch_target()
+                || view.switch_control() || view.switch_bidirectional()
+                || view.switch_resistive())
+            && hit("switch")) {
+            return first;
         }
-        if (view.drive_strength() != DriveStrength { }) {
-            return "drive_strength";
+        if (view.drive_strength() != DriveStrength { } && hit("drive_strength")) {
+            return first;
         }
         if (behavioral) {
-            if (!view.static_trigger_regions().empty()) {
-                return "static_trigger_regions";
+            if (!view.static_trigger_regions().empty()
+                && hit("static_trigger_regions")) {
+                return first;
             }
             if (vhdl) {
                 // VHDL behavioral threads keep their registers in the
                 // member's reference-format file (any value kind); strings,
                 // containers and the 2019 report semantics stay on the host.
-                if (view.string_register_count() != 0U) {
-                    return "string_register";
+                if (view.string_register_count() != 0U
+                    && hit("string_register")) {
+                    return first;
                 }
-                if (view.container_register_count() != 0U) {
-                    return "vhdl_container_register";
+                if (view.container_register_count() != 0U
+                    && hit("vhdl_container_register")) {
+                    return first;
                 }
-                if (view.language_standard() == "2019") {
-                    return "vhdl_2019";
+                if (view.language_standard() == "2019" && hit("vhdl_2019")) {
+                    return first;
                 }
-            } else if (non_logic4) {
-                return "register_kind";
+            } else if (non_logic4 && hit("register_kind")) {
+                return first;
             }
             if (std::ranges::any_of(view.static_sensitivity(),
                     [&](const Sensitivity& entry) {
                         return entry.signal >= signal_count
                             || signals_[entry.signal].event_variable;
-                    })) {
-                return "event_sensitivity";
+                    })
+                && hit("event_sensitivity")) {
+                return first;
             }
-            return nullptr;
+            return first;
         }
-        if (view.string_register_count() != 0U) {
-            return "string_register";
+        if (view.string_register_count() != 0U && hit("string_register")) {
+            return first;
         }
-        if (vhdl && view.container_register_count() != 0U) {
-            return "vhdl_container_register";
+        if (vhdl && view.container_register_count() != 0U
+            && hit("vhdl_container_register")) {
+            return first;
         }
-        if (vhdl && view.language_standard() == "2019") {
-            return "vhdl_2019";
+        if (vhdl && view.language_standard() == "2019" && hit("vhdl_2019")) {
+            return first;
         }
-        if (!vhdl && non_logic4) {
-            return "register_kind";
+        if (!vhdl && non_logic4 && hit("register_kind")) {
+            return first;
         }
-        if (view.operations().size() < 2U) {
-            return "trivial";
+        if (view.operations().size() < 2U && hit("trivial")) {
+            return first;
         }
-        return nullptr;
+        return first;
+    };
+    // The blockers census (FSIM_PROFILE_KERNEL_BLOCKERS): every flag and
+    // every unsupported operation kind of a process the behavioral tiers
+    // reject, so the hosted work can be ranked by what it closes.
+    const bool blockers_census = census
+        && std::getenv("FSIM_PROFILE_KERNEL_BLOCKERS") != nullptr;
+    const auto report_blockers = [&](const ProcessProgramView& view,
+                                     const bool vhdl, const char* reason) {
+        std::vector<const char*> flags;
+        static_cast<void>(flag_rejection(view, vhdl, true, &flags));
+        std::set<std::string> unsupported;
+        const auto& operations = view.operations();
+        for (std::size_t op = 0U; op < operations.size(); ++op) {
+            const auto operation = operations.expanded(op);
+            if (!(vhdl ? static_kernel_vhdl_behavioral_operation_supported(operation)
+                       : static_kernel_behavioral_operation_supported(operation))) {
+                unsupported.insert(operation_type_name(operation));
+            }
+        }
+        std::cerr << "fsim-profile: static-kernel-blockers vhdl=" << vhdl
+                  << " reason=" << reason << " flags=";
+        for (std::size_t entry = 0U; entry < flags.size(); ++entry) {
+            std::cerr << (entry == 0U ? "" : ",") << flags[entry];
+        }
+        std::cerr << " ops=";
+        bool comma = false;
+        for (const auto& name : unsupported) {
+            std::cerr << (comma ? "," : "") << name;
+            comma = true;
+        }
+        std::cerr << " process=" << view.name() << '\n';
     };
     std::vector<std::uint8_t> alias_signal(signal_count, 0U);
     for (const auto& family : graph.signal_alias_families()) {
@@ -980,6 +1032,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (census) {
                     rejection[index] = std::string { "behavioral_" } + flag;
                 }
+                if (blockers_census) {
+                    report_blockers(view, false, flag);
+                }
                 continue;
             }
             const auto& operations = view.operations();
@@ -999,6 +1054,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             // and saved by automatic frames.
             std::set<ContainerRegisterId> bound_containers;
             std::set<ContainerRegisterId> private_containers;
+            // Registers an element write targets.
+            std::set<ContainerRegisterId> written_containers;
             // Whole-register copies (CopyContainerRegister): both registers
             // must be process-private arrays of one shape.
             std::vector<std::pair<ContainerRegisterId, ContainerRegisterId>>
@@ -1049,6 +1106,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         private_containers.insert(value.source);
                     } else if constexpr (std::is_same_v<T, ContainerWrite>) {
                         private_containers.insert(value.target);
+                        written_containers.insert(value.target);
                     } else if constexpr (std::is_same_v<T, CopyContainerRegister>) {
                         private_containers.insert(value.destination);
                         private_containers.insert(value.source);
@@ -1139,7 +1197,22 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         break;
                     }
                 }
+                // An element write into a binding of a design memory edits
+                // the reference's copy, which a later write-back stores
+                // whole (IEEE 1800-2023 7.4); the kernel's binding aliases
+                // the memory, so reads of the memory between the two would
+                // differ. Such a process stays on the host.
+                for (const auto id : written_containers) {
+                    if (supported && bound_containers.contains(id)) {
+                        supported = false;
+                        failed_at = count;
+                        failed_reason = "bound_container_write";
+                    }
+                }
                 for (const auto& [object, source] : object_writes) {
+                    if (!supported) {
+                        break;
+                    }
                     const auto found = binding_objects.find(source);
                     if (found == binding_objects.end() || found->second.size() != 1U
                         || *found->second.begin() != object) {
@@ -1176,6 +1249,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             ? ":" + operation_type_name(
                                   operations.expanded(failed_at))
                             : std::string { });
+                if (blockers_census) {
+                    report_blockers(view, member.vhdl, rejection[index].c_str());
+                }
             }
             if (supported) {
                 candidates[index] = std::move(member);
@@ -1231,6 +1307,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             if (const char* flag = flag_rejection(view, true, true)) {
                 if (census) {
                     rejection[index] = std::string { "behavioral_" } + flag;
+                }
+                if (blockers_census) {
+                    report_blockers(view, true, flag);
                 }
                 continue;
             }
@@ -1310,6 +1389,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             ? ":" + operation_type_name(
                                   operations.expanded(failed_at))
                             : std::string { });
+                if (blockers_census) {
+                    report_blockers(view, member.vhdl, rejection[index].c_str());
+                }
             }
             if (supported) {
                 candidates[index] = std::move(member);
