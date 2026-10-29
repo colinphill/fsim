@@ -138,6 +138,67 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29: D6 standing, SystemVerilog process-template memory aliasing (`5e1bfc1a`), kernel image stage 1b (`dc17e9b0`), MT and Verilator measurements (sweeps `v4c54`, `v4c54a`)
+
+**Gate** (owner, 2026-10-29: gate these two changesets now, as an exception to the five-changeset rule, because one is a correctness fix).
+- ct4: 1089/1089 in all four variants (`session-1029/ct4-1b-svfix.log`).
+- Normal sweep `v4c54` (frozen `5e1bfc1a`): 0 losses against `b96x1` (skipping case11 and issue705, as before).
+- AOT sweep `v4c54a`: 0 losses against `v4c53a`. 7,562 simulates restored an image (4,486 in `v4c53a`); the new ones are the VHDL and mixed kernels.
+- Census `v4c54`: every planned case is admitted with `host=0`, with 0 hosted processes and 0 runs with interpreted>0. `kernel_deopts` (9 cases) is unchanged.
+
+| Suite | Passed / in scope (`v4c53`) | Passed / in scope (`v4c54`) | Passed / in scope (`v4c54a`) | Excluded |
+|---|---:|---:|---:|---:|
+| nvc | 1259 / 1259 | 1259 / 1259 | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 3663 / 3663 | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 2638 / 2638 | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 1495 / 1495 | 2 |
+
+**D6 campaign `v4-d6-1029a`** (frozen `v4c53` = `b80af3fb`, `tools/perf.sh`, 3 samples, CPU 9, ASLR off, xsim in the same session). The geomean e2e is 3.78× (3.19× in `v4-g5-1026b`). Every simulate phase is at least 3.47× xsim; the thinnest was 3.12×.
+
+| Case | fsim e2e | xsim e2e | e2e × | fsim sim | xsim sim | sim × |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 10.612 | 28.510 | 2.69 | 2.131 | 7.398 | 3.47 |
+| original_throughput | 5.043 | 16.022 | 3.18 | 1.480 | 7.446 | 5.03 |
+| mixed_codec | 8.780 | 24.523 | 2.79 | 1.880 | 6.544 | 3.48 |
+| mixed_throughput | 4.370 | 12.689 | 2.90 | 1.480 | 5.993 | 4.05 |
+| codex_reference_mode0_frames1 | 2.060 | 9.583 | 4.65 | 0.127 | 3.837 | 30.27 |
+| codex_reference_mode0_frames2 | 2.167 | 9.634 | 4.45 | 0.127 | 3.887 | 30.57 |
+| codex_reference_mode1_frames1 | 2.061 | 9.781 | 4.75 | 0.125 | 3.835 | 30.61 |
+| codex_reference_mode1_frames2 | 2.112 | 9.886 | 4.68 | 0.126 | 3.786 | 29.96 |
+| codex_throughput_default | 2.211 | 9.732 | 4.40 | 0.277 | 3.887 | 14.03 |
+| codex_throughput_direct_syndrome | 2.010 | 8.624 | 4.29 | 0.277 | 3.886 | 14.03 |
+
+original_codec simulate on the live tree (quiet host): load 309 ms (decode 221), create_simulation_interpreter 406 ms (image restore 168, populate_interpreter ~176), run 1390 ms. Storing each compiled body once in the image was tried and reverted: the image grew from 37.13 to 37.15 MB, because member bodies already differ per instance.
+
+**SystemVerilog process templates aliased per-instance memories** (`5e1bfc1a`). The 8-core PicoRV32 SoC compiled with `--lang systemverilog` trapped at cycle 156 on both engines. xsim `-sv` runs it to the reference (1,735,536 cycles, checksum `43a243a2`).
+- **Effect.** With two or more instances of a module whose `always` writes an element of the module's unpacked array, every instance wrote the first instance's array.
+- **Cause.** `remember_systemverilog_process_template` checked a process only through `remap_template_operations`, which visits the signal-operation kinds in its filter. `WriteContainerObjectElement` (and any other operation naming a design container object) was never checked, so it was cached and replayed unchanged into the other instances.
+- **Scope.** The cache serves only SystemVerilog source, so Verilog-mode compiles were unaffected. The bug is present in `b96x`, so the sweeps against `b96x1` could not see it.
+- **Fix.** Every operation must pass `remap_concurrent_operation` at remember time, as the SV concurrent and VHDL template caches already require. New test: `test_container_write_template_remains_uncached` (ctest `fsim.elaboration`).
+- **Validation.**
+  - the SoC in SV mode now matches xsim `-sv`;
+  - sampled caserun `svfix1`: 774/774 against `b96x1`;
+  - VHDL AOT sample `kimgv2` (stage 1b and this fix): 610/610 sampled against `d6v`, 377 restores;
+  - codec outputs are identical, and original_codec elaborate time is unchanged (8.9–9.0 s).
+
+**Kernel image stage 1b** (`dc17e9b0`, VHDL and mixed kernels) is described in `.local-artifacts/v4-migration/triage/kernel-image-plan-1029.md`.
+
+**MT on the 8-core SoC** (Verilog compile, live tree):
+- t1 22.9 s, t4 14.2 s, t8 12.1 s; output identical.
+- Stats at t8: triggered dispatches 4.7 s wall plus 0.9 s serial replay; domain commit and settle 5.3 s wall against a 4.1 s critical path.
+- `FSIM_KERNEL_MT_TRACE`: one dispatch takes ~7,950 TSC ticks. Lanes end at ~5,000 on average but the latest at ~7,700, so per-cycle imbalance (max of 8 noisy lanes) is the main overhead, about 3 s.
+- Restricting the run to one logical CPU per core changes nothing (11.79 s against 11.87 s).
+- Fusing triggered, commit and settle into one dispatch per edge would average that imbalance. It is exact only if nothing else in the time step touches the domain: a static closure proof, or speculation with rollback. A lighter variant, lanes spinning on a go flag in place of the second dispatch, saves only a wake per cycle (~3–5%).
+
+**Verilator clause (Phase 6)** on the Verilog throughput round-2 fixture:
+- Verilator 5.052 (`--binary --timing -O3 --x-assign fast --x-initial fast`, `-O2 -march=native`): build 28 s, run 0.31 s.
+- fsim simulate: 1.48–1.53 s, of which load 145 ms, setup 193 ms and run 1.12 s. The ratios are 4.8× for the phase and 3.6× for the run (8.8× and 5.5× on 2026-10-07).
+- The 13 `THRU`/`STIM_SUMMARY` lines are identical; two instances print in the other order within one time step.
+- Profile: generated code 41% (~0.61 s, already ~2× Verilator's whole run); kernel event runtime ~25% (notify 6.3%, slot changes 8.7%, slot writes 3%, scheduling ~4%).
+- Reaching 2× needs the plan's static scheduling of synthesizable logic (cycle-based evaluation, no per-change notify) and tighter generated code. It cannot be reached by trimming.
+
 ### 2026-10-29: kernel image, stage 1 — persisted static-kernel state for SystemVerilog kernels (`b80af3fb`, sweeps `v4c53` and `v4c53a`)
 
 **`b80af3fb`** (plan `.local-artifacts/v4-migration/triage/kernel-image-plan-1029.md`)
