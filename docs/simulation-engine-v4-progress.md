@@ -138,6 +138,40 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29: simulate setup and notify trims for the D6 margin (`69edb8aa`, sweep `v4c52`)
+
+original_codec has the thinnest D6 margin: its simulate phase was 3.12× xsim's (~7.27 s). Profile of v4c51's simulate (2.33 s, 28.83 G `instructions:u`, CPU 9, `setarch -R`):
+- load 348 ms, of which the runtime-artifact decode is 247;
+- `create_simulation_interpreter` 606 ms, of which the StaticKernel constructor is ≈355 and `populate_interpreter` ≈172;
+- run 1567 ms. About 20% of the run is bookkeeping: 16 M slot changes, 15 M notifies and 24 M schedules.
+
+**`69edb8aa`** (five trims, all exact)
+- The constructor expands member operations with `expanded_ref` into scratch storage and holds the register value kinds by reference.
+- `forward_partition_stores` uses flat slot and register vectors. Partitions reserve their storage, and members are moved into place. `compile_members` decodes restored bodies in place.
+- `record_sampled_dependencies` uses cached `OperationBodyKinds::sampled_reads`.
+- Artifact decode: leaf scalars are read directly, integral vectors in bulk, and single-word Logic4 values come from their planes. `InternedString::intern` takes a `string_view` and an optional owned string.
+- New `schedule_target_serial`: the leader-only path for pending partition and comb/seq targets, used without profiling. `native_notify` and `native_notify_field` have a fast path for non-general slots without a worker lane.
+
+**Measurements** (original_codec simulate, d6probe): 28.83 G → 28.73 G instructions; 2.35–2.41 s → 2.26–2.27 s, ≈3.2× xsim. The output is byte-identical.
+
+**Validation.**
+- 116 targeted ctests; sampled caseruns `d6v` (equal to the v4c50 sample) and `d6s2` (774/774 vs `b96x1`).
+- ct4: 1088/1088 in all four variants.
+- Sweep `v4c52` (frozen `69edb8aa`) vs `b96x1`: 0 losses. The only non-passing cases are the out-of-scope skips nvc `case11` and `issue705`. The table equals v4c51's.
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Census `v4c52`: every planned case is admitted with `host=0`, with 0 hosted processes and 0 runs with interpreted>0. `specialize_folding` (177 cases) and `kernel_deopts` (9) are unchanged.
+
+**Next.** Persist the constructor's finished state as a kernel image (plan `.local-artifacts/v4-migration/triage/kernel-image-plan-1029.md`, stage 1). The gate for that change adds a six-suite sweep with `--aot` elaboration (`FSIM_SWEEP_AOT=1` in the sweep wrapper), because plain sweeps elaborate with `--no-aot` and never restore a persisted slot. Its baseline is `v4c52a`.
+
 ### 2026-10-29: version 2026.0, efficiency audit G2–G6 — elaboration scans, replay, planner, inner loops, codegen (`d886cfb8`, `d430ace1`, sweep `v4c51`)
 
 **Branches and version.** Work moved from `codex/v3` to `staging` (`main` created at the same commit, both pushed; the old `codex/*` branches are deleted). **`d886cfb8`** sets the version to 2026.0: `fsim --version` prints `fsim 2026.0 (C API 1)`, the libraries are `.so.2026.0`, and the packaging records and version-identity checks accept a two-part version.
