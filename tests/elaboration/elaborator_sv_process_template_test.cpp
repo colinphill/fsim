@@ -1080,6 +1080,88 @@ endmodule
     assert(right->static_sensitivity.empty());
 }
 
+// A process that writes an element of its instance's unpacked array names
+// the array's container object, which replay cannot rebind: each instance
+// lowers its own, and writes land in its own memory.
+void test_container_write_template_remains_uncached()
+{
+    using fsim::runtime::PackedLogic4;
+
+    const auto parsed = fsim::frontend::parse_text(
+        "sv-container-write-template-fallback.sv",
+        R"(
+module memory_leaf (
+  input logic clock,
+  input logic [7:0] value,
+  output logic [7:0] stored
+);
+  logic [7:0] memory [0:3];
+  always_ff @(posedge clock) memory[2] <= value;
+  assign stored = memory[2];
+endmodule
+
+module memory_template_top;
+  logic clock;
+  logic [7:0] left_value, right_value;
+  wire [7:0] left_stored, right_stored;
+  memory_leaf left (.clock(clock), .value(left_value), .stored(left_stored));
+  memory_leaf right (.clock(clock), .value(right_value), .stored(right_stored));
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed.ok());
+
+    std::ostringstream profile_output;
+    fsim::elaboration::ElaborationResult elaborated;
+    {
+        const ProfileCapture profile { profile_output };
+        elaborated = compile_and_elaborate(
+            parsed.design, "sv:work.memory_template_top");
+    }
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok() && elaborated.design);
+    const auto output = profile_output.str();
+    const auto row_start = output.find(
+        "fsim-profile: systemverilog-ordinary-process-template ");
+    assert(row_start != std::string::npos);
+    const auto row_end = output.find('\n', row_start);
+    const auto row = std::string_view { output }.substr(
+        row_start, row_end == std::string::npos
+            ? output.size() - row_start : row_end - row_start);
+    assert(profile_metric(row, "replays") == 0U);
+
+    const auto signal = [&](const std::string_view suffix) {
+        const auto id = elaborated.design->find_signal(
+            "memory_template_top." + std::string { suffix });
+        assert(id);
+        return *id;
+    };
+    auto interpreter = elaborated.design->create_interpreter();
+    const auto deposit = [&](const std::string_view name,
+                             const std::string_view value) {
+        interpreter->deposit_signal(signal(name), PackedLogic4::from_msb_string(value));
+    };
+    const auto read = [&](const std::string_view name) {
+        return interpreter->signal_value(signal(name)).to_msb_string();
+    };
+    const auto run = [&] {
+        assert(interpreter->run().status == fsim::runtime::RunStatus::completed);
+    };
+    deposit("clock", "0");
+    deposit("left_value", "00010001");
+    deposit("right_value", "00100010");
+    run();
+    deposit("clock", "1");
+    run();
+    assert(read("left_stored") == "00010001");
+    assert(read("right_stored") == "00100010");
+}
+
 } // namespace
 
 void test_systemverilog_generated_process_template_replay()
@@ -1863,6 +1945,7 @@ endmodule
     test_static_always_template_replay();
     test_output_variable_actual_resolved_net();
     test_timed_always_template_remains_uncached();
+    test_container_write_template_remains_uncached();
 }
 
 void test_systemverilog_element_process_template_replay()

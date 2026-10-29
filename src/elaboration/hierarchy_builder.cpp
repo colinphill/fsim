@@ -2376,6 +2376,18 @@ bool HierarchyBuilder::remember_systemverilog_process_template(
             design_.signal_info_)) {
         return false;
     }
+    // Replay remaps only signal operands and debug scopes
+    // (remap_template_operations), so every operation must be one a move
+    // to another hierarchy keeps: an operation that names a design
+    // container object (a memory element write) or other per-instance
+    // storage would still name this instance's.
+    for (std::size_t index = 0; index < process.operations.size(); ++index) {
+        auto operation = process.operations.expanded(index);
+        if (!remap_concurrent_operation(
+                operation, identity_signals, hierarchy, hierarchy)) {
+            return false;
+        }
+    }
 
     const SystemVerilogProcessTemplateKey key {
         unit.id, source.id, source_language, generated_occurrence,
