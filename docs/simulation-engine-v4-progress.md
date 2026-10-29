@@ -150,14 +150,7 @@ per completed phase).
 - **'DRIVING and 'DRIVING_VALUE** (16.2.4).
   - `Impl::signal_driving` and `signal_driving_value` are shared by the interpreter and the kernel.
   - The prefix stays a host signal (`static_kernel_host_signal`).
-- **Implicit signals** (S'DELAYED, S'S| Suite | Passed / in scope | Excluded |
-|---|---:|---:|
-| nvc | 1259 / 1259 | 223 |
-| vhdl-compliance | 65 / 65 | 7 |
-| vests | 3663 / 3663 | 2 |
-| ivtest | 2638 / 2638 | 273 |
-| verilator | 2071 / 2071 | 344 |
-| sv-tests | 1495 / 1495 | 2 |, S'QUIET, S'TRANSACTION; 16.2.4).
+- **Implicit signals** (S'DELAYED, S'STABLE, S'QUIET, S'TRANSACTION; 16.2.4).
   - Their drivers are VHDL behavioral members. They run as the host ran them, in the delta after their prefix changes and after the VHDL processes.
   - The plan's `start_waiting` arms such a member on its static sensitivity before time zero without running it, as the reference arms a non-initialized process. The plan format is now `fsim-static-kernel-plan-v8`.
   - A transaction-edge wait keeps its prefix a host signal. The kernel's host process is sensitive to the prefix's transactions, and a scan wakes the waiters when the host's transaction stamp moves (`wake_transaction_waiters`), even when the value did not change.

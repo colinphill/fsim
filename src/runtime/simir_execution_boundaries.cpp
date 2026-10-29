@@ -8,6 +8,7 @@
 #include "fsim/support/environment.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+#include "simir_container_ops.hpp"
 #include "simir_execution_context.hpp"
 #include "simir_execution_shared.hpp"
 #include "simir_internal.hpp"
@@ -397,15 +398,67 @@ bind_inline_constraint_containers(
     return bound;
 }
 
+// The reference process's frame, or its executor's registers.
+struct Interpreter::Impl::ProcessRandomizeStorage final : RandomizeStorage {
+    ProcessRandomizeStorage(Impl& owner_value, ProcessState& state_value) noexcept
+        : owner { owner_value }, state { state_value }
+    {
+    }
+    [[nodiscard]] PackedLogic4 packed(const RegisterId id, const std::size_t width) override
+    {
+        return state.executor ? state.executor->read_register(id, width)
+                              : owner.get_register(state, id);
+    }
+    void write_packed(const RegisterId id, PackedLogic4 value) override
+    {
+        if (state.executor) {
+            state.executor->write_register(id, value);
+        } else {
+            owner.get_register(state, id) = std::move(value);
+        }
+    }
+    [[nodiscard]] ContainerValue container(const ContainerRegisterId id) override
+    {
+        return state.executor ? state.executor->read_container_register(id)
+                              : owner.read_container_register(state, id);
+    }
+    void write_container(const ContainerRegisterId id, ContainerValue value) override
+    {
+        if (state.executor) {
+            state.executor->write_container_register(id, value);
+        } else {
+            owner.get_container_register(state, id) = std::move(value);
+        }
+    }
+    [[nodiscard]] std::uint32_t next_random() override
+    {
+        return Impl::next_random(state);
+    }
+    [[nodiscard]] std::string scope() override
+    {
+        return std::string { state.program().name() };
+    }
+    Impl& owner;
+    ProcessState& state;
+};
+
 void Interpreter::Impl::execute_scope_randomize(
     ProcessState& process,
     const InstructionIndex instruction,
     const ScopeRandomize& operation)
 {
+    ProcessRandomizeStorage storage { *this, process };
+    run_scope_randomize(storage, instruction, operation);
+}
+
+void Interpreter::Impl::run_scope_randomize(RandomizeStorage& storage,
+    const InstructionIndex instruction, const ScopeRandomize& operation)
+{
     SystemVerilogScopeRandomizeRequest request;
     request.limits.maximum_domain_values = operation.maximum_domain_values;
-    request.selection = (static_cast<std::uint64_t>(next_random(process)) << 32U)
-        | next_random(process);
+    const auto high = storage.next_random();
+    request.selection = (static_cast<std::uint64_t>(high) << 32U)
+        | storage.next_random();
     request.variables.reserve(operation.targets.size());
 
     std::vector<RegisterId> target_registers;
@@ -419,10 +472,8 @@ void Interpreter::Impl::execute_scope_randomize(
         if (found == target_registers.end()) {
             target_index = target_registers.size();
             target_registers.push_back(target.target);
-            staged_targets.push_back(process.executor
-                    ? process.executor->read_register(
-                          target.target, target.width)
-                    : get_register(process, target.target));
+            staged_targets.push_back(
+                storage.packed(target.target, target.width));
         } else {
             target_index = static_cast<std::size_t>(
                 std::distance(target_registers.begin(), found));
@@ -453,9 +504,7 @@ void Interpreter::Impl::execute_scope_randomize(
     std::vector<StagedContainer> staged_containers;
     std::deque<PackedLogic4> container_elements;
     for (const auto& container : operation.containers) {
-        auto value = process.executor
-            ? process.executor->read_container_register(container.container)
-            : read_container_register(process, container.container);
+        auto value = storage.container(container.container);
         if ((value.type.element_kind != ContainerElementKind::Packed
                 && value.type.element_kind != ContainerElementKind::Scalar)
             || std::ranges::any_of(value.elements, [&](const auto& element) {
@@ -575,9 +624,7 @@ void Interpreter::Impl::execute_scope_randomize(
                 const auto source = static_cast<RegisterId>(std::stoul(
                     node.text.substr(register_prefix.size())));
                 const auto width = node.constant.width();
-                auto value = process.executor
-                    ? process.executor->read_register(source, width)
-                    : get_register(process, source);
+                auto value = storage.packed(source, width);
                 if (value.width() != width || value.is_logic9()) {
                     throw std::invalid_argument {
                         "std::randomize inline value does not match its constraint"
@@ -595,8 +642,8 @@ void Interpreter::Impl::execute_scope_randomize(
         }
     }
     if (!operation.inline_constraints.empty()) {
-        request.inline_constraints = [&process, &operation, &bound_constraints,
-                                         instruction](
+        request.inline_constraints = [scope = storage.scope(), &operation,
+                                         &bound_constraints, instruction](
                                         auto& solver,
                                         const auto& variables) {
             configure_systemverilog_inline_constraints(
@@ -608,22 +655,15 @@ void Interpreter::Impl::execute_scope_randomize(
                           operation.inline_constraints.end() }
                     : std::span<const SystemVerilogConstraintTemplate> {
                           bound_constraints },
-                process.program().name() + "::std::randomize@"
-                    + std::to_string(instruction));
+                scope + "::std::randomize@" + std::to_string(instruction));
         };
     }
 
     const auto result = randomize_systemverilog_scope(request);
     if (result.status == SystemVerilogConstraintSolveStatus::Satisfied) {
         for (std::size_t index = 0; index < target_registers.size(); ++index) {
-            if (process.executor) {
-                process.executor->write_register(
-                    target_registers[index], staged_targets[index]);
-            } else {
-                using std::swap;
-                swap(get_register(process, target_registers[index]),
-                    staged_targets[index]);
-            }
+            storage.write_packed(target_registers[index],
+                std::move(staged_targets[index]));
         }
         for (auto& staged : staged_containers) {
             if (!staged.randomized) {
@@ -634,23 +674,13 @@ void Interpreter::Impl::execute_scope_randomize(
                 staged.value.elements[index]
                     = std::move(container_elements[staged.first + index]);
             }
-            if (process.executor) {
-                process.executor->write_container_register(
-                    staged.id, staged.value);
-            } else {
-                get_container_register(process, staged.id)
-                    = std::move(staged.value);
-            }
+            storage.write_container(staged.id, std::move(staged.value));
         }
     }
 
     auto result_value = PackedLogic4::from_aval_bval(
         32U, result.language_result(), 0U);
-    if (process.executor) {
-        process.executor->write_register(operation.destination, result_value);
-    } else {
-        get_register(process, operation.destination) = std::move(result_value);
-    }
+    storage.write_packed(operation.destination, std::move(result_value));
 }
 
 struct Interpreter::Impl::ProcessVhdlApiStorage final : VhdlApiStorage {
@@ -734,6 +764,222 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
 {
     ProcessVhdlApiStorage storage { *this, process, std::nullopt };
     run_vhdl_reflection_api(storage, operation);
+}
+
+const char* Interpreter::Impl::run_class_operation(
+    ContainerRegisterAccess& access, const ClassAllocate& operation,
+    const ProcessId process, const ProcessId design_process,
+    const std::string_view scope)
+{
+    if (!class_allocate_context_hook) {
+        return "class allocation service is unavailable";
+    }
+    std::vector<PackedLogic4> actuals;
+    std::vector<std::string> string_actuals;
+    actuals.reserve(operation.constructor_actuals.size());
+    string_actuals.reserve(operation.constructor_actuals.size());
+    for (std::size_t index = 0;
+        index < operation.constructor_actuals.size(); ++index) {
+        const auto actual = operation.constructor_actuals[index];
+        const auto string_actual = !operation.constructor_actual_kinds.empty()
+            && operation.constructor_actual_kinds[index] == 1U;
+        actuals.push_back(string_actual ? PackedLogic4(64) : access.read(actual));
+        string_actuals.push_back(
+            string_actual ? access.read_string(actual) : std::string { });
+    }
+    // The object's random seed (IEEE 1800-2023 18.14.1) is the next two
+    // draws of the allocating process's stream.
+    const auto high = access.next_random();
+    pending_class_allocation_seed
+        = (static_cast<std::uint64_t>(high) << 32U) | access.next_random();
+    const auto handle = class_allocate_context_hook(process, design_process,
+        scope, operation.specialization_identity, operation.declared_type,
+        actuals, string_actuals, operation.constructor_actual_names);
+    access.write(operation.destination,
+        PackedLogic4::from_aval_bval(64, handle, 0));
+    return nullptr;
+}
+
+const char* Interpreter::Impl::run_class_operation(
+    ContainerRegisterAccess& access, const ClassPropertyRead& operation)
+{
+    if (!class_property_read_hook) {
+        return "class property service is unavailable";
+    }
+    const auto handle = access.read(operation.receiver).low_word().aval;
+    access.write(operation.destination,
+        resize_class_value(
+            class_property_read_hook(handle, operation.property_identity),
+            operation.width));
+    return nullptr;
+}
+
+const char* Interpreter::Impl::run_class_operation(
+    ContainerRegisterAccess& access, const ClassPropertyWrite& operation)
+{
+    if (!class_property_write_hook) {
+        return "class property service is unavailable";
+    }
+    const auto handle = access.read(operation.receiver).low_word().aval;
+    class_property_write_hook(
+        handle, operation.property_identity, access.read(operation.source));
+    return nullptr;
+}
+
+const char* Interpreter::Impl::run_class_operation(
+    ContainerRegisterAccess& access, const ClassStaticPropertyRead& operation)
+{
+    if (!class_static_property_read_hook) {
+        return "class static property service is unavailable";
+    }
+    access.write(operation.destination,
+        resize_class_value(
+            class_static_property_read_hook(operation.property_identity),
+            operation.width));
+    return nullptr;
+}
+
+const char* Interpreter::Impl::run_class_operation(
+    ContainerRegisterAccess& access, const ClassStaticPropertyWrite& operation)
+{
+    if (!class_static_property_write_hook) {
+        return "class static property service is unavailable";
+    }
+    class_static_property_write_hook(
+        operation.property_identity, access.read(operation.source));
+    return nullptr;
+}
+
+const char* Interpreter::Impl::run_class_operation(
+    ContainerRegisterAccess& access, const ClassPropertyContainerRead& operation)
+{
+    if (!class_property_container_hook) {
+        return "class property service is unavailable";
+    }
+    // The destination keeps its declared type; a property never written
+    // reads as that type's default value.
+    auto value = default_container_value(
+        access.read_container(operation.destination).type);
+    class_property_container_hook(
+        access.read(operation.receiver).low_word().aval,
+        operation.property_identity, value, false);
+    access.container(operation.destination) = std::move(value);
+    return nullptr;
+}
+
+const char* Interpreter::Impl::run_class_operation(
+    ContainerRegisterAccess& access, const ClassPropertyContainerWrite& operation)
+{
+    if (!class_property_container_hook) {
+        return "class property service is unavailable";
+    }
+    auto value = access.read_container(operation.source);
+    class_property_container_hook(
+        access.read(operation.receiver).low_word().aval,
+        operation.property_identity, value, true);
+    return nullptr;
+}
+
+const char* Interpreter::Impl::run_class_operation(
+    ContainerRegisterAccess& access, const ClassMethodCall& operation,
+    const ProcessId process)
+{
+    if (!class_method_call_context_hook) {
+        return "class method service is unavailable";
+    }
+    std::vector<PackedLogic4> actuals;
+    std::vector<std::string> string_actuals;
+    actuals.reserve(operation.actuals.size());
+    string_actuals.reserve(operation.actuals.size());
+    for (std::size_t index = 0; index < operation.actuals.size(); ++index) {
+        const auto string_actual = !operation.actual_kinds.empty()
+            && operation.actual_kinds[index] == 1U;
+        actuals.push_back(string_actual
+                ? PackedLogic4(64)
+                : access.read(operation.actuals[index]));
+        string_actuals.push_back(string_actual
+                ? access.read_string(operation.actuals[index])
+                : std::string { });
+    }
+    const auto handle = access.read(operation.receiver).low_word().aval;
+    const auto bound_constraints = bind_inline_constraint_containers(
+        operation.inline_constraints, [&](const ContainerRegisterId id) {
+            return access.read_container(id);
+        });
+    auto result = class_method_call_context_hook(process, handle,
+        operation.method_identity, actuals, string_actuals,
+        operation.actual_names, operation.actual_directions,
+        bound_constraints
+            ? std::span<const SystemVerilogConstraintTemplate> {
+                  *bound_constraints }
+            : std::span<const SystemVerilogConstraintTemplate> {
+                  operation.inline_constraints },
+        operation.virtual_dispatch);
+    access.write(operation.destination, std::move(result));
+    for (std::size_t index = 0; index < actuals.size(); ++index) {
+        const auto string_actual = !operation.actual_kinds.empty()
+            && operation.actual_kinds[index] == 1U;
+        if (string_actual) {
+            access.string(operation.actuals[index])
+                = std::move(string_actuals[index]);
+        } else {
+            access.write(operation.actuals[index], std::move(actuals[index]));
+        }
+    }
+    return nullptr;
+}
+
+const char* Interpreter::Impl::run_class_operation(
+    ContainerRegisterAccess& access, const ClassStaticMethodCall& operation,
+    const ProcessId process)
+{
+    const auto dpi = std::string_view { operation.method_identity }
+        .starts_with(systemverilog_dpi_function_prefix);
+    if ((dpi && !dpi_function_call_hook)
+        || (!dpi && !class_static_method_call_context_hook)) {
+        return dpi ? "SystemVerilog DPI function service is unavailable"
+                   : "class static method service is unavailable";
+    }
+    std::vector<PackedLogic4> actuals;
+    std::vector<std::string> string_actuals;
+    actuals.reserve(operation.actuals.size());
+    string_actuals.reserve(operation.actuals.size());
+    for (std::size_t index = 0; index < operation.actuals.size(); ++index) {
+        const auto actual = operation.actuals[index];
+        const auto string_actual = !operation.actual_kinds.empty()
+            && operation.actual_kinds[index] == 1U;
+        const auto stream_actual = !operation.actual_kinds.empty()
+            && operation.actual_kinds[index] == 2U;
+        actuals.push_back(string_actual ? PackedLogic4(64)
+                : stream_actual
+                ? bit_stream_value(access.read_container(actual))
+                : access.read(actual));
+        string_actuals.push_back(
+            string_actual ? access.read_string(actual) : std::string { });
+    }
+    const auto identity = dpi
+        ? std::string_view { operation.method_identity }.substr(
+              systemverilog_dpi_function_prefix.size())
+        : std::string_view { operation.method_identity };
+    auto result = dpi
+        ? dpi_function_call_hook(identity, actuals, string_actuals,
+              operation.actual_names, operation.actual_directions)
+        : class_static_method_call_context_hook(process, identity, actuals,
+              string_actuals, operation.actual_names,
+              operation.actual_directions);
+    access.write(operation.destination, std::move(result));
+    for (std::size_t index = 0; index < actuals.size(); ++index) {
+        const auto string_actual = !operation.actual_kinds.empty()
+            && operation.actual_kinds[index] == 1U;
+        if (string_actual) {
+            access.string(operation.actuals[index])
+                = std::move(string_actuals[index]);
+        } else if (operation.actual_kinds.empty()
+            || operation.actual_kinds[index] != 2U) {
+            access.write(operation.actuals[index], std::move(actuals[index]));
+        }
+    }
+    return nullptr;
 }
 
 void Interpreter::Impl::run_vhdl_environment_time(

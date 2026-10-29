@@ -3156,8 +3156,16 @@ void Interpreter::start()
             impl_->package_static_initialization_callback_index
                 = action.callback;
             try {
-                impl_->package_static_startup_callbacks.at(
-                    action.callback).callback();
+                const auto& callback
+                    = impl_->package_static_startup_callbacks.at(action.callback);
+                callback.callback();
+                // The application's class services ran the initializer on
+                // the host's signals: kernel-owned ones take its values.
+                if (impl_->static_kernel) {
+                    for (const auto signal : callback.writable_signal_ids) {
+                        impl_->static_kernel->import_startup_write(signal);
+                    }
+                }
             } catch (...) {
                 impl_->package_static_initialization_callback_active = false;
                 impl_->package_static_initialization_callback_index
@@ -4048,11 +4056,12 @@ ProcessId Interpreter::design_process(const ProcessId process) const
 
 const Process& Interpreter::process_program(const ProcessId process) const
 {
-    // A debugger plan's host member runs the kernel stub on the scheduler;
-    // the debugger sees the program the member really runs.
+    // A host member runs the kernel stub on the scheduler; the debugger
+    // and the VPI's compiletf scan (IEEE 1800-2023 38.36.2) see the program
+    // the member really runs.
     if (impl_->static_kernel) {
         if (const auto* original
-            = impl_->static_kernel->debug_program(process)) {
+            = impl_->static_kernel->startup_program(process)) {
             return *original;
         }
     }

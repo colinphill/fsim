@@ -52,6 +52,9 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     thread.epoch = epoch;
     thread.alive = true;
     thread.order = members_[member].process;
+    if (parent == no_slot) {
+        members_[member].root_thread = index;
+    }
     if (parent != no_slot) {
         ++threads_[parent].child_records;
         // A fork child is a process of its own, numbered after the processes
@@ -191,6 +194,42 @@ void Interpreter::Impl::StaticKernel::prepare_behavioral()
         member.prearmed = true;
         const auto thread = spawn_thread(index, 0U, no_slot, no_slot);
         run_thread(thread);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::run_behavioral_initializers()
+{
+    // A declaration initializer that is a thread member (one that allocates
+    // through a class constructor, say) sets its static variable before any
+    // initial or always procedure starts (IEEE 1800-2023 6.8, 10.5), as
+    // run_hosted_initializers does for hosted ones: it runs here, in process
+    // order, ahead of the once members and the threads.
+    std::vector<std::uint32_t> initializers;
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        const auto& member = members_[index];
+        if (member.kind != StaticKernelMemberKind::behavioral || member.vhdl
+            || member.prearmed || member.start_late || member.final_block
+            || member.package_startup || member.resolver
+            || member.operations.empty()) {
+            continue;
+        }
+        // A member's host process is dormant, its initialize flag cleared
+        // (ElaboratedDesign): the name says what it is.
+        if (member_program(index).name().find(".$declaration_initializer_")
+            != std::string::npos) {
+            initializers.push_back(index);
+        }
+    }
+    std::ranges::stable_sort(initializers, std::less { },
+        [&](const std::uint32_t member) { return members_[member].process; });
+    for (const auto index : initializers) {
+        if (trace_) {
+            std::cerr << "fsim-kernel-trace: initialize "
+                      << member_program(index).name() << '\n';
+        }
+        // start_behavioral does not start it again.
+        members_[index].prearmed = true;
+        run_thread(spawn_thread(index, 0U, no_slot, no_slot));
     }
 }
 
@@ -417,6 +456,38 @@ void Interpreter::Impl::StaticKernel::wake_waiters(std::vector<Waiter>& waiters,
     waiters.resize(kept);
 }
 
+bool Interpreter::Impl::StaticKernel::wake_switch_reader(const ProcessId process)
+{
+    const auto found = switch_members_.find(process);
+    if (found == switch_members_.end()) {
+        return false;
+    }
+    switch_wakes_.push_back(
+        { found->second, impl_.scheduler.now(), impl_.scheduler.delta() });
+    impl_.queue_next_delta(host_process_);
+    return true;
+}
+
+void Interpreter::Impl::StaticKernel::resume_switch_readers()
+{
+    // The host runs a woken reader in the next delta (queue_next_delta),
+    // whatever it waits on.
+    const auto now = impl_.scheduler.now();
+    const auto delta = impl_.scheduler.delta();
+    std::size_t kept = 0U;
+    for (const auto wake : switch_wakes_) {
+        if (wake.time == now && wake.delta == delta) {
+            switch_wakes_[kept++] = wake;
+            continue;
+        }
+        const auto thread = members_[wake.member].root_thread;
+        if (thread != no_slot && threads_[thread].member == wake.member) {
+            ready_thread(thread);
+        }
+    }
+    switch_wakes_.resize(kept);
+}
+
 void Interpreter::Impl::StaticKernel::wake_transaction_waiters()
 {
     for (const auto input_index : transaction_inputs_) {
@@ -590,6 +661,35 @@ std::vector<std::uint32_t> Interpreter::Impl::StaticKernel::live_children(
     std::ranges::sort(children, std::less { },
         [&](const std::uint32_t index) { return threads_[index].order; });
     return children;
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::next_member_random(
+    const std::uint32_t member)
+{
+    const auto thread = running_thread_;
+    if (thread != no_slot && threads_[thread].member == member
+        && threads_[thread].parent != no_slot) {
+        return Impl::next_random(threads_[thread].random_state);
+    }
+    return Impl::next_random(
+        impl_.get_process(members_[member].process).cold().random_state);
+}
+
+ProcessId Interpreter::Impl::StaticKernel::running_process(
+    const std::uint32_t member) const
+{
+    const auto thread = running_thread_;
+    return thread != no_slot && threads_[thread].member == member
+        ? static_cast<ProcessId>(threads_[thread].order)
+        : members_[member].process;
+}
+
+bool Interpreter::Impl::StaticKernel::only_detached_children(
+    const std::uint32_t parent) const
+{
+    return std::ranges::all_of(threads_, [&](const Thread& thread) {
+        return !thread.alive || thread.parent != parent || thread.detached;
+    });
 }
 
 std::vector<std::uint32_t> Interpreter::Impl::StaticKernel::child_records(
@@ -1020,7 +1120,7 @@ void Interpreter::Impl::StaticKernel::fork_child_done(const std::uint32_t parent
 {
     if (parent != no_slot && threads_[parent].alive
         && threads_[parent].waiting_children
-        && live_children(parent).empty()) {
+        && only_detached_children(parent)) {
         // wait fork (IEEE 1800-2023 9.6.1) ends with the last child.
         threads_[parent].waiting_children = false;
         ready_thread(parent);
@@ -1464,6 +1564,59 @@ struct Interpreter::Impl::StaticKernel::MemberVhdlApiStorage final
     std::uint32_t pc;
 };
 
+struct Interpreter::Impl::StaticKernel::MemberRandomizeStorage final
+    : RandomizeStorage {
+    MemberRandomizeStorage(StaticKernel& kernel_value,
+        const std::uint32_t member_value, const std::uint32_t pc_value) noexcept
+        : kernel { kernel_value }, member { member_value }, pc { pc_value }
+    {
+    }
+    [[nodiscard]] PackedLogic4& slot(const RegisterId id)
+    {
+        auto& registers = kernel.members_[member].registers;
+        if (id >= registers.size()) {
+            kernel.fail(member, pc, "invalid register ID");
+        }
+        return registers[id];
+    }
+    [[nodiscard]] PackedLogic4 packed(const RegisterId id, std::size_t) override
+    {
+        return slot(id);
+    }
+    void write_packed(const RegisterId id, PackedLogic4 value) override
+    {
+        slot(id) = std::move(value);
+    }
+    [[nodiscard]] ContainerValue container(const ContainerRegisterId id) override
+    {
+        const auto& state = kernel.members_[member];
+        if (!state.dynamic_container(id)) {
+            kernel.fail(member, pc, "invalid container register ID");
+        }
+        return *state.dynamic_containers[id];
+    }
+    void write_container(const ContainerRegisterId id, ContainerValue value) override
+    {
+        auto& state = kernel.members_[member];
+        if (!state.dynamic_container(id)) {
+            kernel.fail(member, pc, "invalid container register ID");
+        }
+        state.dynamic_containers[id]
+            = std::make_shared<ContainerValue>(std::move(value));
+    }
+    [[nodiscard]] std::uint32_t next_random() override
+    {
+        return kernel.next_member_random(member);
+    }
+    [[nodiscard]] std::string scope() override
+    {
+        return std::string { kernel.member_program(member).name() };
+    }
+    StaticKernel& kernel;
+    std::uint32_t member;
+    std::uint32_t pc;
+};
+
 struct Interpreter::Impl::StaticKernel::MemberContainerAccess final
     : ContainerRegisterAccess {
     MemberContainerAccess(StaticKernel& kernel_value,
@@ -1520,18 +1673,9 @@ struct Interpreter::Impl::StaticKernel::MemberContainerAccess final
         }
         return *state.dynamic_containers[id];
     }
-    // The stream RandomValue draws from: a fork child's own, else the
-    // process's.
     [[nodiscard]] std::uint32_t next_random() override
     {
-        const auto thread = kernel.running_thread_;
-        if (thread != static_kernel_detail::no_slot
-            && kernel.threads_[thread].member == member
-            && kernel.threads_[thread].parent != static_kernel_detail::no_slot) {
-            return Impl::next_random(kernel.threads_[thread].random_state);
-        }
-        return Impl::next_random(kernel.impl_.get_process(
-            kernel.members_[member].process).cold().random_state);
+        return kernel.next_member_random(member);
     }
     StaticKernel& kernel;
     std::uint32_t member;
@@ -2061,15 +2205,59 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
             // A guarded assignment's driver disconnection (IEEE 1076-2019
             // 11.6, 10.5.2.2): the null transaction on the member's host
-            // driver, as the reference schedules it.
+            // driver, as the reference schedules it. Any other is a static
+            // method or DPI function call (IEEE 1800-2023 8.10, 35.5) for
+            // the running process.
+            bool disconnected = false;
             try {
-                if (!impl_.try_vhdl_disconnect_call(member.process,
-                        op.method_identity)) {
+                disconnected = impl_.try_vhdl_disconnect_call(member.process,
+                    op.method_identity);
+            } catch (const std::exception& error) {
+                fail(member_index, pc, error.what());
+            }
+            if (!disconnected) {
+                if (member.vhdl) {
                     fail(member_index, pc,
                         "static kernel static call is not a driver disconnection");
                 }
-            } catch (const std::exception& error) {
-                fail(member_index, pc, error.what());
+                MemberContainerAccess access { *this, member_index, pc };
+                if (const auto* error = impl_.run_class_operation(access, op,
+                        running_process(member_index))) {
+                    fail(member_index, pc, error);
+                }
+            }
+        } else if constexpr (std::is_same_v<T, ClassAllocate>) {
+            // The application's class services (IEEE 1800-2023 8.7) on the
+            // member's registers, for the running process: a fork child's
+            // own (18.14), else the member's.
+            MemberContainerAccess access { *this, member_index, pc };
+            if (const auto* error = impl_.run_class_operation(access, op,
+                    running_process(member_index),
+                    impl_.get_process(member.process).cold().design_process,
+                    member_program(member_index).name())) {
+                fail(member_index, pc, error);
+            }
+        } else if constexpr (std::is_same_v<T, ScopeRandomize>) {
+            // std::randomize (18.12) on the member's registers.
+            MemberRandomizeStorage storage { *this, member_index, pc };
+            impl_.run_scope_randomize(storage, pc, op);
+        } else if constexpr (std::is_same_v<T, ClassMethodCall>) {
+            // A method call (8.6) for the running process.
+            MemberContainerAccess access { *this, member_index, pc };
+            if (const auto* error = impl_.run_class_operation(access, op,
+                    running_process(member_index))) {
+                fail(member_index, pc, error);
+            }
+        } else if constexpr (std::is_same_v<T, ClassPropertyRead>
+            || std::is_same_v<T, ClassPropertyWrite>
+            || std::is_same_v<T, ClassStaticPropertyRead>
+            || std::is_same_v<T, ClassStaticPropertyWrite>
+            || std::is_same_v<T, ClassPropertyContainerRead>
+            || std::is_same_v<T, ClassPropertyContainerWrite>) {
+            // Class property reads and writes (8.5, 8.9).
+            MemberContainerAccess access { *this, member_index, pc };
+            if (const auto* error = impl_.run_class_operation(access, op)) {
+                fail(member_index, pc, error);
             }
         } else if constexpr (std::is_same_v<T, VhdlAssertApi>) {
             // The std.env assertion controls and counts (IEEE 1076-2019
@@ -2766,7 +2954,7 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             // children end; without any, the reference requeues the process
             // in the current region (queue_current), which the next round is.
             suspend_point = true;
-            if (live_children(index).empty()) {
+            if (only_detached_children(index)) {
                 ready_thread(index);
             } else {
                 threads_[index].waiting_children = true;
@@ -2778,7 +2966,21 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             // or the children of one named fork, the process continuing.
             if (!op.site) {
                 suspend_point = true;
-                cancel_thread_descendants(index);
+                // A pending clocking drive is not a subprocess: with one
+                // live, only the other children end, with their descendants.
+                const auto children = live_children(index);
+                if (std::ranges::none_of(children, [&](const std::uint32_t child) {
+                        return threads_[child].detached;
+                    })) {
+                    cancel_thread_descendants(index);
+                } else {
+                    for (const auto child : children) {
+                        if (!threads_[child].detached && threads_[child].alive) {
+                            cancel_thread_descendants(child);
+                            kill_thread(child);
+                        }
+                    }
+                }
                 ready_thread(index);
                 outcome = Boundary::suspend;
             } else {
@@ -2875,7 +3077,10 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                     static_cast<std::uint32_t>(op.branches.size()), false };
             }
             for (const auto branch : op.branches) {
-                ready_thread(spawn_thread(member_index, branch, index, group, pc));
+                const auto child
+                    = spawn_thread(member_index, branch, index, group, pc);
+                threads_[child].detached = op.detached;
+                ready_thread(child);
             }
             outcome = op.join == ForkJoinKind::none ? Boundary::advance
                                                     : Boundary::suspend;

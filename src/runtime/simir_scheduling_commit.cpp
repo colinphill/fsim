@@ -2883,7 +2883,8 @@ void Interpreter::Impl::wake_switch_source_readers(
         return;
     }
     for (const auto reader : switch_source_readers[signal]) {
-        if (reader != writer) {
+        if (reader != writer
+            && !(static_kernel && static_kernel->wake_switch_reader(reader))) {
             queue_next_delta(reader);
         }
     }

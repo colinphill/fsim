@@ -6,6 +6,7 @@
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "fsim/support/environment.hpp"
 #include "fsim/support/path.hpp"
+#include "simir_container_helpers.hpp"
 #include "simir_execution_context.hpp"
 #include "simir_execution_shared.hpp"
 #include "simir_internal.hpp"
@@ -787,131 +788,34 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             get_register(process, op.destination) = std::move(converted);
             ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, ClassAllocate>) {
-            if (!class_allocate_context_hook) {
-                fail(process, "class allocation service is unavailable");
+            ProcessContainerAccess access { *this, process };
+            if (const auto* error = run_class_operation(access, op, process.id,
+                    process.cold().design_process, process.program().name())) {
+                fail(process, error);
             }
-            std::vector<PackedLogic4> actuals;
-            std::vector<std::string> string_actuals;
-            actuals.reserve(op.constructor_actuals.size());
-            string_actuals.reserve(op.constructor_actuals.size());
-            for (std::size_t index = 0;
-                index < op.constructor_actuals.size(); ++index) {
-                const auto actual = op.constructor_actuals[index];
-                const auto string_actual = !op.constructor_actual_kinds.empty()
-                    && op.constructor_actual_kinds[index] == 1U;
-                actuals.push_back(
-                    string_actual
-                        ? PackedLogic4(64)
-                        : get_register(process, actual));
-                string_actuals.push_back(
-                    string_actual
-                        ? process.frame->string_registers.at(actual)
-                        : std::string { });
-            }
-            pending_class_allocation_seed
-                = (static_cast<std::uint64_t>(next_random(process))
-                      << 32U)
-                | next_random(process);
-            const auto handle = class_allocate_context_hook(
-                      process.id,
-                      process.cold().design_process,
-                      process.program().name(),
-                      op.specialization_identity,
-                      op.declared_type,
-                      actuals,
-                      string_actuals,
-                      op.constructor_actual_names);
-            get_register(process, op.destination) = PackedLogic4::from_aval_bval(64, handle, 0);
             ++process.pc;
         } else if constexpr (
-            std::is_same_v<OperationType, ClassPropertyRead>) {
-            if (!class_property_read_hook) {
-                fail(process, "class property service is unavailable");
+            std::is_same_v<OperationType, ClassPropertyRead>
+            || std::is_same_v<OperationType, ClassPropertyWrite>) {
+            ProcessContainerAccess access { *this, process };
+            if (const auto* error = run_class_operation(access, op)) {
+                fail(process, error);
             }
-            const auto handle = get_register(process, op.receiver).low_word().aval;
-            get_register(process, op.destination) = resize_class_value(
-                class_property_read_hook(handle, op.property_identity),
-                op.width);
-            ++process.pc;
-        } else if constexpr (
-            std::is_same_v<OperationType, ClassPropertyWrite>) {
-            if (!class_property_write_hook) {
-                fail(process, "class property service is unavailable");
-            }
-            const auto handle = get_register(process, op.receiver).low_word().aval;
-            class_property_write_hook(
-                handle, op.property_identity,
-                get_register(process, op.source));
             ++process.pc;
         } else if constexpr (
             std::is_same_v<OperationType, ClassMethodCall>) {
-            if (!class_method_call_context_hook) {
-                fail(process, "class method service is unavailable");
-            }
-            std::vector<PackedLogic4> actuals;
-            std::vector<std::string> string_actuals;
-            actuals.reserve(op.actuals.size());
-            string_actuals.reserve(op.actuals.size());
-            for (std::size_t index = 0; index < op.actuals.size(); ++index) {
-                const auto string_actual = !op.actual_kinds.empty()
-                    && op.actual_kinds[index] == 1U;
-                actuals.push_back(
-                    string_actual
-                        ? PackedLogic4(64)
-                        : get_register(process, op.actuals[index]));
-                string_actuals.push_back(
-                    string_actual
-                        ? get_string_register(process, op.actuals[index])
-                        : std::string { });
-            }
-            const auto handle = get_register(process, op.receiver).low_word().aval;
-            const auto bound_constraints
-                = bind_inline_constraint_containers(
-                    op.inline_constraints,
-                    [&](const ContainerRegisterId id) {
-                        return read_container_register(process, id);
-                    });
-            get_register(process, op.destination)
-                = class_method_call_context_hook(
-                      process.id,
-                      handle,
-                      op.method_identity,
-                      actuals,
-                      string_actuals,
-                      op.actual_names,
-                      op.actual_directions,
-                      bound_constraints
-                          ? std::span<const SystemVerilogConstraintTemplate> {
-                                *bound_constraints }
-                          : std::span<const SystemVerilogConstraintTemplate> {
-                                op.inline_constraints },
-                      op.virtual_dispatch);
-            for (std::size_t index = 0; index < actuals.size(); ++index) {
-                const auto string_actual = !op.actual_kinds.empty()
-                    && op.actual_kinds[index] == 1U;
-                if (string_actual) {
-                    get_string_register(process, op.actuals[index]) = string_actuals[index];
-                } else {
-                    get_register(process, op.actuals[index]) = actuals[index];
-                }
+            ProcessContainerAccess access { *this, process };
+            if (const auto* error = run_class_operation(access, op, process.id)) {
+                fail(process, error);
             }
             ++process.pc;
         } else if constexpr (
-            std::is_same_v<OperationType, ClassStaticPropertyRead>) {
-            if (!class_static_property_read_hook) {
-                fail(process, "class static property service is unavailable");
+            std::is_same_v<OperationType, ClassStaticPropertyRead>
+            || std::is_same_v<OperationType, ClassStaticPropertyWrite>) {
+            ProcessContainerAccess access { *this, process };
+            if (const auto* error = run_class_operation(access, op)) {
+                fail(process, error);
             }
-            get_register(process, op.destination) = resize_class_value(
-                class_static_property_read_hook(op.property_identity),
-                op.width);
-            ++process.pc;
-        } else if constexpr (
-            std::is_same_v<OperationType, ClassStaticPropertyWrite>) {
-            if (!class_static_property_write_hook) {
-                fail(process, "class static property service is unavailable");
-            }
-            class_static_property_write_hook(
-                op.property_identity, get_register(process, op.source));
             ++process.pc;
         } else if constexpr (
             std::is_same_v<OperationType, ClassStaticMethodCall>) {
@@ -919,61 +823,9 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
                 ++process.pc;
                 return;
             }
-            const auto dpi = std::string_view { op.method_identity }
-                .starts_with(systemverilog_dpi_function_prefix);
-            if ((dpi && !dpi_function_call_hook)
-                || (!dpi && !class_static_method_call_context_hook)) {
-                fail(process, dpi
-                    ? "SystemVerilog DPI function service is unavailable"
-                    : "class static method service is unavailable");
-            }
-            std::vector<PackedLogic4> actuals;
-            std::vector<std::string> string_actuals;
-            actuals.reserve(op.actuals.size());
-            string_actuals.reserve(op.actuals.size());
-            for (std::size_t index = 0; index < op.actuals.size(); ++index) {
-                const auto string_actual = !op.actual_kinds.empty()
-                    && op.actual_kinds[index] == 1U;
-                const auto stream_actual = !op.actual_kinds.empty()
-                    && op.actual_kinds[index] == 2U;
-                actuals.push_back(
-                    string_actual ? PackedLogic4(64)
-                    : stream_actual
-                    ? bit_stream_value(read_container_register(
-                          process, op.actuals[index]))
-                    : get_register(process, op.actuals[index]));
-                string_actuals.push_back(
-                    string_actual
-                        ? get_string_register(process, op.actuals[index])
-                        : std::string { });
-            }
-            const auto identity = dpi
-                ? std::string_view { op.method_identity }.substr(
-                      systemverilog_dpi_function_prefix.size())
-                : std::string_view { op.method_identity };
-            get_register(process, op.destination) = dpi
-                ? dpi_function_call_hook(
-                      identity,
-                      actuals,
-                      string_actuals,
-                      op.actual_names,
-                      op.actual_directions)
-                : class_static_method_call_context_hook(
-                      process.id,
-                      identity,
-                      actuals,
-                      string_actuals,
-                      op.actual_names,
-                      op.actual_directions);
-            for (std::size_t index = 0; index < actuals.size(); ++index) {
-                const auto string_actual = !op.actual_kinds.empty()
-                    && op.actual_kinds[index] == 1U;
-                if (string_actual) {
-                    get_string_register(process, op.actuals[index]) = string_actuals[index];
-                } else if (op.actual_kinds.empty()
-                    || op.actual_kinds[index] != 2U) {
-                    get_register(process, op.actuals[index]) = actuals[index];
-                }
+            ProcessContainerAccess access { *this, process };
+            if (const auto* error = run_class_operation(access, op, process.id)) {
+                fail(process, error);
             }
             ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, LoadStringConstant>) {

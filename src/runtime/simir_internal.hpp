@@ -37,6 +37,8 @@
 
 namespace fsim::runtime::simir {
 
+class ContainerRegisterAccess;
+
 struct SignalChangeOrigin {
     ProcessSchedulingDomain process_domain {
         ProcessSchedulingDomain::generic
@@ -2554,6 +2556,22 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessState& process,
         InstructionIndex instruction,
         const ScopeRandomize& operation);
+    // std::randomize's register file (IEEE 1800-2023 18.12): the
+    // reference's process frame or executor, or a kernel member's.
+    struct RandomizeStorage {
+        virtual ~RandomizeStorage() = default;
+        [[nodiscard]] virtual PackedLogic4 packed(RegisterId id, std::size_t width) = 0;
+        virtual void write_packed(RegisterId id, PackedLogic4 value) = 0;
+        [[nodiscard]] virtual ContainerValue container(ContainerRegisterId id) = 0;
+        virtual void write_container(ContainerRegisterId id, ContainerValue value) = 0;
+        // The next draw of the running process's random stream (18.14).
+        [[nodiscard]] virtual std::uint32_t next_random() = 0;
+        // The running program's name, the with-clause's scope.
+        [[nodiscard]] virtual std::string scope() = 0;
+    };
+    struct ProcessRandomizeStorage;
+    void run_scope_randomize(RandomizeStorage& storage,
+        InstructionIndex instruction, const ScopeRandomize& operation);
     void execute_vhdl_assert_api(
         ProcessState& process, const VhdlAssertApi& operation);
     /// The registers and reports of the process that runs a std.env
@@ -2578,6 +2596,34 @@ struct Interpreter::Impl : SchedulerBatchTask {
         [[noreturn]] virtual void fail(const std::string& message) = 0;
     };
     struct ProcessVhdlApiStorage;
+    // The application's class services (IEEE 1800-2023 8.4, 8.5, 8.9) on a
+    // register file, the reference's process frame or a kernel member's: an
+    // allocation for `process` (its design process and scope name), a
+    // property or static property read or write. Each returns the
+    // reference's message when its service is missing, and nullptr when it
+    // ran.
+    [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
+        const ClassAllocate&, ProcessId process, ProcessId design_process,
+        std::string_view scope);
+    [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
+        const ClassPropertyRead&);
+    [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
+        const ClassPropertyWrite&);
+    [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
+        const ClassStaticPropertyRead&);
+    [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
+        const ClassStaticPropertyWrite&);
+    [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
+        const ClassPropertyContainerRead&);
+    [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
+        const ClassPropertyContainerWrite&);
+    // A method call (8.6) or static method or DPI function call (8.10,
+    // 35.5) for `process`, its actuals written back. A VHDL driver
+    // disconnection is the caller's (try_vhdl_disconnect_call).
+    [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
+        const ClassMethodCall&, ProcessId process);
+    [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
+        const ClassStaticMethodCall&, ProcessId process);
     // The assertion controls and counts (16.5.6).
     void run_vhdl_assert_api(VhdlApiStorage&, const VhdlAssertApi&);
     // The date and time functions (16.5.5); a bad operand fails.

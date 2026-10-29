@@ -3263,9 +3263,15 @@ std::optional<Process> Lowerer::lower_hir_concurrent_statement(
         // The runtime's switch network resolves a bidirectional switch from
         // the drivers on both sides. Its directional assignments would
         // become drivers that feed each terminal's value back to itself.
+        // The connection is a descriptor, as an alias or inout adapter is:
+        // the network tracks its terminals and control
+        // (switch_endpoint_adjacency, switch_control_adjacency), so nothing
+        // wakes it.
         result->operations.clear();
         result->operations.emplace_back(Halt { });
         result->initialize = false;
+        result->static_sensitivity.clear();
+        result->static_trigger_regions.clear();
     }
     return result;
 }

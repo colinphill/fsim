@@ -206,6 +206,10 @@ public:
     /// time step. Not called for the kernel's own publication or
     /// materialization (Impl::import_static_kernel_write filters those).
     void import_host_write(SignalId signal, SignalChangeOrigin origin);
+    /// A package static initializer that the application's class services
+    /// run before time zero (IEEE 1800-2023 6.21) wrote `signal` on the
+    /// host: a kernel-owned signal takes that value.
+    void import_startup_write(SignalId signal);
     /// Hosted tier: a wake of a hosted process, redirected from the host
     /// scheduler's queue_* entry points (Impl::static_kernel_enqueue_hosted).
     /// Runs the process to its next suspension on its hosted tier; false when
@@ -251,6 +255,12 @@ public:
     {
         return resolver_members_.contains(process);
     }
+    /// A driver of a unidirectional switch's source changed
+    /// (Impl::wake_switch_source_readers): the strength of the switch's
+    /// output follows its source's (IEEE 1800-2023 28.13). When the reader
+    /// `process` is a member, the kernel resumes it in the next delta, as
+    /// the host queues a reader, and the call returns true.
+    [[nodiscard]] bool wake_switch_reader(ProcessId process);
     /// One pass of an update-commit program (IEEE 1076-2019 14.7.3), as
     /// Impl::run_vhdl_resolver and run_vhdl_conversion_drivers run it:
     /// `driving` (a resolution function's connected drivers' values, when
@@ -293,12 +303,10 @@ public:
     /// The readers throw std::logic_error for an unavailable register.
     [[nodiscard]] bool debug_member(ProcessId process) const noexcept;
     /// The original program of the host process when it is a member (its
-    /// scheduler program is the kernel stub); null for every other process
-    /// and outside a debugger plan.
-    /// The original program of the host process when it is a member, for
-    /// the time-zero start's late-start rule (systemverilog_late_starters),
-    /// which the planner applies to the original programs; null for every
-    /// other process.
+    /// scheduler program is the kernel stub), for the time-zero start's
+    /// late-start rule (systemverilog_late_starters), which the planner
+    /// applies to the original programs, and for Interpreter::process_program;
+    /// null for every other process.
     [[nodiscard]] const Process* startup_program(ProcessId process) const noexcept
     {
         return host_program_ && process == host_process_ ? &*host_program_
@@ -364,6 +372,8 @@ private:
         /// A behavioral thread armed at its first static wait before the
         /// once members run (prepare_behavioral).
         bool prearmed { };
+        /// The thread the member started as (spawn_thread without a parent).
+        std::uint32_t root_thread { static_kernel_detail::no_slot };
         /// A behavioral process that is not initialized (an implicit
         /// signal's driver): armed on its static sensitivity without
         /// running, then run from its first operation (prepare_behavioral).
@@ -1141,6 +1151,10 @@ private:
         bool ended_record { };
         /// Suspended in wait fork (9.6.1) until its children end.
         bool waiting_children { };
+        /// A pending update (a clocking drive with a cycle delay, Fork's
+        /// detached), which disable fork and wait fork leave alone (IEEE
+        /// 1800-2023 9.6.1, 9.6.3).
+        bool detached { };
         /// A fork child's random stream (IEEE 1800-2023 18.14: each thread
         /// has its own), seeded as the reference seeds the child process.
         std::uint64_t random_state { };
@@ -1233,6 +1247,18 @@ private:
     /// driver, IEEE 1076-2019 16.2.4): a scan wakes those waiters when the
     /// host's transaction stamp moved, whether or not the value changed.
     std::vector<std::uint32_t> transaction_inputs_;
+    /// The members that are unidirectional switches (MOS gates), by process
+    /// (wake_switch_reader).
+    std::unordered_map<ProcessId, std::uint32_t> switch_members_;
+    /// Switch members the host woke, with the time and delta of the wake:
+    /// a scan of a later delta resumes them.
+    struct SwitchWake {
+        std::uint32_t member { };
+        SimulationTick time { };
+        std::uint64_t delta { };
+    };
+    std::vector<SwitchWake> switch_wakes_;
+    void resume_switch_readers();
     std::priority_queue<Timer, std::vector<Timer>, std::greater<>> timers_;
     std::uint64_t timer_sequence_ { };
     /// The wake time of the scheduler task that will activate the kernel.
@@ -1352,6 +1378,7 @@ private:
     /// operations (run_file) use them.
     struct MemberFileStorage;
     struct MemberContainerAccess;
+    struct MemberRandomizeStorage;
     struct MemberVhdlApiStorage;
     struct MemberAssertionStorage;
     /// A VHDL-2019 member's report or assertion violation (Impl::report_vhdl)
@@ -1447,6 +1474,9 @@ private:
     void sync_behavioral_registers(std::uint32_t member, std::uint32_t keep);
     void prepare_behavioral();
     [[nodiscard]] bool start_after_procedures();
+    /// Runs the declaration initializers that are thread members, before
+    /// the once members and threads of time zero.
+    void run_behavioral_initializers();
     void start_behavioral();
     [[nodiscard]] std::uint32_t spawn_thread(std::uint32_t member,
         std::uint32_t pc, std::uint32_t parent, std::uint32_t group,
@@ -1487,6 +1517,14 @@ private:
         named_scopes_;
     /// The live fork children of a thread, in process order.
     [[nodiscard]] std::vector<std::uint32_t> live_children(std::uint32_t thread) const;
+    /// The process a member's operation runs for (class services, report
+    /// process): the running fork child's own number, else the member's.
+    [[nodiscard]] ProcessId running_process(std::uint32_t member) const;
+    /// The next draw of the stream RandomValue draws from: a running fork
+    /// child's own, else the member process's (IEEE 1800-2023 18.14).
+    [[nodiscard]] std::uint32_t next_member_random(std::uint32_t member);
+    /// Whether every live child is detached (none counts).
+    [[nodiscard]] bool only_detached_children(std::uint32_t thread) const;
     /// The fork children with records, live or ended (Thread::child_records),
     /// in stable order.
     [[nodiscard]] std::vector<std::uint32_t> child_records(std::uint32_t thread) const;
@@ -2509,6 +2547,10 @@ private:
     std::uint64_t profile_publishes_ { };
     /// import_host_write's copy of a slot before the host value lands.
     std::vector<std::uint64_t> import_before_;
+    /// Copies the host's value of a kernel-owned signal into its slot: the
+    /// slot when that changed it (import_before_ holds the old words), else
+    /// no_slot.
+    [[nodiscard]] std::uint32_t import_slot(SignalId signal);
     std::vector<std::uint64_t> profile_member_runs_;
     std::vector<std::string> profile_names_;
     std::size_t compiled_members_ { };

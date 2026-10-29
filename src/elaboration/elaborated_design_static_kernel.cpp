@@ -605,9 +605,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             && hit("package_static_initializer")) {
             return first;
         }
+        // A unidirectional switch (a MOS gate; IEEE 1800-2023 28.7) is a
+        // SystemVerilog behavioral member: the host resolves its source's
+        // strength, which its output takes (Impl::set_driver), and wakes it
+        // when a driver of the source changes (StaticKernel::
+        // wake_switch_reader). A bidirectional one is the host's switch
+        // network.
+        const bool unidirectional_switch = view.switch_source()
+            && view.switch_target() && !view.switch_bidirectional();
         if ((view.switch_source() || view.switch_target()
                 || view.switch_control() || view.switch_bidirectional()
                 || view.switch_resistive())
+            && !(behavioral && !vhdl && unidirectional_switch)
             && hit("switch")) {
             return first;
         }
@@ -2150,6 +2159,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (region.signal < signal_count) {
                     host_touched[region.signal] = 1U;
                 }
+            }
+        }
+        // A switch member's source and target: the host resolves the
+        // source's strength and drives the target at it (IEEE 1800-2023
+        // 28.13; Impl::set_driver).
+        for (const auto endpoint : { views[index].switch_source(),
+                 views[index].switch_target() }) {
+            if (endpoint && *endpoint < signal_count) {
+                host_touched[*endpoint] = 1U;
             }
         }
         const auto& operations = views[index].operations();

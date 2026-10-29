@@ -545,6 +545,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             resolver_members_.emplace(member.process,
                 static_cast<std::uint32_t>(members_.size()));
         }
+        if (member.kind == StaticKernelMemberKind::behavioral
+            && program.switch_source() && !program.switch_bidirectional()) {
+            switch_members_.emplace(member.process,
+                static_cast<std::uint32_t>(members_.size()));
+        }
         member.partition_key = member.lazy ? no_slot : member_spec.partition;
         member.body_begin = member_spec.body_begin;
         member.prologue_end = member_spec.body_begin;
@@ -1459,6 +1464,18 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     // (IEEE 1800-2023 21.2.3), and an event's triggered
                     // state is of the host's time step (15.5.3): no time
                     // warp.
+                    host_written = true;
+                } else if constexpr (std::is_same_v<T, ClassAllocate>
+                    || std::is_same_v<T, ClassPropertyWrite>
+                    || std::is_same_v<T, ClassStaticPropertyWrite>
+                    || std::is_same_v<T, ClassPropertyContainerWrite>
+                    || std::is_same_v<T, ClassMethodCall>
+                    || std::is_same_v<T, ClassStaticMethodCall>) {
+                    // The class services toggle the host's
+                    // $sv_class_heap_change, whose waiters wake in the
+                    // host's next delta (IEEE 1800-2023 9.4.2;
+                    // Simulation::Impl::notify_class_changes), and a class
+                    // body may write any host signal.
                     host_written = true;
                 } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
                     // A host object read into a reference-format register.
@@ -5329,6 +5346,7 @@ void Interpreter::Impl::StaticKernel::initialize()
     }
     if (behavioral_) {
         prepare_behavioral();
+        run_behavioral_initializers();
     }
     // The reference queues time zero's ordinary processes in stable order
     // (Interpreter::start; IEEE 1800-2023 4.7). A once member (an initial
@@ -5402,6 +5420,9 @@ void Interpreter::Impl::StaticKernel::write_mirror(const Input& input,
 
 bool Interpreter::Impl::StaticKernel::scan_inputs(const bool all)
 {
+    if (initialized_ && !switch_wakes_.empty()) {
+        resume_switch_readers();
+    }
     if (initialized_ && !transaction_inputs_.empty()) {
         wake_transaction_waiters();
     }
@@ -5506,10 +5527,18 @@ bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
         // the other). Each applied change is an event (IEEE 1076-2019
         // 14.7.3.1, 14.7.5.3: processes sensitive to the signal resume), so
         // the readers wake although the net change is empty.
+        // A SystemVerilog signal the host commits at once more than once
+        // between scans (deposits, as the class services toggle
+        // $sv_class_heap_change; blocking writes of hosted processes) moves
+        // its revision with every change: each one is an event (IEEE
+        // 1800-2023 4.3, 9.4.2).
         // Only a signal no member writes: the host's publication of a
         // member's own write is already in the cached value and is no new
         // event for the members.
-        if (!vhdl_ || !input.event_seen || input.event_seen == seen
+        const bool events = vhdl_
+            ? input.event_seen && input.event_seen != seen
+            : bumped;
+        if (!events
             || (input.signal < slot_of_signal_.size()
                 && slot_of_signal_[input.signal] != no_slot)) {
             return false;
@@ -6393,23 +6422,22 @@ void Interpreter::Impl::StaticKernel::refresh_lazy(const std::uint32_t slot)
     }
 }
 
-void Interpreter::Impl::StaticKernel::import_host_write(
-    const SignalId signal, const SignalChangeOrigin origin)
+std::uint32_t Interpreter::Impl::StaticKernel::import_slot(const SignalId signal)
 {
     if (signal >= slot_of_signal_.size()) {
-        return;
+        return no_slot;
     }
     // Aggregate proxies have no slot: their leaves are separate owned signals
     // that the host commits (and this hook imports) on their own.
     const auto slot_index = slot_of_signal_[signal];
     if (slot_index == no_slot) {
-        return;
+        return no_slot;
     }
     auto& slot = slots_[slot_index];
     const auto value = Impl::coerce_value_kind(impl_.logical_signal_value(signal),
         slot.planes == 4U ? ValueKind::logic9 : ValueKind::logic4);
     if (value.width() != slot.width) {
-        return;
+        return no_slot;
     }
     const auto size = slot.planes * slot.words;
     import_before_.assign(arena_.begin() + slot.offset,
@@ -6425,12 +6453,28 @@ void Interpreter::Impl::StaticKernel::import_host_write(
             arena_.begin() + slot.offset)) {
         // The kernel's own publication arriving (or a write of the value the
         // slot already holds): nothing changed.
-        return;
+        return no_slot;
     }
     if (slot.output) {
         // The host holds this value now; do not publish it back.
         std::copy_n(arena_.begin() + slot.offset, size,
             arena_.begin() + slot.published);
+    }
+    return slot_index;
+}
+
+void Interpreter::Impl::StaticKernel::import_startup_write(const SignalId signal)
+{
+    // Before time zero nothing has started that a change would wake.
+    (void)import_slot(signal);
+}
+
+void Interpreter::Impl::StaticKernel::import_host_write(
+    const SignalId signal, const SignalChangeOrigin origin)
+{
+    const auto slot_index = import_slot(signal);
+    if (slot_index == no_slot) {
+        return;
     }
     if (!initialized_) {
         // Before the first activation every member is evaluated from the
@@ -6440,7 +6484,7 @@ void Interpreter::Impl::StaticKernel::import_host_write(
     if (trace_) {
         std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+" << impl_.scheduler.delta()
                   << " import " << impl_.get_signal_cold(signal).name << " "
-                  << value.to_msb_string() << '\n';
+                  << impl_.logical_signal_value(signal).to_msb_string() << '\n';
     }
     slot_changed(slot_index, 0U, import_before_.data());
     if (in_activation_) {

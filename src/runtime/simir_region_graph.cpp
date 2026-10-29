@@ -724,6 +724,20 @@ bool visit_known_region_accesses(
             // only. ProcessKill/Suspend/Resume/Await and the random-state
             // setters change other processes' execution and stay opaque.
             return true;
+        } else if constexpr (std::is_same_v<T, ClassAllocate>) {
+            // An object whose lowered constructor the process runs itself
+            // ("@no-constructor:"; the constructor's body follows as this
+            // process's operations) is allocated with its property defaults
+            // (Simulation::Impl::construct_class): the class heap, and the
+            // host's $sv_class_heap_change, which no process writes. A
+            // constructor the class services run reaches package-scope
+            // signals and stays opaque.
+            return value.specialization_identity.starts_with("@no-constructor:");
+        } else if constexpr (std::is_same_v<T, ClassPropertyWrite>
+            || std::is_same_v<T, ClassStaticPropertyWrite>) {
+            // The class heap or static store, and $sv_class_heap_change
+            // (Simulation::Impl::notify_class_changes).
+            return true;
         } else if constexpr (std::is_same_v<T, SvaOperation>) {
             // The concurrent-property monitor is interpreter state keyed by
             // (process, site) and fed by guard/start/disabled registers. The
@@ -733,6 +747,10 @@ bool visit_known_region_accesses(
             return true;
         } else if constexpr (std::is_same_v<T, TimeFormatControl>
             || std::is_same_v<T, RandomDistribution>
+            // std::randomize (IEEE 1800-2023 18.12): register and container
+            // register targets, and the process's random stream
+            // (run_scope_randomize).
+            || std::is_same_v<T, ScopeRandomize>
             || std::is_same_v<T, VhdlAssertApi>
             || std::is_same_v<T, VhdlReflectionApi>
             || std::is_same_v<T, VhdlEnvironmentTime>

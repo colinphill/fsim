@@ -9,6 +9,7 @@
 // identity, and observation materializes hidden state on demand.
 #pragma once
 
+#include "fsim/runtime/constraint_solver.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_region_graph.hpp"
 
@@ -554,6 +555,41 @@ inline constexpr bool static_kernel_vhdl_api_container_operation
     || std::is_same_v<T, VhdlEnvironmentCallPath>
     || std::is_same_v<T, VhdlReflectionApi>;
 
+/// Class services and std::randomize with container operands (IEEE
+/// 1800-2023 7.12, 8.5, 18.7, 18.12): the reference's run_class_operation
+/// and run_scope_randomize read and write them as reference-format
+/// registers.
+template <typename T>
+inline constexpr bool static_kernel_class_container_operation
+    = std::is_same_v<T, ClassPropertyContainerRead>
+    || std::is_same_v<T, ClassPropertyContainerWrite>
+    || std::is_same_v<T, ClassMethodCall>
+    || std::is_same_v<T, ClassStaticMethodCall>
+    || std::is_same_v<T, ScopeRandomize>;
+
+/// Calls `visit(id)` for each container register a with-clause names (an
+/// inline_container_prefix name, bind_inline_constraint_containers).
+template <typename Visit>
+inline void static_kernel_inline_constraint_containers(
+    const std::span<const SystemVerilogConstraintTemplate> constraints,
+    Visit&& visit)
+{
+    const auto walk = [&](const auto& self,
+                          const SystemVerilogConstraintTemplate& node) -> void {
+        if (node.text.starts_with(inline_container_prefix)) {
+            visit(static_cast<ContainerRegisterId>(std::stoul(
+                node.text.substr(inline_container_prefix.size()))));
+            return;
+        }
+        for (const auto& operand : node.operands) {
+            self(self, operand);
+        }
+    };
+    for (const auto& node : constraints) {
+        walk(walk, node);
+    }
+}
+
 /// Calls `visit(id)` for each container register a reference container
 /// operation, ContainerRead, ContainerWrite or CopyContainerRegister names.
 template <typename Visit>
@@ -604,6 +640,25 @@ inline void static_kernel_container_operands(
         } else if constexpr (std::is_same_v<T, VhdlReflectionApi>) {
             if (op.access_heap) {
                 visit(*op.access_heap);
+            }
+        } else if constexpr (std::is_same_v<T, ClassPropertyContainerRead>) {
+            visit(op.destination);
+        } else if constexpr (std::is_same_v<T, ClassPropertyContainerWrite>) {
+            visit(op.source);
+        } else if constexpr (std::is_same_v<T, ClassMethodCall>) {
+            static_kernel_inline_constraint_containers(
+                op.inline_constraints, visit);
+        } else if constexpr (std::is_same_v<T, ScopeRandomize>) {
+            for (const auto& container : op.containers) {
+                visit(container.container);
+            }
+        } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
+            // A stream actual (kind 2) is a container register.
+            for (std::size_t index = 0U; index < op.actuals.size()
+                 && index < op.actual_kinds.size(); ++index) {
+                if (op.actual_kinds[index] == 2U) {
+                    visit(op.actuals[index]);
+                }
             }
         } else if constexpr (std::is_same_v<T, VhdlShaped>) {
             // The registers each operation uses (an unused one is zero).
@@ -683,7 +738,8 @@ template <typename OperationAt, typename Types>
         const bool reference = visit_operation([](const auto& value) {
             using T = std::decay_t<decltype(value)>;
             return static_kernel_reference_container_operation<T>
-                || static_kernel_vhdl_api_container_operation<T>;
+                || static_kernel_vhdl_api_container_operation<T>
+                || static_kernel_class_container_operation<T>;
         }, operation);
         static_kernel_container_operands(operation,
             [&](const ContainerRegisterId id) {
@@ -823,8 +879,27 @@ template <typename OperationAt, typename Types>
             // The host's force of a host signal (static_kernel_host_signal);
             // a port segment force reaches a net by another name.
             return !value.port_segment;
+        } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
+            // A static method or DPI function call (IEEE 1800-2023 8.10,
+            // 35.5) through the application's services; its body may touch
+            // any signal, which the planner's publish-all mode covers. A
+            // VHDL driver disconnection is a VHDL member's.
+            return !vhdl_disconnect_signal(value.method_identity).has_value();
         } else {
             return std::is_same_v<T, WaitFor>
+                // Allocation (IEEE 1800-2023 8.7), method calls (8.6) and
+                // property reads and writes (8.5, 8.9) through the
+                // application's class services (Impl::run_class_operation).
+                || std::is_same_v<T, ClassAllocate>
+                || std::is_same_v<T, ClassMethodCall>
+                // std::randomize (18.12) on the member's registers.
+                || std::is_same_v<T, ScopeRandomize>
+                || std::is_same_v<T, ClassPropertyContainerRead>
+                || std::is_same_v<T, ClassPropertyContainerWrite>
+                || std::is_same_v<T, ClassPropertyRead>
+                || std::is_same_v<T, ClassPropertyWrite>
+                || std::is_same_v<T, ClassStaticPropertyRead>
+                || std::is_same_v<T, ClassStaticPropertyWrite>
                 // History queries of host signals
                 // (static_kernel_host_signal).
                 || std::is_same_v<T, SignalLastValue>
