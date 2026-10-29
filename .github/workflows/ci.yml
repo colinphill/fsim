@@ -122,8 +122,8 @@ jobs:
             build_dir: build/ci-windows-llvm-mingw-Release-llvm-ON
             artifact: github-windows-release-llvm-on
             retained_log: build/qualification/ci-windows-release-llvm-on.log
-            binary_package: fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22
-            binary_archive: fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip
+            binary_package: fsim-v2026.0-windows-x86_64-llvm-mingw-llvm22
+            binary_archive: fsim-v2026.0-windows-x86_64-llvm-mingw-llvm22.zip
             binary_log: build/qualification/ci-windows-llvm22-archive.log
             install_log: build/qualification/ci-windows-llvm22-install.log
     steps:

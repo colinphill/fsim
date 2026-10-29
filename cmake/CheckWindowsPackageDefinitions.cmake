@@ -123,7 +123,7 @@ foreach(FSIM_WORKFLOW_POLICY IN ITEMS
     "configuration: Release"
     "llvm_mode: 'ON'"
     "-DFSIM_TCL_MODE=ON"
-    "fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
+    "fsim-v2026.0-windows-x86_64-llvm-mingw-llvm22.zip"
     "ci-windows-llvm22-install.log"
     "v3_current_required_ctests.txt"
     "v3_installed_archive_required.txt"

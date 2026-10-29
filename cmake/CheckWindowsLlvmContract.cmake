@@ -155,7 +155,7 @@ foreach(FSIM_JOB_POLICY IN ITEMS
     "-DLLVM_DIR=\$env:LLVM_MINGW_ROOT/lib/cmake/llvm"
     "github-windows-debug-llvm-on"
     "github-windows-release-llvm-on"
-    "fsim-v3.0.0-windows-x86_64-llvm-mingw-llvm22.zip"
+    "fsim-v2026.0-windows-x86_64-llvm-mingw-llvm22.zip"
     "-DFSIM_BINARY_ONLY=ON"
     "cmake/CheckV3InstalledArchive.cmake"
     "actions/upload-artifact@v7"

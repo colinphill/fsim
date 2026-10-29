@@ -375,7 +375,7 @@ endif()
 execute_process(COMMAND ${launcher} "${prefix}/bin/fsim${suffix}" --version
   RESULT_VARIABLE version_result OUTPUT_VARIABLE version ERROR_VARIABLE version_error)
 string(STRIP "${version}" version)
-if(NOT version_result EQUAL 0 OR NOT version STREQUAL "fsim 3.0.0 (C API 1)")
+if(NOT version_result EQUAL 0 OR NOT version STREQUAL "fsim 2026.0 (C API 1)")
   message(FATAL_ERROR
     "v3 installed archive version failed with ${version_result}: "
     "${version}${version_error}")
@@ -413,7 +413,7 @@ if(suffix STREQUAL ".exe")
   file(REMOVE_RECURSE "${compile_root}")
 endif()
 file(READ "${prefix}/lib/pkgconfig/fsim.pc" pc)
-foreach(token IN ITEMS "Version: 3.0.0" "Libs: -L\${libdir} -lfsim_api")
+foreach(token IN ITEMS "Version: 2026.0" "Libs: -L\${libdir} -lfsim_api")
   string(FIND "${pc}" "${token}" offset)
   if(offset EQUAL -1)
     message(FATAL_ERROR "v3 installed archive pkg-config metadata misses ${token}")

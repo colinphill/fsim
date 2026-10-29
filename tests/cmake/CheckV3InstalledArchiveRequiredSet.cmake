@@ -19,7 +19,7 @@ set(FSIM_EXECUTABLE_CONTENTS [=[#!/bin/sh
 set -eu
 case "$*" in
   --version)
-    printf '%s\n' 'fsim 3.0.0 (C API 1)'
+    printf '%s\n' 'fsim 2026.0 (C API 1)'
     ;;
   'compile --library work top.sv')
     test -f top.sv
@@ -69,7 +69,7 @@ file(WRITE "${FSIM_ARCHIVE_ROOT}/include/fsim/semantic/model.hpp"
   "fixture\n")
 file(WRITE "${FSIM_ARCHIVE_ROOT}/include/fsim/version.hpp" "fixture\n")
 file(WRITE "${FSIM_ARCHIVE_ROOT}/lib/pkgconfig/fsim.pc"
-  "Version: 3.0.0\nLibs: -L\${libdir} -lfsim_api\n")
+  "Version: 2026.0\nLibs: -L\${libdir} -lfsim_api\n")
 file(WRITE "${FSIM_ARCHIVE_ROOT}/share/doc/fsim/LICENSE" "fixture\n")
 foreach(FSIM_SQLITE_FILE IN ITEMS
     LICENSE NOTICE SOURCE_MANIFEST.txt sqlite-3.53.4.spdx.json)

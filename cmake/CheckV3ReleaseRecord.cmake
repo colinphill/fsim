@@ -39,7 +39,7 @@ endforeach()
 
 file(READ "${FSIM_SOURCE_DIR}/CMakeLists.txt" FSIM_PROJECT_CMAKE)
 if(NOT FSIM_PROJECT_CMAKE MATCHES
-    "project\\([ \n\r\t]*fsim[ \n\r\t]+VERSION[ \n\r\t]+([0-9]+\\.[0-9]+\\.[0-9]+)")
+    "project\\([ \n\r\t]*fsim[ \n\r\t]+VERSION[ \n\r\t]+([0-9]+\\.[0-9]+(\\.[0-9]+)?)")
   message(FATAL_ERROR "cannot read fsim project version")
 endif()
 set(FSIM_PROJECT_VERSION "${CMAKE_MATCH_1}")

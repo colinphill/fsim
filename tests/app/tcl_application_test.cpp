@@ -86,7 +86,7 @@ int main()
             output,
             error);
         assert(result == 0);
-        assert(output.str().find("3.0.0 (C API 1)") != std::string::npos);
+        assert(output.str().find("2026.0 (C API 1)") != std::string::npos);
         assert(error.str().empty());
     }
     {

@@ -26,7 +26,7 @@ foreach(row IN LISTS rows)
   list(GET fields 4 llvm)
   list(GET fields 5 owner)
   if(artifact IN_LIST artifacts OR owner STREQUAL ""
-      OR NOT artifact MATCHES "^fsim-v[0-9]+[.][0-9]+[.][0-9]+-[A-Za-z0-9_.+-]+[.]zip$")
+      OR NOT artifact MATCHES "^fsim-v[0-9]+[.][0-9]+([.][0-9]+)?-[A-Za-z0-9_.+-]+[.]zip$")
     message(FATAL_ERROR "invalid v3 archive identity/owner: ${row}")
   endif()
   if(kind STREQUAL "source")
