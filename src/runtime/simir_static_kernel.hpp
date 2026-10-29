@@ -221,7 +221,19 @@ struct StaticKernelRuntimeSpec {
     /// (static_kernel_canonical_identity).
     std::shared_ptr<const std::string_view> native_image;
     std::shared_ptr<std::string> record_native_image;
+    /// The constructor's state up to its native code (members, slots,
+    /// levels, compiled bodies, partitions) from an earlier run of the same
+    /// build (static_kernel_image_identity), restored instead of building
+    /// it; and where this run records its own. Only SystemVerilog kernels
+    /// without hosted processes or debug points have one.
+    std::shared_ptr<const std::string_view> kernel_image;
+    std::shared_ptr<std::string> record_kernel_image;
 };
+
+/// Identifies the kernel image format, the constructor that fills it, and
+/// the FSIM_KERNEL_* and FSIM_STATIC_KERNEL_* settings that shape it, for
+/// persisted kernel images.
+[[nodiscard]] std::string static_kernel_image_identity();
 
 /// Identifies the template canonicalization, for persisted native images.
 [[nodiscard]] std::string static_kernel_canonical_identity();

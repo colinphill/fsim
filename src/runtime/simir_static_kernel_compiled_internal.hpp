@@ -577,29 +577,7 @@ public:
         });
         integers(body.containers);
         put(body.entry);
-        list(body.wide_registers, [&](const PackedLogic4& value) {
-            // Width plus the raw bit planes (two four-state, four logic9).
-            const bool logic9 = value.is_logic9();
-            put(logic9 ? 1U : 0U);
-            put(value.width());
-            const auto word = [&](const std::uint64_t bits) {
-                out_.append(reinterpret_cast<const char*>(&bits), sizeof(bits));
-            };
-            if (logic9) {
-                for (std::size_t plane = 0; plane < 4U; ++plane) {
-                    for (const auto bits : value.logic9_plane_words(plane)) {
-                        word(bits);
-                    }
-                }
-            } else {
-                for (const auto bits : value.aval_words()) {
-                    word(bits);
-                }
-                for (const auto bits : value.bval_words()) {
-                    word(bits);
-                }
-            }
-        });
+        list(body.wide_registers, [&](const PackedLogic4& value) { packed(value); });
         integers(body.wide_base);
         list(body.wide_constants, [&](const kernel_word::Word& word) {
             put(word.a);
@@ -614,6 +592,35 @@ public:
         integers(body.u_operands);
         put(body.call_stack_base);
         integers(body.resume_entries);
+    }
+    /// Width plus the raw bit planes (two four-state, four logic9).
+    void packed(const PackedLogic4& value)
+    {
+        const bool logic9 = value.is_logic9();
+        put(logic9 ? 1U : 0U);
+        put(value.width());
+        const auto word = [&](const std::uint64_t bits) {
+            out_.append(reinterpret_cast<const char*>(&bits), sizeof(bits));
+        };
+        if (logic9) {
+            for (std::size_t plane = 0; plane < 4U; ++plane) {
+                for (const auto bits : value.logic9_plane_words(plane)) {
+                    word(bits);
+                }
+            }
+        } else {
+            for (const auto bits : value.aval_words()) {
+                word(bits);
+            }
+            for (const auto bits : value.bval_words()) {
+                word(bits);
+            }
+        }
+    }
+    void text(const std::string_view value)
+    {
+        put(value.size());
+        out_.append(value);
     }
 
 private:
@@ -743,46 +750,7 @@ public:
                        && get(operand.unknown);
                })
             && integers(body.containers) && get(body.entry)
-            && list(body.wide_registers, [&](PackedLogic4& value) {
-                   bool logic9 { };
-                   std::uint64_t width { };
-                   if (!get(logic9) || !get(width)) {
-                       return false;
-                   }
-                   if (width == 0U) {
-                       value = logic9 ? PackedLogic4::from_logic9_msb_string({ })
-                                      : PackedLogic4::from_msb_string({ });
-                       return true;
-                   }
-                   const std::uint64_t planes = logic9 ? 4U : 2U;
-                   const std::uint64_t remaining = bytes_.size() - at_;
-                   // Check the bytes exist before any width-sized allocation.
-                   if (width > remaining * 8U) {
-                       return false;
-                   }
-                   const std::uint64_t words = (width + 63U) / 64U;
-                   if (words > remaining / 8U / planes) {
-                       return false;
-                   }
-                   std::vector<std::uint64_t> storage(
-                       static_cast<std::size_t>(words * planes));
-                   std::memcpy(storage.data(), bytes_.data() + at_,
-                       storage.size() * sizeof(std::uint64_t));
-                   at_ += storage.size() * sizeof(std::uint64_t);
-                   const auto plane = [&](const std::uint64_t index) {
-                       return std::span<const std::uint64_t> {
-                           storage.data() + index * words,
-                           static_cast<std::size_t>(words) };
-                   };
-                   value = logic9
-                       ? PackedLogic4::from_logic9_word_planes(
-                           static_cast<std::size_t>(width), plane(0U),
-                           plane(1U), plane(2U), plane(3U))
-                       : PackedLogic4::from_word_planes(
-                           static_cast<std::size_t>(width), plane(0U),
-                           plane(1U));
-                   return true;
-               })
+            && list(body.wide_registers, [&](PackedLogic4& value) { return packed(value); })
             && integers(body.wide_base)
             && list(body.wide_constants, [&](kernel_word::Word& word) {
                    return get(word.a) && get(word.b);
@@ -792,6 +760,61 @@ public:
             && integers(body.u_mode) && integers(body.u_operand_begin)
             && integers(body.u_operands) && get(body.call_stack_base)
             && integers(body.resume_entries);
+    }
+    bool packed(PackedLogic4& value)
+    {
+        bool logic9 { };
+        std::uint64_t width { };
+        if (!get(logic9) || !get(width)) {
+            return false;
+        }
+        if (width == 0U) {
+            value = logic9 ? PackedLogic4::from_logic9_msb_string({ })
+                           : PackedLogic4::from_msb_string({ });
+            return true;
+        }
+        const std::uint64_t planes = logic9 ? 4U : 2U;
+        const std::uint64_t remaining = bytes_.size() - at_;
+        // Check the bytes exist before any width-sized allocation.
+        if (width > remaining * 8U) {
+            return false;
+        }
+        const std::uint64_t words = (width + 63U) / 64U;
+        if (words > remaining / 8U / planes) {
+            return false;
+        }
+        std::vector<std::uint64_t> storage(
+            static_cast<std::size_t>(words * planes));
+        std::memcpy(storage.data(), bytes_.data() + at_,
+            storage.size() * sizeof(std::uint64_t));
+        at_ += storage.size() * sizeof(std::uint64_t);
+        const auto plane = [&](const std::uint64_t index) {
+            return std::span<const std::uint64_t> {
+                storage.data() + index * words,
+                static_cast<std::size_t>(words) };
+        };
+        value = logic9
+            ? PackedLogic4::from_logic9_word_planes(
+                static_cast<std::size_t>(width), plane(0U),
+                plane(1U), plane(2U), plane(3U))
+            : PackedLogic4::from_word_planes(
+                static_cast<std::size_t>(width), plane(0U),
+                plane(1U));
+        return true;
+    }
+    bool text(std::string& value)
+    {
+        std::uint64_t size { };
+        if (!get(size) || size > bytes_.size() - at_) {
+            return false;
+        }
+        value.assign(bytes_.data() + at_, static_cast<std::size_t>(size));
+        at_ += static_cast<std::size_t>(size);
+        return true;
+    }
+    [[nodiscard]] std::size_t remaining() const noexcept
+    {
+        return bytes_.size() - at_;
     }
     [[nodiscard]] bool done() const noexcept { return at_ == bytes_.size(); }
 

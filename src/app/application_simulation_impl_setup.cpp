@@ -453,6 +453,8 @@ PersistedPlanSlot persisted_plan_slot(const BuiltProject& built,
         key.add("compiler", runtime::simir::static_kernel_compiler_identity());
     } else if (kind == "native") {
         key.add("canonical", runtime::simir::static_kernel_canonical_identity());
+    } else if (kind == "image") {
+        key.add("image", runtime::simir::static_kernel_image_identity());
     }
     key.add("kind", kind);
     // A plan made for foreign or observing clients differs from the default.
@@ -749,9 +751,48 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                     }
                 }
             }
+            // The constructor's state (kernel image), likewise. Under
+            // FSIM_VERIFY_ARTIFACT=1 the kernel is built afresh and its image
+            // must equal the stored one.
+            const auto kernel_image = persisted_plan_slot(built, "image");
+            std::shared_ptr<std::string> recorded_image;
+            std::optional<std::string> stored_image;
+            if (kernel_image.cache) {
+                const bool verify
+                    = elaboration::detail::TrustedArtifactLoad::verify_requested();
+                if (compiler::StaticKernelAheadOfTimeScope::active()) {
+                    recorded_image = std::make_shared<std::string>();
+                    plan.spec->record_kernel_image = recorded_image;
+                } else {
+                    std::error_code error;
+                    if (auto bytes = kernel_image.cache->load_payload(
+                            kernel_image.key, error)) {
+                        if (verify) {
+                            stored_image.emplace(bytes->text());
+                            recorded_image = std::make_shared<std::string>();
+                            plan.spec->record_kernel_image = recorded_image;
+                        } else {
+                            plan.spec->kernel_image = std::move(*bytes).share();
+                        }
+                    }
+                }
+            }
             plan.spec->debug_points = built.kernel_access.debug;
             auto interpreter = std::move(built.design).create_interpreter(
                 options, built.seed, plan);
+            if (stored_image && recorded_image && !recorded_image->empty()
+                && *recorded_image != *stored_image) {
+                throw std::runtime_error { "FSIM-ART-0014: the persisted "
+                    "static-kernel image differs from the kernel this build "
+                    "makes for the design" };
+            }
+            if (!stored_image && recorded_image && !recorded_image->empty()) {
+                std::error_code error;
+                static_cast<void>(kernel_image.cache->store(kernel_image.key,
+                    std::as_bytes(std::span { recorded_image->data(),
+                        recorded_image->size() }),
+                    error));
+            }
             if (recorded_native && !recorded_native->empty()) {
                 std::error_code error;
                 static_cast<void>(native_image.cache->store(native_image.key,

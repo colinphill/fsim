@@ -1221,6 +1221,7 @@ src/runtime/simir_static_kernel_compiled.cpp
 src/runtime/simir_static_kernel_compiled_internal.hpp
 src/runtime/simir_static_kernel_execute.cpp
 src/runtime/simir_static_kernel_hosted.cpp
+src/runtime/simir_static_kernel_image.cpp
 src/runtime/simir_static_kernel_ir.hpp
 src/runtime/simir_static_kernel_native.hpp
 src/runtime/simir_static_kernel_native_units.cpp
@@ -2157,6 +2158,8 @@ tests/fixtures/sdf/vital/timing_21.sdf
 tests/fixtures/sdf/vital/timing_30.sdf
 tests/fixtures/sdf/vital/timing_40.sdf
 tests/fixtures/sdf/vital/wrapper.vhd
+tests/fixtures/systemverilog/kernel_image/kernel_image_lanes.sv
+tests/fixtures/systemverilog/kernel_image/run_kernel_image.cmake
 tests/fixtures/systemverilog/scheduling/README.md
 tests/fixtures/systemverilog/scheduling/a1_alias_leaf_native_read.sv
 tests/fixtures/systemverilog/scheduling/a2_active_nba_boundary.sv

@@ -826,6 +826,7 @@ add_library(
     src/runtime/simir_static_kernel_compiled.cpp
     src/runtime/simir_static_kernel_execute.cpp
     src/runtime/simir_static_kernel_hosted.cpp
+    src/runtime/simir_static_kernel_image.cpp
     src/runtime/simir_static_kernel_native_units.cpp
     src/runtime/simir_static_kernel_parallel.cpp
     src/runtime/simir_static_kernel_specialize.cpp
@@ -865,7 +866,8 @@ add_library(
 add_library(fsim::runtime ALIAS fsim_runtime)
 fsim_configure_subsystem_library(fsim_runtime)
 target_link_libraries(fsim_runtime
-  PUBLIC fsim_semantic fsim_tf)
+  PUBLIC fsim_semantic fsim_tf
+  PRIVATE fsim_boost_pfr_headers)
 if(WIN32)
   target_link_libraries(fsim_runtime PUBLIC Advapi32)
 endif()

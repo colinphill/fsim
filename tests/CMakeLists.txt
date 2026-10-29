@@ -6743,6 +6743,23 @@ if(TARGET fsim)
   endforeach()
 endif()
 
+# Persisted static-kernel images: recorded by elaborate --aot, restored by
+# simulate, and checked against a fresh build under FSIM_VERIFY_ARTIFACT=1.
+if(FSIM_WITH_LLVM)
+  add_test(
+    NAME fsim.application.static-kernel-image
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/kernel_image"
+      "-DFSIM_SCHEDULING_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/scheduling"
+      -P
+      "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/kernel_image/run_kernel_image.cmake"
+  )
+  set_tests_properties(fsim.application.static-kernel-image PROPERTIES
+    LABELS "application;systemverilog;static-kernel;llvm;cache;positive"
+    TIMEOUT 600)
+endif()
+
 # Application cases can create Tcl interpreters directly or launch the CLI
 # from a temporary working directory. Cover both Tcl's native initializer and
 # fsim's override; the separate installed/relocation tests must remain unseeded.

@@ -164,6 +164,12 @@ void copy_bits(std::uint64_t* target, const std::uint32_t offset,
 
 } // namespace
 
+std::string static_kernel_detail::static_kernel_constructor_identity()
+{
+    // build_fresh lives here, and the state it makes is the kernel image's.
+    return "fsim-static-kernel-constructor;" __DATE__ " " __TIME__;
+}
+
 Interpreter::Impl::StaticKernel::StaticKernel(
     Impl& impl, StaticKernelRuntimeSpec spec)
     : impl_(impl)
@@ -196,6 +202,229 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         })) {
         host_program_ = spec.host_original;
     }
+    const bool stage_profile = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    auto stage_started = std::chrono::steady_clock::now();
+    const std::function<void(const char*)> stage = [&](const char* name) {
+        if (stage_profile) {
+            const auto now = std::chrono::steady_clock::now();
+            std::cerr << "fsim-profile: static-kernel-stage " << name << "_ms="
+                      << std::chrono::duration<double, std::milli>(now - stage_started).count()
+                      << '\n';
+            stage_started = now;
+        }
+    };
+    // A kernel image restores what build_fresh would make.
+    if (restore_image(spec)) {
+        stage("image");
+    } else {
+        build_fresh(spec, stage);
+        if (spec.record_kernel_image
+            && !record_image(spec, *spec.record_kernel_image)) {
+            spec.record_kernel_image->clear();
+        }
+    }
+    if (std::getenv("FSIM_STATIC_KERNEL_GENERIC") == nullptr) {
+        restored_native_ = std::move(spec.native_image);
+        recorded_native_ = std::move(spec.record_native_image);
+        if (spec.codegen) {
+            codegen_ = spec.codegen;
+            build_native(*codegen_);
+        }
+        // Only build_native reads the restored image.
+        restored_native_.reset();
+        stage("native");
+    }
+    // FSIM_STATIC_KERNEL_DISPATCH_GROUPS=0 schedules every sequential member
+    // on its own.
+    if (const char* groups = std::getenv("FSIM_STATIC_KERNEL_DISPATCH_GROUPS");
+        groups == nullptr || std::string_view { groups } != "0") {
+        build_dispatch_groups();
+    }
+    build_schedule_targets();
+    stage("schedule");
+    for (const auto signal : spec.unwritten_inputs) {
+        if (signal < input_of_signal_.size() && input_of_signal_[signal] != no_slot) {
+            inputs_[input_of_signal_[signal]].unwritten = true;
+        }
+    }
+    for (const auto signal : spec.sole_writer_inputs) {
+        if (signal < input_of_signal_.size() && input_of_signal_[signal] != no_slot) {
+            inputs_[input_of_signal_[signal]].sole_writer = !vhdl_;
+        }
+    }
+    for (std::uint32_t index = 0U; index < inputs_.size(); ++index) {
+        if (!inputs_[index].unwritten) {
+            written_inputs_.push_back(index);
+        }
+    }
+    // Hosted processes (simir_static_kernel_hosted.cpp): SystemVerilog ones
+    // in a SystemVerilog kernel, VHDL ones in a VHDL or mixed kernel, where
+    // they run in the delta rounds (S25a).
+    if (!spec.hosted.empty()) {
+        adopt_hosted(spec.hosted);
+    }
+    // A member's write to a signal the kernel does not own (a real variable,
+    // say) is staged on the host and matures in the host's regions of its
+    // time step: the kernel is not closed.
+    bool host_written = false;
+    for (const auto& member : members_) {
+        for (const auto& operation : member.operations) {
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, WriteBlocking>
+                    || std::is_same_v<T, WriteBlockingSlice>
+                    || std::is_same_v<T, WriteBlockingDynamicSlice>
+                    || std::is_same_v<T, WriteBlockingDynamicPartSlice>
+                    || std::is_same_v<T, WriteUpdate>
+                    || std::is_same_v<T, WriteUpdateSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicPartSlice>
+                    || std::is_same_v<T, WriteAfter>
+                    || std::is_same_v<T, WriteAfterSlice>
+                    || std::is_same_v<T, WriteAfterDynamicSlice>
+                    || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                    || std::is_same_v<T, WriteDelayed>
+                    || std::is_same_v<T, WriteInertial>
+                    || std::is_same_v<T, WriteInertialSlice>
+                    || std::is_same_v<T, WriteProjected>
+                    || std::is_same_v<T, WriteProjectedSlice>
+                    || std::is_same_v<T, WriteProjectedDynamicSlice>
+                    || std::is_same_v<T, WriteProjectedWaveform>
+                    || std::is_same_v<T, WriteProjectedWaveformSlice>
+                    || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+                    host_written = host_written || !owned(op.signal);
+                    if constexpr (std::is_same_v<T, WriteAfter>
+                        || std::is_same_v<T, WriteAfterSlice>
+                        || std::is_same_v<T, WriteAfterDynamicSlice>
+                        || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                        || std::is_same_v<T, WriteDelayed>
+                        || std::is_same_v<T, WriteInertial>
+                        || std::is_same_v<T, WriteInertialSlice>) {
+                        // The host matures the update at its writer's
+                        // stable order (run_merged_active).
+                        host_delayed_writes_ = host_delayed_writes_ || !member.vhdl;
+                    }
+                    if constexpr (!std::is_same_v<T, WriteBlocking>
+                        && !std::is_same_v<T, WriteBlockingSlice>
+                        && !std::is_same_v<T, WriteBlockingDynamicSlice>
+                        && !std::is_same_v<T, WriteBlockingDynamicPartSlice>) {
+                        vhdl_host_cycles_ = vhdl_host_cycles_
+                            || (member.vhdl && !owned(op.signal));
+                    }
+                } else if constexpr (std::is_same_v<T, ForceSignalSlice>
+                    || std::is_same_v<T, ReleaseSignalSlice>) {
+                    // A VHDL force applies in the host's update phase.
+                    host_written = host_written || !owned(op.signal);
+                    vhdl_host_cycles_ = vhdl_host_cycles_
+                        || (member.vhdl && !owned(op.signal));
+                } else if constexpr (std::is_same_v<T, SignalEvent>
+                    || std::is_same_v<T, SignalActive>
+                    || std::is_same_v<T, SignalLastValue>
+                    || std::is_same_v<T, SignalLastEvent>
+                    || std::is_same_v<T, SignalLastActive>) {
+                    // The host's history of the cycles it ran, which
+                    // counts the host's time: no time warp.
+                    vhdl_host_cycles_ = vhdl_host_cycles_
+                        || (member.vhdl && !owned(op.signal));
+                    host_written = host_written || !owned(op.signal);
+                } else if constexpr (std::is_same_v<T, MonitorInstall>
+                    || std::is_same_v<T, MonitorControl>
+                    || std::is_same_v<T, EventTriggered>) {
+                    // The host's monitor prints in the host's time steps
+                    // (IEEE 1800-2023 21.2.3), and an event's triggered
+                    // state is of the host's time step (15.5.3): no time
+                    // warp.
+                    host_written = true;
+                } else if constexpr (std::is_same_v<T, WriteStringObject>) {
+                    // `s <= v` matures in the host's NBA region of the
+                    // host's time step: no time warp.
+                    host_written = host_written || op.nonblocking;
+                } else if constexpr (std::is_same_v<T, Yield>) {
+                    // A yield resumes in the host's next delta: no time
+                    // warp.
+                    host_written = true;
+                } else if constexpr (std::is_same_v<T, DynamicEvent>) {
+                    // `->>` triggers the event in the host's NBA region of
+                    // the host's time step (IEEE 1800-2023 15.5.1): no time
+                    // warp.
+                    host_written = host_written
+                        || (op.operation == DynamicEventOperation::trigger
+                            && op.nonblocking);
+                } else if constexpr (std::is_same_v<T, ClassAllocate>
+                    || std::is_same_v<T, ClassPropertyWrite>
+                    || std::is_same_v<T, ClassStaticPropertyWrite>
+                    || std::is_same_v<T, ClassPropertyContainerWrite>
+                    || std::is_same_v<T, ClassMethodCall>
+                    || std::is_same_v<T, ClassStaticMethodCall>) {
+                    // The class services toggle the host's
+                    // $sv_class_heap_change, whose waiters wake in the
+                    // host's next delta (IEEE 1800-2023 9.4.2;
+                    // Simulation::Impl::notify_class_changes), and a class
+                    // body may write any host signal.
+                    host_written = true;
+                } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
+                    // A host object read into a reference-format register.
+                    host_written = host_written
+                        || (member.dynamic_container(op.destination)
+                            && (op.object >= container_of_object_.size()
+                                || container_of_object_[op.object] == no_container));
+                } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+                    // An element write of a host object.
+                    host_written = host_written
+                        || (!member.vhdl
+                            && (op.object >= container_of_object_.size()
+                                || container_of_object_[op.object] == no_container));
+                } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
+                    // A host object written from a reference-format register.
+                    host_written = host_written
+                        || (member.dynamic_container(op.source)
+                            && (op.object >= container_of_object_.size()
+                                || container_of_object_[op.object] == no_container));
+                } else if constexpr (std::is_same_v<T, FileReadLine>
+                    || std::is_same_v<T, FileErrorStatus>) {
+                    // A text read into a signal (commit_driver).
+                    host_written = host_written
+                        || (op.target_kind == FileTextTargetKind::packed_signal
+                            && !owned(static_cast<SignalId>(op.target)));
+                } else if constexpr (std::is_same_v<T, FileScan>) {
+                    for (const auto& conversion : op.conversions) {
+                        host_written = host_written
+                            || (conversion.target.kind
+                                    == InputScanTargetKind::packed_signal
+                                && !owned(static_cast<SignalId>(
+                                    conversion.target.id)));
+                    }
+                }
+            }, operation);
+        }
+    }
+    stage("host_scan");
+    // A hosted VHDL process writes through the host's update phase, so every
+    // round is a host delta.
+    host_boundary_ = has_hosted_
+        || std::ranges::any_of(inputs_,
+            [](const Input& input) { return !input.unwritten; })
+        || std::ranges::any_of(slots_, [](const Slot& slot) { return slot.output; });
+    // Every process is a member and nothing crosses the host boundary.
+    // Assertion members run in the host's regions and read its sampled
+    // state, which follow the host's time.
+    const bool assertions = std::ranges::any_of(members_,
+        [](const Member& member) { return member.assertion; });
+    closed_ = !host_boundary_ && !has_hosted_ && !host_written && !assertions
+        && !vhdl_host_cycles_ && impl_.processes.size() == members_.size();
+    if (!conversion_members_.empty()) {
+        settle_conversions();
+    }
+    plan_delta_collapse();
+    stage("finish");
+    if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
+        report_interpreted_sites();
+    }
+}
+
+void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
+    const std::function<void(const char*)>& stage)
+{
     const auto signal_count = impl_.signals.size();
     slot_of_signal_.assign(signal_count, no_slot);
     slots_.reserve(spec.owned_signals.size());
@@ -417,66 +646,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             containers_.push_back(std::move(container));
         }
     }
-    // Native memory access (SystemVerilog): element slots or one packed
-    // slot, one-word Logic4 elements.
-    container_info_.reserve(containers_.size());
-    std::vector<std::size_t> element_begin;
-    for (const auto& container : containers_) {
-        const auto& type = container.type;
-        StaticKernelContainerInfo info;
-        const bool shape = (!vhdl_ || mixed_) && type.fixed && !type.associative
-            && container.element_words == 1U
-            && (type.element_kind == ContainerElementKind::Packed
-                || type.element_kind == ContainerElementKind::Scalar);
-        element_begin.push_back(container_elements_.size());
-        if (shape
-            && container.storage == StaticKernelContainerStorage::element_signals
-            && std::ranges::all_of(container.element_slots,
-                [&](const std::uint32_t slot) {
-                    return slots_[slot].words == 1U && slots_[slot].planes == 2U;
-                })) {
-            info.storage = 1U;
-            for (const auto slot : container.element_slots) {
-                container_elements_.push_back(slots_[slot].offset);
-                container_elements_.push_back(slot);
-            }
-        } else if (shape
-            && container.storage == StaticKernelContainerStorage::packed_signal
-            && slots_[container.packed_slot].planes == 2U) {
-            const auto& slot = slots_[container.packed_slot];
-            info.storage = 2U;
-            info.slot = container.packed_slot;
-            info.packed_offset = slot.offset;
-            info.packed_words = slot.words;
-            info.packed_width = slot.width;
-        } else if (shape
-            && container.storage == StaticKernelContainerStorage::elements) {
-            // Kernel-held elements: nothing observes them, so native code
-            // also writes them in place.
-            info.storage = 3U;
-            info.packed_offset = container.element_offset;
-            info.packed_words = 1U;
-        }
-        info.count = container.count;
-        info.left = type.index_left;
-        info.low = std::min(type.index_left, type.index_right);
-        info.high = std::max(type.index_left, type.index_right);
-        info.element_width = static_cast<std::uint32_t>(type.element_width);
-        const Word unknown = type.two_state
-            ? Word { }
-            : kernel_word::all_x(info.element_width);
-        info.unknown_a = unknown.a;
-        info.unknown_b = unknown.b;
-        info.flags = (type.two_state ? 1U : 0U)
-            | (type.index_left >= type.index_right ? 2U : 0U);
-        container_info_.push_back(info);
-    }
-    for (std::size_t index = 0U; index < container_info_.size(); ++index) {
-        if (container_info_[index].storage == 1U) {
-            container_info_[index].elements
-                = container_elements_.data() + element_begin[index];
-        }
-    }
+    build_container_info();
 
     input_of_signal_.assign(signal_count, no_slot);
     const auto input_for = [&](const SignalId signal) -> Input& {
@@ -490,16 +660,6 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     };
 
     const bool stage_profile = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
-    auto stage_started = std::chrono::steady_clock::now();
-    const auto stage = [&](const char* name) {
-        if (stage_profile) {
-            const auto now = std::chrono::steady_clock::now();
-            std::cerr << "fsim-profile: static-kernel-stage " << name << "_ms="
-                      << std::chrono::duration<double, std::milli>(now - stage_started).count()
-                      << '\n';
-            stage_started = now;
-        }
-    };
     stage("slots");
     double expand_seconds = 0.0;
     std::size_t expanded_ops = 0U;
@@ -913,6 +1073,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
         members_.push_back(std::move(member));
     }
+    stage("member_loop");
     member_process_.reserve(members_.size());
     for (const auto& member : members_) {
         member_process_.push_back(member.process);
@@ -996,6 +1157,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             }
         }
     }
+    stage("sharing");
     fast_runs_.assign(members_.size(), FastRun { });
     for (const auto& region : spec.writer_regions) {
         if (region.signal < signal_count
@@ -1051,6 +1213,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
     }
 
+    stage("writers");
     // Mirrors: narrow host signals members read become arena slots that
     // scan_inputs refreshes, so compiled reads are plain loads. A signal a
     // member writes immediately on the host is not mirrored.
@@ -1102,6 +1265,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
     }
 
+    stage("mirrors");
     // Conversions: each source slot runs its conversion members in the
     // order the host queues the formals it converts (its dependents list);
     // the host resolves none of them again.
@@ -1245,6 +1409,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
     }
 
+    stage("wiring");
     // Level combinational members: writer before reader, cycles last.
     const auto count = members_.size();
     std::vector<std::vector<std::uint32_t>> successors(count);
@@ -1424,14 +1589,12 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                   << " ops=" << expanded_ops << " distinct_bodies=" << distinct_bodies.size()
                   << " members=" << spec.members.size() << '\n';
     }
-    stage("members");
+    stage("levels");
     if (std::getenv("FSIM_STATIC_KERNEL_GENERIC") == nullptr) {
         restored_specializations_ = std::move(spec.specializations);
         recorded_specializations_ = std::move(spec.record_specializations);
         restored_bodies_ = std::move(spec.compiled_bodies);
         recorded_bodies_ = std::move(spec.record_compiled_bodies);
-        restored_native_ = std::move(spec.native_image);
-        recorded_native_ = std::move(spec.record_native_image);
         compile_members();
         // Only compile_members reads these; the images are payload-sized.
         restored_specializations_.reset();
@@ -1443,197 +1606,70 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             build_partitions(successors);
         }
         stage("partitions");
-        if (spec.codegen) {
-            codegen_ = spec.codegen;
-            build_native(*codegen_);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::build_container_info()
+{
+    // Native memory access (SystemVerilog): element slots or one packed
+    // slot, one-word Logic4 elements.
+    container_info_.reserve(containers_.size());
+    std::vector<std::size_t> element_begin;
+    for (const auto& container : containers_) {
+        const auto& type = container.type;
+        StaticKernelContainerInfo info;
+        const bool shape = (!vhdl_ || mixed_) && type.fixed && !type.associative
+            && container.element_words == 1U
+            && (type.element_kind == ContainerElementKind::Packed
+                || type.element_kind == ContainerElementKind::Scalar);
+        element_begin.push_back(container_elements_.size());
+        if (shape
+            && container.storage == StaticKernelContainerStorage::element_signals
+            && std::ranges::all_of(container.element_slots,
+                [&](const std::uint32_t slot) {
+                    return slots_[slot].words == 1U && slots_[slot].planes == 2U;
+                })) {
+            info.storage = 1U;
+            for (const auto slot : container.element_slots) {
+                container_elements_.push_back(slots_[slot].offset);
+                container_elements_.push_back(slot);
+            }
+        } else if (shape
+            && container.storage == StaticKernelContainerStorage::packed_signal
+            && slots_[container.packed_slot].planes == 2U) {
+            const auto& slot = slots_[container.packed_slot];
+            info.storage = 2U;
+            info.slot = container.packed_slot;
+            info.packed_offset = slot.offset;
+            info.packed_words = slot.words;
+            info.packed_width = slot.width;
+        } else if (shape
+            && container.storage == StaticKernelContainerStorage::elements) {
+            // Kernel-held elements: nothing observes them, so native code
+            // also writes them in place.
+            info.storage = 3U;
+            info.packed_offset = container.element_offset;
+            info.packed_words = 1U;
         }
-        // Only build_native reads the restored image.
-        restored_native_.reset();
-        stage("native");
+        info.count = container.count;
+        info.left = type.index_left;
+        info.low = std::min(type.index_left, type.index_right);
+        info.high = std::max(type.index_left, type.index_right);
+        info.element_width = static_cast<std::uint32_t>(type.element_width);
+        const Word unknown = type.two_state
+            ? Word { }
+            : kernel_word::all_x(info.element_width);
+        info.unknown_a = unknown.a;
+        info.unknown_b = unknown.b;
+        info.flags = (type.two_state ? 1U : 0U)
+            | (type.index_left >= type.index_right ? 2U : 0U);
+        container_info_.push_back(info);
     }
-    // FSIM_STATIC_KERNEL_DISPATCH_GROUPS=0 schedules every sequential member
-    // on its own.
-    if (const char* groups = std::getenv("FSIM_STATIC_KERNEL_DISPATCH_GROUPS");
-        groups == nullptr || std::string_view { groups } != "0") {
-        build_dispatch_groups();
-    }
-    build_schedule_targets();
-    stage("schedule");
-    for (const auto signal : spec.unwritten_inputs) {
-        if (signal < input_of_signal_.size() && input_of_signal_[signal] != no_slot) {
-            inputs_[input_of_signal_[signal]].unwritten = true;
+    for (std::size_t index = 0U; index < container_info_.size(); ++index) {
+        if (container_info_[index].storage == 1U) {
+            container_info_[index].elements
+                = container_elements_.data() + element_begin[index];
         }
-    }
-    for (const auto signal : spec.sole_writer_inputs) {
-        if (signal < input_of_signal_.size() && input_of_signal_[signal] != no_slot) {
-            inputs_[input_of_signal_[signal]].sole_writer = !vhdl_;
-        }
-    }
-    for (std::uint32_t index = 0U; index < inputs_.size(); ++index) {
-        if (!inputs_[index].unwritten) {
-            written_inputs_.push_back(index);
-        }
-    }
-    // Hosted processes (simir_static_kernel_hosted.cpp): SystemVerilog ones
-    // in a SystemVerilog kernel, VHDL ones in a VHDL or mixed kernel, where
-    // they run in the delta rounds (S25a).
-    if (!spec.hosted.empty()) {
-        adopt_hosted(spec.hosted);
-    }
-    // A member's write to a signal the kernel does not own (a real variable,
-    // say) is staged on the host and matures in the host's regions of its
-    // time step: the kernel is not closed.
-    bool host_written = false;
-    for (const auto& member : members_) {
-        for (const auto& operation : member.operations) {
-            visit_operation([&](const auto& op) {
-                using T = std::decay_t<decltype(op)>;
-                if constexpr (std::is_same_v<T, WriteBlocking>
-                    || std::is_same_v<T, WriteBlockingSlice>
-                    || std::is_same_v<T, WriteBlockingDynamicSlice>
-                    || std::is_same_v<T, WriteBlockingDynamicPartSlice>
-                    || std::is_same_v<T, WriteUpdate>
-                    || std::is_same_v<T, WriteUpdateSlice>
-                    || std::is_same_v<T, WriteUpdateDynamicSlice>
-                    || std::is_same_v<T, WriteUpdateDynamicPartSlice>
-                    || std::is_same_v<T, WriteAfter>
-                    || std::is_same_v<T, WriteAfterSlice>
-                    || std::is_same_v<T, WriteAfterDynamicSlice>
-                    || std::is_same_v<T, WriteAfterDynamicPartSlice>
-                    || std::is_same_v<T, WriteDelayed>
-                    || std::is_same_v<T, WriteInertial>
-                    || std::is_same_v<T, WriteInertialSlice>
-                    || std::is_same_v<T, WriteProjected>
-                    || std::is_same_v<T, WriteProjectedSlice>
-                    || std::is_same_v<T, WriteProjectedDynamicSlice>
-                    || std::is_same_v<T, WriteProjectedWaveform>
-                    || std::is_same_v<T, WriteProjectedWaveformSlice>
-                    || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
-                    host_written = host_written || !owned(op.signal);
-                    if constexpr (std::is_same_v<T, WriteAfter>
-                        || std::is_same_v<T, WriteAfterSlice>
-                        || std::is_same_v<T, WriteAfterDynamicSlice>
-                        || std::is_same_v<T, WriteAfterDynamicPartSlice>
-                        || std::is_same_v<T, WriteDelayed>
-                        || std::is_same_v<T, WriteInertial>
-                        || std::is_same_v<T, WriteInertialSlice>) {
-                        // The host matures the update at its writer's
-                        // stable order (run_merged_active).
-                        host_delayed_writes_ = host_delayed_writes_ || !member.vhdl;
-                    }
-                    if constexpr (!std::is_same_v<T, WriteBlocking>
-                        && !std::is_same_v<T, WriteBlockingSlice>
-                        && !std::is_same_v<T, WriteBlockingDynamicSlice>
-                        && !std::is_same_v<T, WriteBlockingDynamicPartSlice>) {
-                        vhdl_host_cycles_ = vhdl_host_cycles_
-                            || (member.vhdl && !owned(op.signal));
-                    }
-                } else if constexpr (std::is_same_v<T, ForceSignalSlice>
-                    || std::is_same_v<T, ReleaseSignalSlice>) {
-                    // A VHDL force applies in the host's update phase.
-                    host_written = host_written || !owned(op.signal);
-                    vhdl_host_cycles_ = vhdl_host_cycles_
-                        || (member.vhdl && !owned(op.signal));
-                } else if constexpr (std::is_same_v<T, SignalEvent>
-                    || std::is_same_v<T, SignalActive>
-                    || std::is_same_v<T, SignalLastValue>
-                    || std::is_same_v<T, SignalLastEvent>
-                    || std::is_same_v<T, SignalLastActive>) {
-                    // The host's history of the cycles it ran, which
-                    // counts the host's time: no time warp.
-                    vhdl_host_cycles_ = vhdl_host_cycles_
-                        || (member.vhdl && !owned(op.signal));
-                    host_written = host_written || !owned(op.signal);
-                } else if constexpr (std::is_same_v<T, MonitorInstall>
-                    || std::is_same_v<T, MonitorControl>
-                    || std::is_same_v<T, EventTriggered>) {
-                    // The host's monitor prints in the host's time steps
-                    // (IEEE 1800-2023 21.2.3), and an event's triggered
-                    // state is of the host's time step (15.5.3): no time
-                    // warp.
-                    host_written = true;
-                } else if constexpr (std::is_same_v<T, WriteStringObject>) {
-                    // `s <= v` matures in the host's NBA region of the
-                    // host's time step: no time warp.
-                    host_written = host_written || op.nonblocking;
-                } else if constexpr (std::is_same_v<T, Yield>) {
-                    // A yield resumes in the host's next delta: no time
-                    // warp.
-                    host_written = true;
-                } else if constexpr (std::is_same_v<T, DynamicEvent>) {
-                    // `->>` triggers the event in the host's NBA region of
-                    // the host's time step (IEEE 1800-2023 15.5.1): no time
-                    // warp.
-                    host_written = host_written
-                        || (op.operation == DynamicEventOperation::trigger
-                            && op.nonblocking);
-                } else if constexpr (std::is_same_v<T, ClassAllocate>
-                    || std::is_same_v<T, ClassPropertyWrite>
-                    || std::is_same_v<T, ClassStaticPropertyWrite>
-                    || std::is_same_v<T, ClassPropertyContainerWrite>
-                    || std::is_same_v<T, ClassMethodCall>
-                    || std::is_same_v<T, ClassStaticMethodCall>) {
-                    // The class services toggle the host's
-                    // $sv_class_heap_change, whose waiters wake in the
-                    // host's next delta (IEEE 1800-2023 9.4.2;
-                    // Simulation::Impl::notify_class_changes), and a class
-                    // body may write any host signal.
-                    host_written = true;
-                } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
-                    // A host object read into a reference-format register.
-                    host_written = host_written
-                        || (member.dynamic_container(op.destination)
-                            && (op.object >= container_of_object_.size()
-                                || container_of_object_[op.object] == no_container));
-                } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
-                    // An element write of a host object.
-                    host_written = host_written
-                        || (!member.vhdl
-                            && (op.object >= container_of_object_.size()
-                                || container_of_object_[op.object] == no_container));
-                } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
-                    // A host object written from a reference-format register.
-                    host_written = host_written
-                        || (member.dynamic_container(op.source)
-                            && (op.object >= container_of_object_.size()
-                                || container_of_object_[op.object] == no_container));
-                } else if constexpr (std::is_same_v<T, FileReadLine>
-                    || std::is_same_v<T, FileErrorStatus>) {
-                    // A text read into a signal (commit_driver).
-                    host_written = host_written
-                        || (op.target_kind == FileTextTargetKind::packed_signal
-                            && !owned(static_cast<SignalId>(op.target)));
-                } else if constexpr (std::is_same_v<T, FileScan>) {
-                    for (const auto& conversion : op.conversions) {
-                        host_written = host_written
-                            || (conversion.target.kind
-                                    == InputScanTargetKind::packed_signal
-                                && !owned(static_cast<SignalId>(
-                                    conversion.target.id)));
-                    }
-                }
-            }, operation);
-        }
-    }
-    // A hosted VHDL process writes through the host's update phase, so every
-    // round is a host delta.
-    host_boundary_ = has_hosted_
-        || std::ranges::any_of(inputs_,
-            [](const Input& input) { return !input.unwritten; })
-        || std::ranges::any_of(slots_, [](const Slot& slot) { return slot.output; });
-    // Every process is a member and nothing crosses the host boundary.
-    // Assertion members run in the host's regions and read its sampled
-    // state, which follow the host's time.
-    const bool assertions = std::ranges::any_of(members_,
-        [](const Member& member) { return member.assertion; });
-    closed_ = !host_boundary_ && !has_hosted_ && !host_written && !assertions
-        && !vhdl_host_cycles_ && impl_.processes.size() == members_.size();
-    if (!conversion_members_.empty()) {
-        settle_conversions();
-    }
-    plan_delta_collapse();
-    if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
-        report_interpreted_sites();
     }
 }
 

@@ -37,6 +37,10 @@ namespace fsim::runtime::simir {
 
 namespace static_kernel_detail {
 
+/// Identifies the StaticKernel constructor's build (part of
+/// static_kernel_image_identity).
+[[nodiscard]] std::string static_kernel_constructor_identity();
+
 /// Drains a live queue for one pass: the queue's entries move into a spare
 /// vector that keeps its capacity across passes (the live queue takes the
 /// spare's empty storage), so a round does not free and regrow them. The
@@ -1139,6 +1143,34 @@ private:
     static void native_fail(StaticKernelNativeFrame* frame, std::uint32_t at,
         std::uint32_t reason);
     void compile_members();
+    /// The constructor's work up to the native code; `stage` times its
+    /// steps (FSIM_PROFILE_PHASES).
+    void build_fresh(StaticKernelRuntimeSpec& spec,
+        const std::function<void(const char*)>& stage);
+    /// The native view of containers_ (container_info_, container_elements_).
+    void build_container_info();
+    /// Kernel images (StaticKernelRuntimeSpec::kernel_image;
+    /// simir_static_kernel_image.cpp). image_scope: the kernel may record or
+    /// restore one. record_image: the image of the state build_fresh made,
+    /// false outside the scope. restore_image: that state from
+    /// spec.kernel_image, false (and the state as before) when there is
+    /// none, it is out of scope, or it does not fit this specification.
+    [[nodiscard]] bool image_scope(const StaticKernelRuntimeSpec& spec) const;
+    [[nodiscard]] bool record_image(
+        const StaticKernelRuntimeSpec& spec, std::string& out) const;
+    [[nodiscard]] bool restore_image(const StaticKernelRuntimeSpec& spec);
+    [[nodiscard]] static std::uint64_t image_spec_digest(
+        const StaticKernelRuntimeSpec& spec);
+    /// FSIM_PROFILE_PHASES: `static-kernel-image ACTION=OUTCOME bytes=N`.
+    static void note_image(const char* action, const char* outcome,
+        std::size_t bytes);
+    /// Calls visit(field) for each field a kernel image holds, in order.
+    template <typename Self, typename Visit>
+    static void visit_image_fields(Self& self, Visit&& visit);
+    class ImageWriter;
+    class ImageReader;
+    /// Storage of restored not_compiled_reason_ texts.
+    std::vector<std::string> image_reasons_;
     /// Appends a VHDL member's body specialized on its constant control
     /// flow and enters it from then on; false when not applicable.
     bool specialize_member(std::uint32_t member);
