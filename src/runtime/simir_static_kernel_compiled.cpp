@@ -121,6 +121,12 @@ void Interpreter::Impl::StaticKernel::compile_members()
             not_compiled_reason_[index] = "vhdl_behavioral";
             continue;
         }
+        // So do SystemVerilog members with nine-valued registers: their
+        // compiled bodies hold Logic4 words.
+        if (!members_[index].vhdl && !members_[index].register_kinds.empty()) {
+            not_compiled_reason_[index] = "register_kinds";
+            continue;
+        }
         // Per-thread callable contexts need the automatic frames the
         // compiled bodies elide: such a member runs on the operation tier.
         if (members_[index].thread_contexts) {

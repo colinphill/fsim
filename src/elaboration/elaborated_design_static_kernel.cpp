@@ -636,12 +636,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 && hit("static_trigger_regions")) {
                 return first;
             }
-            // VHDL behavioral threads keep their registers and strings in the
-            // member's reference-format files (any value kind); their
-            // container registers follow the container rule.
-            if (!vhdl && non_logic4 && hit("register_kind")) {
-                return first;
-            }
+            // Behavioral threads keep their registers and strings in the
+            // member's reference-format files, of any value kind (a
+            // SystemVerilog process's registers hold nine-valued values
+            // across a port to a VHDL std_logic signal); their container
+            // registers follow the container rule.
             if (std::ranges::any_of(view.static_sensitivity(),
                     [&](const Sensitivity& entry) {
                         return entry.signal >= signal_count
@@ -1057,14 +1056,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // 5.4): their ReadContainerObject copies the object's value and their
     // WriteContainerObject writes it, as the reference's do. An object of
     // another shape than the arena's is a host object (never kernel
-    // storage) outside signal alias families: a member's write through the
-    // host changes the signals its elements alias, which stay host signals
-    // (container_aliased below), and the kernel rescans its inputs after it.
+    // storage): the reference reads it from the signals its elements alias
+    // and a write through the host changes them. Those signals stay host
+    // signals (container_aliased below), and the kernel rescans its inputs
+    // after a write. A family's leaves qualify only as host_family_ok says.
     // `dynamic_written` receives the host objects written.
-    // A family (an unpacked net array whose elements are signals, IEEE
-    // 1800-2023 7.4) stays with the host: through host access, a member's
-    // write of the whole object and the leaves' mirrored updates reach
-    // readers in another delta order than the reference's.
     // A slice-alias view (an array slice connected to a port) is reached
     // through the host with its root object (slice_alias_root), whose
     // storage it is.
@@ -1075,14 +1071,73 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         return object;
     };
+    // A forced value hides the driver's (IEEE 1800-2023 10.6.2); a port
+    // segment force reaches nets by another name, so any force in the design
+    // turns the mirroring of host signals and the ownership of undriven
+    // actuals off.
+    const bool forces = std::ranges::any_of(
+        std::views::iota(std::size_t { 0U }, process_count),
+        [&](const std::size_t index) {
+            if (!views[index].valid()) {
+                return false;
+            }
+            const auto& operations = views[index].operations();
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                const auto& operation = operations.expanded(op);
+                if (operation_get_if<ForceSignalSlice>(&operation) != nullptr
+                    || operation_get_if<ReleaseSignalSlice>(&operation) != nullptr) {
+                    return true;
+                }
+            }
+            return false;
+        });
+    // A signal the kernel never mirrors as a sole writer's update
+    // (sole_writer_inputs below): the design forces, a foreign library is
+    // attached, its resolution is not a single driver's value, or its
+    // drivers are several processes or have a drive strength. Its kernel
+    // readers wake when the host commits it, as host readers do.
+    const auto never_sole_writer = [&](const SignalId signal) {
+        if (signal >= signal_count) {
+            return false;
+        }
+        if (forces || access.foreign) {
+            return true;
+        }
+        const auto& info = signals_[signal];
+        if (!(info.resolution == ResolutionKind::none
+                || (info.resolution == ResolutionKind::sv_wire
+                    && !info.implicit_driver && !info.charge_strength))) {
+            return true;
+        }
+        const auto& writers = graph_signals[signal].writers;
+        return writers.empty()
+            || std::ranges::any_of(writers, [&](const auto& writer) {
+                   return writer.process != writers.front().process
+                       || writer.process >= process_count
+                       || views[writer.process].drive_strength() != DriveStrength { };
+               });
+    };
+    // A family (an unpacked net array whose elements are signals, IEEE
+    // 1800-2023 7.4) reached through the host keeps its leaves and proxy
+    // host signals that the kernel does not mirror (container_aliased); the
+    // host access is exact only where none of them would be mirrored
+    // anyway, or the members' delta order of the leaves' updates changes.
+    const auto host_family_ok = [&](const ContainerObjectId object) {
+        return std::ranges::all_of(graph.signal_alias_families(),
+            [&](const auto& family) {
+                return family.object != object
+                    || (never_sole_writer(family.proxy)
+                        && std::ranges::all_of(family.leaves,
+                            [&](const auto& leaf) {
+                                return never_sole_writer(leaf.signal);
+                            }));
+            });
+    };
     const auto host_container_ok = [&](const ContainerObjectId object) {
         const auto root = slice_alias_root(object);
         return object < container_objects_.size()
             && root < container_objects_.size()
-            && std::ranges::none_of(graph.signal_alias_families(),
-                [&](const auto& family) {
-                    return family.object == object || family.object == root;
-                });
+            && host_family_ok(object) && host_family_ok(root);
     };
     // Container objects a member writes through the host (see below), and
     // those it reads through the host.
@@ -2453,6 +2508,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         for (const auto& entry : container_aggregate_signal_aliases_) {
             alias(entry.object, entry.signal);
         }
+        for (const auto& family : graph.signal_alias_families()) {
+            alias(family.object, family.proxy);
+            for (const auto& leaf : family.leaves) {
+                alias(family.object, leaf.signal);
+            }
+        }
     }
     // Assertion members read the host's sampled state (run_sampled_read):
     // a sampled signal, its sampling clock and its gate are host signals,
@@ -2921,26 +2982,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             alias_role[alias.signal] = 1U;
         }
     }
-    // A forced value hides the driver's (IEEE 1800-2023 10.6.2); a port
-    // segment force reaches nets by another name, so any force in the design
-    // turns the mirroring of host signals and the ownership of undriven
-    // actuals off.
-    const bool forces = std::ranges::any_of(
-        std::views::iota(std::size_t { 0U }, process_count),
-        [&](const std::size_t index) {
-            if (!views[index].valid()) {
-                return false;
-            }
-            const auto& operations = views[index].operations();
-            for (std::size_t op = 0U; op < operations.size(); ++op) {
-                const auto& operation = operations.expanded(op);
-                if (operation_get_if<ForceSignalSlice>(&operation) != nullptr
-                    || operation_get_if<ReleaseSignalSlice>(&operation) != nullptr) {
-                    return true;
-                }
-            }
-            return false;
-        });
     // Signals with no source at all: no process writes them, and no port
     // association (resolver, conversion driver, wiring) drives them.
     std::vector<std::uint8_t> undriven_actual(signal_count, 0U);

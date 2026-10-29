@@ -564,8 +564,15 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.vhdl = vhdl_ && (!mixed_ || member_spec.vhdl);
         member.vhdl_2019 = member.vhdl && program.language_standard() == "2019";
         member.fresh = member.vhdl && member_spec.run_at_start;
-        if (member.vhdl) {
-            const auto kinds = program.register_value_kinds();
+        // Registers of another kind than Logic4 (VHDL values, and a
+        // SystemVerilog process's that hold them across a mixed-language
+        // port) take each value in their kind, as the reference's do
+        // (Impl::register_value_kind).
+        if (const auto kinds = program.register_value_kinds();
+            member.vhdl
+            || std::ranges::any_of(kinds, [](const ValueKind kind) {
+                   return kind != ValueKind::logic4;
+               })) {
             member.register_kinds.assign(kinds.begin(), kinds.end());
             member.register_kinds.resize(program.register_count(),
                 ValueKind::logic4);

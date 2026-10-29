@@ -44,7 +44,9 @@ namespace {
     constexpr std::size_t maximum_unrolled_repeat_iterations = 256U;
     // A for loop with constant bounds is unrolled only while short; a longer
     // one runs at run time like a loop with dynamic bounds (12.7.1), so a
-    // 100000-iteration loop is not a program of 100000 bodies.
+    // 100000-iteration loop is not a program of 100000 bodies. The bound is
+    // on the copies of the body, counting the unrolled loops around it, so
+    // nested short loops are not a program of their product either.
     constexpr std::size_t default_maximum_unrolled_for_iterations = 256U;
     // Diagnostic: FSIM_SV_UNROLL_FOR_LIMIT overrides the limit.
     std::size_t maximum_unrolled_for_iterations()
@@ -18145,13 +18147,21 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 visiting);
         }();
         auto static_loop_iterations = hir_loop_iteration_count(statement_id);
+        // The copies of the body unrolling would make.
+        const auto unrolled_copies = [&](const std::size_t limit) {
+            return *static_loop_iterations > limit / hir_unrolled_copies_
+                ? limit + 1U
+                : *static_loop_iterations * hir_unrolled_copies_;
+        };
         const bool long_repeat = statement->systemverilog != nullptr
             && statement->systemverilog->loop_repeat
             && statement->systemverilog->loop_limit && static_loop_iterations
-            && *static_loop_iterations > maximum_unrolled_repeat_iterations;
+            && unrolled_copies(maximum_unrolled_repeat_iterations)
+                > maximum_unrolled_repeat_iterations;
         const bool long_static_for = [&] {
             if (statement->systemverilog == nullptr || !static_loop_iterations
-                || *static_loop_iterations <= maximum_unrolled_for_iterations()) {
+                || unrolled_copies(maximum_unrolled_for_iterations())
+                    <= maximum_unrolled_for_iterations()) {
                 return false;
             }
             const auto& loop_statement = *statement->systemverilog;
@@ -20190,6 +20200,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 ? vhdl_attribute_range->descending
                 : loop_statement.loop_descending;
         }
+        const auto enclosing_copies = hir_unrolled_copies_;
+        hir_unrolled_copies_ = *iterations != 0U
+                && enclosing_copies > std::numeric_limits<std::size_t>::max() / *iterations
+            ? std::numeric_limits<std::size_t>::max()
+            : enclosing_copies * std::max<std::size_t>(*iterations, 1U);
+        const auto restore_copies = [&] {
+            hir_unrolled_copies_ = enclosing_copies;
+        };
         for (std::size_t iteration = 0U;
             iteration < *iterations; ++iteration) {
             if (vhdl_loop_parameter && vhdl_loop_initial) {
@@ -20210,6 +20228,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 hir_static_loop_values_.pop_back();
             }
             if (!lowered) {
+                restore_copies();
                 loop_controls_.pop_back();
                 restore_scope();
                 return false;
@@ -20223,6 +20242,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             loop_statement.loop_update_target,
                             loop_statement.value))
                     || !lower_hir_statements(updates)) {
+                    restore_copies();
                     loop_controls_.pop_back();
                     restore_scope();
                     return false;
@@ -20234,6 +20254,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             loop_controls_.back().continue_jumps.clear();
         }
+        restore_copies();
         const auto end = static_cast<InstructionIndex>(
             process_.operations.size());
         for (const auto jump : loop_controls_.back().break_jumps) {

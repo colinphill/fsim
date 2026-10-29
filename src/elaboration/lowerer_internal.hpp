@@ -5097,6 +5097,9 @@ private:
     // them only while a call captures its actuals' shapes.
     std::vector<std::pair<semantic::DeclarationId, std::int64_t>>
         hir_static_loop_values_;
+    // The product of the iteration counts of the unrolled loops around the
+    // statement being lowered: the copies of its body the program holds.
+    std::size_t hir_unrolled_copies_ = 1U;
     bool hir_static_loop_shapes_ { };
     mutable std::unordered_map<std::uint32_t, HirVhdlShapedLocal>
         hir_vhdl_shaped_heap_views_;
