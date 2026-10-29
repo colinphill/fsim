@@ -7,6 +7,11 @@ incremental A1–A7 sequence in
 [simulation-performance-architecture.md](simulation-performance-architecture.md)
 as the route to competitive performance.
 
+Migration complete, 2026-10-29 (`baa27c0a`, sweep `v4c49`). v4 is the
+default engine, and the whole six-suite LRM corpus runs on it with no host
+processes. The definition-of-done gates G1–G5 are met: see the v4c49 entry
+in [simulation-engine-v4-progress.md](simulation-engine-v4-progress.md) §4.
+
 ## 1. Why the current architecture cannot get there
 
 The current engine executes the elaborated design as a large set of

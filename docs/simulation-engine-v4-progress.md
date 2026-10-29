@@ -138,6 +138,84 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29: hosted processes at zero — nine-valued SV registers, exact family access, unroll nest bound (`baa27c0a`, sweep `v4c49`)
+
+**`baa27c0a`** (changesets 49–51)
+- **SystemVerilog members with nine-valued registers.**
+  - A Verilog process that reads a VHDL std_logic port holds nine-valued values in its registers.
+  - Its registers now take each value in its kind, as the reference's do (`Impl::register_value_kind`). `Member::register_kinds` is filled whenever a register is not Logic4.
+  - Such members run on the operation tier (`not_compiled: register_kinds`).
+  - The planner's behavioral `register_kind` refusal is gone.
+- **Signal alias families take host access where it is exact.**
+  - `never_sole_writer(signal)` holds when a leaf or proxy could never be a sole-writer input. That is the case when:
+    - the design forces;
+    - a foreign library is attached;
+    - the resolution is not one driver's value;
+    - there are no writers, several writers, or strength drivers.
+  - `host_family_ok` requires this for the proxy and every leaf. The leaves and proxies of host-accessed objects become `container_aliased`.
+  - This is the exact form of the rule reverted in `5f04a717`. `fsim.application.static-kernel` (observe-all) passes.
+- **Unroll nest bound.**
+  - A constant-bound `for` or `repeat` loop is unrolled only while the copies of its body stay within the 256 bound. The count includes the unrolled loops around it (`hir_unrolled_copies_`). A longer nest runs at run time, as a single long loop already did (IEEE 1800-2023 12.7.1).
+  - In verilator `t_dpi_open_elem`, 5×7×9 nests made one 285k-op initial process. Its code generation took 10.7 s.
+  - Now the process has 51k ops, and simulate takes 1.66 s instead of 11.2 s.
+
+**Validation.**
+- Caseruns had 0 losses:
+  - c78s: ivtest, sv-tests and verilator whole, 6195 cases, no hosted rows;
+  - the family and nine-valued cases.
+- ct4: 1087/1087 in all four variants.
+- Sweep `v4c49` (frozen `baa27c0a`) has 0 losses vs `b96x1`.
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Census `v4c49`:
+  - every planned case is admitted with `host=0`;
+  - 0 hosted processes (v4c48 8);
+  - 0 runs with interpreted>0.
+  - Build-time `specialize_folding` (177 cases) and exact-mode `kernel_deopts` (9 cases) do not run the reference evaluator.
+- **G3 is met.**
+
+**G5 performance** (frozen `v4c49`, quiet host).
+- **(a) Campaign `v4c49-g5`** (10 cases, 3 samples each). The D6 criteria hold:
+  - the end-to-end geomean over xsim is 3.68× (v4c48 3.66×);
+  - every simulate is ≥3× `xsim -R` (native setup and simulation).
+
+| Case | Simulate × xsim | End-to-end × xsim |
+|---|---:|---:|
+| original_codec | 3.12 | 2.59 |
+| mixed_codec | 3.53 | 2.72 |
+| mixed_throughput | 4.05 | 2.88 |
+| original_throughput | 4.66 | 3.00 |
+| codex_throughput_default | 14.25 | 4.46 |
+| codex_throughput_direct_syndrome | 14.40 | 4.16 |
+| codex_reference (4 cases) | 30.4–31.7 | 4.41–4.55 |
+
+- **(b) rs-suite against b96x** (B96 close; pinned to one CPU, two repetitions).
+  - Elaboration instructions and CPU are lower on every testbench in both languages. Examples:
+    - rs_codec_tb VHDL 38.5→27.9 G instructions, 3.65→2.75 s;
+    - rs_symsize_tb Verilog 136.4→33.0 G, 7.77→3.33 s;
+    - rs_param_tb VHDL 123.1→88.7 G, 12.7→9.5 s.
+  - Frontend compile instructions are 5–7% lower, and CPU is equal within noise. The largest difference is rs_tbs, +0.04 s on 0.54 s with fewer instructions.
+  - Peak RSS is mixed: rs_codec_tb Verilog is 1184→1273 MB, as at v4c48, and rs_param_tb Verilog is 2911→2720 MB.
+  - The rc=1 rows (rs_decoder_tb VHDL, rs_param_tb Verilog) fail the same way on both binaries; these are known workload issues.
+
+**Migration status.** All gates of the definition of done (HANDOFF §2) are met:
+
+| Gate | Status |
+|---|---|
+| G1 | v4 is the default engine, `--engine compiled` is an alias of v4, and the legacy JIT is deleted |
+| G2 | 0 losses vs `b96x1` |
+| G3 | `host=0` and 0 hosted processes everywhere |
+| G4 | ctest 1087/1087 in all four variants |
+| G5 | Both performance checks hold |
+
 ### 2026-10-29: hosted kinds into the kernel — region-written objects, VHPI calls, VHDL host containers (`5f04a717`, sweep `v4c48`)
 
 **`5f04a717`** (six changesets)
