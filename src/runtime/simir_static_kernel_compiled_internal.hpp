@@ -36,6 +36,8 @@ inline constexpr bool behavioral_suspension = std::is_same_v<T, WaitFor>
     || std::is_same_v<T, ProcessAwait> || std::is_same_v<T, ProcessKill>
     // suspend may stop this thread; resume readies another.
     || std::is_same_v<T, ProcessSuspend> || std::is_same_v<T, ProcessResume>
+    // A yield resumes in the next delta.
+    || std::is_same_v<T, Yield>
     // Mailbox, semaphore and dynamic-event operations may block, and their
     // puts and triggers resume other threads (Impl::run_synchronization).
     || std::is_same_v<T, MailboxCreate> || std::is_same_v<T, MailboxPut>

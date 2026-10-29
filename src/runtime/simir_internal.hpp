@@ -2441,6 +2441,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const CoverageControlEvent& event) noexcept;
     [[nodiscard]] std::int32_t access_coverage(
         const CoverageAccessEvent& event) noexcept;
+    /// $coverage_control and the $coverage_get/merge/save family (IEEE
+    /// 1800-2023 20.14) on a process's operands: the status register value.
+    using CoverageRegisterReader
+        = std::function<const PackedLogic4&(RegisterId)>;
+    using CoverageStringReader
+        = std::function<const std::string&(StringRegisterId)>;
+    [[nodiscard]] PackedLogic4 run_coverage_control(const CoverageControl& op,
+        const CoverageRegisterReader& read,
+        const CoverageStringReader& read_string);
+    [[nodiscard]] PackedLogic4 run_coverage_access(const CoverageAccess& op,
+        const CoverageRegisterReader& read,
+        const CoverageStringReader& read_string);
 
     void execute_sampled_read(
         ProcessState& process,
@@ -2857,6 +2869,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     void set_event_identity(
         SignalId signal, std::optional<SignalId> identity);
+    /// EventAlias (IEEE 1800-2023 15.5.5.1); false when either side is not
+    /// a named-event variable.
+    [[nodiscard]] bool alias_event(const EventAlias& alias);
 
     /// A named event's triggered state (IEEE 1800-2023 15.5.3): its
     /// synchronization object triggered in the current time step.

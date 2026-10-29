@@ -257,6 +257,77 @@ void Interpreter::set_coverage_access_hook(CoverageAccessHook hook)
     impl_->coverage_access_hook = std::move(hook);
 }
 
+namespace {
+
+/// A 32-bit known operand as an int (the coverage system tasks' integer
+/// arguments), or nothing.
+std::optional<std::int32_t> coverage_integer(const PackedLogic4& value)
+{
+    if (value.width() != 32U || value.is_logic9()) {
+        return std::nullopt;
+    }
+    const auto word = value.low_word();
+    if (word.bval != 0U) {
+        return std::nullopt;
+    }
+    return static_cast<std::int32_t>(static_cast<std::uint32_t>(word.aval));
+}
+
+PackedLogic4 coverage_status(const std::int32_t status)
+{
+    return PackedLogic4::from_aval_bval(
+        32U, static_cast<std::uint32_t>(status), 0U);
+}
+
+} // namespace
+
+PackedLogic4 Interpreter::Impl::run_coverage_control(const CoverageControl& op,
+    const CoverageRegisterReader& read, const CoverageStringReader& read_string)
+{
+    const auto command = coverage_integer(read(op.command));
+    const auto coverage_type = coverage_integer(read(op.coverage_type));
+    const auto scope = coverage_integer(read(op.scope));
+    if (!command || !coverage_type || !scope) {
+        return coverage_status(
+            static_cast<std::int32_t>(SystemVerilogCoverageStatus::error));
+    }
+    CoverageControlEvent event;
+    event.command = *command;
+    event.coverage_type = *coverage_type;
+    event.scope = *scope;
+    event.selector = read_string(op.selector);
+    event.instance_context = op.instance_context;
+    event.selector_is_instance = op.selector_is_instance;
+    return coverage_status(control_coverage(event));
+}
+
+PackedLogic4 Interpreter::Impl::run_coverage_access(const CoverageAccess& op,
+    const CoverageRegisterReader& read, const CoverageStringReader& read_string)
+{
+    auto status = static_cast<std::int32_t>(SystemVerilogCoverageStatus::error);
+    const auto coverage_type = coverage_integer(read(op.coverage_type));
+    if (!coverage_type) {
+        return coverage_status(status);
+    }
+    CoverageAccessEvent event;
+    event.kind = op.kind;
+    event.coverage_type = *coverage_type;
+    if (op.scope && op.selector) {
+        event.scope = coverage_integer(read(*op.scope));
+        event.selector = read_string(*op.selector);
+        event.instance_context = op.instance_context;
+        event.selector_is_instance = op.selector_is_instance;
+    }
+    if (op.filename) {
+        event.filename = read_string(*op.filename);
+    }
+    if ((!op.scope && !op.selector)
+        || (event.scope && !event.selector.empty())) {
+        status = access_coverage(event);
+    }
+    return coverage_status(status);
+}
+
 std::int32_t Interpreter::Impl::control_coverage(
     const CoverageControlEvent& event) noexcept
 {

@@ -3582,6 +3582,10 @@ void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
     }
     impl_->commit(signal, std::move(value),
         SignalChangeOrigin { origin_domain, SchedulerPhase::active });
+    if (impl_->static_kernel && impl_->started
+        && origin_domain == ProcessSchedulingDomain::generic) {
+        impl_->static_kernel->host_deposit(signal);
+    }
 }
 
 void Interpreter::deposit_scalar_signal(
@@ -4048,6 +4052,13 @@ PackedLogic4 Interpreter::driver_value(
 
 ProcessId Interpreter::design_process(const ProcessId process) const
 {
+    // A fork child of a kernel thread (its output names it).
+    if (impl_->static_kernel) {
+        if (const auto design
+            = impl_->static_kernel->child_design_process(process)) {
+            return *design;
+        }
+    }
     if (impl_->processes.is_compact_constant(process)) {
         return process;
     }
@@ -4098,6 +4109,12 @@ std::uint64_t Interpreter::process_interpreter_operations(
 
 ProcessId Interpreter::dynamic_process_root(const ProcessId process) const
 {
+    if (impl_->static_kernel) {
+        if (const auto root
+            = impl_->static_kernel->child_dynamic_root(process)) {
+            return *root;
+        }
+    }
     auto root = process;
     while (true) {
         if (impl_->processes.is_compact_constant(root)) {
@@ -4119,6 +4136,9 @@ void Interpreter::kill_dynamic_processes(
     const std::span<const ProcessId> design_processes)
 {
     impl_->kill_dynamic_processes(design_processes);
+    if (impl_->static_kernel) {
+        impl_->static_kernel->kill_member_children(design_processes);
+    }
 }
 
 std::vector<Interpreter::SvaObligation> Interpreter::finish_sva_monitors()

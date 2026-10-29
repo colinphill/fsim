@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <iostream>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -31,7 +32,7 @@ using namespace static_kernel_detail;
 std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     const std::uint32_t member, const std::uint32_t pc,
     const std::uint32_t parent, const std::uint32_t group,
-    const std::uint32_t fork_site)
+    const std::uint32_t fork_site, const bool isolated)
 {
     std::uint32_t index { };
     if (!free_threads_.empty()) {
@@ -72,6 +73,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
         next_child_process_ = static_cast<std::size_t>(id) + 1U;
         thread.order = id;
         thread.random_state = Impl::initial_random_state(impl_.root_seed, id);
+        child_threads_[id] = index;
         if (members_[member].thread_contexts) {
             // The activation the fork runs in escapes: the child shares it,
             // and those its parent shares, holding their current values
@@ -86,6 +88,13 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
                     threads_[index].contexts.push_back(context);
                 }
             }
+        }
+        if (isolated) {
+            // Fork isolate_register_frame: the child starts from a copy of
+            // the frame the forking thread runs with (Interpreter::
+            // spawn_fork's frame copy).
+            threads_[index].isolated = std::make_shared<CallableContext>(
+                whole_frame(members_[member]));
         }
         if (debug_points_) {
             thread.debug_process = id;
@@ -495,6 +504,31 @@ void Interpreter::Impl::StaticKernel::resume_switch_readers()
     switch_wakes_.resize(kept);
 }
 
+void Interpreter::Impl::StaticKernel::resume_yielded()
+{
+    // A yielded thread resumes in the active region of the next delta, as
+    // the host runs a process it queued there (queue_next_delta).
+    const auto now = impl_.scheduler.now();
+    const auto delta = impl_.scheduler.delta();
+    std::size_t kept = 0U;
+    for (const auto wake : yield_wakes_) {
+        if (wake.time == now && wake.delta == delta) {
+            yield_wakes_[kept++] = wake;
+            continue;
+        }
+        const auto& thread = threads_[wake.thread];
+        if (thread.alive && thread.epoch == wake.epoch) {
+            ready_thread(wake.thread);
+        }
+    }
+    yield_wakes_.resize(kept);
+    if (kept != 0U) {
+        // The Yield's request may have been dropped while the host process
+        // was queued for a same-delta activation: ask again.
+        impl_.queue_next_delta(host_process_);
+    }
+}
+
 void Interpreter::Impl::StaticKernel::wake_transaction_waiters()
 {
     for (const auto input_index : transaction_inputs_) {
@@ -535,12 +569,13 @@ void Interpreter::Impl::StaticKernel::release_thread(const std::uint32_t index)
     thread.saved_array_marks.clear();
     thread.stack.clear();
     thread.contexts.clear();
+    thread.isolated.reset();
     if (thread.child_records != 0U) {
         // Its descendants still name it as their ancestor.
         thread.ended_record = true;
         return;
     }
-    free_threads_.push_back(index);
+    free_thread_slot(index);
     // Ended ancestors whose last descendant record this was go too.
     for (auto parent = thread.parent; parent != no_slot;) {
         auto& record = threads_[parent];
@@ -549,8 +584,81 @@ void Interpreter::Impl::StaticKernel::release_thread(const std::uint32_t index)
             break;
         }
         record.ended_record = false;
-        free_threads_.push_back(parent);
+        free_thread_slot(parent);
         parent = record.parent;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::free_thread_slot(const std::uint32_t index)
+{
+    if (threads_[index].parent != no_slot) {
+        child_threads_.erase(static_cast<ProcessId>(threads_[index].order));
+    }
+    free_threads_.push_back(index);
+}
+
+std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::child_thread(
+    const ProcessId process) const
+{
+    const auto found = child_threads_.find(process);
+    if (found == child_threads_.end()) {
+        return std::nullopt;
+    }
+    return found->second;
+}
+
+std::optional<ProcessId> Interpreter::Impl::StaticKernel::child_design_process(
+    const ProcessId process) const
+{
+    const auto thread = child_thread(process);
+    if (!thread) {
+        return std::nullopt;
+    }
+    return members_[threads_[*thread].member].process;
+}
+
+std::optional<ProcessId> Interpreter::Impl::StaticKernel::child_dynamic_root(
+    const ProcessId process) const
+{
+    // The fork child of the member's own thread the process descends from
+    // (Interpreter::dynamic_process_root).
+    auto thread = child_thread(process);
+    if (!thread) {
+        return std::nullopt;
+    }
+    while (threads_[*thread].parent != no_slot
+        && threads_[threads_[*thread].parent].parent != no_slot) {
+        thread = threads_[*thread].parent;
+    }
+    return static_cast<ProcessId>(threads_[*thread].order);
+}
+
+void Interpreter::Impl::StaticKernel::kill_member_children(
+    const std::span<const ProcessId> design_processes)
+{
+    // As Impl::kill_dynamic_processes: the live fork children of those
+    // processes whose parent is the member's own thread or has ended, with
+    // their descendants.
+    std::vector<std::uint32_t> roots;
+    for (std::uint32_t index = 0U; index < threads_.size(); ++index) {
+        const auto& thread = threads_[index];
+        if (!thread.alive || thread.parent == no_slot
+            || std::ranges::find(design_processes,
+                   members_[thread.member].process)
+                == design_processes.end()) {
+            continue;
+        }
+        const auto& parent = threads_[thread.parent];
+        if (parent.parent == no_slot || !parent.alive) {
+            roots.push_back(index);
+        }
+    }
+    for (const auto root : roots) {
+        if (!threads_[root].alive) {
+            continue;
+        }
+        cancel_thread_descendants(root);
+        kill_thread(root);
     }
 }
 
@@ -654,6 +762,23 @@ void Interpreter::Impl::StaticKernel::load_contexts(
         }
         load_context(member, context);
     }
+}
+
+Interpreter::Impl::StaticKernel::CallableContext
+Interpreter::Impl::StaticKernel::whole_frame(const Member& member)
+{
+    CallableContext context;
+    context.ids.resize(member.registers.size());
+    std::iota(context.ids.begin(), context.ids.end(), RegisterId { 0U });
+    context.string_ids.resize(member.strings.size());
+    std::iota(context.string_ids.begin(), context.string_ids.end(),
+        StringRegisterId { 0U });
+    context.container_ids.resize(std::max(member.container_registers.size(),
+        member.dynamic_containers.size()));
+    std::iota(context.container_ids.begin(), context.container_ids.end(),
+        ContainerRegisterId { 0U });
+    store_context(member, context);
+    return context;
 }
 
 std::vector<std::uint32_t> Interpreter::Impl::StaticKernel::live_children(
@@ -993,6 +1118,21 @@ struct Interpreter::Impl::StaticKernel::MemberSynchronizationClient final
     std::uint32_t member;
     std::uint32_t pc;
 };
+
+void Interpreter::Impl::StaticKernel::push_container_element(
+    const std::uint32_t target, const std::uint32_t ordinal, PackedLogic4 value,
+    const std::uint32_t member, const InstructionIndex instruction)
+{
+    Pending pending;
+    pending.kind = PendingKind::element;
+    pending.member = member;
+    pending.instruction = instruction;
+    pending.target = target;
+    pending.value = std::move(value);
+    pending.index = PackedLogic4::from_aval_bval(32U, ordinal, 0U);
+    pending.linear_index = true;
+    push_generic_pending(std::move(pending));
+}
 
 ProcessId Interpreter::Impl::StaticKernel::running_process(
     const std::uint32_t member) const
@@ -1483,7 +1623,9 @@ void Interpreter::Impl::StaticKernel::behavioral_output(
     }
     if (impl_.output_hook) {
         // A warped time step is the first delta of its time slot.
-        impl_.output_hook(members_[member].process, text, newline,
+        // A fork child's output names the child, as the reference's does
+        // (child_design_process, child_dynamic_root).
+        impl_.output_hook(running_process(member), text, newline,
             kernel_now(), warp_time_ ? 0U : impl_.scheduler.delta());
     }
 }
@@ -2112,11 +2254,21 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     // A kernel array (a fixed array of the arena's shape):
                     // changed elements are written as element writes, which
                     // notify its readers (copy_container).
-                    auto& to = containers_[container_of_object_[op.object]];
+                    const auto target = container_of_object_[op.object];
+                    auto& to = containers_[target];
                     if (!(to.type == value.type)
                         || to.count != value.elements.size()) {
                         fail(member_index, pc,
                             "static kernel container copy needs arrays of one type");
+                    }
+                    if (op.nonblocking) {
+                        // `a <= b` (IEEE 1800-2023 10.4.2): the value now,
+                        // the array's update in the NBA region.
+                        for (std::uint32_t ordinal = 0U; ordinal < to.count; ++ordinal) {
+                            push_container_element(target, ordinal,
+                                value.elements[ordinal], member_index, pc);
+                        }
+                        return;
                     }
                     for (std::uint32_t ordinal = 0U; ordinal < to.count; ++ordinal) {
                         const auto& element = value.elements[ordinal];
@@ -2240,6 +2392,46 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 return;
             }
             behavioral_output(member_index, time_display_text(op), op.newline);
+        } else if constexpr (std::is_same_v<T, Assert>) {
+            // An immediate assertion's failure (IEEE 1800-2023 16.3), as the
+            // reference reports it.
+            const auto& condition = packed_register(op.condition);
+            if (condition.width() != 1U || condition.get(0) != Logic4::one) {
+                const auto message = op.message.empty()
+                    ? std::string_view { "assertion failed" }
+                    : std::string_view { op.message };
+                if (member.vhdl_2019) {
+                    report_vhdl(member_index, pc, message, op.severity,
+                        op.source, false);
+                    return;
+                }
+                if (op.severity != AssertionSeverity::failure && impl_.report_hook) {
+                    impl_.report_hook(member.process, message, op.severity,
+                        op.source, kernel_now(),
+                        warp_time_ ? 0U : impl_.scheduler.delta());
+                }
+                if (op.severity == AssertionSeverity::failure) {
+                    throw AssertionError(member.process,
+                        pc < member.origin.size() ? member.origin[pc] : pc,
+                        std::string { message }, op.severity, op.source);
+                }
+            }
+        } else if constexpr (std::is_same_v<T, RuntimeStringFormat>) {
+            // $sformatf with a run-time format string (IEEE 1800-2023
+            // 21.3.3), formatted as the reference formats it.
+            try {
+                string_register(op.destination) = format_runtime_string(op,
+                    string_register(op.format),
+                    [&](const RuntimeFormatArgument& argument) {
+                        return packed_register(argument.value);
+                    },
+                    [&](const RuntimeFormatArgument& argument) {
+                        return string_register(argument.value);
+                    },
+                    kernel_now(), impl_.time_format);
+            } catch (const std::exception& error) {
+                fail(member_index, pc, error.what());
+            }
         } else if constexpr (std::is_same_v<T, Report>) {
             // A VHDL report statement (IEEE 1076-2019 10.9, 10.8), as the
             // reference evaluator emits it.
@@ -2394,6 +2586,77 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
             impl_.schedule_inertial(member.process, op.signal,
                 packed_register(op.source), offset, op.delays, op.domain);
+        } else if constexpr (std::is_same_v<T, CoverageSample>) {
+            // A covergroup sample (IEEE 1800-2023 19.8) into the host's
+            // coverage database, as the reference samples it.
+            if (!impl_.coverage_sample_hook) {
+                fail(member_index, pc, "coverage sampling service is unavailable");
+            }
+            std::vector<PackedLogic4> actuals;
+            actuals.reserve(op.actuals.size());
+            for (const auto actual : op.actuals) {
+                actuals.push_back(packed_register(actual));
+            }
+            impl_.coverage_sample_hook(op.instance_identity, actuals,
+                op.signed_actuals, op.scalar_kinds, op.trigger);
+        } else if constexpr (std::is_same_v<T, CoverageQuery>) {
+            if (op.kind > CoverageQueryKind::covergroup_instance
+                || (op.kind >= CoverageQueryKind::covergroup_type
+                    && op.identity.empty())) {
+                fail(member_index, pc, "coverage query kind is invalid");
+            }
+            if (!impl_.coverage_query_hook) {
+                fail(member_index, pc, "coverage query service is unavailable");
+            }
+            auto value = impl_.coverage_query_hook(op.kind, op.identity);
+            if (value.width() != 64U || value.is_logic9()) {
+                fail(member_index, pc,
+                    "coverage query service returned an invalid real payload");
+            }
+            packed_register(op.destination) = std::move(value);
+        } else if constexpr (std::is_same_v<T, CoverageControl>
+            || std::is_same_v<T, CoverageAccess>) {
+            // The coverage system tasks (IEEE 1800-2023 20.14), the host's.
+            const auto read = [&](const RegisterId id) -> const PackedLogic4& {
+                return packed_register(id);
+            };
+            const auto read_string
+                = [&](const StringRegisterId id) -> const std::string& {
+                return string_register(id);
+            };
+            if constexpr (std::is_same_v<T, CoverageControl>) {
+                packed_register(op.destination)
+                    = impl_.run_coverage_control(op, read, read_string);
+            } else {
+                packed_register(op.destination)
+                    = impl_.run_coverage_access(op, read, read_string);
+            }
+        } else if constexpr (std::is_same_v<T, SystemCommand>) {
+            // $system (IEEE 1800-2023 20.18.1).
+            if (!impl_.system_command_hook) {
+                fail(member_index, pc, "$system service is unavailable");
+            }
+            const auto command = op.command
+                ? std::optional<std::string_view> { string_register(*op.command) }
+                : std::nullopt;
+            const auto status = impl_.system_command_hook(command);
+            if (op.destination) {
+                packed_register(*op.destination) = PackedLogic4::from_aval_bval(
+                    32U, static_cast<std::uint32_t>(status), 0U);
+            }
+        } else if constexpr (std::is_same_v<T, EventAlias>) {
+            // Event assignment (IEEE 1800-2023 15.5.5.1) of host events
+            // (static_kernel_host_signal): the host keeps their identities
+            // and trigger history.
+            if (owned(op.target) || (op.has_source && owned(op.source))) {
+                fail(member_index, pc, "static kernel event alias of a kernel signal");
+            }
+            if (!impl_.alias_event(op)) {
+                fail(member_index, pc, "EventAlias requires named-event variables");
+            }
+            if (const auto input = input_of_signal_[op.target]; input != no_slot) {
+                (void)refresh_input(inputs_[input]);
+            }
         } else if constexpr (std::is_same_v<T, EventTriggered>) {
             // .triggered (IEEE 1800-2023 15.5.3) of an event, a host signal:
             // the host stamps each trigger, the kernel's own included.
@@ -2409,10 +2672,24 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             // no events: the member reads and writes it in its serial place.
             string_register(op.destination) = impl_.string_object_storage(op.object);
         } else if constexpr (std::is_same_v<T, WriteStringObject>) {
-            // Blocking only (the planner hosts `s <= v`).
             if (impl_.package_static_initialization_active) {
                 impl_.initialize_package_static_string_object(
                     op.object, string_register(op.source), member.process);
+            } else if (op.nonblocking) {
+                // `s <= v` updates the string in the host's NBA region (IEEE
+                // 1800-2023 10.4.2, 4.9.4), at the thread's stable order, as
+                // the reference schedules it; the kernel's NBA commit joins
+                // that region after it.
+                const auto origin = impl_.capture_signal_change_origin(
+                    member.process, SignalUpdateDomain::systemverilog_nba);
+                impl_.scheduler.schedule_systemverilog(origin.phase,
+                    running_process(member_index),
+                    [owner = &impl_, object = op.object,
+                        value = string_register(op.source)](Scheduler&) {
+                        owner->string_object_storage(object) = value;
+                    });
+                host_nba_staged_ = true;
+                host_nba_time_ = impl_.scheduler.now();
             } else {
                 impl_.string_object_storage(op.object) = string_register(op.source);
             }
@@ -3090,8 +3367,9 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             // $readmem lowering): the binding aliases the memory, so there
             // is nothing to copy. A private array of the memory's type (a
             // task's output array, IEEE 1800-2023 13.5) is written element by
-            // element, as element writes would be.
-            if (op.nonblocking || op.transaction_signal
+            // element, as element writes would be; a nonblocking write of one
+            // (`a <= b`, 10.4.2) stages its elements for the NBA region.
+            if (op.transaction_signal
                 || op.object >= container_of_object_.size()
                 || container_of_object_[op.object] == no_container) {
                 fail(member_index, pc,
@@ -3099,7 +3377,20 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
             const auto source = container_register(op.source);
             auto& target = containers_[container_of_object_[op.object]];
-            if (source != container_of_object_[op.object]) {
+            if (op.nonblocking) {
+                if (source == no_container
+                    || containers_[source].object != no_container_object
+                    || !(containers_[source].type == target.type)
+                    || containers_[source].count != target.count) {
+                    fail(member_index, pc,
+                        "static kernel container write needs a private array of its type");
+                }
+                for (std::uint32_t ordinal = 0U; ordinal < target.count; ++ordinal) {
+                    push_container_element(container_of_object_[op.object],
+                        ordinal, container_element(containers_[source], ordinal),
+                        member_index, pc);
+                }
+            } else if (source != container_of_object_[op.object]) {
                 if (source == no_container
                     || containers_[source].object != no_container_object
                     || !(containers_[source].type == target.type)
@@ -3249,8 +3540,11 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             // or the region the thread runs in, where it continues after
             // the processes already queued there.
             suspend_point = true;
-            const auto current = impl_.scheduler.current_phase();
-            if (!current || op.phase < *current) {
+            // The kernel's start activation runs the time-zero threads, which
+            // the reference runs in the Active region (IEEE 1800-2023 4.5).
+            const auto current = impl_.scheduler.current_phase().value_or(
+                SchedulerPhase::active);
+            if (op.phase < current) {
                 fail(member_index, pc,
                     "WaitRegion must target a later scheduler region");
             }
@@ -3387,6 +3681,14 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             } else {
                 outcome = Boundary::killed;
             }
+        } else if constexpr (std::is_same_v<T, Yield>) {
+            // Resume in the active region of the next delta (the
+            // reference's queue_next_delta).
+            suspend_point = true;
+            yield_wakes_.push_back({ index, threads_[index].epoch,
+                impl_.scheduler.now(), impl_.scheduler.delta() });
+            impl_.queue_next_delta(host_process_);
+            outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, ProcessSuspend>) {
             // suspend (9.7): the process stops until resumed; then, as for
             // the reference's boundary, a caller that is not itself
@@ -3524,6 +3826,28 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             outcome = op.scopes.empty() ? disable_block(index, pc, op)
                                         : disable_named_scope(index, pc, op.scopes);
         } else if constexpr (std::is_same_v<T, Fork>) {
+            if (const auto filter = impl_.fork_spawn_filter;
+                !op.branches.empty() && filter) {
+                // The host may refuse the children (a disabled concurrent
+                // assertion's attempts); the thread then requeues, as for
+                // the reference's spawn_fork.
+                impl_.prepare_callback_observation();
+                if (!(*filter)(member.process)) {
+                    suspend_point = true;
+                    ready_thread(index);
+                    outcome = Boundary::suspend;
+                    return;
+                }
+            }
+            if (op.branches.empty()) {
+                // A fork without branches (IEEE 1800-2023 9.3.2) completes at
+                // once; as for the reference's boundary, the thread requeues
+                // in the current region.
+                suspend_point = true;
+                ready_thread(index);
+                outcome = Boundary::suspend;
+                return;
+            }
             std::uint32_t group = no_slot;
             if (op.join != ForkJoinKind::none) {
                 if (!free_fork_groups_.empty()) {
@@ -3538,7 +3862,8 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             }
             for (const auto branch : op.branches) {
                 const auto child
-                    = spawn_thread(member_index, branch, index, group, pc);
+                    = spawn_thread(member_index, branch, index, group, pc,
+                        op.isolate_register_frame);
                 threads_[child].detached = op.detached;
                 ready_thread(child);
             }
@@ -3843,6 +4168,13 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
     std::swap(member.frame_bytes, threads_[index].frame_bytes);
     std::swap(member.saved_arrays, threads_[index].saved_arrays);
     std::swap(member.saved_array_marks, threads_[index].saved_array_marks);
+    // An isolated child runs with its own frame; the shared one is restored
+    // when it parks.
+    std::optional<CallableContext> shared_frame;
+    if (const auto& isolated = threads_[index].isolated) {
+        shared_frame = whole_frame(member);
+        load_context(member, *isolated);
+    }
     if (member.thread_contexts) {
         load_contexts(index);
     }
@@ -3882,6 +4214,10 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
     const auto park = [&](const std::uint32_t resume) {
         if (member.thread_contexts) {
             store_contexts(index);
+        }
+        if (shared_frame) {
+            store_context(member, *threads_[index].isolated);
+            load_context(member, *shared_frame);
         }
         auto& thread = threads_[index];
         std::swap(member.call_stack, thread.call_stack);

@@ -1130,6 +1130,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             ContainerObjectId object { };
             ContainerRegisterId source { };
             bool plain { };
+            bool nonblocking { };
         };
         std::vector<ObjectWrite> object_writes;
         const char* dynamic_reason = nullptr;
@@ -1189,8 +1190,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     private_containers.insert(value.target);
                 } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
                     if (is_dynamic(value.source)) {
-                        // A nonblocking write goes through the host's NBA
-                        // region (Impl::write_object): host objects only.
+                        // A nonblocking write of a host object goes through
+                        // the host's NBA region (Impl::write_object); one of
+                        // a kernel array stages its elements for the kernel's.
                         const bool host = !static_kernel_arena_container_type(
                                 types[value.source])
                             || (value.object < host_access_objects.size()
@@ -1202,17 +1204,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                                 value.object, value.source);
                         } else if (value.transaction_signal) {
                             dynamic_reason = "dynamic_container_transaction";
-                        } else if (value.nonblocking && !host) {
-                            dynamic_reason = "dynamic_container_nonblocking";
-                        } else if (dynamic_written != nullptr
-                            && (!static_kernel_arena_container_type(types[value.source])
-                                || host_access_objects[value.object] != 0U)) {
+                        } else if (dynamic_written != nullptr && host) {
                             dynamic_written->insert(value.object);
                         }
                         return;
                     }
                     object_writes.push_back({ value.object, value.source,
-                        !value.nonblocking && !value.transaction_signal });
+                        !value.transaction_signal, value.nonblocking });
                 } else if constexpr (std::is_same_v<T, ContainerRead>) {
                     if (is_dynamic(value.source)) {
                         return;
@@ -1294,9 +1292,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
             }
         }
-        for (const auto& [object, source, plain] : object_writes) {
+        for (const auto& [object, source, plain, nonblocking] : object_writes) {
+            // A nonblocking copy-out (`a <= b`) stages the private array's
+            // elements for the NBA region; a binding aliases its memory, so
+            // its write-back is blocking only.
             const auto found = binding_objects.find(source);
-            const bool write_back = found != binding_objects.end()
+            const bool write_back = !nonblocking && found != binding_objects.end()
                 && found->second.size() == 1U
                 && *found->second.begin() == object;
             const bool copy_out = plain && found == binding_objects.end()
@@ -1574,16 +1575,32 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             // current), and a constant delay resumes it there. It neither
             // waits #0, forces, disables nor writes design memories and
             // kernel containers (host_container_write).
+            // A register no ReadContainerObject binds holds the member's
+            // private array (container_rule): writing its elements touches
+            // no design memory.
+            std::set<ContainerRegisterId> bound_registers;
+            if (region_member(view)) {
+                for (std::size_t op = 0U; op < count; ++op) {
+                    const auto operation = operations.expanded(op);
+                    if (const auto* bind
+                        = operation_get_if<ReadContainerObject>(&operation)) {
+                        bound_registers.insert(bind->destination);
+                    }
+                }
+            }
             for (std::size_t op = 0U; supported && op < count
                  && region_member(view); ++op) {
                 const auto operation = operations.expanded(op);
-                const bool denied = visit_operation([](const auto& value) {
+                const bool denied = visit_operation([&](const auto& value) {
                     using T = std::decay_t<decltype(value)>;
                     if constexpr (std::is_same_v<T, WaitFor>) {
                         // A delay resumes the thread in its region at the
                         // later time (Impl::queue_at); a #0 resumes it in
                         // this time step's Inactive region instead.
                         return value.source.has_value() || value.delay == 0U;
+                    }
+                    if constexpr (std::is_same_v<T, ContainerWrite>) {
+                        return bound_registers.contains(value.target);
                     }
                     return std::is_same_v<T, WriteAfter>
                         || std::is_same_v<T, WriteAfterSlice>
@@ -1600,7 +1617,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         || std::is_same_v<T, FileReadLine>
                         || std::is_same_v<T, FileErrorStatus>
                         || std::is_same_v<T, FileScan>
-                        || std::is_same_v<T, ContainerWrite>
                         || std::is_same_v<T, WriteContainerObject>
                         || std::is_same_v<T, WriteContainerObjectElement>;
                 }, operation);

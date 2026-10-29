@@ -613,6 +613,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             member.thread_contexts = fork && push
                 && static_kernel_fork_holds_suspended_frame(
                     operations, operations.size());
+            member.isolated_forks = std::ranges::any_of(member.operations,
+                [](const Operation& operation) {
+                    const auto* fork = operation_get_if<Fork>(&operation);
+                    return fork != nullptr && fork->isolate_register_frame;
+                });
             named_disable_ = named_disable_
                 || std::ranges::any_of(member.operations,
                     [](const Operation& operation) {
@@ -1463,6 +1468,14 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     // The host's monitor prints in the host's time steps
                     // (IEEE 1800-2023 21.2.3), and an event's triggered
                     // state is of the host's time step (15.5.3): no time
+                    // warp.
+                    host_written = true;
+                } else if constexpr (std::is_same_v<T, WriteStringObject>) {
+                    // `s <= v` matures in the host's NBA region of the
+                    // host's time step: no time warp.
+                    host_written = host_written || op.nonblocking;
+                } else if constexpr (std::is_same_v<T, Yield>) {
+                    // A yield resumes in the host's next delta: no time
                     // warp.
                     host_written = true;
                 } else if constexpr (std::is_same_v<T, DynamicEvent>) {
@@ -5430,6 +5443,9 @@ bool Interpreter::Impl::StaticKernel::scan_inputs(const bool all)
     if (initialized_ && !switch_wakes_.empty()) {
         resume_switch_readers();
     }
+    if (initialized_ && !yield_wakes_.empty()) {
+        resume_yielded();
+    }
     if (initialized_ && !transaction_inputs_.empty()) {
         wake_transaction_waiters();
     }
@@ -5457,6 +5473,15 @@ bool Interpreter::Impl::StaticKernel::scan_inputs(const bool all)
     std::size_t kept = 0U;
     for (const auto signal : dirty) {
         const auto input = input_of_signal_[signal];
+        if (deposited_now(inputs_[input])) {
+            // Still this delta's deposit: the next delta's scan reads it.
+            // The host process may be queued for a same-delta activation,
+            // which drops host_deposit's request; each scan that keeps it
+            // asks again.
+            impl_.queue_next_delta(host_process_);
+            dirty[kept++] = signal;
+            continue;
+        }
         if (!all && inputs_[input].unwritten) {
             dirty[kept++] = signal;
             continue;
@@ -5473,8 +5498,39 @@ bool Interpreter::Impl::StaticKernel::scan_inputs(const bool all)
     return changed;
 }
 
+bool Interpreter::Impl::StaticKernel::deposited_now(const Input& input) const
+{
+    return input.deposited
+        && *input.deposited
+        == std::pair { impl_.scheduler.now(), impl_.scheduler.delta() };
+}
+
+void Interpreter::Impl::StaticKernel::host_deposit(const SignalId signal)
+{
+    if (signal < input_of_signal_.size()) {
+        if (const auto input = input_of_signal_[signal]; input != no_slot) {
+            inputs_[input].deposited
+                = std::pair { impl_.scheduler.now(), impl_.scheduler.delta() };
+            // The scan of the next delta reads it.
+            impl_.queue_next_delta(host_process_);
+            if (trace_) {
+                std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+"
+                          << impl_.scheduler.delta() << " input "
+                          << impl_.get_signal_cold(signal).name
+                          << " deposited\n";
+            }
+        }
+    }
+}
+
 bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
 {
+    if (deposited_now(input)) {
+        // The next delta's scan reads it (see scan_inputs).
+        impl_.queue_next_delta(host_process_);
+        return false;
+    }
+    input.deposited.reset();
     // Every committed host value change bumps the signal's revision.
     const auto revision = impl_.signal_value_revisions[input.signal];
     if (revision == input.revision && !check_inputs_) {

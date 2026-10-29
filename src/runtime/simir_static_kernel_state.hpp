@@ -261,6 +261,11 @@ public:
     /// `process` is a member, the kernel resumes it in the next delta, as
     /// the host queues a reader, and the call returns true.
     [[nodiscard]] bool wake_switch_reader(ProcessId process);
+    /// A generic-origin deposit to a host signal (Interpreter::deposit_signal:
+    /// the class services' $sv_class_heap_change, VPI, the debugger): the
+    /// kernel's readers see it from the next delta, as the host wakes its
+    /// processes (queue_next_delta).
+    void host_deposit(SignalId signal);
     /// The waiters of the host's mailbox, semaphore and dynamic-event
     /// tables (Impl::run_synchronization) that are kernel threads, by their
     /// process order: whether `process` is one, whether its wait still
@@ -535,6 +540,11 @@ private:
         /// each thread keeps its callable contexts (Thread::contexts), and
         /// the member runs on the operation tier.
         bool thread_contexts { };
+        /// A Fork gives its children copies of the register frame
+        /// (isolate_register_frame: an assertion attempt's locals): each
+        /// such child keeps its own frame (Thread::isolated), and the member
+        /// runs on the operation tier, whose registers are the frame.
+        bool isolated_forks { };
         /// Behavioral members: string registers shared by the member's
         /// threads, and the signal/edge list of WaitSensitivity.
         std::vector<std::string> strings;
@@ -634,6 +644,10 @@ private:
         /// signal that changed and returned to the scanned value inside one
         /// update phase (two forces in one cycle) still had an event.
         std::optional<std::pair<SimulationTick, std::uint64_t>> event_seen;
+        /// The time and delta of a host deposit (Interpreter::deposit_signal,
+        /// generic origin): the host wakes SystemVerilog readers in the
+        /// next delta, so a scan of that delta leaves the change for later.
+        std::optional<std::pair<SimulationTick, std::uint64_t>> deposited;
         /// The host's transaction stamp of the signal at the last scan, for
         /// threads that wait on its transactions (transaction_inputs_).
         std::optional<std::pair<SimulationTick, std::uint64_t>> transaction_seen;
@@ -833,6 +847,11 @@ private:
     void push_generic_pending(Pending pending);
     /// Queues a nonblocking memory element write (SystemVerilog).
     void push_element_write(const NbaEntry& entry);
+    /// Queues the nonblocking write of element `ordinal` of kernel array
+    /// `target`: a whole-array `a <= b` lands element by element in the NBA
+    /// region.
+    void push_container_element(std::uint32_t target, std::uint32_t ordinal,
+        PackedLogic4 value, std::uint32_t member, InstructionIndex instruction);
     /// A whole-array copy between private containers of one type.
     void copy_container(std::uint32_t destination, std::uint32_t source,
         std::uint32_t member, InstructionIndex instruction);
@@ -1156,6 +1175,10 @@ private:
         /// its own frames, innermost last); stored when it parks, loaded
         /// when it resumes.
         std::vector<std::shared_ptr<CallableContext>> contexts;
+        /// A child of an isolating Fork: its own copy of the member's whole
+        /// register frame, loaded while it runs (the frame the other threads
+        /// share is set aside meanwhile) and stored when it parks.
+        std::shared_ptr<CallableContext> isolated;
         /// Live children; the parent of a join-all fork resumes at zero.
         std::uint32_t children { };
         /// Fork children whose records exist (alive, or ended with
@@ -1274,6 +1297,8 @@ private:
     };
     std::vector<Thread> threads_;
     std::vector<std::uint32_t> free_threads_;
+    /// Fork children by process number (Thread::order).
+    std::unordered_map<ProcessId, std::uint32_t> child_threads_;
     std::vector<ForkGroup> fork_groups_;
     std::vector<std::uint32_t> free_fork_groups_;
     std::vector<std::uint32_t> ready_threads_;
@@ -1296,6 +1321,17 @@ private:
     };
     std::vector<SwitchWake> switch_wakes_;
     void resume_switch_readers();
+    /// Threads that yielded (Yield: the reference's queue_next_delta),
+    /// with the time and delta they yielded in: a scan of a later delta
+    /// resumes them.
+    struct YieldWake {
+        std::uint32_t thread { };
+        std::uint64_t epoch { };
+        SimulationTick time { };
+        std::uint64_t delta { };
+    };
+    std::vector<YieldWake> yield_wakes_;
+    void resume_yielded();
     std::priority_queue<Timer, std::vector<Timer>, std::greater<>> timers_;
     std::uint64_t timer_sequence_ { };
     /// The wake time of the scheduler task that will activate the kernel.
@@ -1517,7 +1553,8 @@ private:
     void start_behavioral();
     [[nodiscard]] std::uint32_t spawn_thread(std::uint32_t member,
         std::uint32_t pc, std::uint32_t parent, std::uint32_t group,
-        std::uint32_t fork_site = static_kernel_detail::no_slot);
+        std::uint32_t fork_site = static_kernel_detail::no_slot,
+        bool isolated = false);
     /// A thread taken from a ready list: false when it is not alive (a
     /// killed thread's slot is freed here).
     [[nodiscard]] bool take_ready(std::uint32_t thread);
@@ -1577,6 +1614,9 @@ private:
         std::optional<std::uint64_t> dynamic_event;
     };
     std::unordered_map<ProcessId, SynchronizationWait> synchronization_waits_;
+    /// The input took a host deposit in this delta (host_deposit): its
+    /// readers see it from the next one.
+    [[nodiscard]] bool deposited_now(const Input& input) const;
     struct MemberSynchronizationClient;
     /// A member register as the thread runner holds it (compiled body or
     /// reference register file).
@@ -1619,6 +1659,22 @@ private:
     void load_contexts(std::uint32_t thread, bool escaping_only = false);
     void store_context(const Member& member, CallableContext& context);
     void load_context(Member& member, const CallableContext& context);
+    void free_thread_slot(std::uint32_t index);
+    [[nodiscard]] std::optional<std::uint32_t> child_thread(ProcessId process) const;
+public:
+    /// A live (or recorded) fork child's design process and the child of
+    /// its member's thread it descends from (Interpreter::design_process,
+    /// dynamic_process_root); nothing for another process number.
+    [[nodiscard]] std::optional<ProcessId> child_design_process(
+        ProcessId process) const;
+    [[nodiscard]] std::optional<ProcessId> child_dynamic_root(
+        ProcessId process) const;
+    /// Interpreter::kill_dynamic_processes for the kernel's fork children.
+    void kill_member_children(std::span<const ProcessId> design_processes);
+private:
+    /// A context covering every register, string and private array of the
+    /// member, holding their current values.
+    [[nodiscard]] CallableContext whole_frame(const Member& member);
     void ready_thread(std::uint32_t thread);
     /// Resumes a thread in a later region of this time step (WaitRegion),
     /// or in its member's region (ready_thread), through the hosted region

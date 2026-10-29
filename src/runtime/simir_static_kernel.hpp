@@ -841,15 +841,20 @@ template <typename OperationAt, typename Types>
             return true;
         } else if constexpr (std::is_same_v<T, WaitRegion>) {
             // The later regions' hosted lists (a deferred assertion's
-            // action runs in the Reactive or Postponed region; IEEE
-            // 1800-2023 16.4.2).
-            return value.phase == SchedulerPhase::observed
+            // action runs in the Reactive or Postponed region, IEEE
+            // 1800-2023 16.4.2; a class property's nonblocking write in the
+            // NBA or Re-NBA region, 10.4.2).
+            return value.phase == SchedulerPhase::update
+                || value.phase == SchedulerPhase::re_update
+                || value.phase == SchedulerPhase::observed
                 || value.phase == SchedulerPhase::reactive
                 || value.phase == SchedulerPhase::re_inactive
                 || value.phase == SchedulerPhase::postponed;
         } else if constexpr (std::is_same_v<T, Fork>) {
-            return !value.isolate_register_frame
-                && !value.branches.empty();
+            // An isolating fork's children keep copies of the register frame
+            // (Thread::isolated); a fork without branches requeues.
+            (void)value;
+            return true;
         } else if constexpr (std::is_same_v<T, DisableBlock>) {
             // A named block (IEEE 1800-2023 9.6.2): of the process's own
             // code, or named by hierarchical name, whose declaring
@@ -868,17 +873,19 @@ template <typename OperationAt, typename Types>
             // 21.4, 21.5).
             return true;
         } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
-            // Only the write-back of a binding to its own memory (see the
-            // planner).
-            return !value.nonblocking && !value.transaction_signal;
+            // The write-back of a binding to its own memory and the copy-out
+            // of a private array, blocking or nonblocking (see the planner).
+            return !value.transaction_signal;
         } else if constexpr (std::is_same_v<T, WriteStringObject>) {
             // A nonblocking string write matures in the host's NBA region.
-            return !value.nonblocking;
+            (void)value;
+            return true;
         } else if constexpr (std::is_same_v<T, ForceSignalSlice>
             || std::is_same_v<T, ReleaseSignalSlice>) {
-            // The host's force of a host signal (static_kernel_host_signal);
-            // a port segment force reaches a net by another name.
-            return !value.port_segment;
+            // The host's force of a host signal (static_kernel_host_signal),
+            // also through a port segment (the host keeps its force layers).
+            (void)value;
+            return true;
         } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
             // A static method or DPI function call (IEEE 1800-2023 8.10,
             // 35.5) through the application's services; its body may touch
@@ -933,6 +940,8 @@ template <typename OperationAt, typename Types>
                 || std::is_same_v<T, SignalLastActive>
                 || std::is_same_v<T, WaitSensitivity>
                 || std::is_same_v<T, WaitForever>
+                // The next delta (the UVM run's wait for its run phase).
+                || std::is_same_v<T, Yield>
                 || std::is_same_v<T, ForkEnd>
                 // wait fork and disable fork (IEEE 1800-2023 9.6.1, 9.6.3)
                 // of the member's own threads.
@@ -943,6 +952,17 @@ template <typename OperationAt, typename Types>
                 || std::is_same_v<T, Report>
                 // An assertion's computed message (IEEE 1800-2023 16.3).
                 || std::is_same_v<T, StringReport>
+                // Immediate assertions (16.3) and $sformatf with a run-time
+                // format string (21.3.3).
+                || std::is_same_v<T, Assert>
+                || std::is_same_v<T, RuntimeStringFormat>
+                // Covergroup sampling and coverage queries (IEEE 1800-2023
+                // 19.8) and $system: the host's services, on registers.
+                || std::is_same_v<T, CoverageSample>
+                || std::is_same_v<T, CoverageQuery>
+                || std::is_same_v<T, CoverageControl>
+                || std::is_same_v<T, CoverageAccess>
+                || std::is_same_v<T, SystemCommand>
                 || std::is_same_v<T, RandomValue>
                 || std::is_same_v<T, ConcatenateStrings>
                 || std::is_same_v<T, StringMethod>
@@ -972,6 +992,8 @@ template <typename OperationAt, typename Types>
                 // An event's triggered state (15.5.3), from the host's
                 // event history (static_kernel_host_signal).
                 || std::is_same_v<T, EventTriggered>
+                // Event assignment (15.5.5.1) of host events.
+                || std::is_same_v<T, EventAlias>
                 // Delayed, gate-delay and inertial updates of host signals
                 // (10.3.3, 28.16, static_kernel_host_signal).
                 || std::is_same_v<T, WriteAfter>
@@ -1205,7 +1227,7 @@ template <typename OperationAt, typename Types>
             // registers).
             return true;
         } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
-            return !value.nonblocking && !value.transaction_signal;
+            return !value.transaction_signal;
         } else if constexpr (std::is_same_v<T, WriteProjected>
             || std::is_same_v<T, WriteProjectedSlice>
             || std::is_same_v<T, WriteProjectedDynamicSlice>
@@ -1219,8 +1241,10 @@ template <typename OperationAt, typename Types>
             return true;
         } else if constexpr (std::is_same_v<T, ForceSignalSlice>
             || std::is_same_v<T, ReleaseSignalSlice>) {
-            // Forces scheduled for the host's update phase (10.5.2.1).
-            return !value.port_segment;
+            // Forces scheduled for the host's update phase (10.5.2.1), also
+            // through a port segment.
+            (void)value;
+            return true;
         } else {
             return std::is_same_v<T, WaitFor>
                 // std.env.stop (16.5.6 STOP): the run pauses at the thread.

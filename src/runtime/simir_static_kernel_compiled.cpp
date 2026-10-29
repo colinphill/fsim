@@ -127,6 +127,11 @@ void Interpreter::Impl::StaticKernel::compile_members()
             not_compiled_reason_[index] = "thread_contexts";
             continue;
         }
+        // So do per-thread register frames (Thread::isolated).
+        if (members_[index].isolated_forks) {
+            not_compiled_reason_[index] = "isolated_forks";
+            continue;
+        }
         // Reference-format container registers run the reference's
         // container operations on the operation tier.
         if (!members_[index].dynamic_containers.empty()) {

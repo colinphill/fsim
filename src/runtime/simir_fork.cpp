@@ -472,6 +472,32 @@ Interpreter::Impl::process_from_handle(
     return target;
 }
 
+
+bool Interpreter::Impl::alias_event(const EventAlias& alias)
+{
+    // Assignment of a named event (IEEE 1800-2023 15.5.5.1): the target
+    // becomes the source's synchronization object, or none for null.
+    const auto& target = get_signal(alias.target);
+    const auto* source = alias.has_source ? &get_signal(alias.source) : nullptr;
+    if (!target.event_variable
+        || (source != nullptr && !source->event_variable)) {
+        return false;
+    }
+    set_event_identity(alias.target,
+        source != nullptr ? event_identities.at(alias.source) : std::nullopt);
+    if (source != nullptr) {
+        driven_values.at(alias.target) = driven_values.at(alias.source);
+        signals.at(alias.target).initial_value = source->initial_value;
+        signal_last_values.at(alias.target) = signal_last_values.at(alias.source);
+        signal_events.at(alias.target) = signal_events.at(alias.source);
+        signal_event_scheduling_stamps.at(alias.target)
+            = signal_event_scheduling_stamps.at(alias.source);
+        signal_transactions.at(alias.target)
+            = signal_transactions.at(alias.source);
+    }
+    return true;
+}
+
 void Interpreter::Impl::complete_process(
     ProcessState& process,
     const ProcessStatus terminal_status)
@@ -565,29 +591,8 @@ void Interpreter::Impl::complete_process(
     }
     if (const auto* alias = fsim::runtime::simir::operation_get_if<EventAlias>(
             &operation)) {
-        const auto& target = get_signal(alias->target);
-        const auto* source = alias->has_source
-            ? &get_signal(alias->source)
-            : nullptr;
-        if (!target.event_variable
-            || (source != nullptr && !source->event_variable)) {
+        if (!alias_event(*alias)) {
             fail(process, "EventAlias requires named-event variables");
-        }
-        set_event_identity(
-            alias->target,
-            source != nullptr
-                ? event_identities.at(alias->source)
-                : std::nullopt);
-        if (source != nullptr) {
-            driven_values.at(alias->target) = driven_values.at(alias->source);
-            signals.at(alias->target).initial_value = source->initial_value;
-            signal_last_values.at(alias->target)
-                = signal_last_values.at(alias->source);
-            signal_events.at(alias->target) = signal_events.at(alias->source);
-            signal_event_scheduling_stamps.at(alias->target)
-                = signal_event_scheduling_stamps.at(alias->source);
-            signal_transactions.at(alias->target)
-                = signal_transactions.at(alias->source);
         }
         process.status = ProcessStatus::running;
         return true;

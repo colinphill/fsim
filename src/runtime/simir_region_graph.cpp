@@ -817,6 +817,14 @@ bool visit_known_region_accesses(
             // static calls remain opaque: they run class bodies that reach
             // package-scope signals and toggle $sv_class_heap_change.
             return true;
+        } else if constexpr (std::is_same_v<T, CoverageSample>
+            || std::is_same_v<T, CoverageQuery>
+            || std::is_same_v<T, CoverageControl>
+            || std::is_same_v<T, CoverageAccess>
+            || std::is_same_v<T, SystemCommand>) {
+            // The host's coverage database (sampled from register actuals)
+            // and $system's shell: neither reads or writes a signal.
+            return true;
         } else if constexpr (std::is_same_v<T, Assert>
             || std::is_same_v<T, Display>
             || std::is_same_v<T, FormatDisplay>
@@ -838,8 +846,9 @@ bool visit_known_region_accesses(
 bool fork_control_access_is_known(const Fork& fork,
     const std::size_t instruction, const std::size_t operation_count)
 {
-    if (fork.isolate_register_frame
-        || (fork.join != ForkJoinKind::all
+    // A child's copy of the register frame (isolate_register_frame) leaves
+    // its signal access as the shared frame's would be.
+    if ((fork.join != ForkJoinKind::all
             && fork.join != ForkJoinKind::any
             && fork.join != ForkJoinKind::none)
         || instruction + 1U >= operation_count) {
@@ -2183,7 +2192,21 @@ RegionGraphContainerBindings build_region_graph_container_bindings_impl(
         const auto& value = objects[object];
         RegionContainerDescriptor descriptor;
         descriptor.object = object;
-        descriptor.complete = !value.slice_alias;
+        descriptor.complete = true;
+        if (value.slice_alias) {
+            // A view of a range of an earlier object (an array slice
+            // connected to a port, IEEE 1800-2023 23.3.3.5): it is that
+            // object's storage, so its access is the root's, a superset of
+            // the selected range's.
+            const auto root = value.slice_alias->object;
+            if (root >= object) {
+                throw std::invalid_argument(
+                    "RegionGraph container slice alias is invalid");
+            }
+            const auto& backing = result.containers[root];
+            descriptor.complete = backing.complete;
+            descriptor.bindings = backing.bindings;
+        }
         for (const auto* alias : direct_by_object[object]) {
             descriptor.bindings.push_back({
                 alias->signal, alias->readable, alias->writable });
