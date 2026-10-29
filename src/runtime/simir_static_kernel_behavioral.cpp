@@ -196,6 +196,13 @@ void Interpreter::Impl::StaticKernel::start_behavioral()
             }
             if (member.start_late) {
                 late_members_.push_back(index);
+            } else if (member.vhdl && member.phase == SchedulerPhase::postponed) {
+                // A postponed process initializes with the others (IEEE
+                // 1076-2019 14.7.5.2), in the first round's VHDL work.
+                const auto thread = spawn_thread(index, 0U, no_slot, no_slot);
+                ++threads_[thread].epoch;
+                threads_[thread].queued = true;
+                vhdl_ready_threads_.push_back(thread);
             } else {
                 ready_thread(spawn_thread(index, 0U, no_slot, no_slot));
             }
@@ -869,6 +876,13 @@ void Interpreter::Impl::StaticKernel::finish_thread(const std::uint32_t index)
     }
 }
 
+void Interpreter::Impl::StaticKernel::host_object_written()
+{
+    if (initialized_) {
+        (void)scan_inputs(false);
+    }
+}
+
 void Interpreter::Impl::StaticKernel::complete_program_member(
     const std::uint32_t member)
 {
@@ -1147,9 +1161,84 @@ struct Interpreter::Impl::StaticKernel::MemberFileStorage final
         kernel.write_signal_owned(signal, std::move(value), std::nullopt,
             member, pc);
     }
+    // A reference-format register is the reference's value; an arena one
+    // (private, or bound to a kernel memory) is written back element by
+    // element, as element writes would be.
+    [[nodiscard]] ContainerValue container(const ContainerRegisterId id) override
+    {
+        auto& state = kernel.members_[member];
+        if (state.dynamic_container(id)) {
+            return *state.dynamic_containers[id];
+        }
+        return arena_value(arena_register(id));
+    }
+    void write_container(const ContainerRegisterId id, ContainerValue value) override
+    {
+        auto& state = kernel.members_[member];
+        if (state.dynamic_container(id)) {
+            state.dynamic_containers[id]
+                = std::make_shared<ContainerValue>(std::move(value));
+            return;
+        }
+        write_arena(arena_register(id), value);
+    }
+    // A kernel memory, or a host object (the host keeps the signals its
+    // elements alias; the kernel rescans its inputs after the write).
+    [[nodiscard]] ContainerValue object(const ContainerObjectId id) override
+    {
+        if (const auto index = kernel_object(id); index != static_kernel_detail::no_container) {
+            return arena_value(index);
+        }
+        return kernel.impl_.read_container_object_value(id);
+    }
+    void write_object(const ContainerObjectId id, const ContainerValue& value) override
+    {
+        if (const auto index = kernel_object(id); index != static_kernel_detail::no_container) {
+            write_arena(index, value);
+            return;
+        }
+        kernel.impl_.write_container_object_value(id, value,
+            kernel.members_[member].process);
+        kernel.host_object_written();
+    }
     [[noreturn]] void fail(const std::string& message) override
     {
         kernel.fail(member, pc, message);
+    }
+    [[nodiscard]] std::uint32_t arena_register(const ContainerRegisterId id)
+    {
+        const auto& registers = kernel.members_[member].container_registers;
+        if (id >= registers.size() || registers[id] == static_kernel_detail::no_container) {
+            kernel.fail(member, pc, "static kernel container register is not bound");
+        }
+        return registers[id];
+    }
+    [[nodiscard]] std::uint32_t kernel_object(const ContainerObjectId id) const
+    {
+        return id < kernel.container_of_object_.size()
+            ? kernel.container_of_object_[id] : static_kernel_detail::no_container;
+    }
+    [[nodiscard]] ContainerValue arena_value(const std::uint32_t index) const
+    {
+        const auto& source = kernel.containers_[index];
+        ContainerValue value;
+        value.type = source.type;
+        value.elements.reserve(source.count);
+        for (std::uint32_t ordinal = 0U; ordinal < source.count; ++ordinal) {
+            value.elements.push_back(kernel.container_element(source, ordinal));
+        }
+        return value;
+    }
+    void write_arena(const std::uint32_t index, const ContainerValue& value)
+    {
+        auto& target = kernel.containers_[index];
+        for (std::uint32_t ordinal = 0U;
+             ordinal < target.count && ordinal < value.elements.size(); ++ordinal) {
+            if (!(value.elements[ordinal] == kernel.container_element(target, ordinal))) {
+                kernel.write_container_element(target, ordinal,
+                    value.elements[ordinal], member, pc);
+            }
+        }
     }
     StaticKernel& kernel;
     std::uint32_t member;
@@ -1213,6 +1302,63 @@ struct Interpreter::Impl::StaticKernel::MemberAssertionStorage final
 // frame holds them, and the reference-format container registers
 // (Member::dynamic_containers), copied before a write when shared as the
 // reference's get_container_register does.
+// The member's registers and reports for the reference's std.env
+// operations (Impl::run_vhdl_assert_api, run_vhdl_environment_time).
+struct Interpreter::Impl::StaticKernel::MemberVhdlApiStorage final
+    : VhdlApiStorage {
+    MemberVhdlApiStorage(StaticKernel& kernel_value,
+        const std::uint32_t member_value, const std::uint32_t pc_value) noexcept
+        : kernel { kernel_value }, member { member_value }, pc { pc_value }
+    {
+    }
+    [[nodiscard]] PackedLogic4 packed(const RegisterId id, std::size_t) override
+    {
+        const auto& registers = kernel.members_[member].registers;
+        if (id >= registers.size()) {
+            kernel.fail(member, pc, "invalid register ID");
+        }
+        return registers[id];
+    }
+    void write_packed(const RegisterId id, const PackedLogic4& value) override
+    {
+        auto& state = kernel.members_[member];
+        if (id >= state.registers.size()) {
+            kernel.fail(member, pc, "invalid register ID");
+        }
+        state.registers[id] = Impl::coerce_value_kind(value,
+            id < state.register_kinds.size() ? state.register_kinds[id]
+                                             : ValueKind::logic4);
+    }
+    [[nodiscard]] std::string text(const StringRegisterId id) override
+    {
+        return string(id);
+    }
+    void write_text(const StringRegisterId id, const std::string_view value) override
+    {
+        string(id) = value;
+    }
+    void report(const std::string_view message, const AssertionSeverity severity,
+        const SourceLocation& source, const bool standalone) override
+    {
+        kernel.report_vhdl(member, pc, message, severity, source, standalone);
+    }
+    [[noreturn]] void fail(const std::string& message) override
+    {
+        kernel.fail(member, pc, message);
+    }
+    [[nodiscard]] std::string& string(const StringRegisterId id)
+    {
+        auto& strings = kernel.members_[member].strings;
+        if (id >= strings.size()) {
+            kernel.fail(member, pc, "invalid string register ID");
+        }
+        return strings[id];
+    }
+    StaticKernel& kernel;
+    std::uint32_t member;
+    std::uint32_t pc;
+};
+
 struct Interpreter::Impl::StaticKernel::MemberContainerAccess final
     : ContainerRegisterAccess {
     MemberContainerAccess(StaticKernel& kernel_value,
@@ -1401,6 +1547,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                         op.signed_index, op.linear_index, value, member.process,
                         instruction, origin);
                 }
+                host_object_written();
                 return;
             }
         } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
@@ -1436,6 +1583,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 } catch (const std::invalid_argument& error) {
                     fail(member_index, pc, error.what());
                 }
+                host_object_written();
                 return;
             }
         }
@@ -1568,7 +1716,8 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             || std::is_same_v<T, FileErrorStatus>
             || std::is_same_v<T, FileScan>
             || std::is_same_v<T, FilePosition>
-            || std::is_same_v<T, FileFlush>) {
+            || std::is_same_v<T, FileFlush>
+            || std::is_same_v<T, FileBinaryRead>) {
             // File input and output (IEEE 1800-2023 21.3, 1076-2019 16.4):
             // the reference's operations on the thread's registers. The file
             // table, the standard streams and string objects are the host's;
@@ -1799,6 +1948,43 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     fail(member_index, pc, error.what());
                 }
             }
+        } else if constexpr (std::is_same_v<T, VcdControl>) {
+            // $dumpfile, $dumpvars and the other dump controls (IEEE
+            // 1800-2023 21.7): the host's VCD observer, which records every
+            // signal (the planner keeps them host signals, observe_all).
+            if (!impl_.vcd_control_hook) {
+                fail(member_index, pc, "VCD control service is unavailable");
+            }
+            VcdControlEvent event;
+            event.kind = op.kind;
+            if (op.filename) {
+                event.filename = string_register(*op.filename);
+            }
+            if (op.value) {
+                const auto converted = packed_register(*op.value).known_unsigned_value();
+                if (!converted) {
+                    fail(member_index, pc,
+                        "VCD control value must be a known unsigned 64-bit integer");
+                }
+                event.value = *converted;
+            }
+            impl_.control_vcd(member.process, op, std::move(event));
+        } else if constexpr (std::is_same_v<T, VhdlAssertApi>) {
+            // The std.env assertion controls and counts (IEEE 1076-2019
+            // 16.5.6), as the reference runs them.
+            MemberVhdlApiStorage storage { *this, member_index, pc };
+            impl_.run_vhdl_assert_api(storage, op);
+        } else if constexpr (std::is_same_v<T, VhdlEnvironmentTime>) {
+            // The std.env date and time functions (16.5.5).
+            MemberVhdlApiStorage storage { *this, member_index, pc };
+            impl_.run_vhdl_environment_time(storage, op);
+        } else if constexpr (std::is_same_v<T, VhdlEnvironmentTimeToString>) {
+            MemberVhdlApiStorage storage { *this, member_index, pc };
+            impl_.run_vhdl_environment_time_string(storage, op);
+        } else if constexpr (std::is_same_v<T, VhdlEnvironmentGetenv>) {
+            // GETENV (16.5.6).
+            MemberVhdlApiStorage storage { *this, member_index, pc };
+            impl_.run_vhdl_environment_getenv(storage, op);
         } else if constexpr (std::is_same_v<T, StringReport>) {
             // A VHDL report or assertion with a computed message (IEEE
             // 1076-2019 10.8, 10.9), as the reference emits it.
@@ -2154,9 +2340,12 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             // binding aliases. The file loads into the current contents,
             // written back element by element as element writes would be.
             // An I/O error leaves the array as it was (the reference loads
-            // a copy and never writes it back).
-            const auto index = container_register(op.target);
-            if (op.write || index == no_container) {
+            // a copy and never writes it back). $writememb/$writememh (21.5)
+            // write the array's contents. A reference-format register
+            // (an associative array, say) is the reference's own value.
+            const bool dynamic = member.dynamic_container(op.target);
+            const auto index = dynamic ? no_container : container_register(op.target);
+            if (!dynamic && index == no_container) {
                 fail(member_index, pc, "static kernel container register is not bound");
             }
             const auto bound = [&](const std::optional<RegisterId> source,
@@ -2173,14 +2362,40 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 }
                 return static_cast<std::int32_t>(*converted);
             };
-            const auto start = bound(op.start, "read-memory start");
-            const auto finish = bound(op.finish, "read-memory finish");
+            const auto start = bound(op.start,
+                op.write ? "write-memory start" : "read-memory start");
+            const auto finish = bound(op.finish,
+                op.write ? "write-memory finish" : "read-memory finish");
+            const auto write_file = [&](const ContainerValue& source) {
+                try {
+                    impl_.write_memory_file(member.process, string_register(op.path),
+                        source, op.hexadecimal, start, finish);
+                } catch (const InterpreterError&) {
+                    throw;
+                } catch (const std::exception& error) {
+                    fail(member_index, pc, error.what());
+                }
+            };
+            if (dynamic) {
+                MemberContainerAccess access { *this, member_index, pc };
+                if (op.write) {
+                    write_file(access.read_container(op.target));
+                } else {
+                    impl_.read_memory_file(member.process, pc, string_register(op.path),
+                        access.container(op.target), op.hexadecimal, start, finish);
+                }
+                return;
+            }
             auto& container = containers_[index];
             ContainerValue value;
             value.type = container.type;
             value.elements.reserve(container.count);
             for (std::uint32_t ordinal = 0U; ordinal < container.count; ++ordinal) {
                 value.elements.push_back(container_element(container, ordinal));
+            }
+            if (op.write) {
+                write_file(value);
+                return;
             }
             impl_.read_memory_file(member.process, pc, string_register(op.path), value,
                 op.hexadecimal, start, finish);

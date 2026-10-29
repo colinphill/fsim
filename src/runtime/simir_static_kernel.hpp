@@ -476,7 +476,7 @@ struct StaticKernelInlinedProgram {
 
 /// The file operations a behavioral member runs on its registers through the
 /// reference's run_file (IEEE 1800-2023 21.3, IEEE 1076-2019 16.4); $fread
-/// (FileBinaryRead) may target a design array and stays on the host.
+/// (FileBinaryRead, 21.3.4.4) fills a register, a signal or an array.
 [[nodiscard]] inline bool static_kernel_file_operation(
     const Operation& operation)
 {
@@ -491,7 +491,8 @@ struct StaticKernelInlinedProgram {
             || std::is_same_v<T, FileErrorStatus>
             || std::is_same_v<T, FileScan>
             || std::is_same_v<T, FilePosition>
-            || std::is_same_v<T, FileFlush>;
+            || std::is_same_v<T, FileFlush>
+            || std::is_same_v<T, FileBinaryRead>;
     }, operation);
 }
 
@@ -534,7 +535,9 @@ inline constexpr bool static_kernel_reference_container_operation
     || std::is_same_v<T, PushContainer>
     || std::is_same_v<T, PopContainer>
     || std::is_same_v<T, AppendContainer>
-    || std::is_same_v<T, ContainerBitstream>;
+    || std::is_same_v<T, ContainerBitstream>
+    // VHDL arrays with run-time index ranges (IEEE 1076-2019 5.3.2.2).
+    || std::is_same_v<T, VhdlShaped>;
 
 /// Calls `visit(id)` for each container register a reference container
 /// operation, ContainerRead, ContainerWrite or CopyContainerRegister names.
@@ -573,6 +576,31 @@ inline void static_kernel_container_operands(
         } else if constexpr (std::is_same_v<T, ContainerBitstream>) {
             visit(op.bits);
             visit(op.container);
+        } else if constexpr (std::is_same_v<T, VhdlShaped>) {
+            // The registers each operation uses (an unused one is zero).
+            switch (op.operation) {
+            case VhdlShapedOperation::create:
+            case VhdlShapedOperation::from_packed:
+            case VhdlShapedOperation::element_write:
+            case VhdlShapedOperation::slice_write:
+            case VhdlShapedOperation::append_packed:
+                visit(op.target);
+                break;
+            case VhdlShapedOperation::query:
+            case VhdlShapedOperation::to_packed:
+            case VhdlShapedOperation::slice_read:
+            case VhdlShapedOperation::equal_packed:
+                visit(op.source);
+                break;
+            case VhdlShapedOperation::element_read:
+            case VhdlShapedOperation::slice:
+            case VhdlShapedOperation::assign:
+            case VhdlShapedOperation::equal:
+            case VhdlShapedOperation::append:
+                visit(op.target);
+                visit(op.source);
+                break;
+            }
         } else if constexpr (std::is_same_v<T, ContainerSize>
             || std::is_same_v<T, ContainerReduction>
             || std::is_same_v<T, ContainerStringRead>
@@ -594,14 +622,16 @@ inline void static_kernel_container_operands(
     }, operation);
 }
 
-/// The container registers a SystemVerilog behavioral member holds in
-/// reference format: those of a type the arena does not hold that the
-/// member uses, those a reference container operation names, and those a
-/// copy connects to either. `operation_at(op)` is the member's operation
-/// `op` of `count`; `types` its container register types.
+/// The container registers a behavioral member holds in reference format:
+/// those a reference container operation names, those of a type the arena
+/// does not hold that a SystemVerilog member uses (`by_type`; a VHDL
+/// member's other registers keep their kernel shapes), and those a copy
+/// connects to either. `operation_at(op)` is the member's operation `op` of
+/// `count`; `types` its container register types.
 template <typename OperationAt, typename Types>
 [[nodiscard]] std::vector<std::uint8_t> static_kernel_dynamic_container_registers(
-    const std::size_t count, OperationAt&& operation_at, const Types& types)
+    const std::size_t count, OperationAt&& operation_at, const Types& types,
+    const bool by_type = true)
 {
     std::vector<std::uint8_t> dynamic(types.size(), 0U);
     const auto mark = [&](const ContainerRegisterId id) {
@@ -621,12 +651,18 @@ template <typename OperationAt, typename Types>
         static_kernel_container_operands(operation,
             [&](const ContainerRegisterId id) {
                 if (reference
-                    || (id < types.size()
+                    || (by_type && id < types.size()
                         && !static_kernel_arena_container_type(types[id]))) {
                     mark(id);
                 }
             });
-        if (const auto* bind = operation_get_if<ReadContainerObject>(&operation);
+        if (!by_type) {
+            if (const auto* copy
+                = operation_get_if<CopyContainerRegister>(&operation)) {
+                copies.emplace_back(copy->destination, copy->source);
+            }
+        } else if (const auto* bind
+            = operation_get_if<ReadContainerObject>(&operation);
             bind != nullptr && bind->destination < types.size()
             && !static_kernel_arena_container_type(types[bind->destination])) {
             mark(bind->destination);
@@ -727,8 +763,9 @@ template <typename OperationAt, typename Types>
             // $time, $stime and $realtime.
             return value.function >= SystemVerilogMathFunction::Time;
         } else if constexpr (std::is_same_v<T, LoadMemory>) {
-            // $readmemb/$readmemh; $writemem* stays on the host.
-            return !value.write;
+            // $readmemb/$readmemh and $writememb/$writememh (IEEE 1800-2023
+            // 21.4, 21.5).
+            return true;
         } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
             // Only the write-back of a binding to its own memory (see the
             // planner).
@@ -758,6 +795,8 @@ template <typename OperationAt, typename Types>
                 || std::is_same_v<T, Stop>
                 || std::is_same_v<T, Pause>
                 || std::is_same_v<T, Report>
+                // An assertion's computed message (IEEE 1800-2023 16.3).
+                || std::is_same_v<T, StringReport>
                 || std::is_same_v<T, RandomValue>
                 || std::is_same_v<T, ConcatenateStrings>
                 || std::is_same_v<T, StringMethod>
@@ -770,6 +809,9 @@ template <typename OperationAt, typename Types>
                 || std::is_same_v<T, ReadStringObject>
                 // $timeformat (20.4.2).
                 || std::is_same_v<T, TimeFormatControl>
+                // Dump controls (21.7); the planner keeps every signal a
+                // host signal (observe_all).
+                || std::is_same_v<T, VcdControl>
                 // $monitor, $strobe, $monitoron/off (21.2.2, 21.2.3): the
                 // planner keeps the monitored signals host signals.
                 || std::is_same_v<T, MonitorInstall>
@@ -977,10 +1019,24 @@ template <typename OperationAt, typename Types>
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
             // `now` (IEEE 1076-2019 16.3): the time query.
             return value.function >= SystemVerilogMathFunction::Time;
+        } else if constexpr (std::is_same_v<T, VhdlAssertApi>
+            || std::is_same_v<T, VhdlEnvironmentTime>
+            || std::is_same_v<T, VhdlEnvironmentTimeToString>
+            || std::is_same_v<T, VhdlEnvironmentGetenv>) {
+            // std.env's assertion controls, date/time functions and GETENV
+            // (16.5.5, 16.5.6), the reference's run_vhdl_* on the member's
+            // registers.
+            (void)value;
+            return true;
         } else if constexpr (std::is_same_v<T, ContainerWrite>) {
             // Process-private arrays and copies of protected-type state
             // (see the planner's container rule).
             return !value.string_index && !value.associative_default;
+        } else if constexpr (static_kernel_reference_container_operation<T>) {
+            // Access values and arrays with run-time ranges in
+            // reference-format registers (static_kernel_dynamic_container_
+            // registers).
+            return true;
         } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
             return !value.nonblocking && !value.transaction_signal;
         } else if constexpr (std::is_same_v<T, WriteProjected>

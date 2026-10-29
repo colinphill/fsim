@@ -1306,6 +1306,7 @@ private:
     /// operations (run_file) use them.
     struct MemberFileStorage;
     struct MemberContainerAccess;
+    struct MemberVhdlApiStorage;
     struct MemberAssertionStorage;
     /// A VHDL-2019 member's report or assertion violation (Impl::report_vhdl)
     /// at the kernel's time.
@@ -1471,6 +1472,11 @@ private:
     /// last of its members' threads ends, or at $exit, which ends them all;
     /// the simulation ends with the last program.
     void complete_program_member(std::uint32_t member);
+    /// A member's blocking write of a host object changed the signals its
+    /// elements alias: like a blocking write of a host signal (write_host),
+    /// it is visible to the kernel's readers at once (IEEE 1800-2023
+    /// 10.4.1).
+    void host_object_written();
     void exit_program(std::uint32_t owner);
     /// The non-final members of each program, in process order.
     std::map<std::uint32_t, std::vector<std::uint32_t>> program_members_;

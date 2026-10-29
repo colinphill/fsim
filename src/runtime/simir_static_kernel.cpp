@@ -272,9 +272,8 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         private_containers(spec.members.size());
     std::vector<std::vector<ContainerRegisterId>> copied_containers(
         spec.members.size());
-    // SystemVerilog behavioral members hold other registers in reference
-    // format (static_kernel_dynamic_container_registers): their initial
-    // values.
+    // Behavioral members hold other registers in reference format
+    // (static_kernel_dynamic_container_registers): their initial values.
     std::vector<std::vector<std::pair<ContainerRegisterId, SharedContainerValue>>>
         dynamic_containers(spec.members.size());
     for (std::size_t index = 0U; index < spec.members.size(); ++index) {
@@ -311,6 +310,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                 if (memory_load->target < used.size()) {
                     used[memory_load->target] = 1U;
                 }
+            } else if (const auto* binary = operation_get_if<FileBinaryRead>(&operation);
+                       binary != nullptr
+                       && binary->target_kind == FileBinaryTargetKind::container_register) {
+                if (binary->target < used.size()) {
+                    used[binary->target] = 1U;
+                    written[binary->target] = 1U;
+                }
             } else if (const auto* copy
                 = operation_get_if<CopyContainerRegister>(&operation)) {
                 if (copy->destination < used.size()) {
@@ -323,14 +329,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
         const auto types = process_layout_detail::ProcessLayoutAccess::view(
             program.container_register_types());
-        std::vector<std::uint8_t> dynamic;
-        if (program.scheduling_domain() == ProcessSchedulingDomain::systemverilog) {
-            dynamic = static_kernel_dynamic_container_registers(operations.size(),
-                [&](const std::size_t op) -> const Operation& {
-                    return operations[op];
-                },
-                types);
-        }
+        const auto dynamic = static_kernel_dynamic_container_registers(
+            operations.size(),
+            [&](const std::size_t op) -> const Operation& {
+                return operations[op];
+            },
+            types,
+            program.scheduling_domain() == ProcessSchedulingDomain::systemverilog);
         for (std::size_t id = 0U; id < dynamic.size(); ++id) {
             if (dynamic[id] != 0U) {
                 dynamic_containers[index].emplace_back(
@@ -486,9 +491,12 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.after_procedures = program.startup_phase()
             == ProcessStartupPhase::after_procedures;
         member.final_block = program.final();
+        // A postponed VHDL process resumes in the postponed region list,
+        // the end of the time step (IEEE 1076-2019 11.3, 14.7.5.3).
         member.phase = process_execution_phase(
-            program.observed(), program.reactive(), false);
+            program.observed(), program.reactive(), program.postponed());
         if (member.process == spec.host
+            && !(vhdl_ && (!mixed_ || member_spec.vhdl))
             && member.phase != SchedulerPhase::active) {
             impl_.static_kernel_region_host = member.process;
             impl_.static_kernel_region_host_phase = member.phase;
@@ -574,7 +582,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                         const auto* disable = operation_get_if<DisableBlock>(&operation);
                         return disable != nullptr && !disable->scopes.empty();
                     });
-            member.assertion = member.phase != SchedulerPhase::active
+            member.assertion = (!member.vhdl && member.phase != SchedulerPhase::active)
                 || std::ranges::any_of(member.operations,
                     [](const Operation& operation) {
                         return static_kernel_assertion_operation(operation);

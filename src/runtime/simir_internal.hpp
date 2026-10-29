@@ -2235,6 +2235,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         [[nodiscard]] virtual PackedLogic4 handle(RegisterId id) = 0;
         // A packed signal target, written as commit_driver writes it.
         virtual void commit(SignalId signal, PackedLogic4 value) = 0;
+        // A container register or design memory ($fread's target), read
+        // and written whole.
+        [[nodiscard]] virtual ContainerValue container(ContainerRegisterId id) = 0;
+        virtual void write_container(ContainerRegisterId id, ContainerValue value) = 0;
+        [[nodiscard]] virtual ContainerValue object(ContainerObjectId id) = 0;
+        virtual void write_object(ContainerObjectId id, const ContainerValue& value) = 0;
         // An error at the running instruction.
         [[noreturn]] virtual void fail(const std::string& message) = 0;
     };
@@ -2256,6 +2262,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void run_file(FileOperationStorage&, const FileScan&);
     void run_file(FileOperationStorage&, const FilePosition&);
     void run_file(FileOperationStorage&, const FileFlush&);
+    void run_file(FileOperationStorage&, const FileBinaryRead&);
+    /// A dump control (IEEE 1800-2023 21.7) with its file name and value
+    /// in `event`: the VCD observer's event at `now`; $dumpvars and
+    /// $dumpports begin the dump in the Postponed region.
+    void control_vcd(ProcessId process, const VcdControl& operation,
+        VcdControlEvent event);
     template <typename Operation>
     void run_process_file(ProcessState&, const Operation&);
     void execute_file(ProcessState&, const FileOpen&);
@@ -2305,6 +2317,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// loaded before an error stay.
     void read_memory_file(ProcessId process, InstructionIndex pc,
         const std::string& path, ContainerValue& target, bool hexadecimal,
+        std::optional<std::int32_t> start, std::optional<std::int32_t> finish);
+    /// $writememb/$writememh (IEEE 1800-2023 21.5): writes `source` to the
+    /// file at `path`. Errors throw std::exception.
+    void write_memory_file(ProcessId process, const std::string& path,
+        const ContainerValue& source, bool hexadecimal,
         std::optional<std::int32_t> start, std::optional<std::int32_t> finish);
     void execute_container(ProcessState&, const VitalMemoryDeclare&);
     void execute_container(ProcessState&, const PushContainer&);
@@ -2527,6 +2544,30 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const ScopeRandomize& operation);
     void execute_vhdl_assert_api(
         ProcessState& process, const VhdlAssertApi& operation);
+    /// The registers and reports of the process that runs a std.env
+    /// operation (IEEE 1076-2019 16.5): a reference process's frame or a
+    /// static kernel member's, so both run one implementation.
+    struct VhdlApiStorage {
+        virtual ~VhdlApiStorage() = default;
+        [[nodiscard]] virtual PackedLogic4 packed(RegisterId id, std::size_t width) = 0;
+        virtual void write_packed(RegisterId id, const PackedLogic4& value) = 0;
+        [[nodiscard]] virtual std::string text(StringRegisterId id) = 0;
+        virtual void write_text(StringRegisterId id, std::string_view value) = 0;
+        // A VHDL report at the running instruction (execute_vhdl_report).
+        virtual void report(std::string_view message, AssertionSeverity severity,
+            const SourceLocation& source, bool standalone) = 0;
+        // An error at the running instruction.
+        [[noreturn]] virtual void fail(const std::string& message) = 0;
+    };
+    struct ProcessVhdlApiStorage;
+    // The assertion controls and counts (16.5.6).
+    void run_vhdl_assert_api(VhdlApiStorage&, const VhdlAssertApi&);
+    // The date and time functions (16.5.5); a bad operand fails.
+    void run_vhdl_environment_time(VhdlApiStorage&, const VhdlEnvironmentTime&);
+    // TO_STRING of a date/time record (16.5.5) and GETENV (16.5.6).
+    void run_vhdl_environment_time_string(VhdlApiStorage&,
+        const VhdlEnvironmentTimeToString&);
+    void run_vhdl_environment_getenv(VhdlApiStorage&, const VhdlEnvironmentGetenv&);
     void execute_vhdl_reflection_api(
         ProcessState& process, const VhdlReflectionApi& operation);
     void execute_vhdl_report(

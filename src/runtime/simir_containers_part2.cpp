@@ -310,21 +310,9 @@ void Interpreter::Impl::execute_container(
     const auto finish = optional_integer(
         operation.finish, operation.write ? "write-memory finish" : "read-memory finish");
     if (operation.write) {
-        const auto text = write_memory_text(
-            target, operation.hexadecimal, start, finish);
-        const auto handle = open_file(
-            process.id,
-            get_string_register(process, operation.path), "w");
-        try {
-            write_file(process.id, handle, text, false);
-            close_file(process.id, handle);
-        } catch (...) {
-            try {
-                close_file(process.id, handle);
-            } catch (...) {
-            }
-            throw;
-        }
+        write_memory_file(process.id,
+            get_string_register(process, operation.path), target,
+            operation.hexadecimal, start, finish);
         ++process.pc;
         return;
     }
@@ -332,6 +320,25 @@ void Interpreter::Impl::execute_container(
         get_string_register(process, operation.path), target,
         operation.hexadecimal, start, finish);
     ++process.pc;
+}
+
+void Interpreter::Impl::write_memory_file(const ProcessId process,
+    const std::string& path, const ContainerValue& source,
+    const bool hexadecimal, const std::optional<std::int32_t> start,
+    const std::optional<std::int32_t> finish)
+{
+    const auto text = write_memory_text(source, hexadecimal, start, finish);
+    const auto handle = open_file(process, path, "w");
+    try {
+        write_file(process, handle, text, false);
+        close_file(process, handle);
+    } catch (...) {
+        try {
+            close_file(process, handle);
+        } catch (...) {
+        }
+        throw;
+    }
 }
 
 void Interpreter::Impl::execute_container(

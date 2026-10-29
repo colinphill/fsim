@@ -52,6 +52,10 @@ void collect_container_objects(
         } else if constexpr (std::is_same_v<T, PlaEvaluate>
             || std::is_same_v<T, WaitPla>) {
             objects.push_back(value.memory);
+        } else if constexpr (std::is_same_v<T, FileBinaryRead>) {
+            if (value.target_kind == FileBinaryTargetKind::container_object) {
+                objects.push_back(value.target);
+            }
         }
     }, operation);
 }
@@ -176,10 +180,11 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
     // package static initializer (the kernel runs it at its startup action).
     stub.final = false;
     // The kernel activates in the Active region even when the member it
-    // replaces is an assertion's process (that one resumes in its own
-    // region, StaticKernel::ready_thread_in).
+    // replaces is an assertion's process or a postponed VHDL process (that
+    // one resumes in its own region, StaticKernel::ready_thread_in).
     stub.observed = false;
     stub.reactive = false;
+    stub.postponed = false;
     stub.startup_phase = ProcessStartupPhase::ordinary;
     stub.startup_order = 0U;
     stub.startup_package_owner_id = 0U;
@@ -514,7 +519,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         if (view.program_owner() && (!behavioral || vhdl) && hit("program")) {
             return first;
         }
-        if (view.postponed() && hit("postponed")) {
+        // A postponed VHDL process is a behavioral member in the postponed
+        // region list (IEEE 1076-2019 11.3, 14.7.5.3).
+        if (view.postponed() && (!behavioral || !vhdl) && hit("postponed")) {
             return first;
         }
         // A final procedure is a behavioral member only (its body rule is
@@ -965,22 +972,20 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // copies the object's value and their WriteContainerObject writes it, as
     // the reference's do. An object of another shape than the arena's is a
     // host object (never kernel storage) without signal aliases: a member's
-    // write through the host wakes no kernel reader. `dynamic_written`
-    // receives the host objects written.
+    // write through the host changes the signals its elements alias, which
+    // stay host signals (host_alias_signals below), and the kernel rescans
+    // its inputs after it. `dynamic_written` receives the host objects
+    // written.
     const auto host_container_ok = [&](const ContainerObjectId object) {
         return object < container_objects_.size()
             && !container_objects_[object].slice_alias
-            && std::ranges::none_of(container_signal_aliases_,
-                [&](const auto& alias) { return alias.object == object; })
-            && std::ranges::none_of(container_element_signal_aliases_,
-                [&](const auto& alias) { return alias.object == object; })
-            && std::ranges::none_of(container_aggregate_signal_aliases_,
-                [&](const auto& alias) { return alias.object == object; })
             && std::ranges::none_of(graph.signal_alias_families(),
                 [&](const auto& family) { return family.object == object; });
     };
-    // Container objects a member writes through the host (see below).
+    // Container objects a member writes through the host (see below), and
+    // those it reads through the host.
     std::vector<std::uint8_t> host_container_object(container_objects_.size(), 0U);
+    std::vector<std::uint8_t> host_read_object(container_objects_.size(), 0U);
     const auto container_rule = [&](const auto& view, const bool vhdl,
                                     std::set<ContainerObjectId>* dynamic_written
                                     = nullptr) -> const char* {
@@ -988,14 +993,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         const auto count = operations.size();
         const auto types = process_layout_detail::ProcessLayoutAccess::view(
             view.container_register_types());
-        std::vector<std::uint8_t> dynamic;
-        if (!vhdl) {
-            dynamic = static_kernel_dynamic_container_registers(count,
-                [&](const std::size_t op) -> const Operation& {
-                    return operations[op];
-                },
-                types);
-        }
+        const auto dynamic = static_kernel_dynamic_container_registers(count,
+            [&](const std::size_t op) -> const Operation& {
+                return operations[op];
+            },
+            types, !vhdl);
         const auto is_dynamic = [&](const ContainerRegisterId id) {
             return id < dynamic.size() && dynamic[id] != 0U;
         };
@@ -1048,7 +1050,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 using T = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<T, ReadContainerObject>) {
                     if (is_dynamic(value.destination)) {
-                        if (!dynamic_object_ok(value.object, value.destination)) {
+                        // A VHDL member's reference-format registers are its
+                        // own (access values, arrays with run-time ranges).
+                        if (vhdl
+                            || !dynamic_object_ok(value.object, value.destination)) {
                             dynamic_reason = "dynamic_container_object";
                         }
                         return;
@@ -1069,15 +1074,27 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             dynamic_written->insert(value.object);
                         }
                     }
+                } else if constexpr (std::is_same_v<T, FileBinaryRead>) {
+                    // $fread into an array register: private storage (or
+                    // a binding's copy of its memory), filled whole.
+                    if (value.target_kind == FileBinaryTargetKind::container_register
+                        && !is_dynamic(value.target)) {
+                        private_containers.insert(value.target);
+                        written_containers.insert(value.target);
+                    }
                 } else if constexpr (std::is_same_v<T, LoadMemory>) {
+                    // A reference-format register loads or writes as the
+                    // reference's does.
                     if (is_dynamic(value.target)) {
-                        dynamic_reason = "dynamic_container_load";
+                        if (vhdl) {
+                            dynamic_reason = "dynamic_container_load";
+                        }
                         return;
                     }
                     private_containers.insert(value.target);
                 } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
                     if (is_dynamic(value.source)) {
-                        if (!dynamic_object_ok(value.object, value.source)
+                        if (vhdl || !dynamic_object_ok(value.object, value.source)
                             || value.nonblocking || value.transaction_signal) {
                             dynamic_reason = "dynamic_container_object";
                         } else if (dynamic_written != nullptr
@@ -1407,6 +1424,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         bind != nullptr && is_dynamic(bind->destination)
                         && !static_kernel_arena_container_type(
                             types[bind->destination])) {
+                        if (bind->object < host_read_object.size()) {
+                            host_read_object[bind->object] = 1U;
+                        }
                         continue;
                     }
                     if (const auto* write
@@ -1459,6 +1479,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         || std::is_same_v<T, ReleaseSignalSlice>
                         || std::is_same_v<T, DisableBlock>
                         || std::is_same_v<T, LoadMemory>
+                        || std::is_same_v<T, FileBinaryRead>
                         || std::is_same_v<T, FileReadLine>
                         || std::is_same_v<T, FileErrorStatus>
                         || std::is_same_v<T, FileScan>
@@ -2133,6 +2154,38 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     }
                 }
             }, operations.expanded(op));
+        }
+    }
+    // The signals that the elements of a host object members access alias
+    // (IEEE 1800-2023 7.4, 23.3.3): the host keeps the object and its
+    // signals coherent, so they stay host signals; those of an object a
+    // member writes change inside an activation (alias_written). A member
+    // reading the object or another alias reads the host's value, which a
+    // mirrored update of one alias does not change (container_aliased).
+    std::vector<std::uint8_t> alias_written(signal_count, 0U);
+    std::vector<std::uint8_t> container_aliased(signal_count, 0U);
+    {
+        const auto alias = [&](const ContainerObjectId object,
+                               const SignalId signal) {
+            if (object >= container_objects_.size() || signal >= signal_count
+                || (host_container_object[object] == 0U
+                    && host_read_object[object] == 0U)) {
+                return;
+            }
+            host_touched[signal] = 1U;
+            container_aliased[signal] = 1U;
+            if (host_container_object[object] != 0U) {
+                alias_written[signal] = 1U;
+            }
+        };
+        for (const auto& entry : container_signal_aliases_) {
+            alias(entry.object, entry.signal);
+        }
+        for (const auto& entry : container_element_signal_aliases_) {
+            alias(entry.object, entry.signal);
+        }
+        for (const auto& entry : container_aggregate_signal_aliases_) {
+            alias(entry.object, entry.signal);
         }
     }
     // Assertion members read the host's sampled state (run_sampled_read):
@@ -4329,7 +4382,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // activation, where only the written inputs are rescanned.
         if (!forces && !access.foreign && owned[signal] == 0U
             && virtual_owned[signal] == 0U
-            && node.writers.empty()
+            && node.writers.empty() && alias_written[signal] == 0U
             && std::ranges::any_of(node.readers, [&](const auto& reader) {
                    return reader.process < process_count && member[reader.process] != 0U;
                })) {
@@ -4343,8 +4396,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // path delays the host's commit of its destination, so the host
         // does not apply a member's update unchanged and at once. A mirrored
         // update would wake a member whose history query (history_read) does
-        // not see it yet.
+        // not see it yet. Nor would it change the aliased host object
+        // (container_aliased).
         if (!forces && !access.foreign && path_destination[signal] == 0U
+            && container_aliased[signal] == 0U
             && path_source[signal] == 0U && history_read[signal] == 0U
             && owned[signal] == 0U && virtual_owned[signal] == 0U
             && !node.writers.empty()

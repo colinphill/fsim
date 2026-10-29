@@ -272,12 +272,10 @@ void write_shaped_record(
 
 } // namespace
 
-void Interpreter::Impl::execute_container(
-    ProcessState& process,
-    const VhdlShaped& operation)
+void execute_container_operation(const VhdlShaped& operation,
+    ContainerRegisterAccess& access, const ProcessId id,
+    const InstructionIndex pc)
 {
-    const auto id = process.id;
-    const auto pc = process.pc;
     switch (operation.operation) {
     case VhdlShapedOperation::create: {
         // Without bounds the target is refilled in its own shape.
@@ -292,7 +290,7 @@ void Interpreter::Impl::execute_container(
         }
         std::vector<VhdlShapeRange> shape;
         if (refill) {
-            shape = get_container_register(process, operation.target).shape;
+            shape = access.container(operation.target).shape;
             if (shape.size() != operation.type.vhdl_rank) {
                 container_error(id, pc, "malformed VHDL shaped value creation");
             }
@@ -307,10 +305,9 @@ void Interpreter::Impl::execute_container(
                 range = shape[dimension];
             } else {
                 range.left = known_index(id, pc,
-                    get_register(process, operation.operands[2U * dimension]));
+                    access.read(operation.operands[2U * dimension]));
                 range.right = known_index(id, pc,
-                    get_register(process,
-                        operation.operands[2U * dimension + 1U]));
+                    access.read(operation.operands[2U * dimension + 1U]));
                 range.descending = operation.directions[dimension] != 0U;
             }
             const auto length = shape_length(range);
@@ -323,7 +320,7 @@ void Interpreter::Impl::execute_container(
             count *= length;
             value.shape.push_back(range);
         }
-        const auto& filler = get_register(process, operation.value);
+        const auto& filler = access.read(operation.value);
         const auto width = operation.type.element_width;
         if (filler.width() != width) {
             container_error(id, pc,
@@ -339,20 +336,20 @@ void Interpreter::Impl::execute_container(
                 static_cast<std::size_t>(ordinal) * width);
         }
         value.elements.push_back(std::move(payload));
-        get_container_register(process, operation.target) = std::move(value);
+        access.container(operation.target) = std::move(value);
         break;
     }
     case VhdlShapedOperation::query: {
-        const auto& source = read_container_register(process, operation.source);
+        const auto& source = access.read_container(operation.source);
         require_shaped(id, pc, source);
         if (operation.dimension >= source.shape.size()) {
             container_error(id, pc,
                 "a VHDL array attribute names a missing dimension");
         }
         const auto& range = source.shape[operation.dimension];
-        auto& destination = get_register(process, operation.value);
+        const auto destination_width = access.read(operation.value).width();
         const auto width = operation.width != 0U ? operation.width
-            : destination.width() == 0U ? 64U : destination.width();
+            : destination_width == 0U ? 64U : destination_width;
         std::int64_t result { };
         switch (operation.attribute) {
         case VhdlShapedAttribute::left:
@@ -374,16 +371,16 @@ void Interpreter::Impl::execute_container(
             result = range.descending ? 0 : 1;
             break;
         }
-        destination = signed_register_value(result, width);
+        access.write(operation.value, signed_register_value(result, width));
         break;
     }
     case VhdlShapedOperation::element_read: {
-        const auto& source = read_container_register(process, operation.source);
+        const auto& source = access.read_container(operation.source);
         require_shaped(id, pc, source);
         std::vector<std::int64_t> indices;
         indices.reserve(operation.operands.size());
         for (const auto index : operation.operands) {
-            indices.push_back(known_index(id, pc, get_register(process, index)));
+            indices.push_back(known_index(id, pc, access.read(index)));
         }
         const auto place = shaped_place(id, pc, source, indices,
             operation.inner, operation.width);
@@ -402,7 +399,7 @@ void Interpreter::Impl::execute_container(
                         + static_cast<std::ptrdiff_t>(indices.size()),
                     source.shape.end());
                 subarray.elements.push_back(bits);
-                get_container_register(process, operation.target)
+                access.container(operation.target)
                     = std::move(subarray);
                 break;
             }
@@ -412,17 +409,17 @@ void Interpreter::Impl::execute_container(
                     "context's length");
             }
         }
-        get_register(process, operation.value) = bits;
+        access.write(operation.value, bits);
         break;
     }
     case VhdlShapedOperation::element_write: {
         std::vector<std::int64_t> indices;
         indices.reserve(operation.operands.size());
         for (const auto index : operation.operands) {
-            indices.push_back(known_index(id, pc, get_register(process, index)));
+            indices.push_back(known_index(id, pc, access.read(index)));
         }
-        const auto element = get_register(process, operation.value);
-        auto& target = get_container_register(process, operation.target);
+        const auto element = access.read(operation.value);
+        auto& target = access.container(operation.target);
         require_shaped(id, pc, target);
         const auto place = shaped_place(id, pc, target, indices,
             operation.inner, operation.width);
@@ -434,7 +431,7 @@ void Interpreter::Impl::execute_container(
         break;
     }
     case VhdlShapedOperation::to_packed: {
-        const auto& source = read_container_register(process, operation.source);
+        const auto& source = access.read_container(operation.source);
         if (aggregate_box(source.type)) {
             auto end = shaped_record_width(id, pc, source);
             if (end != operation.width) {
@@ -443,7 +440,7 @@ void Interpreter::Impl::execute_container(
             }
             PackedLogic4 packed(end, Logic4::zero);
             read_shaped_record(source, packed, end);
-            get_register(process, operation.value) = std::move(packed);
+            access.write(operation.value, std::move(packed));
             break;
         }
         require_shaped(id, pc, source);
@@ -453,12 +450,12 @@ void Interpreter::Impl::execute_container(
                     source.elements.front().width() / source.type.element_width)
                     + " does not match its target's length");
         }
-        get_register(process, operation.value) = source.elements.front();
+        access.write(operation.value, source.elements.front());
         break;
     }
     case VhdlShapedOperation::from_packed: {
-        const auto value = get_register(process, operation.value);
-        auto& target = get_container_register(process, operation.target);
+        const auto value = access.read(operation.value);
+        auto& target = access.container(operation.target);
         if (aggregate_box(target.type)) {
             auto end = shaped_record_width(id, pc, target);
             if (end != value.width()) {
@@ -483,13 +480,13 @@ void Interpreter::Impl::execute_container(
             container_error(id, pc, "malformed VHDL slice operation");
         }
         const auto first = known_index(id, pc,
-            get_register(process, operation.operands[0]));
+            access.read(operation.operands[0]));
         const auto last = known_index(id, pc,
-            get_register(process, operation.operands[1]));
+            access.read(operation.operands[1]));
         const bool descending = operation.directions.front() != 0U;
         if (operation.operation == VhdlShapedOperation::slice) {
             const auto& source
-                = read_container_register(process, operation.source);
+                = access.read_container(operation.source);
             require_shaped(id, pc, source);
             const auto place
                 = slice_place(id, pc, source, first, last, descending);
@@ -500,11 +497,11 @@ void Interpreter::Impl::execute_container(
                     ? PackedLogic4(0U, Logic4::zero)
                     : source.elements.front().extract_bits(
                           place.offset, place.width));
-            get_container_register(process, operation.target)
+            access.container(operation.target)
                 = std::move(sliced);
         } else if (operation.operation == VhdlShapedOperation::slice_read) {
             const auto& source
-                = read_container_register(process, operation.source);
+                = access.read_container(operation.source);
             require_shaped(id, pc, source);
             const auto place
                 = slice_place(id, pc, source, first, last, descending);
@@ -512,13 +509,13 @@ void Interpreter::Impl::execute_container(
                 container_error(id, pc,
                     "VHDL slice length does not match its context's length");
             }
-            get_register(process, operation.value) = place.width == 0U
-                ? PackedLogic4(0U, Logic4::zero)
-                : source.elements.front().extract_bits(
-                      place.offset, place.width);
+            access.write(operation.value, place.width == 0U
+                    ? PackedLogic4(0U, Logic4::zero)
+                    : source.elements.front().extract_bits(
+                          place.offset, place.width));
         } else {
-            const auto value = get_register(process, operation.value);
-            auto& target = get_container_register(process, operation.target);
+            const auto value = access.read(operation.value);
+            auto& target = access.container(operation.target);
             require_shaped(id, pc, target);
             const auto place
                 = slice_place(id, pc, target, first, last, descending);
@@ -533,8 +530,8 @@ void Interpreter::Impl::execute_container(
         break;
     }
     case VhdlShapedOperation::assign: {
-        const auto source = read_container_register(process, operation.source);
-        auto& target = get_container_register(process, operation.target);
+        const auto source = access.read_container(operation.source);
+        auto& target = access.container(operation.target);
         require_shaped(id, pc, source);
         require_shaped(id, pc, target);
         for (std::size_t dimension { }; dimension < target.shape.size();
@@ -551,11 +548,11 @@ void Interpreter::Impl::execute_container(
     }
     case VhdlShapedOperation::equal:
     case VhdlShapedOperation::equal_packed: {
-        const auto& source = read_container_register(process, operation.source);
+        const auto& source = access.read_container(operation.source);
         require_shaped(id, pc, source);
         bool same { };
         if (operation.operation == VhdlShapedOperation::equal) {
-            const auto& other = read_container_register(process, operation.target);
+            const auto& other = access.read_container(operation.target);
             require_shaped(id, pc, other);
             same = source.shape.size() == other.shape.size()
                 && source.elements.front().width()
@@ -572,17 +569,17 @@ void Interpreter::Impl::execute_container(
             if (operation.operands.size() != 1U) {
                 container_error(id, pc, "malformed VHDL array comparison");
             }
-            const auto& value = get_register(process, operation.operands.front());
+            const auto& value = access.read(operation.operands.front());
             same = source.elements.front().width() == value.width()
                 && (value.width() == 0U || source.elements.front() == value);
         }
-        get_register(process, operation.value)
-            = PackedLogic4::from_aval_bval(1U, same ? 1U : 0U, 0U);
+        access.write(operation.value,
+            PackedLogic4::from_aval_bval(1U, same ? 1U : 0U, 0U));
         break;
     }
     case VhdlShapedOperation::append:
     case VhdlShapedOperation::append_packed: {
-        auto& target = get_container_register(process, operation.target);
+        auto& target = access.container(operation.target);
         require_shaped(id, pc, target);
         if (target.shape.size() != 1U) {
             container_error(id, pc,
@@ -591,7 +588,7 @@ void Interpreter::Impl::execute_container(
         PackedLogic4 right;
         std::optional<VhdlShapeRange> right_range;
         if (operation.operation == VhdlShapedOperation::append) {
-            const auto& source = read_container_register(process, operation.source);
+            const auto& source = access.read_container(operation.source);
             require_shaped(id, pc, source);
             if (source.shape.size() != 1U) {
                 container_error(id, pc,
@@ -603,7 +600,7 @@ void Interpreter::Impl::execute_container(
             if (operation.operands.size() != 1U) {
                 container_error(id, pc, "malformed VHDL concatenation");
             }
-            right = get_register(process, operation.operands.front());
+            right = access.read(operation.operands.front());
         }
         const auto element_width = target.type.element_width;
         if (right.width() % element_width != 0U) {
@@ -636,6 +633,15 @@ void Interpreter::Impl::execute_container(
         break;
     }
     }
+}
+
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const VhdlShaped& operation)
+{
+    ProcessContainerAccess access { *this, process };
+    execute_container_operation(operation, access, process.id, process.pc);
     ++process.pc;
 }
 

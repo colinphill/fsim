@@ -667,6 +667,13 @@ bool visit_known_region_accesses(
             // The access therefore reaches no design signal. The nonblocking
             // form only schedules a string store on the NBA queue.
             return true;
+        } else if constexpr (std::is_same_v<T, VcdControl>) {
+            // $dumpfile, $dumpvars and the other dump controls (IEEE
+            // 1800-2023 21.7) name scopes, not signals: the dump observer
+            // records signal changes through the host's trace hooks. A
+            // design with dump controls keeps every signal observable
+            // (the static kernel's observe_all; cone fusion refuses it).
+            return true;
         } else if constexpr (std::is_same_v<T, LoadMemory>) {
             // $readmem/$writemem: the target is this process's container
             // register, the path a string register; the rest is the host

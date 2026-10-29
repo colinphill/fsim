@@ -98,6 +98,10 @@ void execute_container_operation(const AppendContainer&,
     ContainerRegisterAccess&, ProcessId, InstructionIndex);
 void execute_container_operation(const ContainerBitstream&,
     ContainerRegisterAccess&, ProcessId, InstructionIndex);
+/// A VHDL array with run-time index ranges (IEEE 1076-2019 5.3.2.2;
+/// simir_containers_shaped.cpp).
+void execute_container_operation(const VhdlShaped&,
+    ContainerRegisterAccess&, ProcessId, InstructionIndex);
 
 // Follow an aggregate member path from one aggregate value.
 [[nodiscard]] ContainerValue* follow_container_members(

@@ -905,6 +905,22 @@ struct Interpreter::Impl::ProcessFileStorage final : FileOperationStorage {
     {
         owner.commit_driver(state.id, signal, std::move(value));
     }
+    [[nodiscard]] ContainerValue container(const ContainerRegisterId id) override
+    {
+        return owner.read_container_register(state, id);
+    }
+    void write_container(const ContainerRegisterId id, ContainerValue value) override
+    {
+        owner.get_container_register(state, id) = std::move(value);
+    }
+    [[nodiscard]] ContainerValue object(const ContainerObjectId id) override
+    {
+        return owner.read_container_object_value(id);
+    }
+    void write_object(const ContainerObjectId id, const ContainerValue& value) override
+    {
+        owner.write_container_object_value(id, value, state.id);
+    }
     [[noreturn]] void fail(const std::string& message) override
     {
         throw InterpreterError { state.id, state.pc, message };
@@ -1436,56 +1452,83 @@ void Interpreter::Impl::execute_file(
 void Interpreter::Impl::execute_file(
     ProcessState& process, const FileBinaryRead& operation)
 {
-    try {
-        const auto known_integer = [&](const RegisterId id) {
-            const auto word = get_register(process, id).low_word();
-            if (word.width != 32 || word.bval != 0) {
-                throw std::runtime_error { "$fread bounds must be known 32-bit integers" };
-            }
-            return static_cast<std::int32_t>(static_cast<std::uint32_t>(word.aval));
-        };
-        std::optional<ContainerValue> container;
-        if (operation.target_kind == FileBinaryTargetKind::container_register) {
-            container = read_container_register(process, operation.target);
-        } else if (operation.target_kind
-            == FileBinaryTargetKind::container_object) {
-            container = read_container_object_value(operation.target);
+    run_process_file(process, operation);
+}
+
+void Interpreter::Impl::run_file(
+    FileOperationStorage& storage, const FileBinaryRead& operation)
+{
+    const auto known_integer = [&](const RegisterId id) {
+        const auto word = storage.packed(id).low_word();
+        if (word.width != 32 || word.bval != 0) {
+            throw std::runtime_error { "$fread bounds must be known 32-bit integers" };
         }
-        const auto handle = known_file_handle(process, operation.handle);
-        const std::function<std::int32_t()> read = [&] {
-            return read_file_character(process.id, handle);
-        };
-        auto result = read_binary_file(
-            operation, std::move(container),
-            operation.has_start
-                ? std::optional { known_integer(operation.start) }
-                : std::nullopt,
-            operation.has_count
-                ? std::optional { known_integer(operation.count) }
-                : std::nullopt,
-            read);
-        switch (operation.target_kind) {
-        case FileBinaryTargetKind::packed_register:
-            get_register(process, operation.target) = std::move(result.packed);
-            break;
-        case FileBinaryTargetKind::packed_signal:
-            commit_driver(
-                process.id, operation.target, std::move(result.packed));
-            break;
-        case FileBinaryTargetKind::container_register:
-            get_container_register(process, operation.target) = std::move(*result.container);
-            break;
-        case FileBinaryTargetKind::container_object:
-            write_container_object_value(
-                operation.target, *result.container, process.id);
-            break;
-        }
-        get_register(process, operation.destination) = PackedLogic4::from_aval_bval(32, result.bytes, 0);
-        ++process.pc;
-    } catch (const InterpreterError&) {
-        throw;
-    } catch (const std::exception& error) {
-        throw InterpreterError { process.id, process.pc, error.what() };
+        return static_cast<std::int32_t>(static_cast<std::uint32_t>(word.aval));
+    };
+    std::optional<ContainerValue> container;
+    if (operation.target_kind == FileBinaryTargetKind::container_register) {
+        container = storage.container(operation.target);
+    } else if (operation.target_kind
+        == FileBinaryTargetKind::container_object) {
+        container = storage.object(operation.target);
+    }
+    const auto process = storage.process();
+    const auto handle = known_file_handle(storage, operation.handle);
+    const std::function<std::int32_t()> read = [&] {
+        return read_file_character(process, handle);
+    };
+    auto result = read_binary_file(
+        operation, std::move(container),
+        operation.has_start
+            ? std::optional { known_integer(operation.start) }
+            : std::nullopt,
+        operation.has_count
+            ? std::optional { known_integer(operation.count) }
+            : std::nullopt,
+        read);
+    switch (operation.target_kind) {
+    case FileBinaryTargetKind::packed_register:
+        storage.packed(operation.target) = std::move(result.packed);
+        break;
+    case FileBinaryTargetKind::packed_signal:
+        storage.commit(operation.target, std::move(result.packed));
+        break;
+    case FileBinaryTargetKind::container_register:
+        storage.write_container(operation.target, std::move(*result.container));
+        break;
+    case FileBinaryTargetKind::container_object:
+        storage.write_object(operation.target, *result.container);
+        break;
+    }
+    storage.packed(operation.destination) = PackedLogic4::from_aval_bval(32, result.bytes, 0);
+}
+
+void Interpreter::Impl::control_vcd(const ProcessId process,
+    const VcdControl& operation, VcdControlEvent event)
+{
+    event.selections = operation.selections;
+    event.scope = operation.scope;
+    event.time = scheduler.now();
+    event.delta = scheduler.delta();
+    vcd_control_hook(event);
+    if (operation.kind == VcdControlKind::variables
+        || operation.kind == VcdControlKind::ports) {
+        const auto begin_kind = operation.kind == VcdControlKind::variables
+            ? VcdControlKind::begin_variables
+            : VcdControlKind::begin_ports;
+        scheduler.schedule(
+            SchedulerPhase::postponed,
+            process,
+            [this, begin_kind](Scheduler& runtime) {
+                if (!vcd_control_hook) {
+                    return;
+                }
+                VcdControlEvent begin;
+                begin.kind = begin_kind;
+                begin.time = runtime.now();
+                begin.delta = runtime.delta();
+                vcd_control_hook(begin);
+            });
     }
 }
 

@@ -304,38 +304,29 @@ void Interpreter::Impl::report_vhdl(
     }
 }
 
-void Interpreter::Impl::execute_vhdl_assert_api(
-    ProcessState& process, const VhdlAssertApi& operation)
+void Interpreter::Impl::run_vhdl_assert_api(
+    VhdlApiStorage& storage, const VhdlAssertApi& operation)
 {
     using Kind = VhdlAssertApiKind;
-    const auto packed = [&](const RegisterId id, const std::size_t width)
-        -> PackedLogic4 {
-        return process.executor
-            ? process.executor->read_register(id, width)
-            : get_register(process, id);
+    const auto packed = [&](const RegisterId id, const std::size_t width) {
+        return storage.packed(id, width);
     };
     const auto write_packed = [&](const RegisterId id, PackedLogic4 value) {
-        write_process_register(process, id, value);
+        storage.write_packed(id, value);
     };
     const auto string_value = [&](const StringRegisterId id) {
-        return process.executor
-            ? process.executor->read_string_register(id)
-            : get_string_register(process, id);
+        return storage.text(id);
     };
     const auto write_string = [&](const StringRegisterId id,
                                   const std::string_view value) {
-        if (process.executor) {
-            process.executor->write_string_register(id, value);
-        } else {
-            get_string_register(process, id) = value;
-        }
+        storage.write_text(id, value);
     };
     const auto decode_level = [&](const RegisterId id) {
         const auto value = packed(id, 2U);
         if (value.width() != 2U || value.is_logic9()
             || value.low_word().bval != 0U
             || value.low_word().aval >= 4U) {
-            fail(process, "VHDL assert API severity is not SEVERITY_LEVEL");
+            storage.fail("VHDL assert API severity is not SEVERITY_LEVEL");
         }
         return static_cast<std::size_t>(value.low_word().aval);
     };
@@ -343,7 +334,7 @@ void Interpreter::Impl::execute_vhdl_assert_api(
         const auto value = packed(id, 1U);
         if (value.width() != 1U || value.is_logic9()
             || value.low_word().bval != 0U) {
-            fail(process, "VHDL assert API enable is not BOOLEAN");
+            storage.fail("VHDL assert API enable is not BOOLEAN");
         }
         return (value.low_word().aval & 1U) != 0U;
     };
@@ -419,10 +410,8 @@ void Interpreter::Impl::execute_vhdl_assert_api(
         if (valid) {
             vhdl_assert_formats[level] = format;
         } else if (!operation.valid) {
-            execute_vhdl_report(
-                process, process.pc,
-                "invalid VHDL assert format", AssertionSeverity::failure,
-                operation.source, true);
+            storage.report("invalid VHDL assert format",
+                AssertionSeverity::failure, operation.source, true);
         }
         return;
     }
@@ -452,13 +441,12 @@ void Interpreter::Impl::execute_vhdl_assert_api(
         && !operation.destination && !operation.string_destination
         && !operation.level && !operation.enable && !operation.format
         && !operation.valid) {
-        execute_vhdl_report(
-            process, process.pc,
+        storage.report(
             "VHDL TextIO read did not convert the requested element",
             vhdl_read_severity, operation.source, false);
         return;
     }
-    fail(process, "VHDL assert API operation is invalid");
+    storage.fail("VHDL assert API operation is invalid");
 }
 
 void Interpreter::Impl::execute_vhdl_reflection_api(

@@ -1164,31 +1164,7 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
                 }
                 event.value = *converted;
             }
-            event.selections = op.selections;
-            event.scope = op.scope;
-            event.time = scheduler.now();
-            event.delta = scheduler.delta();
-            vcd_control_hook(event);
-            if (op.kind == VcdControlKind::variables
-                || op.kind == VcdControlKind::ports) {
-                const auto begin_kind
-                    = op.kind == VcdControlKind::variables
-                    ? VcdControlKind::begin_variables
-                    : VcdControlKind::begin_ports;
-                scheduler.schedule(
-                    SchedulerPhase::postponed,
-                    process.id,
-                    [this, begin_kind](Scheduler& runtime) {
-                        if (!vcd_control_hook) {
-                            return;
-                        }
-                        VcdControlEvent begin;
-                        begin.kind = begin_kind;
-                        begin.time = runtime.now();
-                        begin.delta = runtime.delta();
-                        vcd_control_hook(begin);
-                    });
-            }
+            control_vcd(process.id, op, std::move(event));
             ++process.pc;
         } else if constexpr (
             std::is_same_v<OperationType,

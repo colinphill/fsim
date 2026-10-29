@@ -653,6 +653,226 @@ void Interpreter::Impl::execute_scope_randomize(
     }
 }
 
+struct Interpreter::Impl::ProcessVhdlApiStorage final : VhdlApiStorage {
+    ProcessVhdlApiStorage(Impl& owner_value, ProcessState& state_value,
+        const std::optional<InstructionIndex> instruction_value) noexcept
+        : owner { owner_value }, state { state_value },
+          instruction { instruction_value }
+    {
+    }
+    [[nodiscard]] PackedLogic4 packed(const RegisterId id, const std::size_t width) override
+    {
+        return state.executor ? state.executor->read_register(id, width)
+                              : owner.get_register(state, id);
+    }
+    void write_packed(const RegisterId id, const PackedLogic4& value) override
+    {
+        owner.write_process_register(state, id, value);
+    }
+    [[nodiscard]] std::string text(const StringRegisterId id) override
+    {
+        return state.executor ? state.executor->read_string_register(id)
+                              : owner.get_string_register(state, id);
+    }
+    void write_text(const StringRegisterId id, const std::string_view value) override
+    {
+        if (state.executor) {
+            state.executor->write_string_register(id, value);
+        } else {
+            owner.get_string_register(state, id) = value;
+        }
+    }
+    void report(const std::string_view message, const AssertionSeverity severity,
+        const SourceLocation& source, const bool standalone) override
+    {
+        owner.execute_vhdl_report(state, state.pc, message, severity, source,
+            standalone);
+    }
+    [[noreturn]] void fail(const std::string& message) override
+    {
+        if (instruction) {
+            state.pc = *instruction;
+        }
+        owner.fail(state, message);
+    }
+    Impl& owner;
+    ProcessState& state;
+    std::optional<InstructionIndex> instruction;
+};
+
+void Interpreter::Impl::execute_vhdl_assert_api(
+    ProcessState& process, const VhdlAssertApi& operation)
+{
+    ProcessVhdlApiStorage storage { *this, process, std::nullopt };
+    run_vhdl_assert_api(storage, operation);
+}
+
+void Interpreter::Impl::run_vhdl_environment_time(
+    VhdlApiStorage& storage, const VhdlEnvironmentTime& operation)
+{
+    const auto* time = &operation;
+    const auto require = [&](const std::optional<RegisterId> value,
+                             const char* name) -> PackedLogic4 {
+        if (!value) {
+            throw std::invalid_argument {
+                std::string { "STD.ENV date/time operation is missing " }
+                    + name
+            };
+        }
+        return storage.packed(
+            *value, ProcessExecutor::native_register_width);
+    };
+    try {
+        PackedLogic4 result;
+        const auto now = [] {
+            return std::chrono::duration<double>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count();
+        };
+        switch (time->kind) {
+        case VhdlEnvironmentTimeKind::current_local:
+            result = pack_calendar(local_calendar_from_epoch(now()));
+            break;
+        case VhdlEnvironmentTimeKind::current_utc:
+            result = pack_calendar(utc_calendar_from_epoch(now()));
+            break;
+        case VhdlEnvironmentTimeKind::current_epoch:
+            result = real_value(now());
+            break;
+        case VhdlEnvironmentTimeKind::local_from_epoch:
+            result = pack_calendar(local_calendar_from_epoch(
+                known_real(require(time->first, "TIMER"), "TIMER")));
+            break;
+        case VhdlEnvironmentTimeKind::utc_from_epoch:
+            result = pack_calendar(utc_calendar_from_epoch(
+                known_real(require(time->first, "TIMER"), "TIMER")));
+            break;
+        case VhdlEnvironmentTimeKind::epoch_from_local:
+            result = real_value(local_epoch_from_calendar(
+                unpack_calendar(require(time->first, "TREC"))));
+            break;
+        case VhdlEnvironmentTimeKind::local_from_utc_record:
+            result = pack_calendar(local_calendar_from_epoch(
+                utc_epoch_from_calendar(
+                    unpack_calendar(require(time->first, "TREC")))));
+            break;
+        case VhdlEnvironmentTimeKind::utc_from_local_record:
+            result = pack_calendar(utc_calendar_from_epoch(
+                local_epoch_from_calendar(
+                    unpack_calendar(require(time->first, "TREC")))));
+            break;
+        case VhdlEnvironmentTimeKind::add_seconds:
+        case VhdlEnvironmentTimeKind::subtract_seconds:
+        case VhdlEnvironmentTimeKind::reverse_subtract_seconds: {
+            const auto record = unpack_calendar(
+                require(time->first, "TREC"));
+            const auto delta = known_real(
+                require(time->second, "DELTA"), "DELTA");
+            const auto subtract = time->kind
+                != VhdlEnvironmentTimeKind::add_seconds;
+            result = pack_calendar(utc_calendar_from_epoch(
+                utc_epoch_from_calendar(record)
+                    + (subtract ? -delta : delta)));
+            break;
+        }
+        case VhdlEnvironmentTimeKind::difference_seconds: {
+            const auto first = unpack_calendar(
+                require(time->first, "TR1"));
+            const auto second = unpack_calendar(
+                require(time->second, "TR2"));
+            result = real_value(
+                utc_epoch_from_calendar(first)
+                - utc_epoch_from_calendar(second));
+            break;
+        }
+        case VhdlEnvironmentTimeKind::time_to_seconds: {
+            const auto ticks = require(time->first, "TIME_VAL")
+                .known_unsigned_value();
+            if (!ticks) {
+                throw std::invalid_argument {
+                    "STD.ENV TIME_TO_SECONDS requires a known nonnegative TIME"
+                };
+            }
+            const auto seconds = static_cast<long double>(*ticks)
+                * static_cast<long double>(
+                    time_format.resolution_femtoseconds)
+                / 1'000'000'000'000'000.0L;
+            result = real_value(static_cast<double>(seconds));
+            break;
+        }
+        case VhdlEnvironmentTimeKind::seconds_to_time: {
+            const auto seconds = known_real(
+                require(time->first, "REAL_VAL"), "REAL_VAL");
+            const auto ticks = static_cast<long double>(seconds)
+                * 1'000'000'000'000'000.0L
+                / static_cast<long double>(
+                    time_format.resolution_femtoseconds);
+            if (ticks < 0.0L
+                || ticks > static_cast<long double>(
+                    std::numeric_limits<std::int64_t>::max())) {
+                throw std::invalid_argument {
+                    "STD.ENV SECONDS_TO_TIME result is outside TIME'LOW through TIME'HIGH"
+                };
+            }
+            const auto rounded = std::round(ticks);
+            if (rounded > static_cast<long double>(
+                    std::numeric_limits<std::int64_t>::max())) {
+                throw std::invalid_argument {
+                    "STD.ENV SECONDS_TO_TIME result is outside TIME'LOW through TIME'HIGH"
+                };
+            }
+            result = PackedLogic4::from_aval_bval(
+                64U, static_cast<std::uint64_t>(rounded), 0U);
+            break;
+        }
+        }
+        storage.write_packed(time->destination, result);
+    } catch (const std::invalid_argument& error) {
+        storage.fail(error.what());
+    }
+}
+
+void Interpreter::Impl::run_vhdl_environment_time_string(
+    VhdlApiStorage& storage, const VhdlEnvironmentTimeToString& format)
+{
+    try {
+        const auto digits = storage.packed(format.fractional_digits,
+            ProcessExecutor::native_register_width).known_signed_value();
+        if (!digits || *digits < 0 || *digits > 6) {
+            throw std::invalid_argument {
+                "STD.ENV TO_STRING FRAC_DIGITS must be in 0 through 6"
+            };
+        }
+        storage.write_text(format.destination,
+            calendar_string(
+                unpack_calendar(storage.packed(format.record,
+                    ProcessExecutor::native_register_width)),
+                static_cast<std::uint32_t>(*digits)));
+    } catch (const std::invalid_argument& error) {
+        storage.fail(error.what());
+    }
+}
+
+void Interpreter::Impl::run_vhdl_environment_getenv(
+    VhdlApiStorage& storage, const VhdlEnvironmentGetenv& environment)
+{
+    const auto name = storage.text(environment.name);
+    if (name.find('\0') != std::string::npos) {
+        storage.fail("STD.ENV GETENV name contains an embedded null character");
+    }
+    // Conditional analysis identifiers take precedence over the
+    // environment (IEEE 1076-2019 16.5.6).
+    const auto identity = fsim::support::vhdl_tool_identity(name);
+    const auto value = identity
+        ? std::string { *identity }
+        : fsim::support::environment_variable(name)
+              .value_or(std::string { });
+    if (value.size() > maximum_string_bytes) {
+        storage.fail("STD.ENV GETENV result exceeds the bounded string limit");
+    }
+    storage.write_text(environment.destination, value);
+}
+
 void Interpreter::Impl::handle_boundary(
     ProcessState& process,
     const InstructionIndex instruction,
@@ -992,31 +1212,7 @@ void Interpreter::Impl::handle_boundary(
             }
             event.value = *converted;
         }
-        event.selections = control->selections;
-        event.scope = control->scope;
-        event.time = scheduler.now();
-        event.delta = scheduler.delta();
-        vcd_control_hook(event);
-        if (control->kind == VcdControlKind::variables
-            || control->kind == VcdControlKind::ports) {
-            const auto begin_kind
-                = control->kind == VcdControlKind::variables
-                ? VcdControlKind::begin_variables
-                : VcdControlKind::begin_ports;
-            scheduler.schedule(
-                SchedulerPhase::postponed,
-                process.id,
-                [this, begin_kind](Scheduler& runtime) {
-                    if (!vcd_control_hook) {
-                        return;
-                    }
-                    VcdControlEvent begin;
-                    begin.kind = begin_kind;
-                    begin.time = runtime.now();
-                    begin.delta = runtime.delta();
-                    vcd_control_hook(begin);
-                });
-        }
+        control_vcd(process.id, *control, std::move(event));
         return;
     }
     if (const auto* control
@@ -1625,152 +1821,15 @@ void Interpreter::Impl::handle_boundary(
     if (const auto* time
         = fsim::runtime::simir::operation_get_if<VhdlEnvironmentTime>(
             &operation)) {
-        const auto require = [&](const std::optional<RegisterId> value,
-                                 const char* name) -> PackedLogic4 {
-            if (!value) {
-                throw std::invalid_argument {
-                    std::string { "STD.ENV date/time operation is missing " }
-                        + name
-                };
-            }
-            return read_boundary_value(*value);
-        };
-        try {
-            PackedLogic4 result;
-            const auto now = [] {
-                return std::chrono::duration<double>(
-                    std::chrono::system_clock::now().time_since_epoch())
-                    .count();
-            };
-            switch (time->kind) {
-            case VhdlEnvironmentTimeKind::current_local:
-                result = pack_calendar(local_calendar_from_epoch(now()));
-                break;
-            case VhdlEnvironmentTimeKind::current_utc:
-                result = pack_calendar(utc_calendar_from_epoch(now()));
-                break;
-            case VhdlEnvironmentTimeKind::current_epoch:
-                result = real_value(now());
-                break;
-            case VhdlEnvironmentTimeKind::local_from_epoch:
-                result = pack_calendar(local_calendar_from_epoch(
-                    known_real(require(time->first, "TIMER"), "TIMER")));
-                break;
-            case VhdlEnvironmentTimeKind::utc_from_epoch:
-                result = pack_calendar(utc_calendar_from_epoch(
-                    known_real(require(time->first, "TIMER"), "TIMER")));
-                break;
-            case VhdlEnvironmentTimeKind::epoch_from_local:
-                result = real_value(local_epoch_from_calendar(
-                    unpack_calendar(require(time->first, "TREC"))));
-                break;
-            case VhdlEnvironmentTimeKind::local_from_utc_record:
-                result = pack_calendar(local_calendar_from_epoch(
-                    utc_epoch_from_calendar(
-                        unpack_calendar(require(time->first, "TREC")))));
-                break;
-            case VhdlEnvironmentTimeKind::utc_from_local_record:
-                result = pack_calendar(utc_calendar_from_epoch(
-                    local_epoch_from_calendar(
-                        unpack_calendar(require(time->first, "TREC")))));
-                break;
-            case VhdlEnvironmentTimeKind::add_seconds:
-            case VhdlEnvironmentTimeKind::subtract_seconds:
-            case VhdlEnvironmentTimeKind::reverse_subtract_seconds: {
-                const auto record = unpack_calendar(
-                    require(time->first, "TREC"));
-                const auto delta = known_real(
-                    require(time->second, "DELTA"), "DELTA");
-                const auto subtract = time->kind
-                    != VhdlEnvironmentTimeKind::add_seconds;
-                result = pack_calendar(utc_calendar_from_epoch(
-                    utc_epoch_from_calendar(record)
-                        + (subtract ? -delta : delta)));
-                break;
-            }
-            case VhdlEnvironmentTimeKind::difference_seconds: {
-                const auto first = unpack_calendar(
-                    require(time->first, "TR1"));
-                const auto second = unpack_calendar(
-                    require(time->second, "TR2"));
-                result = real_value(
-                    utc_epoch_from_calendar(first)
-                    - utc_epoch_from_calendar(second));
-                break;
-            }
-            case VhdlEnvironmentTimeKind::time_to_seconds: {
-                const auto ticks = require(time->first, "TIME_VAL")
-                    .known_unsigned_value();
-                if (!ticks) {
-                    throw std::invalid_argument {
-                        "STD.ENV TIME_TO_SECONDS requires a known nonnegative TIME"
-                    };
-                }
-                const auto seconds = static_cast<long double>(*ticks)
-                    * static_cast<long double>(
-                        time_format.resolution_femtoseconds)
-                    / 1'000'000'000'000'000.0L;
-                result = real_value(static_cast<double>(seconds));
-                break;
-            }
-            case VhdlEnvironmentTimeKind::seconds_to_time: {
-                const auto seconds = known_real(
-                    require(time->first, "REAL_VAL"), "REAL_VAL");
-                const auto ticks = static_cast<long double>(seconds)
-                    * 1'000'000'000'000'000.0L
-                    / static_cast<long double>(
-                        time_format.resolution_femtoseconds);
-                if (ticks < 0.0L
-                    || ticks > static_cast<long double>(
-                        std::numeric_limits<std::int64_t>::max())) {
-                    throw std::invalid_argument {
-                        "STD.ENV SECONDS_TO_TIME result is outside TIME'LOW through TIME'HIGH"
-                    };
-                }
-                const auto rounded = std::round(ticks);
-                if (rounded > static_cast<long double>(
-                        std::numeric_limits<std::int64_t>::max())) {
-                    throw std::invalid_argument {
-                        "STD.ENV SECONDS_TO_TIME result is outside TIME'LOW through TIME'HIGH"
-                    };
-                }
-                result = PackedLogic4::from_aval_bval(
-                    64U, static_cast<std::uint64_t>(rounded), 0U);
-                break;
-            }
-            }
-            write_process_register(process, time->destination, result);
-        } catch (const std::invalid_argument& error) {
-            process.pc = instruction;
-            fail(process, error.what());
-        }
+        ProcessVhdlApiStorage storage { *this, process, instruction };
+        run_vhdl_environment_time(storage, *time);
         return;
     }
     if (const auto* format
         = fsim::runtime::simir::operation_get_if<
             VhdlEnvironmentTimeToString>(&operation)) {
-        try {
-            const auto digits = read_boundary_value(
-                format->fractional_digits).known_signed_value();
-            if (!digits || *digits < 0 || *digits > 6) {
-                throw std::invalid_argument {
-                    "STD.ENV TO_STRING FRAC_DIGITS must be in 0 through 6"
-                };
-            }
-            auto text = calendar_string(
-                unpack_calendar(read_boundary_value(format->record)),
-                static_cast<std::uint32_t>(*digits));
-            if (process.executor) {
-                process.executor->write_string_register(
-                    format->destination, text);
-            } else {
-                get_string_register(process, format->destination)
-                    = std::move(text);
-            }
-        } catch (const std::invalid_argument& error) {
-            process.pc = instruction;
-            fail(process, error.what());
-        }
+        ProcessVhdlApiStorage storage { *this, process, instruction };
+        run_vhdl_environment_time_string(storage, *format);
         return;
     }
     if (const auto* directory
@@ -2085,33 +2144,8 @@ void Interpreter::Impl::handle_boundary(
     if (const auto* environment
         = fsim::runtime::simir::operation_get_if<
             VhdlEnvironmentGetenv>(&operation)) {
-        const auto name = process.executor
-            ? process.executor->read_string_register(environment->name)
-            : get_string_register(process, environment->name);
-        if (name.find('\0') != std::string::npos) {
-            process.pc = instruction;
-            fail(process,
-                "STD.ENV GETENV name contains an embedded null character");
-        }
-        // Conditional analysis identifiers take precedence over the
-        // environment (IEEE 1076-2019 16.5.6).
-        const auto identity = fsim::support::vhdl_tool_identity(name);
-        auto value = identity
-            ? std::string { *identity }
-            : fsim::support::environment_variable(name)
-                  .value_or(std::string { });
-        if (value.size() > maximum_string_bytes) {
-            process.pc = instruction;
-            fail(process,
-                "STD.ENV GETENV result exceeds the bounded string limit");
-        }
-        if (process.executor) {
-            process.executor->write_string_register(
-                environment->destination, value);
-        } else {
-            get_string_register(process, environment->destination)
-                = std::move(value);
-        }
+        ProcessVhdlApiStorage storage { *this, process, instruction };
+        run_vhdl_environment_getenv(storage, *environment);
         return;
     }
     struct VhdlCallPathFrame {
