@@ -718,11 +718,31 @@ bool visit_known_region_accesses(
             return false;
         } else if constexpr (std::is_same_v<T, ProcessSelf>
             || std::is_same_v<T, ProcessStatusQuery>
-            || std::is_same_v<T, ProcessCompleted>) {
-            // A process handle or a read of another process's status
-            // (simir_fork.cpp handle_process_boundary): register results
-            // only. ProcessKill/Suspend/Resume/Await and the random-state
-            // setters change other processes' execution and stay opaque.
+            || std::is_same_v<T, ProcessCompleted>
+            || std::is_same_v<T, ProcessAwait>
+            || std::is_same_v<T, ProcessKill>
+            || std::is_same_v<T, ProcessSuspend>
+            || std::is_same_v<T, ProcessResume>
+            || std::is_same_v<T, ProcessGetRandState>
+            || std::is_same_v<T, ProcessSetRandState>
+            || std::is_same_v<T, ProcessSrandom>) {
+            // Process handles (simir_fork.cpp handle_process_boundary):
+            // register and string-register operands, and the execution or
+            // random state of other processes. None reads or writes a
+            // signal.
+            return true;
+        } else if constexpr (std::is_same_v<T, MailboxCreate>
+            || std::is_same_v<T, MailboxPut>
+            || std::is_same_v<T, MailboxGet>
+            || std::is_same_v<T, MailboxNum>
+            || std::is_same_v<T, SemaphoreCreate>
+            || std::is_same_v<T, SemaphoreGet>
+            || std::is_same_v<T, SemaphorePut>
+            || std::is_same_v<T, DynamicEvent>) {
+            // Mailboxes, semaphores and dynamic events
+            // (simir_synchronization.cpp run_synchronization): register and
+            // string-register operands, the host's object tables, and the
+            // resumption of their waiters. None reads or writes a signal.
             return true;
         } else if constexpr (std::is_same_v<T, ClassAllocate>) {
             // An object whose lowered constructor the process runs itself
@@ -751,6 +771,9 @@ bool visit_known_region_accesses(
             // register targets, and the process's random stream
             // (run_scope_randomize).
             || std::is_same_v<T, ScopeRandomize>
+            // The stochastic analysis queues (IEEE 1800-2023 20.16):
+            // registers and the interpreter's queue table.
+            || std::is_same_v<T, StochasticQueueOperation>
             || std::is_same_v<T, VhdlAssertApi>
             || std::is_same_v<T, VhdlReflectionApi>
             || std::is_same_v<T, VhdlEnvironmentTime>

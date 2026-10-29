@@ -752,6 +752,14 @@ struct Interpreter::Impl::ProcessVhdlApiStorage final : VhdlApiStorage {
     std::optional<InstructionIndex> instruction;
 };
 
+void Interpreter::Impl::execute_stochastic_queue(
+    ProcessState& process,
+    const StochasticQueueOperation& operation)
+{
+    ProcessVhdlApiStorage storage { *this, process, std::nullopt };
+    run_stochastic_queue(storage, operation, scheduler.now());
+}
+
 void Interpreter::Impl::execute_vhdl_assert_api(
     ProcessState& process, const VhdlAssertApi& operation)
 {

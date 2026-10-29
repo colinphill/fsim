@@ -1465,6 +1465,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     // state is of the host's time step (15.5.3): no time
                     // warp.
                     host_written = true;
+                } else if constexpr (std::is_same_v<T, DynamicEvent>) {
+                    // `->>` triggers the event in the host's NBA region of
+                    // the host's time step (IEEE 1800-2023 15.5.1): no time
+                    // warp.
+                    host_written = host_written
+                        || (op.operation == DynamicEventOperation::trigger
+                            && op.nonblocking);
                 } else if constexpr (std::is_same_v<T, ClassAllocate>
                     || std::is_same_v<T, ClassPropertyWrite>
                     || std::is_same_v<T, ClassStaticPropertyWrite>

@@ -81,19 +81,15 @@ Interpreter::Impl::~Impl()
     scheduler.remove_discard_hook(scheduler_discard_hook);
 }
 
-void Interpreter::Impl::execute_stochastic_queue(
-    ProcessState& process,
-    const StochasticQueueOperation& operation)
+void Interpreter::Impl::run_stochastic_queue(VhdlApiStorage& storage,
+    const StochasticQueueOperation& operation, const SimulationTick now)
 {
     const auto read_i32 = [&](const RegisterId id,
                               const std::string_view role) {
-        const auto value = process.executor
-            ? process.executor->read_register(id, 32U)
-            : get_register(process, id);
+        const auto value = storage.packed(id, 32U);
         const auto word = value.low_word();
         if (value.width() != 32U || word.bval != 0) {
-            fail(
-                process,
+            storage.fail(
                 std::string { "stochastic queue " } + std::string { role }
                     + " must be a known 32-bit integer");
         }
@@ -101,9 +97,7 @@ void Interpreter::Impl::execute_stochastic_queue(
             static_cast<std::uint32_t>(word.aval));
     };
     const auto write_i32 = [&](const RegisterId id, const std::int32_t value) {
-        write_process_register(
-            process,
-            id,
+        storage.write_packed(id,
             PackedLogic4::from_aval_bval(
                 32U, std::bit_cast<std::uint32_t>(value), 0));
     };
@@ -113,8 +107,7 @@ void Interpreter::Impl::execute_stochastic_queue(
     const auto required = [&](const auto& value,
                               const std::string_view role) {
         if (!value) {
-            fail(
-                process,
+            storage.fail(
                 std::string { "stochastic queue operation is missing " }
                     + std::string { role });
         }
@@ -208,7 +201,7 @@ void Interpreter::Impl::execute_stochastic_queue(
         }
         try {
             queue.entries.push_back(
-                { job, information, scheduler.now() });
+                { job, information, now });
         } catch (const std::bad_alloc&) {
             write_status(7);
             return;
@@ -216,9 +209,9 @@ void Interpreter::Impl::execute_stochastic_queue(
         if (queue.last_arrival) {
             queue.total_interarrival = saturating_add(
                 queue.total_interarrival,
-                scheduler.now() - *queue.last_arrival);
+                now - *queue.last_arrival);
         }
-        queue.last_arrival = scheduler.now();
+        queue.last_arrival = now;
         ++queue.arrivals;
         queue.maximum_occupancy = std::max<std::uint64_t>(
             queue.maximum_occupancy, queue.entries.size());
@@ -243,7 +236,7 @@ void Interpreter::Impl::execute_stochastic_queue(
             queue.entries.pop_back();
         else
             queue.entries.pop_front();
-        const auto wait = scheduler.now() - entry.arrival;
+        const auto wait = now - entry.arrival;
         queue.shortest_wait = queue.shortest_wait
             ? std::min(*queue.shortest_wait, wait)
             : wait;
@@ -265,7 +258,7 @@ void Interpreter::Impl::execute_stochastic_queue(
     }
 
     if (operation.kind != StochasticQueueKind::examine) {
-        fail(process, "stochastic queue operation kind is invalid");
+        storage.fail("stochastic queue operation kind is invalid");
     }
     const auto code = read_i32(
         required(operation.statistic_code, "statistic code"),
@@ -289,7 +282,7 @@ void Interpreter::Impl::execute_stochastic_queue(
     case 5:
         for (const auto& entry : queue.entries) {
             statistic = std::max<std::uint64_t>(
-                statistic, scheduler.now() - entry.arrival);
+                statistic, now - entry.arrival);
         }
         break;
     case 6:

@@ -54,6 +54,13 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     thread.order = members_[member].process;
     if (parent == no_slot) {
         members_[member].root_thread = index;
+        thread.generation = static_cast<std::uint32_t>(
+            impl_.get_process(members_[member].process).generation);
+    } else {
+        if (impl_.next_process_generation == 0U) {
+            throw std::overflow_error { "SimIR process generation overflow" };
+        }
+        thread.generation = impl_.next_process_generation++;
     }
     if (parent != no_slot) {
         ++threads_[parent].child_records;
@@ -675,6 +682,318 @@ std::uint32_t Interpreter::Impl::StaticKernel::next_member_random(
         impl_.get_process(members_[member].process).cold().random_state);
 }
 
+std::uint64_t Interpreter::Impl::StaticKernel::take_handle(
+    const std::uint32_t index)
+{
+    // The reference's process_handle: generation, then the process id + 1.
+    auto& thread = threads_[index];
+    const auto encoded = static_cast<std::uint64_t>(thread.order) + 1U;
+    if (encoded > std::numeric_limits<std::uint32_t>::max()
+        || thread.generation == 0U) {
+        throw std::overflow_error { "SimIR process handle identity overflow" };
+    }
+    if (!thread.handle) {
+        thread.handle = true;
+        auto& record = process_records_[thread.order];
+        record = ProcessRecord { };
+        record.generation = thread.generation;
+        record.thread = index;
+    }
+    return (static_cast<std::uint64_t>(thread.generation) << 32U) | encoded;
+}
+
+std::pair<ProcessId, Interpreter::Impl::StaticKernel::ProcessRecord*>
+Interpreter::Impl::StaticKernel::handle_record(const std::uint32_t member,
+    const std::uint32_t pc, const PackedLogic4& handle)
+{
+    // Only a member takes a handle (the planner's process_handle group), so
+    // every live handle names a kernel thread.
+    if (handle.width() != 64U) {
+        fail(member, pc, "process handle register must be 64 bits");
+    }
+    const auto word = handle.low_word();
+    if (word.bval != 0U || word.aval == 0U) {
+        fail(member, pc, "process handle is null or unknown");
+    }
+    const auto encoded = static_cast<std::uint32_t>(word.aval);
+    const auto generation = static_cast<std::uint32_t>(word.aval >> 32U);
+    const auto found = encoded == 0U ? process_records_.end()
+                                     : process_records_.find(encoded - 1U);
+    if (found == process_records_.end()) {
+        fail(member, pc, "process handle is stale");
+    }
+    if (generation == 0U || found->second.generation != generation) {
+        fail(member, pc, "process handle generation is stale");
+    }
+    return { found->first, &found->second };
+}
+
+ProcessStatus Interpreter::Impl::StaticKernel::record_status(
+    const ProcessRecord& record) const
+{
+    // The reference's status: running while it runs or is queued to,
+    // waiting while it waits.
+    if (record.ended) {
+        return record.status;
+    }
+    const auto& thread = threads_[record.thread];
+    if (thread.suspended) {
+        return ProcessStatus::suspended;
+    }
+    return record.thread == running_thread_ || thread.queued
+        ? ProcessStatus::running
+        : ProcessStatus::waiting;
+}
+
+std::uint64_t& Interpreter::Impl::StaticKernel::record_random_state(
+    const ProcessId id, ProcessRecord& record)
+{
+    if (record.ended) {
+        return record.random_state;
+    }
+    const auto& thread = threads_[record.thread];
+    // A root thread draws from its process's stream (next_member_random).
+    return thread.parent == no_slot
+        ? impl_.get_process(id).cold().random_state
+        : threads_[record.thread].random_state;
+}
+
+void Interpreter::Impl::StaticKernel::end_record(const std::uint32_t index,
+    const ProcessStatus status)
+{
+    auto& thread = threads_[index];
+    if (!thread.handle) {
+        return;
+    }
+    thread.handle = false;
+    const auto found = process_records_.find(thread.order);
+    if (found == process_records_.end()) {
+        return;
+    }
+    auto& record = found->second;
+    record.random_state = record_random_state(found->first, record);
+    record.ended = true;
+    record.status = status;
+    // The reference's complete_process: each awaiting process resumes.
+    for (const auto& [waiter, epoch] : std::exchange(record.awaiting, { })) {
+        if (threads_[waiter].alive && threads_[waiter].epoch == epoch) {
+            ready_thread(waiter);
+        }
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::synchronization_thread(
+    const ProcessId process) const
+{
+    return synchronization_waits_.contains(process);
+}
+
+bool Interpreter::Impl::StaticKernel::synchronization_live(
+    const ProcessId process) const
+{
+    // The reference's `halted`: the thread ended, or was killed, while it
+    // waited.
+    const auto found = synchronization_waits_.find(process);
+    if (found == synchronization_waits_.end()) {
+        return false;
+    }
+    const auto& wait = found->second;
+    const auto& thread = threads_[wait.thread];
+    return thread.alive && !thread.queued && thread.epoch == wait.epoch
+        && thread.order == process;
+}
+
+void Interpreter::Impl::StaticKernel::synchronization_deliver(
+    const ProcessId process, const RegisterId destination,
+    const PackedLogic4& value)
+{
+    if (synchronization_live(process)) {
+        Thread::DeliveredResult result;
+        result.destination = destination;
+        result.value = value;
+        threads_[synchronization_waits_.at(process).thread].delivered.push_back(
+            std::move(result));
+    }
+}
+
+void Interpreter::Impl::StaticKernel::synchronization_deliver(
+    const ProcessId process, const StringRegisterId destination,
+    const std::string& value)
+{
+    if (synchronization_live(process)) {
+        Thread::DeliveredResult result;
+        result.string_destination = destination;
+        result.text = value;
+        threads_[synchronization_waits_.at(process).thread].delivered.push_back(
+            std::move(result));
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::synchronization_wake(const ProcessId process)
+{
+    const auto found = synchronization_waits_.find(process);
+    if (found == synchronization_waits_.end()) {
+        return false;
+    }
+    const bool live = synchronization_live(process);
+    const auto thread = found->second.thread;
+    synchronization_waits_.erase(found);
+    if (!live) {
+        return false;
+    }
+    ready_thread(thread);
+    if (running_thread_ == no_slot) {
+        // Woken by host code (a hosted process, a class body): the host runs
+        // the kernel's Active work, as enqueue_hosted does.
+        impl_.queue_active_current(host_process_);
+    }
+    return true;
+}
+
+void Interpreter::Impl::StaticKernel::synchronization_event_wake(
+    const ProcessId process, const std::uint64_t handle)
+{
+    const auto found = synchronization_waits_.find(process);
+    if (found == synchronization_waits_.end()
+        || found->second.dynamic_event != handle) {
+        return;
+    }
+    (void)synchronization_wake(process);
+}
+
+PackedLogic4 Interpreter::Impl::StaticKernel::thread_register(
+    const std::uint32_t member_index, const std::uint32_t pc,
+    const RegisterId reg) const
+{
+    const auto& member = members_[member_index];
+    if (member.compiled && !member.generic_mode) {
+        const auto& body = *member.compiled;
+        if (reg >= body.register_widths.size()) {
+            fail(member_index, pc, "invalid register ID");
+        }
+        const auto width = body.register_widths[reg];
+        if (width > 64U && reg < body.wide_base.size() && body.wide_base[reg] != 0U) {
+            return wide_value(body, body.registers.data(), reg, ValueKind::logic4);
+        }
+        if (width > 64U) {
+            return body.wide_registers.at(reg);
+        }
+        return uword_value(body.registers[reg], 0U, width, ValueKind::logic4);
+    }
+    if (reg >= member.registers.size()) {
+        fail(member_index, pc, "invalid register ID");
+    }
+    return member.registers[reg];
+}
+
+void Interpreter::Impl::StaticKernel::set_thread_register(
+    const std::uint32_t member_index, const std::uint32_t pc,
+    const RegisterId reg, const PackedLogic4& value)
+{
+    auto& member = members_[member_index];
+    if (member.compiled && !member.generic_mode) {
+        auto& body = *member.compiled;
+        if (reg >= body.register_widths.size()
+            || body.register_widths[reg] != value.width()) {
+            fail(member_index, pc, "register write has the wrong width");
+        }
+        const auto converted = Impl::coerce_value_kind(value, ValueKind::logic4);
+        if (value.width() > 64U && reg < body.wide_base.size()
+            && body.wide_base[reg] != 0U) {
+            (void)set_wide_value(body, body.registers.data(), reg, converted);
+        } else if (value.width() > 64U) {
+            body.wide_registers.at(reg) = converted;
+        } else {
+            const auto aval = converted.aval_words();
+            const auto bval = converted.bval_words();
+            body.registers[reg] = { aval.empty() ? 0U : aval[0],
+                bval.empty() ? 0U : bval[0] };
+        }
+        // Two-state code assumes known registers; recheck before using it.
+        member.registers_known = false;
+        return;
+    }
+    if (reg >= member.registers.size()) {
+        fail(member_index, pc, "invalid register ID");
+    }
+    member.registers[reg] = Impl::coerce_value_kind(value,
+        reg < member.register_kinds.size() ? member.register_kinds[reg]
+                                           : ValueKind::logic4);
+}
+
+/// A kernel thread's side of a mailbox, semaphore or dynamic-event
+/// operation (IEEE 1800-2023 15.3-15.5).
+struct Interpreter::Impl::StaticKernel::MemberSynchronizationClient final
+    : Impl::SynchronizationClient {
+    MemberSynchronizationClient(StaticKernel& kernel_value,
+        const std::uint32_t thread_value, const std::uint32_t pc_value) noexcept
+        : kernel { kernel_value }
+        , thread { thread_value }
+        , member { kernel_value.threads_[thread_value].member }
+        , pc { pc_value }
+    {
+    }
+    [[nodiscard]] ProcessId self() const override
+    {
+        return kernel.threads_[thread].order;
+    }
+    [[nodiscard]] PackedLogic4 read(const RegisterId id, std::uint32_t) override
+    {
+        return kernel.thread_register(member, pc, id);
+    }
+    [[nodiscard]] std::string& string(const StringRegisterId id)
+    {
+        auto& strings = kernel.members_[member].strings;
+        if (id >= strings.size()) {
+            kernel.fail(member, pc, "invalid string register ID");
+        }
+        return strings[id];
+    }
+    [[nodiscard]] std::string read_string(const StringRegisterId id) override
+    {
+        return string(id);
+    }
+    void write(const RegisterId id, PackedLogic4 value) override
+    {
+        kernel.set_thread_register(member, pc, id, value);
+    }
+    void write_string(const StringRegisterId id, std::string value) override
+    {
+        string(id) = std::move(value);
+    }
+    [[noreturn]] void fail(const std::string_view message) override
+    {
+        kernel.fail(member, pc, std::string { message });
+    }
+    [[nodiscard]] SimulationTick now() const override
+    {
+        return kernel.kernel_now();
+    }
+    void wait(const Wait& wait) override
+    {
+        const auto& running = kernel.threads_[thread];
+        kernel.synchronization_waits_[running.order]
+            = { thread, running.epoch, wait.dynamic_event };
+    }
+    [[nodiscard]] bool defer_trigger(Scheduler::Task trigger) override
+    {
+        // `->>` triggers the event in the host's NBA region (IEEE 1800-2023
+        // 15.5.1, 4.4), at the thread's stable order; the kernel's own NBA
+        // commit joins that region after it (host_nba_staged_).
+        auto& impl = kernel.impl_;
+        const auto origin = impl.capture_signal_change_origin(
+            kernel.members_[member].process, SignalUpdateDomain::systemverilog_nba);
+        impl.scheduler.schedule_systemverilog(origin.phase, self(), std::move(trigger));
+        kernel.host_nba_staged_ = true;
+        kernel.host_nba_time_ = impl.scheduler.now();
+        return true;
+    }
+    StaticKernel& kernel;
+    std::uint32_t thread;
+    std::uint32_t member;
+    std::uint32_t pc;
+};
+
 ProcessId Interpreter::Impl::StaticKernel::running_process(
     const std::uint32_t member) const
 {
@@ -795,6 +1114,7 @@ void Interpreter::Impl::StaticKernel::kill_thread(const std::uint32_t index)
         // A killed program process no longer keeps its program running.
         members_[thread.member].program_ended = true;
     }
+    end_record(index, ProcessStatus::killed);
     // Its waiter and timer entries lapse.
     ++thread.epoch;
     const auto parent = thread.parent;
@@ -1043,6 +1363,7 @@ void Interpreter::Impl::StaticKernel::disable_thread_interval(
 
 void Interpreter::Impl::StaticKernel::finish_thread(const std::uint32_t index)
 {
+    end_record(index, ProcessStatus::finished);
     const auto parent = threads_[index].parent;
     const auto group = threads_[index].group;
     const auto member = threads_[index].member;
@@ -2237,6 +2558,60 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     member_program(member_index).name())) {
                 fail(member_index, pc, error);
             }
+        } else if constexpr (std::is_same_v<T, ProcessSelf>) {
+            // process::self (IEEE 1800-2023 9.7) of the running thread.
+            MemberContainerAccess access { *this, member_index, pc };
+            if (running_thread_ == no_slot) {
+                fail(member_index, pc, "process::self outside a thread");
+            }
+            access.write(op.destination, PackedLogic4::from_aval_bval(
+                64U, take_handle(running_thread_), 0U));
+        } else if constexpr (std::is_same_v<T, ProcessStatusQuery>
+            || std::is_same_v<T, ProcessCompleted>) {
+            MemberContainerAccess access { *this, member_index, pc };
+            const auto status = record_status(
+                *handle_record(member_index, pc, access.read(op.source)).second);
+            if constexpr (std::is_same_v<T, ProcessStatusQuery>) {
+                access.write(op.destination, PackedLogic4::from_aval_bval(
+                    32U, static_cast<std::uint32_t>(status), 0U));
+            } else {
+                access.write(op.destination, PackedLogic4::from_aval_bval(1U,
+                    status == ProcessStatus::finished
+                            || status == ProcessStatus::killed
+                        ? 1U : 0U,
+                    0U));
+            }
+        } else if constexpr (std::is_same_v<T, ProcessGetRandState>) {
+            // get_randstate, set_randstate and srandom (18.13.3-18.13.5).
+            MemberContainerAccess access { *this, member_index, pc };
+            auto [id, record]
+                = handle_record(member_index, pc, access.read(op.source));
+            access.string(op.destination)
+                = Impl::encode_random_state(record_random_state(id, *record));
+        } else if constexpr (std::is_same_v<T, ProcessSetRandState>) {
+            MemberContainerAccess access { *this, member_index, pc };
+            auto [id, record]
+                = handle_record(member_index, pc, access.read(op.source));
+            const auto state = Impl::decode_random_state(access.read_string(op.state));
+            if (!state) {
+                fail(member_index, pc, "process random-state token is malformed");
+            }
+            record_random_state(id, *record) = *state;
+        } else if constexpr (std::is_same_v<T, ProcessSrandom>) {
+            MemberContainerAccess access { *this, member_index, pc };
+            auto [id, record]
+                = handle_record(member_index, pc, access.read(op.source));
+            const auto& payload = access.read(op.seed);
+            const auto word = payload.low_word();
+            if (payload.width() != 32U || word.bval != 0U) {
+                fail(member_index, pc,
+                    "process srandom seed must be a known 32-bit value");
+            }
+            record_random_state(id, *record) = static_cast<std::uint32_t>(word.aval);
+        } else if constexpr (std::is_same_v<T, StochasticQueueOperation>) {
+            // The stochastic analysis queues (20.16) at the kernel's time.
+            MemberVhdlApiStorage storage { *this, member_index, pc };
+            impl_.run_stochastic_queue(storage, op, kernel_now());
         } else if constexpr (std::is_same_v<T, ScopeRandomize>) {
             // std::randomize (18.12) on the member's registers.
             MemberRandomizeStorage storage { *this, member_index, pc };
@@ -2960,6 +3335,91 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                 threads_[index].waiting_children = true;
             }
             outcome = Boundary::suspend;
+        } else if constexpr (std::is_same_v<T, MailboxCreate>
+            || std::is_same_v<T, MailboxPut> || std::is_same_v<T, MailboxGet>
+            || std::is_same_v<T, MailboxNum> || std::is_same_v<T, SemaphoreCreate>
+            || std::is_same_v<T, SemaphoreGet> || std::is_same_v<T, SemaphorePut>
+            || std::is_same_v<T, DynamicEvent>) {
+            // Mailboxes, semaphores and dynamic events (IEEE 1800-2023
+            // 15.3-15.5) over the host's tables, as the reference runs them;
+            // a blocked thread waits until a put, get or trigger resumes it.
+            MemberSynchronizationClient client { *this, index, pc };
+            const auto result = impl_.run_synchronization(client,
+                member.operations[pc]);
+            if (result == Impl::SynchronizationResult::waiting) {
+                suspend_point = true;
+                outcome = Boundary::suspend;
+            } else {
+                outcome = Boundary::advance;
+            }
+        } else if constexpr (std::is_same_v<T, ProcessAwait>) {
+            // await (IEEE 1800-2023 9.7): until the process ends; an ended
+            // one requeues the thread in the current region (queue_current).
+            suspend_point = true;
+            auto [id, record] = handle_record(member_index, pc, read(op.source));
+            if (!record->ended && record->thread == index) {
+                fail(member_index, pc, "a process cannot await itself");
+            }
+            if (record->ended) {
+                ready_thread(index);
+            } else {
+                record->awaiting.emplace_back(index, threads_[index].epoch);
+            }
+            outcome = Boundary::suspend;
+        } else if constexpr (std::is_same_v<T, ProcessKill>) {
+            // kill (9.7): the process and its fork descendants end, also
+            // those of one that has ended; then, as for the reference's
+            // boundary, the thread requeues in the current region.
+            suspend_point = true;
+            auto [id, record] = handle_record(member_index, pc, read(op.source));
+            if (!record->ended) {
+                const auto target = record->thread;
+                cancel_thread_descendants(target);
+                kill_thread(target);
+            } else if (const auto slot = record->thread; slot != no_slot
+                && threads_[slot].ended_record && threads_[slot].order == id
+                && threads_[slot].generation == record->generation) {
+                cancel_thread_descendants(slot);
+            }
+            if (threads_[index].alive) {
+                ready_thread(index);
+                outcome = Boundary::suspend;
+            } else {
+                outcome = Boundary::killed;
+            }
+        } else if constexpr (std::is_same_v<T, ProcessSuspend>) {
+            // suspend (9.7): the process stops until resumed; then, as for
+            // the reference's boundary, a caller that is not itself
+            // suspended requeues in the current region.
+            suspend_point = true;
+            auto [id, record] = handle_record(member_index, pc, read(op.source));
+            if (!record->ended && !threads_[record->thread].suspended) {
+                const auto status = record_status(*record);
+                auto& target = threads_[record->thread];
+                target.suspended_running = status == ProcessStatus::running;
+                target.suspended_wake = false;
+                target.suspended = true;
+            }
+            if (!threads_[index].suspended) {
+                ready_thread(index);
+            }
+            outcome = Boundary::suspend;
+        } else if constexpr (std::is_same_v<T, ProcessResume>) {
+            // resume (9.7): a suspended process runs again if it was running
+            // or a wake reached it meanwhile; the caller continues.
+            suspend_point = true;
+            auto [id, record] = handle_record(member_index, pc, read(op.source));
+            if (!record->ended && threads_[record->thread].suspended) {
+                auto& target = threads_[record->thread];
+                target.suspended = false;
+                const bool runnable = target.suspended_wake || target.suspended_running;
+                target.suspended_wake = false;
+                target.suspended_running = false;
+                if (runnable) {
+                    ready_thread(record->thread);
+                }
+            }
+            outcome = Boundary::advance;
         } else if constexpr (std::is_same_v<T, DisableFork>) {
             // disable fork (9.6.3), as the reference's DisableFork: every
             // descendant, the process then requeued in the current region;
@@ -3347,6 +3807,12 @@ std::string Interpreter::Impl::StaticKernel::debug_string_register(
 
 void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
 {
+    if (threads_[index].suspended) {
+        // A suspended process holds the wake until it is resumed (IEEE
+        // 1800-2023 9.7), as the reference's execute does.
+        threads_[index].suspended_wake = true;
+        return;
+    }
     const auto member_index = threads_[index].member;
     auto& member = members_[member_index];
     if (trace_) {
@@ -3396,6 +3862,20 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
             reg < member.register_kinds.size() ? member.register_kinds[reg]
                                                : ValueKind::logic4);
         waiting.timeout_result.reset();
+    }
+    // Mailbox values delivered while the thread waited (15.4), in the
+    // order the puts delivered them.
+    for (auto& result : std::exchange(threads_[index].delivered, { })) {
+        if (result.destination) {
+            set_thread_register(member_index, threads_[index].pc,
+                *result.destination, result.value);
+        } else if (result.string_destination) {
+            if (*result.string_destination >= member.strings.size()) {
+                fail(member_index, threads_[index].pc,
+                    "invalid string register ID");
+            }
+            member.strings[*result.string_destination] = std::move(result.text);
+        }
     }
     auto pc = threads_[index].pc;
     const auto size = static_cast<std::uint32_t>(member.operations.size());

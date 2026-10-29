@@ -894,6 +894,32 @@ template <typename OperationAt, typename Types>
                 || std::is_same_v<T, ClassMethodCall>
                 // std::randomize (18.12) on the member's registers.
                 || std::is_same_v<T, ScopeRandomize>
+                // The stochastic analysis queues (20.16).
+                || std::is_same_v<T, StochasticQueueOperation>
+                // Process handles of the member's threads (9.7, 18.13.3-
+                // 18.13.5; the planner's process_handle group).
+                || std::is_same_v<T, ProcessSelf>
+                || std::is_same_v<T, ProcessStatusQuery>
+                || std::is_same_v<T, ProcessCompleted>
+                || std::is_same_v<T, ProcessAwait>
+                || std::is_same_v<T, ProcessKill>
+                || std::is_same_v<T, ProcessSuspend>
+                || std::is_same_v<T, ProcessResume>
+                || std::is_same_v<T, ProcessGetRandState>
+                || std::is_same_v<T, ProcessSetRandState>
+                || std::is_same_v<T, ProcessSrandom>
+                // Mailboxes and semaphores (15.3, 15.4) over the host's
+                // tables, their waiters kernel threads by process order.
+                || std::is_same_v<T, MailboxCreate>
+                || std::is_same_v<T, MailboxPut>
+                || std::is_same_v<T, MailboxGet>
+                || std::is_same_v<T, MailboxNum>
+                || std::is_same_v<T, SemaphoreCreate>
+                || std::is_same_v<T, SemaphoreGet>
+                || std::is_same_v<T, SemaphorePut>
+                // Dynamic events (15.5); `->>` triggers in the host's NBA
+                // region.
+                || std::is_same_v<T, DynamicEvent>
                 || std::is_same_v<T, ClassPropertyContainerRead>
                 || std::is_same_v<T, ClassPropertyContainerWrite>
                 || std::is_same_v<T, ClassPropertyRead>

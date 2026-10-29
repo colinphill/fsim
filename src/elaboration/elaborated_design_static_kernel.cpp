@@ -1919,6 +1919,65 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 process_groups.push_back({ "program", std::move(group) });
             }
         }
+        // A process handle (IEEE 1800-2023 9.7) names a kernel thread or a
+        // host process, never both kinds: the processes that use handles
+        // are members together (StaticKernel::handle_record), or all stay
+        // on the host.
+        std::vector<std::size_t> handle_users;
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            const auto& view = views[index];
+            if (!view.valid()) {
+                continue;
+            }
+            const auto& operations = view.operations();
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                const auto& operation = operations[op];
+                if (operation_holds<ProcessSelf>(operation)
+                    || operation_holds<ProcessStatusQuery>(operation)
+                    || operation_holds<ProcessCompleted>(operation)
+                    || operation_holds<ProcessAwait>(operation)
+                    || operation_holds<ProcessKill>(operation)
+                    || operation_holds<ProcessSuspend>(operation)
+                    || operation_holds<ProcessResume>(operation)
+                    || operation_holds<ProcessGetRandState>(operation)
+                    || operation_holds<ProcessSetRandState>(operation)
+                    || operation_holds<ProcessSrandom>(operation)) {
+                    handle_users.push_back(index);
+                    break;
+                }
+            }
+        }
+        if (!handle_users.empty()) {
+            process_groups.push_back({ "process_handle", std::move(handle_users) });
+        }
+        // The waiters of a mailbox, semaphore or dynamic event (IEEE
+        // 1800-2023 15.3-15.5) resume in the order the reference queues
+        // them only when they all run in one scheduler: the processes that
+        // use them are members together, or all stay on the host.
+        std::vector<std::size_t> synchronization_users;
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            const auto& view = views[index];
+            if (!view.valid()) {
+                continue;
+            }
+            for (const auto& operation : view.operations()) {
+                if (operation_holds<MailboxCreate>(operation)
+                    || operation_holds<MailboxPut>(operation)
+                    || operation_holds<MailboxGet>(operation)
+                    || operation_holds<MailboxNum>(operation)
+                    || operation_holds<SemaphoreCreate>(operation)
+                    || operation_holds<SemaphoreGet>(operation)
+                    || operation_holds<SemaphorePut>(operation)
+                    || operation_holds<DynamicEvent>(operation)) {
+                    synchronization_users.push_back(index);
+                    break;
+                }
+            }
+        }
+        if (!synchronization_users.empty()) {
+            process_groups.push_back(
+                { "synchronization", std::move(synchronization_users) });
+        }
         static_cast<void>(enforce_process_groups());
     }
     // A SystemC process is neither a member nor a hosted step: its body is

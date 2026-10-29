@@ -261,6 +261,22 @@ public:
     /// `process` is a member, the kernel resumes it in the next delta, as
     /// the host queues a reader, and the call returns true.
     [[nodiscard]] bool wake_switch_reader(ProcessId process);
+    /// The waiters of the host's mailbox, semaphore and dynamic-event
+    /// tables (Impl::run_synchronization) that are kernel threads, by their
+    /// process order: whether `process` is one, whether its wait still
+    /// stands, a mailbox value delivered to it (written when it resumes),
+    /// and its resumption, at once in the current region, as the reference
+    /// queues the process (queue_active_current).
+    [[nodiscard]] bool synchronization_thread(ProcessId process) const;
+    [[nodiscard]] bool synchronization_live(ProcessId process) const;
+    void synchronization_deliver(ProcessId process, RegisterId destination,
+        const PackedLogic4& value);
+    void synchronization_deliver(ProcessId process, StringRegisterId destination,
+        const std::string& value);
+    bool synchronization_wake(ProcessId process);
+    /// A dynamic-event trigger: the thread resumes if it still waits on
+    /// `handle`.
+    void synchronization_event_wake(ProcessId process, std::uint64_t handle);
     /// One pass of an update-commit program (IEEE 1076-2019 14.7.3), as
     /// Impl::run_vhdl_resolver and run_vhdl_conversion_drivers run it:
     /// `driving` (a resolution function's connected drivers' values, when
@@ -1155,6 +1171,18 @@ private:
         /// detached), which disable fork and wait fork leave alone (IEEE
         /// 1800-2023 9.6.1, 9.6.3).
         bool detached { };
+        /// The process generation of its handle (IEEE 1800-2023 9.7): the
+        /// member process's for a root thread, else the reference's next
+        /// one, as Interpreter::spawn_fork numbers its children.
+        std::uint32_t generation { };
+        /// Its handle was taken (process::self): it has a ProcessRecord.
+        bool handle { };
+        /// Suspended through its handle (IEEE 1800-2023 9.7): a wake that
+        /// reaches it is held until resume (suspended_wake), as is its run
+        /// when it was running or queued (suspended_running).
+        bool suspended { };
+        bool suspended_wake { };
+        bool suspended_running { };
         /// A fork child's random stream (IEEE 1800-2023 18.14: each thread
         /// has its own), seeded as the reference seeds the child process.
         std::uint64_t random_state { };
@@ -1172,6 +1200,15 @@ private:
         /// whether the resumption was the timeout.
         std::optional<SimulationTick> deadline;
         std::optional<RegisterId> timeout_result;
+        /// Mailbox values delivered while it waited (IEEE 1800-2023 15.4),
+        /// written to its registers when it resumes.
+        struct DeliveredResult {
+            std::optional<RegisterId> destination;
+            std::optional<StringRegisterId> string_destination;
+            PackedLogic4 value;
+            std::string text;
+        };
+        std::vector<DeliveredResult> delivered;
         /// Compiled members: the synthetic call stack (pointer, entries)
         /// saved while the thread is suspended.
         std::vector<Word> stack;
@@ -1520,6 +1557,46 @@ private:
     /// The process a member's operation runs for (class services, report
     /// process): the running fork child's own number, else the member's.
     [[nodiscard]] ProcessId running_process(std::uint32_t member) const;
+    /// A thread whose handle was taken (IEEE 1800-2023 9.7), kept after it
+    /// ends as the reference keeps a halted process's state: its status
+    /// and random state, and the threads awaiting it.
+    struct ProcessRecord {
+        std::uint32_t generation { };
+        std::uint32_t thread { static_kernel_detail::no_slot };
+        bool ended { };
+        ProcessStatus status { ProcessStatus::running };
+        std::uint64_t random_state { };
+        std::vector<std::pair<std::uint32_t, std::uint64_t>> awaiting;
+    };
+    std::unordered_map<ProcessId, ProcessRecord> process_records_;
+    /// A kernel thread blocked in a synchronization operation, by its
+    /// process order (Impl::SynchronizationClient::wait).
+    struct SynchronizationWait {
+        std::uint32_t thread { static_kernel_detail::no_slot };
+        std::uint64_t epoch { };
+        std::optional<std::uint64_t> dynamic_event;
+    };
+    std::unordered_map<ProcessId, SynchronizationWait> synchronization_waits_;
+    struct MemberSynchronizationClient;
+    /// A member register as the thread runner holds it (compiled body or
+    /// reference register file).
+    [[nodiscard]] PackedLogic4 thread_register(std::uint32_t member,
+        std::uint32_t pc, RegisterId reg) const;
+    void set_thread_register(std::uint32_t member, std::uint32_t pc,
+        RegisterId reg, const PackedLogic4& value);
+    /// The running thread's handle (process::self), recording it.
+    [[nodiscard]] std::uint64_t take_handle(std::uint32_t thread);
+    /// The record a handle register names; fails as the reference's
+    /// process_from_handle does.
+    [[nodiscard]] std::pair<ProcessId, ProcessRecord*> handle_record(
+        std::uint32_t member, std::uint32_t pc, const PackedLogic4& handle);
+    [[nodiscard]] ProcessStatus record_status(const ProcessRecord& record) const;
+    /// The random state a record's process draws from.
+    [[nodiscard]] std::uint64_t& record_random_state(ProcessId id,
+        ProcessRecord& record);
+    /// A thread with a record ends: the record keeps its status and wakes
+    /// the threads awaiting it.
+    void end_record(std::uint32_t thread, ProcessStatus status);
     /// The next draw of the stream RandomValue draws from: a running fork
     /// child's own, else the member process's (IEEE 1800-2023 18.14).
     [[nodiscard]] std::uint32_t next_member_random(std::uint32_t member);

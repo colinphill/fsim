@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "simir_internal.hpp"
+#include "simir_static_kernel_state.hpp"
 
 #include "fsim/runtime/systemverilog_string.hpp"
 
@@ -40,64 +41,188 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
 
 }  // namespace
 
+struct Interpreter::Impl::ProcessSynchronizationClient final
+    : SynchronizationClient {
+  ProcessSynchronizationClient(Impl& impl_value, ProcessState& process_value,
+      const InstructionIndex instruction_value) noexcept
+      : impl{impl_value}, process{process_value},
+        instruction{instruction_value} {}
+  [[nodiscard]] ProcessId self() const override { return process.id; }
+  [[nodiscard]] PackedLogic4 read(const RegisterId id,
+      const std::uint32_t width) override {
+    return process.executor ? process.executor->read_register(id, width)
+                            : impl.get_register(process, id);
+  }
+  [[nodiscard]] std::string read_string(const StringRegisterId id) override {
+    return process.executor ? process.executor->read_string_register(id)
+                            : impl.get_string_register(process, id);
+  }
+  void write(const RegisterId id, PackedLogic4 value) override {
+    impl.write_process_register(process, id, std::move(value));
+  }
+  void write_string(const StringRegisterId id, std::string value) override {
+    impl.write_process_string_register(process, id, std::move(value));
+  }
+  [[noreturn]] void fail(const std::string_view message) override {
+    process.pc = instruction;
+    impl.fail(process, std::string{message});
+  }
+  [[nodiscard]] SimulationTick now() const override {
+    return impl.scheduler.now();
+  }
+  void wait(const Wait& wait) override {
+    if (wait.mailbox_result) {
+      process.cold().pending_mailbox_result = wait.mailbox_result;
+    }
+    if (wait.mailbox_string_result) {
+      process.cold().pending_mailbox_string_result
+          = wait.mailbox_string_result;
+    }
+    if (wait.dynamic_event) {
+      process.cold().pending_dynamic_event = wait.dynamic_event;
+    }
+    process.status = ProcessStatus::waiting;
+    impl.notify_execution_point(
+        process, instruction, ExecutionPointKind::process_suspend,
+        process.cold().current_source);
+  }
+  [[nodiscard]] bool defer_trigger(Scheduler::Task trigger) override {
+    if (impl.processes.program_view(process.id).scheduling_domain()
+        != ProcessSchedulingDomain::systemverilog) {
+      return false;
+    }
+    // `->>` triggers the event in the NBA region (IEEE 1800-2017 15.5.1,
+    // 4.4).
+    const auto origin = impl.capture_signal_change_origin(
+        process.id, SignalUpdateDomain::systemverilog_nba);
+    impl.scheduler.schedule_systemverilog(
+        origin.phase, process.id, std::move(trigger));
+    return true;
+  }
+  Impl& impl;
+  ProcessState& process;
+  InstructionIndex instruction;
+};
+
 [[nodiscard]] bool Interpreter::Impl::handle_synchronization_boundary(
     ProcessState& process,
     const InstructionIndex instruction,
     const Operation& operation) {
-  const auto read_register = [&](const RegisterId id,
-                                 const std::uint32_t width) {
-    return process.executor
-               ? process.executor->read_register(id, width)
-               : get_register(process, id);
-  };
+  ProcessSynchronizationClient client{*this, process, instruction};
+  switch (run_synchronization(client, operation)) {
+  case SynchronizationResult::other:
+    return false;
+  case SynchronizationResult::completed:
+    process.status = ProcessStatus::running;
+    return true;
+  case SynchronizationResult::waiting:
+    return true;
+  }
+  return false;
+}
+
+bool Interpreter::Impl::synchronization_halted(const ProcessId id) {
+  if (static_kernel && static_kernel->synchronization_thread(id)) {
+    return !static_kernel->synchronization_live(id);
+  }
+  return get_process(id).halted;
+}
+
+void Interpreter::Impl::synchronization_deliver(const ProcessId id,
+    const RegisterId destination, const PackedLogic4& value) {
+  if (static_kernel && static_kernel->synchronization_thread(id)) {
+    static_kernel->synchronization_deliver(id, destination, value);
+    return;
+  }
+  auto& target = get_process(id);
+  if (!target.halted) {
+    write_process_register(target, destination, value);
+  }
+  if (target.cold().pending_mailbox_result == destination) {
+    target.cold().pending_mailbox_result.reset();
+  }
+}
+
+void Interpreter::Impl::synchronization_deliver(const ProcessId id,
+    const StringRegisterId destination, const std::string& value) {
+  if (static_kernel && static_kernel->synchronization_thread(id)) {
+    static_kernel->synchronization_deliver(id, destination, value);
+    return;
+  }
+  auto& target = get_process(id);
+  if (!target.halted) {
+    write_process_string_register(target, destination, value);
+  }
+  if (target.cold().pending_mailbox_string_result == destination) {
+    target.cold().pending_mailbox_string_result.reset();
+  }
+}
+
+bool Interpreter::Impl::synchronization_wake(const ProcessId id) {
+  if (static_kernel && static_kernel->synchronization_thread(id)) {
+    return static_kernel->synchronization_wake(id);
+  }
+  auto& waiter = get_process(id);
+  if (waiter.halted) return false;
+  waiter.status = ProcessStatus::running;
+  queue_active_current(id);
+  return true;
+}
+
+void Interpreter::Impl::synchronization_event_wake(const ProcessId id,
+    const std::uint64_t handle) {
+  if (static_kernel && static_kernel->synchronization_thread(id)) {
+    static_kernel->synchronization_event_wake(id, handle);
+    return;
+  }
+  auto& target = get_process(id);
+  if (target.halted || target.status != ProcessStatus::waiting
+      || target.cold().pending_dynamic_event != handle) {
+    return;
+  }
+  target.cold().pending_dynamic_event.reset();
+  target.status = ProcessStatus::running;
+  queue_active_current(id);
+}
+
+Interpreter::Impl::SynchronizationResult Interpreter::Impl::run_synchronization(
+    SynchronizationClient& client, const Operation& operation) {
+  using Result = SynchronizationResult;
   const auto read_string_register = [&](const StringRegisterId id) {
-    auto value = process.executor
-        ? process.executor->read_string_register(id)
-        : get_string_register(process, id);
+    auto value = client.read_string(id);
     if (value.size() > maximum_string_bytes) {
-      process.pc = instruction;
-      fail(process, "mailbox string value exceeds the byte limit");
+      client.fail("mailbox string value exceeds the byte limit");
     }
     (void)systemverilog_string_length(value);
     return value;
   };
   const auto known_u32 = [&](const RegisterId id,
                              const std::string_view purpose) {
-    const auto value = read_register(id, 32U).low_word();
+    const auto value = client.read(id, 32U).low_word();
     if (value.bval != 0 || value.aval > UINT32_MAX) {
-      process.pc = instruction;
-      fail(process, std::string{purpose} + " must be a known 32-bit value");
+      client.fail(std::string{purpose} + " must be a known 32-bit value");
     }
     return static_cast<std::uint32_t>(value.aval);
   };
   const auto known_i32 = [&](const RegisterId id,
                              const std::string_view purpose) {
-    const auto value = read_register(id, 32U).low_word();
-    if (value.bval != 0 || value.aval > UINT32_MAX) {
-      process.pc = instruction;
-      fail(process, std::string{purpose} + " must be a known 32-bit value");
-    }
-    return std::bit_cast<std::int32_t>(
-        static_cast<std::uint32_t>(value.aval));
+    return std::bit_cast<std::int32_t>(known_u32(id, purpose));
   };
   const auto receiver_handle = [&](const RegisterId id) {
-    const auto value = read_register(id, 64U).low_word();
+    const auto value = client.read(id, 64U).low_word();
     if (value.bval != 0) {
-      process.pc = instruction;
-      fail(process, "synchronization handle contains X or Z");
+      client.fail("synchronization handle contains X or Z");
     }
     return value.aval;
   };
   const auto mailbox_from_handle = [&](const RegisterId id) -> MailboxState& {
     const auto handle = receiver_handle(id);
     if ((handle & synchronization_handle_tag_mask) != mailbox_handle_tag) {
-      process.pc = instruction;
-      fail(process, "mailbox handle is null or has the wrong kind");
+      client.fail("mailbox handle is null or has the wrong kind");
     }
     const auto encoded = handle & synchronization_handle_payload_mask;
     if (encoded == 0 || encoded > mailboxes.size()) {
-      process.pc = instruction;
-      fail(process, "mailbox handle is outside the live object range");
+      client.fail("mailbox handle is outside the live object range");
     }
     return mailboxes[static_cast<std::size_t>(encoded - 1U)];
   };
@@ -106,28 +231,17 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
     const auto handle = receiver_handle(id);
     if ((handle & synchronization_handle_tag_mask)
         != semaphore_handle_tag) {
-      process.pc = instruction;
-      fail(process, "semaphore handle is null or has the wrong kind");
+      client.fail("semaphore handle is null or has the wrong kind");
     }
     const auto encoded = handle & synchronization_handle_payload_mask;
     if (encoded == 0 || encoded > semaphores.size()) {
-      process.pc = instruction;
-      fail(process, "semaphore handle is outside the live object range");
+      client.fail("semaphore handle is outside the live object range");
     }
     return semaphores[static_cast<std::size_t>(encoded - 1U)];
   };
-  const auto wake = [&](const ProcessId id) {
-    auto& waiter = get_process(id);
-    if (waiter.halted) return false;
-    waiter.status = ProcessStatus::running;
-    queue_active_current(id);
-    return true;
-  };
   const auto write_bool = [&](const RegisterId destination,
                               const bool value) {
-    write_process_register(
-        process,
-        destination,
+    client.write(destination,
         PackedLogic4::from_aval_bval(32, value ? 1U : 0U, 0));
   };
 
@@ -136,12 +250,10 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
         || (create->element_kind == MailboxElementKind::packed
             ? create->element_width == 0U
             : create->element_width != 0U)) {
-      process.pc = instruction;
-      fail(process, "mailbox has an invalid element kind or width");
+      client.fail("mailbox has an invalid element kind or width");
     }
     if (mailboxes.size() >= maximum_synchronization_objects) {
-      process.pc = instruction;
-      fail(process, "mailbox object limit is exhausted");
+      client.fail("mailbox object limit is exhausted");
     }
     const auto requested = known_u32(create->capacity, "mailbox capacity");
     const auto maximum = maximum_container_storage_bytes
@@ -149,20 +261,16 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
                 ? mailbox_string_entry_storage_bytes()
                 : mailbox_entry_storage_bytes(create->element_width));
     if (maximum == 0 || (requested != 0 && requested > maximum)) {
-      process.pc = instruction;
-      fail(process, "mailbox capacity exceeds the bounded storage limit");
+      client.fail("mailbox capacity exceeds the bounded storage limit");
     }
     mailboxes.push_back(
         MailboxState{create->element_kind, create->element_width,
                      requested == 0 ? maximum : requested,
                      {}, {}, 0U, {}, {}});
     const auto handle = mailbox_handle_tag | mailboxes.size();
-    write_process_register(
-        process,
-        create->destination,
+    client.write(create->destination,
         PackedLogic4::from_aval_bval(64, handle, 0));
-    process.status = ProcessStatus::running;
-    return true;
+    return Result::completed;
   }
 
   if (const auto* put = operation_get_if<MailboxPut>(&operation)) {
@@ -170,24 +278,21 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
     if (!valid_mailbox_element_kind(put->element_kind)
         || put->element_kind != mailbox.element_kind
         || put->element_width != mailbox.element_width) {
-      process.pc = instruction;
-      fail(process, "mailbox put operation has the wrong element type");
+      client.fail("mailbox put operation has the wrong element type");
     }
     PackedLogic4 packed_value;
     std::string string_value;
     if (mailbox.element_kind == MailboxElementKind::packed) {
-      packed_value = read_register(put->source, put->element_width);
+      packed_value = client.read(put->source, put->element_width);
       if (packed_value.width() != put->element_width) {
-        process.pc = instruction;
-        fail(process, "mailbox put value has the wrong element width");
+        client.fail("mailbox put value has the wrong element width");
       }
     } else {
       string_value = read_string_register(put->string_source);
       if (string_value.size() > maximum_container_storage_bytes
               - std::min(mailbox.string_bytes,
                   maximum_container_storage_bytes)) {
-        process.pc = instruction;
-        fail(process, "mailbox string storage exceeds the bounded storage limit");
+        client.fail("mailbox string storage exceeds the bounded storage limit");
       }
     }
     // Hand a put value to the waiting readers in order; a get consumes it,
@@ -198,26 +303,23 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
       while (!mailbox.readers.empty()) {
         const auto reader = mailbox.readers.front();
         mailbox.readers.pop_front();
-        auto& target = get_process(reader.process);
-        auto& pending = string ? target.cold().pending_mailbox_string_result
-                               : target.cold().pending_mailbox_result;
-        const auto destination
-            = string ? reader.string_destination : reader.destination;
-        if (!target.halted) {
+        if (string) {
           if constexpr (std::is_same_v<std::decay_t<decltype(delivered)>,
                             std::string>) {
-            write_process_string_register(target, destination, delivered);
-          } else {
-            write_process_register(target, destination, delivered);
+            synchronization_deliver(
+                reader.process, reader.string_destination, delivered);
+          }
+        } else {
+          if constexpr (!std::is_same_v<std::decay_t<decltype(delivered)>,
+                            std::string>) {
+            synchronization_deliver(
+                reader.process, reader.destination, delivered);
           }
         }
-        if (pending == destination) {
-          pending.reset();
-        }
-        if (target.halted) {
+        if (synchronization_halted(reader.process)) {
           continue;
         }
-        (void)wake(reader.process);
+        (void)synchronization_wake(reader.process);
         if (!reader.peek) {
           consumed = true;
           break;
@@ -244,19 +346,16 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
         deliver(packed_value, mailbox.entries, false);
       }
       if (put->result) write_bool(*put->result, true);
-      process.status = ProcessStatus::running;
-    } else if (put->result) {
-      write_bool(*put->result, false);
-      process.status = ProcessStatus::running;
-    } else {
-      mailbox.writers.push_back({
-          process.id, std::move(packed_value), std::move(string_value)});
-      process.status = ProcessStatus::waiting;
-      notify_execution_point(
-          process, instruction, ExecutionPointKind::process_suspend,
-          process.cold().current_source);
+      return Result::completed;
     }
-    return true;
+    if (put->result) {
+      write_bool(*put->result, false);
+      return Result::completed;
+    }
+    mailbox.writers.push_back({
+        client.self(), std::move(packed_value), std::move(string_value)});
+    client.wait({});
+    return Result::waiting;
   }
 
   if (const auto* get = operation_get_if<MailboxGet>(&operation)) {
@@ -264,20 +363,17 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
     if (!valid_mailbox_element_kind(get->element_kind)
         || get->element_kind != mailbox.element_kind
         || get->element_width != mailbox.element_width) {
-      process.pc = instruction;
-      fail(process, "mailbox get operation has the wrong element type");
+      client.fail("mailbox get operation has the wrong element type");
     }
     const auto entry_count = mailbox.element_kind == MailboxElementKind::string
         ? mailbox.string_entries.size()
         : mailbox.entries.size();
     if (entry_count != 0U) {
       if (mailbox.element_kind == MailboxElementKind::string) {
-        write_process_string_register(
-            process, get->string_destination,
-            mailbox.string_entries.front());
+        client.write_string(
+            get->string_destination, mailbox.string_entries.front());
       } else {
-        write_process_register(
-            process, get->destination, mailbox.entries.front());
+        client.write(get->destination, mailbox.entries.front());
       }
       if (!get->peek) {
         if (mailbox.element_kind == MailboxElementKind::string) {
@@ -289,7 +385,7 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
         while (!mailbox.writers.empty()) {
           auto writer = std::move(mailbox.writers.front());
           mailbox.writers.pop_front();
-          if (!wake(writer.process)) continue;
+          if (!synchronization_wake(writer.process)) continue;
           if (mailbox.element_kind == MailboxElementKind::string) {
             mailbox.string_bytes += writer.string_value.size();
             mailbox.string_entries.push_back(
@@ -301,26 +397,23 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
         }
       }
       if (get->result) write_bool(*get->result, true);
-      process.status = ProcessStatus::running;
-    } else if (get->result) {
-      write_bool(*get->result, false);
-      process.status = ProcessStatus::running;
-    } else {
-      if (mailbox.element_kind == MailboxElementKind::string) {
-        process.cold().pending_mailbox_string_result
-            = get->string_destination;
-      } else {
-        process.cold().pending_mailbox_result = get->destination;
-      }
-      mailbox.readers.push_back(
-          {process.id, get->destination, get->string_destination,
-              get->peek});
-      process.status = ProcessStatus::waiting;
-      notify_execution_point(
-          process, instruction, ExecutionPointKind::process_suspend,
-          process.cold().current_source);
+      return Result::completed;
     }
-    return true;
+    if (get->result) {
+      write_bool(*get->result, false);
+      return Result::completed;
+    }
+    SynchronizationClient::Wait wait;
+    if (mailbox.element_kind == MailboxElementKind::string) {
+      wait.mailbox_string_result = get->string_destination;
+    } else {
+      wait.mailbox_result = get->destination;
+    }
+    mailbox.readers.push_back(
+        {client.self(), get->destination, get->string_destination,
+            get->peek});
+    client.wait(wait);
+    return Result::waiting;
   }
 
   if (const auto* event = operation_get_if<DynamicEvent>(&operation)) {
@@ -333,94 +426,73 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
         return nullptr;
       }
       if ((handle & synchronization_handle_tag_mask) != event_handle_tag) {
-        process.pc = instruction;
-        fail(process, "event handle has the wrong kind");
+        client.fail("event handle has the wrong kind");
       }
       const auto encoded = handle & synchronization_handle_payload_mask;
       if (encoded == 0 || encoded > dynamic_events.size()) {
-        process.pc = instruction;
-        fail(process, "event handle is outside the live object range");
+        client.fail("event handle is outside the live object range");
       }
       return &dynamic_events[static_cast<std::size_t>(encoded - 1U)];
     };
     switch (event->operation) {
     case DynamicEventOperation::create: {
       if (dynamic_events.size() >= maximum_synchronization_objects) {
-        process.pc = instruction;
-        fail(process, "event object limit is exhausted");
+        client.fail("event object limit is exhausted");
       }
       dynamic_events.emplace_back();
-      write_process_register(process, event->destination,
+      client.write(event->destination,
           PackedLogic4::from_aval_bval(
               64, event_handle_tag | dynamic_events.size(), 0));
-      process.status = ProcessStatus::running;
-      return true;
+      return Result::completed;
     }
     case DynamicEventOperation::trigger: {
       const auto handle = receiver_handle(event->receiver);
       if (event_from_handle(event->receiver) != nullptr) {
         const auto index = static_cast<std::size_t>(
             (handle & synchronization_handle_payload_mask) - 1U);
-        const auto trigger = [this, handle, index](Scheduler&) {
+        const auto trigger = [this, handle, index](
+                                 const SimulationTick now) {
           auto& state = dynamic_events[index];
-          state.last_trigger = scheduler.now();
+          state.last_trigger = now;
           auto waiters = std::move(state.waiters);
           state.waiters.clear();
           for (const auto waiter : waiters) {
-            auto& target = get_process(waiter);
-            if (target.halted || target.status != ProcessStatus::waiting
-                || target.cold().pending_dynamic_event != handle) {
-              continue;
-            }
-            target.cold().pending_dynamic_event.reset();
-            target.status = ProcessStatus::running;
-            queue_active_current(waiter);
+            synchronization_event_wake(waiter, handle);
           }
         };
-        if (event->nonblocking
-            && processes.program_view(process.id).scheduling_domain()
-                == ProcessSchedulingDomain::systemverilog) {
-          // `->>` triggers the event in the NBA region (IEEE 1800-2017
-          // 15.5.1, 4.4).
-          const auto origin = capture_signal_change_origin(
-              process.id, SignalUpdateDomain::systemverilog_nba);
-          scheduler.schedule_systemverilog(origin.phase, process.id, trigger);
-        } else {
-          trigger(scheduler);
+        if (!event->nonblocking
+            || !client.defer_trigger([this, trigger](Scheduler&) {
+                 trigger(scheduler.now());
+               })) {
+          trigger(client.now());
         }
       }
-      process.status = ProcessStatus::running;
-      return true;
+      return Result::completed;
     }
     case DynamicEventOperation::wait: {
       const auto handle = receiver_handle(event->receiver);
       if (auto* state = event_from_handle(event->receiver)) {
-        state->waiters.push_back(process.id);
+        state->waiters.push_back(client.self());
       }
-      process.cold().pending_dynamic_event = handle;
-      process.status = ProcessStatus::waiting;
-      notify_execution_point(
-          process, instruction, ExecutionPointKind::process_suspend,
-          process.cold().current_source);
-      return true;
+      SynchronizationClient::Wait wait;
+      wait.dynamic_event = handle;
+      client.wait(wait);
+      return Result::waiting;
     }
     case DynamicEventOperation::triggered: {
       const auto* state = event_from_handle(event->receiver);
       const bool triggered = state != nullptr && state->last_trigger
-          && *state->last_trigger == scheduler.now();
-      write_process_register(process, event->destination,
+          && *state->last_trigger == client.now();
+      client.write(event->destination,
           PackedLogic4::from_aval_bval(1, triggered ? 1U : 0U, 0));
-      process.status = ProcessStatus::running;
-      return true;
+      return Result::completed;
     }
     }
   }
 
   if (const auto* num = operation_get_if<MailboxNum>(&operation)) {
     const auto& mailbox = mailbox_from_handle(num->receiver);
-    write_process_register(
-        process,
-        num->destination,
+    client.write(num->destination,
         PackedLogic4::from_aval_bval(
             32,
             static_cast<std::uint32_t>(
@@ -428,82 +500,70 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
                     ? mailbox.string_entries.size()
                     : mailbox.entries.size()),
             0));
-    process.status = ProcessStatus::running;
-    return true;
+    return Result::completed;
   }
 
   if (const auto* create = operation_get_if<SemaphoreCreate>(&operation)) {
     if (semaphores.size() >= maximum_synchronization_objects) {
-      process.pc = instruction;
-      fail(process, "semaphore object limit is exhausted");
+      client.fail("semaphore object limit is exhausted");
     }
     semaphores.push_back(
         SemaphoreState{known_i32(create->keys, "semaphore key count"), {}});
     const auto handle = semaphore_handle_tag | semaphores.size();
-    write_process_register(
-        process,
-        create->destination,
+    client.write(create->destination,
         PackedLogic4::from_aval_bval(64, handle, 0));
-    process.status = ProcessStatus::running;
-    return true;
+    return Result::completed;
   }
 
   if (const auto* get = operation_get_if<SemaphoreGet>(&operation)) {
     auto& semaphore = semaphore_from_handle(get->receiver);
     const auto requested = known_i32(get->keys, "semaphore get count");
     if (requested < 0) {
-      process.pc = instruction;
-      fail(process, "semaphore get count cannot be negative");
+      client.fail("semaphore get count cannot be negative");
     }
     const auto available = semaphore.waiters.empty()
         && semaphore.keys >= requested;
     if (available) {
       semaphore.keys -= requested;
       if (get->result) write_bool(*get->result, true);
-      process.status = ProcessStatus::running;
-    } else if (get->result) {
-      write_bool(*get->result, false);
-      process.status = ProcessStatus::running;
-    } else {
-      semaphore.waiters.push_back({process.id, requested});
-      process.status = ProcessStatus::waiting;
-      notify_execution_point(
-          process, instruction, ExecutionPointKind::process_suspend,
-          process.cold().current_source);
+      return Result::completed;
     }
-    return true;
+    if (get->result) {
+      write_bool(*get->result, false);
+      return Result::completed;
+    }
+    semaphore.waiters.push_back({client.self(), requested});
+    client.wait({});
+    return Result::waiting;
   }
 
   if (const auto* put = operation_get_if<SemaphorePut>(&operation)) {
     auto& semaphore = semaphore_from_handle(put->receiver);
     const auto returned = known_i32(put->keys, "semaphore put count");
     if (returned < 0) {
-      process.pc = instruction;
-      fail(process, "semaphore put count cannot be negative");
+      client.fail("semaphore put count cannot be negative");
     }
     if (semaphore.keys
         > std::numeric_limits<std::int64_t>::max()
             - static_cast<std::int64_t>(returned)) {
-      process.pc = instruction;
-      fail(process, "semaphore key count overflow");
+      client.fail("semaphore key count overflow");
     }
     semaphore.keys += returned;
     while (!semaphore.waiters.empty()) {
       const auto waiter = semaphore.waiters.front();
-      if (get_process(waiter.process).halted) {
+      if (synchronization_halted(waiter.process)) {
         semaphore.waiters.pop_front();
         continue;
       }
       if (waiter.keys > semaphore.keys) break;
       semaphore.waiters.pop_front();
       semaphore.keys -= waiter.keys;
-      (void)wake(waiter.process);
+      (void)synchronization_wake(waiter.process);
     }
-    process.status = ProcessStatus::running;
-    return true;
+    return Result::completed;
   }
 
-  return false;
+  return Result::other;
 }
 
 }  // namespace fsim::runtime::simir

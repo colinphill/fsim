@@ -2344,6 +2344,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute_string(ProcessState&, const StringMethod&);
     void execute_stochastic_queue(
         ProcessState&, const StochasticQueueOperation&);
+    struct VhdlApiStorage;
+    // $q_initialize, $q_add, $q_remove, $q_full and $q_exam (IEEE 1800-2023
+    // 20.16) on a register file, at time `now`.
+    void run_stochastic_queue(VhdlApiStorage& storage,
+        const StochasticQueueOperation& operation, SimulationTick now);
     // The storage of an assertion operation (SvaOperation, a sampled
     // read): its process's registers and errors at the running instruction.
     // A reference process and a static kernel thread provide it.
@@ -2804,6 +2809,44 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessState& process,
         InstructionIndex instruction,
         const Operation& operation);
+    // The process that runs a mailbox, semaphore or dynamic-event operation
+    // (IEEE 1800-2023 15.3-15.5): a reference process or a static kernel
+    // thread, so both run one implementation over the shared object tables.
+    struct SynchronizationClient {
+        // A blocked operation: what a delivery or trigger resumes.
+        struct Wait {
+            std::optional<RegisterId> mailbox_result;
+            std::optional<StringRegisterId> mailbox_string_result;
+            std::optional<std::uint64_t> dynamic_event;
+        };
+        virtual ~SynchronizationClient() = default;
+        [[nodiscard]] virtual ProcessId self() const = 0;
+        [[nodiscard]] virtual PackedLogic4 read(RegisterId id, std::uint32_t width) = 0;
+        [[nodiscard]] virtual std::string read_string(StringRegisterId id) = 0;
+        virtual void write(RegisterId id, PackedLogic4 value) = 0;
+        virtual void write_string(StringRegisterId id, std::string value) = 0;
+        [[noreturn]] virtual void fail(std::string_view message) = 0;
+        [[nodiscard]] virtual SimulationTick now() const = 0;
+        // The operation blocks until a wake (synchronization_wake).
+        virtual void wait(const Wait& wait) = 0;
+        // `->>` of a SystemVerilog process: runs `trigger` in the NBA region
+        // (15.5.1, 4.4) and returns true; false runs it now.
+        [[nodiscard]] virtual bool defer_trigger(Scheduler::Task trigger) = 0;
+    };
+    struct ProcessSynchronizationClient;
+    enum class SynchronizationResult { other, completed, waiting };
+    [[nodiscard]] SynchronizationResult run_synchronization(
+        SynchronizationClient& client, const Operation& operation);
+    // A waiter in the object tables: a reference process, or a static
+    // kernel thread by its process order.
+    [[nodiscard]] bool synchronization_halted(ProcessId id);
+    void synchronization_deliver(ProcessId id, RegisterId destination,
+        const PackedLogic4& value);
+    void synchronization_deliver(ProcessId id, StringRegisterId destination,
+        const std::string& value);
+    bool synchronization_wake(ProcessId id);
+    // A dynamic-event waiter resumes if it still waits on `handle`.
+    void synchronization_event_wake(ProcessId id, std::uint64_t handle);
     void complete_process(
         ProcessState& process,
         ProcessStatus status);
@@ -2889,6 +2932,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const std::uint64_t seed,
         const ProcessId process) noexcept;
 
+    // A process's random state as std::process::get_randstate's token, and
+    // back (IEEE 1800-2023 18.13.4, 18.13.5).
+    [[nodiscard]] static std::string encode_random_state(std::uint64_t state);
+    [[nodiscard]] static std::optional<std::uint64_t> decode_random_state(
+        std::string_view text);
     [[nodiscard]] static std::uint32_t next_random(
         ProcessState& process) noexcept;
     /// The next draw of a process random stream held outside a

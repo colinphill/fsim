@@ -138,6 +138,57 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — switch networks, MOS gates, class services, std::randomize (`de24d715`, sweep `v4c45`)
+
+**`de24d715`** (five changesets)
+- **Bidirectional switch networks** (IEEE 1800-2023 28.8).
+  - Tran descriptors drop their static sensitivity. The switch network tracks its terminals through its adjacency (`commit_program_switch`).
+- **MOS gates as SystemVerilog behavioral members** (28.7).
+  - Their source and target stay host signals.
+  - The host's switch-source wake readies the member's root thread in a later delta (`wake_switch_reader`, `resume_switch_readers`).
+- **Class services in kernel members** (8.5–8.10, 35.5).
+  - These run through the `Impl::run_class_operation` overloads that the reference interpreter shares: allocation, constructors, property and static-property reads and writes, method calls, static-method, DPI and user systf calls, and container properties.
+  - Their container registers are reference-format.
+  - A member that calls a class service sets `host_written`, which disables the time warp.
+  - The kernel imports the writes of package-startup callbacks.
+  - `refresh_input` counts a repeated SystemVerilog host change between scans as an event even when the value is unchanged.
+- **std::randomize** (18.12).
+  - Runs through `Impl::run_scope_randomize` over a `RandomizeStorage` that the reference shares (`ProcessRandomizeStorage` and `MemberRandomizeStorage`).
+- **Detached fork children** (9.6.1, 9.6.3).
+  - A clocking drive with a cycle delay forks detached children, and the kernel honours `Fork::detached`: `wait fork` and `disable fork` leave them alone.
+- **Declaration initializers before time zero** (6.8, 10.5).
+  - Thread members that are declaration initializers run before the time-zero procedures (`run_behavioral_initializers`).
+  - `Interpreter::process_program` returns a host member's original program, so the VPI compiletf scan finds its calls.
+
+**Validation.**
+- Caseruns had 0 losses:
+  - c58c (1,053 cases);
+  - c60a (1,066 class, switch, SV and randomize cases).
+- ct4: 1087/1087 in all four variants.
+- Sweep `v4c45` (frozen `de24d715`) has 0 losses vs `b96x1`:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Hosted processes in the sweep: 243 (v4c44 1,222).
+- Largest remaining reasons:
+  - ClassAllocate: 51 processes in 51 cases, mostly in UVM;
+  - MailboxCreate: 12;
+  - DynamicEvent: 20 processes in 9 cases;
+  - process handles: Self, Srandom, Await and Kill;
+  - SemaphoreCreate and SemaphoreGet.
+
+**Next.**
+- StochasticQueue and process handles are built and have passed caseruns with 0 losses. Each process with a process op is grouped so that all of them are members or none are.
+- Mailboxes, semaphores and dynamic events through a kernel `service_wake` bridge.
+- Suspend/Resume and nonblocking `->>` come last.
+
 ### 2026-10-28: hosted kinds into the kernel — commit programs, 'DRIVING, implicit signals, std.env directories and reflection (`e0a34772`, sweep `v4c44`)
 
 **`e0a34772`** (five changesets)

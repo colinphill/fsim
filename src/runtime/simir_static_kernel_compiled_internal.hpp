@@ -31,7 +31,17 @@ inline constexpr bool behavioral_suspension = std::is_same_v<T, WaitFor>
     || std::is_same_v<T, Stop> || std::is_same_v<T, Pause>
     // A disable may end or move other threads, or this one.
     || std::is_same_v<T, DisableBlock>
-    || std::is_same_v<T, DisableFork> || std::is_same_v<T, WaitFork>;
+    || std::is_same_v<T, DisableFork> || std::is_same_v<T, WaitFork>
+    // await waits for another process; kill may end this thread or others.
+    || std::is_same_v<T, ProcessAwait> || std::is_same_v<T, ProcessKill>
+    // suspend may stop this thread; resume readies another.
+    || std::is_same_v<T, ProcessSuspend> || std::is_same_v<T, ProcessResume>
+    // Mailbox, semaphore and dynamic-event operations may block, and their
+    // puts and triggers resume other threads (Impl::run_synchronization).
+    || std::is_same_v<T, MailboxCreate> || std::is_same_v<T, MailboxPut>
+    || std::is_same_v<T, MailboxGet> || std::is_same_v<T, MailboxNum>
+    || std::is_same_v<T, SemaphoreCreate> || std::is_same_v<T, SemaphoreGet>
+    || std::is_same_v<T, SemaphorePut> || std::is_same_v<T, DynamicEvent>;
 
 [[nodiscard]] inline bool comparison(const BinaryOperator operation) noexcept
 {

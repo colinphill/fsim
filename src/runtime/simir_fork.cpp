@@ -7,43 +7,43 @@ namespace {
 
     constexpr std::string_view random_state_prefix { "fsim-randstate-v1:" };
 
-    [[nodiscard]] std::string encode_random_state(const std::uint64_t state)
-    {
-        constexpr std::string_view digits { "0123456789abcdef" };
-        std::string result { random_state_prefix };
-        result.resize(result.size() + 16U);
-        for (std::size_t index = 0; index < 16U; ++index) {
-            const auto shift = 4U * (15U - index);
-            result[random_state_prefix.size() + index]
-                = digits[(state >> shift) & 0xfU];
-        }
-        return result;
-    }
-
-    [[nodiscard]] std::optional<std::uint64_t> decode_random_state(
-        const std::string_view text)
-    {
-        if (!text.starts_with(random_state_prefix)
-            || text.size() != random_state_prefix.size() + 16U) {
-            return std::nullopt;
-        }
-        std::uint64_t result { };
-        for (const auto character : text.substr(random_state_prefix.size())) {
-            const auto digit = character >= '0' && character <= '9'
-                ? static_cast<unsigned>(character - '0')
-                : character >= 'a' && character <= 'f'
-                ? static_cast<unsigned>(character - 'a') + 10U
-                : character >= 'A' && character <= 'F'
-                ? static_cast<unsigned>(character - 'A') + 10U
-                : 16U;
-            if (digit >= 16U)
-                return std::nullopt;
-            result = (result << 4U) | digit;
-        }
-        return result;
-    }
-
 } // namespace
+
+std::string Interpreter::Impl::encode_random_state(const std::uint64_t state)
+{
+    constexpr std::string_view digits { "0123456789abcdef" };
+    std::string result { random_state_prefix };
+    result.resize(result.size() + 16U);
+    for (std::size_t index = 0; index < 16U; ++index) {
+        const auto shift = 4U * (15U - index);
+        result[random_state_prefix.size() + index]
+            = digits[(state >> shift) & 0xfU];
+    }
+    return result;
+}
+
+std::optional<std::uint64_t> Interpreter::Impl::decode_random_state(
+    const std::string_view text)
+{
+    if (!text.starts_with(random_state_prefix)
+        || text.size() != random_state_prefix.size() + 16U) {
+        return std::nullopt;
+    }
+    std::uint64_t result { };
+    for (const auto character : text.substr(random_state_prefix.size())) {
+        const auto digit = character >= '0' && character <= '9'
+            ? static_cast<unsigned>(character - '0')
+            : character >= 'a' && character <= 'f'
+            ? static_cast<unsigned>(character - 'a') + 10U
+            : character >= 'A' && character <= 'F'
+            ? static_cast<unsigned>(character - 'A') + 10U
+            : 16U;
+        if (digit >= 16U)
+            return std::nullopt;
+        result = (result << 4U) | digit;
+    }
+    return result;
+}
 
 [[nodiscard]] bool Interpreter::Impl::handle_fork_boundary(
     ProcessState& process,
@@ -717,9 +717,14 @@ void Interpreter::Impl::complete_process(
             queue_active_current(target.id);
         }
     }
+    // kill and suspend requeue the caller in the current region; resume is
+    // an immediate boundary (is_immediate_process_boundary): the caller
+    // continues, and a second queue entry would end its next wait early.
     if (!process.halted && !process.suspended) {
         process.status = ProcessStatus::running;
-        queue_current(process.id);
+        if (resume == nullptr) {
+            queue_current(process.id);
+        }
     }
     notify_execution_point(
         process, instruction, ExecutionPointKind::process_suspend,
