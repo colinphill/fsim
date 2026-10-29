@@ -138,6 +138,75 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29: version 2026.0, efficiency audit G2–G6 — elaboration scans, replay, planner, inner loops, codegen (`d886cfb8`, `d430ace1`, sweep `v4c51`)
+
+**Branches and version.** Work moved from `codex/v3` to `staging` (`main` created at the same commit, both pushed; the old `codex/*` branches are deleted). **`d886cfb8`** sets the version to 2026.0: `fsim --version` prints `fsim 2026.0 (C API 1)`, the libraries are `.so.2026.0`, and the packaging records and version-identity checks accept a two-part version.
+
+**`d430ace1`** (audit batches G2–G6; report `.local-artifacts/v4-migration/triage/efficiency-audit-1029.md`)
+- **G2, elaboration scans.**
+  - `collect_vhdl_expressions` walks the per-unit index and stops early.
+  - The specialization replacement vectors are copy-on-write (`detail::SharedRecords<T>`).
+  - The VHDL template-call scan is driven by units, and the package pairing is computed once per builder.
+  - VHDL HIR type validation shares one `ValidationFacts` per design.
+  - Container aliases get a lazy position index, rebuilt after hierarchy resolution erases entries.
+  - Generate declarations are passed lazily and memoized per unit.
+- **G3, replay and lowering.**
+  - SV and VHDL template replay share `remap_template_operations`.
+  - Lowering caches the debug scope and the last runtime source location.
+  - The renumber pass uses a prefix map.
+  - The region graph and per-instance callable bodies are released as soon as planning is done.
+  - Subtype caches are shared and the name cache is kept across processes.
+  - Smaller fixes: an index for specialization paths, `getenv` read once, stamped visit marks, and decimal appends for callable keys.
+- **G4, planner.**
+  - `OperationList::expanded_ref` expands into reused scratch storage instead of a copy.
+  - The planner's tests that only need types no longer build values, and the region view is hoisted out of loops.
+  - Driver regions are stored flat, with a `driver_positions` index and lazy element signals.
+  - Successors are deduplicated, `target_at` is indexed, and SCC storage is flat.
+- **G5, kernel and runtime inner loops.**
+  - The queue drains reuse spare buffers (`QueueDrain<T>`).
+  - Packed-range change checks compare a 16-word inline `WordSnapshot`.
+  - Waiters are compacted in place, and threads are reset field by field.
+  - The host checks container-aggregate aliases only when the design has them.
+  - Driver updates are indexed.
+- **G6, code generation.**
+  - The static-kernel object cache sweeps entries it did not use.
+  - Resume points are tracked in a set.
+  - LLVM value names are discarded unless `FSIM_STATIC_KERNEL_DUMP_IR` is set.
+  - The host identity for the codegen key is detected once.
+  - Chunks are copied only when the cache stores them.
+- **Deferred.** These items are deferred or rejected:
+  - #3 (does not fire: `uncached_access=0`).
+  - #23 (not exact with a moderate change).
+  - #20 lean dormant slots.
+  - Restarting `plan_for`.
+  - Resolving `register_driver` once (unsafe).
+  - The `template_key` memo (unsafe).
+
+**Measurements** (mixed_codec, `instructions:u`, single run each):
+- Elaboration without AOT: 32.46 G (v4c50) → 31.79 G after G2 → 31.65 G after G3/G4.
+- AOT elaboration: 68.42 G / 9.77 s task-clock (v4c50) → 67.23 G / 8.89 s (v4c51).
+- Simulate: 28.45 G → 28.41 G. The simulation output is byte-identical.
+
+**Validation.**
+- Each batch ran its targeted ctest (481, 490 and 660 tests for G2, G3 and G4, plus 92 under strict). Each batch also ran sampled VHDL and SV caseruns (623 and 774 cases), and their results equal v4c50's.
+- The first ct4 run was 1085/1088 in all four variants. The three failures were pin drift: AST-lifetime tokens, the version regex in deterministic artifacts, and a literal-width anchor. After those were fixed, the closure-audit digest was updated. All 125 governance and audit tests then pass. The owner waived a full ct4 re-run on the final state.
+- Sweep `v4c51` (frozen `d430ace1`) vs `b96x1`: 0 losses. The only non-passing cases are nvc `case11` and `issue705`, which are out-of-scope skips. The table equals v4c50's.
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Census `v4c51`:
+  - every planned case is admitted with `host=0`;
+  - 0 hosted processes;
+  - 0 runs with interpreted>0.
+  - `specialize_folding` (177 cases) and `kernel_deopts` (9 cases) are unchanged.
+
 ### 2026-10-29: efficiency audit G1 — load/publish trust and copies, persisted class specializations (`c717aeb8`, sweep `v4c50`)
 
 **`c717aeb8`** (three earlier changesets plus audit batch G1; audit report `.local-artifacts/v4-migration/triage/efficiency-audit-1029.md`)
