@@ -138,6 +138,49 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — region members, named disables, programs (`a220537e`, sweep `v4c41`)
+
+**`a220537e`** (five changesets)
+- **Observed and Reactive processes as behavioral members** (IEEE 1800-2023 4.4.2, 16.4, 16.5.1).
+  - A member's threads resume in its own region through the hosted region lists (`ready_thread_in`).
+  - `WaitRegion` moves a thread to a later region of the time step: Observed, Reactive, Re-Inactive or Postponed. A deferred assertion's action uses Reactive or Postponed (16.4.2).
+  - Sampled reads and SVA monitors run the reference's code through a storage interface (`AssertionStorage`). The interpreter's process and the kernel's member each implement it. The signals, clocks and gates that sampled reads use stay host signals.
+  - Members with assertion operations run on the operation tier.
+- **Updates from a region member** are staged from its region (`write_host`), outside the kernel's activation flags.
+  - The kernel's host process runs its stub in the Active region. When the member it replaces is a region process, `capture_signal_change_origin` keeps that member's region, so its nonblocking writes go to Re-NBA, as the reference's do.
+  - Region members may fork, wait constant delays, and write reference-format registers and host containers. A `#0`, forces, disables and writes to kernel arrays keep them on the host.
+  - An Active thread woken from a region's run queues the kernel's host.
+- **disable of a block or task named by hierarchical name** (9.6.2) in the kernel (`disable_named_scope`).
+  - The first name that a member's program declares ends that interval in every thread of the declaring members.
+  - The disabling process and the declaring processes are members together or hosted together (planner process groups).
+  - Compiled members resume at the ends of named blocks.
+- **Program blocks** (24.7).
+  - A program ends when the last of its processes ends, or at `$exit`, which kills its threads and their fork descendants. The last program to end stops the simulation (`complete_program_member`, `exit_program`).
+  - A program's processes are members together or hosted together.
+- **The host member's sampled reads are registered from its original program** (`Impl::record_sampled_dependencies`). ct4 caught the missing histories in `fsim.application.expressions`.
+- The concurrent-assertion application test now compares phase shapes, as the deferred-assertion test does: a region's members run in one scheduler callback.
+
+**Validation.**
+- Caseruns on the 196 observed, reactive, program and disable cases had 0 losses.
+- ct4: 1087/1087 in all four variants.
+- Sweep `v4c41` (frozen `a220537e`) has 0 losses vs `b96x1`:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Hosted processes in the sweep: 1,674 (v4c40 2,778).
+
+**Next.**
+- VHDL reference-format container registers: access values and arrays with run-time ranges. `VhdlShaped` is now a shared container operation.
+- Containers whose elements alias signals.
+- Nonblocking element writes to host objects.
+
 ### 2026-10-28: hosted kinds into the kernel — delayed writes, named events, fork control, dynamic containers (`ac40c7cd`, sweep `v4c40`)
 
 **`ac40c7cd`** (five changesets)
