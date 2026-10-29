@@ -138,6 +138,46 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — VHDL dynamic containers, aliased host containers, host services, postponed processes (`9a46cd7e`, sweep `v4c42`)
+
+**`9a46cd7e`** (five changesets)
+- **VHDL reference-format container registers** (IEEE 1076-2019 5.4, 5.3.2): access values and arrays with run-time ranges.
+  - VHDL members hold them as the reference does (`static_kernel_dynamic_container_registers` by register use, not by type).
+  - `VhdlShaped` is a shared container operation (`execute_container_operation` in `simir_containers_shaped.cpp`) that the interpreter and the kernel both call.
+- **Host containers whose elements alias signals** (IEEE 1800-2023 7.4, 7.6).
+  - A member writes them through the host. The kernel then rescans its inputs (`StaticKernel::host_object_written`).
+  - The aliased signals stay host signals (`container_aliased`), and their writes are never mirrored as a sole writer's update. A mirrored update made the host commit look unchanged, so readers through the object or through another alias never woke.
+  - Slice aliases and signal alias families stay on the host.
+- **Host services in members.**
+  - `$sformat`-style string reports.
+  - `$writemem` (21.4) and `$readmem` into dynamic arrays. `Impl::write_memory_file` is shared.
+  - `$fread` (21.3.4) through `FileOperationStorage`, which now also reads and writes containers and host objects.
+  - std.env (IEEE 1076-2019 16.5): assertion API, time, time image and getenv, through `VhdlApiStorage`. Directory and call-path operations stay hosted.
+  - VCD control tasks (IEEE 1800-2023 21.7) through `Impl::control_vcd`.
+- **Postponed VHDL processes** (IEEE 1076-2019 11.3, 14.7.5) run in the kernel's postponed phase.
+  - The kernel's host stub is never postponed. When the host member was postponed, its stub ran the kernel's activation in phase 7 (ct4 `assert5`, `implicit7`).
+
+**Validation.**
+- Caseruns on each changeset's cases had 0 losses.
+- ct4: 1087/1087 in all four variants.
+- Sweep `v4c42` (frozen `9a46cd7e`) has 0 losses vs `b96x1`:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Hosted processes in the sweep: 1,499 (v4c41 1,674).
+
+**Next.**
+- Resolution functions of port associations as kernel threads (built).
+- Containers whose alias signals are unowned (`assign x = y` over net arrays).
+- Implicit 'transaction drivers, switch networks, and classes last.
+
 ### 2026-10-28: hosted kinds into the kernel — region members, named disables, programs (`a220537e`, sweep `v4c41`)
 
 **`a220537e`** (five changesets)
