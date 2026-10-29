@@ -106,6 +106,9 @@ struct Candidate {
     /// Behavioral members: starts one delta after time zero's other
     /// processes, as the scheduler starts the same program.
     bool start_late { };
+    /// Behavioral members: an implicit signal's driver, armed on its static
+    /// sensitivity at time zero without running.
+    bool start_waiting { };
     std::uint32_t body_begin { };
     std::uint32_t body_end { };
     std::uint32_t exit_alt { std::numeric_limits<std::uint32_t>::max() };
@@ -492,15 +495,22 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         return false;
     };
-    // The programs of VHDL resolution functions (IEEE 1076-2019 4.6,
-    // 14.7.3.2): a resolver over drivers, or a guarded signal's variant for
-    // fewer connected drivers. Not scheduled processes: the update commit
-    // runs one pass for each resolution (Impl::run_vhdl_resolver), which a
+    // The programs of the update commit (IEEE 1076-2019 4.6, 6.5.7.1,
+    // 14.7.3): a resolution function over drivers, a guarded signal's
+    // variant for fewer connected drivers, a port association's conversion
+    // of its sources, and an output port's conversion driver. Not scheduled
+    // processes: the update commit runs one pass of each
+    // (Impl::run_vhdl_resolver, run_vhdl_conversion_drivers), which a
     // behavioral member runs in the kernel (StaticKernel::run_resolver).
     std::vector<std::uint8_t> resolution_program(process_count, 0U);
     for (const auto& signal : signals_) {
+        for (const auto& driver : signal.vhdl_conversion_drivers) {
+            if (driver.program < process_count) {
+                resolution_program[driver.program] = 1U;
+            }
+        }
         const auto& resolver = signal.vhdl_resolver;
-        if (!resolver || !resolver->sources.empty() || resolver->driving_mirror) {
+        if (!resolver) {
             continue;
         }
         if (resolver->process < process_count) {
@@ -512,6 +522,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
         }
     }
+    // The driver of an implicit signal (S'DELAYED, S'TRANSACTION, S'STABLE,
+    // S'QUIET; IEEE 1076-2019 16.2.4): a SystemVerilog-domain process that
+    // is not initialized and runs whenever its prefix changes.
+    const auto implicit_signal_driver = [](const ProcessProgramView& view) {
+        constexpr std::string_view suffix { ".$implicit_driver" };
+        const std::string_view name { view.name() };
+        return view.scheduling_domain() == ProcessSchedulingDomain::systemverilog
+            && !view.initialize() && !view.postponed() && !view.observed()
+            && !view.reactive() && !view.final()
+            && name.size() > suffix.size() && name.ends_with(suffix);
+    };
     // The first property that keeps a process off the kernel whatever its
     // body, or nullptr; `behavioral` applies the behavioral tier's rules.
     // With `all`, every such property is appended to it (the blockers
@@ -558,10 +579,19 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         if (view.final() && (!behavioral || vhdl) && hit("final")) {
             return first;
         }
-        // A final procedure does not start at time zero (run_finals).
+        // A final procedure does not start at time zero (run_finals). An
+        // implicit signal's driver is a VHDL member (it runs, as the host
+        // runs it, in the delta after its prefix changes, after the VHDL
+        // processes): it waits on its static sensitivity from before time
+        // zero, as the reference arms it (Interpreter::start), and runs from
+        // its first operation when that wakes it: on any change of its
+        // prefix, or on each of its transactions (StaticKernel::
+        // wake_transaction_waiters).
         if (!view.initialize() && !view.final()
             && !(behavioral && vhdl && view.id() < process_count
                 && resolution_program[view.id()] != 0U)
+            && !(behavioral && vhdl && implicit_signal_driver(view)
+                && !view.static_sensitivity().empty())
             && hit("not_initialized")) {
             return first;
         }
@@ -1628,8 +1658,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
              ++index) {
             const auto& view = views[index];
             if (candidates[index] || !view.valid()
-                || view.scheduling_domain()
-                    == ProcessSchedulingDomain::systemverilog) {
+                || (view.scheduling_domain()
+                        == ProcessSchedulingDomain::systemverilog
+                    && !implicit_signal_driver(view))) {
                 continue;
             }
             if (const char* flag = flag_rejection(view, true, true)) {
@@ -1648,6 +1679,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             member.kind = behavioral_kind;
             member.vhdl = true;
             member.run_at_start = false;
+            member.start_waiting = implicit_signal_driver(view);
             member.body_begin = 0U;
             member.body_end = static_cast<std::uint32_t>(count);
             const auto& sensitivity = view.static_sensitivity();
@@ -1938,17 +1970,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // A design without a native member (no candidates of either language)
     // takes the language of its processes: its VHDL processes are hosted
     // (S25a) and its delta semantics are VHDL's (IEEE 1076-2019 14.7.5).
-    // The driver of an implicit signal (S'DELAYED, S'TRANSACTION, S'STABLE,
-    // S'QUIET; 1076-2019 16.2.4) runs in the SystemVerilog scheduling domain
-    // but belongs to the VHDL signal it observes, so it counts as VHDL.
-    const auto implicit_signal_driver = [](const ProcessProgramView& view) {
-        constexpr std::string_view suffix { ".$implicit_driver" };
-        const std::string_view name { view.name() };
-        return view.scheduling_domain() == ProcessSchedulingDomain::systemverilog
-            && !view.initialize() && !view.postponed() && !view.observed()
-            && !view.reactive() && !view.final()
-            && name.size() > suffix.size() && name.ends_with(suffix);
-    };
+    // The driver of an implicit signal runs in the SystemVerilog scheduling
+    // domain but belongs to the VHDL signal it observes, so it counts as
+    // VHDL.
     std::size_t vhdl_processes = 0U;
     std::size_t sv_processes = 0U;
     for (const auto& view : views) {
@@ -2110,6 +2134,23 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     for (std::size_t index = 0U; index < process_count; ++index) {
         if (!candidates[index]) {
             continue;
+        }
+        // The host records a signal's transactions (a thread waits on them
+        // through it), and an implicit signal's driver updates its signal
+        // as the reference's does, from its SystemVerilog domain (IEEE
+        // 1076-2019 16.2.4).
+        for (const auto& entry : candidates[index]->sensitivity) {
+            if (entry.edge == EdgeKind::transaction
+                && entry.signal < signal_count) {
+                host_touched[entry.signal] = 1U;
+            }
+        }
+        if (implicit_signal_driver(views[index])) {
+            for (const auto& region : views[index].driver_regions()) {
+                if (region.signal < signal_count) {
+                    host_touched[region.signal] = 1U;
+                }
+            }
         }
         const auto& operations = views[index].operations();
         for (std::size_t op = 0U; op < operations.size(); ++op) {
@@ -4185,7 +4226,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     auto spec = std::make_shared<StaticKernelRuntimeSpec>();
     std::vector<std::uint8_t> member(process_count, 0U);
     for (std::size_t index = 0U; index < process_count; ++index) {
-        if (!candidates[index]) {
+        // A live wiring's or conversion's program is the kernel's own update
+        // (below), never a resolver member.
+        if (!candidates[index]
+            || (resolution_program[index] != 0U && wiring_program[index] != 0U)) {
             continue;
         }
         member[index] = 1U;
@@ -4195,6 +4239,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         runtime_member.kind = static_cast<StaticKernelMemberKind>(candidate.kind);
         runtime_member.run_at_start = candidate.run_at_start;
         runtime_member.start_late = candidate.start_late;
+        runtime_member.start_waiting = candidate.start_waiting;
         runtime_member.body_begin = candidate.body_begin;
         runtime_member.body_end = candidate.body_end;
         runtime_member.exit_alt = candidate.exit_alt;
@@ -4267,13 +4312,25 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
             }
         }
+        // A stub (a halted record that never starts: a conversion driver's
+        // driver identity, or an output adapter whose routes a composer
+        // program took over) executes nothing on either side; the program
+        // that does its work has its own row.
+        const auto stub = [&](const std::size_t index) {
+            const auto& view = views[index];
+            return view.valid() && !view.initialize()
+                && view.static_sensitivity().empty()
+                && view.operations().size() == 1U
+                && operation_holds<Halt>(view.operations().expanded(0U));
+        };
         for (std::size_t index = 0U; index < process_count; ++index) {
             if (member[index] != 0U || host_program[index] == 0U) {
                 continue;
             }
-            if (wired[index] != 0U) {
+            if (wired[index] != 0U || stub(index)) {
                 // A live wiring or conversion: the kernel drives its target
-                // in its own update phase, and the host never runs it.
+                // in its own update phase, and the host never runs it. A
+                // stub runs nowhere.
                 kernel_rows[index] = 0U;
                 member[index] = 1U;
                 continue;
@@ -4476,9 +4533,23 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             host_sensitivity.push_back({ signal, EdgeKind::any });
         }
     };
+    // A member waiting on a host signal's transactions also needs the host
+    // to activate the kernel when the signal is active without changing
+    // (IEEE 1076-2019 16.2.4).
     for (const auto& entry : spec->members) {
         for (const auto& sensitivity : entry.sensitivity) {
             host_input(sensitivity.signal);
+            if (sensitivity.edge == EdgeKind::transaction
+                && sensitivity.signal < signal_count
+                && input[sensitivity.signal] != 0U
+                && std::ranges::none_of(host_sensitivity,
+                    [&](const Sensitivity& present) {
+                        return present.signal == sensitivity.signal
+                            && present.edge == EdgeKind::transaction;
+                    })) {
+                host_sensitivity.push_back(
+                    { sensitivity.signal, EdgeKind::transaction });
+            }
         }
     }
     // A behavioral thread's dynamic wait on a host signal also needs the
@@ -4614,7 +4685,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
 namespace detail {
 namespace {
 
-constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v7" };
+constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v8" };
 
 class PlanWriter {
 public:
@@ -4760,6 +4831,7 @@ std::string serialize_static_kernel_plan(const StaticKernelPlan& plan)
         out.put(member.partition);
         out.put(member.vhdl);
         out.put(member.start_late);
+        out.put(member.start_waiting);
         out.put(member.lazy);
         out.put(member.collapse);
         out.put(member.conversion_target);
@@ -4835,7 +4907,8 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
                    && in.sensitivities(member.sensitivity)
                    && sensitivity_ok(member.sensitivity)
                    && in.get(member.partition) && in.get(member.vhdl)
-                   && in.get(member.start_late) && in.get(member.lazy)
+                   && in.get(member.start_late)
+                   && in.get(member.start_waiting) && in.get(member.lazy)
                    && in.get(member.collapse)
                    && in.get(member.conversion_target)
                    && (member.conversion_target

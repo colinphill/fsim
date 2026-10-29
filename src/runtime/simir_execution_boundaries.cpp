@@ -682,6 +682,28 @@ struct Interpreter::Impl::ProcessVhdlApiStorage final : VhdlApiStorage {
             owner.get_string_register(state, id) = value;
         }
     }
+    [[nodiscard]] ContainerValue container(const ContainerRegisterId id) override
+    {
+        return state.executor ? state.executor->read_container_register(id)
+                              : owner.read_container_register(state, id);
+    }
+    void write_container(const ContainerRegisterId id, ContainerValue value) override
+    {
+        if (state.executor) {
+            state.executor->write_container_register(id, value);
+        } else {
+            owner.set_container_register_storage(state, id,
+                std::make_shared<ContainerValue>(std::move(value)));
+        }
+    }
+    [[nodiscard]] ProcessProgramView program() override
+    {
+        return state.program();
+    }
+    [[nodiscard]] std::vector<InstructionIndex> call_stack() override
+    {
+        return state.cold().dynamic_call_stack;
+    }
     void report(const std::string_view message, const AssertionSeverity severity,
         const SourceLocation& source, const bool standalone) override
     {
@@ -705,6 +727,13 @@ void Interpreter::Impl::execute_vhdl_assert_api(
 {
     ProcessVhdlApiStorage storage { *this, process, std::nullopt };
     run_vhdl_assert_api(storage, operation);
+}
+
+void Interpreter::Impl::execute_vhdl_reflection_api(
+    ProcessState& process, const VhdlReflectionApi& operation)
+{
+    ProcessVhdlApiStorage storage { *this, process, std::nullopt };
+    run_vhdl_reflection_api(storage, operation);
 }
 
 void Interpreter::Impl::run_vhdl_environment_time(
@@ -871,6 +900,451 @@ void Interpreter::Impl::run_vhdl_environment_getenv(
         storage.fail("STD.ENV GETENV result exceeds the bounded string limit");
     }
     storage.write_text(environment.destination, value);
+}
+
+namespace {
+
+struct VhdlCallPathFrame {
+    SourceLocation source;
+    std::string scope;
+};
+
+// The current subprogram's frame and its callers' (IEEE 1076-2019 16.5.6):
+// each return address of the call stack names the Call before it and the
+// debug point before that Call.
+std::vector<VhdlCallPathFrame> vhdl_call_path(const ProcessProgramView& program,
+    const std::vector<InstructionIndex>& call_stack,
+    const SourceLocation& source, const InternedString& scope)
+{
+    std::vector<VhdlCallPathFrame> frames;
+    frames.push_back(VhdlCallPathFrame { source, scope.str() });
+    constexpr std::size_t maximum_call_path_depth = 256U;
+    if (call_stack.size() > maximum_call_path_depth - 1U) {
+        throw std::invalid_argument { "STD.ENV call path exceeds 256 frames" };
+    }
+    const auto& operations = program.operations();
+    for (auto returns = call_stack.rbegin(); returns != call_stack.rend();
+         ++returns) {
+        const DebugPoint* caller = nullptr;
+        for (std::size_t cursor = *returns; cursor != 0U; --cursor) {
+            const auto candidate = cursor - 1U;
+            const auto* call = operation_get_if<Call>(
+                &std::as_const(operations)[candidate]);
+            if (call == nullptr || call->return_target != *returns) {
+                continue;
+            }
+            for (std::size_t debug_cursor = candidate; debug_cursor != 0U;
+                 --debug_cursor) {
+                const auto debug_candidate = debug_cursor - 1U;
+                const auto* point = operation_get_if<DebugPoint>(
+                    &std::as_const(operations)[debug_candidate]);
+                if (point != nullptr) {
+                    caller = &operations.debug_point(debug_candidate, *point);
+                    break;
+                }
+            }
+            break;
+        }
+        if (caller != nullptr) {
+            frames.push_back(VhdlCallPathFrame { caller->source,
+                operations.debug_scope(caller->scope).str() });
+        }
+    }
+    return frames;
+}
+
+} // namespace
+
+void Interpreter::Impl::run_vhdl_environment_get_call_path(
+    VhdlApiStorage& storage, const VhdlEnvironmentGetCallPath& operation)
+{
+    try {
+        const auto program = storage.program();
+        const auto container_register_types
+            = process_layout_detail::ProcessLayoutAccess::view(
+                program.container_register_types());
+        const auto& type = container_register_types.at(operation.destination);
+        if (type.element_kind != ContainerElementKind::Aggregate
+            || type.element_types.size() != 4U
+            || type.member_names != std::vector<std::string> {
+                "name", "file_name", "file_path", "file_line" }) {
+            throw std::invalid_argument {
+                "STD.ENV GET_CALL_PATH destination has an invalid profile" };
+        }
+        const auto frames = vhdl_call_path(program, storage.call_stack(),
+            operation.source, operation.scope);
+        auto value = default_container_value(type);
+        resize_container_value(value, frames.size());
+        for (std::size_t index = 0; index < frames.size(); ++index) {
+            auto& element = value.nested_elements.at(index);
+            if (element.nested_elements.size() != 4U
+                || element.nested_elements[0].string_elements.size() != 1U
+                || element.nested_elements[1].string_elements.size() != 1U
+                || element.nested_elements[2].string_elements.size() != 1U
+                || element.nested_elements[3].elements.size() != 1U) {
+                throw std::invalid_argument {
+                    "STD.ENV GET_CALL_PATH storage profile is invalid" };
+            }
+            const auto path = std::filesystem::path {
+                frames[index].source.path.str() }
+                .lexically_normal();
+            // A frame is named by its subprogram, the root by its process
+            // (IEEE 1076-2019 16.5.6).
+            const auto& scope = frames[index].scope.empty()
+                ? std::string { program.name() } : frames[index].scope;
+            const auto leaf = scope.rfind('.');
+            element.nested_elements[0].string_elements[0]
+                = leaf == std::string::npos ? scope : scope.substr(leaf + 1U);
+            element.nested_elements[1].string_elements[0]
+                = path.filename().generic_string();
+            element.nested_elements[2].string_elements[0]
+                = fsim::support::vhdl_environment_file_path(path);
+            element.nested_elements[3].elements[0]
+                = PackedLogic4::from_aval_bval(
+                    64U, frames[index].source.line, 0U);
+        }
+        validate_container_value(value);
+        storage.write_container(operation.destination, std::move(value));
+    } catch (const std::exception& error) {
+        storage.fail(error.what());
+    }
+}
+
+void Interpreter::Impl::run_vhdl_environment_call_path(
+    VhdlApiStorage& storage, const VhdlEnvironmentCallPath& operation)
+{
+    const auto* call_path = &operation;
+    // An element's text is its file path, the directory separator, its file
+    // name, a colon, its line, a colon and its name (IEEE 1076-2019 16.5.6).
+    struct Frame {
+        std::string directory;
+        std::string file_name;
+        std::uint64_t line { };
+        std::string name;
+    };
+    std::vector<Frame> frames;
+    if (call_path->source_value) {
+        const auto value = storage.container(*call_path->source_value);
+        if (value.type.element_kind != ContainerElementKind::Aggregate) {
+            storage.fail("STD.ENV TO_STRING call path has an invalid profile");
+        }
+        std::size_t first = 0U;
+        std::size_t count = value.nested_elements.size();
+        if (call_path->source_index) {
+            const auto selected = storage.packed(*call_path->source_index,
+                ProcessExecutor::native_register_width).known_signed_value();
+            if (!selected || *selected < 0
+                || static_cast<std::uint64_t>(*selected)
+                    >= value.nested_elements.size()) {
+                storage.fail("STD.ENV TO_STRING call-path index is out of range");
+            }
+            first = static_cast<std::size_t>(*selected);
+            count = 1U;
+        }
+        frames.reserve(count);
+        for (std::size_t index = first; index < first + count; ++index) {
+            const auto& element = value.nested_elements[index];
+            if (element.nested_elements.size() != 4U
+                || element.nested_elements[0].string_elements.size() != 1U
+                || element.nested_elements[1].string_elements.size() != 1U
+                || element.nested_elements[2].string_elements.size() != 1U
+                || element.nested_elements[3].elements.size() != 1U) {
+                storage.fail("STD.ENV TO_STRING call path storage is invalid");
+            }
+            const auto line = element.nested_elements[3]
+                .elements[0].known_unsigned_value();
+            if (!line || *line == 0U
+                || *line > std::numeric_limits<std::uint32_t>::max()) {
+                storage.fail("STD.ENV TO_STRING call path line is invalid");
+            }
+            frames.push_back(Frame {
+                element.nested_elements[2].string_elements[0],
+                element.nested_elements[1].string_elements[0],
+                *line,
+                element.nested_elements[0].string_elements[0] });
+        }
+    } else {
+        const auto program = storage.program();
+        std::vector<VhdlCallPathFrame> current;
+        try {
+            current = vhdl_call_path(program, storage.call_stack(),
+                call_path->source, call_path->scope);
+        } catch (const std::invalid_argument& error) {
+            storage.fail(error.what());
+        }
+        frames.reserve(current.size());
+        for (const auto& frame : current) {
+            const auto path = std::filesystem::path {
+                frame.source.path.str() }.lexically_normal();
+            const auto& scope = frame.scope.empty()
+                ? std::string { program.name() } : frame.scope;
+            const auto leaf = scope.rfind('.');
+            frames.push_back(Frame {
+                fsim::support::vhdl_environment_file_path(path),
+                path.filename().generic_string(),
+                frame.source.line,
+                leaf == std::string::npos ? scope : scope.substr(leaf + 1U) });
+        }
+    }
+    const auto separator = storage.text(call_path->separator);
+    std::string text;
+    for (std::size_t index = 0; index < frames.size(); ++index) {
+        const auto& frame = frames[index];
+        const auto line = std::to_string(frame.line);
+        const auto required = frame.directory.size()
+            + frame.file_name.size() + line.size() + frame.name.size()
+            + 3U + (index == 0U ? 0U : separator.size());
+        if (required > maximum_string_bytes
+            || text.size() > maximum_string_bytes - required) {
+            storage.fail(
+                "STD.ENV call-path text exceeds the bounded string limit");
+        }
+        if (index != 0U) {
+            text += separator;
+        }
+        text += frame.directory;
+        text += '/';
+        text += frame.file_name;
+        text += ':';
+        text += line;
+        text += ':';
+        text += frame.name;
+    }
+    storage.write_text(call_path->destination, text);
+}
+
+void Interpreter::Impl::run_vhdl_environment_directory(
+    VhdlApiStorage& storage, const VhdlEnvironmentDirectory& operation)
+{
+    const auto* directory = &operation;
+    const auto write_result = [&](const std::uint64_t value) {
+        if (!directory->result) {
+            throw std::invalid_argument {
+                "STD.ENV directory operation is missing its result"
+            };
+        }
+        const auto width = directory->kind
+                == VhdlEnvironmentDirectoryKind::item_exists
+                || directory->kind
+                    == VhdlEnvironmentDirectoryKind::item_is_directory
+                || directory->kind
+                    == VhdlEnvironmentDirectoryKind::item_is_file
+            ? 1U : 3U;
+        storage.write_packed(*directory->result,
+            PackedLogic4::from_aval_bval(width, value, 0U));
+    };
+    const auto path_text = [&]() -> std::string {
+        if (!directory->path) {
+            throw std::invalid_argument {
+                "STD.ENV directory operation is missing PATH"
+            };
+        }
+        return storage.text(*directory->path);
+    };
+    const auto option = [&]() {
+        if (!directory->option) {
+            return false;
+        }
+        const auto known = storage.packed(*directory->option,
+            ProcessExecutor::native_register_width).known_unsigned_value();
+        if (!known || *known > 1U) {
+            throw std::invalid_argument {
+                "STD.ENV directory option must be a known BOOLEAN"
+            };
+        }
+        return *known != 0U;
+    };
+    try {
+        using Kind = VhdlEnvironmentDirectoryKind;
+        if (directory->kind == Kind::separator) {
+            if (!directory->string_result) {
+                throw std::invalid_argument {
+                    "STD.ENV DIR_SEPARATOR is missing its result"
+                };
+            }
+            storage.write_text(*directory->string_result,
+                std::string(1U,
+                    std::filesystem::path::preferred_separator));
+            return;
+        }
+        if (directory->kind == Kind::get_working_directory) {
+            if (!directory->string_result) {
+                throw std::invalid_argument {
+                    "STD.ENV DIR_WORKINGDIR is missing its result"
+                };
+            }
+            storage.write_text(*directory->string_result,
+                fsim::support::path_to_utf8(vhdl_working_directory));
+            return;
+        }
+        if (directory->kind == Kind::close) {
+            if (!directory->directory) {
+                throw std::invalid_argument {
+                    "STD.ENV DIR_CLOSE is missing DIR"
+                };
+            }
+            auto value = storage.container(*directory->directory);
+            value.string_elements.clear();
+            storage.write_container(*directory->directory, std::move(value));
+            return;
+        }
+
+        std::error_code error;
+        const auto resolved = vhdl_directory_path(
+            file_root, vhdl_working_directory, path_text(), error);
+        if (directory->kind == Kind::item_exists
+            || directory->kind == Kind::item_is_directory
+            || directory->kind == Kind::item_is_file) {
+            bool result = false;
+            if (resolved) {
+                if (directory->kind == Kind::item_exists) {
+                    result = support::native_fs::exists(*resolved, error);
+                } else if (directory->kind == Kind::item_is_directory) {
+                    result = support::native_fs::is_directory(*resolved, error);
+                } else {
+                    result = support::native_fs::is_regular_file(*resolved, error);
+                }
+            }
+            write_result(!error && result ? 1U : 0U);
+            return;
+        }
+        if (directory->kind == Kind::open) {
+            std::uint64_t status = 0U;
+            if (!resolved) {
+                status = vhdl_access_denied(error) ? 3U
+                    : error == std::errc::no_such_file_or_directory
+                    ? 1U
+                    : 4U;
+            } else if (!support::native_fs::exists(*resolved, error)) {
+                status = error && vhdl_access_denied(error) ? 3U : 1U;
+            } else if (!support::native_fs::is_directory(*resolved, error)) {
+                status = error && vhdl_access_denied(error) ? 3U : 2U;
+            } else {
+                if (!directory->directory) {
+                    throw std::invalid_argument {
+                        "STD.ENV DIR_OPEN is missing DIR"
+                    };
+                }
+                auto value = storage.container(*directory->directory);
+                std::vector<std::string> items;
+                std::size_t text_bytes = 0U;
+                for (auto iterator = support::native_fs::directory_iterator(
+                         *resolved, error),
+                     end = std::filesystem::directory_iterator {};
+                     !error && iterator != end; iterator.increment(error)) {
+                    auto item = fsim::support::path_to_utf8(
+                        iterator->path().filename());
+                    if (items.size() >= vhdl_directory_item_limit
+                        || item.size() > vhdl_directory_text_limit
+                        || text_bytes > vhdl_directory_text_limit
+                            - item.size()) {
+                        error = std::make_error_code(
+                            std::errc::value_too_large);
+                        break;
+                    }
+                    text_bytes += item.size();
+                    items.push_back(std::move(item));
+                }
+                if (error) {
+                    status = vhdl_access_denied(error) ? 3U : 4U;
+                } else {
+                    std::sort(items.begin(), items.end());
+                    value.elements.clear();
+                    value.nested_elements.clear();
+                    value.keys.clear();
+                    value.string_keys.clear();
+                    value.string_elements.clear();
+                    value.string_elements.reserve(items.size() + 1U);
+                    value.string_elements.push_back(
+                        fsim::support::path_to_utf8(*resolved));
+                    value.string_elements.insert(
+                        value.string_elements.end(),
+                        std::make_move_iterator(items.begin()),
+                        std::make_move_iterator(items.end()));
+                    validate_container_value(value);
+                    storage.write_container(*directory->directory, std::move(value));
+                }
+            }
+            write_result(status);
+            return;
+        }
+        if (directory->kind == Kind::set_working_directory) {
+            std::uint64_t status = 0U;
+            if (!resolved) {
+                status = vhdl_access_denied(error) ? 3U
+                    : error == std::errc::no_such_file_or_directory
+                    ? 1U
+                    : 4U;
+            } else if (!support::native_fs::exists(*resolved, error)) {
+                status = error && vhdl_access_denied(error) ? 3U : 1U;
+            } else if (!support::native_fs::is_directory(*resolved, error)) {
+                status = error && vhdl_access_denied(error) ? 3U : 2U;
+            } else {
+                vhdl_working_directory = *resolved;
+            }
+            write_result(status);
+            return;
+        }
+        if (directory->kind == Kind::create_directory) {
+            std::uint64_t status = 0U;
+            if (!resolved) {
+                status = vhdl_access_denied(error) ? 2U : 3U;
+            } else if (support::native_fs::exists(*resolved, error)) {
+                status = error && vhdl_access_denied(error) ? 2U : 1U;
+            } else {
+                const bool created = option()
+                    ? support::native_fs::create_directories(*resolved, error)
+                    : support::native_fs::create_directory(*resolved, error);
+                if (error || !created) {
+                    status = vhdl_access_denied(error) ? 2U : 3U;
+                }
+            }
+            write_result(status);
+            return;
+        }
+        if (directory->kind == Kind::delete_directory) {
+            std::uint64_t status = 0U;
+            if (!resolved) {
+                status = vhdl_access_denied(error) ? 3U : 4U;
+            } else if (*resolved == file_root
+                || vhdl_path_below_root(
+                    *resolved, vhdl_working_directory)) {
+                // Preserve the configured sandbox root and the logical
+                // working-directory chain for subsequent operations.
+                status = 3U;
+            } else if (!support::native_fs::is_directory(*resolved, error)) {
+                status = error && vhdl_access_denied(error) ? 3U : 1U;
+            } else if (option()) {
+                static_cast<void>(
+                    support::native_fs::remove_all(*resolved, error));
+                if (error) {
+                    status = vhdl_access_denied(error) ? 3U : 4U;
+                }
+            } else if (!support::native_fs::remove(*resolved, error)) {
+                status = error == std::errc::directory_not_empty
+                    ? 2U : vhdl_access_denied(error) ? 3U : 4U;
+            }
+            write_result(status);
+            return;
+        }
+        if (directory->kind == Kind::delete_file) {
+            std::uint64_t status = 0U;
+            if (!resolved) {
+                status = vhdl_access_denied(error) ? 2U : 3U;
+            } else if (!support::native_fs::is_regular_file(*resolved, error)) {
+                status = error && vhdl_access_denied(error) ? 2U : 1U;
+            } else if (!support::native_fs::remove(*resolved, error)) {
+                status = vhdl_access_denied(error) ? 2U : 3U;
+            }
+            write_result(status);
+            return;
+        }
+        throw std::invalid_argument {
+            "STD.ENV directory operation kind is invalid"
+        };
+    } catch (const std::exception& error) {
+        storage.fail(error.what());
+    }
 }
 
 void Interpreter::Impl::handle_boundary(
@@ -1776,11 +2250,8 @@ void Interpreter::Impl::handle_boundary(
     if (const auto* driving
         = operation_get_if<SignalDriving>(&operation);
         driving && driving->selection) {
-        const auto value = signal_attribute_detail::driving(
-            *this, process.id, driving->signal, driving->selection);
         write_process_register(
-            process, driving->destination,
-            PackedLogic4(1U, value ? Logic4::one : Logic4::zero));
+            process, driving->destination, signal_driving(process.id, *driving));
         return;
     }
     if (const auto* last_value
@@ -1804,18 +2275,14 @@ void Interpreter::Impl::handle_boundary(
     }
     if (const auto* driving_value
         = operation_get_if<SignalDrivingValue>(&operation)) {
-        if (!signal_attribute_detail::driving(
-                *this, process.id, driving_value->signal,
-                driving_value->selection)) {
+        auto value = signal_driving_value(process.id, *driving_value);
+        if (!value) {
             process.pc = instruction;
             fail(process,
                 "VHDL 'driving_value queried a signal without a driver");
         }
         write_process_register(
-            process, driving_value->destination,
-            signal_attribute_detail::driving_value(
-                *this, process.id, driving_value->signal,
-                driving_value->selection));
+            process, driving_value->destination, std::move(*value));
         return;
     }
     if (const auto* time
@@ -1835,261 +2302,8 @@ void Interpreter::Impl::handle_boundary(
     if (const auto* directory
         = fsim::runtime::simir::operation_get_if<
             VhdlEnvironmentDirectory>(&operation)) {
-        const auto read_string = [&](const StringRegisterId id) {
-            return process.executor
-                ? process.executor->read_string_register(id)
-                : get_string_register(process, id);
-        };
-        const auto write_string = [&](const StringRegisterId id,
-                                      std::string value) {
-            if (process.executor) {
-                process.executor->write_string_register(id, value);
-            } else {
-                get_string_register(process, id) = std::move(value);
-            }
-        };
-        const auto read_container = [&](const ContainerRegisterId id) {
-            return process.executor
-                ? process.executor->read_container_register(id)
-                : read_container_register(process, id);
-        };
-        const auto write_container = [&](const ContainerRegisterId id,
-                                         const ContainerValue& value) {
-            if (process.executor) {
-                process.executor->write_container_register(id, value);
-            } else {
-                get_container_register(process, id) = value;
-            }
-        };
-        const auto write_result = [&](const std::uint64_t value) {
-            if (!directory->result) {
-                throw std::invalid_argument {
-                    "STD.ENV directory operation is missing its result"
-                };
-            }
-            const auto width = directory->kind
-                    == VhdlEnvironmentDirectoryKind::item_exists
-                    || directory->kind
-                        == VhdlEnvironmentDirectoryKind::item_is_directory
-                    || directory->kind
-                        == VhdlEnvironmentDirectoryKind::item_is_file
-                ? 1U : 3U;
-            write_process_register(process, *directory->result,
-                PackedLogic4::from_aval_bval(width, value, 0U));
-        };
-        const auto path_text = [&]() -> std::string {
-            if (!directory->path) {
-                throw std::invalid_argument {
-                    "STD.ENV directory operation is missing PATH"
-                };
-            }
-            return read_string(*directory->path);
-        };
-        const auto option = [&]() {
-            if (!directory->option) {
-                return false;
-            }
-            const auto known = read_boundary_value(*directory->option)
-                .known_unsigned_value();
-            if (!known || *known > 1U) {
-                throw std::invalid_argument {
-                    "STD.ENV directory option must be a known BOOLEAN"
-                };
-            }
-            return *known != 0U;
-        };
-        try {
-            using Kind = VhdlEnvironmentDirectoryKind;
-            if (directory->kind == Kind::separator) {
-                if (!directory->string_result) {
-                    throw std::invalid_argument {
-                        "STD.ENV DIR_SEPARATOR is missing its result"
-                    };
-                }
-                write_string(*directory->string_result,
-                    std::string(1U,
-                        std::filesystem::path::preferred_separator));
-                return;
-            }
-            if (directory->kind == Kind::get_working_directory) {
-                if (!directory->string_result) {
-                    throw std::invalid_argument {
-                        "STD.ENV DIR_WORKINGDIR is missing its result"
-                    };
-                }
-                write_string(*directory->string_result,
-                    fsim::support::path_to_utf8(vhdl_working_directory));
-                return;
-            }
-            if (directory->kind == Kind::close) {
-                if (!directory->directory) {
-                    throw std::invalid_argument {
-                        "STD.ENV DIR_CLOSE is missing DIR"
-                    };
-                }
-                auto value = read_container(*directory->directory);
-                value.string_elements.clear();
-                write_container(*directory->directory, value);
-                return;
-            }
-
-            std::error_code error;
-            const auto resolved = vhdl_directory_path(
-                file_root, vhdl_working_directory, path_text(), error);
-            if (directory->kind == Kind::item_exists
-                || directory->kind == Kind::item_is_directory
-                || directory->kind == Kind::item_is_file) {
-                bool result = false;
-                if (resolved) {
-                    if (directory->kind == Kind::item_exists) {
-                        result = support::native_fs::exists(*resolved, error);
-                    } else if (directory->kind == Kind::item_is_directory) {
-                        result = support::native_fs::is_directory(*resolved, error);
-                    } else {
-                        result = support::native_fs::is_regular_file(*resolved, error);
-                    }
-                }
-                write_result(!error && result ? 1U : 0U);
-                return;
-            }
-            if (directory->kind == Kind::open) {
-                std::uint64_t status = 0U;
-                if (!resolved) {
-                    status = vhdl_access_denied(error) ? 3U
-                        : error == std::errc::no_such_file_or_directory
-                        ? 1U
-                        : 4U;
-                } else if (!support::native_fs::exists(*resolved, error)) {
-                    status = error && vhdl_access_denied(error) ? 3U : 1U;
-                } else if (!support::native_fs::is_directory(*resolved, error)) {
-                    status = error && vhdl_access_denied(error) ? 3U : 2U;
-                } else {
-                    if (!directory->directory) {
-                        throw std::invalid_argument {
-                            "STD.ENV DIR_OPEN is missing DIR"
-                        };
-                    }
-                    auto value = read_container(*directory->directory);
-                    std::vector<std::string> items;
-                    std::size_t text_bytes = 0U;
-                    for (auto iterator = support::native_fs::directory_iterator(
-                             *resolved, error),
-                         end = std::filesystem::directory_iterator {};
-                         !error && iterator != end; iterator.increment(error)) {
-                        auto item = fsim::support::path_to_utf8(
-                            iterator->path().filename());
-                        if (items.size() >= vhdl_directory_item_limit
-                            || item.size() > vhdl_directory_text_limit
-                            || text_bytes > vhdl_directory_text_limit
-                                - item.size()) {
-                            error = std::make_error_code(
-                                std::errc::value_too_large);
-                            break;
-                        }
-                        text_bytes += item.size();
-                        items.push_back(std::move(item));
-                    }
-                    if (error) {
-                        status = vhdl_access_denied(error) ? 3U : 4U;
-                    } else {
-                        std::sort(items.begin(), items.end());
-                        value.elements.clear();
-                        value.nested_elements.clear();
-                        value.keys.clear();
-                        value.string_keys.clear();
-                        value.string_elements.clear();
-                        value.string_elements.reserve(items.size() + 1U);
-                        value.string_elements.push_back(
-                            fsim::support::path_to_utf8(*resolved));
-                        value.string_elements.insert(
-                            value.string_elements.end(),
-                            std::make_move_iterator(items.begin()),
-                            std::make_move_iterator(items.end()));
-                        validate_container_value(value);
-                        write_container(*directory->directory, value);
-                    }
-                }
-                write_result(status);
-                return;
-            }
-            if (directory->kind == Kind::set_working_directory) {
-                std::uint64_t status = 0U;
-                if (!resolved) {
-                    status = vhdl_access_denied(error) ? 3U
-                        : error == std::errc::no_such_file_or_directory
-                        ? 1U
-                        : 4U;
-                } else if (!support::native_fs::exists(*resolved, error)) {
-                    status = error && vhdl_access_denied(error) ? 3U : 1U;
-                } else if (!support::native_fs::is_directory(*resolved, error)) {
-                    status = error && vhdl_access_denied(error) ? 3U : 2U;
-                } else {
-                    vhdl_working_directory = *resolved;
-                }
-                write_result(status);
-                return;
-            }
-            if (directory->kind == Kind::create_directory) {
-                std::uint64_t status = 0U;
-                if (!resolved) {
-                    status = vhdl_access_denied(error) ? 2U : 3U;
-                } else if (support::native_fs::exists(*resolved, error)) {
-                    status = error && vhdl_access_denied(error) ? 2U : 1U;
-                } else {
-                    const bool created = option()
-                        ? support::native_fs::create_directories(*resolved, error)
-                        : support::native_fs::create_directory(*resolved, error);
-                    if (error || !created) {
-                        status = vhdl_access_denied(error) ? 2U : 3U;
-                    }
-                }
-                write_result(status);
-                return;
-            }
-            if (directory->kind == Kind::delete_directory) {
-                std::uint64_t status = 0U;
-                if (!resolved) {
-                    status = vhdl_access_denied(error) ? 3U : 4U;
-                } else if (*resolved == file_root
-                    || vhdl_path_below_root(
-                        *resolved, vhdl_working_directory)) {
-                    // Preserve the configured sandbox root and the logical
-                    // working-directory chain for subsequent operations.
-                    status = 3U;
-                } else if (!support::native_fs::is_directory(*resolved, error)) {
-                    status = error && vhdl_access_denied(error) ? 3U : 1U;
-                } else if (option()) {
-                    static_cast<void>(
-                        support::native_fs::remove_all(*resolved, error));
-                    if (error) {
-                        status = vhdl_access_denied(error) ? 3U : 4U;
-                    }
-                } else if (!support::native_fs::remove(*resolved, error)) {
-                    status = error == std::errc::directory_not_empty
-                        ? 2U : vhdl_access_denied(error) ? 3U : 4U;
-                }
-                write_result(status);
-                return;
-            }
-            if (directory->kind == Kind::delete_file) {
-                std::uint64_t status = 0U;
-                if (!resolved) {
-                    status = vhdl_access_denied(error) ? 2U : 3U;
-                } else if (!support::native_fs::is_regular_file(*resolved, error)) {
-                    status = error && vhdl_access_denied(error) ? 2U : 1U;
-                } else if (!support::native_fs::remove(*resolved, error)) {
-                    status = vhdl_access_denied(error) ? 2U : 3U;
-                }
-                write_result(status);
-                return;
-            }
-            throw std::invalid_argument {
-                "STD.ENV directory operation kind is invalid"
-            };
-        } catch (const std::exception& error) {
-            process.pc = instruction;
-            fail(process, error.what());
-        }
+        ProcessVhdlApiStorage storage { *this, process, instruction };
+        run_vhdl_environment_directory(storage, *directory);
         return;
     }
     if (const auto* strength
@@ -2148,233 +2362,18 @@ void Interpreter::Impl::handle_boundary(
         run_vhdl_environment_getenv(storage, *environment);
         return;
     }
-    struct VhdlCallPathFrame {
-        SourceLocation source;
-        std::string scope;
-    };
-    const auto collect_vhdl_call_path = [&](const SourceLocation& source,
-                                             const InternedString& scope) {
-        std::vector<VhdlCallPathFrame> frames;
-        frames.push_back(VhdlCallPathFrame { source, scope.str() });
-        constexpr std::size_t maximum_call_path_depth = 256U;
-        const auto& dynamic_call_stack
-            = process.cold().dynamic_call_stack;
-        if (dynamic_call_stack.size() > maximum_call_path_depth - 1U) {
-            process.pc = instruction;
-            fail(process, "STD.ENV call path exceeds 256 frames");
-        }
-        for (auto returns = dynamic_call_stack.rbegin();
-            returns != dynamic_call_stack.rend(); ++returns) {
-            const DebugPoint* caller = nullptr;
-            for (std::size_t cursor = *returns; cursor != 0U; --cursor) {
-                const auto candidate = cursor - 1U;
-                const auto* call = operation_get_if<Call>(
-                    &std::as_const(process.program().operations())[candidate]);
-                if (call == nullptr || call->return_target != *returns) {
-                    continue;
-                }
-                for (std::size_t debug_cursor = candidate;
-                    debug_cursor != 0U; --debug_cursor) {
-                    const auto debug_candidate = debug_cursor - 1U;
-                    const auto* point = operation_get_if<DebugPoint>(
-                        &std::as_const(process.program().operations())[debug_candidate]);
-                    if (point != nullptr) {
-                        caller = &process.program().operations().debug_point(
-                            debug_candidate, *point);
-                        break;
-                    }
-                }
-                break;
-            }
-            if (caller != nullptr) {
-                frames.push_back(VhdlCallPathFrame {
-                    caller->source,
-                    process.program().operations().debug_scope(
-                        caller->scope).str() });
-            }
-        }
-        return frames;
-    };
     if (const auto* get_call_path
         = fsim::runtime::simir::operation_get_if<
             VhdlEnvironmentGetCallPath>(&operation)) {
-        try {
-            const auto container_register_types
-                = process_layout_detail::ProcessLayoutAccess::view(
-                    process.program().container_register_types());
-            const auto& type
-                = container_register_types.at(get_call_path->destination);
-            if (type.element_kind != ContainerElementKind::Aggregate
-                || type.element_types.size() != 4U
-                || type.member_names != std::vector<std::string> {
-                    "name", "file_name", "file_path", "file_line" }) {
-                throw std::invalid_argument {
-                    "STD.ENV GET_CALL_PATH destination has an invalid profile" };
-            }
-            const auto frames = collect_vhdl_call_path(
-                get_call_path->source, get_call_path->scope);
-            auto value = default_container_value(type);
-            resize_container_value(value, frames.size());
-            for (std::size_t index = 0; index < frames.size(); ++index) {
-                auto& element = value.nested_elements.at(index);
-                if (element.nested_elements.size() != 4U
-                    || element.nested_elements[0].string_elements.size() != 1U
-                    || element.nested_elements[1].string_elements.size() != 1U
-                    || element.nested_elements[2].string_elements.size() != 1U
-                    || element.nested_elements[3].elements.size() != 1U) {
-                    throw std::invalid_argument {
-                        "STD.ENV GET_CALL_PATH storage profile is invalid" };
-                }
-                const auto path = std::filesystem::path {
-                    frames[index].source.path.str() }
-                    .lexically_normal();
-                // A frame is named by its subprogram, the root by its
-                // process (IEEE 1076-2019 16.5.6).
-                const auto& scope = frames[index].scope.empty()
-                    ? process.program().name() : frames[index].scope;
-                const auto leaf = scope.rfind('.');
-                element.nested_elements[0].string_elements[0]
-                    = leaf == std::string::npos ? scope
-                                                : scope.substr(leaf + 1U);
-                element.nested_elements[1].string_elements[0]
-                    = path.filename().generic_string();
-                element.nested_elements[2].string_elements[0]
-                    = fsim::support::vhdl_environment_file_path(path);
-                element.nested_elements[3].elements[0]
-                    = PackedLogic4::from_aval_bval(
-                        64U, frames[index].source.line, 0U);
-            }
-            validate_container_value(value);
-            if (process.executor) {
-                process.executor->write_container_register(
-                    get_call_path->destination, value);
-            } else {
-                set_container_register_storage(
-                    process, get_call_path->destination,
-                    std::make_shared<ContainerValue>(std::move(value)));
-            }
-        } catch (const std::exception& error) {
-            process.pc = instruction;
-            fail(process, error.what());
-        }
+        ProcessVhdlApiStorage storage { *this, process, instruction };
+        run_vhdl_environment_get_call_path(storage, *get_call_path);
         return;
     }
     if (const auto* call_path
         = fsim::runtime::simir::operation_get_if<
             VhdlEnvironmentCallPath>(&operation)) {
-        // An element's text is its file path, the directory separator,
-        // its file name, a colon, its line, a colon and its name (IEEE
-        // 1076-2019 16.5.6).
-        struct Frame {
-            std::string directory;
-            std::string file_name;
-            std::uint64_t line { };
-            std::string name;
-        };
-        std::vector<Frame> frames;
-        if (call_path->source_value) {
-            const auto value = process.executor
-                ? process.executor->read_container_register(
-                    *call_path->source_value)
-                : read_container_register(process, *call_path->source_value);
-            if (value.type.element_kind != ContainerElementKind::Aggregate) {
-                process.pc = instruction;
-                fail(process,
-                    "STD.ENV TO_STRING call path has an invalid profile");
-            }
-            std::size_t first = 0U;
-            std::size_t count = value.nested_elements.size();
-            if (call_path->source_index) {
-                const auto selected = read_boundary_value(
-                    *call_path->source_index).known_signed_value();
-                if (!selected || *selected < 0
-                    || static_cast<std::uint64_t>(*selected)
-                        >= value.nested_elements.size()) {
-                    process.pc = instruction;
-                    fail(process,
-                        "STD.ENV TO_STRING call-path index is out of range");
-                }
-                first = static_cast<std::size_t>(*selected);
-                count = 1U;
-            }
-            frames.reserve(count);
-            for (std::size_t index = first; index < first + count; ++index) {
-                const auto& element = value.nested_elements[index];
-                if (element.nested_elements.size() != 4U
-                    || element.nested_elements[0].string_elements.size() != 1U
-                    || element.nested_elements[1].string_elements.size() != 1U
-                    || element.nested_elements[2].string_elements.size() != 1U
-                    || element.nested_elements[3].elements.size() != 1U) {
-                    process.pc = instruction;
-                    fail(process,
-                        "STD.ENV TO_STRING call path storage is invalid");
-                }
-                const auto line = element.nested_elements[3]
-                    .elements[0].known_unsigned_value();
-                if (!line || *line == 0U
-                    || *line > std::numeric_limits<std::uint32_t>::max()) {
-                    process.pc = instruction;
-                    fail(process,
-                        "STD.ENV TO_STRING call path line is invalid");
-                }
-                frames.push_back(Frame {
-                    element.nested_elements[2].string_elements[0],
-                    element.nested_elements[1].string_elements[0],
-                    *line,
-                    element.nested_elements[0].string_elements[0] });
-            }
-        } else {
-            const auto current = collect_vhdl_call_path(
-                call_path->source, call_path->scope);
-            frames.reserve(current.size());
-            for (const auto& frame : current) {
-                const auto path = std::filesystem::path {
-                    frame.source.path.str() }.lexically_normal();
-                const auto& scope = frame.scope.empty()
-                    ? process.program().name() : frame.scope;
-                const auto leaf = scope.rfind('.');
-                frames.push_back(Frame {
-                    fsim::support::vhdl_environment_file_path(path),
-                    path.filename().generic_string(),
-                    frame.source.line,
-                    leaf == std::string::npos ? scope
-                                              : scope.substr(leaf + 1U) });
-            }
-        }
-        const auto separator = process.executor
-            ? process.executor->read_string_register(call_path->separator)
-            : get_string_register(process, call_path->separator);
-        std::string text;
-        for (std::size_t index = 0; index < frames.size(); ++index) {
-            const auto& frame = frames[index];
-            const auto line = std::to_string(frame.line);
-            const auto required = frame.directory.size()
-                + frame.file_name.size() + line.size() + frame.name.size()
-                + 3U + (index == 0U ? 0U : separator.size());
-            if (required > maximum_string_bytes
-                || text.size() > maximum_string_bytes - required) {
-                process.pc = instruction;
-                fail(process,
-                    "STD.ENV call-path text exceeds the bounded string limit");
-            }
-            if (index != 0U) {
-                text += separator;
-            }
-            text += frame.directory;
-            text += '/';
-            text += frame.file_name;
-            text += ':';
-            text += line;
-            text += ':';
-            text += frame.name;
-        }
-        if (process.executor) {
-            process.executor->write_string_register(
-                call_path->destination, text);
-        } else {
-            get_string_register(process, call_path->destination)
-                = std::move(text);
-        }
+        ProcessVhdlApiStorage storage { *this, process, instruction };
+        run_vhdl_environment_call_path(storage, *call_path);
         return;
     }
     if (const auto* class_allocate = fsim::runtime::simir::operation_get_if<ClassAllocate>(&operation)) {
@@ -2705,6 +2704,25 @@ void Interpreter::Impl::handle_boundary(
     fail(
         process,
         "executor returned at an operation that is not a kernel boundary");
+}
+
+PackedLogic4 Interpreter::Impl::signal_driving(
+    const ProcessId process, const SignalDriving& operation)
+{
+    return PackedLogic4(1U, signal_attribute_detail::driving(
+        *this, process, operation.signal, operation.selection)
+            ? Logic4::one : Logic4::zero);
+}
+
+std::optional<PackedLogic4> Interpreter::Impl::signal_driving_value(
+    const ProcessId process, const SignalDrivingValue& operation)
+{
+    if (!signal_attribute_detail::driving(
+            *this, process, operation.signal, operation.selection)) {
+        return std::nullopt;
+    }
+    return signal_attribute_detail::driving_value(
+        *this, process, operation.signal, operation.selection);
 }
 
 } // namespace fsim::runtime::simir

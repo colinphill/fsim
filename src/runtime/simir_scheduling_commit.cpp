@@ -1680,12 +1680,21 @@ bool Interpreter::Impl::run_vhdl_conversion_drivers(
     const bool resolver = vhdl_resolvers.contains(signal_id);
     const auto& signal = get_signal(signal_id);
     for (const auto& driver : found->second) {
-        auto& process = get_process(driver.program);
-        process.pc = 0U;
-        process.halted = false;
-        execute(driver.program);
+        // One pass of the program: a kernel member's
+        // (StaticKernel::run_resolver), or the reference's.
+        const auto output = [&] {
+            if (static_kernel && static_kernel->resolver_member(driver.program)) {
+                return static_kernel->run_resolver(
+                    driver.program, std::nullopt, driver.output, driver.output);
+            }
+            auto& process = get_process(driver.program);
+            process.pc = 0U;
+            process.halted = false;
+            execute(driver.program);
+            return get_register(process, driver.output);
+        }();
         if (driver.offset) {
-            auto part = get_register(process, driver.output);
+            auto part = output;
             if (initializing && signal.resolution != ResolutionKind::none) {
                 // A subelement source of a resolved signal starts at its
                 // program's value; the signal's initial value resolves its
@@ -1716,8 +1725,7 @@ bool Interpreter::Impl::run_vhdl_conversion_drivers(
             }
             continue;
         }
-        auto value = coerce_value_kind(
-            get_register(process, driver.output), signal.value_kind);
+        auto value = coerce_value_kind(output, signal.value_kind);
         if (initializing || resolver) {
             // The resolver, or the initial resolution, reads the driver.
             driver_slot(driver.stub, signal_id) = std::move(value);

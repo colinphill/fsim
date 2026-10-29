@@ -72,6 +72,10 @@ struct StaticKernelMemberSpec {
     /// A behavioral thread that starts one delta after time zero's other
     /// processes (systemverilog_late_starters).
     bool start_late { };
+    /// A behavioral process that is not initialized (an implicit signal's
+    /// driver): armed on its static sensitivity at time zero without
+    /// running (StaticKernel::prepare_behavioral).
+    bool start_waiting { };
     /// Dead logic (plan dead-logic removal): a combinational member whose
     /// outputs no live process reads. It is never scheduled; a read of what
     /// it writes (materialize) evaluates it first from its current inputs.
@@ -540,6 +544,16 @@ inline constexpr bool static_kernel_reference_container_operation
     // VHDL arrays with run-time index ranges (IEEE 1076-2019 5.3.2.2).
     || std::is_same_v<T, VhdlShaped>;
 
+/// std.env's directory, call-path and reflection operations (IEEE 1076-2019
+/// 16.5.6, 16.6): the reference's run_vhdl_* functions keep their values in
+/// reference-format registers.
+template <typename T>
+inline constexpr bool static_kernel_vhdl_api_container_operation
+    = std::is_same_v<T, VhdlEnvironmentDirectory>
+    || std::is_same_v<T, VhdlEnvironmentGetCallPath>
+    || std::is_same_v<T, VhdlEnvironmentCallPath>
+    || std::is_same_v<T, VhdlReflectionApi>;
+
 /// Calls `visit(id)` for each container register a reference container
 /// operation, ContainerRead, ContainerWrite or CopyContainerRegister names.
 template <typename Visit>
@@ -577,6 +591,20 @@ inline void static_kernel_container_operands(
         } else if constexpr (std::is_same_v<T, ContainerBitstream>) {
             visit(op.bits);
             visit(op.container);
+        } else if constexpr (std::is_same_v<T, VhdlEnvironmentDirectory>) {
+            if (op.directory) {
+                visit(*op.directory);
+            }
+        } else if constexpr (std::is_same_v<T, VhdlEnvironmentGetCallPath>) {
+            visit(op.destination);
+        } else if constexpr (std::is_same_v<T, VhdlEnvironmentCallPath>) {
+            if (op.source_value) {
+                visit(*op.source_value);
+            }
+        } else if constexpr (std::is_same_v<T, VhdlReflectionApi>) {
+            if (op.access_heap) {
+                visit(*op.access_heap);
+            }
         } else if constexpr (std::is_same_v<T, VhdlShaped>) {
             // The registers each operation uses (an unused one is zero).
             switch (op.operation) {
@@ -653,8 +681,9 @@ template <typename OperationAt, typename Types>
     for (std::size_t op = 0U; op < count; ++op) {
         const auto& operation = operation_at(op);
         const bool reference = visit_operation([](const auto& value) {
-            return static_kernel_reference_container_operation<
-                std::decay_t<decltype(value)>>;
+            using T = std::decay_t<decltype(value)>;
+            return static_kernel_reference_container_operation<T>
+                || static_kernel_vhdl_api_container_operation<T>;
         }, operation);
         static_kernel_container_operands(operation,
             [&](const ContainerRegisterId id) {
@@ -1030,6 +1059,12 @@ template <typename OperationAt, typename Types>
                 return false;
             }
             return !value.timeout_origin || value.timeout_result.has_value();
+        } else if constexpr (std::is_same_v<T, WriteUpdate>) {
+            // S'TRANSACTION's driver toggles its host signal from its
+            // SystemVerilog domain, as the reference's does (IEEE 1076-2019
+            // 16.2.4; the planner keeps an implicit driver's signal a host
+            // signal).
+            return value.domain == SignalUpdateDomain::systemverilog_active;
         } else if constexpr (std::is_same_v<T, Halt>) {
             return !value.program_exit;
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
@@ -1039,6 +1074,17 @@ template <typename OperationAt, typename Types>
             // A guarded assignment's driver disconnection (IEEE 1076-2019
             // 11.6, 10.5.2.2) through the host's projected drivers.
             return vhdl_disconnect_signal(value.method_identity).has_value();
+        } else if constexpr (std::is_same_v<T, SignalDriving>
+            || std::is_same_v<T, SignalDrivingValue>) {
+            // 'DRIVING and 'DRIVING_VALUE (16.2.4) of the member's host
+            // driver (static_kernel_host_signal).
+            (void)value;
+            return true;
+        } else if constexpr (static_kernel_vhdl_api_container_operation<T>) {
+            // std.env's directory, call path and reflection (16.5.6, 16.6),
+            // the reference's run_vhdl_* on the member's registers.
+            (void)value;
+            return true;
         } else if constexpr (std::is_same_v<T, VhdlAssertApi>
             || std::is_same_v<T, VhdlEnvironmentTime>
             || std::is_same_v<T, VhdlEnvironmentTimeToString>
@@ -1189,7 +1235,11 @@ template <typename OperationAt, typename Types>
             || std::is_same_v<T, SignalLastActive>
             // %v reads the host's drivers and their strengths (IEEE
             // 1800-2023 21.2.1.5).
-            || std::is_same_v<T, SignalStrengthText>) {
+            || std::is_same_v<T, SignalStrengthText>
+            // 'DRIVING and 'DRIVING_VALUE read the member's host driver
+            // (1076-2019 16.2.4).
+            || std::is_same_v<T, SignalDriving>
+            || std::is_same_v<T, SignalDrivingValue>) {
             return value.signal;
         } else if constexpr (std::is_same_v<T, EventTriggered>) {
             // The triggered state of an event (IEEE 1800-2023 15.5.3) is

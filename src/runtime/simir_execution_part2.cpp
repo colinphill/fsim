@@ -449,28 +449,19 @@ void Interpreter::Impl::run_vhdl_assert_api(
     storage.fail("VHDL assert API operation is invalid");
 }
 
-void Interpreter::Impl::execute_vhdl_reflection_api(
-    ProcessState& process, const VhdlReflectionApi& operation)
+void Interpreter::Impl::run_vhdl_reflection_api(
+    VhdlApiStorage& storage, const VhdlReflectionApi& operation)
 {
     using Kind = VhdlReflectionApiKind;
     constexpr std::size_t maximum_mirrors = 65'536U;
     const auto packed = [&](const RegisterId id, const std::size_t width) {
-        return process.executor
-            ? process.executor->read_register(id, width)
-            : get_register(process, id);
+        return storage.packed(id, width);
     };
     const auto write_packed = [&](PackedLogic4 value) {
         if (!operation.destination || value.width() != operation.result_width) {
-            fail(process, "VHDL reflection packed result is invalid");
+            storage.fail("VHDL reflection packed result is invalid");
         }
-        value = coerce_value_kind(
-            std::move(value),
-            register_value_kind(process, *operation.destination));
-        if (process.executor) {
-            process.executor->write_register(*operation.destination, value);
-        } else {
-            get_register(process, *operation.destination) = std::move(value);
-        }
+        storage.write_packed(*operation.destination, value);
     };
     const auto write_unsigned = [&](const std::uint64_t value) {
         write_packed(PackedLogic4::from_aval_bval(
@@ -479,31 +470,24 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
     const auto write_string = [&](const std::string_view value) {
         if (!operation.string_destination
             || value.size() > maximum_string_bytes) {
-            fail(process, "VHDL reflection string result is invalid");
+            storage.fail("VHDL reflection string result is invalid");
         }
-        if (process.executor) {
-            process.executor->write_string_register(
-                *operation.string_destination, value);
-        } else {
-            get_string_register(process, *operation.string_destination) = value;
-        }
+        storage.write_text(*operation.string_destination, value);
     };
     const auto string_argument = [&]() -> std::string {
         if (!operation.string_argument) {
-            fail(process, "VHDL reflection string argument is missing");
+            storage.fail("VHDL reflection string argument is missing");
         }
-        return process.executor
-            ? process.executor->read_string_register(*operation.string_argument)
-            : get_string_register(process, *operation.string_argument);
+        return storage.text(*operation.string_argument);
     };
     const auto integer_argument = [&](const std::size_t index) -> std::int64_t {
         if (index >= operation.arguments.size()) {
-            fail(process, "VHDL reflection integer argument is missing");
+            storage.fail("VHDL reflection integer argument is missing");
         }
         const auto value = packed(operation.arguments[index], 64U);
         const auto decoded = value.known_signed_value();
         if (!decoded) {
-            fail(process, "VHDL reflection integer argument is not known");
+            storage.fail("VHDL reflection integer argument is not known");
         }
         return *decoded;
     };
@@ -513,7 +497,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
                             std::optional<PackedLogic4> designated_value = { })
         -> std::uint32_t {
         if (vhdl_reflection_mirrors.size() >= maximum_mirrors) {
-            fail(process, "VHDL reflection mirror limit is exhausted");
+            storage.fail("VHDL reflection mirror limit is exhausted");
         }
         vhdl_reflection_mirrors.push_back(
             VhdlReflectionMirror { std::move(type), std::move(value), has_value,
@@ -522,13 +506,13 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
     };
     const auto mirror = [&]() -> const VhdlReflectionMirror& {
         if (!operation.receiver) {
-            fail(process, "VHDL reflection receiver is missing");
+            storage.fail("VHDL reflection receiver is missing");
         }
         const auto value = packed(*operation.receiver, 32U);
         const auto handle = value.known_unsigned_value();
         if (!handle || *handle == 0U
             || *handle >= vhdl_reflection_mirrors.size()) {
-            fail(process, "VHDL reflection receiver is null or stale");
+            storage.fail("VHDL reflection receiver is null or stale");
         }
         return vhdl_reflection_mirrors[static_cast<std::size_t>(*handle)];
     };
@@ -536,7 +520,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
                            const std::size_t dimension = 0U)
         -> const VhdlReflectionRange& {
         if (dimension >= value.type.ranges.size()) {
-            fail(process, "VHDL reflection dimension is outside the subtype");
+            storage.fail("VHDL reflection dimension is outside the subtype");
         }
         return value.type.ranges[dimension];
     };
@@ -550,19 +534,19 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         case Kind::right: return value.right;
         case Kind::low: return std::min(value.left, value.right);
         case Kind::high: return std::max(value.left, value.right);
-        default: fail(process, "VHDL reflection bound query is invalid");
+        default: storage.fail("VHDL reflection bound query is invalid");
         }
     };
     const auto require_value = [&](const VhdlReflectionMirror& value) {
         if (!value.has_value) {
-            fail(process, "VHDL reflection value method used a subtype mirror");
+            storage.fail("VHDL reflection value method used a subtype mirror");
         }
     };
     const auto child_handle = [&](const VhdlReflectionMirror& owner,
                                   const std::size_t index,
                                   const bool with_value) {
         if (index >= owner.type.children.size()) {
-            fail(process, "VHDL reflection element is outside the subtype");
+            storage.fail("VHDL reflection element is outside the subtype");
         }
         auto child = owner.type.children[index];
         auto value = PackedLogic4(child.packed_width, Logic4::zero);
@@ -571,7 +555,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
             if (child.packed_width == 0U
                 || child.lsb_offset > owner.value.width()
                 || child.packed_width > owner.value.width() - child.lsb_offset) {
-                fail(process, "VHDL reflection element has no executable snapshot");
+                storage.fail("VHDL reflection element has no executable snapshot");
             }
             value = owner.value.extract_bits(
                 static_cast<std::size_t>(child.lsb_offset), child.packed_width);
@@ -589,7 +573,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
                 && operation.type.packed_width != 0U && !operation.source)
             || (operation.access_heap
                 && operation.type.type_class != VhdlReflectionClass::access)) {
-            fail(process, "VHDL reflection mirror creation is invalid");
+            storage.fail("VHDL reflection mirror creation is invalid");
         }
         auto value = operation.source
             ? packed(*operation.source, operation.type.packed_width)
@@ -598,21 +582,18 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         if (operation.access_heap) {
             const auto handle = value.known_unsigned_value();
             if (!handle) {
-                fail(process, "reflected access value is not known");
+                storage.fail("reflected access value is not known");
             }
             if (*handle != 0U) {
-                const auto& heap = process.executor
-                    ? process.executor->read_container_register(
-                        *operation.access_heap)
-                    : read_container_register(process, *operation.access_heap);
+                const auto heap = storage.container(*operation.access_heap);
                 if (heap.keys.size() != heap.elements.size()) {
-                    fail(process, "VHDL access heap snapshot is inconsistent");
+                    storage.fail("VHDL access heap snapshot is inconsistent");
                 }
                 const auto key = PackedLogic4::from_aval_bval(
                     value.width(), *handle, 0U);
                 const auto found = std::ranges::find(heap.keys, key);
                 if (found == heap.keys.end()) {
-                    fail(process, "reflected access value is stale");
+                    storage.fail("reflected access value is stale");
                 }
                 designated_value = heap.elements[static_cast<std::size_t>(
                     found - heap.keys.begin())];
@@ -636,7 +617,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
     }
     if (operation.kind == Kind::convert) {
         if (owner.type.type_class != operation.type.type_class) {
-            fail(process, "VHDL reflection class conversion does not match the mirror");
+            storage.fail("VHDL reflection class conversion does not match the mirror");
         }
         const auto receiver_value = packed(*operation.receiver, 32U);
         write_packed(receiver_value);
@@ -653,21 +634,21 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
     }
     if (operation.kind == Kind::enumeration_literal) {
         if (owner.type.type_class != VhdlReflectionClass::enumeration) {
-            fail(process, "enumeration_literal requires an enumeration subtype mirror");
+            storage.fail("enumeration_literal requires an enumeration subtype mirror");
         }
         std::size_t index { };
         if (operation.string_argument) {
             const auto name = string_argument();
             const auto found = std::ranges::find(owner.type.names, name);
             if (found == owner.type.names.end()) {
-                fail(process, "enumeration literal name is outside the subtype");
+                storage.fail("enumeration literal name is outside the subtype");
             }
             index = static_cast<std::size_t>(found - owner.type.names.begin());
         } else {
             const auto requested = integer_argument(0U);
             if (requested < 0
                 || static_cast<std::uint64_t>(requested) >= owner.type.names.size()) {
-                fail(process, "enumeration literal index is outside the subtype");
+                storage.fail("enumeration literal index is outside the subtype");
             }
             index = static_cast<std::size_t>(requested);
         }
@@ -679,7 +660,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
     if (operation.kind == Kind::pos) {
         require_value(owner);
         const auto value = owner.value.known_unsigned_value();
-        if (!value) fail(process, "reflected enumeration value is not known");
+        if (!value) storage.fail("reflected enumeration value is not known");
         write_unsigned(*value);
         return;
     }
@@ -688,13 +669,13 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         if (owner.type.type_class == VhdlReflectionClass::enumeration) {
             const auto ordinal = owner.value.known_unsigned_value();
             if (!ordinal || *ordinal >= owner.type.names.size()) {
-                fail(process, "reflected enumeration value is outside the subtype");
+                storage.fail("reflected enumeration value is outside the subtype");
             }
             write_string(owner.type.names[static_cast<std::size_t>(*ordinal)]);
         } else if (owner.type.type_class == VhdlReflectionClass::floating) {
             const auto bits = owner.value.known_unsigned_value();
             if (!bits || owner.value.width() != 64U) {
-                fail(process, "reflected floating value is invalid");
+                storage.fail("reflected floating value is invalid");
             }
             write_string(std::to_string(std::bit_cast<double>(*bits)));
         } else {
@@ -709,7 +690,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
                         std::numeric_limits<std::int64_t>::max())) {
                 value = static_cast<std::int64_t>(*unsigned_value);
             }
-            if (!value) fail(process, "reflected scalar value is not known");
+            if (!value) storage.fail("reflected scalar value is not known");
             auto text = std::to_string(*value);
             if (owner.type.type_class == VhdlReflectionClass::physical
                 && !owner.type.names.empty()) {
@@ -739,7 +720,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
     if (operation.kind == Kind::length) {
         if (owner.type.type_class == VhdlReflectionClass::record) {
             if (owner.type.names.size() != owner.type.children.size()) {
-                fail(process, "record reflection descriptor is inconsistent");
+                storage.fail("record reflection descriptor is inconsistent");
             }
             write_unsigned(owner.type.children.size());
             return;
@@ -780,7 +761,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
     if (operation.kind == Kind::unit_name) {
         const auto index = integer_argument(0U);
         if (index < 0 || static_cast<std::uint64_t>(index) >= owner.type.names.size())
-            fail(process, "physical unit index is outside the subtype");
+            storage.fail("physical unit index is outside the subtype");
         write_string(owner.type.names[static_cast<std::size_t>(index)]);
         return;
     }
@@ -788,13 +769,13 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         if (operation.string_argument) {
             const auto name = string_argument();
             const auto found = std::ranges::find(owner.type.names, name);
-            if (found == owner.type.names.end()) fail(process, "physical unit name is unknown");
+            if (found == owner.type.names.end()) storage.fail("physical unit name is unknown");
             write_unsigned(static_cast<std::uint64_t>(found - owner.type.names.begin()));
         } else {
             require_value(owner);
             const auto value = owner.value.known_signed_value();
             if (!value || owner.type.scales.empty()) {
-                fail(process, "reflected physical value has no unit");
+                storage.fail("reflected physical value has no unit");
             }
             std::size_t selected = 0U;
             for (std::size_t index = 0U; index < owner.type.scales.size(); ++index) {
@@ -815,28 +796,28 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         if (operation.string_argument) {
             const auto name = string_argument();
             const auto found = std::ranges::find(owner.type.names, name);
-            if (found == owner.type.names.end()) fail(process, "physical unit name is unknown");
+            if (found == owner.type.names.end()) storage.fail("physical unit name is unknown");
             index = static_cast<std::size_t>(found - owner.type.names.begin());
         } else {
             const auto requested = integer_argument(0U);
-            if (requested < 0) fail(process, "physical unit index is negative");
+            if (requested < 0) storage.fail("physical unit index is negative");
             index = static_cast<std::size_t>(requested);
         }
-        if (index >= owner.type.scales.size()) fail(process, "physical unit index is outside the subtype");
+        if (index >= owner.type.scales.size()) storage.fail("physical unit index is outside the subtype");
         write_unsigned(owner.type.scales[index]);
         return;
     }
     if (operation.kind == Kind::record_element_name) {
         const auto index = integer_argument(0U);
         if (index < 0 || static_cast<std::uint64_t>(index) >= owner.type.names.size())
-            fail(process, "record element index is outside the subtype");
+            storage.fail("record element index is outside the subtype");
         write_string(owner.type.names[static_cast<std::size_t>(index)]);
         return;
     }
     if (operation.kind == Kind::record_element_index) {
         const auto name = string_argument();
         const auto found = std::ranges::find(owner.type.names, name);
-        if (found == owner.type.names.end()) fail(process, "record element name is unknown");
+        if (found == owner.type.names.end()) storage.fail("record element name is unknown");
         write_unsigned(static_cast<std::uint64_t>(found - owner.type.names.begin()));
         return;
     }
@@ -847,11 +828,11 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         if (operation.string_argument) {
             const auto name = string_argument();
             const auto found = std::ranges::find(owner.type.names, name);
-            if (found == owner.type.names.end()) fail(process, "record element name is unknown");
+            if (found == owner.type.names.end()) storage.fail("record element name is unknown");
             index = static_cast<std::size_t>(found - owner.type.names.begin());
         } else {
             const auto requested = integer_argument(0U);
-            if (requested < 0) fail(process, "aggregate element index is negative");
+            if (requested < 0) storage.fail("aggregate element index is negative");
             index = static_cast<std::size_t>(requested);
         }
         write_unsigned(child_handle(owner, index,
@@ -863,7 +844,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         require_value(owner);
         if (owner.type.children.size() != 1U
             || operation.arguments.size() != owner.type.ranges.size()) {
-            fail(process, "array reflection index arity does not match its dimensions");
+            storage.fail("array reflection index arity does not match its dimensions");
         }
         const auto& element = owner.type.children.front();
         std::uint64_t bit_offset = 0U;
@@ -875,31 +856,31 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
             const auto low = std::min(bounds.left, bounds.right);
             const auto high = std::max(bounds.left, bounds.right);
             if (index < low || index > high) {
-                fail(process, "array reflection index is outside the subtype");
+                storage.fail("array reflection index is outside the subtype");
             }
             const auto ordinal = support::index_distance(index, bounds.right);
             if (ordinal != 0U
                 && stride > std::numeric_limits<std::uint64_t>::max()
                     / ordinal) {
-                fail(process, "array reflection offset overflows");
+                storage.fail("array reflection offset overflows");
             }
             const auto contribution = ordinal * stride;
             if (contribution
                 > std::numeric_limits<std::uint64_t>::max() - bit_offset) {
-                fail(process, "array reflection offset overflows");
+                storage.fail("array reflection offset overflows");
             }
             bit_offset += contribution;
             const auto count = range_length(bounds);
             if (count != 0U && dimension != 0U
                 && stride > std::numeric_limits<std::uint64_t>::max() / count) {
-                fail(process, "array reflection stride overflows");
+                storage.fail("array reflection stride overflows");
             }
             stride *= count;
         }
         if (element.packed_width == 0U
             || bit_offset > owner.value.width()
             || element.packed_width > owner.value.width() - bit_offset) {
-            fail(process, "array reflection element has no executable snapshot");
+            storage.fail("array reflection element has no executable snapshot");
         }
         auto element_type = element;
         element_type.lsb_offset = 0U;
@@ -915,7 +896,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
     if (operation.kind == Kind::array_index_subtype) {
         const auto dimension = operation.arguments.empty()
             ? 0U : static_cast<std::size_t>(integer_argument(0U) - 1);
-        if (dimension >= owner.type.ranges.size()) fail(process, "array dimension is outside the subtype");
+        if (dimension >= owner.type.ranges.size()) storage.fail("array dimension is outside the subtype");
         VhdlReflectionType index_type;
         index_type.type_class = VhdlReflectionClass::integer;
         index_type.simple_name = "index";
@@ -932,7 +913,7 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
     if (operation.kind == Kind::is_null) {
         require_value(owner);
         const auto value = owner.value.known_unsigned_value();
-        if (!value) fail(process, "reflected access value is not known");
+        if (!value) storage.fail("reflected access value is not known");
         write_unsigned(*value == 0U ? 1U : 0U);
         return;
     }
@@ -944,10 +925,10 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         || operation.kind == Kind::file_open_kind) {
         require_value(owner);
         const auto handle = owner.value.known_unsigned_value();
-        if (!handle) fail(process, "reflected file handle is not known");
+        if (!handle) storage.fail("reflected file handle is not known");
         const auto found = files.find(static_cast<FileHandle>(*handle));
         if (found == files.end() || found->second.closed) {
-            fail(process, "reflected file is not open");
+            storage.fail("reflected file is not open");
         }
         if (operation.kind == Kind::file_logical_name) {
             write_string(found->second.logical_name);
@@ -961,18 +942,18 @@ void Interpreter::Impl::execute_vhdl_reflection_api(
         require_value(owner);
         if (owner.type.type_class != VhdlReflectionClass::access
             || owner.type.children.size() != 1U) {
-            fail(process, "access reflection requires one designated subtype");
+            storage.fail("access reflection requires one designated subtype");
         }
         const auto handle = owner.value.known_unsigned_value();
         if (!handle || *handle == 0U || !owner.designated_value) {
-            fail(process, "cannot reflect the designated value of null access");
+            storage.fail("cannot reflect the designated value of null access");
         }
         auto designated_type = owner.type.children.front();
         write_unsigned(create(std::move(designated_type),
             *owner.designated_value, true));
         return;
     }
-    fail(process, "VHDL reflection API operation is invalid");
+    storage.fail("VHDL reflection API operation is invalid");
 }
 
 SchedulerBatchResult Interpreter::Impl::execute(

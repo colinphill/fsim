@@ -251,10 +251,12 @@ public:
     {
         return resolver_members_.contains(process);
     }
-    /// One pass of a resolution function's program (IEEE 1076-2019
-    /// 14.7.3.2), as Impl::run_vhdl_resolver runs it: `driving` (the
-    /// connected drivers' values, when there is one) in register `input`,
-    /// the program run to its halt, the effective value from `output`.
+    /// One pass of an update-commit program (IEEE 1076-2019 14.7.3), as
+    /// Impl::run_vhdl_resolver and run_vhdl_conversion_drivers run it:
+    /// `driving` (a resolution function's connected drivers' values, when
+    /// there is one) in register `input`, the program run to its halt over
+    /// the host's current values of the signals it reads, the result from
+    /// `output`.
     [[nodiscard]] PackedLogic4 run_resolver(ProcessId process,
         const std::optional<PackedLogic4>& driving, RegisterId input,
         RegisterId output);
@@ -301,6 +303,16 @@ public:
     {
         return host_program_ && process == host_process_ ? &*host_program_
                                                          : nullptr;
+    }
+    /// A member's own program: the host process's original, every other
+    /// member's scheduler program.
+    [[nodiscard]] ProcessProgramView member_program(const std::uint32_t member) const
+    {
+        const auto process = members_[member].process;
+        if (const auto* original = startup_program(process)) {
+            return ProcessProgramView { *original };
+        }
+        return impl_.processes.program_view(process);
     }
     [[nodiscard]] const Process* debug_program(ProcessId process) const noexcept
     {
@@ -352,6 +364,10 @@ private:
         /// A behavioral thread armed at its first static wait before the
         /// once members run (prepare_behavioral).
         bool prearmed { };
+        /// A behavioral process that is not initialized (an implicit
+        /// signal's driver): armed on its static sensitivity without
+        /// running, then run from its first operation (prepare_behavioral).
+        bool start_waiting { };
         /// always_comb/always_latch (ProcessStartupPhase::after_procedures):
         /// starts after the initial and always procedures.
         bool after_procedures { };
@@ -360,9 +376,12 @@ private:
         bool final_block { };
         /// A package static initializer (run_startup_member).
         bool package_startup { };
-        /// A VHDL resolution function's program (run_resolver): never
-        /// starts; the host's update commit runs one pass per resolution.
+        /// A VHDL update-commit program (run_resolver): never starts; the
+        /// host's update commit runs one pass per resolution or conversion.
         bool resolver { };
+        /// The mirrored inputs a resolver member reads (run_resolver), once
+        /// known.
+        std::optional<std::vector<std::uint32_t>> resolver_inputs;
         /// The scheduler region its threads resume in (IEEE 1800-2023 4.4.2):
         /// a concurrent assertion's process runs in the Observed region, a
         /// program's in the Reactive region. Such threads run from the
@@ -589,6 +608,9 @@ private:
         /// signal that changed and returned to the scanned value inside one
         /// update phase (two forces in one cycle) still had an event.
         std::optional<std::pair<SimulationTick, std::uint64_t>> event_seen;
+        /// The host's transaction stamp of the signal at the last scan, for
+        /// threads that wait on its transactions (transaction_inputs_).
+        std::optional<std::pair<SimulationTick, std::uint64_t>> transaction_seen;
         std::vector<Reader> readers;
         std::vector<EdgeReader> edges;
         /// No process writes the signal (StaticKernelRuntimeSpec::
@@ -1207,6 +1229,10 @@ private:
     std::vector<std::uint32_t> inactive_threads_;
     std::vector<std::vector<Waiter>> slot_waiters_;
     std::vector<std::vector<Waiter>> input_waiters_;
+    /// Inputs a thread waits on for transactions (an implicit signal's
+    /// driver, IEEE 1076-2019 16.2.4): a scan wakes those waiters when the
+    /// host's transaction stamp moved, whether or not the value changed.
+    std::vector<std::uint32_t> transaction_inputs_;
     std::priority_queue<Timer, std::vector<Timer>, std::greater<>> timers_;
     std::uint64_t timer_sequence_ { };
     /// The wake time of the scheduler task that will activate the kernel.
@@ -1504,6 +1530,9 @@ private:
     /// resumes as its join requires.
     void fork_child_done(std::uint32_t parent, std::uint32_t group);
     void wake_waiters(std::vector<Waiter>& waiters, const WaitChange& change);
+    /// Wakes the transaction waiters of the inputs whose host transaction
+    /// stamp moved since the last scan.
+    void wake_transaction_waiters();
     [[nodiscard]] bool waiter_range_changed(const Waiter& waiter,
         const WaitChange& change) const;
     void collect_timers();
@@ -1944,6 +1973,7 @@ private:
     /// Mirror slot of each mirrored host signal (no_slot otherwise).
     std::vector<std::uint32_t> mirror_of_signal_;
     void write_mirror(const Input& input);
+    void write_mirror(const Input& input, const PackedLogic4& value);
     std::vector<Container> containers_;
     /// Native view of containers_ (StaticKernelContainerInfo) and the
     /// element tables it points into.

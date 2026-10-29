@@ -497,14 +497,51 @@ PackedLogic4 Interpreter::Impl::StaticKernel::run_resolver(
     if (driving) {
         set_member_register(member, input, *driving);
     }
-    // A resolution function neither waits nor forks: one pass runs to its
+    // The pass runs inside the host's update commit, which may have changed
+    // the host signals it reads since the kernel's last scan: their mirrors
+    // (what compiled bodies read) take the host's values for the pass, and
+    // the scan that follows the commit still sees each change.
+    // The inputs are final once the kernel is initialized; an initial
+    // resolution before then collects them for its own pass.
+    std::optional<std::vector<std::uint32_t>> collected;
+    auto& inputs = initialized_ ? members_[member].resolver_inputs : collected;
+    if (!inputs) {
+        inputs.emplace();
+        for (const auto& operation : members_[member].operations) {
+            visit_operation([&](const auto& value) {
+                if constexpr (requires { value.signal; }) {
+                    if constexpr (std::is_same_v<
+                                      std::decay_t<decltype(value.signal)>,
+                                      SignalId>) {
+                        if (value.signal < input_of_signal_.size()
+                            && input_of_signal_[value.signal]
+                                != static_kernel_detail::no_slot
+                            && inputs_[input_of_signal_[value.signal]].mirror
+                                != static_kernel_detail::no_slot) {
+                            inputs->push_back(input_of_signal_[value.signal]);
+                        }
+                    }
+                }
+            }, operation);
+        }
+        std::ranges::sort(*inputs);
+        inputs->erase(std::ranges::unique(*inputs).begin(), inputs->end());
+    }
+    for (const auto index : *inputs) {
+        write_mirror(inputs_[index],
+            impl_.logical_signal_value(inputs_[index].signal));
+    }
+    // An update-commit program neither waits nor forks: one pass runs to its
     // halt, or to an assertion failure that ends the simulation.
     const auto thread = spawn_thread(member, 0U, static_kernel_detail::no_slot,
         static_kernel_detail::no_slot);
     run_thread(thread);
     if (threads_[thread].alive && threads_[thread].member == member
         && !impl_.stopped_by_design) {
-        throw std::logic_error("VHDL resolution function did not finish synchronously");
+        throw std::logic_error("VHDL update-commit program did not finish synchronously");
+    }
+    for (const auto index : *inputs) {
+        write_mirror(inputs_[index]);
     }
     return member_register(member, output);
 }

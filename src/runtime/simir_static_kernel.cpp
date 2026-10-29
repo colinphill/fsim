@@ -461,17 +461,21 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     std::size_t expanded_ops = 0U;
     std::unordered_set<const void*> distinct_bodies;
     members_.reserve(spec.members.size());
-    // The programs of VHDL resolution functions (Impl::vhdl_resolvers): a
-    // member among them is a resolver member (run_resolver).
+    // The programs of the update commit (Impl::vhdl_resolvers and
+    // Impl::vhdl_conversion_drivers): a behavioral member among them is a
+    // resolver member (run_resolver).
     std::unordered_set<ProcessId> resolver_processes;
     for (const auto& [signal, resolver] : impl_.vhdl_resolvers) {
         static_cast<void>(signal);
-        if (!resolver.sources.empty() || resolver.driving_mirror) {
-            continue;
-        }
         resolver_processes.insert(resolver.process);
         for (const auto& variant : resolver.variants) {
             resolver_processes.insert(variant.process);
+        }
+    }
+    for (const auto& [signal, drivers] : impl_.vhdl_conversion_drivers) {
+        static_cast<void>(signal);
+        for (const auto& driver : drivers) {
+            resolver_processes.insert(driver.program);
         }
     }
     const bool keep_names = profile_ || trace_
@@ -511,6 +515,8 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.after_procedures = program.startup_phase()
             == ProcessStartupPhase::after_procedures;
         member.final_block = program.final();
+        member.start_waiting = member.kind == StaticKernelMemberKind::behavioral
+            && member_spec.start_waiting;
         // A postponed VHDL process resumes in the postponed region list,
         // the end of the time step (IEEE 1076-2019 11.3, 14.7.5.3).
         member.phase = process_execution_phase(
@@ -533,7 +539,8 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                 static_cast<std::uint32_t>(members_.size()),
                 program.startup_order() });
         }
-        member.resolver = resolver_processes.contains(member.process);
+        member.resolver = member.kind == StaticKernelMemberKind::behavioral
+            && resolver_processes.contains(member.process);
         if (member.resolver) {
             resolver_members_.emplace(member.process,
                 static_cast<std::uint32_t>(members_.size()));
@@ -714,10 +721,20 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                         slot_waitable_[leaf.slot] = 1U;
                     }
                 } else if (const auto slot = slot_of_signal_[signal]; slot != no_slot) {
+                    if (edge == EdgeKind::transaction) {
+                        throw std::invalid_argument(
+                            "static kernel transaction wait on a kernel signal");
+                    }
                     slot_waitable_.resize(slots_.size(), 0U);
                     slot_waitable_[slot] = 1U;
                 } else {
                     (void)input_for(signal);
+                    const auto input = input_of_signal_[signal];
+                    if (edge == EdgeKind::transaction
+                        && std::ranges::find(transaction_inputs_, input)
+                            == transaction_inputs_.end()) {
+                        transaction_inputs_.push_back(input);
+                    }
                 }
             };
             for (const auto& entry : member.wait_sensitivity) {
@@ -4556,6 +4573,27 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 } catch (const std::invalid_argument& error) {
                     fail(member_index, pc, error.what());
                 }
+            } else if constexpr (std::is_same_v<T, SignalDriving>
+                || std::is_same_v<T, SignalDrivingValue>) {
+                // 'DRIVING and 'DRIVING_VALUE of the member's driver of a
+                // host signal (static_kernel_host_signal), whose projected
+                // writes the host holds (IEEE 1076-2019 16.2.4).
+                if (owned(op.signal)) {
+                    fail(member_index, pc,
+                        "static kernel attribute of a kernel signal");
+                }
+                if constexpr (std::is_same_v<T, SignalDriving>) {
+                    reg(op.destination, pc)
+                        = impl_.signal_driving(member.process, op);
+                } else {
+                    auto value = impl_.signal_driving_value(member.process, op);
+                    if (!value) {
+                        fail(member_index, pc,
+                            "VHDL 'driving_value queried a signal without a driver");
+                    }
+                    reg(op.destination, pc) = Impl::coerce_value_kind(
+                        std::move(*value), kind_of(op.destination));
+                }
             } else if constexpr (std::is_same_v<T, ForceSignalSlice>
                 || std::is_same_v<T, ReleaseSignalSlice>) {
                 // The host's force or release of a host signal
@@ -5239,6 +5277,7 @@ void Interpreter::Impl::StaticKernel::initialize()
         impl_.static_kernel_input_marks[input.signal] = 1U;
         input.revision = impl_.signal_value_revisions[input.signal];
         input.event_seen = impl_.signal_events[input.signal];
+        input.transaction_seen = impl_.signal_transactions[input.signal];
         // The mirror starts at the host's value.
         auto value = impl_.logical_signal_value(input.signal);
         input.cached = vhdl_ ? std::move(value)
@@ -5340,11 +5379,17 @@ void Interpreter::Impl::StaticKernel::initialize()
 
 void Interpreter::Impl::StaticKernel::write_mirror(const Input& input)
 {
+    write_mirror(input, input.cached);
+}
+
+void Interpreter::Impl::StaticKernel::write_mirror(const Input& input,
+    const PackedLogic4& source)
+{
     if (input.mirror == no_slot) {
         return;
     }
     const auto& slot = slots_[input.mirror];
-    const auto value = Impl::coerce_value_kind(input.cached,
+    const auto value = Impl::coerce_value_kind(source,
         slot.planes == 4U ? ValueKind::logic9 : ValueKind::logic4);
     for (std::uint32_t plane = 0U; plane < slot.planes; ++plane) {
         const auto words = value_plane(value, plane);
@@ -5357,6 +5402,9 @@ void Interpreter::Impl::StaticKernel::write_mirror(const Input& input)
 
 bool Interpreter::Impl::StaticKernel::scan_inputs(const bool all)
 {
+    if (initialized_ && !transaction_inputs_.empty()) {
+        wake_transaction_waiters();
+    }
     bool changed = false;
     // Inputs no process writes change only between activations; within one
     // only the others are scanned.

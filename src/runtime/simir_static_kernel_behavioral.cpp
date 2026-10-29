@@ -161,14 +161,31 @@ void Interpreter::Impl::StaticKernel::prepare_behavioral()
     // (a port conversion that is not evaluated at initialization) is armed
     // the same way, so an SV update of time zero reaches it (IEEE 1076-2019
     // 14.7.5.2: initialization runs every process until it suspends).
+    // A process that is not initialized (an implicit signal's driver, IEEE
+    // 1076-2019 16.2.4) is armed the same way without running: it waits on
+    // its static sensitivity and runs from its first operation when that
+    // wakes it (Interpreter::add_process, waiting_on_static).
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         auto& member = members_[index];
         if (member.kind != StaticKernelMemberKind::behavioral
             || member.start_late || member.final_block
             || member.package_startup || member.resolver
             || member.wait_sensitivity.empty()
-            || member.operations.empty()
-            || !operation_holds<WaitSensitivity>(member.operations.front())) {
+            || member.operations.empty()) {
+            continue;
+        }
+        if (member.start_waiting) {
+            if (trace_) {
+                std::cerr << "fsim-kernel-trace: arm "
+                          << impl_.processes.program_view(member.process).name()
+                          << '\n';
+            }
+            member.prearmed = true;
+            wait_on(spawn_thread(index, 0U, no_slot, no_slot),
+                member.wait_sensitivity);
+            continue;
+        }
+        if (!operation_holds<WaitSensitivity>(member.operations.front())) {
             continue;
         }
         member.prearmed = true;
@@ -193,6 +210,11 @@ void Interpreter::Impl::StaticKernel::start_behavioral()
                 || (member.after_procedures && !member.vhdl)
                     != after_procedures) {
                 continue;
+            }
+            if (trace_) {
+                std::cerr << "fsim-kernel-trace: start "
+                          << impl_.processes.program_view(member.process).name()
+                          << (member.start_late ? " late" : "") << '\n';
             }
             if (member.start_late) {
                 late_members_.push_back(index);
@@ -378,7 +400,12 @@ void Interpreter::Impl::StaticKernel::wake_waiters(std::vector<Waiter>& waiters,
         if (!thread.alive || thread.queued || thread.epoch != waiter.epoch) {
             continue;
         }
-        // A ranged waiter wakes only when its selected bits changed.
+        // A ranged waiter wakes only when its selected bits changed; a
+        // change is a transaction too.
+        if (waiter.edge == EdgeKind::transaction) {
+            ready_thread(waiter.thread);
+            continue;
+        }
         if (waiter.edge == EdgeKind::any
             ? waiter.width == 0U || waiter_range_changed(waiter, change)
             : edge_matches(waiter.edge, change.before, change.after)) {
@@ -388,6 +415,36 @@ void Interpreter::Impl::StaticKernel::wake_waiters(std::vector<Waiter>& waiters,
         waiters[kept++] = waiter;
     }
     waiters.resize(kept);
+}
+
+void Interpreter::Impl::StaticKernel::wake_transaction_waiters()
+{
+    for (const auto input_index : transaction_inputs_) {
+        auto& input = inputs_[input_index];
+        const auto& stamp = impl_.signal_transactions[input.signal];
+        if (stamp == input.transaction_seen) {
+            continue;
+        }
+        input.transaction_seen = stamp;
+        // A transaction without a change of value still resumes the
+        // threads that wait on the signal's transactions (IEEE 1076-2019
+        // 16.2.4: S'TRANSACTION toggles in each cycle S is active).
+        auto& waiters = input_waiters_[input_index];
+        std::size_t kept = 0U;
+        for (std::size_t index = 0U; index < waiters.size(); ++index) {
+            const auto waiter = waiters[index];
+            const auto& thread = threads_[waiter.thread];
+            if (!thread.alive || thread.queued || thread.epoch != waiter.epoch) {
+                continue;
+            }
+            if (waiter.edge == EdgeKind::transaction) {
+                ready_thread(waiter.thread);
+                continue;
+            }
+            waiters[kept++] = waiter;
+        }
+        waiters.resize(kept);
+    }
 }
 
 void Interpreter::Impl::StaticKernel::release_thread(const std::uint32_t index)
@@ -1357,6 +1414,34 @@ struct Interpreter::Impl::StaticKernel::MemberVhdlApiStorage final
     {
         string(id) = value;
     }
+    // std.env's values are reference-format registers
+    // (static_kernel_vhdl_api_container_operation).
+    [[nodiscard]] ContainerValue container(const ContainerRegisterId id) override
+    {
+        const auto& state = kernel.members_[member];
+        if (!state.dynamic_container(id)) {
+            kernel.fail(member, pc, "invalid container register ID");
+        }
+        return *state.dynamic_containers[id];
+    }
+    void write_container(const ContainerRegisterId id, ContainerValue value) override
+    {
+        auto& state = kernel.members_[member];
+        if (!state.dynamic_container(id)) {
+            kernel.fail(member, pc, "invalid container register ID");
+        }
+        state.dynamic_containers[id]
+            = std::make_shared<ContainerValue>(std::move(value));
+    }
+    [[nodiscard]] ProcessProgramView program() override
+    {
+        return kernel.member_program(member);
+    }
+    // The running thread's (run_thread swaps it into the member).
+    [[nodiscard]] std::vector<InstructionIndex> call_stack() override
+    {
+        return kernel.members_[member].call_stack;
+    }
     void report(const std::string_view message, const AssertionSeverity severity,
         const SourceLocation& source, const bool standalone) override
     {
@@ -2002,6 +2087,21 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             // GETENV (16.5.6).
             MemberVhdlApiStorage storage { *this, member_index, pc };
             impl_.run_vhdl_environment_getenv(storage, op);
+        } else if constexpr (std::is_same_v<T, VhdlEnvironmentDirectory>) {
+            // The directory functions (16.5.6).
+            MemberVhdlApiStorage storage { *this, member_index, pc };
+            impl_.run_vhdl_environment_directory(storage, op);
+        } else if constexpr (std::is_same_v<T, VhdlEnvironmentGetCallPath>) {
+            // GET_CALL_PATH and TO_STRING of a call path (16.5.6).
+            MemberVhdlApiStorage storage { *this, member_index, pc };
+            impl_.run_vhdl_environment_get_call_path(storage, op);
+        } else if constexpr (std::is_same_v<T, VhdlEnvironmentCallPath>) {
+            MemberVhdlApiStorage storage { *this, member_index, pc };
+            impl_.run_vhdl_environment_call_path(storage, op);
+        } else if constexpr (std::is_same_v<T, VhdlReflectionApi>) {
+            // The reflection API's mirrors (16.6), the host's table.
+            MemberVhdlApiStorage storage { *this, member_index, pc };
+            impl_.run_vhdl_reflection_api(storage, op);
         } else if constexpr (std::is_same_v<T, StringReport>) {
             // A VHDL report or assertion with a computed message (IEEE
             // 1076-2019 10.8, 10.9), as the reference emits it.

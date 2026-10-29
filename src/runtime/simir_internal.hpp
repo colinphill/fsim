@@ -2565,6 +2565,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         virtual void write_packed(RegisterId id, const PackedLogic4& value) = 0;
         [[nodiscard]] virtual std::string text(StringRegisterId id) = 0;
         virtual void write_text(StringRegisterId id, std::string_view value) = 0;
+        [[nodiscard]] virtual ContainerValue container(ContainerRegisterId id) = 0;
+        virtual void write_container(ContainerRegisterId id, ContainerValue value) = 0;
+        // The running program and its call stack (return addresses), for
+        // the call path (16.5.6) and the container register types.
+        [[nodiscard]] virtual ProcessProgramView program() = 0;
+        [[nodiscard]] virtual std::vector<InstructionIndex> call_stack() = 0;
         // A VHDL report at the running instruction (execute_vhdl_report).
         virtual void report(std::string_view message, AssertionSeverity severity,
             const SourceLocation& source, bool standalone) = 0;
@@ -2580,6 +2586,22 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void run_vhdl_environment_time_string(VhdlApiStorage&,
         const VhdlEnvironmentTimeToString&);
     void run_vhdl_environment_getenv(VhdlApiStorage&, const VhdlEnvironmentGetenv&);
+    // The directory functions (16.5.6), GET_CALL_PATH and TO_STRING of a
+    // call path (16.5.6), and the reflection API (16.6); an error fails.
+    void run_vhdl_environment_directory(VhdlApiStorage&,
+        const VhdlEnvironmentDirectory&);
+    void run_vhdl_environment_get_call_path(VhdlApiStorage&,
+        const VhdlEnvironmentGetCallPath&);
+    void run_vhdl_environment_call_path(VhdlApiStorage&,
+        const VhdlEnvironmentCallPath&);
+    void run_vhdl_reflection_api(VhdlApiStorage&, const VhdlReflectionApi&);
+    // 'DRIVING and 'DRIVING_VALUE of the process's driver of a signal (IEEE
+    // 1076-2019 16.2.4): whether it is connected (a one-bit value), and its
+    // current value, nothing when the process has no connected driver.
+    [[nodiscard]] PackedLogic4 signal_driving(ProcessId process,
+        const SignalDriving& operation);
+    [[nodiscard]] std::optional<PackedLogic4> signal_driving_value(
+        ProcessId process, const SignalDrivingValue& operation);
     void execute_vhdl_reflection_api(
         ProcessState& process, const VhdlReflectionApi& operation);
     void execute_vhdl_report(

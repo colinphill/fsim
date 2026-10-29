@@ -754,22 +754,18 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
             ++process.pc;
         } else if constexpr (
             std::is_same_v<OperationType, SignalDriving>) {
-            const auto driving = signal_attribute_detail::driving(
-                *this, process.id, op.signal, op.selection);
-            get_register(process, op.destination) = PackedLogic4(
-                1, driving ? Logic4::one : Logic4::zero);
+            get_register(process, op.destination)
+                = signal_driving(process.id, op);
             ++process.pc;
         } else if constexpr (
             std::is_same_v<OperationType, SignalDrivingValue>) {
-            if (!signal_attribute_detail::driving(
-                    *this, process.id, op.signal, op.selection)) {
+            auto value = signal_driving_value(process.id, op);
+            if (!value) {
                 fail(process,
                     "VHDL 'driving_value queried a signal without a driver");
             }
             get_register(process, op.destination) = coerce_value_kind(
-                signal_attribute_detail::driving_value(
-                    *this, process.id, op.signal, op.selection),
-                register_value_kind(process, op.destination));
+                std::move(*value), register_value_kind(process, op.destination));
             ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
             get_register(process, op.destination) = coerce_value_kind(
