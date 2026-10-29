@@ -78,10 +78,10 @@ bool read_operation(Reader& reader, runtime::simir::Operation& operation)
 }
 
 bool portable_semantics(
-    const semantic::ModelRecords& records,
+    const std::span<const semantic::SourceFile> source_files,
     diagnostic::Engine& diagnostics)
 {
-    for (const auto& file : records.source_files) {
+    for (const auto& file : source_files) {
         if (support::path_is_portably_absolute(
                 support::path_from_utf8(file.physical_name))) {
             diagnostics.error(
@@ -122,7 +122,7 @@ std::optional<std::string> serialize_runtime_state(
     diagnostic::Engine& diagnostics)
 {
     return runtime_path_codec::serialize_runtime_design_state(
-        design, nullptr, diagnostics);
+        std::move(design), nullptr, diagnostics);
 }
 
 std::optional<std::string> serialize_runtime_state(
@@ -131,7 +131,7 @@ std::optional<std::string> serialize_runtime_state(
     diagnostic::Engine& diagnostics)
 {
     return runtime_path_codec::serialize_runtime_design_state(
-        design, &paths, diagnostics);
+        std::move(design), &paths, diagnostics);
 }
 
 std::optional<std::string> runtime_state_checksum(
@@ -341,6 +341,26 @@ deserialize_systemverilog_uvm_state(
     return state;
 }
 
+std::optional<std::string> serialize_systemverilog_class_specializations(
+    const std::span<const semantic::sv::ClassSpecialization> specializations,
+    diagnostic::Engine& diagnostics)
+{
+    return serialize("FSIMSVCS",
+        kSystemVerilogClassSpecializationStateSchema, specializations,
+        diagnostics);
+}
+
+std::optional<std::vector<semantic::sv::ClassSpecialization>>
+deserialize_systemverilog_class_specializations(
+    const std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics)
+{
+    return deserialize<std::vector<semantic::sv::ClassSpecialization>>(
+        "FSIMSVCS", kSystemVerilogClassSpecializationStateSchema, bytes,
+        std::move(source_name), diagnostics);
+}
+
 #endif
 
 #if defined(FSIM_DESIGN_ARTIFACT_CODEC_SEMANTIC)
@@ -350,7 +370,7 @@ std::optional<std::string> serialize_semantic_records(
     semantic::ModelRecords records,
     diagnostic::Engine& diagnostics)
 {
-    if (!portable_semantics(records, diagnostics)) {
+    if (!portable_semantics(records.source_files, diagnostics)) {
         return std::nullopt;
     }
     return serialize(
@@ -361,7 +381,13 @@ std::optional<std::string> serialize_validated_semantic_state(
     const semantic::Model& model,
     diagnostic::Engine& diagnostics)
 {
-    return serialize_semantic_records(model.records(), diagnostics);
+    if (!portable_semantics(model.source_files(), diagnostics)) {
+        return std::nullopt;
+    }
+    // Same bytes as serializing model.records(), without copying them.
+    return serialize(
+        "FSIMSEM1", kSemanticStateSchema, model_records_view(model),
+        diagnostics);
 }
 
 } // namespace codec_detail
@@ -370,12 +396,11 @@ std::optional<std::string> serialize_semantic_state(
     const semantic::Model& model,
     diagnostic::Engine& diagnostics)
 {
-    auto records = model.records();
     if (!model.valid()) {
         return std::nullopt;
     }
-    return codec_detail::serialize_semantic_records(
-        std::move(records), diagnostics);
+    return codec_detail::serialize_validated_semantic_state(
+        model, diagnostics);
 }
 
 namespace application_detail {
@@ -421,10 +446,13 @@ std::optional<semantic::Model> deserialize_semantic_state_with_budget(
     auto records = deserialize<semantic::ModelRecords>(
         "FSIMSEM1", kSemanticStateSchema, bytes, std::move(source_name),
         diagnostics, &budget);
-    if (!records || !portable_semantics(*records, diagnostics)) {
+    if (!records || !portable_semantics(records->source_files, diagnostics)) {
         return std::nullopt;
     }
-    auto model = semantic::Model::from_records(std::move(*records));
+    // Trusted loads skip the model's structural validation; verify mode and
+    // every other caller keep it.
+    auto model = semantic::Model::from_records(std::move(*records),
+        !elaboration::detail::TrustedArtifactLoad::active());
     if (!model) {
         diagnostics.error(std::string { kCode }, "semantic state is structurally invalid");
     }
@@ -715,25 +743,37 @@ constexpr std::size_t kHierarchyPathHeaderBytes = 8U + 4U + 4U;
     }
     const auto& source = external_paths != nullptr
         ? *external_paths : design.hierarchy_paths();
-    auto payload = hierarchy_path_codec::encode_inline_hierarchy_paths(source);
-    if (!payload) {
-        diagnostics.error(std::string { kCode },
-            "cannot encode the DesignIR hierarchy path table");
-        return std::nullopt;
-    }
+    std::optional<std::string> binding;
+    std::optional<semantic::HierarchyPathTable> inline_paths;
     if (external_paths != nullptr
-        && !same_path_ids(*external_paths, payload.payload->paths)) {
-        diagnostics.error(std::string { kCode },
-            "external DesignIR hierarchy path IDs are not canonical");
-        return std::nullopt;
+        && !external_paths->canonical_digest().empty()) {
+        // A canonical table (encoded or decoded as its payload): its IDs are
+        // canonical and its digest known, so it is used in place.
+        binding = std::string { external_paths->canonical_digest() };
+    } else {
+        auto payload
+            = hierarchy_path_codec::encode_inline_hierarchy_paths(source);
+        if (!payload) {
+            diagnostics.error(std::string { kCode },
+                "cannot encode the DesignIR hierarchy path table");
+            return std::nullopt;
+        }
+        if (external_paths != nullptr
+            && !same_path_ids(*external_paths, payload.payload->paths)) {
+            diagnostics.error(std::string { kCode },
+                "external DesignIR hierarchy path IDs are not canonical");
+            return std::nullopt;
+        }
+        binding = external_paths != nullptr
+            ? std::move(payload.payload->digest)
+            : std::move(payload.payload->bytes);
+        inline_paths = std::move(payload.payload->paths);
     }
     const auto mode = external_paths != nullptr
         ? kExternalPaths : kInlinePaths;
-    auto binding = external_paths != nullptr
-        ? payload.payload->digest : payload.payload->bytes;
     auto records = project_design_ir_records(
-        design, payload.payload->paths, mode, std::move(binding),
-        diagnostics);
+        design, inline_paths ? *inline_paths : *external_paths, mode,
+        std::move(*binding), diagnostics);
     if (!records) {
         return std::nullopt;
     }
@@ -813,8 +853,12 @@ deserialize_design_ir_with_paths(
     design.mutable_transactions() = std::move(records->transactions);
     design.mutable_conversions() = std::move(records->conversions);
     design.mutable_boundaries() = std::move(records->boundaries);
-    if (!design.rebind_path_table(std::move(paths)) || !design.valid()
-        || !required_design_ir_paths_nonempty(design)) {
+    // Trusted loads still rebind the path table; the structural and
+    // path-presence checks are verify-mode only.
+    if (!design.rebind_path_table(std::move(paths))
+        || (!elaboration::detail::TrustedArtifactLoad::active()
+            && (!design.valid()
+                || !required_design_ir_paths_nonempty(design)))) {
         diagnostics.error(std::string { kCode },
             "DesignIR state has an invalid hierarchy path reference");
         return std::nullopt;

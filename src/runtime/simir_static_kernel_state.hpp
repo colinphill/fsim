@@ -2696,9 +2696,9 @@ private:
     /// records its own (record_specializations).
     std::shared_ptr<StaticKernelSpecializations> restored_specializations_;
     std::shared_ptr<StaticKernelSpecializations> recorded_specializations_;
-    std::shared_ptr<const std::string> restored_bodies_;
+    std::shared_ptr<const std::string_view> restored_bodies_;
     std::shared_ptr<std::string> recorded_bodies_;
-    std::shared_ptr<const std::string> restored_native_;
+    std::shared_ptr<const std::string_view> restored_native_;
     std::shared_ptr<std::string> recorded_native_;
     std::size_t specialize_cache_hits_ { };
     std::string compile_failure_detail_;

@@ -166,7 +166,7 @@ ModelRecords Model::take_records() && noexcept {
     return records;
 }
 
-std::optional<Model> Model::from_records(ModelRecords records) {
+std::optional<Model> Model::from_records(ModelRecords records, bool validate) {
     Model model;
     model.source_files_ = std::move(records.source_files);
     model.expansions_ = std::move(records.expansions);
@@ -181,7 +181,7 @@ std::optional<Model> Model::from_records(ModelRecords records) {
     model.expression_identities_ = std::move(records.expression_identities);
     model.statement_identities_ = std::move(records.statement_identities);
     model.process_identities_ = std::move(records.process_identities);
-    if (!model.valid()) {
+    if (validate && !model.valid()) {
         return std::nullopt;
     }
     for (const auto& file : model.source_files_) {

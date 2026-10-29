@@ -744,7 +744,9 @@ process_table_from_design(
     std::shared_ptr<const elaboration::detail::RuntimeProcessProgramTable>
         process_table,
     const Paths* const external_paths,
-    diagnostic::Engine& diagnostics)
+    diagnostic::Engine& diagnostics,
+    State* const owned_state = nullptr,
+    const bool trusted_source = false)
 {
     try {
         if (process_table && !state.processes.empty()) {
@@ -817,13 +819,18 @@ process_table_from_design(
                 "runtime process template table contains an unused entry");
             return std::nullopt;
         }
-        if (!validate_typed_mailbox_operations(
-                *process_table, diagnostics)) {
-            return std::nullopt;
-        }
-        if (!validate_package_startup_rows(
-                state, process_table->rows, diagnostics)) {
-            return std::nullopt;
+        // A design the elaborator just produced is not re-validated on
+        // publish; FSIM_VERIFY_ARTIFACT=1 keeps the checks.
+        if (!trusted_source
+            || elaboration::detail::TrustedArtifactLoad::verify_requested()) {
+            if (!validate_typed_mailbox_operations(
+                    *process_table, diagnostics)) {
+                return std::nullopt;
+            }
+            if (!validate_package_startup_rows(
+                    state, process_table->rows, diagnostics)) {
+                return std::nullopt;
+            }
         }
 
         std::optional<application_detail::ScopedPhaseProfile> stage;
@@ -870,53 +877,72 @@ process_table_from_design(
         }
 
         stage.emplace("runtime_encode_table");
-        Paths path_table;
-        if (external_paths == nullptr) {
-            path_table = std::move(source_builder).freeze();
+        // A table decoded from or encoded as its canonical payload has
+        // canonical IDs and a known digest: bind to it without re-encoding.
+        const bool canonical_bound = external_paths != nullptr
+            && !external_paths->canonical_digest().empty();
+        if (canonical_bound) {
+            prepared.path_binding
+                = std::string { external_paths->canonical_digest() };
         } else {
-            path_table = *external_paths;
-        }
-        auto payload = canonical_payload_for_table(
-            path_table, diagnostics);
-        if (!payload) {
-            return std::nullopt;
-        }
-        if (external_paths != nullptr
-            && !has_canonical_ids(path_table, payload->paths)) {
-            report_error(diagnostics,
-                "external runtime hierarchy path table IDs are not in "
-                "canonical order");
-            return std::nullopt;
-        }
-        for (auto& raw_id : ids) {
-            if (raw_id == kInvalidPathId) {
-                continue;
+            Paths path_table;
+            if (external_paths == nullptr) {
+                path_table = std::move(source_builder).freeze();
+            } else {
+                path_table = *external_paths;
             }
-            const auto spelling = path_table.view(
-                PathId::from_index(raw_id));
-            const auto canonical_id = payload->paths.find(spelling);
-            if (!canonical_id) {
-                report_error(diagnostics,
-                    "runtime path could not be mapped into its canonical "
-                    "path table");
+            auto payload = canonical_payload_for_table(
+                path_table, diagnostics);
+            if (!payload) {
                 return std::nullopt;
             }
-            raw_id = canonical_id->value();
-        }
-
-        if (external_paths == nullptr) {
-            prepared.path_binding = std::move(payload->bytes);
-        } else {
-            prepared.path_binding = std::move(payload->digest);
+            if (external_paths != nullptr
+                && !has_canonical_ids(path_table, payload->paths)) {
+                report_error(diagnostics,
+                    "external runtime hierarchy path table IDs are not in "
+                    "canonical order");
+                return std::nullopt;
+            }
+            for (auto& raw_id : ids) {
+                if (raw_id == kInvalidPathId) {
+                    continue;
+                }
+                const auto spelling = path_table.view(
+                    PathId::from_index(raw_id));
+                const auto canonical_id = payload->paths.find(spelling);
+                if (!canonical_id) {
+                    report_error(diagnostics,
+                        "runtime path could not be mapped into its canonical "
+                        "path table");
+                    return std::nullopt;
+                }
+                raw_id = canonical_id->value();
+            }
+            if (external_paths == nullptr) {
+                prepared.path_binding = std::move(payload->bytes);
+            } else {
+                prepared.path_binding = std::move(payload->digest);
+            }
         }
         stage.emplace("runtime_encode_project");
-        prepared.dto.state = copy_runtime_state_without_processes(state);
         // Path projection clears process names and path-bearing operations in
-        // the wire DTO. Keep the design's immutable runtime rows untouched.
+        // the wire DTO. Keep the design's immutable runtime rows untouched,
+        // unless the caller owns the state and the table exclusively.
+        if (owned_state != nullptr) {
+            prepared.dto.state = std::move(*owned_state);
+        } else {
+            prepared.dto.state = copy_runtime_state_without_processes(state);
+        }
         if (!projected_process_table) {
-            projected_process_table
-                = std::make_shared<elaboration::detail::RuntimeProcessProgramTable>(
+            if (owned_state != nullptr && process_table.use_count() == 1) {
+                projected_process_table = std::const_pointer_cast<
+                    elaboration::detail::RuntimeProcessProgramTable>(
+                    std::move(process_table));
+            } else {
+                projected_process_table = std::make_shared<
+                    elaboration::detail::RuntimeProcessProgramTable>(
                     *process_table);
+            }
         }
         prepared.dto.process_table = std::move(projected_process_table);
         std::size_t cleared_paths { };
@@ -1321,15 +1347,19 @@ std::optional<std::string> serialize_runtime_path_state(
     return std::move(writer).finish();
 }
 
-std::optional<std::string> serialize_runtime_design_state(
-    const elaboration::ElaboratedDesign& design,
+namespace {
+
+// Shared by both serialize_runtime_design_state overloads: an rvalue design
+// has its runtime vectors moved into the wire state instead of copied.
+template <typename Design>
+std::optional<std::string> serialize_design_rows(
+    Design&& design,
     const semantic::HierarchyPathTable* const external_paths,
     diagnostic::Engine& diagnostics)
 {
+    constexpr bool consume = !std::is_lvalue_reference_v<Design>;
     try {
-        auto state
-            = elaboration::detail::ElaboratedDesignProcessAccess::artifact_state(
-                design);
+        // The rows are taken before the state is moved out of the design.
         auto process_table
             = elaboration::detail::ElaboratedDesignProcessAccess::process_table(
                 design);
@@ -1339,8 +1369,18 @@ std::optional<std::string> serialize_runtime_design_state(
                 return std::nullopt;
             }
         }
+        auto state = [&] {
+            if constexpr (consume) {
+                return elaboration::detail::ElaboratedDesignProcessAccess::
+                    take_artifact_state(std::move(design));
+            } else {
+                return elaboration::detail::ElaboratedDesignProcessAccess::
+                    artifact_state(design);
+            }
+        }();
         auto prepared = prepare_runtime_state(
-            state, std::move(process_table), external_paths, diagnostics);
+            state, std::move(process_table), external_paths, diagnostics,
+            consume ? &state : nullptr, true);
         if (!prepared) {
             return std::nullopt;
         }
@@ -1371,6 +1411,25 @@ std::optional<std::string> serialize_runtime_design_state(
             "runtime state allocation exceeds a host container limit");
     }
     return std::nullopt;
+}
+
+} // namespace
+
+std::optional<std::string> serialize_runtime_design_state(
+    const elaboration::ElaboratedDesign& design,
+    const semantic::HierarchyPathTable* const external_paths,
+    diagnostic::Engine& diagnostics)
+{
+    return serialize_design_rows(design, external_paths, diagnostics);
+}
+
+std::optional<std::string> serialize_runtime_design_state(
+    elaboration::ElaboratedDesign&& design,
+    const semantic::HierarchyPathTable* const external_paths,
+    diagnostic::Engine& diagnostics)
+{
+    return serialize_design_rows(
+        std::move(design), external_paths, diagnostics);
 }
 
 bool serialize_runtime_path_state(

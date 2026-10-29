@@ -120,7 +120,7 @@ set(FSIM_COMPILED_HIR_CODEC
 set(FSIM_DESIGN_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_HEADER}"
-  "kRuntimeStateSchema = 90"
+  "kRuntimeStateSchema = 91"
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 5"
   "kCompiledHirBundleSchema = 3"
@@ -137,13 +137,13 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC_INTERNAL}"
   "design state exceeds the safe structural nesting depth"
   "design state contains trailing bytes")
 fsim_require_nested_portable_tokens("${FSIM_COMPILED_HIR_CODEC}"
-  "\"FSIMCHIR\", kCompiledHirBundleSchema"
-  "CompiledHirBundleState")
+  "constexpr std::string_view magic = \"FSIMCHIR\";"
+  "serialize_compiled_hir_bundle_parts(")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "deserialize<runtime::SystemVerilogCoverageState>"
   "coverage state is inconsistent with compiled HIR")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
-  "kRuntimeStateSchema == 90"
+  "kRuntimeStateSchema == 91"
   "kDesignIrStateSchema == 5"
   "kCompiledHirBundleSchema == 3"
   "kSystemVerilogConstraintHirStateSchema == 14"

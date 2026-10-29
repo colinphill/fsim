@@ -99,13 +99,18 @@ TrustedArtifactLoad::~TrustedArtifactLoad()
     artifact_trusted = previous_;
 }
 
-bool TrustedArtifactLoad::active() noexcept
+bool TrustedArtifactLoad::verify_requested() noexcept
 {
     static const bool verify = [] {
         const char* text = std::getenv("FSIM_VERIFY_ARTIFACT");
         return text != nullptr && std::string_view { text } == "1";
     }();
-    return artifact_trusted && !verify;
+    return verify;
+}
+
+bool TrustedArtifactLoad::active() noexcept
+{
+    return artifact_trusted && !verify_requested();
 }
 
 namespace {
@@ -1339,6 +1344,70 @@ detail::ElaboratedDesignProcessAccess::artifact_state(
     return result;
 }
 
+ElaboratedDesignState
+detail::ElaboratedDesignProcessAccess::take_artifact_state(
+    ElaboratedDesign&& design)
+{
+    // Derive the inventory first: it reads the rows and signals that are
+    // about to be moved out.
+    auto computed_inventory
+        = std::optional<runtime::simir::SignalDriverInventory> { };
+    if (!design.signal_driver_inventory_) {
+        computed_inventory = design.compute_signal_driver_inventory();
+    }
+    ElaboratedDesignState result {
+        design.top_, std::move(design.roots_),
+        std::move(design.signal_info_),
+        std::move(design.boundary_conversions_),
+        std::move(design.signals_),
+        std::move(design.string_object_info_),
+        std::move(design.string_objects_),
+        { std::make_move_iterator(design.container_object_info_.begin()),
+            std::make_move_iterator(design.container_object_info_.end()) },
+        std::move(design.container_objects_),
+        std::move(design.container_signal_aliases_),
+        std::move(design.container_element_signal_aliases_),
+        std::move(design.container_aggregate_signal_aliases_),
+        std::move(design.vhdl_protected_object_info_), { },
+        std::move(design.specializations_), std::move(design.udp_tables_),
+        std::move(design.verilog_specify_paths_),
+        std::move(design.verilog_timing_checks_),
+        std::move(design.systemc_instances_),
+        std::move(design.systemc_processes_),
+        std::move(design.systemc_objects_), { }, { }, { },
+        std::move(design.code_coverage_inventory_),
+        computed_inventory ? std::move(*computed_inventory)
+                           : std::move(*design.signal_driver_inventory_),
+        std::move(design.systemverilog_package_class_initializers_),
+        std::move(design.systemverilog_package_class_static_initializers_)
+    };
+    result.signal_names.reserve(design.signal_by_path_.size());
+    for (const auto& [path, signal] : design.signal_by_path_) {
+        result.signal_names.emplace_back(
+            design.hierarchy_paths_.view(path), signal);
+    }
+    result.string_names.reserve(design.string_by_path_.size());
+    for (const auto& [path, object] : design.string_by_path_) {
+        result.string_names.emplace_back(
+            design.hierarchy_paths_.view(path), object);
+    }
+    result.container_names.reserve(design.container_by_path_.size());
+    for (const auto& [path, object] : design.container_by_path_) {
+        result.container_names.emplace_back(
+            design.hierarchy_paths_.view(path), object);
+    }
+    const auto by_name = [](const auto& left, const auto& right) {
+        return left.first < right.first;
+    };
+    std::ranges::sort(result.signal_names, by_name);
+    std::ranges::sort(result.string_names, by_name);
+    std::ranges::sort(result.container_names, by_name);
+    // The caller took the row table through process_table(); release the
+    // design's reference so a sole owner can edit it in place.
+    design.process_rows_.reset();
+    return result;
+}
+
 ElaboratedDesignState ElaboratedDesign::state() &&
 {
     if (process_builder_) {
@@ -1415,6 +1484,9 @@ ElaboratedDesign::from_state_with_process_rows(
 {
     auto serialized_driver_inventory
         = std::move(state.signal_driver_inventory);
+    // A trusted artifact's checksummed contents are not re-derived or
+    // cross-checked below; index bounds that guard later accesses stay.
+    const bool trusted = detail::TrustedArtifactLoad::active();
     if (rows && !state.processes.empty()) {
         return std::nullopt;
     }
@@ -1570,7 +1642,9 @@ ElaboratedDesign::from_state_with_process_rows(
                 return std::nullopt;
             }
             std::unordered_set<std::uint64_t> endpoint_offsets;
-            endpoint_offsets.reserve(binding.elements.size());
+            if (!trusted) {
+                endpoint_offsets.reserve(binding.elements.size());
+            }
             for (const auto& endpoint : binding.elements) {
                 if (endpoint.formal_path.empty()
                     || endpoint.actual_path.empty()
@@ -1579,7 +1653,9 @@ ElaboratedDesign::from_state_with_process_rows(
                     || endpoint.lsb_offset > signal_info.width
                     || endpoint.width
                         > signal_info.width - endpoint.lsb_offset
-                    || !endpoint_offsets.insert(endpoint.lsb_offset).second) {
+                    || (!trusted
+                        && !endpoint_offsets.insert(endpoint.lsb_offset)
+                                .second)) {
                     return std::nullopt;
                 }
             }
@@ -1595,170 +1671,197 @@ ElaboratedDesign::from_state_with_process_rows(
             return std::nullopt;
         }
     }
-    std::vector<std::vector<bool>> element_alias_ordinals;
-    element_alias_ordinals.reserve(state.container_objects.size());
-    for (const auto& object : state.container_objects) {
-        element_alias_ordinals.emplace_back(object.initial_value.elements.size(), false);
-    }
-    std::vector<bool> aggregate_alias_present(state.container_objects.size(), false);
-    std::vector<bool> aggregate_alias_signals(state.signals.size(), false);
-    for (const auto& alias : state.container_signal_aliases) {
-        if (alias.object >= state.container_objects.size()
-            || alias.signal >= state.signals.size()
-            || alias.signal >= state.signal_info.size()) {
-            return std::nullopt;
+    if (trusted) {
+        for (const auto& alias : state.container_signal_aliases) {
+            if (alias.object >= state.container_objects.size()
+                || alias.signal >= state.signals.size()
+                || alias.signal >= state.signal_info.size()) {
+                return std::nullopt;
+            }
         }
-        aggregate_alias_present[alias.object] = true;
-        aggregate_alias_signals[alias.signal] = true;
-    }
-    std::vector<bool> composite_alias_present(
-        state.container_objects.size(), false);
-    std::vector<bool> composite_alias_signal_seen(state.signals.size(), false);
-    for (const auto& alias : state.container_aggregate_signal_aliases) {
-        if (alias.object >= state.container_objects.size()
-            || alias.signal >= state.signals.size()
-            || alias.signal >= state.signal_info.size()
-            || !alias.readable
-            || aggregate_alias_present[alias.object]
-            || composite_alias_present[alias.object]
-            || aggregate_alias_signals[alias.signal]
-            || composite_alias_signal_seen[alias.signal]) {
-            return std::nullopt;
+        for (const auto& alias : state.container_aggregate_signal_aliases) {
+            if (alias.object >= state.container_objects.size()
+                || alias.signal >= state.signals.size()
+                || alias.signal >= state.signal_info.size()) {
+                return std::nullopt;
+            }
         }
-        composite_alias_present[alias.object] = true;
-        composite_alias_signal_seen[alias.signal] = true;
-        aggregate_alias_signals[alias.signal] = true;
-    }
-    std::vector<bool> element_alias_signal_seen(state.signals.size(), false);
-    std::vector<std::vector<runtime::simir::SignalId>> element_alias_signals(
-        state.container_objects.size());
-    for (const auto& alias : state.container_element_signal_aliases) {
-        if (alias.object >= state.container_objects.size()
-            || alias.signal >= state.signals.size()
-            || alias.signal >= state.signal_info.size()
-            || !alias.readable || !alias.writable
-            || aggregate_alias_signals[alias.signal]
-            || element_alias_signal_seen[alias.signal]
-            || aggregate_alias_present[alias.object]) {
-            return std::nullopt;
+        for (const auto& alias : state.container_element_signal_aliases) {
+            if (alias.object >= state.container_objects.size()
+                || alias.signal >= state.signals.size()
+                || alias.signal >= state.signal_info.size()
+                || alias.ordinal
+                    >= state.container_objects[alias.object]
+                           .initial_value.elements.size()) {
+                return std::nullopt;
+            }
         }
-        element_alias_signal_seen[alias.signal] = true;
-        const auto& object = state.container_objects[alias.object];
-        const auto& object_info = state.container_object_info[alias.object];
-        const auto& type = object.initial_value.type;
-        if (object.slice_alias || object_info.is_port || object_info.type != type
-            || !type.fixed || type.dimensions.empty()
-            || (type.element_kind
+    } else {
+        std::vector<std::vector<bool>> element_alias_ordinals;
+        element_alias_ordinals.reserve(state.container_objects.size());
+        for (const auto& object : state.container_objects) {
+            element_alias_ordinals.emplace_back(object.initial_value.elements.size(), false);
+        }
+        std::vector<bool> aggregate_alias_present(state.container_objects.size(), false);
+        std::vector<bool> aggregate_alias_signals(state.signals.size(), false);
+        for (const auto& alias : state.container_signal_aliases) {
+            if (alias.object >= state.container_objects.size()
+                || alias.signal >= state.signals.size()
+                || alias.signal >= state.signal_info.size()) {
+                return std::nullopt;
+            }
+            aggregate_alias_present[alias.object] = true;
+            aggregate_alias_signals[alias.signal] = true;
+        }
+        std::vector<bool> composite_alias_present(
+            state.container_objects.size(), false);
+        std::vector<bool> composite_alias_signal_seen(state.signals.size(), false);
+        for (const auto& alias : state.container_aggregate_signal_aliases) {
+            if (alias.object >= state.container_objects.size()
+                || alias.signal >= state.signals.size()
+                || alias.signal >= state.signal_info.size()
+                || !alias.readable
+                || aggregate_alias_present[alias.object]
+                || composite_alias_present[alias.object]
+                || aggregate_alias_signals[alias.signal]
+                || composite_alias_signal_seen[alias.signal]) {
+                return std::nullopt;
+            }
+            composite_alias_present[alias.object] = true;
+            composite_alias_signal_seen[alias.signal] = true;
+            aggregate_alias_signals[alias.signal] = true;
+        }
+        std::vector<bool> element_alias_signal_seen(state.signals.size(), false);
+        std::vector<std::vector<runtime::simir::SignalId>> element_alias_signals(
+            state.container_objects.size());
+        for (const auto& alias : state.container_element_signal_aliases) {
+            if (alias.object >= state.container_objects.size()
+                || alias.signal >= state.signals.size()
+                || alias.signal >= state.signal_info.size()
+                || !alias.readable || !alias.writable
+                || aggregate_alias_signals[alias.signal]
+                || element_alias_signal_seen[alias.signal]
+                || aggregate_alias_present[alias.object]) {
+                return std::nullopt;
+            }
+            element_alias_signal_seen[alias.signal] = true;
+            const auto& object = state.container_objects[alias.object];
+            const auto& object_info = state.container_object_info[alias.object];
+            const auto& type = object.initial_value.type;
+            if (object.slice_alias || object_info.is_port || object_info.type != type
+                || !type.fixed || type.dimensions.empty()
+                || (type.element_kind
+                        != runtime::simir::ContainerElementKind::Packed
+                    && type.element_kind
+                        != runtime::simir::ContainerElementKind::Scalar)
+                || alias.ordinal >= element_alias_ordinals[alias.object].size()
+                || element_alias_ordinals[alias.object][alias.ordinal]
+                || state.signal_info[alias.signal].width != type.element_width
+                || state.signals[alias.signal].initial_value.width()
+                    != type.element_width
+                || state.signals[alias.signal].initial_value.is_logic9()
+                || state.signals[alias.signal].value_kind
+                    != runtime::simir::ValueKind::logic4
+                || state.signal_info[alias.signal].source_domain
+                    != (type.two_state ? frontend::ValueDomain::Bit2
+                                       : frontend::ValueDomain::Logic4)
+                || state.signal_info[alias.signal].is_signed
+                    != type.signed_elements) {
+                return std::nullopt;
+            }
+            const auto bridge_width = runtime::simir::container_signal_bridge_width(type);
+            if (!bridge_width || type.element_width == 0U
+                || *bridge_width % type.element_width != 0U
+                || *bridge_width / type.element_width
+                    != object.initial_value.elements.size()) {
+                return std::nullopt;
+            }
+            auto remaining = static_cast<std::uint64_t>(alias.ordinal);
+            std::string suffix;
+            for (auto dimension = type.dimensions.rbegin();
+                dimension != type.dimensions.rend(); ++dimension) {
+                const auto [left, right] = *dimension;
+                const auto extent = static_cast<std::uint64_t>(
+                    left >= right
+                        ? static_cast<std::int64_t>(left) - right
+                        : static_cast<std::int64_t>(right) - left) + 1U;
+                const auto position = remaining % extent;
+                remaining /= extent;
+                const auto index = static_cast<std::int64_t>(left)
+                    + (left >= right ? -static_cast<std::int64_t>(position)
+                                     : static_cast<std::int64_t>(position));
+                suffix = "[" + std::to_string(index) + "]" + suffix;
+            }
+            if (remaining != 0U) {
+                return std::nullopt;
+            }
+            const auto expected_name = object_info.name + suffix;
+            if (state.signal_info[alias.signal].name != expected_name
+                || state.signals[alias.signal].name != expected_name) {
+                return std::nullopt;
+            }
+            element_alias_ordinals[alias.object][alias.ordinal] = true;
+            element_alias_signals[alias.object].push_back(alias.signal);
+        }
+        for (std::size_t object = 0; object < element_alias_ordinals.size(); ++object) {
+            const auto& ordinals = element_alias_ordinals[object];
+            const bool has_element_alias
+                = std::ranges::any_of(ordinals, [](const bool present) {
+                    return present;
+                });
+            if (has_element_alias != composite_alias_present[object]) {
+                return std::nullopt;
+            }
+            if (!ordinals.empty()
+                && has_element_alias
+                && !std::ranges::all_of(ordinals, [](const bool present) {
+                    return present;
+                })) {
+                return std::nullopt;
+            }
+            auto& signals = element_alias_signals[object];
+            std::ranges::sort(signals);
+            if (std::ranges::adjacent_find(signals) != signals.end()) {
+                return std::nullopt;
+            }
+        }
+        for (const auto& alias : state.container_aggregate_signal_aliases) {
+            const auto& object = state.container_objects[alias.object];
+            const auto& object_info = state.container_object_info[alias.object];
+            const auto& signal_info = state.signal_info[alias.signal];
+            const auto& signal = state.signals[alias.signal];
+            const auto& type = object.initial_value.type;
+            const auto width = runtime::simir::container_signal_bridge_width(type);
+            const auto& ordinals = element_alias_ordinals[alias.object];
+            // Artifact admission must satisfy the same family contract as
+            // Interpreter::add_container_aggregate_signal_alias. Otherwise a
+            // decoded design can pass validation and fail during runtime setup.
+            const bool matching_resolution = std::ranges::all_of(
+                element_alias_signals[alias.object],
+                [&](const runtime::simir::SignalId element) {
+                    return state.signals[element].resolution == signal.resolution;
+                });
+            if (object.slice_alias || object_info.is_port
+                || !type.fixed || type.two_state
+                || type.dimensions.empty()
+                || type.element_kind
                     != runtime::simir::ContainerElementKind::Packed
-                && type.element_kind
-                    != runtime::simir::ContainerElementKind::Scalar)
-            || alias.ordinal >= element_alias_ordinals[alias.object].size()
-            || element_alias_ordinals[alias.object][alias.ordinal]
-            || state.signal_info[alias.signal].width != type.element_width
-            || state.signals[alias.signal].initial_value.width()
-                != type.element_width
-            || state.signals[alias.signal].initial_value.is_logic9()
-            || state.signals[alias.signal].value_kind
-                != runtime::simir::ValueKind::logic4
-            || state.signal_info[alias.signal].source_domain
-                != (type.two_state ? frontend::ValueDomain::Bit2
-                                   : frontend::ValueDomain::Logic4)
-            || state.signal_info[alias.signal].is_signed
-                != type.signed_elements) {
-            return std::nullopt;
-        }
-        const auto bridge_width = runtime::simir::container_signal_bridge_width(type);
-        if (!bridge_width || type.element_width == 0U
-            || *bridge_width % type.element_width != 0U
-            || *bridge_width / type.element_width
-                != object.initial_value.elements.size()) {
-            return std::nullopt;
-        }
-        auto remaining = static_cast<std::uint64_t>(alias.ordinal);
-        std::string suffix;
-        for (auto dimension = type.dimensions.rbegin();
-            dimension != type.dimensions.rend(); ++dimension) {
-            const auto [left, right] = *dimension;
-            const auto extent = static_cast<std::uint64_t>(
-                left >= right
-                    ? static_cast<std::int64_t>(left) - right
-                    : static_cast<std::int64_t>(right) - left) + 1U;
-            const auto position = remaining % extent;
-            remaining /= extent;
-            const auto index = static_cast<std::int64_t>(left)
-                + (left >= right ? -static_cast<std::int64_t>(position)
-                                 : static_cast<std::int64_t>(position));
-            suffix = "[" + std::to_string(index) + "]" + suffix;
-        }
-        if (remaining != 0U) {
-            return std::nullopt;
-        }
-        const auto expected_name = object_info.name + suffix;
-        if (state.signal_info[alias.signal].name != expected_name
-            || state.signals[alias.signal].name != expected_name) {
-            return std::nullopt;
-        }
-        element_alias_ordinals[alias.object][alias.ordinal] = true;
-        element_alias_signals[alias.object].push_back(alias.signal);
-    }
-    for (std::size_t object = 0; object < element_alias_ordinals.size(); ++object) {
-        const auto& ordinals = element_alias_ordinals[object];
-        const bool has_element_alias
-            = std::ranges::any_of(ordinals, [](const bool present) {
-                return present;
-            });
-        if (has_element_alias != composite_alias_present[object]) {
-            return std::nullopt;
-        }
-        if (!ordinals.empty()
-            && has_element_alias
-            && !std::ranges::all_of(ordinals, [](const bool present) {
-                return present;
-            })) {
-            return std::nullopt;
-        }
-        auto& signals = element_alias_signals[object];
-        std::ranges::sort(signals);
-        if (std::ranges::adjacent_find(signals) != signals.end()) {
-            return std::nullopt;
-        }
-    }
-    for (const auto& alias : state.container_aggregate_signal_aliases) {
-        const auto& object = state.container_objects[alias.object];
-        const auto& object_info = state.container_object_info[alias.object];
-        const auto& signal_info = state.signal_info[alias.signal];
-        const auto& signal = state.signals[alias.signal];
-        const auto& type = object.initial_value.type;
-        const auto width = runtime::simir::container_signal_bridge_width(type);
-        const auto& ordinals = element_alias_ordinals[alias.object];
-        // Artifact admission must satisfy the same family contract as
-        // Interpreter::add_container_aggregate_signal_alias. Otherwise a
-        // decoded design can pass validation and fail during runtime setup.
-        const bool matching_resolution = std::ranges::all_of(
-            element_alias_signals[alias.object],
-            [&](const runtime::simir::SignalId element) {
-                return state.signals[element].resolution == signal.resolution;
-            });
-        if (object.slice_alias || object_info.is_port
-            || !type.fixed || type.two_state
-            || type.dimensions.empty()
-            || type.element_kind
-                != runtime::simir::ContainerElementKind::Packed
-            || type.element_width == 0U || !width
-            || !std::ranges::all_of(ordinals, [](const bool present) {
-                return present;
-            })
-            || signal_info.name != object_info.name
-            || signal_info.width != *width
-            || signal.initial_value.width() != *width
-            || signal.initial_value.is_logic9()
-            || signal.value_kind != runtime::simir::ValueKind::logic4
-            || signal.resolution == runtime::simir::ResolutionKind::none
-            || !matching_resolution
-            || signal_info.source_domain != frontend::ValueDomain::Logic4
-            || signal_info.is_signed != type.signed_elements
-            || signal.name != object_info.name || ordinals.empty()) {
-            return std::nullopt;
+                || type.element_width == 0U || !width
+                || !std::ranges::all_of(ordinals, [](const bool present) {
+                    return present;
+                })
+                || signal_info.name != object_info.name
+                || signal_info.width != *width
+                || signal.initial_value.width() != *width
+                || signal.initial_value.is_logic9()
+                || signal.value_kind != runtime::simir::ValueKind::logic4
+                || signal.resolution == runtime::simir::ResolutionKind::none
+                || !matching_resolution
+                || signal_info.source_domain != frontend::ValueDomain::Logic4
+                || signal_info.is_signed != type.signed_elements
+                || signal.name != object_info.name || ordinals.empty()) {
+                return std::nullopt;
+            }
         }
     }
     for (std::size_t index = 0; index < process_count; ++index) {
@@ -1827,111 +1930,128 @@ ElaboratedDesign::from_state_with_process_rows(
             return std::nullopt;
         }
     }
-    for (std::size_t index = 0; index < state.udp_tables.size(); ++index) {
-        const auto& table = state.udp_tables[index];
-        const auto digest_is_hex = table.digest.size() == 64
-            && std::ranges::all_of(table.digest, [](const char character) {
-                   return (character >= '0' && character <= '9')
-                       || (character >= 'a' && character <= 'f');
-               });
-        std::unordered_set<std::string_view> terminal_names;
-        bool terminals_valid = !table.terminals.empty();
-        for (const auto& terminal : table.terminals) {
-            terminals_valid = terminals_valid && !terminal.empty()
-                && terminal_names.insert(terminal).second;
-        }
-        if (table.id != index || !table.identity.starts_with("udp:")
-            || !digest_is_hex || !terminals_valid
-            || !frontend::verilog_udp_table_well_formed(
-                table.sequential,
-                table.terminals.size() - 1U,
-                table.initial_output,
-                table.rows)) {
-            return std::nullopt;
-        }
-    }
-    std::unordered_map<std::string, std::string> udp_digests;
-    for (const auto& table : state.udp_tables) {
-        if (!udp_digests.emplace(table.identity, table.digest).second) {
-            return std::nullopt;
-        }
-    }
-    std::unordered_set<std::string> referenced_udp_tables;
-    for (const auto& specialization : state.specializations) {
-        std::optional<std::string_view> identity;
-        std::optional<std::string_view> digest;
-        for (const auto& [name, value] :
-            specialization.parameter_identity_values) {
-            if (name == "__udp") {
-                if (identity)
-                    return std::nullopt;
-                identity = value;
-            } else if (name == "__udp_table") {
-                if (digest)
-                    return std::nullopt;
-                digest = value;
-            }
-        }
-        if (identity.has_value() != digest.has_value())
-            return std::nullopt;
-        if (identity) {
-            const auto table = udp_digests.find(std::string { *identity });
-            if (table == udp_digests.end() || table->second != *digest) {
+    if (trusted) {
+        for (const auto& path : state.verilog_specify_paths) {
+            const auto valid_signal = [&](const VerilogSpecifyTerminalInfo& terminal) {
+                return terminal.signal < state.signals.size();
+            };
+            if (!std::ranges::all_of(path.sources, valid_signal)
+                || !std::ranges::all_of(path.destinations, valid_signal)
+                || !std::ranges::all_of(
+                    path.drivers,
+                    [&](const runtime::simir::ProcessId driver) {
+                        return driver < process_count;
+                    })) {
                 return std::nullopt;
             }
-            referenced_udp_tables.emplace(*identity);
         }
-    }
-    if (referenced_udp_tables.size() != state.udp_tables.size()) {
-        return std::nullopt;
-    }
-    std::unordered_set<std::string> specify_identities;
-    for (std::size_t index = 0;
-        index < state.verilog_specify_paths.size(); ++index) {
-        const auto& path = state.verilog_specify_paths[index];
-        const auto valid_terminal = [&](const VerilogSpecifyTerminalInfo& terminal) {
-            return terminal.signal < state.signals.size()
-                && terminal.width != 0
-                && terminal.offset
-                <= state.signals[terminal.signal].initial_value.width()
-                && terminal.width
-                <= state.signals[terminal.signal].initial_value.width()
-                    - terminal.offset;
-        };
-        const bool valid_delay_count = path.delays.size() == 1
-            || path.delays.size() == 2 || path.delays.size() == 3
-            || path.delays.size() == 6 || path.delays.size() == 12;
-        if (path.id != index || path.instance.empty()
-            || !path.identity.starts_with("sdf:iopath:" + path.instance + ":")
-            || !specify_identities.emplace(path.identity).second
-            || path.sources.empty() || path.destinations.empty()
-            || !valid_delay_count
-            || !std::ranges::all_of(path.sources, valid_terminal)
-            || !std::ranges::all_of(path.destinations, valid_terminal)
-            || (path.kind == frontend::VerilogModulePathKind::Parallel
-                && (path.sources.size() != path.destinations.size()
-                    || !std::ranges::equal(
-                        path.sources, path.destinations,
-                        [](const auto& left, const auto& right) {
-                            return left.width == right.width;
-                        })))) {
+    } else {
+        for (std::size_t index = 0; index < state.udp_tables.size(); ++index) {
+            const auto& table = state.udp_tables[index];
+            const auto digest_is_hex = table.digest.size() == 64
+                && std::ranges::all_of(table.digest, [](const char character) {
+                       return (character >= '0' && character <= '9')
+                           || (character >= 'a' && character <= 'f');
+                   });
+            std::unordered_set<std::string_view> terminal_names;
+            bool terminals_valid = !table.terminals.empty();
+            for (const auto& terminal : table.terminals) {
+                terminals_valid = terminals_valid && !terminal.empty()
+                    && terminal_names.insert(terminal).second;
+            }
+            if (table.id != index || !table.identity.starts_with("udp:")
+                || !digest_is_hex || !terminals_valid
+                || !frontend::verilog_udp_table_well_formed(
+                    table.sequential,
+                    table.terminals.size() - 1U,
+                    table.initial_output,
+                    table.rows)) {
+                return std::nullopt;
+            }
+        }
+        std::unordered_map<std::string, std::string> udp_digests;
+        for (const auto& table : state.udp_tables) {
+            if (!udp_digests.emplace(table.identity, table.digest).second) {
+                return std::nullopt;
+            }
+        }
+        std::unordered_set<std::string> referenced_udp_tables;
+        for (const auto& specialization : state.specializations) {
+            std::optional<std::string_view> identity;
+            std::optional<std::string_view> digest;
+            for (const auto& [name, value] :
+                specialization.parameter_identity_values) {
+                if (name == "__udp") {
+                    if (identity)
+                        return std::nullopt;
+                    identity = value;
+                } else if (name == "__udp_table") {
+                    if (digest)
+                        return std::nullopt;
+                    digest = value;
+                }
+            }
+            if (identity.has_value() != digest.has_value())
+                return std::nullopt;
+            if (identity) {
+                const auto table = udp_digests.find(std::string { *identity });
+                if (table == udp_digests.end() || table->second != *digest) {
+                    return std::nullopt;
+                }
+                referenced_udp_tables.emplace(*identity);
+            }
+        }
+        if (referenced_udp_tables.size() != state.udp_tables.size()) {
             return std::nullopt;
         }
-        if (!std::ranges::is_sorted(path.drivers)
-            || std::ranges::adjacent_find(path.drivers)
-                != path.drivers.end()
-            || !std::ranges::all_of(
-                path.drivers,
-                [&](const runtime::simir::ProcessId driver) {
-                    return driver < process_count;
-                })) {
-            return std::nullopt;
+        std::unordered_set<std::string> specify_identities;
+        for (std::size_t index = 0;
+            index < state.verilog_specify_paths.size(); ++index) {
+            const auto& path = state.verilog_specify_paths[index];
+            const auto valid_terminal = [&](const VerilogSpecifyTerminalInfo& terminal) {
+                return terminal.signal < state.signals.size()
+                    && terminal.width != 0
+                    && terminal.offset
+                    <= state.signals[terminal.signal].initial_value.width()
+                    && terminal.width
+                    <= state.signals[terminal.signal].initial_value.width()
+                        - terminal.offset;
+            };
+            const bool valid_delay_count = path.delays.size() == 1
+                || path.delays.size() == 2 || path.delays.size() == 3
+                || path.delays.size() == 6 || path.delays.size() == 12;
+            if (path.id != index || path.instance.empty()
+                || !path.identity.starts_with("sdf:iopath:" + path.instance + ":")
+                || !specify_identities.emplace(path.identity).second
+                || path.sources.empty() || path.destinations.empty()
+                || !valid_delay_count
+                || !std::ranges::all_of(path.sources, valid_terminal)
+                || !std::ranges::all_of(path.destinations, valid_terminal)
+                || (path.kind == frontend::VerilogModulePathKind::Parallel
+                    && (path.sources.size() != path.destinations.size()
+                        || !std::ranges::equal(
+                            path.sources, path.destinations,
+                            [](const auto& left, const auto& right) {
+                                return left.width == right.width;
+                            })))) {
+                return std::nullopt;
+            }
+            if (!std::ranges::is_sorted(path.drivers)
+                || std::ranges::adjacent_find(path.drivers)
+                    != path.drivers.end()
+                || !std::ranges::all_of(
+                    path.drivers,
+                    [&](const runtime::simir::ProcessId driver) {
+                        return driver < process_count;
+                    })) {
+                return std::nullopt;
+            }
         }
-    }
-    for (const auto& check : state.verilog_timing_checks) {
-        if (!check.identity.starts_with("sdf:timingcheck:")
-            || !specify_identities.emplace(check.identity).second) {
-            return std::nullopt;
+        for (const auto& check : state.verilog_timing_checks) {
+            if (!check.identity.starts_with("sdf:timingcheck:")
+                || !specify_identities.emplace(check.identity).second) {
+                return std::nullopt;
+            }
         }
     }
     ElaboratedDesign result;
@@ -1970,33 +2090,76 @@ ElaboratedDesign::from_state_with_process_rows(
         = std::move(state.systemverilog_package_class_static_initializers);
     result.code_coverage_inventory_
         = std::move(state.code_coverage_inventory);
-    for (auto& entry : state.signal_names) {
-        if (entry.first.empty() || entry.second >= result.signals_.size()
-            || !result.signal_by_name_.emplace(std::move(entry)).second) {
-            return std::nullopt;
+    // A trusted restore against the artifact's canonical path table resolves
+    // the names straight into the path maps (what freeze_hierarchy_paths
+    // would build from the name maps and adopt); if a name is absent from the
+    // table it falls back to the name maps below.
+    bool paths_adopted = false;
+    if (auto* const canonical = detail::CanonicalHierarchyPaths::active();
+        trusted && canonical != nullptr
+        && detail::DeferredProgramValidation::active()) {
+        const auto& table = canonical->table();
+        const auto resolve = [&](const auto& names, const std::size_t limit,
+                                 auto& by_path) {
+            by_path.reserve(names.size());
+            for (const auto& [name, value] : names) {
+                if (name.empty() || value >= limit) {
+                    return false;
+                }
+                const auto id = table.find(name);
+                if (!id || !by_path.emplace(*id, value).second) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (resolve(state.signal_names, result.signals_.size(),
+                result.signal_by_path_)
+            && resolve(state.string_names, result.string_objects_.size(),
+                result.string_by_path_)
+            && resolve(state.container_names,
+                result.container_objects_.size(), result.container_by_path_)) {
+            result.hierarchy_paths_ = table;
+            canonical->mark_adopted();
+            paths_adopted = true;
+        } else {
+            result.signal_by_path_.clear();
+            result.string_by_path_.clear();
+            result.container_by_path_.clear();
         }
     }
-    for (auto& entry : state.string_names) {
-        if (entry.first.empty() || entry.second >= result.string_objects_.size()
-            || !result.string_by_name_.emplace(std::move(entry)).second) {
-            return std::nullopt;
+    if (!paths_adopted) {
+        for (auto& entry : state.signal_names) {
+            if (entry.first.empty() || entry.second >= result.signals_.size()
+                || !result.signal_by_name_.emplace(std::move(entry)).second) {
+                return std::nullopt;
+            }
         }
-    }
-    for (auto& entry : state.container_names) {
-        if (entry.first.empty() || entry.second >= result.container_objects_.size()
-            || !result.container_by_name_.emplace(std::move(entry)).second) {
-            return std::nullopt;
+        for (auto& entry : state.string_names) {
+            if (entry.first.empty() || entry.second >= result.string_objects_.size()
+                || !result.string_by_name_.emplace(std::move(entry)).second) {
+                return std::nullopt;
+            }
         }
-    }
-    for (const auto& alias : result.container_aggregate_signal_aliases_) {
-        const auto& name = result.signal_info_[alias.signal].name;
-        const auto found = result.signal_by_name_.find(name);
-        if (found == result.signal_by_name_.end()
-            || found->second != alias.signal) {
-            return std::nullopt;
+        for (auto& entry : state.container_names) {
+            if (entry.first.empty() || entry.second >= result.container_objects_.size()
+                || !result.container_by_name_.emplace(std::move(entry)).second) {
+                return std::nullopt;
+            }
         }
+        for (const auto& alias : result.container_aggregate_signal_aliases_) {
+            if (trusted) {
+                break;
+            }
+            const auto& name = result.signal_info_[alias.signal].name;
+            const auto found = result.signal_by_name_.find(name);
+            if (found == result.signal_by_name_.end()
+                || found->second != alias.signal) {
+                return std::nullopt;
+            }
+        }
+        result.freeze_hierarchy_paths();
     }
-    result.freeze_hierarchy_paths();
     if (!detail::DeferredProgramValidation::active()) {
         try {
             runtime::simir::Interpreter validator;

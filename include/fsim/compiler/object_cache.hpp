@@ -7,11 +7,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace fsim::compiler {
@@ -55,6 +57,30 @@ private:
     bool finished_{};
 };
 
+/// A verified cache payload that stays in the buffer it was read into: the
+/// envelope header is skipped by offset, not erased.
+class ObjectCachePayload final {
+public:
+    ObjectCachePayload(
+        std::unique_ptr<char[]> storage, std::size_t offset, std::size_t size) noexcept
+        : storage_(std::move(storage)), offset_(offset), size_(size) {}
+
+    [[nodiscard]] std::string_view text() const noexcept {
+        return {storage_.get() + offset_, size_};
+    }
+    [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
+        return std::as_bytes(std::span{storage_.get() + offset_, size_});
+    }
+    /// Hands the buffer to a shared owner; the view stays valid for as long
+    /// as any copy of the returned pointer lives.
+    [[nodiscard]] std::shared_ptr<const std::string_view> share() &&;
+
+private:
+    std::unique_ptr<char[]> storage_;
+    std::size_t offset_{};
+    std::size_t size_{};
+};
+
 class ObjectCache final {
 public:
     explicit ObjectCache(std::filesystem::path root);
@@ -63,6 +89,9 @@ public:
     [[nodiscard]] std::filesystem::path path_for(std::string_view key) const;
 
     [[nodiscard]] std::optional<std::vector<std::byte>> load(
+        std::string_view key, std::error_code& error) const;
+    /// load without copying the payload out of the read buffer.
+    [[nodiscard]] std::optional<ObjectCachePayload> load_payload(
         std::string_view key, std::error_code& error) const;
     bool store(
         std::string_view key, std::span<const std::byte> payload, std::error_code& error) const;

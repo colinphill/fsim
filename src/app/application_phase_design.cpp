@@ -558,7 +558,7 @@ static bool publish_design_artifact_impl(
                     hierarchy_paths.error) });
         return false;
     }
-    auto compiled_hir = serialize_compiled_hir_bundle(
+    auto compiled_hir = serialize_elaborated_compiled_hir_bundle(
         compiled_design, diagnostics);
     auto design_ir = serialize_design_ir_state(project.design_ir,
         hierarchy_paths.payload->paths, diagnostics);
@@ -628,6 +628,11 @@ static bool publish_design_artifact_impl(
     auto uvm_state = serialize_systemverilog_uvm_state(
         uvm_bootstrap.artifact, diagnostics);
     if (!uvm_state) {
+        return false;
+    }
+    auto class_specializations = serialize_systemverilog_class_specializations(
+        project.compiled_systemverilog_class_specializations, diagnostics);
+    if (!class_specializations) {
         return false;
     }
     for (const auto& binding : config.bindings) {
@@ -719,25 +724,21 @@ static bool publish_design_artifact_impl(
     add_payload("design-ir", "state/design-ir.bin", *design_ir);
     add_payload("sv-coverage", "state/sv-coverage.bin", *coverage);
     add_payload("sv-uvm", "state/sv-uvm.bin", *uvm_state);
+    add_payload("sv-classes", "state/sv-classes.bin", *class_specializations);
     metadata.payloads.push_back({ "hierarchy-paths",
         "state/hierarchy-paths.bin", hierarchy_paths.payload->digest });
+    // Each payload's bytes move into the list (an initializer list's
+    // elements are const, so inserting from one would copy them all at the
+    // artifact's peak).
     std::vector<library::PortablePayload> payloads;
-    payloads.reserve(6);
-    payloads.push_back({ metadata.payloads[0].artifact,
-        std::move(*runtime), metadata.payloads[0].checksum });
-    payloads.insert(payloads.end(), {
-        { metadata.payloads[1].artifact, std::move(*compiled_hir),
-            metadata.payloads[1].checksum },
-        { metadata.payloads[2].artifact, std::move(*design_ir),
-            metadata.payloads[2].checksum },
-        { metadata.payloads[3].artifact, std::move(*coverage),
-            metadata.payloads[3].checksum },
-        { metadata.payloads[4].artifact, std::move(*uvm_state),
-            metadata.payloads[4].checksum },
-        { metadata.payloads[5].artifact,
-            std::move(hierarchy_paths.payload->bytes),
-            metadata.payloads[5].checksum }
-    });
+    payloads.reserve(7);
+    for (auto* bytes : { &*runtime, &*compiled_hir, &*design_ir, &*coverage,
+             &*uvm_state, &*class_specializations,
+             &hierarchy_paths.payload->bytes }) {
+        const auto& indexed = metadata.payloads[payloads.size()];
+        payloads.push_back({ indexed.artifact, std::move(*bytes),
+            indexed.checksum });
+    }
     std::set<std::string> plugin_libraries;
     for (std::size_t index = 0; index < project.systemc_plugins.size(); ++index) {
         const auto native = project.systemc_plugins[index];
@@ -934,10 +935,12 @@ std::optional<BuiltProject> load_design_artifact(
     const auto* design_ir_index = payload_by_kind(*metadata, "design-ir");
     const auto* coverage_index = payload_by_kind(*metadata, "sv-coverage");
     const auto* uvm_index = payload_by_kind(*metadata, "sv-uvm");
+    const auto* classes_index = payload_by_kind(*metadata, "sv-classes");
     if (runtime_index == nullptr || hierarchy_paths_index == nullptr
         || compiled_hir_index == nullptr
         || design_ir_index == nullptr
-        || coverage_index == nullptr || uvm_index == nullptr) {
+        || coverage_index == nullptr || uvm_index == nullptr
+        || classes_index == nullptr) {
         diagnostics.error(
             "FSIM-ART-0014", ".fsimdesign is missing a required state payload");
         return std::nullopt;
@@ -1047,11 +1050,19 @@ std::optional<BuiltProject> load_design_artifact(
               support::path_to_utf8(uvm_index->artifact), diagnostics)
         : std::optional<fsim::runtime::SystemVerilogUvmCheckpointArtifact> { };
     uvm_bytes.reset();
+    // Kept until the verify-mode comparison below.
+    auto classes_bytes = read_design_payload(
+        directory / classes_index->artifact, classes_index->checksum,
+        diagnostics);
+    auto class_specializations = classes_bytes
+        ? deserialize_systemverilog_class_specializations(*classes_bytes,
+              support::path_to_utf8(classes_index->artifact), diagnostics)
+        : std::optional<std::vector<semantic::sv::ClassSpecialization>> { };
     // A trusted artifact (checksummed, from a matching build) is not
     // re-derived and cross-checked; FSIM_VERIFY_ARTIFACT=1 keeps the checks.
     const bool trusted = elaboration::detail::TrustedArtifactLoad::active();
     if (!runtime || !semantics || !design_ir || !constraint_hir || !vhdl_hir
-        || !coverage || !uvm_state
+        || !coverage || !uvm_state || !class_specializations
         || (!trusted
             && (!design_ir->valid(*semantics)
                 || !application_detail::valid_runtime_projection(
@@ -1252,24 +1263,40 @@ std::optional<BuiltProject> load_design_artifact(
     auto primary_hierarchy = live_systemc->registries.empty()
         ? std::shared_ptr<systemc::HierarchyRegistry> { }
         : live_systemc->registries.front();
-    auto compiled_class_specializations = semantic::sv::specialize_classes(
-        *semantics, *constraint_hir);
-    if (std::getenv("FSIM_SV_CLASS_SPEC_TRACE") != nullptr) {
-        for (const auto& specialization :
-            compiled_class_specializations.specializations) {
-            std::cerr << "[fsim-sv-class-spec] specialization "
-                      << specialization.specialization_identity << '\n';
+    // The artifact carries the specializations the design was elaborated
+    // with. An untrusted load (FSIM_VERIFY_ARTIFACT=1) re-derives them from
+    // the compiled HIR and requires the persisted copy to match byte for byte.
+    const bool class_trace = std::getenv("FSIM_SV_CLASS_SPEC_TRACE") != nullptr;
+    if (!trusted || class_trace) {
+        const auto derived
+            = semantic::sv::specialize_classes(*semantics, *constraint_hir);
+        if (class_trace) {
+            for (const auto& specialization : derived.specializations) {
+                std::cerr << "[fsim-sv-class-spec] specialization "
+                          << specialization.specialization_identity << '\n';
+            }
+            for (const auto& [declaration, identity] :
+                derived.declaration_specializations) {
+                std::cerr << "[fsim-sv-class-spec] declaration "
+                          << declaration.value() << " -> " << identity << '\n';
+            }
+            for (const auto& error : derived.errors) {
+                std::cerr << "[fsim-sv-class-spec] " << error.declaration_identity << ": "
+                          << error.message << '\n';
+            }
         }
-        for (const auto& [declaration, identity] :
-            compiled_class_specializations.declaration_specializations) {
-            std::cerr << "[fsim-sv-class-spec] declaration "
-                      << declaration.value() << " -> " << identity << '\n';
-        }
-        for (const auto& error : compiled_class_specializations.errors) {
-            std::cerr << "[fsim-sv-class-spec] " << error.declaration_identity << ": "
-                      << error.message << '\n';
+        if (!trusted) {
+            const auto bytes = serialize_systemverilog_class_specializations(
+                derived.specializations, diagnostics);
+            if (!bytes || *bytes != *classes_bytes) {
+                diagnostics.error("FSIM-ART-0014",
+                    ".fsimdesign class specializations differ from its "
+                    "compiled HIR");
+                return std::nullopt;
+            }
         }
     }
+    classes_bytes.reset();
     auto built = BuiltProject {
         std::move(*runtime), std::move(*design_ir), std::move(*semantics),
         std::move(*constraint_hir), std::move(*vhdl_hir),
@@ -1285,7 +1312,7 @@ std::optional<BuiltProject> load_design_artifact(
                 .value_or(project::SystemVerilogUvmRelease::none),
             metadata->uvm_source_identity },
         metadata->design_digest,
-        std::move(compiled_class_specializations.specializations),
+        std::move(*class_specializations),
         std::move(*coverage), std::move(*uvm_state),
         std::move(vhdl_unit_provenance),
         std::move(verilog_unit_revisions),

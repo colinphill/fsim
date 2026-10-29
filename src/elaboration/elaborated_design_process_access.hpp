@@ -112,6 +112,8 @@ public:
     TrustedArtifactLoad& operator=(const TrustedArtifactLoad&) = delete;
 
     [[nodiscard]] static bool active() noexcept;
+    /// True when FSIM_VERIFY_ARTIFACT=1 asks for every check, on any side.
+    [[nodiscard]] static bool verify_requested() noexcept;
 
 private:
     bool previous_ { };
@@ -159,6 +161,13 @@ public:
     /// design. Process rows are returned separately by process_table().
     [[nodiscard]] static ElaboratedDesignState artifact_state(
         const ElaboratedDesign& design);
+
+    /// Consuming counterpart of artifact_state(): moves the runtime vectors
+    /// out of `design` instead of copying them and releases the design's
+    /// reference to its row table. Obtain process_table() first; the design
+    /// must not be used afterwards except to destroy it.
+    [[nodiscard]] static ElaboratedDesignState take_artifact_state(
+        ElaboratedDesign&& design);
 
     /// Return the stable owner for published row views. Consumers retaining
     /// ProcessProgramViews must retain this owner too; the public processes()

@@ -12,18 +12,21 @@
 #include <optional>
 #include <istream>
 #include <ostream>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 90;
+inline constexpr std::uint32_t kRuntimeStateSchema = 91;
 inline constexpr std::uint32_t kSemanticStateSchema = 4;
 inline constexpr std::uint32_t kDesignIrStateSchema = 5;
 inline constexpr std::uint32_t kCompiledHirBundleSchema = 3;
 inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 14;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 7;
 inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 3;
+inline constexpr std::uint32_t kSystemVerilogClassSpecializationStateSchema = 1;
 inline constexpr std::uint32_t kVhdlHirStateSchema = 8;
 // A UVM testbench's compiled HIR decodes to about 270 MiB.
 inline constexpr std::size_t kCompiledHirDecodeBudgetBytes
@@ -95,6 +98,11 @@ deserialize_runtime_state(
 [[nodiscard]] std::optional<std::string> serialize_compiled_hir_bundle(
     const semantic::CompiledDesign& design,
     diagnostic::Engine& diagnostics);
+/// Publish-side encode of the design this process just elaborated: the
+/// structural HIR checks run only when FSIM_VERIFY_ARTIFACT=1.
+[[nodiscard]] std::optional<std::string> serialize_elaborated_compiled_hir_bundle(
+    const semantic::CompiledDesign& design,
+    diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<semantic::CompiledDesign>
 deserialize_compiled_hir_bundle(
     std::string_view bytes,
@@ -152,6 +160,18 @@ serialize_systemverilog_uvm_state(
     diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<runtime::SystemVerilogUvmCheckpointArtifact>
 deserialize_systemverilog_uvm_state(
+    std::string_view bytes,
+    std::string source_name,
+    diagnostic::Engine& diagnostics);
+
+/// The compiled class specializations a design was elaborated with, so a
+/// simulate of the artifact need not re-run specialize_classes.
+[[nodiscard]] std::optional<std::string>
+serialize_systemverilog_class_specializations(
+    std::span<const semantic::sv::ClassSpecialization> specializations,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<std::vector<semantic::sv::ClassSpecialization>>
+deserialize_systemverilog_class_specializations(
     std::string_view bytes,
     std::string source_name,
     diagnostic::Engine& diagnostics);

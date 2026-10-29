@@ -356,8 +356,10 @@ public:
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] ModelRecords records() const;
     [[nodiscard]] ModelRecords take_records() && noexcept;
+    /// `validate` false skips valid() for records a checksummed artifact
+    /// already vouches for.
     [[nodiscard]] static std::optional<Model> from_records(
-        ModelRecords records);
+        ModelRecords records, bool validate = true);
 
     [[nodiscard]] SourceFileId intern_source_file(
         std::string physical_name,

@@ -811,7 +811,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     std::vector<std::uint32_t> template_of_unit(units.size(), no_slot);
     bool restored = false;
     if (restored_native_ && restored_native_->starts_with(native_magic)) {
-        BodyReader reader { std::string_view { *restored_native_ }.substr(
+        BodyReader reader { restored_native_->substr(
             native_magic.size()) };
         std::uint64_t template_count { };
         std::uint64_t unit_count { };

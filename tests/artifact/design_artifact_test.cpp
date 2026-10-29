@@ -74,7 +74,7 @@ void make_tree_writable(const std::filesystem::path& root) {
 }  // namespace
 
 int main() {
-    static_assert(fsim::artifact::kDesignFormatVersion == 14U);
+    static_assert(fsim::artifact::kDesignFormatVersion == 15U);
     static_assert(fsim::runtime_abi_version == 1U);
     std::string trace_source(257U, '0');
     constexpr char trace_symbols[] = { '0', '1', 'X', 'Z' };
@@ -646,7 +646,7 @@ int main() {
                                                   const auto& diagnostics,
                                                   const std::string& found) {
       const auto expected = "unsupported .fsimdesign identity: found " + found
-          + "; required format 14 and runtime ABI 1; regenerate .fsimdesign "
+          + "; required format 15 and runtime ABI 1; regenerate .fsimdesign "
             "with this fsim build";
       return std::ranges::any_of(
           diagnostics.diagnostics(), [&](const auto& diagnostic) {
@@ -656,7 +656,7 @@ int main() {
   };
 
   for (const auto stale_format :
-      { 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U }) {
+      { 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U, 14U }) {
       auto stale_header = encoded.substr(0, 16U);
       store_u32(stale_header, 8U, stale_format);
       fsim::diagnostic::Engine stale_format_diagnostics;
@@ -683,7 +683,7 @@ int main() {
   assert(!fsim::artifact::deserialize_design_metadata(
       future_header, "future-format-design", future_header_diagnostics));
   assert(has_design_identity_diagnostic(
-      future_header_diagnostics, "format 15 and runtime ABI 1"));
+      future_header_diagnostics, "format 16 and runtime ABI 1"));
 
   auto corrupt_magic = encoded;
   corrupt_magic[0] = 'X';
@@ -713,7 +713,7 @@ int main() {
       incompatible_runtime, "incompatible-runtime-abi",
       incompatible_runtime_diagnostics));
   assert(has_design_identity_diagnostic(
-      incompatible_runtime_diagnostics, "format 14 and runtime ABI 2"));
+      incompatible_runtime_diagnostics, "format 15 and runtime ABI 2"));
 
   auto oversized_root = encoded;
   store_u64(oversized_root, 16U, std::numeric_limits<std::uint64_t>::max());
@@ -782,7 +782,7 @@ int main() {
       stale_publication_directory, stale_publication_metadata, payloads,
       stale_publication_diagnostics));
   assert(has_design_identity_diagnostic(
-      stale_publication_diagnostics, "format 13 and runtime ABI 1"));
+      stale_publication_diagnostics, "format 14 and runtime ABI 1"));
   assert(!std::filesystem::exists(stale_publication_directory));
   fsim::diagnostic::Engine publish_diagnostics;
   assert(fsim::artifact::publish_design(directory, metadata, payloads,

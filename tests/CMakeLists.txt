@@ -4170,6 +4170,16 @@ if(FSIM_WITH_LLVM)
   set_tests_properties(
     fsim.application.static-kernel-vhdl
     PROPERTIES LABELS "fast;application;vhdl;static-kernel;llvm")
+  # The same fixture with every wide register outside the register file's
+  # chunks: dynamic part inserts into wide Logic9 registers take the
+  # generic tier's in-place path (StaticKernel::wide_part_insert).
+  add_test(
+    NAME fsim.application.static-kernel-vhdl-generic-wide
+    COMMAND ${CMAKE_COMMAND} -E env FSIM_KERNEL_WIDE_MASK=0
+      $<TARGET_FILE:fsim_application_static_kernel_vhdl_tests>)
+  set_tests_properties(
+    fsim.application.static-kernel-vhdl-generic-wide
+    PROPERTIES LABELS "fast;application;vhdl;static-kernel;llvm")
 
   add_executable(fsim_application_static_kernel_behavioral_tests
     app/static_kernel_behavioral_test.cpp)

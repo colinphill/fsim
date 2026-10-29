@@ -86,7 +86,7 @@ function(fsim_require_design_library_tokens path)
 endfunction()
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_HEADER}"
-  "kDesignFormatVersion = 14"
+  "kDesignFormatVersion = 15"
   "kDesignMetadataFilename = \"fsim-design.bin\""
   "std::string scv_compatibility"
   "Producer paths are deliberately")
@@ -145,7 +145,7 @@ fsim_require_design_library_tokens("${FSIM_LIBRARY_ADMISSION}"
   "library::load_metadata(")
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_TEST}"
-  "kDesignFormatVersion == 14U"
+  "kDesignFormatVersion == 15U"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
   "runtime_abi_version == 1U"

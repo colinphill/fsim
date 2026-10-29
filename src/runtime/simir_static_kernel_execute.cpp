@@ -650,10 +650,13 @@ bool Interpreter::Impl::StaticKernel::wide_part_insert(CompiledBody& body,
     }
     const auto write = kw::dynamic_part_write(registers[source],
         registers[index], insert.selection);
+    // The bound is the target value's own width: a register without a fixed
+    // width (polymorphic) has none in register_widths.
+    const auto target_width = body.wide_registers[target].width();
     if (!write.valid
         || (write.write
-            && (write.write->offset > widths[target]
-                || write.write->width > widths[target] - write.write->offset))) {
+            && (write.write->offset > target_width
+                || write.write->width > target_width - write.write->offset))) {
         return false;
     }
     if (destination != target) {

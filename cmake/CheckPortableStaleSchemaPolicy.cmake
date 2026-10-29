@@ -184,7 +184,7 @@ fsim_require_portable_policy_tokens("${FSIM_OBJECT_TEST}"
   "future-compiled-hir-schema"
   "stale-publication")
 fsim_require_portable_policy_tokens("${FSIM_DESIGN_TEST}"
-  "{ 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U }"
+  "{ 0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U, 14U }"
   "future_header"
   "stale-publication")
 fsim_require_portable_policy_tokens("${FSIM_LIBRARY_TEST}"

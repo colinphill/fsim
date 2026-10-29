@@ -215,11 +215,11 @@ struct StaticKernelRuntimeSpec {
     /// Compiled member bodies from an earlier run of the same build
     /// (static_kernel_compiler_identity), restored instead of compiling, and
     /// where this run records its own; the bytes are the kernel's own.
-    std::shared_ptr<const std::string> compiled_bodies;
+    std::shared_ptr<const std::string_view> compiled_bodies;
     std::shared_ptr<std::string> record_compiled_bodies;
     /// Canonical templates and their units' bindings, likewise
     /// (static_kernel_canonical_identity).
-    std::shared_ptr<const std::string> native_image;
+    std::shared_ptr<const std::string_view> native_image;
     std::shared_ptr<std::string> record_native_image;
 };
 

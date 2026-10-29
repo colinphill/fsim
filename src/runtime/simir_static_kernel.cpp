@@ -1369,6 +1369,9 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         restored_native_ = std::move(spec.native_image);
         recorded_native_ = std::move(spec.record_native_image);
         compile_members();
+        // Only compile_members reads these; the images are payload-sized.
+        restored_specializations_.reset();
+        restored_bodies_.reset();
         stage("compile");
         // VHDL members defer their writes and are not partitioned.
         if ((!vhdl_ || mixed_)
@@ -1380,6 +1383,8 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             codegen_ = spec.codegen;
             build_native(*codegen_);
         }
+        // Only build_native reads the restored image.
+        restored_native_.reset();
         stage("native");
     }
     // FSIM_STATIC_KERNEL_DISPATCH_GROUPS=0 schedules every sequential member

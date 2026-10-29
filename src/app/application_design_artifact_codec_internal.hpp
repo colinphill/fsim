@@ -265,20 +265,41 @@ namespace codec_detail {
         std::span<const semantic::vhdl::Instance> instances;
     };
 
-    struct CompiledHirBundleState {
-        std::string semantic_state;
-        std::string systemverilog_hir_state;
-        std::string vhdl_hir_state;
-        std::vector<semantic::CompiledDependency> dependencies;
-        std::vector<semantic::CompiledReference> references;
+    // Serialization-only view of a Model's records; the fields mirror
+    // semantic::ModelRecords one for one, so the wire bytes are identical to
+    // serializing a ModelRecords copy.
+    struct ModelRecordsView {
+        std::span<const semantic::SourceFile> source_files;
+        std::span<const semantic::Expansion> expansions;
+        std::span<const semantic::SourceSpan> source_spans;
+        std::span<const semantic::Origin> origins;
+        std::span<const semantic::Scope> scopes;
+        std::span<const semantic::Unit> units;
+        std::span<const semantic::Type> types;
+        std::span<const semantic::Value> values;
+        std::span<const semantic::Instance> instances;
+        std::span<const semantic::Declaration> declarations;
+        std::span<const semantic::ExpressionIdentity> expression_identities;
+        std::span<const semantic::StatementIdentity> statement_identities;
+        std::span<const semantic::ProcessIdentity> process_identities;
     };
 
-    struct CompiledHirBundleView {
-        std::string semantic_state;
-        std::string systemverilog_hir_state;
-        std::string vhdl_hir_state;
-        std::span<const semantic::CompiledDependency> dependencies;
-        std::span<const semantic::CompiledReference> references;
+    [[nodiscard]] inline ModelRecordsView model_records_view(
+        const semantic::Model& model) noexcept
+    {
+        return {
+            model.source_files(), model.expansions(), model.source_spans(),
+            model.origins(), model.scopes(), model.units(), model.types(),
+            model.values(), model.instances(), model.declarations(),
+            model.expression_identities(), model.statement_identities(),
+            model.process_identities()
+        };
+    }
+
+    // The decoded tail of a compiled-HIR bundle (after its three states).
+    struct CompiledHirBundleDecoded {
+        std::vector<semantic::CompiledDependency> dependencies;
+        std::vector<semantic::CompiledReference> references;
     };
 
     template <typename T>
@@ -1352,6 +1373,33 @@ namespace codec_detail {
             raw_stream(bytes);
         }
 
+        // A length-prefixed nested payload (a string field on the wire)
+        // written in place: begin reserves the u64 length, end patches it.
+        // In-memory output only.
+        [[nodiscard]] std::size_t begin_length_prefixed()
+        {
+            const auto at = memory_size_;
+            u64(0U);
+            return at;
+        }
+
+        void end_length_prefixed(const std::size_t at)
+        {
+            if (output_ != nullptr || checksum_ != nullptr
+                || at + sizeof(std::uint64_t) > memory_size_) {
+                if (failure_.empty()) {
+                    failure_ = "design state nested payload is not in memory";
+                }
+                return;
+            }
+            const std::uint64_t size
+                = memory_size_ - at - sizeof(std::uint64_t);
+            for (unsigned shift = 0; shift < 64; shift += 8) {
+                memory_[at + shift / 8U]
+                    = static_cast<char>((size >> shift) & 0xffU);
+            }
+        }
+
         void raw_stream(std::string_view bytes)
         {
             while (!bytes.empty() && failure_.empty()) {
@@ -1483,8 +1531,25 @@ namespace codec_detail {
             } else if constexpr (std::same_as<Value, std::filesystem::path>) {
                 write(value.generic_string());
             } else if constexpr (std::same_as<Value, runtime::PackedLogic4>) {
-                write(value.is_logic9());
-                write(value.to_msb_string());
+                // Width plus the raw bit planes: two for four-state values,
+                // four for logic9. Unused high bits are rebuilt as zero.
+                const bool logic9 = value.is_logic9();
+                write(logic9);
+                u64(value.width());
+                if (logic9) {
+                    for (std::size_t plane = 0; plane < 4U; ++plane) {
+                        for (const auto word : value.logic9_plane_words(plane)) {
+                            u64(word);
+                        }
+                    }
+                } else {
+                    for (const auto word : value.aval_words()) {
+                        u64(word);
+                    }
+                    for (const auto word : value.bval_words()) {
+                        u64(word);
+                    }
+                }
             } else if constexpr (std::same_as<Value, runtime::simir::Operation>) {
                 write_operation(*this, value);
             } else if constexpr (
@@ -1979,6 +2044,22 @@ namespace codec_detail {
             return true;
         }
 
+        // Reads a length-prefixed string field as a view into the input
+        // buffer instead of copying it. In-memory input only; charges the
+        // decode budget exactly as reading a std::string does.
+        bool string_slice(std::string_view& slice)
+        {
+            std::uint64_t size { };
+            if (input_ != nullptr || !u64(size) || size > remaining()
+                || !consume_allocation(size, sizeof(char))) {
+                return fail("design state string exceeds the payload");
+            }
+            slice = bytes_.substr(position_, static_cast<std::size_t>(size));
+            position_ += static_cast<std::size_t>(size);
+            remaining_ -= size;
+            return true;
+        }
+
         template <std::size_t Index = 0, typename... Values>
         bool read_variant(
             std::variant<Values...>& value,
@@ -2133,23 +2214,56 @@ namespace codec_detail {
                     return true;
                 } else if constexpr (std::same_as<Value, runtime::PackedLogic4>) {
                     bool logic9 { };
-                    std::string spelling;
-                    if (!read(logic9) || !read(spelling)) {
+                    std::uint64_t width { };
+                    if (!read(logic9) || !u64(width)) {
                         return false;
                     }
-                    constexpr std::size_t bits_per_word
+                    constexpr std::uint64_t bits_per_word
                         = std::numeric_limits<std::uint64_t>::digits;
-                    const auto words = spelling.size() / bits_per_word
-                        + (spelling.size() % bits_per_word != 0U ? 1U : 0U);
-                    if (spelling.size() > bits_per_word
+                    if (width == 0U) {
+                        value = logic9
+                            ? runtime::PackedLogic4::from_logic9_msb_string({ })
+                            : runtime::PackedLogic4::from_msb_string({ });
+                        return true;
+                    }
+                    const std::uint64_t words = width / bits_per_word
+                        + (width % bits_per_word != 0U ? 1U : 0U);
+                    const std::uint64_t planes = logic9 ? 4U : 2U;
+                    // Check the bytes exist before any width-sized allocation.
+                    if (width > static_cast<std::uint64_t>(remaining()) * 8U
+                        || words > static_cast<std::uint64_t>(remaining()) / 8U
+                            / planes) {
+                        return fail("design state vector exceeds the payload");
+                    }
+                    if (words > 1U
                         && !consume_allocation(
-                            words, (logic9 ? 4U : 2U)
-                                * sizeof(std::uint64_t))) {
+                            words, planes * sizeof(std::uint64_t))) {
                         return false;
                     }
+                    std::array<std::uint64_t, 4U> narrow { };
+                    std::vector<std::uint64_t> wide;
+                    std::uint64_t* storage = narrow.data();
+                    if (words > 1U) {
+                        wide.resize(static_cast<std::size_t>(words * planes));
+                        storage = wide.data();
+                    }
+                    for (std::uint64_t index = 0; index < words * planes; ++index) {
+                        if (!u64(storage[index])) {
+                            return false;
+                        }
+                    }
+                    const auto plane = [&](const std::uint64_t index) {
+                        return std::span<const std::uint64_t> {
+                            storage + index * words,
+                            static_cast<std::size_t>(words) };
+                    };
                     value = logic9
-                        ? runtime::PackedLogic4::from_logic9_msb_string(spelling)
-                        : runtime::PackedLogic4::from_msb_string(spelling);
+                        ? runtime::PackedLogic4::from_logic9_word_planes(
+                            static_cast<std::size_t>(width), plane(0U),
+                            plane(1U), plane(2U), plane(3U))
+                        : runtime::PackedLogic4::from_word_planes(
+                            static_cast<std::size_t>(width), plane(0U),
+                            plane(1U));
                     return true;
                 } else if constexpr (std::same_as<Value, runtime::simir::Operation>) {
                     return read_operation(*this, value);
@@ -2983,6 +3097,9 @@ namespace codec_detail {
         std::string source_name,
         diagnostic::Engine& diagnostics,
         DecodeBudget& budget);
+    bool portable_semantics(
+        std::span<const semantic::SourceFile> source_files,
+        diagnostic::Engine& diagnostics);
     /// Serialize after the enclosing CompiledDesign has validated its model.
     std::optional<std::string> serialize_validated_semantic_state(
         const semantic::Model& model,
@@ -3000,6 +3117,15 @@ namespace codec_detail {
         const semantic::Model& semantics,
         diagnostic::Engine& diagnostics,
         DecodeBudget& budget);
+    /// One-pass FSIMCHIR writer shared by the publish and cache paths.
+    std::optional<std::string> serialize_compiled_hir_bundle_parts(
+        const semantic::Model& semantics,
+        const SystemVerilogConstraintHirView& systemverilog,
+        const VhdlHirView& vhdl,
+        std::span<const semantic::CompiledDependency> dependencies,
+        std::span<const semantic::CompiledReference> references,
+        diagnostic::Engine& diagnostics,
+        bool check_states = true);
     std::optional<semantic::CompiledDesign>
     deserialize_compiled_hir_bundle_with_budget(
         std::string_view bytes,

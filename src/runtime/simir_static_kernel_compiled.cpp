@@ -36,7 +36,7 @@ namespace kw = kernel_word;
 
 namespace {
 
-constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v4" };
+constexpr std::string_view bodies_magic { "fsim-static-kernel-bodies-v5" };
 
 } // namespace
 
@@ -75,7 +75,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
     };
     std::vector<RestoredBody> restored_bodies;
     if (restored_bodies_ && restored_bodies_->starts_with(bodies_magic)) {
-        BodyReader reader { std::string_view { *restored_bodies_ }.substr(
+        BodyReader reader { restored_bodies_->substr(
             bodies_magic.size()) };
         std::vector<RestoredBody> entries(members_.size());
         std::uint64_t count { };

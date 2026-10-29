@@ -12,6 +12,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <memory>
+#include <utility>
 #include <limits>
 #include <mutex>
 #include <new>
@@ -87,6 +89,38 @@ std::optional<std::vector<std::byte>> read_all(
         return std::nullopt;
     }
     return result;
+}
+
+/// read_all into uninitialized storage (no zero fill of the payload).
+std::optional<std::pair<std::unique_ptr<char[]>, std::size_t>> read_all_uninitialized(
+    const std::filesystem::path& path,
+    std::error_code& error,
+    const std::uintmax_t maximum_size) {
+    error.clear();
+    const auto size = support::native_fs::file_size(path, error);
+    if (error) {
+        return std::nullopt;
+    }
+    if (size > maximum_size
+        || size > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max())
+        || size > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
+        error = std::make_error_code(std::errc::file_too_large);
+        return std::nullopt;
+    }
+
+    auto stream = support::native_fs::open_ifstream(path, std::ios::binary);
+    if (!stream) {
+        error = std::make_error_code(std::errc::io_error);
+        return std::nullopt;
+    }
+    const auto count = static_cast<std::size_t>(size);
+    auto buffer = std::make_unique_for_overwrite<char[]>(count);
+    stream.read(buffer.get(), static_cast<std::streamsize>(count));
+    if (!stream && count != 0U) {
+        error = std::make_error_code(std::errc::io_error);
+        return std::nullopt;
+    }
+    return std::pair{std::move(buffer), count};
 }
 
 [[nodiscard]] bool cache_entry_filename(
@@ -524,19 +558,28 @@ std::filesystem::path ObjectCache::path_for(const std::string_view key) const {
 
 std::optional<std::vector<std::byte>> ObjectCache::load(
     const std::string_view key, std::error_code& error) const {
+    auto payload = load_payload(key, error);
+    if (!payload) {
+        return std::nullopt;
+    }
+    const auto bytes = payload->bytes();
+    return std::vector<std::byte>{bytes.begin(), bytes.end()};
+}
+
+std::optional<ObjectCachePayload> ObjectCache::load_payload(
+    const std::string_view key, std::error_code& error) const {
     error.clear();
     const auto path = path_for(key);
     if (path.empty()) {
         error = std::make_error_code(std::errc::invalid_argument);
         return std::nullopt;
     }
-    auto encoded = read_all(path, error, kMaximumCacheEntryBytes);
+    auto encoded = read_all_uninitialized(path, error, kMaximumCacheEntryBytes);
     if (!encoded) {
         return std::nullopt;
     }
 
-    const std::string_view raw{
-        reinterpret_cast<const char*>(encoded->data()), encoded->size()};
+    const std::string_view raw{encoded->first.get(), encoded->second};
     const auto header_size = static_cast<std::size_t>(kCacheEnvelopeBytes);
     if (raw.size() < header_size || !raw.starts_with(kMagic)
         || raw[header_size - 1U] != '\n') {
@@ -555,9 +598,19 @@ std::optional<std::vector<std::byte>> ObjectCache::load(
     std::error_code ignored;
     support::native_fs::last_write_time(
         path, std::filesystem::file_time_type::clock::now(), ignored);
-    encoded->erase(encoded->begin(),
-        encoded->begin() + static_cast<std::ptrdiff_t>(header_size));
-    return encoded;
+    return ObjectCachePayload{
+        std::move(encoded->first), header_size, encoded->second - header_size};
+}
+
+std::shared_ptr<const std::string_view> ObjectCachePayload::share() && {
+    struct Owner {
+        std::unique_ptr<char[]> storage;
+        std::string_view view;
+    };
+    auto owner = std::make_shared<Owner>();
+    owner->view = text();
+    owner->storage = std::move(storage_);
+    return std::shared_ptr<const std::string_view>{owner, &owner->view};
 }
 
 bool ObjectCache::store(

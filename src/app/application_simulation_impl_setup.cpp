@@ -713,12 +713,10 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                     plan.spec->record_specializations = recorded;
                 } else {
                     std::error_code error;
-                    if (const auto bytes = specializations.cache->load(
+                    if (const auto bytes = specializations.cache->load_payload(
                             specializations.key, error)) {
                         plan.spec->specializations = restore_specializations(
-                            std::string_view { reinterpret_cast<const char*>(
-                                                   bytes->data()),
-                                bytes->size() });
+                            bytes->text());
                     }
                 }
             }
@@ -731,9 +729,8 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                     plan.spec->record_compiled_bodies = recorded_bodies;
                 } else {
                     std::error_code error;
-                    if (const auto bytes = bodies.cache->load(bodies.key, error)) {
-                        plan.spec->compiled_bodies = std::make_shared<const std::string>(
-                            reinterpret_cast<const char*>(bytes->data()), bytes->size());
+                    if (auto bytes = bodies.cache->load_payload(bodies.key, error)) {
+                        plan.spec->compiled_bodies = std::move(*bytes).share();
                     }
                 }
             }
@@ -746,10 +743,9 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                     plan.spec->record_native_image = recorded_native;
                 } else {
                     std::error_code error;
-                    if (const auto bytes = native_image.cache->load(
+                    if (auto bytes = native_image.cache->load_payload(
                             native_image.key, error)) {
-                        plan.spec->native_image = std::make_shared<const std::string>(
-                            reinterpret_cast<const char*>(bytes->data()), bytes->size());
+                        plan.spec->native_image = std::move(*bytes).share();
                     }
                 }
             }

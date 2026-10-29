@@ -1191,6 +1191,20 @@ private:
         return return_next_;
     }
 
+    /// Step code's shared exit to the runner, its position already in
+    /// `reserved` (KOp::step).
+    [[nodiscard]] llvm::BasicBlock* step_leave()
+    {
+        if (step_leave_ == nullptr) {
+            const auto saved = builder_.saveIP();
+            step_leave_ = llvm::BasicBlock::Create(context_, "leave", &function_);
+            builder_.SetInsertPoint(step_leave_);
+            builder_.CreateRet(llvm::ConstantInt::get(i32_, 3U));
+            builder_.restoreIP(saved);
+        }
+        return step_leave_;
+    }
+
     [[nodiscard]] llvm::Value* helper_symbol(const char* name,
         llvm::FunctionType* type)
     {
@@ -2721,17 +2735,27 @@ private:
             std::erase_if(successors, [&](const std::uint32_t target) {
                 return target >= size || blocks_[target] == nullptr;
             });
-            auto* leave = llvm::BasicBlock::Create(context_, "leave", &function_);
-            auto* targets = builder_.CreateSwitch(next, leave,
-                static_cast<unsigned>(successors.size()));
-            for (const auto target : successors) {
-                targets->addCase(llvm::ConstantInt::get(
-                                     llvm::cast<llvm::IntegerType>(i32_), target),
-                    blocks_[target]);
-            }
-            builder_.SetInsertPoint(leave);
+            // The position goes to `reserved` first (the runner reads it
+            // only after a return), so every step shares one leave block.
+            // Compare-and-branch per successor (at most two): fast
+            // instruction selection lowers it, where a switch terminator
+            // falls back to the selection DAG in every step's block.
             builder_.CreateStore(next, frame_field(44U));
-            builder_.CreateRet(llvm::ConstantInt::get(i32_, 3U));
+            for (std::size_t index = 0U; index < successors.size(); ++index) {
+                auto* otherwise = index + 1U == successors.size()
+                    ? step_leave()
+                    : llvm::BasicBlock::Create(context_, "next", &function_);
+                builder_.CreateCondBr(
+                    builder_.CreateICmpEQ(next,
+                        llvm::ConstantInt::get(i32_, successors[index])),
+                    blocks_[successors[index]], otherwise);
+                if (index + 1U != successors.size()) {
+                    builder_.SetInsertPoint(otherwise);
+                }
+            }
+            if (successors.empty()) {
+                builder_.CreateBr(step_leave());
+            }
             break;
         }
         case KOp::mark:
@@ -3661,6 +3685,7 @@ private:
     /// branches to (its position in `return_next_`).
     llvm::BasicBlock* return_dispatch_ { };
     llvm::PHINode* return_next_ { };
+    llvm::BasicBlock* step_leave_ { };
     std::vector<llvm::BasicBlock*> blocks_;
     std::map<std::uint32_t, Pair> cache_;
     /// Blocks of the current KIR block in which an instruction started or

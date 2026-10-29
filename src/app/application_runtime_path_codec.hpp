@@ -46,6 +46,13 @@ inline constexpr std::size_t kMaximumDecodeAllocationBytes
     const semantic::HierarchyPathTable* external_paths,
     diagnostic::Engine& diagnostics);
 
+/// Consuming overload: moves the design's runtime state out instead of
+/// copying it. The design must not be used afterwards.
+[[nodiscard]] std::optional<std::string> serialize_runtime_design_state(
+    elaboration::ElaboratedDesign&& design,
+    const semantic::HierarchyPathTable* external_paths,
+    diagnostic::Engine& diagnostics);
+
 /// Streaming counterpart of serialize_runtime_path_state().
 [[nodiscard]] bool serialize_runtime_path_state(
     const elaboration::ElaboratedDesignState& state,
