@@ -138,6 +138,31 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29: kernel image, stage 1 — persisted static-kernel state for SystemVerilog kernels (`b80af3fb`, sweeps `v4c53` and `v4c53a`)
+
+**`b80af3fb`** (plan `.local-artifacts/v4-migration/triage/kernel-image-plan-1029.md`)
+- `elaborate --aot` records the state the StaticKernel constructor builds before its native code as a fifth persisted plan slot, `image`. That state covers slots, arena, families, containers, inputs, members with their compiled bodies, levels and partitions. `simulate` restores it instead of building it.
+- On restore, the member operations are expanded again from the programs, with calls inlined as before. The native container view is rebuilt, and the region-host side effect is replayed.
+- The key is `static_kernel_image_identity`: the format, the constructor and compiler builds, and every `FSIM_KERNEL_*`/`FSIM_STATIC_KERNEL_*` setting except the run-only ones. The image also carries a digest of the specification it was made for.
+- Under `FSIM_VERIFY_ARTIFACT=1`, simulate builds the kernel fresh and requires the image it makes to equal the stored one; a mismatch raises FSIM-ART-0014.
+- Stage 1 scope: SystemVerilog kernels without hosted processes, debug points or reference-format registers. Every other kernel builds as before.
+- The constructor splits into `build_fresh` and the common remainder. The codec is `simir_static_kernel_image.cpp`, generic over `boost::pfr` aggregates on top of BodyWriter/BodyReader varints.
+- `FSIM_PROFILE_PHASES` reports `static-kernel-image record|restore=OUTCOME`. `FSIM_KERNEL_IMAGE_REQUIRED=1` (tests) turns a missed restore into an error.
+- New ctest `fsim.application.static-kernel-image`: six CLI fixtures, each simulated for a reference, then restored (with the image required), then verified.
+
+**Measurements** (original_codec simulate, CPU 9, `setarch -R`, loaded host):
+- 28.73 G → 28.30 G `instructions:u`, about −125 ms task-clock; the output is identical.
+- The image is 37.2 MB, and restoring it takes ~191 ms. About 40% of that is re-expanding operations and about 35% is decoding members.
+
+**Validation.**
+- ct4: 1089/1089 in all four variants, after adding the new files to the source-package manifest.
+- Sampled AOT caserun `kimg3`: 774/774 against `v4c52a`; 569 images recorded and 502 restored. The misses are VPI cases, whose access plan differs, and cases that only elaborate.
+- Normal sweep `v4c53` (frozen `b80af3fb`): 0 losses against `b96x1` and `v4c52`, and the table equals v4c52's.
+- AOT sweep `v4c53a` (`FSIM_SWEEP_AOT=1`) against the AOT baseline `v4c52a` (v4c52, which equals v4c52 case by case): 0 losses. 4,486 simulates restored an image.
+- Census `v4c53`: every planned case is admitted with `host=0`, with 0 hosted processes and 0 runs with interpreted>0. `kernel_deopts` (9 cases) is unchanged.
+
+**Next.** Stage 1b (owner, 2026-10-29): VHDL and mixed-language kernels. It is measured first on mixed_codec, where about 114 ms of the setup comes before the capture point.
+
 ### 2026-10-29: simulate setup and notify trims for the D6 margin (`69edb8aa`, sweep `v4c52`)
 
 original_codec has the thinnest D6 margin: its simulate phase was 3.12× xsim's (~7.27 s). Profile of v4c51's simulate (2.33 s, 28.83 G `instructions:u`, CPU 9, `setarch -R`):
