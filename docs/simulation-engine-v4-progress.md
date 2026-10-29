@@ -138,6 +138,61 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — commit programs, 'DRIVING, implicit signals, std.env directories and reflection (`e0a34772`, sweep `v4c44`)
+
+**`e0a34772`** (five changesets)
+- **Commit programs as resolver members** (IEEE 1076-2019 14.7.3).
+  - Every resolution program, its variants, and every port-conversion driver program run as kernel resolver members through `StaticKernel::run_resolver`. This includes the formals' driving-value mirrors.
+  - Each pass writes the mirrors the program reads from the host's logical values and restores them afterwards.
+  - `run_vhdl_conversion_drivers` evaluates a member's conversion through the kernel.
+  - A live wiring or conversion program that the kernel drives is not emitted as a member.
+  - The census no longer counts halted, non-initialized stubs as hosted.
+- **'DRIVING and 'DRIVING_VALUE** (16.2.4).
+  - `Impl::signal_driving` and `signal_driving_value` are shared by the interpreter and the kernel.
+  - The prefix stays a host signal (`static_kernel_host_signal`).
+- **Implicit signals** (S'DELAYED, S'S| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |, S'QUIET, S'TRANSACTION; 16.2.4).
+  - Their drivers are VHDL behavioral members. They run as the host ran them, in the delta after their prefix changes and after the VHDL processes.
+  - The plan's `start_waiting` arms such a member on its static sensitivity before time zero without running it, as the reference arms a non-initialized process. The plan format is now `fsim-static-kernel-plan-v8`.
+  - A transaction-edge wait keeps its prefix a host signal. The kernel's host process is sensitive to the prefix's transactions, and a scan wakes the waiters when the host's transaction stamp moves (`wake_transaction_waiters`), even when the value did not change.
+  - The planner reads that sensitivity from the member specifications. ct4 `fsim.application.vhdl_projected` caught a version that read it from the candidates after they had been moved, so the host never woke the kernel for a transaction that left the value unchanged.
+  - The driver's own signal stays a host signal: S'TRANSACTION toggles it from its SystemVerilog domain, as the reference does.
+- **std.env directories, call paths and reflection** (16.5.6, 16.6).
+  - `run_vhdl_environment_directory`, `run_vhdl_environment_get_call_path`, `run_vhdl_environment_call_path` and `run_vhdl_reflection_api` are shared over `VhdlApiStorage`, which gained container registers, the running program and its call stack.
+  - Their container registers are reference-format in kernel members (`static_kernel_vhdl_api_container_operation`).
+- `FSIM_KERNEL_TRACE` shows the behavioral members that start and those armed before time zero.
+
+**Validation.**
+- Caseruns had 0 losses:
+  - c51a and c52a (190 VHDL cases with hosted processes);
+  - c53a and c54c (190; the implicit-driver cases are now fully members);
+  - c55a (1,267 SV cases);
+  - c56a and c56b (320, with every vhdl-compliance case and nvc's std.env, reflection, access and protected cases).
+- ct4: 1087/1087 in all four variants.
+- Sweep `v4c44` (frozen `e0a34772`) has 0 losses vs `b96x1`:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Hosted processes in the sweep: 1,222 (v4c43 1,278). The VHDL suites are down to 9 (nvc), from 56.
+
+**Next.**
+- Switch networks: bidirectional descriptors with no sensitivity (commit_program_switch, 440), and MOS gates as members (behavioral_switch, 212). Both are built and have passed caseruns with 0 losses.
+- Classes: constructor-less allocations and property writes touch only the heap and `$sv_class_heap_change` (opaque_access:ClassAllocate, 636).
+- Process handles, mailboxes, semaphores and dynamic events.
+
 ### 2026-10-28: hosted kinds into the kernel — resolvers, proxy waits, host-access arrays, nonblocking host writes, disconnections (`a1783bcd`, sweep `v4c43`)
 
 **`a1783bcd`** (five changesets)
