@@ -546,6 +546,8 @@ struct TclConsole::State {
         ic_style_def("tcl-comment", "color=gray");
         ic_style_def("tcl-diagnostic", "color=red");
         ic_set_prompt_marker("> ", "... ");
+        // Show the completion preview with the keystroke's own redraw.
+        const long previous_hint_delay = ic_set_hint_delay(0);
 
         std::error_code history_error;
         if (options.persist_history && options.history_limit > 0U) {
@@ -585,6 +587,7 @@ struct TclConsole::State {
         if (old_error_buffer != nullptr)
             options.error->rdbuf(old_error_buffer);
         finish_editor_read();
+        ic_set_hint_delay(previous_hint_delay);
         ic_enable_color(previous_color);
 
         std::string text;

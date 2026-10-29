@@ -42,7 +42,10 @@ The upstream snapshot is patched to meet the fsim Tcl console contract:
   `src/editline_completion.c` carry contextual hints, reject stale completion
   sets immediately before use, poll the output/interrupt callback while the
   completion menu is open, and redraw the saved edit buffer and cursor after
-  output. Output control bytes are escaped before terminal display.
+  output. Output control bytes are escaped before terminal display. While
+  the output callback is polled, a pending hint is drawn once, after the hint
+  delay, rather than redrawn on every poll; with no delay it is drawn only
+  with the edit. The Tcl console uses no delay.
 - `src/editline_completion.c` lays out multi-line completion help (a usage
   line, then a description): such menus use the list layout, continuation
   lines are indented under the help column, and a grid cell would keep only

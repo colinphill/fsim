@@ -1067,7 +1067,9 @@ static char* edit_line( ic_env_t* env, const char* prompt_text,
 
   // process keys
   code_t c;          // current key code
-  while(true) {    
+  long idle_waited = 0;     // time idle since the last key
+  bool hint_shown = false;  // the pending hint has been displayed
+  while(true) {
     // read a character
     term_flush(env->term);
     if (eb.idle != NULL) {
@@ -1076,7 +1078,15 @@ static char* edit_line( ic_env_t* env, const char* prompt_text,
       if (interval > 1000) interval = 1000;
       if (!tty_read_timeout(env->tty, interval, &c)) {
         if (tty_term_resize_event(env->tty)) edit_resize(env, &eb);
-        if (sbuf_len(eb.hint) > 0 || sbuf_len(eb.extra) > 0) edit_refresh(env, &eb);
+        // display a pending hint once its delay has passed; redrawing it on
+        // every idle tick makes the cursor flicker. Without a delay the hint
+        // was drawn with the edit itself.
+        idle_waited += interval;
+        if (!hint_shown && env->hint_delay > 0 && idle_waited >= env->hint_delay &&
+            (sbuf_len(eb.hint) > 0 || sbuf_len(eb.extra) > 0)) {
+          edit_refresh(env, &eb);
+          hint_shown = true;
+        }
         struct edit_output_context_s output_context = { env, &eb, false };
         const bool interrupted = eb.idle(eb.idle_arg, &edit_output_emit, &output_context);
         if (output_context.emitted) {
@@ -1092,6 +1102,8 @@ static char* edit_line( ic_env_t* env, const char* prompt_text,
         }
       }
       else {
+        idle_waited = 0;
+        hint_shown = false;
         sbuf_clear(eb.hint);
         sbuf_clear(eb.hint_help);
       }
