@@ -138,6 +138,62 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29: hosted kinds into the kernel — process handles, mailboxes, semaphores, dynamic events (`ef472b4f`, sweep `v4c46`)
+
+**`ef472b4f`** (five changesets)
+- **Stochastic analysis queues** (IEEE 1800-2023 20.16).
+  - Run through `Impl::run_stochastic_queue` over `VhdlApiStorage`, at the kernel's time.
+- **Process handles of kernel threads** (9.7, 18.13.3–18.13.5).
+  - Covers `process::self`, status, `await`, `kill`, `get_randstate`/`set_randstate` and `srandom`.
+  - A handle carries the reference's generation and process number.
+  - The thread's `ProcessRecord` keeps its status and random state after it ends, and wakes the threads that await it.
+  - The planner's `process_handle` group makes every process that uses handles a member together, or keeps them all on the host.
+- **Mailboxes, semaphores and dynamic events** (15.3–15.5).
+  - One implementation, `Impl::run_synchronization`, over a `SynchronizationClient` (a reference process or a kernel thread) and the host's object tables.
+  - A waiter that is a kernel thread is named by its process order.
+  - The kernel writes a delivered mailbox value when the thread resumes, and readies the thread at once in its region.
+  - The planner's `synchronization` group keeps the users together.
+- **suspend and resume** (9.7).
+  - A wake that reaches a suspended thread is held until resume.
+  - **Reference fix:** the reference's `resume` requeued its caller even though the caller continues at once (an immediate boundary). The stale queue entry ended the caller's next wait early, so a `#2` after `p.resume()` took no time. Now `resume` does not requeue.
+- **Nonblocking `->>`** (15.5.1).
+  - A trigger from a kernel thread runs in the host's NBA region, and the kernel's NBA commit joins that region after it.
+  - The kernel does not time-warp past it.
+
+**Validation.**
+- Caseruns had 0 losses:
+  - c63a (122 mailbox, semaphore, event and process cases); the hosted rows left are processes that the group rule keeps with another hosted kind;
+  - c64a (1,186 class, switch, process and synchronization cases).
+- ct4: 1087/1087 in all four variants.
+- Sweep `v4c46` (frozen `ef472b4f`) has 0 losses vs `b96x1`.
+  - The memory reaper stopped it during sv-tests; sv-tests through vhdl-compliance were rerun.
+  - ivtest `pow_reg_signed` timed out under that load. Run alone on the same archive it passes in 38 s (b96x1 took 49 s).
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Hosted processes in the sweep: 161 (v4c45 243).
+
+**Next** (built, uncommitted).
+- **`Yield`** (the UVM run's wait for its run phase) in the kernel: resumes in the next delta.
+- **Host deposits** (`Interpreter::deposit_signal`, generic origin: the class services' `$sv_class_heap_change`, VPI).
+  - They reach kernel readers from the next delta, as the host wakes its processes.
+  - The UVM `run_test` process is now a member, and its `$finish` lands in the reference's delta.
+- **Region members** (assertion actions) may write elements of a private array, meaning a register that no `ReadContainerObject` binds.
+- **Remaining reasons:**
+  - UVM `ClassAllocate` rows: these were the `Yield` and `ContainerWrite` blockers;
+  - port-segment forces;
+  - `Fork` with an isolated register frame;
+  - nonblocking object and string writes;
+  - `RuntimeStringFormat`, `EventAlias`, coverage and `SystemCommand`;
+  - a few VHDL container shapes.
+
 ### 2026-10-28: hosted kinds into the kernel — switch networks, MOS gates, class services, std::randomize (`de24d715`, sweep `v4c45`)
 
 **`de24d715`** (five changesets)
