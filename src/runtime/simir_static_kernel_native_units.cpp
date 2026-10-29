@@ -1598,7 +1598,10 @@ NodeLevels static_kernel_detail::condensed_levels(
     std::vector<std::uint8_t> stacked(node_total, 0U);
     std::vector<std::uint32_t> stack;
     std::vector<std::uint32_t> component_of(node_total, 0U);
-    std::vector<std::vector<std::uint32_t>> components;
+    // Components laid end to end: component c holds
+    // flat[start[c], start[c + 1]), each range sorted.
+    std::vector<std::uint32_t> flat;
+    std::vector<std::size_t> start;
     std::uint32_t counter = 0U;
     struct Frame {
         std::uint32_t node;
@@ -1629,19 +1632,20 @@ NodeLevels static_kernel_detail::condensed_levels(
                 continue;
             }
             if (low[node] == order[node]) {
-                const auto component = static_cast<std::uint32_t>(components.size());
-                auto& members = components.emplace_back();
+                const auto component = static_cast<std::uint32_t>(start.size());
+                const auto begin = flat.size();
+                start.push_back(begin);
                 for (;;) {
                     const auto top = stack.back();
                     stack.pop_back();
                     stacked[top] = 0U;
                     component_of[top] = component;
-                    members.push_back(top);
+                    flat.push_back(top);
                     if (top == node) {
                         break;
                     }
                 }
-                std::ranges::sort(members);
+                std::sort(flat.begin() + static_cast<std::ptrdiff_t>(begin), flat.end());
             }
             frames.pop_back();
             if (!frames.empty()) {
@@ -1651,9 +1655,12 @@ NodeLevels static_kernel_detail::condensed_levels(
     }
     NodeLevels result;
     result.level.assign(node_total, 0U);
-    std::vector<std::uint32_t> base(components.size(), 0U);
-    for (auto component = components.size(); component-- > 0U;) {
-        const auto& members = components[component];
+    start.push_back(flat.size());
+    const auto component_total = start.size() - 1U;
+    std::vector<std::uint32_t> base(component_total, 0U);
+    for (auto component = component_total; component-- > 0U;) {
+        const std::span<const std::uint32_t> members { flat.data() + start[component],
+            flat.data() + start[component + 1U] };
         const auto first = base[component];
         const auto span = static_cast<std::uint32_t>(members.size());
         if (span > 1U) {
@@ -1698,6 +1705,7 @@ void Interpreter::Impl::StaticKernel::build_partitions(
         std::vector<std::uint32_t> low(node_total, 0U);
         std::vector<std::uint8_t> stacked(node_total, 0U);
         std::vector<std::uint32_t> stack;
+        std::vector<std::uint32_t> component;
         std::uint32_t counter = 0U;
         struct Frame {
             std::uint32_t node;
@@ -1727,7 +1735,7 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                     continue;
                 }
                 if (low[node] == order[node]) {
-                    std::vector<std::uint32_t> component;
+                    component.clear();
                     for (;;) {
                         const auto top = stack.back();
                         stack.pop_back();

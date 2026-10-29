@@ -450,6 +450,104 @@ ElaboratedDesign::container_objects() const noexcept
     return container_object_info_;
 }
 
+namespace {
+
+template <typename Aliases, typename Index>
+std::span<const std::uint32_t> alias_positions(const Aliases& aliases,
+    Index& index, const runtime::simir::ContainerObjectId object)
+{
+    if (index.indexed > aliases.size()) {
+        index.positions.clear();
+        index.indexed = 0U;
+    }
+    for (; index.indexed < aliases.size(); ++index.indexed) {
+        index.positions[aliases[index.indexed].object].push_back(
+            static_cast<std::uint32_t>(index.indexed));
+    }
+    const auto found = index.positions.find(object);
+    if (found == index.positions.end()) {
+        return { };
+    }
+    return found->second;
+}
+
+} // namespace
+
+std::span<const std::uint32_t> ElaboratedDesign::container_alias_positions(
+    const runtime::simir::ContainerObjectId object) const
+{
+    return alias_positions(
+        container_signal_aliases_, container_alias_index_, object);
+}
+
+std::span<const std::uint32_t>
+ElaboratedDesign::container_element_alias_positions(
+    const runtime::simir::ContainerObjectId object) const
+{
+    return alias_positions(container_element_signal_aliases_,
+        container_element_alias_index_, object);
+}
+
+void ElaboratedDesign::invalidate_container_alias_indexes() noexcept
+{
+    container_alias_index_ = { };
+    container_element_alias_index_ = { };
+}
+
+std::span<const std::uint32_t> ElaboratedDesign::specialization_positions(
+    const std::string_view instance) const
+{
+    auto& index = specialization_path_index_;
+    if (index.exact_indexed > specializations_.size()) {
+        index.exact.clear();
+        index.exact_indexed = 0U;
+    }
+    for (; index.exact_indexed < specializations_.size();
+         ++index.exact_indexed) {
+        index.exact[specializations_[index.exact_indexed].instance]
+            .push_back(static_cast<std::uint32_t>(index.exact_indexed));
+    }
+    const auto found = index.exact.find(instance);
+    if (found == index.exact.end()) {
+        return { };
+    }
+    return found->second;
+}
+
+std::span<const std::uint32_t>
+ElaboratedDesign::specialization_positions_lowercase(
+    const std::string_view lowered) const
+{
+    auto& index = specialization_path_index_;
+    if (index.lowercase_indexed > specializations_.size()) {
+        index.lowercase.clear();
+        index.lowercase_indexed = 0U;
+    }
+    for (; index.lowercase_indexed < specializations_.size();
+         ++index.lowercase_indexed) {
+        std::string key = specializations_[index.lowercase_indexed].instance;
+        for (auto& character : key) {
+            if (character >= 'A' && character <= 'Z') {
+                character = static_cast<char>(character - 'A' + 'a');
+            }
+        }
+        index.lowercase[std::move(key)].push_back(
+            static_cast<std::uint32_t>(index.lowercase_indexed));
+    }
+    const auto found = index.lowercase.find(lowered);
+    if (found == index.lowercase.end()) {
+        return { };
+    }
+    return found->second;
+}
+
+const SpecializationInfo* ElaboratedDesign::find_specialization(
+    const std::string_view instance) const
+{
+    const auto positions = specialization_positions(instance);
+    return positions.empty() ? nullptr : &specializations_[positions.front()];
+}
+
 const std::vector<runtime::simir::ContainerElementSignalAlias>&
 ElaboratedDesign::container_element_signal_aliases() const noexcept
 {
@@ -2306,6 +2404,15 @@ detail::ElaboratedDesignProcessAccess::region_graph(
         rows->region_graph_key = key;
     }
     return graph;
+}
+
+void detail::ElaboratedDesignProcessAccess::drop_region_graph(
+    const ElaboratedDesign& design) noexcept
+{
+    if (const auto& rows = design.process_rows_) {
+        rows->region_graph.reset();
+        rows->region_graph_key = 0U;
+    }
 }
 
 } // namespace fsim::elaboration

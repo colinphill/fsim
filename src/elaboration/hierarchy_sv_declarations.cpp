@@ -1338,14 +1338,24 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     }
     // A variable's initializer that is not a constant runs as its
     // time-zero declaration initializer process (6.8).
+    constexpr std::string_view initializer_prefix {
+        "$declaration_initializer_"
+    };
     const bool declaration_initializer_process = declaration.initializer
         && declaration.form == Form::variable
         && std::ranges::any_of(unit.processes,
             [&](const semantic::ProcessId process_id) {
                 const auto process = compiled_->find_process(process_id);
-                return process && process->systemverilog != nullptr
-                    && process->systemverilog->name
-                    == "$declaration_initializer_" + declaration.name;
+                if (!process || process->systemverilog == nullptr) {
+                    return false;
+                }
+                const std::string_view process_name
+                    = process->systemverilog->name;
+                return process_name.size()
+                        == initializer_prefix.size() + declaration.name.size()
+                    && process_name.starts_with(initializer_prefix)
+                    && process_name.substr(initializer_prefix.size())
+                        == declaration.name;
             });
     if (compiled_systemverilog_string_declaration(
             working_specialization, declaration)) {

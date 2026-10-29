@@ -193,6 +193,10 @@ public:
     /// layout, so a loaded design builds it once.
     [[nodiscard]] static std::shared_ptr<const runtime::simir::RegionGraph>
     region_graph(const ElaboratedDesign& design);
+
+    /// Releases the cached region graph once its last consumer is done; the
+    /// next region_graph() call rebuilds the same graph.
+    static void drop_region_graph(const ElaboratedDesign& design) noexcept;
 };
 
 } // namespace fsim::elaboration::detail

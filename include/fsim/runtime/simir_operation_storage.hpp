@@ -589,6 +589,11 @@ public:
     /// Return an artifact/debugger-visible operation with all per-instance
     /// metadata and signal operands restored.
     [[nodiscard]] Operation expanded(size_type index) const;
+    /// expanded() without the copy: returns the stored operation by
+    /// reference when no instance field applies to it, otherwise fills
+    /// scratch with expanded(index) and returns scratch.
+    [[nodiscard]] const Operation& expanded_ref(
+        size_type index, Operation& scratch) const;
     [[nodiscard]] const DebugPoint& debug_point(
         size_type index, const DebugPoint& canonical) const noexcept;
     [[nodiscard]] const InternedString& debug_scope(

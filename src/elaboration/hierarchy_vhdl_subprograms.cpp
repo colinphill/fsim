@@ -181,48 +181,82 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
           };
     validate_generic_callables(entity.declarations);
     validate_generic_callables(architecture.declarations);
-    for (const auto& expression : compiled_->vhdl_hir.expressions()) {
-        using Form = semantic::vhdl::DeclarationForm;
-        if (expression.kind != semantic::vhdl::ExpressionKind::call
-            || !expression.referenced_name) {
-            continue;
+    // A call of a template that is not yet instantiated, in an expression of
+    // the entity or the architecture.
+    const auto check_template_call
+        = [&](const semantic::vhdl::Expression& expression) {
+              using Form = semantic::vhdl::DeclarationForm;
+              if (expression.kind != semantic::vhdl::ExpressionKind::call
+                  || !expression.referenced_name) {
+                  return;
+              }
+              std::vector<semantic::DeclarationId> targets;
+              if (expression.referenced_name->selected) {
+                  targets.push_back(*expression.referenced_name->selected);
+              }
+              targets.insert(targets.end(),
+                  expression.referenced_name->overloads.begin(),
+                  expression.referenced_name->overloads.end());
+              const auto is_template
+                  = [&](const semantic::DeclarationId target_id) {
+                        const auto target
+                            = specialized.find_declaration(target_id);
+                        return target && target->vhdl != nullptr
+                            && (target->vhdl->form
+                                    == Form::generic_function_template
+                                || target->vhdl->form
+                                    == Form::generic_procedure_template);
+                    };
+              // `function f is new f ...` adds an instance homograph; a call
+              // that can denote it is not a call of the template (IEEE
+              // 1076-2008 4.4, 12.3).
+              const auto template_call
+                  = std::ranges::any_of(targets, is_template)
+                  && std::ranges::all_of(targets, is_template);
+              if (!template_call) {
+                  return;
+              }
+              append_diagnostic(
+                  "FSIM-ELAB-VHGSUB-006",
+                  "generic subprogram template is called before being "
+                  "instantiated",
+                  expression.source);
+              generic_callables_valid = false;
+          };
+    const auto& all_expressions = compiled_->vhdl_hir.expressions();
+    const auto* entity_items = compiled_->vhdl_unit_items(entity.id);
+    const auto* architecture_items
+        = compiled_->vhdl_unit_items(architecture.id);
+    if (entity_items != nullptr && architecture_items != nullptr
+        && entity.id != architecture.id) {
+        // The two units' expression positions, merged back into HIR order.
+        const auto& left = entity_items->expressions;
+        const auto& right = architecture_items->expressions;
+        std::size_t left_index { };
+        std::size_t right_index { };
+        while (left_index < left.size() || right_index < right.size()) {
+            const auto take_left = right_index == right.size()
+                || (left_index < left.size()
+                    && left[left_index] < right[right_index]);
+            check_template_call(all_expressions[take_left
+                    ? left[left_index++]
+                    : right[right_index++]]);
         }
-        std::vector<semantic::DeclarationId> targets;
-        if (expression.referenced_name->selected) {
-            targets.push_back(*expression.referenced_name->selected);
+    } else {
+        for (const auto& expression : all_expressions) {
+            if (expression.kind != semantic::vhdl::ExpressionKind::call) {
+                continue;
+            }
+            const auto& scopes = compiled_->semantics.scopes();
+            const auto expression_scope = std::ranges::find(
+                scopes, expression.scope, &semantic::Scope::id);
+            if (expression_scope == scopes.end()
+                || (expression_scope->unit != entity.id
+                    && expression_scope->unit != architecture.id)) {
+                continue;
+            }
+            check_template_call(expression);
         }
-        targets.insert(targets.end(),
-            expression.referenced_name->overloads.begin(),
-            expression.referenced_name->overloads.end());
-        const auto is_template = [&](const semantic::DeclarationId target_id) {
-            const auto target = specialized.find_declaration(target_id);
-            return target && target->vhdl != nullptr
-                && (target->vhdl->form == Form::generic_function_template
-                    || target->vhdl->form == Form::generic_procedure_template);
-        };
-        // `function f is new f ...` adds an instance homograph; a call that
-        // can denote it is not a call of the template (IEEE 1076-2008
-        // 4.4, 12.3).
-        const auto template_call
-            = std::ranges::any_of(targets, is_template)
-            && std::ranges::all_of(targets, is_template);
-        if (!template_call) {
-            continue;
-        }
-        const auto& scopes = compiled_->semantics.scopes();
-        const auto expression_scope = std::ranges::find(
-            scopes, expression.scope, &semantic::Scope::id);
-        if (expression_scope == scopes.end()
-            || (expression_scope->unit != entity.id
-                && expression_scope->unit != architecture.id)) {
-            continue;
-        }
-        append_diagnostic(
-            "FSIM-ELAB-VHGSUB-006",
-            "generic subprogram template is called before being "
-            "instantiated",
-            expression.source);
-        generic_callables_valid = false;
     }
 
     const auto generic_template_profile
@@ -361,88 +395,105 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
               }
               return true;
           };
-    for (const auto& specification_unit : compiled_->vhdl_units()) {
-        if (specification_unit.kind != semantic::vhdl::UnitKind::package
-            || !specification_unit.primary_name.empty()) {
-            continue;
-        }
-        for (const auto& body_unit : compiled_->vhdl_units()) {
-            if (body_unit.kind != semantic::vhdl::UnitKind::package
-                || body_unit.primary_name.empty()
-                || !library_equal(
-                    specification_unit.library, body_unit.library)
-                || !name_equal(
-                    specification_unit.name, body_unit.name)) {
+    // The package pairing reads only package units and their declarations,
+    // which no instance specialization replaces, so its diagnostics are the
+    // same for every instance; compute them once and replay them.
+    if (!package_template_diagnostics_) {
+        std::vector<CompiledVhdlSubprogramDiagnostic> package_diagnostics;
+        const auto append_package_diagnostic
+            = [&](std::string code, std::string message,
+                  const semantic::SourceSpanId source) {
+                  package_diagnostics.push_back(
+                      { std::move(code), std::move(message), source });
+              };
+        for (const auto& specification_unit : compiled_->vhdl_units()) {
+            if (specification_unit.kind != semantic::vhdl::UnitKind::package
+                || !specification_unit.primary_name.empty()) {
                 continue;
             }
-            for (const auto specification_id :
-                specification_unit.declarations) {
-                const auto specification
-                    = specialized.find_declaration(specification_id);
-                if (!specification || specification->vhdl == nullptr) {
+            for (const auto& body_unit : compiled_->vhdl_units()) {
+                if (body_unit.kind != semantic::vhdl::UnitKind::package
+                    || body_unit.primary_name.empty()
+                    || !library_equal(
+                        specification_unit.library, body_unit.library)
+                    || !name_equal(
+                        specification_unit.name, body_unit.name)) {
                     continue;
                 }
-                using Form = semantic::vhdl::DeclarationForm;
-                const auto form = specification->vhdl->form;
-                if (form != Form::generic_function_template
-                    && form != Form::generic_procedure_template) {
-                    continue;
-                }
-                const auto specification_profile
-                    = generic_template_profile(*specification->vhdl);
-                corresponding_generic_types.clear();
-                for (const auto generic : specification_profile.first) {
-                    const auto record = specialized.find_declaration(generic);
-                    if (record && record->vhdl != nullptr
-                        && record->vhdl->form == Form::generic_type) {
-                        corresponding_generic_types.push_back(
-                            record->vhdl->name);
-                    }
-                }
-                // An overloaded template's body is the homograph whose
-                // generic list and profile conform (IEEE 1076-2008 4.10).
-                std::optional<semantic::CompiledDeclarationView>
-                    first_body;
-                bool conforming_body { };
-                for (const auto candidate_id : body_unit.declarations) {
-                    const auto body
-                        = specialized.find_declaration(candidate_id);
-                    if (!body || body->vhdl == nullptr
-                        || body->vhdl->form != form
-                        || !name_equal(
-                            body->vhdl->name, specification->vhdl->name)) {
+                for (const auto specification_id :
+                    specification_unit.declarations) {
+                    const auto specification
+                        = specialized.find_declaration(specification_id);
+                    if (!specification || specification->vhdl == nullptr) {
                         continue;
                     }
-                    if (!first_body) {
-                        first_body = body;
+                    using Form = semantic::vhdl::DeclarationForm;
+                    const auto form = specification->vhdl->form;
+                    if (form != Form::generic_function_template
+                        && form != Form::generic_procedure_template) {
+                        continue;
                     }
-                    const auto body_profile
-                        = generic_template_profile(*body->vhdl);
-                    const auto callable_conforms
-                        = specification_profile.second
-                        && body_profile.second
-                        && callables_conform(
-                            *specification_profile.second,
-                            *body_profile.second);
-                    if (generic_formals_conform(
-                            specification_profile.first,
-                            body_profile.first)
-                        && callable_conforms) {
-                        conforming_body = true;
-                        break;
+                    const auto specification_profile
+                        = generic_template_profile(*specification->vhdl);
+                    corresponding_generic_types.clear();
+                    for (const auto generic : specification_profile.first) {
+                        const auto record = specialized.find_declaration(generic);
+                        if (record && record->vhdl != nullptr
+                            && record->vhdl->form == Form::generic_type) {
+                            corresponding_generic_types.push_back(
+                                record->vhdl->name);
+                        }
                     }
+                    // An overloaded template's body is the homograph whose
+                    // generic list and profile conform (IEEE 1076-2008 4.10).
+                    std::optional<semantic::CompiledDeclarationView>
+                        first_body;
+                    bool conforming_body { };
+                    for (const auto candidate_id : body_unit.declarations) {
+                        const auto body
+                            = specialized.find_declaration(candidate_id);
+                        if (!body || body->vhdl == nullptr
+                            || body->vhdl->form != form
+                            || !name_equal(
+                                body->vhdl->name, specification->vhdl->name)) {
+                            continue;
+                        }
+                        if (!first_body) {
+                            first_body = body;
+                        }
+                        const auto body_profile
+                            = generic_template_profile(*body->vhdl);
+                        const auto callable_conforms
+                            = specification_profile.second
+                            && body_profile.second
+                            && callables_conform(
+                                *specification_profile.second,
+                                *body_profile.second);
+                        if (generic_formals_conform(
+                                specification_profile.first,
+                                body_profile.first)
+                            && callable_conforms) {
+                            conforming_body = true;
+                            break;
+                        }
+                    }
+                    if (!first_body || conforming_body) {
+                        continue;
+                    }
+                    append_package_diagnostic(
+                        "FSIM-ELAB-VHGSUB-013",
+                        "generic subprogram declaration and body do not have "
+                        "conforming generic lists and callable profiles",
+                        first_body->vhdl->source);
                 }
-                if (!first_body || conforming_body) {
-                    continue;
-                }
-                append_diagnostic(
-                    "FSIM-ELAB-VHGSUB-013",
-                    "generic subprogram declaration and body do not have "
-                    "conforming generic lists and callable profiles",
-                    first_body->vhdl->source);
-                generic_callables_valid = false;
             }
         }
+        package_template_diagnostics_ = std::move(package_diagnostics);
+    }
+    for (const auto& diagnostic : *package_template_diagnostics_) {
+        append_diagnostic(
+            diagnostic.code, diagnostic.message, diagnostic.source);
+        generic_callables_valid = false;
     }
     result.valid = generic_callables_valid;
     return result;

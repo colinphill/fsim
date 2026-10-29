@@ -340,7 +340,9 @@ SignalId Interpreter::add_signal(Signal signal)
         for (const auto& driver : signal.vhdl_conversion_drivers) {
             for (const auto source : driver.sources) {
                 auto& dependents = impl_->vhdl_conversion_dependents[source];
-                if (std::ranges::find(dependents, id) == dependents.end()) {
+                // Signal ids only grow, so an earlier push of this id can
+                // only be the last entry.
+                if (dependents.empty() || dependents.back() != id) {
                     dependents.push_back(id);
                 }
             }
@@ -669,6 +671,7 @@ void Interpreter::add_container_aggregate_signal_alias(
     impl_->revoke_stable_writer_shadow_for_container_alias(alias.signal);
     impl_->container_aggregate_signal_aliases[alias.object] = alias;
     impl_->signal_container_aggregate_aliases[alias.signal] = alias.object;
+    impl_->has_container_aggregate_aliases = true;
     impl_->aggregate_signal_current_projection[alias.signal].emplace(
         std::move(current_projection));
     impl_->aggregate_signal_stored_projection[alias.signal].emplace(
@@ -1502,8 +1505,24 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     // untouched and can retry the same dense process ID.
     using ScalarDriverRegions
         = std::shared_ptr<const std::vector<Process::DriverRegion>>;
-    std::map<SignalId, ScalarDriverRegions> scalar_driver_regions;
-    for (const auto& [signal_id, regions] : outputs) {
+    // Keyed by driver-group index; entries are appended in group order.
+    std::vector<std::pair<std::size_t, ScalarDriverRegions>>
+        scalar_driver_regions;
+    const auto driver_group_end = [&](const std::size_t begin) {
+        auto end = begin + 1U;
+        while (end < outputs.size()
+            && outputs[end].signal == outputs[begin].signal) {
+            ++end;
+        }
+        return end;
+    };
+    std::size_t group_index = 0U;
+    for (std::size_t begin = 0U, end = 0U; begin < outputs.size();
+         begin = end, ++group_index) {
+        end = driver_group_end(begin);
+        const std::span<const Process::DriverRegion> regions {
+            outputs.data() + begin, end - begin };
+        const auto signal_id = outputs[begin].signal;
         const auto& signal = signals.at(signal_id);
         if (signal.resolution == ResolutionKind::std_logic
             && signal.value_kind == ValueKind::logic9 && !regions.empty()
@@ -1513,7 +1532,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                     return region.offset == 0U
                         && region.width == signal.initial_value.width();
                 })) {
-            scalar_driver_regions.emplace(signal_id,
+            scalar_driver_regions.emplace_back(group_index,
                 std::make_shared<std::vector<Process::DriverRegion>>(
                     regions.begin(), regions.end()));
         }
@@ -1872,72 +1891,81 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             }
         }
     }
-    std::set<std::string> local_names;
-    for (const auto& local : process.debug_locals()) {
-        if (local.name.empty()
-            || local.register_id >= process.register_count()) {
-            throw std::invalid_argument { "invalid SimIR debug-local metadata" };
+    // Debug-local and container-register metadata come from the shared
+    // template, so one validation covers every instance of it.
+    const bool template_validated = common_program
+        && validated_program_templates.contains(common_program);
+    if (!template_validated) {
+        std::set<std::string> local_names;
+        for (const auto& local : process.debug_locals()) {
+            if (local.name.empty()
+                || local.register_id >= process.register_count()) {
+                throw std::invalid_argument { "invalid SimIR debug-local metadata" };
+            }
+            if (local.systemverilog_scalar != SystemVerilogScalarKind::None) {
+                const auto expected_width = local.systemverilog_scalar
+                        == SystemVerilogScalarKind::ShortReal
+                    ? 32U
+                    : local.systemverilog_scalar == SystemVerilogScalarKind::Real
+                        || local.systemverilog_scalar
+                            == SystemVerilogScalarKind::Realtime
+                        || local.systemverilog_scalar
+                            == SystemVerilogScalarKind::Time
+                        || local.systemverilog_scalar
+                            == SystemVerilogScalarKind::Chandle
+                    ? 64U
+                    : 0U;
+                if (local.width != expected_width
+                    || local.value_kind != ValueKind::logic4) {
+                    throw std::invalid_argument {
+                        "invalid SimIR scalar debug-local metadata"
+                    };
+                }
+            }
+            if (!local_names.insert(local.name).second) {
+                throw std::invalid_argument { "duplicate SimIR debug-local name" };
+            }
         }
-        if (local.systemverilog_scalar != SystemVerilogScalarKind::None) {
-            const auto expected_width = local.systemverilog_scalar
-                    == SystemVerilogScalarKind::ShortReal
-                ? 32U
-                : local.systemverilog_scalar == SystemVerilogScalarKind::Real
-                    || local.systemverilog_scalar
-                        == SystemVerilogScalarKind::Realtime
-                    || local.systemverilog_scalar
-                        == SystemVerilogScalarKind::Time
-                    || local.systemverilog_scalar
-                        == SystemVerilogScalarKind::Chandle
-                ? 64U
-                : 0U;
-            if (local.width != expected_width
-                || local.value_kind != ValueKind::logic4) {
+        std::set<std::string> string_local_names;
+        for (const auto& local : process.debug_string_locals()) {
+            if (local.name.empty()
+                || local.register_id >= process.string_register_count()) {
                 throw std::invalid_argument {
-                    "invalid SimIR scalar debug-local metadata"
+                    "invalid SimIR string debug-local metadata"
+                };
+            }
+            if (!string_local_names.insert(local.name).second
+                || local_names.contains(local.name)) {
+                throw std::invalid_argument {
+                    "duplicate SimIR debug-local name"
                 };
             }
         }
-        if (!local_names.insert(local.name).second) {
-            throw std::invalid_argument { "duplicate SimIR debug-local name" };
-        }
-    }
-    std::set<std::string> string_local_names;
-    for (const auto& local : process.debug_string_locals()) {
-        if (local.name.empty()
-            || local.register_id >= process.string_register_count()) {
+        if (container_register_types.size()
+            != process.container_register_count()) {
             throw std::invalid_argument {
-                "invalid SimIR string debug-local metadata"
+                "SimIR container register type count does not match register count"
             };
         }
-        if (!string_local_names.insert(local.name).second
-            || local_names.contains(local.name)) {
-            throw std::invalid_argument {
-                "duplicate SimIR debug-local name"
-            };
+        std::set<std::string> container_local_names;
+        for (const auto& local : process.debug_container_locals()) {
+            if (local.name.empty()
+                || local.register_id >= process.container_register_count()
+                || local.type != container_register_types.at(local.register_id)) {
+                throw std::invalid_argument {
+                    "invalid SimIR container debug-local metadata"
+                };
+            }
+            if (!container_local_names.insert(local.name).second
+                || local_names.contains(local.name)
+                || string_local_names.contains(local.name)) {
+                throw std::invalid_argument {
+                    "duplicate SimIR debug-local name"
+                };
+            }
         }
-    }
-    if (container_register_types.size()
-        != process.container_register_count()) {
-        throw std::invalid_argument {
-            "SimIR container register type count does not match register count"
-        };
-    }
-    std::set<std::string> container_local_names;
-    for (const auto& local : process.debug_container_locals()) {
-        if (local.name.empty()
-            || local.register_id >= process.container_register_count()
-            || local.type != container_register_types.at(local.register_id)) {
-            throw std::invalid_argument {
-                "invalid SimIR container debug-local metadata"
-            };
-        }
-        if (!container_local_names.insert(local.name).second
-            || local_names.contains(local.name)
-            || string_local_names.contains(local.name)) {
-            throw std::invalid_argument {
-                "duplicate SimIR debug-local name"
-            };
+        if (common_program) {
+            validated_program_templates.insert(common_program);
         }
     }
     if (!common_program) {
@@ -1958,7 +1986,14 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                 || operation_holds<WriteInertialSlice>(operation);
         }
     }
-    for (const auto& [signal, regions] : outputs) {
+    std::size_t scalar_cursor = 0U;
+    group_index = 0U;
+    for (std::size_t begin = 0U, end = 0U; begin < outputs.size();
+         begin = end, ++group_index) {
+        end = driver_group_end(begin);
+        const auto signal = outputs[begin].signal;
+        const std::span<const Process::DriverRegion> regions {
+            outputs.data() + begin, end - begin };
         if (!switch_connection && !package_static_initializer) {
             auto& writer_count = signal_writer_counts[signal];
             if (writer_count != std::numeric_limits<std::uint32_t>::max()) {
@@ -1976,10 +2011,13 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                     "SimIR signal-writer topology revision overflow"
                 };
             }
-            const auto scalar_regions = scalar_driver_regions.find(signal);
+            const bool has_scalar_regions
+                = scalar_cursor < scalar_driver_regions.size()
+                && scalar_driver_regions[scalar_cursor].first == group_index;
             register_driver(id, signal, regions, process.drive_strength(),
-                scalar_regions == scalar_driver_regions.end()
-                    ? ScalarDriverRegions { } : scalar_regions->second,
+                has_scalar_regions
+                    ? scalar_driver_regions[scalar_cursor++].second
+                    : ScalarDriverRegions { },
                 delayed_writer);
         }
     }
@@ -2031,16 +2069,24 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     const bool observed = process.observed();
     const bool reactive = process.reactive();
     const bool postponed = process.postponed();
-    ProcessColdState program_owner;
+    // The program is installed straight into a bare storage record; a full
+    // ProcessColdState would only be constructed to be moved from.
+    ProcessProgramStorage program_storage;
+    program_storage.program_template = std::move(common_program);
     if (owned_instance != nullptr) {
-        program_owner.set_program(std::move(*owned_instance), common_program);
+        program_storage.instance_program
+            = std::move(*owned_instance);
     } else {
-        Process retained_program = owned_process != nullptr
-            ? std::move(*owned_process)
-            : process.materialize();
-        program_owner.set_program(std::move(retained_program), common_program);
+        program_storage.instance_program = ProcessInstanceProgram {
+            owned_process != nullptr
+                ? std::move(*owned_process)
+                : process.materialize()
+        };
     }
-    const auto program = program_owner.program();
+    const ProcessProgramView program {
+        *program_storage.program_template,
+        program_storage.instance_program
+    };
     std::optional<Impl::ConstantDriverStartupEntry> compact_shape;
     if (executable
         && program.startup_phase() != ProcessStartupPhase::package_static_initializer) {
@@ -2116,7 +2162,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         }
         bank->body_cache = body_cache->second;
         compact_shape->startup_write_bank = std::move(bank);
-        program_owner.local_program_storage.instance_program.operations
+        program_storage.instance_program.operations
             = OperationList { };
     }
     const auto execution_phase = process_execution_phase(
@@ -2135,7 +2181,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         compact.random_state = Impl::initial_random_state(
             root_seed, id);
         compact.program_storage = std::make_unique<ProcessProgramStorage>(
-            std::move(program_owner.local_program_storage));
+            std::move(program_storage));
         processes.push_compact(std::move(compact));
     } else {
         Impl::ProcessState state;
@@ -2159,7 +2205,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             ? ProcessStatus::running
             : ProcessStatus::waiting;
         state.cold().local_program_storage
-            = std::move(program_owner.local_program_storage);
+            = std::move(program_storage);
         processes.push_back(std::move(state));
     }
     static_fanout_dirty = true;

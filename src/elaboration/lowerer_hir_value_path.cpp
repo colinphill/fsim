@@ -13,6 +13,14 @@
 namespace fsim::elaboration {
 namespace {
 
+    // FSIM_SV_VALUE_PATH_TRACE is read once per process.
+    [[nodiscard]] bool sv_value_path_trace_enabled()
+    {
+        static const bool enabled
+            = std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr;
+        return enabled;
+    }
+
     [[nodiscard]] bool aggregate_value_type(const ContainerType& type)
     {
         return type.element_kind == ContainerElementKind::Aggregate
@@ -95,7 +103,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
     // FSIM_SV_VALUE_PATH_TRACE names the line that rejected a path.
     const auto rejected = [&](const int line)
         -> std::optional<HirSvValuePath> {
-        if (std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr) {
+        if (sv_value_path_trace_enabled()) {
             std::cerr << "[fsim-sv-value-path] expression="
                       << expression_id.value() << " rejected line=" << line
                       << '\n';
@@ -263,7 +271,7 @@ std::optional<Lowerer::HirSvValuePath> Lowerer::hir_sv_value_path(
             }
             break;
         }
-        if (std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr) {
+        if (sv_value_path_trace_enabled()) {
             std::cerr << "[fsim-sv-value-path] unknown step kind="
                       << static_cast<int>(source.kind) << " text="
                       << source.text << " operands="
@@ -623,10 +631,9 @@ std::optional<Lowerer::HirPlaceSignalImage> Lowerer::hir_place_signal_image(
         return std::nullopt;
     }
     const runtime::simir::ContainerSignalAlias* alias { };
-    for (const auto& candidate : design_.container_signal_aliases_) {
-        if (candidate.object != path->root.object) {
-            continue;
-        }
+    for (const auto position :
+        design_.container_alias_positions(path->root.object)) {
+        const auto& candidate = design_.container_signal_aliases_[position];
         if (alias != nullptr) {
             return std::nullopt;
         }
@@ -1020,7 +1027,7 @@ std::vector<Lowerer::HirPackedRange> Lowerer::hir_sv_value_path_leaf_shape(
     for (const auto& dimension : shape) {
         width *= index_distance(dimension.left, dimension.right) + 1U;
     }
-    if (std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr) {
+    if (sv_value_path_trace_enabled()) {
         std::cerr << "[fsim-sv-value-path] leaf-shape members=" << members
                   << " object=" << path.root.object << " recorded="
                   << (recorded != design_.container_element_packed_shape_.end())
@@ -1228,7 +1235,7 @@ bool Lowerer::lower_hir_sv_value_path_write(
     const std::optional<ContainerRegisterId> container_value)
 {
     const auto write_rejected = [](const int line) {
-        if (std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr) {
+        if (sv_value_path_trace_enabled()) {
             std::cerr << "[fsim-sv-value-path] write rejected line=" << line
                       << '\n';
         }
@@ -1490,7 +1497,7 @@ bool Lowerer::lower_hir_sv_value_path_nonblocking_write(
     const std::function<bool()>& before_write)
 {
     const auto write_rejected = [](const int line) {
-        if (std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr) {
+        if (sv_value_path_trace_enabled()) {
             std::cerr << "[fsim-sv-value-path] nonblocking-write rejected line=" << line
                       << '\n';
         }

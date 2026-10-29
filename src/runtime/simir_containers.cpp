@@ -1047,7 +1047,7 @@ bool Interpreter::Impl::can_stage_container_alias_deposit(
     });
 }
 
-std::map<SignalId, std::vector<Process::DriverRegion>>
+std::vector<Process::DriverRegion>
 Interpreter::Impl::expanded_driver_regions(
     const ProcessProgramView& process) const
 {
@@ -1067,7 +1067,7 @@ Interpreter::Impl::expanded_driver_regions(
         requested_regions = process.driver_regions();
     }
 
-    std::map<SignalId, std::vector<Process::DriverRegion>> expanded;
+    std::vector<Process::DriverRegion> expanded;
     for (const auto& region : requested_regions) {
         if (region.signal >= signals.size()) {
             throw std::invalid_argument {
@@ -1090,7 +1090,7 @@ Interpreter::Impl::expanded_driver_regions(
             || !signal_container_aggregate_aliases[region.signal]
             || process.switch_bidirectional() || process.switch_source()
             || process.switch_target()) {
-            expanded[region.signal].push_back(region);
+            expanded.push_back(region);
             continue;
         }
 
@@ -1110,7 +1110,7 @@ Interpreter::Impl::expanded_driver_regions(
         }
 
         if (!can_stage_container_alias_deposit(object)) {
-            expanded[region.signal].push_back(region);
+            expanded.push_back(region);
             continue;
         }
 
@@ -1159,7 +1159,7 @@ Interpreter::Impl::expanded_driver_regions(
             const auto leaf_width = intersection_end - intersection_begin;
             const bool whole_leaf
                 = leaf_offset == 0U && leaf_width == type.element_width;
-            expanded[aliases[ordinal]->signal].push_back({
+            expanded.push_back({
                 aliases[ordinal]->signal,
                 whole_leaf ? 0U : static_cast<std::uint32_t>(leaf_offset),
                 whole_leaf ? 0U : static_cast<std::uint32_t>(leaf_width),
@@ -1167,6 +1167,9 @@ Interpreter::Impl::expanded_driver_regions(
             });
         }
     }
+    // Group by signal in SignalId order, keeping each signal's regions in
+    // the order they were produced.
+    std::ranges::stable_sort(expanded, {}, &Process::DriverRegion::signal);
     return expanded;
 }
 

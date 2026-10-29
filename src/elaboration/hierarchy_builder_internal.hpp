@@ -1403,7 +1403,10 @@ private:
         // Empty for ordinary VHDL; generated callers retain the unit-relative
         // generate path/index in this template discriminator.
         std::string_view generate_relative_discriminator = { },
-        std::span<const semantic::DeclarationId> additional_declarations = { });
+        std::span<const semantic::DeclarationId> additional_declarations = { },
+        // Bound after `additional_declarations`; lets a caller pass two
+        // ranges without concatenating them.
+        std::span<const semantic::DeclarationId> more_declarations = { });
     // Whether every iteration of the iterative generate bodies around a
     // concurrent statement lowers it alike, up to its signals and names.
     [[nodiscard]] bool vhdl_statement_iteration_invariant(
@@ -1525,6 +1528,12 @@ private:
         // match up to the generate parameters' values.
         bool iteration_invariant { };
     };
+    // Signals each SystemVerilog generate region may name (the unit's and its
+    // enclosing regions'), by unit then region; they depend only on the unit.
+    std::unordered_map<const semantic::sv::Unit*,
+        std::unordered_map<const semantic::sv::GenerateRegion*,
+            std::vector<semantic::DeclarationId>>>
+        systemverilog_generate_declarations_;
     // vhdl_statement_iteration_invariant results by statement.
     std::unordered_map<std::uint32_t, bool>
         vhdl_iteration_invariant_statements_;
@@ -2297,6 +2306,10 @@ private:
         bool declarations);
     std::unordered_map<std::uint32_t, std::vector<CleanVhdlValidation>>
         clean_vhdl_validations_;
+    // The package template spec/body diagnostics of
+    // validate_compiled_vhdl_subprograms, which no instance changes.
+    std::optional<std::vector<CompiledVhdlSubprogramDiagnostic>>
+        package_template_diagnostics_;
     std::size_t vhdl_process_lower_requests_ { };
     std::size_t vhdl_process_template_occurrences_ { };
     std::size_t vhdl_process_template_hits_ { };

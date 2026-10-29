@@ -6798,10 +6798,9 @@ Lowerer::hir_hierarchical_virtual_interface(const std::string_view path) const
     if (cut == std::string::npos) {
         return std::nullopt;
     }
-    const auto owner = std::ranges::find(design_.specializations_,
-        std::string_view { full }.substr(0U, cut),
-        &SpecializationInfo::instance);
-    if (owner == design_.specializations_.end() || !owner->source_unit) {
+    const auto* const owner = design_.find_specialization(
+        std::string_view { full }.substr(0U, cut));
+    if (owner == nullptr || !owner->source_unit) {
         return std::nullopt;
     }
     const auto& hir = specialized_hir_unit_->design().systemverilog_hir;
@@ -7083,10 +7082,10 @@ Lowerer::hir_virtual_interface_candidates(HirVirtualInterfaceMember result,
         handles.clear();
         for (const auto& path : paths) {
             const auto handle = systemverilog_interface_handles_->find(path);
-            const auto specialization = std::ranges::find(
-                design_.specializations_, path, &SpecializationInfo::instance);
+            const auto* const specialization
+                = design_.find_specialization(path);
             if (handle == systemverilog_interface_handles_->end()
-                || specialization == design_.specializations_.end()
+                || specialization == nullptr
                 || !handles.insert(handle->second).second) {
                 continue;
             }
@@ -7669,17 +7668,21 @@ std::optional<SignalId> Lowerer::hir_hierarchical_signal(
         const auto& units
             = specialized_hir_unit_->design().systemverilog_hir.units();
         for (std::string_view ancestor = hierarchy_; !ancestor.empty();) {
-            const auto found = std::ranges::find_if(design_.specializations_,
-                [&](const SpecializationInfo& specialization) {
-                    if (specialization.instance != ancestor
-                        || !specialization.source_unit) {
-                        return false;
-                    }
-                    const auto unit = std::ranges::find(units,
-                        *specialization.source_unit, &semantic::sv::Unit::id);
-                    return unit != units.end() && unit->name == module_name;
-                });
-            if (found != design_.specializations_.end()) {
+            bool found { };
+            for (const auto position :
+                design_.specialization_positions(ancestor)) {
+                const auto& specialization = design_.specializations_[position];
+                if (!specialization.source_unit) {
+                    continue;
+                }
+                const auto unit = std::ranges::find(units,
+                    *specialization.source_unit, &semantic::sv::Unit::id);
+                if (unit != units.end() && unit->name == module_name) {
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
                 if (const auto signal = lookup(std::string { ancestor }
                         + std::string { path.substr(dot) })) {
                     return signal;
@@ -8188,10 +8191,9 @@ bool Lowerer::hir_virtual_interface_instance_matches(
         || virtual_type.interface_parameter_actuals.empty()) {
         return true;
     }
-    const auto specialization = std::ranges::find(
-        design_.specializations_, instance_path,
-        &SpecializationInfo::instance);
-    if (specialization == design_.specializations_.end()) {
+    const auto* const specialization
+        = design_.find_specialization(instance_path);
+    if (specialization == nullptr) {
         return true;
     }
     const auto& hir = specialized_hir_unit_->design().systemverilog_hir;
@@ -10292,8 +10294,7 @@ std::optional<Lowerer::HirStaticContainerSignalExtract>
 Lowerer::hir_static_element_signal_extract(
     const HirContainerElementBinding& element) const
 {
-    if (std::ranges::none_of(design_.container_element_signal_aliases_,
-            [&](const auto& alias) { return alias.object == element.object; })) {
+    if (design_.container_element_alias_positions(element.object).empty()) {
         return std::nullopt;
     }
     using ElementKind = runtime::simir::ContainerElementKind;
@@ -10351,9 +10352,10 @@ Lowerer::hir_static_element_signal_extract(
     }
 
     const runtime::simir::ContainerElementSignalAlias* alias { };
-    for (const auto& candidate : design_.container_element_signal_aliases_) {
-        if (candidate.object != element.object
-            || candidate.ordinal != static_cast<std::uint32_t>(ordinal)) {
+    for (const auto position :
+        design_.container_element_alias_positions(element.object)) {
+        const auto& candidate = design_.container_element_signal_aliases_[position];
+        if (candidate.ordinal != static_cast<std::uint32_t>(ordinal)) {
             continue;
         }
         if (alias != nullptr || !candidate.readable) {
@@ -10362,11 +10364,7 @@ Lowerer::hir_static_element_signal_extract(
         alias = &candidate;
     }
     if (alias == nullptr
-        || std::ranges::any_of(
-            design_.container_signal_aliases_,
-            [&](const runtime::simir::ContainerSignalAlias& candidate) {
-                return candidate.object == element.object;
-            })) {
+        || !design_.container_alias_positions(element.object).empty()) {
         return std::nullopt;
     }
 
@@ -10482,10 +10480,9 @@ Lowerer::hir_static_container_signal_extract(
     }
 
     const runtime::simir::ContainerSignalAlias* alias { };
-    for (const auto& candidate : design_.container_signal_aliases_) {
-        if (candidate.object != element.object) {
-            continue;
-        }
+    for (const auto position :
+        design_.container_alias_positions(element.object)) {
+        const auto& candidate = design_.container_signal_aliases_[position];
         if (alias != nullptr || !candidate.readable) {
             return std::nullopt;
         }
@@ -20088,7 +20085,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
     if (const auto value_prefix
         = hir_vhdl_value_attribute_prefix(expression_id);
         value_prefix && hir_vhdl_composite_value_form(*value_prefix)) {
-        const auto subtype = hir_vhdl_expression_subtype(expression_id);
+        const auto subtype = hir_vhdl_expression_subtype_ref(expression_id);
         return subtype ? hir_vhdl_value_natural_width(*subtype) : std::nullopt;
     }
     // An external name has the width of the object it denotes (IEEE
@@ -20363,7 +20360,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
         && hir_vhdl_record_result_possible(*expression->vhdl)
         && hir_vhdl_record_result_width_frames_.insert(
             expression_id.value()).second) {
-        const auto declared = hir_vhdl_expression_subtype(expression_id);
+        const auto declared = hir_vhdl_expression_subtype_ref(expression_id);
         hir_vhdl_record_result_width_frames_.erase(expression_id.value());
         if (declared
             && hir_vhdl_partially_constrained_record(
@@ -20521,7 +20518,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
             == semantic::vhdl::ExpressionKind::call
         && expression->vhdl->text == "@vhdl-dereference"
         && expression->vhdl->operands.size() == 1U) {
-        const auto subtype = hir_vhdl_expression_subtype(expression_id);
+        const auto subtype = hir_vhdl_expression_subtype_ref(expression_id);
         return subtype ? vhdl_subtype_width(*subtype) : std::nullopt;
     }
     if (const auto signal = hir_direct_signal_binding(expression_id)) {
@@ -20531,7 +20528,7 @@ std::optional<std::size_t> Lowerer::compute_hir_expression_width(
     // (IEEE 1076-2008 5.3.2.2).
     if (expression->vhdl != nullptr
         && expression->vhdl->kind == semantic::vhdl::ExpressionKind::name) {
-        if (const auto subtype = hir_vhdl_expression_subtype(expression_id);
+        if (const auto subtype = hir_vhdl_expression_subtype_ref(expression_id);
             subtype && hir_vhdl_array_type_family(*subtype)
             && vhdl_subtype_storage_width(*subtype)
                 == std::optional<std::size_t> { 0U }) {
@@ -23953,12 +23950,14 @@ bool Lowerer::hir_vhdl_expression_subtype_cacheable() const
 // An expression's subtype depends on its declarations, the process scope and
 // the generic bindings; outside callable frames it is kept for the cache
 // scope (cleared with the effective-subtype cache).
-std::optional<semantic::vhdl::SubtypeIndication>
-Lowerer::hir_vhdl_expression_subtype(
-    const semantic::ExpressionId expression_id) const
+std::shared_ptr<const semantic::vhdl::SubtypeIndication>
+Lowerer::lookup_hir_vhdl_expression_subtype(
+    const semantic::ExpressionId expression_id,
+    std::optional<semantic::vhdl::SubtypeIndication>& fresh) const
 {
+    using Cached = std::shared_ptr<const semantic::vhdl::SubtypeIndication>;
     if (specialized_hir_unit_ == nullptr) {
-        return std::nullopt;
+        return Cached { };
     }
     if (!hir_vhdl_expression_subtype_cacheable()) {
         if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
@@ -23970,13 +23969,15 @@ Lowerer::hir_vhdl_expression_subtype(
         } else {
             ++hir_vhdl_expression_subtype_uncached_frames_;
         }
-        return compute_hir_vhdl_expression_subtype(expression_id);
+        fresh = compute_hir_vhdl_expression_subtype(expression_id);
+        return Cached { };
     }
     const auto scope = hir_process_scope_;
     const auto frames = hir_binding_frames_state();
     if (!frames) {
         ++hir_vhdl_expression_subtype_uncached_frames_;
-        return compute_hir_vhdl_expression_subtype(expression_id);
+        fresh = compute_hir_vhdl_expression_subtype(expression_id);
+        return Cached { };
     }
     if (const auto found
         = hir_vhdl_expression_subtype_cache_.find(expression_id.value());
@@ -23996,20 +23997,60 @@ Lowerer::hir_vhdl_expression_subtype(
     if (hir_boundary_fallback_calls_ != fallback_calls
         || hir_vhdl_expression_subtype_cache_entries_ >= maximum_entries
         || !hir_vhdl_expression_subtype_cacheable()) {
-        return result;
+        fresh = std::move(result);
+        return Cached { };
     }
     // Lowering the expression may have left the frames changed; the
     // entry is kept only under the frames it was computed for.
     if (hir_binding_frames_state() != frames) {
-        return result;
+        fresh = std::move(result);
+        return Cached { };
     }
+    // The cache and the caller share one immutable result; a cache clear
+    // does not end the lifetime of a result a caller still holds.
+    Cached shared;
     try {
+        if (result) {
+            shared = std::make_shared<const semantic::vhdl::SubtypeIndication>(
+                std::move(*result));
+        }
         hir_vhdl_expression_subtype_cache_[expression_id.value()].push_back(
-            { scope, active_hir_callable_, *frames, result });
+            { scope, active_hir_callable_, *frames, shared });
         ++hir_vhdl_expression_subtype_cache_entries_;
     } catch (const std::bad_alloc&) {
+        if (!shared) {
+            fresh = std::move(result);
+        }
     }
-    return result;
+    return shared;
+}
+
+std::optional<semantic::vhdl::SubtypeIndication>
+Lowerer::hir_vhdl_expression_subtype(
+    const semantic::ExpressionId expression_id) const
+{
+    std::optional<semantic::vhdl::SubtypeIndication> fresh;
+    if (const auto cached
+        = lookup_hir_vhdl_expression_subtype(expression_id, fresh)) {
+        return *cached;
+    }
+    return fresh;
+}
+
+std::shared_ptr<const semantic::vhdl::SubtypeIndication>
+Lowerer::hir_vhdl_expression_subtype_ref(
+    const semantic::ExpressionId expression_id) const
+{
+    std::optional<semantic::vhdl::SubtypeIndication> fresh;
+    if (auto cached
+        = lookup_hir_vhdl_expression_subtype(expression_id, fresh)) {
+        return cached;
+    }
+    if (!fresh) {
+        return nullptr;
+    }
+    return std::make_shared<const semantic::vhdl::SubtypeIndication>(
+        std::move(*fresh));
 }
 
 std::optional<semantic::vhdl::SubtypeIndication>
@@ -25920,7 +25961,7 @@ std::optional<std::pair<semantic::vhdl::TypeForm, semantic::TypeId>>
 Lowerer::hir_vhdl_composite_root_type(
     const semantic::ExpressionId expression_id) const
 {
-    const auto subtype = hir_vhdl_expression_subtype(expression_id);
+    const auto subtype = hir_vhdl_expression_subtype_ref(expression_id);
     if (!subtype || !subtype->type_mark.target.valid()
         || specialized_hir_unit_ == nullptr) {
         return std::nullopt;
@@ -30025,7 +30066,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_enumeration_string(
                 array.element_subtype->type_mark.spelling, "character", true)) {
             return std::nullopt;
         }
-        const auto element = hir_effective_vhdl_subtype(*array.element_subtype);
+        const auto element
+            = hir_effective_vhdl_subtype_ref(*array.element_subtype);
         const auto element_width = element ? vhdl_subtype_width(*element)
                                            : std::nullopt;
         if (!element_width || *element_width == 0U || *element_width > 32U
@@ -30054,7 +30096,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_enumeration_string(
         return bits;
     };
     std::optional<std::string> bits;
-    const auto subtype = hir_vhdl_expression_subtype(expression_id);
+    const auto subtype = hir_vhdl_expression_subtype_ref(expression_id);
     if (const auto* array = subtype && subtype->type_mark.target.valid()
             ? vhdl_array_definition(
                   *specialized_hir_unit_, subtype->type_mark.target)

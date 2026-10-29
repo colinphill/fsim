@@ -4,6 +4,7 @@
 #include "fsim/semantic/compiled_design.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
+#include "vhdl_lowering_index.hpp"
 
 #include <optional>
 #include <string>
@@ -34,6 +35,7 @@ resolve_vhdl_user_attribute_subtype(
 validate_vhdl_hir_types(
     const semantic::SpecializedHirUnit& specialization,
     const semantic::vhdl::Unit& entity,
-    const semantic::vhdl::Unit& architecture);
+    const semantic::vhdl::Unit& architecture,
+    VhdlLoweringIndex* index = nullptr);
 
 } // namespace fsim::elaboration

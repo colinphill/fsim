@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace fsim::elaboration {
@@ -71,6 +72,21 @@ struct VhdlLoweringIndex {
         std::vector<semantic::SourceSpanId>>>
         external_name_sources;
 
+    /// The whole-HIR sets the type validator reads for every distinct
+    /// (architecture, entity, actuals); none depends on the actuals.
+    struct ValidationFacts {
+        /// Expressions that are a port association actual or the first
+        /// operand of an attribute name (IEEE 1076-1993 4.3.2).
+        std::unordered_set<std::uint32_t> linkage_uses;
+        /// Index expressions that are the prefix of another index.
+        std::unordered_set<std::uint32_t> inner_indices;
+        /// Declarations that are methods of a protected type.
+        std::unordered_set<std::uint32_t> protected_methods;
+        /// Whether the design has a unit of the IEEE VITAL packages.
+        bool vital_unit { };
+    };
+    std::optional<ValidationFacts> validation_facts;
+
     /// Facts about one revision of the design's SystemVerilog HIR.
     struct SystemVerilogEvents {
         const semantic::sv::Hir* hir { };
@@ -88,6 +104,24 @@ struct VhdlLoweringIndex {
     std::unordered_map<std::string,
         std::shared_ptr<const HirCallableBodyRecording>>
         callable_bodies;
+    /// The keys of the module-function bodies recorded under each instance
+    /// path (Lowerer::set_unit_callable_body_scope); no other instance's
+    /// lowering can look them up, so release_instance_callable_bodies drops
+    /// them once the instance is lowered.
+    std::unordered_map<std::string, std::vector<std::string>>
+        instance_callable_bodies;
+
+    void release_instance_callable_bodies(const std::string& instance)
+    {
+        const auto found = instance_callable_bodies.find(instance);
+        if (found == instance_callable_bodies.end()) {
+            return;
+        }
+        for (const auto& key : found->second) {
+            callable_bodies.erase(key);
+        }
+        instance_callable_bodies.erase(found);
+    }
 
     /// The event-waiting statements and processes of `source`'s current
     /// revision.

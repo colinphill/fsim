@@ -872,11 +872,46 @@ void collect_expressions(const CompiledDesign& design,
     const std::set<UnitId>& units, const ActualDependencies& actuals,
     std::vector<ExpressionId>& output)
 {
+    if (actuals.declarations.empty() && actuals.types.empty()) {
+        // intersects() cannot hold without an actual.
+        return;
+    }
     for (const auto& expression : expressions) {
         if (!expression.folded
             && expression_is_in_units(design, expression.scope, units)
             && intersects(expression.dependencies, actuals)) {
             output.push_back(expression.id);
+        }
+    }
+}
+
+// The VHDL variant reads the design's per-unit expression index instead of
+// testing every expression of the linked design. The index lists the
+// expressions whose scope belongs to the unit, which is exactly what
+// expression_is_in_units tests; callers canonicalize the output, so the
+// per-unit order is immaterial.
+void collect_vhdl_expressions(const CompiledDesign& design,
+    const std::set<UnitId>& units, const ActualDependencies& actuals,
+    std::vector<ExpressionId>& output)
+{
+    if (actuals.declarations.empty() && actuals.types.empty()) {
+        // intersects() cannot hold without an actual.
+        return;
+    }
+    const auto& expressions = design.vhdl_hir.expressions();
+    for (const auto unit : units) {
+        const auto* items = design.vhdl_unit_items(unit);
+        if (items == nullptr) {
+            // The lookup indexes are not current: scan the whole design.
+            collect_expressions(design, expressions, units, actuals, output);
+            return;
+        }
+        for (const auto position : items->expressions) {
+            const auto& expression = expressions[position];
+            if (!expression.folded
+                && intersects(expression.dependencies, actuals)) {
+                output.push_back(expression.id);
+            }
         }
     }
 }
@@ -16924,9 +16959,8 @@ make_specialized_hir_overlay_from_validated_design(
         collect_generates(*selected->systemverilog,
             *dependencies, result.dependent_generates);
     } else {
-        collect_expressions(design, design.vhdl_hir.expressions(),
-            dependency_units, *dependencies,
-            result.residual_expressions);
+        collect_vhdl_expressions(design, dependency_units,
+            *dependencies, result.residual_expressions);
         if (entity != nullptr) {
             collect_generates(
                 *entity, *dependencies, result.dependent_generates);
@@ -18489,14 +18523,15 @@ SpecializedHirUnit::vhdl_types_named(const std::string_view name) const
     };
     // A replacement may be renamed, so the overlay is read directly and the
     // design's name index only for types it does not replace.
-    for (const auto& type : vhdl_types_) {
+    for (const auto& type : vhdl_types_.get()) {
         if (named(type)) {
             result.push_back(&type);
         }
     }
     const auto& types = design_->vhdl_hir.types();
     const auto consider = [&](const vhdl::TypeDefinition& type) {
-        if (named(type) && find_replacement(vhdl_types_, type.id) == nullptr) {
+        if (named(type)
+            && find_replacement(vhdl_types_.get(), type.id) == nullptr) {
             result.push_back(&type);
         }
     };
@@ -18511,7 +18546,7 @@ SpecializedHirUnit::vhdl_types_named(const std::string_view name) const
             consider(type);
         }
     }
-    if (!vhdl_types_.empty()) {
+    if (!vhdl_types_.get().empty()) {
         std::ranges::stable_sort(result, { },
             [](const vhdl::TypeDefinition* type) { return type->id.value(); });
     }
@@ -19059,14 +19094,17 @@ SpecializedHirUnit SpecializedHirUnit::with_overlay(
     SpecializedHirOverlay overlay) const
 {
     const bool replacements_empty
-        = systemverilog_declarations_.empty()
-        && vhdl_declarations_.empty()
-        && systemverilog_types_.empty() && vhdl_types_.empty()
-        && systemverilog_expressions_.empty()
-        && vhdl_expressions_.empty()
-        && systemverilog_statements_.empty() && vhdl_statements_.empty()
-        && systemverilog_processes_.empty() && vhdl_processes_.empty()
-        && systemverilog_instances_.empty() && vhdl_instances_.empty();
+        = systemverilog_declarations_.get().empty()
+        && vhdl_declarations_.get().empty()
+        && systemverilog_types_.get().empty() && vhdl_types_.get().empty()
+        && systemverilog_expressions_.get().empty()
+        && vhdl_expressions_.get().empty()
+        && systemverilog_statements_.get().empty()
+        && vhdl_statements_.get().empty()
+        && systemverilog_processes_.get().empty()
+        && vhdl_processes_.get().empty()
+        && systemverilog_instances_.get().empty()
+        && vhdl_instances_.get().empty();
     auto result = SpecializedHirUnit {
         *design_, std::move(overlay), replacement_units_,
         validated_lookup_indexes_,
@@ -19212,7 +19250,7 @@ bool SpecializedHirUnit::replace(sv::Declaration replacement)
     }
     const bool renamed = replacement.name != original->systemverilog->name;
     if (!insert_replacement(
-            systemverilog_declarations_, std::move(replacement))) {
+            systemverilog_declarations_.mutate(), std::move(replacement))) {
         return false;
     }
     renames_systemverilog_declarations_
@@ -19236,7 +19274,7 @@ bool SpecializedHirUnit::replace(vhdl::Declaration replacement)
         return false;
     }
     return insert_replacement(
-        vhdl_declarations_, std::move(replacement));
+        vhdl_declarations_.mutate(), std::move(replacement));
 }
 
 bool SpecializedHirUnit::replace(sv::TypeDefinition replacement)
@@ -19254,7 +19292,7 @@ bool SpecializedHirUnit::replace(sv::TypeDefinition replacement)
         return false;
     }
     return insert_replacement(
-        systemverilog_types_, std::move(replacement));
+        systemverilog_types_.mutate(), std::move(replacement));
 }
 
 bool SpecializedHirUnit::replace(vhdl::TypeDefinition replacement)
@@ -19271,7 +19309,7 @@ bool SpecializedHirUnit::replace(vhdl::TypeDefinition replacement)
             replacement_units_, replacement, original->vhdl)) {
         return false;
     }
-    return insert_replacement(vhdl_types_, std::move(replacement));
+    return insert_replacement(vhdl_types_.mutate(), std::move(replacement));
 }
 
 bool SpecializedHirUnit::replace(sv::Expression replacement)
@@ -19290,7 +19328,7 @@ bool SpecializedHirUnit::replace(sv::Expression replacement)
         return false;
     }
     return insert_replacement(
-        systemverilog_expressions_, std::move(replacement));
+        systemverilog_expressions_.mutate(), std::move(replacement));
 }
 
 bool SpecializedHirUnit::replace(vhdl::Expression replacement)
@@ -19309,7 +19347,7 @@ bool SpecializedHirUnit::replace(vhdl::Expression replacement)
         return false;
     }
     return insert_replacement(
-        vhdl_expressions_, std::move(replacement));
+        vhdl_expressions_.mutate(), std::move(replacement));
 }
 
 bool SpecializedHirUnit::replace(sv::Statement replacement)
@@ -19328,7 +19366,7 @@ bool SpecializedHirUnit::replace(sv::Statement replacement)
         return false;
     }
     return insert_replacement(
-        systemverilog_statements_, std::move(replacement));
+        systemverilog_statements_.mutate(), std::move(replacement));
 }
 
 bool SpecializedHirUnit::replace(vhdl::Statement replacement)
@@ -19347,7 +19385,7 @@ bool SpecializedHirUnit::replace(vhdl::Statement replacement)
         return false;
     }
     return insert_replacement(
-        vhdl_statements_, std::move(replacement));
+        vhdl_statements_.mutate(), std::move(replacement));
 }
 
 bool SpecializedHirUnit::replace(sv::Process replacement)
@@ -19366,7 +19404,7 @@ bool SpecializedHirUnit::replace(sv::Process replacement)
         return false;
     }
     return insert_replacement(
-        systemverilog_processes_, std::move(replacement));
+        systemverilog_processes_.mutate(), std::move(replacement));
 }
 
 bool SpecializedHirUnit::replace(vhdl::Process replacement)
@@ -19384,7 +19422,8 @@ bool SpecializedHirUnit::replace(vhdl::Process replacement)
             design_->semantics.process_identities())) {
         return false;
     }
-    return insert_replacement(vhdl_processes_, std::move(replacement));
+    return insert_replacement(
+        vhdl_processes_.mutate(), std::move(replacement));
 }
 
 bool SpecializedHirUnit::replace(sv::Instance replacement)
@@ -19403,7 +19442,7 @@ bool SpecializedHirUnit::replace(sv::Instance replacement)
         return false;
     }
     return insert_replacement(
-        systemverilog_instances_, std::move(replacement));
+        systemverilog_instances_.mutate(), std::move(replacement));
 }
 
 bool SpecializedHirUnit::replace(vhdl::Instance replacement)
@@ -19421,7 +19460,8 @@ bool SpecializedHirUnit::replace(vhdl::Instance replacement)
             design_->semantics.instances())) {
         return false;
     }
-    return insert_replacement(vhdl_instances_, std::move(replacement));
+    return insert_replacement(
+        vhdl_instances_.mutate(), std::move(replacement));
 }
 
 std::optional<CompiledDeclarationView>
@@ -19429,12 +19469,12 @@ SpecializedHirUnit::find_declaration(const DeclarationId id) const noexcept
 {
     if (specialization_.language == Language::system_verilog) {
         if (const auto* replacement = find_replacement(
-                systemverilog_declarations_, id)) {
+                systemverilog_declarations_.get(), id)) {
             return CompiledDeclarationView { replacement, nullptr };
         }
     } else {
         if (const auto* replacement = find_replacement(
-                vhdl_declarations_, id)) {
+                vhdl_declarations_.get(), id)) {
             return CompiledDeclarationView { nullptr, replacement };
         }
     }
@@ -19453,11 +19493,12 @@ SpecializedHirUnit::find_type(const TypeId id) const noexcept
 {
     if (specialization_.language == Language::system_verilog) {
         if (const auto* replacement = find_replacement(
-                systemverilog_types_, id)) {
+                systemverilog_types_.get(), id)) {
             return CompiledTypeView { replacement, nullptr };
         }
     } else {
-        if (const auto* replacement = find_replacement(vhdl_types_, id)) {
+        if (const auto* replacement
+            = find_replacement(vhdl_types_.get(), id)) {
             return CompiledTypeView { nullptr, replacement };
         }
     }
@@ -19476,12 +19517,12 @@ SpecializedHirUnit::find_expression(const ExpressionId id) const noexcept
 {
     if (specialization_.language == Language::system_verilog) {
         if (const auto* replacement = find_replacement(
-                systemverilog_expressions_, id)) {
+                systemverilog_expressions_.get(), id)) {
             return CompiledExpressionView { replacement, nullptr };
         }
     } else {
         if (const auto* replacement = find_replacement(
-                vhdl_expressions_, id)) {
+                vhdl_expressions_.get(), id)) {
             return CompiledExpressionView { nullptr, replacement };
         }
     }
@@ -19500,12 +19541,12 @@ SpecializedHirUnit::find_statement(const StatementId id) const noexcept
 {
     if (specialization_.language == Language::system_verilog) {
         if (const auto* replacement = find_replacement(
-                systemverilog_statements_, id)) {
+                systemverilog_statements_.get(), id)) {
             return CompiledStatementView { replacement, nullptr };
         }
     } else {
         if (const auto* replacement = find_replacement(
-                vhdl_statements_, id)) {
+                vhdl_statements_.get(), id)) {
             return CompiledStatementView { nullptr, replacement };
         }
     }
@@ -19524,12 +19565,12 @@ SpecializedHirUnit::find_process(const ProcessId id) const noexcept
 {
     if (specialization_.language == Language::system_verilog) {
         if (const auto* replacement = find_replacement(
-                systemverilog_processes_, id)) {
+                systemverilog_processes_.get(), id)) {
             return CompiledProcessView { replacement, nullptr };
         }
     } else {
         if (const auto* replacement = find_replacement(
-                vhdl_processes_, id)) {
+                vhdl_processes_.get(), id)) {
             return CompiledProcessView { nullptr, replacement };
         }
     }
@@ -19551,12 +19592,12 @@ SpecializedHirUnit::find_instance(const InstanceId id) const noexcept
     }
     if (specialization_.language == Language::system_verilog) {
         if (const auto* replacement = find_replacement(
-                systemverilog_instances_, id)) {
+                systemverilog_instances_.get(), id)) {
             return CompiledInstanceView { replacement, nullptr };
         }
     } else {
         if (const auto* replacement = find_replacement(
-                vhdl_instances_, id)) {
+                vhdl_instances_.get(), id)) {
             return CompiledInstanceView { nullptr, replacement };
         }
     }
@@ -19679,73 +19720,73 @@ SpecializedHirUnit::selected_generate_instances() const
 std::span<const sv::Declaration>
 SpecializedHirUnit::systemverilog_declarations() const noexcept
 {
-    return systemverilog_declarations_;
+    return systemverilog_declarations_.get();
 }
 
 std::span<const vhdl::Declaration>
 SpecializedHirUnit::vhdl_declarations() const noexcept
 {
-    return vhdl_declarations_;
+    return vhdl_declarations_.get();
 }
 
 std::span<const sv::TypeDefinition>
 SpecializedHirUnit::systemverilog_types() const noexcept
 {
-    return systemverilog_types_;
+    return systemverilog_types_.get();
 }
 
 std::span<const vhdl::TypeDefinition>
 SpecializedHirUnit::vhdl_types() const noexcept
 {
-    return vhdl_types_;
+    return vhdl_types_.get();
 }
 
 std::span<const sv::Expression>
 SpecializedHirUnit::systemverilog_expressions() const noexcept
 {
-    return systemverilog_expressions_;
+    return systemverilog_expressions_.get();
 }
 
 std::span<const vhdl::Expression>
 SpecializedHirUnit::vhdl_expressions() const noexcept
 {
-    return vhdl_expressions_;
+    return vhdl_expressions_.get();
 }
 
 std::span<const sv::Statement>
 SpecializedHirUnit::systemverilog_statements() const noexcept
 {
-    return systemverilog_statements_;
+    return systemverilog_statements_.get();
 }
 
 std::span<const vhdl::Statement>
 SpecializedHirUnit::vhdl_statements() const noexcept
 {
-    return vhdl_statements_;
+    return vhdl_statements_.get();
 }
 
 std::span<const sv::Process>
 SpecializedHirUnit::systemverilog_processes() const noexcept
 {
-    return systemverilog_processes_;
+    return systemverilog_processes_.get();
 }
 
 std::span<const vhdl::Process>
 SpecializedHirUnit::vhdl_processes() const noexcept
 {
-    return vhdl_processes_;
+    return vhdl_processes_.get();
 }
 
 std::span<const sv::Instance>
 SpecializedHirUnit::systemverilog_instances() const noexcept
 {
-    return systemverilog_instances_;
+    return systemverilog_instances_.get();
 }
 
 std::span<const vhdl::Instance>
 SpecializedHirUnit::vhdl_instances() const noexcept
 {
-    return vhdl_instances_;
+    return vhdl_instances_.get();
 }
 
 std::optional<SpecializedHirUnit> make_specialized_hir_unit(

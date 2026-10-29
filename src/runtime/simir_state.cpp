@@ -1402,16 +1402,17 @@ void Interpreter::Impl::register_static_sensitivity_cohort(
             == ProcessSchedulingDomain::systemverilog
         ? 's'
         : 'g';
+    // Fixed-width raw fields: the key is only compared for equality.
+    key.reserve(2U + sensitivity.size() * 13U);
+    const auto append_u32 = [&key](const std::uint32_t value) {
+        key.append(reinterpret_cast<const char*>(&value), sizeof value);
+    };
     for (const auto& entry : sensitivity) {
-        key += std::to_string(static_cast<std::size_t>(entry.signal));
-        key += ':';
-        key += std::to_string(static_cast<std::underlying_type_t<EdgeKind>>(
-            entry.edge));
-        key += ':';
-        key += std::to_string(entry.offset);
-        key += ':';
-        key += std::to_string(entry.width);
-        key += ';';
+        append_u32(entry.signal);
+        key += static_cast<char>(
+            static_cast<std::underlying_type_t<EdgeKind>>(entry.edge));
+        append_u32(entry.offset);
+        append_u32(entry.width);
     }
     const auto [found, inserted]
         = static_sensitivity_cohort_by_key.try_emplace(
@@ -3016,10 +3017,18 @@ void Interpreter::Impl::install_monitor(const ProcessId process,
         throw std::overflow_error { "monitor generation overflow" };
     }
     ++monitor_generation;
+    // Only the previous monitor's own signals can be set in the mask.
+    if (monitor) {
+        for (const auto& value : monitor->values) {
+            if (value.kind == MonitorValueKind::signal
+                && value.signal < monitor_signal_watch_mask.size()) {
+                monitor_signal_watch_mask[value.signal] = 0U;
+            }
+        }
+    }
     monitor = registration;
     monitor_signal_watches_unknown
         = monitor_signal_watch_mask.size() != signals.size();
-    std::ranges::fill(monitor_signal_watch_mask, 0U);
     for (const auto& value : registration.values) {
         if (value.kind != MonitorValueKind::signal) {
             continue;

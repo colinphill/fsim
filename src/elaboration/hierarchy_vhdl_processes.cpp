@@ -61,21 +61,6 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
         return compiled_source_encloses(source, external_spans);
     };
 
-    // Signals a generated occurrence may name: the architecture's and the
-    // generate region's.
-    const auto generated_signal_declarations
-        = [&](const VhdlHirMaterialization& materialization) {
-              std::vector<semantic::DeclarationId> declarations;
-              declarations.reserve(architecture.declarations.size()
-                  + materialization.signal_declarations.size());
-              declarations.insert(declarations.end(),
-                  architecture.declarations.begin(),
-                  architecture.declarations.end());
-              declarations.insert(declarations.end(),
-                  materialization.signal_declarations.begin(),
-                  materialization.signal_declarations.end());
-              return declarations;
-          };
     for (std::size_t materialization_index { };
          materialization_index < materializations.size();
          ++materialization_index) {
@@ -250,7 +235,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                     generated_lowerer, statement_id, materialization.path,
                     concurrent_order++, std::nullopt,
                     materialization.generate_relative_discriminator,
-                    generated_signal_declarations(materialization));
+                    architecture.declarations,
+                    materialization.signal_declarations);
                 if (!occurrence) {
                     report("FSIM-ELAB-HIR-001",
                         std::string {
@@ -328,7 +314,8 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                 generated_lowerer, semantic::StatementId { },
                 materialization.path, concurrent_order++, process_id,
                 materialization.generate_relative_discriminator,
-                generated_signal_declarations(materialization));
+                architecture.declarations,
+                materialization.signal_declarations);
             if (!lowered) {
                 report("FSIM-ELAB-HIR-001",
                     "compiled generated VHDL process could not be "

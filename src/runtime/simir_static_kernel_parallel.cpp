@@ -2315,8 +2315,9 @@ bool Interpreter::Impl::StaticKernel::commit_domains()
                                                      : std::chrono::steady_clock::time_point { };
         writes_.count = 0U;
         host_nba_staged_ = false;
-        auto elements = std::move(nba_);
-        nba_.clear();
+        static_kernel_detail::QueueDrain<NbaEntry> drained_elements(
+            nba_, nba_spare_);
+        auto& elements = drained_elements.items();
         merge_items_.clear();
         for (const auto index : active_domains_) {
             const auto& logged = domains_[index].logged;

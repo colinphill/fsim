@@ -74,6 +74,44 @@ namespace {
     return false;
 }
 
+/// Whether bits [offset, offset + width) of two equal-width values differ in
+/// the model's element view (Logic9 under VHDL, else Logic4). Two Logic4-kind
+/// values differ at a bit exactly when their aval or bval bit does (the
+/// element views are injective in those planes), so those compare by mask,
+/// word at a time; any Logic9-kind value compares per element.
+[[nodiscard]] bool packed_range_differs(const PackedLogic4& before,
+    const PackedLogic4& after, const std::uint32_t offset,
+    const std::uint32_t width, const bool vhdl)
+{
+    const auto end = offset + width;
+    if (!before.is_logic9() && !after.is_logic9()) {
+        const auto ba = before.aval_words();
+        const auto bb = before.bval_words();
+        const auto aa = after.aval_words();
+        const auto ab = after.bval_words();
+        const auto last = width == 0U ? 0U : (end - 1U) / 64U + 1U;
+        if (ba.size() >= last && bb.size() >= last && aa.size() >= last
+            && ab.size() >= last) {
+            for (auto word = offset / 64U; word < last; ++word) {
+                const auto low = std::max(offset, word * 64U);
+                const auto high = std::min(end, word * 64U + 64U);
+                const auto m = kernel_word::mask(high - low) << (low % 64U);
+                if (((ba[word] ^ aa[word]) | (bb[word] ^ ab[word])) & m) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+    for (auto bit = offset; bit < end; ++bit) {
+        if (vhdl ? before.get_logic9(bit) != after.get_logic9(bit)
+                 : before.get(bit) != after.get(bit)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Plane `plane` of a value: aval, bval, then the upper Logic9 code planes.
 [[nodiscard]] std::span<const std::uint64_t> value_plane(
     const PackedLogic4& value, const std::uint32_t plane)
@@ -977,19 +1015,22 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             }
         }
     }
+    // Scratch for the offset-ordered copy of each slot's writers.
+    decltype(Slot::writers) ordered_writers;
     for (auto& slot : slots_) {
         if (slot.writers.size() == 1U) {
             slot.last_writer = slot.writers.front().process;
             slot.single_writer = true;
             continue;
         }
-        auto writers = slot.writers;
-        std::ranges::sort(writers, [](const auto& left, const auto& right) {
+        ordered_writers.assign(slot.writers.begin(), slot.writers.end());
+        std::ranges::sort(ordered_writers, [](const auto& left, const auto& right) {
             return left.offset < right.offset;
         });
-        for (std::size_t index = 1U; index < writers.size(); ++index) {
-            if (writers[index - 1U].offset + writers[index - 1U].width
-                > writers[index].offset) {
+        for (std::size_t index = 1U; index < ordered_writers.size(); ++index) {
+            if (ordered_writers[index - 1U].offset
+                    + ordered_writers[index - 1U].width
+                > ordered_writers[index].offset) {
                 slot.disjoint_writers = false;
             }
         }
@@ -1346,6 +1387,21 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
     }
     {
+        // One edge per (member, successor), first occurrence kept: the
+        // component search, level and partition passes all ignore edge
+        // multiplicity, and the edge order they walk is unchanged.
+        std::vector<std::uint32_t> seen_from(count, no_slot);
+        for (std::uint32_t index = 0U; index < count; ++index) {
+            auto& list = successors[index];
+            std::size_t kept = 0U;
+            for (const auto successor : list) {
+                if (seen_from[successor] != index) {
+                    seen_from[successor] = index;
+                    list[kept++] = successor;
+                }
+            }
+            list.resize(kept);
+        }
         const auto levels = condensed_levels(successors);
         for (std::uint32_t index = 0U; index < count; ++index) {
             members_[index].level = levels.level[index];
@@ -1950,14 +2006,8 @@ bool Interpreter::Impl::StaticKernel::waiter_range_changed(
             || waiter.offset + waiter.width > after.width()) {
             return true;
         }
-        for (std::uint32_t bit = waiter.offset;
-             bit < waiter.offset + waiter.width; ++bit) {
-            if (vhdl_ ? before.get_logic9(bit) != after.get_logic9(bit)
-                      : before.get(bit) != after.get(bit)) {
-                return true;
-            }
-        }
-        return false;
+        return packed_range_differs(before, after, waiter.offset, waiter.width,
+            vhdl_);
     }
     if (change.slot_before != nullptr) {
         const auto& slot = slots_[change.slot];
@@ -2234,8 +2284,7 @@ void Interpreter::Impl::StaticKernel::write_slot_value(
     slot.last_writer = member_process_[member];
     auto next = offset ? insert_value(slot_value(slot_index), value, *offset)
                        : value;
-    std::vector<std::uint64_t> before(arena_.begin() + slot.offset,
-        arena_.begin() + slot.offset + 2U * slot.words);
+    const WordSnapshot before(arena_.data() + slot.offset, 2U * slot.words);
     const auto aval = next.aval_words();
     const auto bval = next.bval_words();
     bool changed = false;
@@ -2284,8 +2333,8 @@ void Interpreter::Impl::StaticKernel::write_slot_immediate(
             "static kernel write width does not match its signal");
     }
     slot.last_writer = member_process_[member];
-    std::vector<std::uint64_t> before(arena_.begin() + slot.offset,
-        arena_.begin() + slot.offset + slot.planes * slot.words);
+    const WordSnapshot before(
+        arena_.data() + slot.offset, slot.planes * slot.words);
     store_slot_bits(slot_index, value, offset.value_or(0U));
     if (!std::equal(before.begin(), before.end(),
             arena_.begin() + slot.offset)) {
@@ -3253,16 +3302,17 @@ void Interpreter::Impl::StaticKernel::build_dispatch_groups()
     const auto rewrite = [&](std::vector<EdgeReader>& edges) {
         std::vector<EdgeReader> rewritten;
         rewritten.reserve(edges.size());
+        // (group, edge) pairs already kept in this list.
+        std::unordered_set<std::uint64_t> kept;
         for (const auto& reader : edges) {
             const auto group = group_of[reader.member];
-            const EdgeReader entry = group == no_slot
-                ? reader
-                : EdgeReader { group | dispatch_group_tag, reader.edge };
-            if (group == no_slot
-                || std::ranges::none_of(rewritten, [&](const EdgeReader& existing) {
-                       return existing.member == entry.member
-                           && existing.edge == entry.edge;
-                   })) {
+            if (group == no_slot) {
+                rewritten.push_back(reader);
+                continue;
+            }
+            const EdgeReader entry { group | dispatch_group_tag, reader.edge };
+            if (kept.insert((static_cast<std::uint64_t>(group) << 8U)
+                    | static_cast<std::uint64_t>(reader.edge)).second) {
                 rewritten.push_back(entry);
             }
         }
@@ -3336,6 +3386,13 @@ void Interpreter::Impl::StaticKernel::index_ranged_readers(Slot& slot)
 
 void Interpreter::Impl::StaticKernel::build_schedule_targets()
 {
+    // Position in the slot's target list by target id (members, then
+    // partitions); reset after each slot.
+    std::vector<std::uint32_t> target_at(members_.size() + partitions_.size(), no_slot);
+    const auto target_index = [&](const std::uint32_t id) -> std::uint32_t& {
+        return target_at[(id & partition_tag) != 0U
+            ? members_.size() + (id & ~partition_tag) : id];
+    };
     for (auto& slot : slots_) {
         std::vector<Reader> ranged;
         std::vector<ScheduleTarget> targets;
@@ -3350,16 +3407,17 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
                 && member.partition != no_slot) {
                 target = { member.partition | partition_tag, member.position };
             }
-            const auto found = std::ranges::find_if(targets,
-                [&](const ScheduleTarget& existing) {
-                    return existing.id == target.id;
-                });
-            if (found == targets.end()) {
+            auto& at = target_index(target.id);
+            if (at == no_slot) {
+                at = static_cast<std::uint32_t>(targets.size());
                 targets.push_back(target);
             } else {
-                found->min_position
-                    = std::min(found->min_position, target.min_position);
+                targets[at].min_position
+                    = std::min(targets[at].min_position, target.min_position);
             }
+        }
+        for (const auto& target : targets) {
+            target_index(target.id) = no_slot;
         }
         // Group ranged readers by the target that schedule() would queue.
         const auto group_of = [&](const Reader& reader) {
@@ -3642,8 +3700,9 @@ void Interpreter::Impl::StaticKernel::BatchProfile::record(
 
 void Interpreter::Impl::StaticKernel::run_triggered_round()
 {
-    auto triggered = std::move(triggered_);
-    triggered_.clear();
+    static_kernel_detail::QueueDrain<std::uint32_t> drained(
+        triggered_, triggered_spare_);
+    auto& triggered = drained.items();
     constexpr std::size_t merge_limit = 8U;
     if (triggered.size() <= merge_limit
         && std::ranges::all_of(triggered, [](const std::uint32_t id) {
@@ -5202,10 +5261,12 @@ void Interpreter::Impl::StaticKernel::commit_pending()
     const auto count = writes_.count;
     writes_.count = 0U;
     host_nba_staged_ = false;
-    auto elements = std::move(nba_);
-    nba_.clear();
-    auto generic = std::move(pending_generic_);
-    pending_generic_.clear();
+    static_kernel_detail::QueueDrain<NbaEntry> drained_elements(
+        nba_, nba_spare_);
+    auto& elements = drained_elements.items();
+    static_kernel_detail::QueueDrain<Pending> drained_generic(
+        pending_generic_, pending_generic_spare_);
+    auto& generic = drained_generic.items();
     for (std::uint32_t index = 0U; index < count; ++index) {
         const auto item = writes_.data[index];
         switch (item.kind) {
@@ -5264,8 +5325,9 @@ void Interpreter::Impl::StaticKernel::publish(
             }
         }
     }
-    auto queue = std::move(output_queue_);
-    output_queue_.clear();
+    static_kernel_detail::QueueDrain<std::uint32_t> drained(
+        output_queue_, output_queue_spare_);
+    auto& queue = drained.items();
     for (const auto slot_index : queue) {
         auto& slot = slots_[slot_index];
         slot.output_pending = false;
@@ -5670,11 +5732,9 @@ void Interpreter::Impl::StaticKernel::apply_input(
         bool differs = event || reader.width == 0U
             || before.width() != input.cached.width()
             || reader.offset + reader.width > input.cached.width();
-        for (std::uint32_t bit = reader.offset;
-             !differs && bit < reader.offset + reader.width; ++bit) {
-            differs = vhdl_
-                ? before.get_logic9(bit) != input.cached.get_logic9(bit)
-                : before.get(bit) != input.cached.get(bit);
+        if (!differs) {
+            differs = packed_range_differs(before, input.cached, reader.offset,
+                reader.width, vhdl_);
         }
         if (differs) {
             schedule(reader.member);

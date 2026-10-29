@@ -602,14 +602,23 @@ std::optional<HirCallableBodyRecording> Lowerer::renumber_hir_callable_body(
         return true;
     };
     auto body = recording;
+    // The recording keeps each recorded scope alive, so its address names
+    // the scope for the whole replay.
+    std::unordered_map<const std::string*, InternedString> scope_prefixed;
     for (auto& operation : body.operations) {
         if (auto* point = operation_get_if<DebugPoint>(&operation)) {
-            if (point->scope.empty()) {
-                point->scope = InternedString { process_.name };
-            } else if (!process_.name.empty()) {
-                point->scope = InternedString {
-                    process_.name + "." + point->scope.str()
-                };
+            if (point->scope.empty() || !process_.name.empty()) {
+                const auto* key = &point->scope.str();
+                auto found = scope_prefixed.find(key);
+                if (found == scope_prefixed.end()) {
+                    found = scope_prefixed.emplace(key,
+                        point->scope.empty()
+                            ? InternedString { process_.name }
+                            : InternedString {
+                                process_.name + "." + point->scope.str()
+                            }).first;
+                }
+                point->scope = found->second;
             }
         }
         (void)for_each_replayable_operand(

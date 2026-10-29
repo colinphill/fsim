@@ -278,7 +278,11 @@ void Interpreter::Impl::schedule_update_commit()
                 candidate.owners.push_back(std::move(selection));
                 return candidate.owners.back();
             };
-            for (const auto& pending : pending_updates) {
+            const std::span<const PendingUpdate> alias_scan_updates
+                = has_container_aggregate_aliases
+                ? std::span<const PendingUpdate> { pending_updates }
+                : std::span<const PendingUpdate> { };
+            for (const auto& pending : alias_scan_updates) {
                 if (pending.signal
                         >= signal_container_aggregate_aliases.size()
                     || !signal_container_aggregate_aliases[pending.signal]) {
@@ -313,7 +317,7 @@ void Interpreter::Impl::schedule_update_commit()
                         ? std::optional<ProcessId> { pending.driver }
                         : std::nullopt);
             }
-            for (const auto& pending : pending_updates) {
+            for (const auto& pending : alias_scan_updates) {
                 if (pending.signal
                         >= signal_container_element_aliases.size()
                     || !signal_container_element_aliases[pending.signal]) {
@@ -646,9 +650,53 @@ void Interpreter::Impl::schedule_update_commit()
                     } else {
                         auto& staged
                             = driver_update_scratch[pending.signal];
-                        auto found = std::ranges::find(
-                            staged, driver,
-                            &PendingDriverCommit::driver);
+                        // Wide fan-in nets stage one entry per driver; past a
+                        // small bound the lookup goes through a per-signal
+                        // index of the entries already staged (rebuilt when
+                        // other staging paths appended to the vector).
+                        const auto driver_key = driver
+                            ? static_cast<std::uint64_t>(*driver) + 1U
+                            : std::uint64_t { 0U };
+                        const auto index_new_entry = [&]() {
+                            if (driver_update_index.empty()) {
+                                return;
+                            }
+                            const auto index_it
+                                = driver_update_index.find(pending.signal);
+                            if (index_it != driver_update_index.end()
+                                && index_it->second.size()
+                                    == staged.size() - 1U) {
+                                index_it->second.emplace(
+                                    driver_key, staged.size() - 1U);
+                            }
+                        };
+                        auto found = staged.end();
+                        if (staged.size() < 16U) {
+                            found = std::ranges::find(
+                                staged, driver,
+                                &PendingDriverCommit::driver);
+                        } else {
+                            auto& index = driver_update_index[pending.signal];
+                            if (index.size() != staged.size()) {
+                                index.clear();
+                                for (std::size_t slot = 0U;
+                                    slot < staged.size(); ++slot) {
+                                    const auto& entry = staged[slot].driver;
+                                    index.emplace(
+                                        entry
+                                            ? static_cast<std::uint64_t>(
+                                                  *entry) + 1U
+                                            : std::uint64_t { 0U },
+                                        slot);
+                                }
+                            }
+                            const auto hit = index.find(driver_key);
+                            if (hit != index.end()) {
+                                found = staged.begin()
+                                    + static_cast<std::ptrdiff_t>(
+                                        hit->second);
+                            }
+                        }
                         if (found == staged.end()) {
                             if (staged.empty()) {
                                 driver_update_signals.push_back(
@@ -657,6 +705,7 @@ void Interpreter::Impl::schedule_update_commit()
                             if (!pending.offset_present()) {
                                 staged.push_back(PendingDriverCommit {
                                     driver, pending_value(pending) });
+                                index_new_entry();
                                 mark_resolved(pending.signal);
                                 continue;
                             }
@@ -673,6 +722,7 @@ void Interpreter::Impl::schedule_update_commit()
                                 driver,
                                 std::move(initial) });
                             found = std::prev(staged.end());
+                            index_new_entry();
                         }
                         destination = &found->value;
                         mark_resolved(pending.signal);
@@ -940,6 +990,7 @@ void Interpreter::Impl::schedule_update_commit()
                 staged.clear();
             }
             driver_update_signals.clear();
+            driver_update_index.clear();
 
             update_commit_scratch.clear();
             update_commit_scratch.reserve(
@@ -1311,6 +1362,30 @@ void Interpreter::Impl::prepare_systemverilog_update_pool()
             continue;
         }
         const auto program = processes.program_view(id);
+        // Instances of one operation body share its summary; a body with
+        // none of the tagged write kinds skips the per-operation scan.
+        const auto* const kinds = body_kinds(program.operations());
+        if (kinds != nullptr
+            && !kinds->kinds.test(
+                static_kernel_detail::operation_kind_of<WriteUpdate>)
+            && !kinds->kinds.test(
+                static_kernel_detail::operation_kind_of<WriteAfter>)
+            && !kinds->kinds.test(
+                static_kernel_detail::operation_kind_of<WriteDelayed>)
+            && !kinds->kinds.test(
+                static_kernel_detail::operation_kind_of<WriteUpdateSlice>)
+            && !kinds->kinds.test(
+                static_kernel_detail::operation_kind_of<WriteAfterSlice>)
+            && !kinds->kinds.test(static_kernel_detail::operation_kind_of<
+                WriteUpdateDynamicSlice>)
+            && !kinds->kinds.test(static_kernel_detail::operation_kind_of<
+                WriteAfterDynamicSlice>)
+            && !kinds->kinds.test(static_kernel_detail::operation_kind_of<
+                WriteUpdateDynamicPartSlice>)
+            && !kinds->kinds.test(static_kernel_detail::operation_kind_of<
+                WriteAfterDynamicPartSlice>)) {
+            continue;
+        }
         for (const auto& operation : program.operations()) {
             count_if_tagged(operation_get_if<WriteUpdate>(&operation));
             count_if_tagged(operation_get_if<WriteAfter>(&operation));

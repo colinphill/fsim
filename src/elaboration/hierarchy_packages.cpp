@@ -2894,15 +2894,13 @@ namespace {
                 && definition.form == semantic::vhdl::TypeForm::physical) {
                 const auto declaration = specialization.find_declaration(
                     definition.declaration);
-                const auto physical_scope
+                const auto* physical_scope
                     = declaration && declaration->vhdl != nullptr
-                    ? std::ranges::find(
+                    ? semantic::find_by_id(
                           specialization.design().semantics.scopes(),
-                          declaration->vhdl->scope,
-                          &semantic::Scope::id)
-                    : specialization.design().semantics.scopes().end();
-                const auto owner_unit = physical_scope
-                        != specialization.design().semantics.scopes().end()
+                          declaration->vhdl->scope)
+                    : nullptr;
+                const auto owner_unit = physical_scope != nullptr
                     ? compiled_vhdl_unit(
                           specialization.design(), physical_scope->unit)
                     : nullptr;
@@ -3226,11 +3224,9 @@ namespace {
                 return &fallback;
             }
             const auto& scopes = compiled.semantics.scopes();
-            const auto owner_scope = std::ranges::find(
-                scopes,
-                declaration->systemverilog->scope,
-                &semantic::Scope::id);
-            if (owner_scope == scopes.end()) {
+            const auto* owner_scope = semantic::find_by_id(
+                scopes, declaration->systemverilog->scope);
+            if (owner_scope == nullptr) {
                 return &fallback;
             }
             const auto owner_unit = owner_scope->unit;
@@ -16809,6 +16805,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             deferred_generated, specialization_index, program_owner)) {
         return false;
     }
+    // Every lowerer that records under this instance's path is done.
+    vhdl_lowering_index_.release_instance_callable_bodies(path);
     resolve_compiled_systemverilog_virtual_interface_initializers(
         unit, pending_virtual_interface_initializers);
     for (std::size_t index = defparam_guard.size();
@@ -31308,7 +31306,8 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
             && clean_vhdl_validation(architecture.id, entity, actuals, false);
         if (!vhdl_types_validated) {
             const auto issues = validate_vhdl_hir_types(
-                *specialized, *entity, architecture);
+                *specialized, *entity, architecture,
+                &vhdl_lowering_index_);
             for (const auto& issue : issues) {
                 report(
                     issue.code,
@@ -32165,7 +32164,7 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
             const auto issues = validate_vhdl_hir_types(
                 *child_interface_specialization,
                 *target_entity,
-                *child->vhdl);
+                *child->vhdl, &vhdl_lowering_index_);
             for (const auto& issue : issues) {
                 report(
                     issue.code,
@@ -32455,11 +32454,13 @@ bool HierarchyBuilder::validate_compiled_vhdl_generated_callables(
         }
         return false;
     };
+    // The specialization's replacement expressions are inspected first and
+    // shadow the design expressions of the same identity; design expression
+    // identities are unique, so only the replacements need recording.
     std::unordered_set<std::uint32_t> inspected_expressions;
     const auto inspect_expression = [&](
                                         const semantic::vhdl::Expression& expression) {
-        if (!inspected_expressions.insert(expression.id.value()).second
-            || expression.kind
+        if (expression.kind
                 != semantic::vhdl::ExpressionKind::call
             || !expression.referenced_name) {
             return;
@@ -32517,10 +32518,14 @@ bool HierarchyBuilder::validate_compiled_vhdl_generated_callables(
     };
     if (!generated_callables.empty()) {
         for (const auto& expression : specialization.vhdl_expressions()) {
-            inspect_expression(expression);
+            if (inspected_expressions.insert(expression.id.value()).second) {
+                inspect_expression(expression);
+            }
         }
         for (const auto& expression : compiled_->vhdl_hir.expressions()) {
-            inspect_expression(expression);
+            if (!inspected_expressions.contains(expression.id.value())) {
+                inspect_expression(expression);
+            }
         }
     }
     for (const auto declaration_id : declarations) {

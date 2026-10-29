@@ -27516,12 +27516,15 @@ std::optional<std::string> Lowerer::hir_vhdl_path_text(
             if (level + 1U == instances) {
                 unit = current_unit->vhdl;
             } else {
-                const auto found = std::ranges::find_if(design_.specializations_,
-                    [&](const SpecializationInfo& specialization) {
-                        return lower(specialization.instance) == prefix_path
-                            && specialization.source_unit;
-                    });
-                if (found != design_.specializations_.end()) {
+                const SpecializationInfo* found = nullptr;
+                for (const auto position :
+                    design_.specialization_positions_lowercase(prefix_path)) {
+                    if (design_.specializations_[position].source_unit) {
+                        found = &design_.specializations_[position];
+                        break;
+                    }
+                }
+                if (found != nullptr) {
                     const auto source = design.find_unit(*found->source_unit);
                     unit = source && source->vhdl != nullptr ? source->vhdl : nullptr;
                 }

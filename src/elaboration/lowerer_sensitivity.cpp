@@ -23,8 +23,10 @@ void Lowerer::record_container_object_dependency(
     const runtime::simir::ContainerObjectId object)
 {
     bool found_element_alias = false;
-    for (const auto& alias : design_.container_element_signal_aliases_) {
-        if (alias.object == object && alias.readable) {
+    for (const auto position :
+        design_.container_element_alias_positions(object)) {
+        const auto& alias = design_.container_element_signal_aliases_[position];
+        if (alias.readable) {
             record_implicit_signal_dependency(alias.signal);
             found_element_alias = true;
         }
@@ -32,14 +34,14 @@ void Lowerer::record_container_object_dependency(
     if (found_element_alias) {
         return;
     }
-    const auto alias = std::ranges::find_if(
-        design_.container_signal_aliases_.rbegin(),
-        design_.container_signal_aliases_.rend(),
-        [object](const runtime::simir::ContainerSignalAlias& candidate) {
-            return candidate.object == object && candidate.readable;
+    const auto positions = design_.container_alias_positions(object);
+    const auto alias = std::ranges::find_if(positions.rbegin(), positions.rend(),
+        [&](const std::uint32_t position) {
+            return design_.container_signal_aliases_[position].readable;
         });
-    if (alias != design_.container_signal_aliases_.rend()) {
-        record_implicit_signal_dependency(alias->signal);
+    if (alias != positions.rend()) {
+        record_implicit_signal_dependency(
+            design_.container_signal_aliases_[*alias].signal);
         return;
     }
     // Without a signal holding its value, an implicit event list waits on

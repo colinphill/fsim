@@ -623,6 +623,7 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
         [&](const ContainerSignalAlias& alias) {
             return family_objects.contains(alias.object);
         });
+    design_.invalidate_container_alias_indexes();
     if (lowering_census_enabled_) {
         census.physical_families = families.size();
         census.physical_leaves = static_cast<std::size_t>(

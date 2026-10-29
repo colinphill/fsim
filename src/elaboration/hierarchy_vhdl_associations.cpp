@@ -540,9 +540,7 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
     const auto& scopes = compiled_->semantics.scopes();
     const auto& units = compiled_->semantics.units();
     const auto find_scope = [&](const semantic::ScopeId id) {
-        const auto scope = std::ranges::find(
-            scopes, id, &semantic::Scope::id);
-        return scope == scopes.end() ? nullptr : &*scope;
+        return semantic::find_by_id(scopes, id);
     };
     const auto name_equal = [](
                                 const std::string_view left,

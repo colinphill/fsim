@@ -11,6 +11,7 @@
 #include "hierarchy_sv_type_layout_internal.hpp"
 #include "lowerer_internal.hpp"
 
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -638,6 +639,17 @@ namespace {
         return result;
     }
 
+    // Appends the decimal digits std::to_string would produce.
+    template <typename Integer>
+    void append_decimal(std::string& key, const Integer value)
+    {
+        std::array<char, 24> digits;
+        const auto end
+            = std::to_chars(digits.data(), digits.data() + digits.size(), value)
+                  .ptr;
+        key.append(digits.data(), end);
+    }
+
     // Calls resolved through different generic actuals (a formal subprogram,
     // an instance's generics) run different bodies or environments, so their
     // frames must not be shared (IEEE 1076-2008 4.2.1, 6.5.6.2).
@@ -645,14 +657,20 @@ namespace {
         const semantic::CompiledBindingFrame& bindings)
     {
         for (const auto& binding : bindings) {
-            key += "|generic:" + std::to_string(binding.formal.value()) + ":"
-                + (binding.expression
-                        ? std::to_string(binding.expression->value())
-                        : std::string { "-" })
-                + ":"
-                + (binding.actual_declaration
-                        ? std::to_string(binding.actual_declaration->value())
-                        : std::string { "-" });
+            key += "|generic:";
+            append_decimal(key, binding.formal.value());
+            key += ':';
+            if (binding.expression) {
+                append_decimal(key, binding.expression->value());
+            } else {
+                key += '-';
+            }
+            key += ':';
+            if (binding.actual_declaration) {
+                append_decimal(key, binding.actual_declaration->value());
+            } else {
+                key += '-';
+            }
         }
     }
 
@@ -4412,7 +4430,9 @@ std::optional<std::uint32_t> Lowerer::hir_class_member_specialization(
     if (selected != nullptr) {
         *selected = accessed;
     }
-    if (std::getenv("FSIM_SV_CLASS_SPEC_TRACE") != nullptr) {
+    static const bool class_spec_trace
+        = std::getenv("FSIM_SV_CLASS_SPEC_TRACE") != nullptr;
+    if (class_spec_trace) {
         std::fprintf(stderr, "[fsim-sv-class-spec] member call=%u owner=%zu "
                              "running=%d for_expr=%d -> %s\n",
             static_cast<unsigned>(call.value()),
@@ -5081,10 +5101,8 @@ Lowerer::hir_class_task_profile(
                     break;
                 }
                 ancestor.resize(dot);
-                const auto found = std::ranges::find(design_.specializations_,
-                    ancestor, &SpecializationInfo::instance);
-                if (found == design_.specializations_.end()
-                    || !found->source_unit) {
+                const auto* const found = design_.find_specialization(ancestor);
+                if (found == nullptr || !found->source_unit) {
                     continue;
                 }
                 const auto unit = std::ranges::find(units,
@@ -9670,10 +9688,12 @@ Lowerer::hir_vhdl_type_actual(
     return std::nullopt;
 }
 
-std::optional<semantic::vhdl::SubtypeIndication>
-Lowerer::hir_effective_vhdl_subtype(
-    const semantic::vhdl::SubtypeIndication& subtype) const
+std::shared_ptr<const semantic::vhdl::SubtypeIndication>
+Lowerer::lookup_hir_effective_vhdl_subtype(
+    const semantic::vhdl::SubtypeIndication& subtype,
+    std::optional<semantic::vhdl::SubtypeIndication>& fresh) const
 {
+    using Cached = std::shared_ptr<const semantic::vhdl::SubtypeIndication>;
     const auto resolve = [&] {
         if (specialized_hir_unit_ == nullptr) {
             return std::optional<semantic::vhdl::SubtypeIndication> { };
@@ -9696,7 +9716,8 @@ Lowerer::hir_effective_vhdl_subtype(
             scoped_subtype, hir_process_scope_);
     };
     if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
-        return resolve();
+        fresh = resolve();
+        return Cached { };
     }
 
     const auto scope = hir_process_scope_;
@@ -9714,22 +9735,16 @@ Lowerer::hir_effective_vhdl_subtype(
     }();
     const auto frames = hir_binding_frames_state();
     if (!frames) {
-        return resolve();
+        fresh = resolve();
+        return Cached { };
     }
     if (const auto bucket = hir_effective_vhdl_subtype_cache_.find(key);
         bucket != hir_effective_vhdl_subtype_cache_.end()) {
         for (const auto& entry : bucket->second) {
             if (entry.scope == scope && entry.binding_frames == *frames
                 && entry.subtype == subtype) {
-                try {
-                    auto cached = std::optional<semantic::vhdl::SubtypeIndication> {
-                        entry.result
-                    };
-                    ++hir_effective_vhdl_subtype_cache_hits_;
-                    return cached;
-                } catch (const std::bad_alloc&) {
-                    break;
-                }
+                ++hir_effective_vhdl_subtype_cache_hits_;
+                return entry.result;
             }
         }
     }
@@ -9738,13 +9753,15 @@ Lowerer::hir_effective_vhdl_subtype(
     const auto folds_before = hir_boundary_fallback_folds_;
     auto result = resolve();
     if (!result || hir_boundary_fallback_folds_ != folds_before) {
-        return result;
+        fresh = std::move(result);
+        return Cached { };
     }
     if (hir_effective_vhdl_subtype_cache_entries_
             >= maximum_effective_subtype_cache_entries
         || hir_effective_vhdl_subtype_cache_bytes_
                 >= maximum_effective_subtype_cache_bytes) {
-        return result;
+        fresh = std::move(result);
+        return Cached { };
     }
     auto retained_bytes = sizeof(HirEffectiveVhdlSubtypeCacheEntry);
     const auto entry_limit = maximum_effective_subtype_cache_entry_bytes;
@@ -9755,21 +9772,57 @@ Lowerer::hir_effective_vhdl_subtype(
             retained_bytes, *result, entry_limit)
         || !cache_bytes_fit(hir_effective_vhdl_subtype_cache_bytes_,
             retained_bytes, maximum_effective_subtype_cache_bytes)) {
-        return result;
+        fresh = std::move(result);
+        return Cached { };
     }
+    // The cache and the caller share one immutable result; a cache clear
+    // does not end the lifetime of a result a caller still holds.
+    Cached shared;
     try {
+        shared = std::make_shared<const semantic::vhdl::SubtypeIndication>(
+            std::move(*result));
         hir_effective_vhdl_subtype_cache_[key].push_back({
             subtype,
             scope,
             *frames,
-            *result,
+            shared,
         });
     } catch (const std::bad_alloc&) {
-        return result;
+        if (shared) {
+            return shared;
+        }
+        fresh = std::move(result);
+        return Cached { };
     }
     ++hir_effective_vhdl_subtype_cache_entries_;
     hir_effective_vhdl_subtype_cache_bytes_ += retained_bytes;
-    return result;
+    return shared;
+}
+
+std::optional<semantic::vhdl::SubtypeIndication>
+Lowerer::hir_effective_vhdl_subtype(
+    const semantic::vhdl::SubtypeIndication& subtype) const
+{
+    std::optional<semantic::vhdl::SubtypeIndication> fresh;
+    if (const auto cached = lookup_hir_effective_vhdl_subtype(subtype, fresh)) {
+        return *cached;
+    }
+    return fresh;
+}
+
+std::shared_ptr<const semantic::vhdl::SubtypeIndication>
+Lowerer::hir_effective_vhdl_subtype_ref(
+    const semantic::vhdl::SubtypeIndication& subtype) const
+{
+    std::optional<semantic::vhdl::SubtypeIndication> fresh;
+    if (auto cached = lookup_hir_effective_vhdl_subtype(subtype, fresh)) {
+        return cached;
+    }
+    if (!fresh) {
+        return nullptr;
+    }
+    return std::make_shared<const semantic::vhdl::SubtypeIndication>(
+        std::move(*fresh));
 }
 
 const semantic::CompiledDeclarationResolution*
@@ -9872,7 +9925,6 @@ void Lowerer::begin_hir_effective_vhdl_subtype_cache_scope() const noexcept
     if (hir_effective_vhdl_subtype_cache_depth_ == 0U) {
         clear_hir_effective_vhdl_subtype_cache();
         clear_hir_expression_resolution_cache();
-        clear_hir_vhdl_subtype_name_cache();
         clear_hir_pure_integral_attempt_cache();
     }
     ++hir_effective_vhdl_subtype_cache_depth_;
@@ -9962,7 +10014,12 @@ void Lowerer::end_hir_effective_vhdl_subtype_cache_scope() const noexcept
         }
         clear_hir_effective_vhdl_subtype_cache();
         clear_hir_expression_resolution_cache();
-        clear_hir_vhdl_subtype_name_cache();
+        // The name cache holds only what the specialized unit and the scope
+        // determine, so it is kept across processes (the unit swaps clear
+        // it); the profile counts are per process.
+        hir_vhdl_subtype_name_cache_hits_ = 0U;
+        hir_vhdl_subtype_name_cache_misses_ = 0U;
+        hir_vhdl_subtype_name_cache_cap_drops_ = 0U;
         clear_hir_pure_integral_attempt_cache();
     }
 }
@@ -10656,12 +10713,9 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
         const auto candidate = lexical.empty()
             ? std::string { receiver }
             : lexical + "." + std::string { receiver };
-        const auto found = std::ranges::find_if(design_.specializations_,
-            [&](const SpecializationInfo& specialization) {
-                return specialization.instance == candidate;
-            });
-        if (found != design_.specializations_.end()) {
-            target = &*found;
+        if (const auto* const found = design_.find_specialization(candidate);
+            found != nullptr) {
+            target = found;
             break;
         }
         if (lexical.empty()) {
@@ -10676,19 +10730,23 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
         // instance (IEEE 1800-2017 23.8): `ma.f()` inside an instance below
         // an instance of module `ma`.
         for (std::string ancestor = hierarchy_; !ancestor.empty();) {
-            const auto found = std::ranges::find_if(design_.specializations_,
-                [&](const SpecializationInfo& specialization) {
-                    if (specialization.instance != ancestor
-                        || !specialization.source_unit) {
-                        return false;
-                    }
-                    const auto& units = design.systemverilog_hir.units();
-                    const auto unit = std::ranges::find(units,
-                        *specialization.source_unit, &semantic::sv::Unit::id);
-                    return unit != units.end() && unit->name == receiver;
-                });
-            if (found != design_.specializations_.end()) {
-                target = &*found;
+            const SpecializationInfo* found = nullptr;
+            for (const auto position :
+                design_.specialization_positions(ancestor)) {
+                const auto& specialization = design_.specializations_[position];
+                if (!specialization.source_unit) {
+                    continue;
+                }
+                const auto& units = design.systemverilog_hir.units();
+                const auto unit = std::ranges::find(units,
+                    *specialization.source_unit, &semantic::sv::Unit::id);
+                if (unit != units.end() && unit->name == receiver) {
+                    found = &specialization;
+                    break;
+                }
+            }
+            if (found != nullptr) {
+                target = found;
                 break;
             }
             const auto separator = ancestor.rfind('.');
@@ -10729,13 +10787,9 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
                 const auto candidate = lexical_scope.empty()
                     ? instance
                     : lexical_scope + "." + instance;
-                const auto found = std::ranges::find_if(
-                    design_.specializations_,
-                    [&](const SpecializationInfo& specialization) {
-                        return specialization.instance == candidate;
-                    });
-                if (found != design_.specializations_.end()
-                    && found->source_unit) {
+                const auto* const found
+                    = design_.find_specialization(candidate);
+                if (found != nullptr && found->source_unit) {
                     target_unit = found->source_unit;
                     target_path = found->instance;
                     for (const auto& name : generate_chain) {
@@ -17390,7 +17444,9 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_vhdl_literal_actual_range(
     const semantic::vhdl::SubtypeIndication& formal) const
 {
     const auto literal = specialized_hir_unit_->find_expression(actual);
-    if (std::getenv("FSIM_VHDL_ACTUAL_SHAPE_TRACE") != nullptr && literal
+    static const bool actual_shape_trace
+        = std::getenv("FSIM_VHDL_ACTUAL_SHAPE_TRACE") != nullptr;
+    if (actual_shape_trace && literal
         && literal->vhdl != nullptr) {
         std::cerr << "FSIM_VHDL_ACTUAL_SHAPE literal kind="
                   << static_cast<int>(literal->vhdl->kind)
@@ -18855,13 +18911,15 @@ Lowerer::lower_hir_function_call_value(
     const auto lexical_parent = declaration->vhdl != nullptr
         ? hir_vhdl_lexical_enclosing_callable(declaration->vhdl->scope)
         : std::nullopt;
-    auto callable_key = std::to_string(callable_identity)
-        + signal_actual_key;
+    std::string callable_key;
+    callable_key.reserve(128U + signal_actual_key.size());
+    append_decimal(callable_key, callable_identity);
+    callable_key += signal_actual_key;
     // A subprogram of one package instance is not another instance's: each
     // reads its own generics (IEEE 1076-2008 4.9).
     if (resolution->package_instance) {
-        callable_key += "|instance:"
-            + std::to_string(resolution->package_instance->value());
+        callable_key += "|instance:";
+        append_decimal(callable_key, resolution->package_instance->value());
     }
     append_hir_generic_binding_key(
         callable_key, resolution->generic_bindings);
@@ -18872,22 +18930,29 @@ Lowerer::lower_hir_function_call_value(
         append_hir_generic_binding_key(callable_key, environment);
     }
     if (lexical_parent) {
-        callable_key += "|lexical-parent:"
-            + std::to_string(*lexical_parent);
+        callable_key += "|lexical-parent:";
+        append_decimal(callable_key, *lexical_parent);
     }
     for (const auto& [index, value] : static_integer_actuals) {
-        callable_key += "|" + std::to_string(index) + "="
-            + std::to_string(value);
+        callable_key += '|';
+        append_decimal(callable_key, index);
+        callable_key += '=';
+        append_decimal(callable_key, value);
     }
     for (const auto& [index, range] : vhdl_actual_ranges) {
-        callable_key += "|vhdl-range:" + std::to_string(index) + "=";
+        callable_key += "|vhdl-range:";
+        append_decimal(callable_key, index);
+        callable_key += '=';
         for (std::size_t dimension { }; dimension < range.size();
              ++dimension) {
-            callable_key += std::to_string(dimension) + ":";
+            append_decimal(callable_key, dimension);
+            callable_key += ':';
             if (range[dimension]) {
-                callable_key += std::to_string(range[dimension]->left) + ":"
-                    + std::to_string(range[dimension]->right) + ":"
-                    + (range[dimension]->descending ? "down" : "up");
+                append_decimal(callable_key, range[dimension]->left);
+                callable_key += ':';
+                append_decimal(callable_key, range[dimension]->right);
+                callable_key += ':';
+                callable_key += range[dimension]->descending ? "down" : "up";
             } else {
                 callable_key += "unknown";
             }
@@ -18895,7 +18960,9 @@ Lowerer::lower_hir_function_call_value(
         }
     }
     for (const auto& [index, constraints] : vhdl_actual_element_constraints) {
-        callable_key += "|vhdl-element:" + std::to_string(index) + "=";
+        callable_key += "|vhdl-element:";
+        append_decimal(callable_key, index);
+        callable_key += '=';
         append_vhdl_element_constraint_key(callable_key, constraints);
     }
     if (result_context) {
@@ -18909,7 +18976,8 @@ Lowerer::lower_hir_function_call_value(
     if (protected_members) {
         callable_key += "|protected:";
         for (const auto& member : *protected_members) {
-            callable_key += std::to_string(member.storage) + ",";
+            append_decimal(callable_key, member.storage);
+            callable_key += ',';
         }
     }
     auto frame_index = hir_callable_frames_.size();
@@ -18938,7 +19006,9 @@ Lowerer::lower_hir_function_call_value(
         }
     }
     // FSIM_HIR_CALLABLE_KEY_TRACE prints each new callable frame's key.
-    if (new_frame && std::getenv("FSIM_HIR_CALLABLE_KEY_TRACE") != nullptr) {
+    static const bool callable_key_trace
+        = std::getenv("FSIM_HIR_CALLABLE_KEY_TRACE") != nullptr;
+    if (new_frame && callable_key_trace) {
         std::cerr << "[fsim-hir-lower] callable-key " << callable_key << '\n';
     }
     // A recursion whose static actuals change on every call would
@@ -24453,9 +24523,16 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 std::abort();
             }
         } else if (!recorded_body && recording) {
-            vhdl_lowering_index().callable_bodies.emplace(*memo_key,
-                std::make_shared<const HirCallableBodyRecording>(
-                    std::move(*recording)));
+            auto& index = vhdl_lowering_index();
+            if (index.callable_bodies
+                    .emplace(*memo_key,
+                        std::make_shared<const HirCallableBodyRecording>(
+                            std::move(*recording)))
+                    .second
+                && memo_key->starts_with("module-function|")) {
+                index.instance_callable_bodies[unit_callable_body_scope_]
+                    .push_back(*memo_key);
+            }
         }
     }
 
@@ -24553,8 +24630,7 @@ void Lowerer::bind_hir_instance_parameters(HirCallableFrame& frame) const
     if (generated_scope_receiver) {
         receiver.remove_prefix(std::string_view { "@instance:" }.size());
     }
-    auto target = std::ranges::find(design_.specializations_,
-        receiver, &SpecializationInfo::instance);
+    const SpecializationInfo* target = design_.find_specialization(receiver);
     const semantic::SpecializedHirUnit* callable_owner
         = specialized_hir_unit_;
     auto callable = specialized_hir_unit_->find_declaration(
@@ -24566,7 +24642,7 @@ void Lowerer::bind_hir_instance_parameters(HirCallableFrame& frame) const
     // owner only when the declaration, scope, selected-generate view, and
     // current hierarchy path all prove the relationship. Ordinary missing
     // instance paths never walk outward to a same-named ancestor.
-    if (target == design_.specializations_.end()
+    if (target == nullptr
         && generated_scope_receiver
         && ancestor_systemverilog_specializations_ != nullptr
         && callable && callable->systemverilog != nullptr) {
@@ -24646,10 +24722,11 @@ void Lowerer::bind_hir_instance_parameters(HirCallableFrame& frame) const
                         }
                         const SpecializationInfo* occurrence { };
                         std::size_t occurrence_count { };
-                        for (const auto& specialization
-                            : design_.specializations_) {
-                            if (specialization.instance != parent_instance
-                                || !specialization.source_unit
+                        for (const auto position :
+                            design_.specialization_positions(parent_instance)) {
+                            const auto& specialization
+                                = design_.specializations_[position];
+                            if (!specialization.source_unit
                                 || *specialization.source_unit
                                     != owner->unit()) {
                                 continue;
@@ -24666,10 +24743,7 @@ void Lowerer::bind_hir_instance_parameters(HirCallableFrame& frame) const
                     }
                     if (proof_count == 1U && proven_owner != nullptr
                         && proven_target != nullptr) {
-                        target = std::ranges::find_if(
-                            design_.specializations_, [&](const auto& item) {
-                                return &item == proven_target;
-                            });
+                        target = proven_target;
                         callable_owner = proven_owner;
                         callable = proven_owner->find_declaration(
                             frame.declaration);
@@ -24679,8 +24753,7 @@ void Lowerer::bind_hir_instance_parameters(HirCallableFrame& frame) const
             }
         }
     }
-    if (target == design_.specializations_.end()
-        || target->parameter_values.empty() || !callable
+    if (target == nullptr || target->parameter_values.empty() || !callable
         || callable->systemverilog == nullptr) {
         return;
     }

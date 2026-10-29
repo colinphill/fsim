@@ -622,8 +622,9 @@ bool Interpreter::Impl::StaticKernel::run_hosted_active()
         || hosted_inactive_task_) {
         return false;
     }
-    auto ready = std::move(hosted_active_);
-    hosted_active_.clear();
+    static_kernel_detail::QueueDrain<HostedReady> drained(
+        hosted_active_, hosted_active_spare_);
+    auto& ready = drained.items();
     sort_hosted(ready);
     for (std::size_t position = 0U; position < ready.size(); ++position) {
         if (impl_.scheduler.stop_requested()) {
@@ -798,13 +799,15 @@ void Interpreter::Impl::StaticKernel::run_merged_active()
     // next one.
     // A round stopped for host tasks ahead of it in the running batch
     // resumes first; what it woke waits for the next round.
-    std::vector<HostedReady> hosted;
-    std::vector<std::uint32_t> threads;
+    static_kernel_detail::QueueDrain<HostedReady> drained_hosted(
+        merged_hosted_spare_);
+    static_kernel_detail::QueueDrain<std::uint32_t> drained_threads(
+        merged_threads_spare_);
+    auto& hosted = drained_hosted.items();
+    auto& threads = drained_threads.items();
     if (!batch_hosted_.empty() || !batch_threads_.empty()) {
-        hosted = std::move(batch_hosted_);
-        batch_hosted_.clear();
-        threads = std::move(batch_threads_);
-        batch_threads_.clear();
+        drained_hosted.take(batch_hosted_);
+        drained_threads.take(batch_threads_);
     } else if (mixed_) {
         // A mixed kernel's hosted VHDL processes wait for its round.
         std::size_t kept = 0U;
@@ -816,13 +819,10 @@ void Interpreter::Impl::StaticKernel::run_merged_active()
             }
         }
         hosted_active_.resize(kept);
-        threads = std::move(ready_threads_);
-        ready_threads_.clear();
+        drained_threads.take(ready_threads_);
     } else {
-        hosted = std::move(hosted_active_);
-        hosted_active_.clear();
-        threads = std::move(ready_threads_);
-        ready_threads_.clear();
+        drained_hosted.take(hosted_active_);
+        drained_threads.take(ready_threads_);
     }
     sort_hosted(hosted);
     const auto thread_order = [&](const std::uint32_t thread) {
@@ -902,8 +902,9 @@ bool Interpreter::Impl::StaticKernel::run_hosted_inactive()
     if (hosted_inactive_.empty()) {
         return false;
     }
-    auto ready = std::move(hosted_inactive_);
-    hosted_inactive_.clear();
+    static_kernel_detail::QueueDrain<HostedReady> drained(
+        hosted_inactive_, hosted_inactive_spare_);
+    auto& ready = drained.items();
     sort_hosted(ready);
     struct Running {
         bool& flag;

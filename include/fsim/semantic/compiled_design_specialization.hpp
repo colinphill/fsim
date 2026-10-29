@@ -442,6 +442,32 @@ private:
     mutable std::shared_ptr<std::shared_ptr<T>> slot_;
 };
 
+/// An ordered replacement list that a SpecializedHirUnit and its derivatives
+/// share until one of them inserts: mutate() gives the writer a private copy
+/// when the list is shared. Readers see an empty list until the first insert.
+template <typename T>
+class SharedRecords {
+public:
+    [[nodiscard]] const std::vector<T>& get() const noexcept
+    {
+        static const std::vector<T> none;
+        return records_ ? *records_ : none;
+    }
+
+    [[nodiscard]] std::vector<T>& mutate()
+    {
+        if (!records_) {
+            records_ = std::make_shared<std::vector<T>>();
+        } else if (records_.use_count() > 1) {
+            records_ = std::make_shared<std::vector<T>>(*records_);
+        }
+        return *records_;
+    }
+
+private:
+    std::shared_ptr<std::vector<T>> records_;
+};
+
 } // namespace detail
 
 /// Mutable, unit-scoped HIR replacements for one specialization. Records not
@@ -488,7 +514,7 @@ public:
     /// a replacement may carry a name the design's type index lacks.
     [[nodiscard]] bool replaces_vhdl_types() const noexcept
     {
-        return !vhdl_types_.empty();
+        return !vhdl_types_.get().empty();
     }
 
     /// Evaluate the bounded integral HIR subset in this specialization. Name
@@ -825,19 +851,19 @@ private:
     std::vector<InstanceId> active_instance_ids_;
     std::vector<GenerateInstances> generate_instances_;
     std::vector<InstanceId> selected_generate_instance_ids_;
-    std::vector<sv::Declaration> systemverilog_declarations_;
+    detail::SharedRecords<sv::Declaration> systemverilog_declarations_;
     bool renames_systemverilog_declarations_ { };
-    std::vector<vhdl::Declaration> vhdl_declarations_;
-    std::vector<sv::TypeDefinition> systemverilog_types_;
-    std::vector<vhdl::TypeDefinition> vhdl_types_;
-    std::vector<sv::Expression> systemverilog_expressions_;
-    std::vector<vhdl::Expression> vhdl_expressions_;
-    std::vector<sv::Statement> systemverilog_statements_;
-    std::vector<vhdl::Statement> vhdl_statements_;
-    std::vector<sv::Process> systemverilog_processes_;
-    std::vector<vhdl::Process> vhdl_processes_;
-    std::vector<sv::Instance> systemverilog_instances_;
-    std::vector<vhdl::Instance> vhdl_instances_;
+    detail::SharedRecords<vhdl::Declaration> vhdl_declarations_;
+    detail::SharedRecords<sv::TypeDefinition> systemverilog_types_;
+    detail::SharedRecords<vhdl::TypeDefinition> vhdl_types_;
+    detail::SharedRecords<sv::Expression> systemverilog_expressions_;
+    detail::SharedRecords<vhdl::Expression> vhdl_expressions_;
+    detail::SharedRecords<sv::Statement> systemverilog_statements_;
+    detail::SharedRecords<vhdl::Statement> vhdl_statements_;
+    detail::SharedRecords<sv::Process> systemverilog_processes_;
+    detail::SharedRecords<vhdl::Process> vhdl_processes_;
+    detail::SharedRecords<sv::Instance> systemverilog_instances_;
+    detail::SharedRecords<vhdl::Instance> vhdl_instances_;
 };
 
 /// Construct a parser-independent specialization overlay for one compiled

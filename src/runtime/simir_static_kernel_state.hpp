@@ -16,6 +16,7 @@
 #include "simir_static_kernel_pool.hpp"
 #include "simir_static_kernel.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -36,6 +37,45 @@ namespace fsim::runtime::simir {
 
 namespace static_kernel_detail {
 
+/// Drains a live queue for one pass: the queue's entries move into a spare
+/// vector that keeps its capacity across passes (the live queue takes the
+/// spare's empty storage), so a round does not free and regrow them. The
+/// spare member is taken for the pass, so a re-entrant pass finds it empty
+/// and allocates as before; the larger storage is handed back when the pass
+/// ends, which also destroys the entries then.
+template <typename T>
+class QueueDrain {
+public:
+    explicit QueueDrain(std::vector<T>& spare)
+        : spare_(spare)
+        , items_(std::move(spare))
+    {
+        items_.clear();
+        spare_.clear();
+    }
+    QueueDrain(std::vector<T>& live, std::vector<T>& spare)
+        : QueueDrain(spare)
+    {
+        take(live);
+    }
+    ~QueueDrain()
+    {
+        items_.clear();
+        if (items_.capacity() > spare_.capacity()) {
+            spare_.swap(items_);
+        }
+    }
+    QueueDrain(const QueueDrain&) = delete;
+    QueueDrain& operator=(const QueueDrain&) = delete;
+    /// Moves the live queue's entries in (only into an empty drain).
+    void take(std::vector<T>& live) { items_.swap(live); }
+    [[nodiscard]] std::vector<T>& items() noexcept { return items_; }
+
+private:
+    std::vector<T>& spare_;
+    std::vector<T> items_;
+};
+
 constexpr auto no_slot = std::numeric_limits<std::uint32_t>::max();
 constexpr auto no_container = std::numeric_limits<std::uint32_t>::max();
 /// Container::object of a behavioral member's private array.
@@ -46,6 +86,39 @@ constexpr std::size_t edge_iteration_limit = 100'000U;
 constexpr std::uint32_t partition_tag = std::uint32_t { 1 } << 31U;
 /// Tags a dispatch group in edge readers and the triggered list.
 constexpr std::uint32_t dispatch_group_tag = std::uint32_t { 1 } << 31U;
+
+/// A copy of a slot's words taken before a write, for change detection. Up
+/// to 16 words (1024 two-plane bits) live in the object; wider slots use the
+/// heap. Local to one write, so worker lanes and nested writes never share it.
+class WordSnapshot {
+public:
+    WordSnapshot(const std::uint64_t* first, const std::size_t count)
+    {
+        if (count <= inline_.size()) {
+            std::copy(first, first + count, inline_.begin());
+            data_ = inline_.data();
+        } else {
+            heap_.assign(first, first + count);
+            data_ = heap_.data();
+        }
+        size_ = count;
+    }
+    WordSnapshot(const WordSnapshot&) = delete;
+    WordSnapshot& operator=(const WordSnapshot&) = delete;
+
+    [[nodiscard]] const std::uint64_t* data() const noexcept { return data_; }
+    [[nodiscard]] const std::uint64_t* begin() const noexcept { return data_; }
+    [[nodiscard]] const std::uint64_t* end() const noexcept
+    {
+        return data_ + size_;
+    }
+
+private:
+    std::array<std::uint64_t, 16> inline_ { };
+    std::vector<std::uint64_t> heap_;
+    const std::uint64_t* data_ { };
+    std::size_t size_ { };
+};
 
 /// Why the kernel's reference evaluator runs an operation (interpretation
 /// census): a member without compiled code, a VHDL prologue, generic mode
@@ -1302,9 +1375,13 @@ private:
     std::vector<ForkGroup> fork_groups_;
     std::vector<std::uint32_t> free_fork_groups_;
     std::vector<std::uint32_t> ready_threads_;
+    std::vector<std::uint32_t> ready_threads_spare_;
     std::vector<std::uint32_t> inactive_threads_;
     std::vector<std::vector<Waiter>> slot_waiters_;
     std::vector<std::vector<Waiter>> input_waiters_;
+    /// WaitOn's sensitivity list, rebuilt per suspension in place (wait_on
+    /// copies out of it).
+    std::vector<Sensitivity> wait_entries_;
     /// Inputs a thread waits on for transactions (an implicit signal's
     /// driver, IEEE 1076-2019 16.2.4): a scan wakes those waiters when the
     /// host's transaction stamp moved, whether or not the value changed.
@@ -1342,6 +1419,7 @@ private:
     /// the wake time of the update-phase task that releases them; and
     /// whether that task has run (collect_timers then takes the due timers).
     std::vector<std::uint32_t> vhdl_ready_threads_;
+    std::vector<std::uint32_t> vhdl_ready_threads_spare_;
     std::priority_queue<Timer, std::vector<Timer>, std::greater<>> vhdl_timers_;
     std::optional<SimulationTick> armed_vhdl_timer_;
     bool vhdl_timers_released_ { };
@@ -2159,6 +2237,11 @@ private:
     std::vector<std::uint32_t> output_queue_;
     std::vector<std::uint32_t> trigger_queue_;
     std::vector<std::uint32_t> triggered_;
+    /// Spare storage the drained queues above swap with (QueueDrain).
+    std::vector<NbaEntry> nba_spare_;
+    std::vector<Pending> pending_generic_spare_;
+    std::vector<std::uint32_t> output_queue_spare_;
+    std::vector<std::uint32_t> triggered_spare_;
     /// Sequential SystemVerilog members with one edge-sensitivity set and no
     /// other wake-up (build_dispatch_groups). An edge schedules the group
     /// once, and the group runs its members in index order, as the sorted
@@ -2570,6 +2653,12 @@ private:
     bool hosted_running_inactive_ { };
     std::vector<HostedReady> hosted_active_;
     std::vector<HostedReady> hosted_inactive_;
+    /// Spare storage for the hosted queues and the merged round's lists
+    /// (QueueDrain).
+    std::vector<HostedReady> hosted_active_spare_;
+    std::vector<HostedReady> hosted_inactive_spare_;
+    std::vector<HostedReady> merged_hosted_spare_;
+    std::vector<std::uint32_t> merged_threads_spare_;
     /// Ready lists of the regions after NBA (observed, reactive,
     /// re-inactive, postponed), indexed by SchedulerPhase. Each non-empty
     /// list has a doorbell: a host task of that phase that runs it, so the

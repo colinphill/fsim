@@ -465,6 +465,18 @@ void Lowerer::emit_disable_scope_marker(
     });
 }
 
+InternedString Lowerer::debug_scope()
+{
+    // The scope depends on the process name, the local scope stack and the
+    // active callable frame, all mutated from many sites, so the cache is
+    // validated by content instead of being invalidated.
+    auto name = debug_scope_name();
+    if (debug_scope_cache_ != name) {
+        debug_scope_cache_ = InternedString { std::move(name) };
+    }
+    return debug_scope_cache_;
+}
+
 void Lowerer::emit_debug_point(
     const DebugPointKind kind,
     const frontend::SourceSpan& span)
@@ -472,7 +484,7 @@ void Lowerer::emit_debug_point(
     process_.operations.emplace_back(DebugPoint {
         kind,
         runtime_source_location(span),
-        debug_scope_name(),
+        debug_scope(),
     });
 }
 
@@ -569,13 +581,52 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
     const semantic::ScopeId process_scope) const
 {
     std::vector<SignalId> dependencies;
+    // Visit marks are stamped per call in a reused table; a nested call
+    // (the table is busy) falls back to a set of its own.
+    struct VisitMarks {
+        std::vector<std::uint32_t> stamps;
+        std::uint32_t stamp { };
+        bool busy { };
+    };
+    static thread_local VisitMarks marks;
+    struct MarksGuard {
+        VisitMarks* marks;
+        ~MarksGuard()
+        {
+            if (marks != nullptr) {
+                marks->busy = false;
+            }
+        }
+    };
+    const bool use_marks = !marks.busy;
+    const MarksGuard guard { use_marks ? &marks : nullptr };
+    if (use_marks) {
+        marks.busy = true;
+        if (++marks.stamp == 0U) {
+            std::ranges::fill(marks.stamps, 0U);
+            marks.stamp = 1U;
+        }
+    }
     std::unordered_set<std::uint32_t> visited;
+    const auto first_visit = [&](const std::uint32_t id) {
+        if (!use_marks) {
+            return visited.insert(id).second;
+        }
+        if (id >= marks.stamps.size()) {
+            marks.stamps.resize(static_cast<std::size_t>(id) + 1U);
+        }
+        if (marks.stamps[id] == marks.stamp) {
+            return false;
+        }
+        marks.stamps[id] = marks.stamp;
+        return true;
+    };
     const auto collect = [&](const auto& self,
                              const semantic::ExpressionId current) -> bool {
         if (!current.valid()) {
             return false;
         }
-        if (!visited.insert(current.value()).second) {
+        if (!first_visit(current.value())) {
             return true;
         }
         if (const auto signal = hir_direct_signal(current)) {
@@ -612,9 +663,11 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
         if (const auto container = hir_container_object_binding(current);
             container && !container->local) {
             bool element_alias = false;
-            for (const auto& alias :
-                design_.container_element_signal_aliases_) {
-                if (alias.object == container->object && alias.readable) {
+            for (const auto position :
+                design_.container_element_alias_positions(container->object)) {
+                const auto& alias
+                    = design_.container_element_signal_aliases_[position];
+                if (alias.readable) {
                     dependencies.push_back(alias.signal);
                     element_alias = true;
                 }
@@ -622,15 +675,17 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
             // Without element nets, the container's bridge signal carries
             // every element change.
             if (!element_alias) {
+                const auto positions
+                    = design_.container_alias_positions(container->object);
                 const auto alias = std::ranges::find_if(
-                    design_.container_signal_aliases_.rbegin(),
-                    design_.container_signal_aliases_.rend(),
-                    [&](const runtime::simir::ContainerSignalAlias& candidate) {
-                        return candidate.object == container->object
-                            && candidate.readable;
+                    positions.rbegin(), positions.rend(),
+                    [&](const std::uint32_t position) {
+                        return design_.container_signal_aliases_[position]
+                            .readable;
                     });
-                if (alias != design_.container_signal_aliases_.rend()) {
-                    dependencies.push_back(alias->signal);
+                if (alias != positions.rend()) {
+                    dependencies.push_back(
+                        design_.container_signal_aliases_[*alias].signal);
                 }
             }
         }
@@ -2499,10 +2554,13 @@ std::optional<Process> Lowerer::lower_hir_process(
                             = hir_container_object_binding(
                                 *sensitivity.expression)) {
                             bool has_element_alias = false;
-                            for (const auto& alias
-                                : design_.container_element_signal_aliases_) {
-                                if (alias.object == container->object
-                                    && alias.readable) {
+                            for (const auto position
+                                : design_.container_element_alias_positions(
+                                    container->object)) {
+                                const auto& alias
+                                    = design_.container_element_signal_aliases_
+                                        [position];
+                                if (alias.readable) {
                                     description.sensitivities.push_back({
                                         alias.signal,
                                         runtime::simir::EdgeKind::any });
@@ -2517,10 +2575,13 @@ std::optional<Process> Lowerer::lower_hir_process(
                     if (const auto element = hir_container_element_binding(
                             *sensitivity.expression)) {
                         bool has_element_alias = false;
-                        for (const auto& alias
-                            : design_.container_element_signal_aliases_) {
-                            if (alias.object == element->object
-                                && alias.readable) {
+                        for (const auto position
+                            : design_.container_element_alias_positions(
+                                element->object)) {
+                            const auto& alias
+                                = design_.container_element_signal_aliases_
+                                    [position];
+                            if (alias.readable) {
                                 description.sensitivities.push_back({
                                     alias.signal,
                                     runtime::simir::EdgeKind::any });

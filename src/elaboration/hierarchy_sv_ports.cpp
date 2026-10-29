@@ -1594,11 +1594,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     for (std::size_t depth = 0U;
                         depth < design_.container_objects_.size();
                         ++depth) {
-                        if (std::ranges::any_of(
-                                design_.container_element_signal_aliases_,
-                                [object](const ContainerElementSignalAlias& alias) {
-                                    return alias.object == object;
-                                })
+                        if (!design_.container_element_alias_positions(object)
+                                .empty()
                             || std::ranges::any_of(
                                 design_.container_aggregate_signal_aliases_,
                                 [object](const ContainerAggregateSignalAlias& alias) {
@@ -1606,11 +1603,12 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                                 })) {
                             return true;
                         }
-                        const auto direct_alias = std::ranges::find_if(
-                            design_.container_signal_aliases_,
-                            [object](const ContainerSignalAlias& alias) {
-                                return alias.object == object;
-                            });
+                        const auto direct_positions
+                            = design_.container_alias_positions(object);
+                        const auto direct_alias = direct_positions.empty()
+                            ? design_.container_signal_aliases_.end()
+                            : design_.container_signal_aliases_.begin()
+                                + direct_positions.front();
                         if (direct_alias
                             != design_.container_signal_aliases_.end()) {
                             if (!direct_alias->writable

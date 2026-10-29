@@ -44,7 +44,32 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     }
     auto& thread = threads_[index];
     const auto epoch = thread.epoch + 1U;
-    thread = Thread { };
+    // Reset in place so the vectors keep the capacity release_thread left.
+    thread.call_stack.clear();
+    thread.frames.clear();
+    thread.frame_bytes = 0U;
+    thread.saved_arrays.clear();
+    thread.saved_array_marks.clear();
+    thread.contexts.clear();
+    thread.isolated.reset();
+    thread.children = 0U;
+    thread.child_records = 0U;
+    thread.ended_record = false;
+    thread.waiting_children = false;
+    thread.detached = false;
+    thread.handle = false;
+    thread.suspended = false;
+    thread.suspended_wake = false;
+    thread.suspended_running = false;
+    thread.random_state = 0U;
+    thread.queued = false;
+    thread.reclaim = false;
+    thread.deadline.reset();
+    thread.timeout_result.reset();
+    thread.delivered.clear();
+    thread.stack.clear();
+    thread.last_point = no_slot;
+    thread.debug_process = no_slot;
     thread.member = member;
     thread.pc = pc;
     thread.parent = parent;
@@ -353,8 +378,9 @@ bool Interpreter::Impl::StaticKernel::run_ready_threads()
     if (ready_threads_.empty()) {
         return false;
     }
-    auto ready = std::move(ready_threads_);
-    ready_threads_.clear();
+    static_kernel_detail::QueueDrain<std::uint32_t> drained(
+        ready_threads_, ready_threads_spare_);
+    auto& ready = drained.items();
     for (std::size_t position = 0U; position < ready.size(); ++position) {
         const auto index = ready[position];
         if (stopped_) {
@@ -391,8 +417,9 @@ bool Interpreter::Impl::StaticKernel::run_vhdl_threads()
     }
     // Threads woken while these run (none today: a VHDL signal changes only
     // in the update phase) belong to the next round.
-    auto ready = std::move(vhdl_ready_threads_);
-    vhdl_ready_threads_.clear();
+    static_kernel_detail::QueueDrain<std::uint32_t> drained(
+        vhdl_ready_threads_, vhdl_ready_threads_spare_);
+    auto& ready = drained.items();
     for (std::size_t position = 0U; position < ready.size(); ++position) {
         const auto index = ready[position];
         if (stopped_) {
@@ -414,6 +441,19 @@ void Interpreter::Impl::StaticKernel::wait_on(const std::uint32_t index,
     const std::span<const Sensitivity> entries)
 {
     const auto epoch = threads_[index].epoch;
+    // A waiter of a dead thread or an earlier epoch is stale for good (the
+    // epoch only grows), which wake_waiters would drop at the slot's next
+    // change; drop them as the list doubles past 64, survivors in order.
+    const auto compact = [this](std::vector<Waiter>& waiters) {
+        const auto size = waiters.size();
+        if (size <= 64U || (size & (size - 1U)) != 0U) {
+            return;
+        }
+        std::erase_if(waiters, [this](const Waiter& waiter) {
+            const auto& thread = threads_[waiter.thread];
+            return !thread.alive || thread.epoch != waiter.epoch;
+        });
+    };
     for (const auto& entry : entries) {
         if (const auto family = family_of_signal_[entry.signal];
             family != no_slot) {
@@ -431,6 +471,7 @@ void Interpreter::Impl::StaticKernel::wait_on(const std::uint32_t index,
                         EdgeKind::any, low - leaf.offset,
                         low == leaf.offset && high == leaf.offset + leaf.width
                             ? 0U : high - low });
+                    compact(slot_waiters_[leaf.slot]);
                 }
             }
             continue;
@@ -439,8 +480,11 @@ void Interpreter::Impl::StaticKernel::wait_on(const std::uint32_t index,
             entry.edge == EdgeKind::any ? entry.width : 0U };
         if (const auto slot = slot_of_signal_[entry.signal]; slot != no_slot) {
             slot_waiters_[slot].push_back(waiter);
+            compact(slot_waiters_[slot]);
         } else {
-            input_waiters_[input_of_signal_[entry.signal]].push_back(waiter);
+            auto& waiters = input_waiters_[input_of_signal_[entry.signal]];
+            waiters.push_back(waiter);
+            compact(waiters);
         }
     }
 }
@@ -3565,8 +3609,8 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             outcome = Boundary::suspend;
         } else if constexpr (std::is_same_v<T, WaitOn>) {
             suspend_point = true;
-            std::vector<Sensitivity> entries;
-            entries.reserve(op.signals.size());
+            auto& entries = wait_entries_;
+            entries.clear();
             for (std::size_t entry = 0U; entry < op.signals.size(); ++entry) {
                 entries.push_back({ op.signals[entry],
                     op.edges.empty() ? EdgeKind::any : op.edges[entry] });

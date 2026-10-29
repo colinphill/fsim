@@ -3055,12 +3055,10 @@ Lowerer::hir_named_clocking_event(
             const auto path = ancestor.empty()
                 ? std::string { handle_path }
                 : std::string { ancestor } + "." + std::string { handle_path };
-            const auto instance = std::ranges::find(design_.specializations_,
-                path, &SpecializationInfo::instance);
+            const auto* const instance = design_.find_specialization(path);
             // The unit's own name: SpecializationInfo::unit is its
             // library identity.
-            const auto source = instance != design_.specializations_.end()
-                    && instance->source_unit
+            const auto source = instance != nullptr && instance->source_unit
                 ? specialized_hir_unit_->design().find_unit(
                       *instance->source_unit)
                 : std::nullopt;
@@ -6407,19 +6405,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
 
                     const bool has_element_aliases
-                        = std::ranges::any_of(
-                            design_.container_element_signal_aliases_,
-                            [&](const ContainerElementSignalAlias& candidate) {
-                                return candidate.object == element->object;
-                            });
+                        = !design_.container_element_alias_positions(
+                                element->object)
+                               .empty();
 
                     const ContainerElementSignalAlias* leaf_alias { };
                     bool duplicate_leaf_alias { };
                     if (static_element) {
-                        for (const auto& candidate
-                            : design_.container_element_signal_aliases_) {
-                            if (candidate.object != element->object
-                                || candidate.ordinal != element_ordinal) {
+                        for (const auto position
+                            : design_.container_element_alias_positions(
+                                element->object)) {
+                            const auto& candidate
+                                = design_.container_element_signal_aliases_
+                                    [position];
+                            if (candidate.ordinal != element_ordinal) {
                                 continue;
                             }
                             if (leaf_alias != nullptr
@@ -6453,16 +6452,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             target_width = element->width;
                         }
                     } else if (target_found) {
-                        const auto aggregate_alias
-                            = std::ranges::find_if(
-                                design_.container_signal_aliases_.rbegin(),
-                                design_.container_signal_aliases_.rend(),
-                                [&](const ContainerSignalAlias& candidate) {
-                                    return candidate.object == element->object
-                                        && candidate.writable;
-                                });
-                        if (aggregate_alias
-                            == design_.container_signal_aliases_.rend()
+                        const ContainerSignalAlias* aggregate_alias { };
+                        const auto positions
+                            = design_.container_alias_positions(
+                                element->object);
+                        for (auto it = positions.rbegin();
+                            it != positions.rend(); ++it) {
+                            const auto& candidate
+                                = design_.container_signal_aliases_[*it];
+                            if (candidate.writable) {
+                                aggregate_alias = &candidate;
+                                break;
+                            }
+                        }
+                        if (aggregate_alias == nullptr
                             || element->object
                                 >= design_.container_objects_.size()
                             || element_count
@@ -8153,18 +8156,24 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 const auto declaration
                     = specialized_hir_unit_->find_declaration(
                         element->declaration);
-                const bool has_element_alias = std::ranges::any_of(
-                    design_.container_element_signal_aliases_,
-                    [&](const ContainerElementSignalAlias& candidate) {
-                        return candidate.object == element->object;
-                    });
-                const auto alias = std::ranges::find_if(
-                    design_.container_signal_aliases_.rbegin(),
-                    design_.container_signal_aliases_.rend(),
-                    [&](const ContainerSignalAlias& candidate) {
-                        return candidate.object == element->object
-                            && candidate.writable;
-                    });
+                const bool has_element_alias
+                    = !design_.container_element_alias_positions(
+                            element->object)
+                           .empty();
+                const ContainerSignalAlias* alias { };
+                {
+                    const auto positions = design_.container_alias_positions(
+                        element->object);
+                    for (auto it = positions.rbegin(); it != positions.rend();
+                        ++it) {
+                        const auto& candidate
+                            = design_.container_signal_aliases_[*it];
+                        if (candidate.writable) {
+                            alias = &candidate;
+                            break;
+                        }
+                    }
+                }
                 const auto packed_or_scalar
                     = element->selected_type != nullptr
                     && (element->selected_type->element_kind
@@ -8179,7 +8188,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     || element->type->dimensions.size()
                         != element->indices.size()
                     || (!has_element_alias
-                        && (alias == design_.container_signal_aliases_.rend()
+                        && (alias == nullptr
                             || alias->signal
                                 >= design_.signal_info_.size()))
                     || element->width == 0U) {
@@ -8197,9 +8206,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                           : 0U)
                                   << " width=" << element->width
                                   << " alias="
-                                  << (alias
-                                          != design_.container_signal_aliases_
-                                                 .rend())
+                                  << (alias != nullptr)
                                   << '\n';
                     }
                     return assignment_rejected(__LINE__);
@@ -8251,10 +8258,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 std::uint32_t offset { };
                 if (has_element_alias) {
                     const ContainerElementSignalAlias* selected_alias { };
-                    for (const auto& candidate
-                        : design_.container_element_signal_aliases_) {
-                        if (candidate.object != element->object
-                            || candidate.ordinal != ordinal) {
+                    for (const auto position
+                        : design_.container_element_alias_positions(
+                            element->object)) {
+                        const auto& candidate
+                            = design_.container_element_signal_aliases_
+                                [position];
+                        if (candidate.ordinal != ordinal) {
                             continue;
                         }
                         if (selected_alias != nullptr
@@ -9698,10 +9708,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                             *path, std::nullopt, lowered)) {
                         return true;
                     }
-                } else if (std::getenv("FSIM_SV_VALUE_PATH_TRACE")
-                    != nullptr) {
-                    std::cerr << "[fsim-sv-value-path] container value "
-                                 "for the target was not lowered\n";
+                } else {
+                    static const bool trace
+                        = std::getenv("FSIM_SV_VALUE_PATH_TRACE") != nullptr;
+                    if (trace) {
+                        std::cerr << "[fsim-sv-value-path] container value "
+                                     "for the target was not lowered\n";
+                    }
                 }
             }
         }

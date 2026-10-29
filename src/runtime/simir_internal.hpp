@@ -1311,6 +1311,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
         signal_container_element_aliases;
     std::vector<std::optional<ContainerObjectId>>
         signal_container_aggregate_aliases;
+    // Set once the first aggregate alias is registered; aliases are never
+    // removed, so the per-commit alias scans skip while it is false.
+    bool has_container_aggregate_aliases { };
     // Per signal, present only for an aggregate alias proxy: pointer-sized
     // when absent.
     std::vector<support::RareOptional<PackedLogic4>>
@@ -1503,6 +1506,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::vector<SignalId>> event_identity_members;
     ProcessTable processes;
     ProcessProgramTemplatePool process_program_templates;
+    /// Templates whose debug-local metadata add_process_program_impl has
+    /// already validated.
+    std::unordered_set<std::shared_ptr<const ProcessProgramTemplate>>
+        validated_program_templates;
     // Retain each original shared operation body only until registration is
     // complete, so lazy startup banks can preserve the same body-sharing groups.
     std::unordered_map<const void*,
@@ -1596,6 +1603,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
         unresolved_update_owner_provenance;
     std::vector<SignalId> unresolved_update_owner_provenance_signals;
     std::vector<std::vector<PendingDriverCommit>> driver_update_scratch;
+    // Lookup of staged entries by driver (0 is the external driver, else
+    // process + 1) for signals with many staged drivers; cleared per commit.
+    std::unordered_map<SignalId, std::unordered_map<std::uint64_t, std::size_t>>
+        driver_update_index;
     std::vector<DirectSingleDriverRoute> direct_single_driver_routes;
     std::vector<ProcessNativeWordUpdate>
         direct_single_driver_word_scratch;
@@ -2072,7 +2083,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessInstanceProgram* owned_instance,
         bool executable,
         const ProcessProgramView* registration = nullptr);
-    [[nodiscard]] std::map<SignalId, std::vector<Process::DriverRegion>>
+    /// Regions grouped (stably sorted) by signal.
+    [[nodiscard]] std::vector<Process::DriverRegion>
     expanded_driver_regions(const ProcessProgramView& process) const;
     void write_container_alias_deposit(
         ContainerObjectId object,

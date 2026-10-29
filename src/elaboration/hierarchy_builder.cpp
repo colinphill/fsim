@@ -656,36 +656,19 @@ make_systemverilog_template_signal_remap(
     return remap;
 }
 
-template<class ProcessInstance>
-bool remap_systemverilog_template_process(
-    ProcessInstance& process,
+template<class Remaps>
+bool remap_template_operations(
+    OperationList& operations,
     const std::map<SignalId, SignalId>& signal_remap,
     const std::string_view from_hierarchy,
     const std::string_view to_hierarchy,
-    const std::span<const SignalInfo> signal_info)
+    const Remaps& remaps)
 {
-    if (process.switch_source || process.switch_target
-        || process.switch_control) {
-        return false;
-    }
-
-    for (std::size_t index = 0; index < process.operations.size(); ++index) {
+    for (std::size_t index = 0; index < operations.size(); ++index) {
         // A template's operations all passed remap_concurrent_operation when
         // it was cached; only signal operands and debug scopes change.
-        const auto& stored = std::as_const(process.operations)[index];
-        const bool remaps = visit_operation([](const auto& value) {
-            using Type = std::decay_t<decltype(value)>;
-            return std::is_same_v<Type, DebugPoint>
-                || std::is_same_v<Type, ReadSignal>
-                || std::is_same_v<Type, WriteBlocking>
-                || std::is_same_v<Type, WriteUpdate>
-                || std::is_same_v<Type, WriteBlockingSlice>
-                || std::is_same_v<Type, WriteUpdateSlice>
-                || std::is_same_v<Type, WriteUpdateDynamicPartSlice>
-                || std::is_same_v<Type, WriteProjected>
-                || std::is_same_v<Type, WriteProjectedSlice>;
-        }, stored);
-        if (!remaps) {
+        const auto& stored = std::as_const(operations)[index];
+        if (!visit_operation(remaps, stored)) {
             continue;
         }
         // A debug point without an instruction override is remapped from
@@ -693,9 +676,9 @@ bool remap_systemverilog_template_process(
         // already have remapped it, which expanded() would apply.
         const bool canonical_point = operation_holds<DebugPoint>(stored)
             && !runtime::simir::operation_list_detail::ShareAccess::
-                has_instruction_override(process.operations, index);
+                has_instruction_override(operations, index);
         auto operation = canonical_point ? Operation { stored }
-                                         : process.operations.expanded(index);
+                                         : operations.expanded(index);
         bool changed { };
         if (!remap_concurrent_operation(
                 operation, signal_remap, from_hierarchy, to_hierarchy,
@@ -713,11 +696,43 @@ bool remap_systemverilog_template_process(
             // Only the scope differs: remap the body's scope instead of
             // overriding the operation.
             runtime::simir::operation_list_detail::ShareAccess::
-                remap_debug_scope(process.operations, canonical->scope,
+                remap_debug_scope(operations, canonical->scope,
                     point->scope);
             continue;
         }
-        process.operations.replace(index, std::move(operation));
+        operations.replace(index, std::move(operation));
+    }
+    return true;
+}
+
+template<class ProcessInstance>
+bool remap_systemverilog_template_process(
+    ProcessInstance& process,
+    const std::map<SignalId, SignalId>& signal_remap,
+    const std::string_view from_hierarchy,
+    const std::string_view to_hierarchy,
+    const std::span<const SignalInfo> signal_info)
+{
+    if (process.switch_source || process.switch_target
+        || process.switch_control) {
+        return false;
+    }
+
+    if (!remap_template_operations(process.operations, signal_remap,
+            from_hierarchy, to_hierarchy,
+            [](const auto& value) {
+                using Type = std::decay_t<decltype(value)>;
+                return std::is_same_v<Type, DebugPoint>
+                    || std::is_same_v<Type, ReadSignal>
+                    || std::is_same_v<Type, WriteBlocking>
+                    || std::is_same_v<Type, WriteUpdate>
+                    || std::is_same_v<Type, WriteBlockingSlice>
+                    || std::is_same_v<Type, WriteUpdateSlice>
+                    || std::is_same_v<Type, WriteUpdateDynamicPartSlice>
+                    || std::is_same_v<Type, WriteProjected>
+                    || std::is_same_v<Type, WriteProjectedSlice>;
+            })) {
+        return false;
     }
 
     auto sensitivities = process.static_sensitivity;
@@ -1193,7 +1208,8 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
     const std::size_t order,
     const std::optional<semantic::ProcessId> process_source,
     const std::string_view generate_relative_discriminator,
-    const std::span<const semantic::DeclarationId> additional_declarations)
+    const std::span<const semantic::DeclarationId> additional_declarations,
+    const std::span<const semantic::DeclarationId> more_declarations)
 {
     record_lowering_census(process_source
         ? vhdl_process_template_occurrences_
@@ -1410,18 +1426,42 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
                     : source->vhdl->label;
                 replay.name = std::string { path } + "." + suffix;
             }
-            for (std::size_t index = 0;
-                 index < replay.operations.size(); ++index) {
-                auto operation = replay.operations.expanded(index);
-                bool changed { };
-                if (!remap_concurrent_operation(
-                        operation, signal_remap,
-                        cached_name, replay.name, &changed)) {
-                    return std::nullopt;
-                }
-                if (changed) {
-                    replay.operations.replace(index, std::move(operation));
-                }
+            // The cached template's operations all passed
+            // remap_concurrent_operation (same hierarchy and formals) when
+            // it was stored; only signal operands and debug scopes change.
+            if (!remap_template_operations(replay.operations, signal_remap,
+                    cached_name, replay.name,
+                    [](const auto& value) {
+                        using Type = std::decay_t<decltype(value)>;
+                        return std::is_same_v<Type, DebugPoint>
+                            || std::is_same_v<Type, ReadSignal>
+                            || std::is_same_v<Type, SignalEvent>
+                            || std::is_same_v<Type, SignalLastValue>
+                            || std::is_same_v<Type, SignalLastEvent>
+                            || std::is_same_v<Type, SignalActive>
+                            || std::is_same_v<Type, SignalLastActive>
+                            || std::is_same_v<Type, SignalDriving>
+                            || std::is_same_v<Type, SignalDrivingValue>
+                            || std::is_same_v<Type, WriteBlocking>
+                            || std::is_same_v<Type, WriteUpdate>
+                            || std::is_same_v<Type, WriteBlockingSlice>
+                            || std::is_same_v<Type, WriteUpdateSlice>
+                            || std::is_same_v<Type,
+                                WriteUpdateDynamicPartSlice>
+                            || std::is_same_v<Type, WriteProjected>
+                            || std::is_same_v<Type, WriteProjectedSlice>
+                            || std::is_same_v<Type,
+                                WriteProjectedDynamicSlice>
+                            || std::is_same_v<Type,
+                                WriteProjectedWaveformSlice>
+                            || std::is_same_v<Type,
+                                WriteProjectedWaveformDynamicSlice>
+                            || std::is_same_v<Type,
+                                WriteBlockingDynamicSlice>
+                            || std::is_same_v<Type,
+                                WriteUpdateDynamicSlice>;
+                    })) {
+                return std::nullopt;
             }
             for (auto& sensitivity : replay.static_sensitivity) {
                 const auto found = signal_remap.find(sensitivity.signal);
@@ -1576,10 +1616,13 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
                 return false;
             }
         }
-        for (const auto declaration_id : additional_declarations) {
-            if (appended_declarations.insert(declaration_id).second
-                && !append_signal_binding(declaration_id)) {
-                return false;
+        for (const auto declarations : { additional_declarations,
+                 more_declarations }) {
+            for (const auto declaration_id : declarations) {
+                if (appended_declarations.insert(declaration_id).second
+                    && !append_signal_binding(declaration_id)) {
+                    return false;
+                }
             }
         }
         // An exact replay also rebinds the owning unit's own signals.
@@ -2187,8 +2230,6 @@ HierarchyBuilder::replay_systemverilog_process_template(
             || cached.compatibility_profile
                 != unit.compatibility_profile
             || !cached.common
-            || !cached.common->matches(
-                ProcessProgramView { *cached.common, cached.program })
             || (source.kind == semantic::sv::ProcessKind::always
                 && cached.program.static_sensitivity.empty())) {
             continue;
@@ -2318,7 +2359,7 @@ bool HierarchyBuilder::remember_systemverilog_process_template(
         generated_identity = *identity;
     }
 
-    const auto signal_roles = systemverilog_process_signal_roles(
+    auto signal_roles = systemverilog_process_signal_roles(
         process, lowerer, specialized, signal_declarations);
     if (!signal_roles) {
         return false;
@@ -2358,7 +2399,7 @@ bool HierarchyBuilder::remember_systemverilog_process_template(
         std::string { hierarchy },
         std::move(common),
         std::move(instance),
-        *signal_roles,
+        std::move(*signal_roles),
         callable_invocation_before,
         callable_invocation_after,
     });

@@ -299,29 +299,29 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
     // The instance's processes and its generate blocks' share the lowered
     // bodies of its module-level functions.
     lowerer.set_unit_callable_body_scope(path);
-    std::unordered_map<const semantic::sv::GenerateRegion*,
-        std::vector<semantic::DeclarationId>> generated_signal_declarations;
-    const auto collect_generate_declarations = [&]
-        (const auto& self, const semantic::sv::GenerateRegion& generate,
-            const std::vector<semantic::DeclarationId>& inherited)
-        -> void {
-        auto declarations = inherited;
-        for (const auto declaration : generate.declarations) {
-            if (std::ranges::find(declarations, declaration)
-                == declarations.end()) {
-                declarations.push_back(declaration);
+    auto& generated_signal_declarations
+        = systemverilog_generate_declarations_[&unit];
+    if (generated_signal_declarations.empty()) {
+        const auto collect_generate_declarations = [&]
+            (const auto& self, const semantic::sv::GenerateRegion& generate,
+                const std::vector<semantic::DeclarationId>& inherited)
+            -> void {
+            auto declarations = inherited;
+            for (const auto declaration : generate.declarations) {
+                if (std::ranges::find(declarations, declaration)
+                    == declarations.end()) {
+                    declarations.push_back(declaration);
+                }
             }
+            generated_signal_declarations.emplace(&generate, declarations);
+            for (const auto& nested : generate.nested) {
+                self(self, nested, declarations);
+            }
+        };
+        for (const auto& generate : unit.generates) {
+            collect_generate_declarations(
+                collect_generate_declarations, generate, unit.declarations);
         }
-        generated_signal_declarations.emplace(&generate, declarations);
-        for (const auto& nested : generate.nested) {
-            self(self, nested, declarations);
-        }
-    };
-    const std::vector<semantic::DeclarationId> unit_declarations
-        = unit.declarations;
-    for (const auto& generate : unit.generates) {
-        collect_generate_declarations(
-            collect_generate_declarations, generate, unit_declarations);
     }
 
     const auto append_generated_processes = [&](Lowerer& source) {

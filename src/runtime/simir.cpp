@@ -633,6 +633,28 @@ Operation OperationList::expanded(const size_type index) const
     return result;
 }
 
+const Operation& OperationList::expanded_ref(
+    const size_type index, Operation& scratch) const
+{
+    const auto& stored = at(index);
+    // apply_instance_fields rewrites signal operands through
+    // signal_remap_ and four alternatives through their override tables;
+    // an operation override already replaced the stored operation above.
+    const bool unchanged = signal_remap_.empty()
+        && (!operation_holds<DebugPoint>(stored)
+            || (debug_overrides_.empty() && debug_scope_overrides_.empty()))
+        && (!operation_holds<Assert>(stored) || assert_overrides_.empty())
+        && (!operation_holds<ReadContainerObject>(stored)
+            || container_object_overrides_.empty())
+        && (!operation_holds<CodeCoverageHit>(stored)
+            || coverage_hit_overrides_.empty());
+    if (unchanged) {
+        return stored;
+    }
+    scratch = expanded(index);
+    return scratch;
+}
+
 bool OperationList::shares_body_with(const OperationList& other) const noexcept
 {
     return storage_ == other.storage_;

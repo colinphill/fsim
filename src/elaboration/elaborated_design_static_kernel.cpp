@@ -215,6 +215,15 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
 StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     const StaticKernelAccessPlan& requested_access) const
 {
+    // The planner is the region graph's last consumer (the driver inventory
+    // is finalized before it); a later reader rebuilds the same graph.
+    struct RegionGraphRelease {
+        const ElaboratedDesign& design;
+        ~RegionGraphRelease()
+        {
+            detail::ElaboratedDesignProcessAccess::drop_region_graph(design);
+        }
+    } region_graph_release { *this };
     // SystemC co-simulation (engine-v4-semantics S26): the SystemC kernel
     // reads and writes HDL signals through the boundary context, outside any
     // SimIR operation, like a foreign library (S19). Every signal stays a
@@ -251,6 +260,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // the host. Opaque accesses come first: they refuse the whole design.
     // That refusal is then deferred until the processes are classified.
     const bool census = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    const bool plan_profile = std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr;
     std::vector<std::string> rejection(census ? this->process_count() : 0U);
     std::vector<std::string> opaque(rejection.size());
     std::vector<std::uint8_t> census_valid(rejection.size(), 1U);
@@ -454,7 +464,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     if (!operation_holds<EventAlias>(operations[op])) {
                         continue;
                     }
-                    const auto expanded = operations.expanded(op);
+                    Operation expanded_scratch;
+                    const auto& expanded = operations.expanded_ref(op, expanded_scratch);
                     const auto* alias = operation_get_if<EventAlias>(&expanded);
                     if (alias == nullptr) {
                         continue;
@@ -556,8 +567,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
             return all == nullptr;
         };
-        const auto non_logic4 = std::ranges::any_of(view.register_value_kinds(),
-            [](const ValueKind kind) { return kind != ValueKind::logic4; });
         // A SystemVerilog behavioral member runs in its process's region
         // (IEEE 1800-2023 4.4.2; StaticKernel::ready_thread_in).
         if (view.observed() && (!behavioral || vhdl) && hit("observed")) {
@@ -660,7 +669,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             && hit("vhdl_container_register")) {
             return first;
         }
-        if (!vhdl && non_logic4 && hit("register_kind")) {
+        if (!vhdl
+            && std::ranges::any_of(view.register_value_kinds(),
+                [](const ValueKind kind) { return kind != ValueKind::logic4; })
+            && hit("register_kind")) {
             return first;
         }
         if (view.operations().size() < 2U && hit("trivial")) {
@@ -1083,7 +1095,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
             const auto& operations = views[index].operations();
             for (std::size_t op = 0U; op < operations.size(); ++op) {
-                const auto& operation = operations.expanded(op);
+                const auto& operation = operations[op];
                 if (operation_get_if<ForceSignalSlice>(&operation) != nullptr
                     || operation_get_if<ReleaseSignalSlice>(&operation) != nullptr) {
                     return true;
@@ -1218,7 +1230,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         std::vector<ObjectWrite> object_writes;
         const char* dynamic_reason = nullptr;
         for (std::size_t op = 0U; op < count && dynamic_reason == nullptr; ++op) {
-            const auto operation = operations.expanded(op);
+            Operation expanded_scratch;
+            const auto& operation = operations.expanded_ref(op, expanded_scratch);
             visit_operation([&](const auto& value) {
                 using T = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<T, ReadContainerObject>) {
@@ -1481,7 +1494,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         && host_access_objects[object] != 0U));
         };
         for (std::size_t op = 0U; op < count; ++op) {
-            const auto operation = operations.expanded(op);
+            Operation expanded_scratch;
+            const auto& operation = operations.expanded_ref(op, expanded_scratch);
             if (const auto* write = operation_get_if<ContainerWrite>(&operation)) {
                 host_container_write[op] = is_dynamic(write->target);
             } else if (const auto* object
@@ -1500,7 +1514,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             uses.clear();
         }
         for (std::size_t op = 0U; rebuild && op < count; ++op) {
-            const auto operation = operations.expanded(op);
+            Operation expanded_scratch;
+            const auto& operation = operations.expanded_ref(op, expanded_scratch);
             if (const auto* bind = operation_get_if<ReadContainerObject>(&operation);
                 bind != nullptr && host_object(bind->object, bind->destination)) {
                 // A slice view reads its root's elements (slice_alias_root).
@@ -1569,7 +1584,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             std::size_t failed_at = count;
             const char* failed_reason = "";
             for (std::size_t op = 0U; op < count && supported; ++op) {
-                const auto operation = operations.expanded(op);
+                Operation expanded_scratch;
+                const auto& operation = operations.expanded_ref(op, expanded_scratch);
                 failed_at = op;
                 if (!static_kernel_behavioral_operation_supported(operation)) {
                     supported = false;
@@ -1630,7 +1646,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
             for (std::size_t op = 0U; supported && view.final() && op < count;
                  ++op) {
-                if (!static_kernel_final_operation(operations.expanded(op))) {
+                if (!static_kernel_final_operation(operations[op])) {
                     supported = false;
                     failed_at = op;
                     failed_reason = "final_body";
@@ -1640,7 +1656,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                  && view.startup_phase()
                      == ProcessStartupPhase::package_static_initializer
                  && op < count; ++op) {
-                if (!static_kernel_startup_operation(operations.expanded(op))) {
+                if (!static_kernel_startup_operation(operations[op])) {
                     supported = false;
                     failed_at = op;
                     failed_reason = "package_static_initializer_body";
@@ -1651,7 +1667,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             // host object (the planner keeps written objects on the host):
             // none notifies a kernel reader.
             std::vector<std::uint8_t> host_container_write(count, 0U);
-            if (supported) {
+            // Without container registers or objects both container passes
+            // find nothing: no reason, no written object, no uses to rebuild.
+            const bool container_free = container_uses[index].empty()
+                && view.container_register_count() == 0U;
+            if (supported && !container_free) {
                 if (const char* reason
                     = container_rule(view, false, &dynamic_written)) {
                     supported = false;
@@ -1659,7 +1679,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     failed_reason = reason;
                 }
             }
-            if (supported) {
+            if (supported && !container_free) {
                 host_container_write
                     = host_object_uses(view, index, dynamic_written, true);
             }
@@ -1674,9 +1694,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             // private array (container_rule): writing its elements touches
             // no design memory.
             std::set<ContainerRegisterId> bound_registers;
-            if (region_member(view)) {
+            const bool region_view = region_member(view);
+            if (region_view) {
                 for (std::size_t op = 0U; op < count; ++op) {
-                    const auto operation = operations.expanded(op);
+                    Operation expanded_scratch;
+                    const auto& operation = operations.expanded_ref(op, expanded_scratch);
                     if (const auto* bind
                         = operation_get_if<ReadContainerObject>(&operation)) {
                         bound_registers.insert(bind->destination);
@@ -1684,8 +1706,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
             }
             for (std::size_t op = 0U; supported && op < count
-                 && region_member(view); ++op) {
-                const auto operation = operations.expanded(op);
+                 && region_view; ++op) {
+                Operation expanded_scratch;
+                const auto& operation = operations.expanded_ref(op, expanded_scratch);
                 const bool denied = visit_operation([&](const auto& value) {
                     using T = std::decay_t<decltype(value)>;
                     if constexpr (std::is_same_v<T, WriteContainerObjectElement>
@@ -1746,7 +1769,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (census) {
                     rejection[index].clear();
                 }
-            } else if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
+            } else if (plan_profile) {
                 std::cerr << "fsim-kernel-plan: behavioral rejected process="
                           << view.name() << " op=" << failed_at
                           << " reason=" << failed_reason;
@@ -1831,7 +1854,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
             member.sensitivity = sensitivity;
             for (std::size_t op = 0U; op < count && supported; ++op) {
-                const auto operation = operations.expanded(op);
+                Operation expanded_scratch;
+                const auto& operation = operations.expanded_ref(op, expanded_scratch);
                 failed_at = op;
                 if (!static_kernel_vhdl_behavioral_operation_supported(
                         operation)) {
@@ -1874,7 +1898,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }, operation);
             }
             std::set<ContainerObjectId> dynamic_written;
-            if (supported) {
+            if (supported && !(container_uses[index].empty()
+                    && view.container_register_count() == 0U)) {
                 if (const char* reason
                     = container_rule(view, true, &dynamic_written)) {
                     supported = false;
@@ -1899,7 +1924,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (census) {
                     rejection[index].clear();
                 }
-            } else if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
+            } else if (plan_profile) {
                 std::cerr << "fsim-kernel-plan: vhdl behavioral rejected process="
                           << view.name() << " op=" << failed_at
                           << " reason=" << failed_reason;
@@ -1950,7 +1975,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
                 for (const auto index : group) {
                     if (candidates[index]) {
-                        if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
+                        if (plan_profile) {
                             std::cerr << "fsim-kernel-plan: rejected process="
                                       << views[index].name()
                                       << " reason=" << reason << '\n';
@@ -1977,7 +2002,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (!operation_holds<DisableBlock>(operations[op])) {
                     continue;
                 }
-                const auto expanded = operations.expanded(op);
+                Operation expanded_scratch;
+                const auto& expanded = operations.expanded_ref(op, expanded_scratch);
                 if (const auto* statement
                     = operation_get_if<DisableBlock>(&expanded);
                     statement != nullptr && !statement->scopes.empty()) {
@@ -2236,10 +2262,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     const auto object_count = container_objects_.size();
     std::vector<std::vector<SignalId>> element_signals(object_count);
     std::vector<std::uint8_t> element_complete(object_count, 0U);
-    for (std::size_t object = 0U; object < object_count; ++object) {
-        element_signals[object].assign(
-            container_objects_[object].initial_value.elements.size(),
-            std::numeric_limits<SignalId>::max());
+    // Only an object with an element alias can be complete, so the others
+    // keep an empty list (an unaliased list would be all sentinels).
+    for (const auto& alias : container_element_signal_aliases_) {
+        if (alias.object < object_count
+            && element_signals[alias.object].empty()) {
+            element_signals[alias.object].assign(
+                container_objects_[alias.object].initial_value.elements.size(),
+                std::numeric_limits<SignalId>::max());
+        }
     }
     for (const auto& alias : container_element_signal_aliases_) {
         if (alias.object < object_count
@@ -2356,7 +2387,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         const auto& operations = views[index].operations();
         for (std::size_t op = 0U; op < operations.size(); ++op) {
-            const auto operation = operations.expanded(op);
+            Operation expanded_scratch;
+            const auto& operation = operations.expanded_ref(op, expanded_scratch);
             if (const auto target = static_kernel_host_signal(operation);
                 target && *target < signal_count) {
                 host_touched[*target] = 1U;
@@ -2455,6 +2487,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             continue;
         }
         const auto& operations = views[index].operations();
+        Operation expanded_scratch;
         for (std::size_t op = 0U; op < operations.size(); ++op) {
             visit_operation([&](const auto& value) {
                 using T = std::decay_t<decltype(value)>;
@@ -2474,7 +2507,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         }
                     }
                 }
-            }, operations.expanded(op));
+            }, operations.expanded_ref(op, expanded_scratch));
         }
     }
     // The signals that the elements of a host object members access alias
@@ -2534,6 +2567,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
         };
         const auto& operations = views[index].operations();
+        Operation expanded_scratch;
         for (std::size_t op = 0U; op < operations.size(); ++op) {
             visit_operation([&](const auto& value) {
                 using T = std::decay_t<decltype(value)>;
@@ -2560,7 +2594,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         touch(value.signal);
                     }
                 }
-            }, operations.expanded(op));
+            }, operations.expanded_ref(op, expanded_scratch));
         }
     }
     // The endpoints and controls of a switch or inout alias network take
@@ -2728,9 +2762,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         const auto& operations = views[resolver->process].operations();
         bool pure = operations.size() != 0U;
+        Operation expanded_scratch;
         for (std::size_t op = 0U; op < operations.size() && pure; ++op) {
             pure = static_kernel_conversion_operation(
-                operations.expanded(op), resolver->sources);
+                operations.expanded_ref(op, expanded_scratch),
+                resolver->sources);
         }
         if (!pure) {
             continue;
@@ -2762,7 +2798,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         const auto& operations = views[index].operations();
         if (!views[index].initialize() && operations.size() == 1U
-            && operation_holds<Halt>(operations.expanded(0U))) {
+            && operation_holds<Halt>(operations[0U])) {
             host_program[index] = 1U;
         }
     }
@@ -2794,6 +2830,28 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             && (info.resolution == ResolutionKind::none
                 || info.resolution == ResolutionKind::sv_wire
                 || (vhdl_mode && info.resolution == ResolutionKind::std_logic));
+    };
+    // The positions in a process's driver regions that drive a signal, in
+    // region order, indexed on first use (a process drives few signals but
+    // may have many regions).
+    std::vector<std::uint8_t> driver_index_built(views.size(), 0U);
+    std::vector<std::unordered_map<SignalId, std::vector<std::uint32_t>>>
+        driver_index(views.size());
+    const auto driver_positions = [&](const ProcessId process,
+                                      const SignalId signal)
+        -> const std::vector<std::uint32_t>& {
+        static const std::vector<std::uint32_t> none;
+        if (driver_index_built[process] == 0U) {
+            driver_index_built[process] = 1U;
+            const auto& regions = views[process].driver_regions();
+            for (std::uint32_t position = 0U; position < regions.size();
+                 ++position) {
+                driver_index[process][regions[position].signal].push_back(
+                    position);
+            }
+        }
+        const auto found = driver_index[process].find(signal);
+        return found == driver_index[process].end() ? none : found->second;
     };
     const auto writers_ok = [&](const SignalId signal) {
         const auto& node = graph_signals[signal];
@@ -2872,13 +2930,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 std::vector<std::tuple<std::uint32_t, std::uint32_t, ProcessId>>
                     spans;
                 for (const auto process : combinational) {
-                    for (const auto& region : views[process].driver_regions()) {
-                        if (region.signal == signal) {
-                            const auto begin = region.whole ? 0U : region.offset;
-                            spans.emplace_back(begin,
-                                begin + (region.whole ? width : region.width),
-                                process);
-                        }
+                    const auto& process_regions = views[process].driver_regions();
+                    for (const auto position :
+                         driver_positions(process, signal)) {
+                        const auto& region = process_regions[position];
+                        const auto begin = region.whole ? 0U : region.offset;
+                        spans.emplace_back(begin,
+                            begin + (region.whole ? width : region.width),
+                            process);
                     }
                 }
                 std::ranges::sort(spans);
@@ -2909,12 +2968,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             if (writers.size() > 1U) {
                 std::vector<std::pair<std::uint32_t, std::uint32_t>> regions;
                 for (const auto writer : writers) {
-                    for (const auto& region : views[writer].driver_regions()) {
-                        if (region.signal == signal) {
-                            regions.emplace_back(
-                                region.whole ? 0U : region.offset,
-                                region.whole ? width : region.width);
-                        }
+                    const auto& writer_regions = views[writer].driver_regions();
+                    for (const auto position : driver_positions(writer, signal)) {
+                        const auto& region = writer_regions[position];
+                        regions.emplace_back(
+                            region.whole ? 0U : region.offset,
+                            region.whole ? width : region.width);
                     }
                 }
                 std::ranges::sort(regions);
@@ -3193,7 +3252,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         }
                     }
                 }
-                if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
+                if (plan_profile) {
                     for (const auto object : container_uses[index]) {
                         if (object < object_count
                             && owned_container[object] == 0U) {
@@ -3289,7 +3348,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
 
-    const bool diagnose = std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr;
+    const bool diagnose = plan_profile;
     if (diagnose) {
         std::map<std::string, std::size_t> reasons;
         std::map<std::string, std::string> examples;
@@ -3905,8 +3964,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (!lazy_ok(index)) {
                     mark_process(index);
                 }
-                for (const auto& sensitivity : candidate
-                         ? candidate->sensitivity : std::vector<Sensitivity> { }) {
+                if (!candidate) {
+                    continue;
+                }
+                for (const auto& sensitivity : candidate->sensitivity) {
                     if (sensitivity.signal < signal_count) {
                         triggered[sensitivity.signal].push_back(
                             static_cast<ProcessId>(index));
@@ -4069,7 +4130,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
             const auto& operations = views[process].operations();
             for (std::size_t op = 0U; op < operations.size(); ++op) {
-                const auto operation = operations.expanded(op);
+                Operation expanded_scratch;
+                const auto& operation = operations.expanded_ref(op, expanded_scratch);
                 if (const auto* wait = operation_get_if<WaitFor>(&operation)) {
                     if (wait->source || wait->delay == 0U) {
                         return false;
@@ -4617,6 +4679,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
     std::vector<std::uint8_t> virtual_owned(signal_count, 0U);
+    // Signals that already have a writer region (the wiring and conversion
+    // loops below add their targets).
+    std::vector<std::uint8_t> has_writer_region(signal_count, 0U);
     for (std::size_t object = 0U; object < object_count; ++object) {
         if (owned_container[object] == 0U) {
             continue;
@@ -4628,7 +4693,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             container.packed_signal = *packed_alias[object];
         } else if (has_element_alias[object] != 0U) {
             container.storage = StaticKernelContainerStorage::element_signals;
-            container.element_signals = element_signals[object];
+            container.element_signals = std::move(element_signals[object]);
         }
         if (!accessors[object].empty()
             || container.storage != StaticKernelContainerStorage::elements) {
@@ -4670,6 +4735,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 const auto emit = [&] {
                     spec->writer_regions.push_back({ signal, process,
                         current.first, current.second - current.first });
+                    has_writer_region[signal] = 1U;
                 };
                 for (std::size_t index = 1U; index < ranges.size(); ++index) {
                     if (ranges[index].first <= current.second) {
@@ -4696,11 +4762,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // The kernel's wiring is the only writer of a wired formal; the program
     // is its driver identity on the host.
     for (const auto& wiring : wirings) {
-        if (wiring.live
-            && std::ranges::none_of(spec->writer_regions,
-                [&](const auto& region) {
-                    return region.signal == wiring.target;
-                })) {
+        if (wiring.live && has_writer_region[wiring.target] == 0U) {
+            has_writer_region[wiring.target] = 1U;
             spec->writer_regions.push_back({ wiring.target, wiring.program,
                 0U,
                 static_cast<std::uint32_t>(
@@ -4709,11 +4772,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     }
     // A conversion member is its formal's only writer.
     for (const auto& conversion : conversions) {
-        if (conversion.live
-            && std::ranges::none_of(spec->writer_regions,
-                [&](const auto& region) {
-                    return region.signal == conversion.target;
-                })) {
+        if (conversion.live && has_writer_region[conversion.target] == 0U) {
+            has_writer_region[conversion.target] = 1U;
             spec->writer_regions.push_back({ conversion.target,
                 conversion.program, 0U,
                 static_cast<std::uint32_t>(
@@ -4768,7 +4828,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         const auto& operations = views[index].operations();
         for (std::size_t op = 0U; op < operations.size(); ++op) {
-            const auto& operation = operations.expanded(op);
+            Operation expanded_scratch;
+            const auto& operation = operations.expanded_ref(op, expanded_scratch);
             const auto mark = [&](const auto* query) {
                 if (query != nullptr && query->signal < signal_count) {
                     history_read[query->signal] = 1U;

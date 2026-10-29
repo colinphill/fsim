@@ -543,10 +543,10 @@ fsim_require_ast_lifetime_tokens("${FSIM_ELABORATOR_HEADER}"
 fsim_require_ast_lifetime_tokens("${FSIM_SPECIALIZATION_HEADER}"
   "const CompiledDesign* design_ { };"
   "SpecializedHirOverlay specialization_;"
-  "std::vector<sv::Expression> systemverilog_expressions_;"
-  "std::vector<vhdl::Expression> vhdl_expressions_;"
-  "std::vector<sv::Statement> systemverilog_statements_;"
-  "std::vector<vhdl::Statement> vhdl_statements_;")
+  "detail::SharedRecords<sv::Expression> systemverilog_expressions_;"
+  "detail::SharedRecords<vhdl::Expression> vhdl_expressions_;"
+  "detail::SharedRecords<sv::Statement> systemverilog_statements_;"
+  "detail::SharedRecords<vhdl::Statement> vhdl_statements_;")
 
 fsim_require_ast_lifetime_tokens("${FSIM_CACHE_HEADER}"
   "std::optional<std::vector<std::byte>> load("

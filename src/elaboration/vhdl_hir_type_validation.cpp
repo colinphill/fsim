@@ -104,6 +104,12 @@ public:
     {
     }
 
+    // Share the design-wide sets with the other validators of this design.
+    void set_lowering_index(VhdlLoweringIndex* index) noexcept
+    {
+        lowering_index_ = index;
+    }
+
     // An analysis-only validator: the expression rules it answers read no
     // entity or architecture state.
     explicit Validator(const semantic::SpecializedHirUnit& specialization)
@@ -155,13 +161,8 @@ public:
         }
         // The VITAL packages' declarations are compiler-supplied and not
         // retained, so names in a design using VITAL cannot be checked.
-        for (const auto& unit : specialization_.design().vhdl_hir.units()) {
-            std::string lowered { unit.name };
-            lowercase_ascii(lowered);
-            if (lowered.starts_with("vital_") && equal_ignoring_ascii_case(unit.library, "ieee")) {
-                name_check_ = false;
-                break;
-            }
+        if (validation_facts().vital_unit) {
+            name_check_ = false;
         }
         collect_unit_types(entity_);
         collect_unit_types(architecture_);
@@ -187,6 +188,57 @@ public:
     }
 
 private:
+    // The whole-HIR sets that do not depend on the specialization's actuals,
+    // derived on first use and kept on the shared lowering index when there
+    // is one.
+    const VhdlLoweringIndex::ValidationFacts& validation_facts()
+    {
+        const auto& hir = specialization_.design().vhdl_hir;
+        auto& slot = lowering_index_ != nullptr
+            ? lowering_index_->current(hir).validation_facts
+            : local_validation_facts_;
+        if (slot) {
+            return *slot;
+        }
+        auto& facts = slot.emplace();
+        for (const auto& unit : hir.units()) {
+            std::string lowered { unit.name };
+            lowercase_ascii(lowered);
+            if (lowered.starts_with("vital_")
+                && equal_ignoring_ascii_case(unit.library, "ieee")) {
+                facts.vital_unit = true;
+                break;
+            }
+        }
+        // A protected type's methods have their bodies in the protected type
+        // body, which may be in a package body.
+        for (const auto& type : hir.types()) {
+            for (const auto member : type.protected_members) {
+                facts.protected_methods.insert(member.value());
+            }
+        }
+        for (const auto& instance : hir.instances()) {
+            for (const auto& association : instance.port_map) {
+                if (association.expression) {
+                    facts.linkage_uses.insert(
+                        association.expression->value());
+                }
+            }
+        }
+        for (const auto& stored : hir.expressions()) {
+            if (stored.kind == semantic::vhdl::ExpressionKind::call
+                && stored.text.starts_with('\'')
+                && !stored.operands.empty()) {
+                facts.linkage_uses.insert(stored.operands.front().value());
+            }
+            if (stored.kind == semantic::vhdl::ExpressionKind::index
+                && !stored.operands.empty()) {
+                facts.inner_indices.insert(stored.operands.front().value());
+            }
+        }
+        return facts;
+    }
+
     const TypeDefinition* type_definition(const semantic::TypeId id) const
     {
         const auto type = specialization_.find_type(id);
@@ -6607,12 +6659,7 @@ private:
         const auto& declarations = specialization_.design().vhdl_hir.declarations();
         // A protected type's methods have their bodies in the protected type
         // body, which may be in a package body.
-        std::unordered_set<std::uint32_t> protected_methods;
-        for (const auto& type : specialization_.design().vhdl_hir.types()) {
-            for (const auto member : type.protected_members) {
-                protected_methods.insert(member.value());
-            }
-        }
+        const auto& protected_methods = validation_facts().protected_methods;
         for (const auto& declaration : declarations) {
             if (protected_methods.contains(declaration.id.value())) {
                 continue;
@@ -13712,20 +13759,7 @@ private:
                 prefix_id = prefix->vhdl->operands.front();
             }
         }
-        std::unordered_set<std::uint32_t> linkage_uses;
-        for (const auto& instance : specialization_.design().vhdl_hir.instances()) {
-            for (const auto& association : instance.port_map) {
-                if (association.expression) {
-                    linkage_uses.insert(association.expression->value());
-                }
-            }
-        }
-        for (const auto& stored : specialization_.design().vhdl_hir.expressions()) {
-            if (stored.kind == semantic::vhdl::ExpressionKind::call
-                && stored.text.starts_with('\'') && !stored.operands.empty()) {
-                linkage_uses.insert(stored.operands.front().value());
-            }
-        }
+        const auto& linkage_uses = validation_facts().linkage_uses;
         for (const auto& stored : unit_expressions()) {
             const auto effective = specialization_.find_expression(stored.id);
             if (!effective || effective->vhdl == nullptr
@@ -13742,14 +13776,7 @@ private:
         }
         // Index expressions that are the prefix of another index: a name
         // with several indices (`k(5,5)`) is retained as nested indices.
-        std::unordered_set<std::uint32_t> inner_indices;
-        for (const auto& stored :
-            specialization_.design().vhdl_hir.expressions()) {
-            if (stored.kind == semantic::vhdl::ExpressionKind::index
-                && !stored.operands.empty()) {
-                inner_indices.insert(stored.operands.front().value());
-            }
-        }
+        const auto& inner_indices = validation_facts().inner_indices;
         for (const auto& stored : unit_expressions()) {
             const auto effective = specialization_.find_expression(
                 stored.id);
@@ -14252,6 +14279,8 @@ private:
     bool name_check_ { true };
     bool operator_check_ { true };
     bool names_only_ { };
+    VhdlLoweringIndex* lowering_index_ { };
+    std::optional<VhdlLoweringIndex::ValidationFacts> local_validation_facts_;
     std::optional<std::unordered_set<std::uint32_t>> callable_scopes_;
     std::optional<std::unordered_set<std::uint32_t>> signal_formals_;
     std::optional<std::unordered_set<std::string>> exempt_names_;
@@ -14446,9 +14475,12 @@ bool vhdl_locally_static_expression(
 std::vector<VhdlHirTypeValidationIssue> validate_vhdl_hir_types(
     const semantic::SpecializedHirUnit& specialization,
     const semantic::vhdl::Unit& entity,
-    const semantic::vhdl::Unit& architecture)
+    const semantic::vhdl::Unit& architecture,
+    VhdlLoweringIndex* const index)
 {
-    return Validator { specialization, entity, architecture }.run();
+    Validator validator { specialization, entity, architecture };
+    validator.set_lowering_index(index);
+    return validator.run();
 }
 
 std::vector<Diagnostic> validate_vhdl_architecture_names(

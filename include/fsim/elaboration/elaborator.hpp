@@ -1107,6 +1107,30 @@ private:
     friend class Lowerer;
     friend class detail::ElaboratedDesignProcessAccess;
 
+    /// Positions, in insertion order, of the container signal aliases and
+    /// element signal aliases that name `object`. The index extends over
+    /// entries appended since the last query; code that erases from or
+    /// replaces either vector calls invalidate_container_alias_indexes().
+    [[nodiscard]] std::span<const std::uint32_t> container_alias_positions(
+        runtime::simir::ContainerObjectId object) const;
+    [[nodiscard]] std::span<const std::uint32_t>
+    container_element_alias_positions(
+        runtime::simir::ContainerObjectId object) const;
+    void invalidate_container_alias_indexes() noexcept;
+
+    /// Positions in `specializations_`, in insertion order, of the
+    /// specializations whose instance path is `instance` (exact) or whose
+    /// ASCII-lowercased instance path is `lowered`. The indexes extend over
+    /// entries appended since the last query; instance paths are fixed
+    /// before an entry is appended.
+    [[nodiscard]] std::span<const std::uint32_t> specialization_positions(
+        std::string_view instance) const;
+    [[nodiscard]] std::span<const std::uint32_t>
+    specialization_positions_lowercase(std::string_view lowered) const;
+    /// The first specialization whose instance path is `instance`, or null.
+    [[nodiscard]] const SpecializationInfo* find_specialization(
+        std::string_view instance) const;
+
     [[nodiscard]] static std::optional<ElaboratedDesign>
     from_state_with_process_rows(
         ElaboratedDesignState state,
@@ -1164,6 +1188,14 @@ private:
         container_signal_aliases_;
     std::vector<runtime::simir::ContainerElementSignalAlias>
         container_element_signal_aliases_;
+    struct ContainerAliasIndex {
+        std::unordered_map<runtime::simir::ContainerObjectId,
+            std::vector<std::uint32_t>>
+            positions;
+        std::size_t indexed { };
+    };
+    mutable ContainerAliasIndex container_alias_index_;
+    mutable ContainerAliasIndex container_element_alias_index_;
     std::vector<runtime::simir::ContainerAggregateSignalAlias>
         container_aggregate_signal_aliases_;
     std::vector<VhdlProtectedObjectInfo> vhdl_protected_object_info_;
@@ -1175,6 +1207,33 @@ private:
     std::shared_ptr<detail::RuntimeProcessProgramTableBuilder>
         process_builder_;
     std::vector<SpecializationInfo> specializations_;
+    struct SpecializationPathHash {
+        using is_transparent = void;
+        [[nodiscard]] std::size_t operator()(
+            const std::string_view value) const noexcept
+        {
+            return std::hash<std::string_view> { }(value);
+        }
+    };
+    struct SpecializationPathEqual {
+        using is_transparent = void;
+        [[nodiscard]] bool operator()(const std::string_view left,
+            const std::string_view right) const noexcept
+        {
+            return left == right;
+        }
+    };
+    struct SpecializationPathIndex {
+        std::unordered_map<std::string, std::vector<std::uint32_t>,
+            SpecializationPathHash, SpecializationPathEqual>
+            exact;
+        std::unordered_map<std::string, std::vector<std::uint32_t>,
+            SpecializationPathHash, SpecializationPathEqual>
+            lowercase;
+        std::size_t exact_indexed { };
+        std::size_t lowercase_indexed { };
+    };
+    mutable SpecializationPathIndex specialization_path_index_;
     std::vector<UdpTableInfo> udp_tables_;
     std::vector<VerilogSpecifyPathInfo> verilog_specify_paths_;
     std::vector<runtime::simir::ModuleTimingCheck> verilog_timing_checks_;

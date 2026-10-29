@@ -1368,8 +1368,8 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
         if ((inst.flags & flag_blocking) != 0U) {
             // Shared variable: immediate.
             slot.last_writer = member_process_[member_index];
-            std::vector<std::uint64_t> before(arena_.begin() + slot.offset,
-                arena_.begin() + slot.offset + slot.planes * slot.words);
+            const WordSnapshot before(
+                arena_.data() + slot.offset, slot.planes * slot.words);
             store_slot_word(resolved, x, offset, inst.width, z.a);
             if (!std::equal(before.begin(), before.end(),
                     arena_.begin() + slot.offset)) {
@@ -1921,13 +1921,20 @@ PackedLogic4 Interpreter::Impl::StaticKernel::wide_value(
         unknown = unknown || registers[base + chunks + chunk].a != 0U;
     }
     if (!unknown) {
-        std::vector<std::uint64_t> a(chunks);
-        std::vector<std::uint64_t> b(chunks);
-        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
-            a[chunk] = registers[base + chunk].a;
-            b[chunk] = registers[base + chunk].b;
+        // One buffer for both planes; short values stay off the heap.
+        std::array<std::uint64_t, 16> inline_planes;
+        std::vector<std::uint64_t> heap_planes;
+        auto* planes = inline_planes.data();
+        if (2U * chunks > inline_planes.size()) {
+            heap_planes.resize(2U * chunks);
+            planes = heap_planes.data();
         }
-        auto result = PackedLogic4::from_word_planes(width, a, b);
+        for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
+            planes[chunk] = registers[base + chunk].a;
+            planes[chunks + chunk] = registers[base + chunk].b;
+        }
+        auto result = PackedLogic4::from_word_planes(width,
+            { planes, chunks }, { planes + chunks, chunks });
         return kind == ValueKind::logic9 ? result.promoted_to_logic9() : result;
     }
     std::array<std::vector<std::uint64_t>, 4> planes;
@@ -2120,8 +2127,8 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
         if (inst.sub == 2U && (inst.flags & flag_blocking) != 0U) {
             // A shared variable: immediate, one change report.
             slot.last_writer = member_process_[member_index];
-            std::vector<std::uint64_t> before(arena_.begin() + slot.offset,
-                arena_.begin() + slot.offset + slot.planes * slot.words);
+            const WordSnapshot before(
+                arena_.data() + slot.offset, slot.planes * slot.words);
             for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {
                 store_slot_word(resolved, registers[inst.x + chunk],
                     inst.offset + 64U * chunk, chunk_width(chunk), unknown(chunk));

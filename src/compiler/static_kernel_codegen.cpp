@@ -213,6 +213,9 @@ public:
         , resume_points_(resume_points)
         , vhdl_(vhdl)
     {
+        if (resume_points_ != nullptr) {
+            resume_seen_.insert(resume_points_->begin(), resume_points_->end());
+        }
     }
 
     void emit()
@@ -348,9 +351,7 @@ public:
             // in, which dominates the rest of the KIR block; values defined
             // in its inner blocks must not be reused after it.
             spine_.insert(builder_.GetInsertBlock());
-            std::erase_if(cache_, [&](const auto& entry) {
-                return !available(entry.second);
-            });
+            sweep_cache();
         }
         if (builder_.GetInsertBlock()->getTerminator() == nullptr) {
             builder_.CreateBr(return_block_);
@@ -777,6 +778,29 @@ private:
         return defined(value.a) && defined(value.b);
     }
 
+    /// Records a register's value. Only entries written since the last
+    /// sweep can be unavailable: the spine only grows within a KIR block and
+    /// the builder rests in it after every instruction, so an older entry
+    /// stays available.
+    void cache_put(const std::uint32_t reg, const Pair value)
+    {
+        cache_[reg] = value;
+        fresh_.push_back(reg);
+    }
+
+    /// Drops the entries written since the last sweep that are no longer
+    /// available (the whole-cache sweep, restricted to what can have changed).
+    void sweep_cache()
+    {
+        for (const auto reg : fresh_) {
+            if (const auto found = cache_.find(reg);
+                found != cache_.end() && !available(found->second)) {
+                cache_.erase(found);
+            }
+        }
+        fresh_.clear();
+    }
+
     [[nodiscard]] Pair load_register(const std::uint32_t reg)
     {
         if (const auto found = cache_.find(reg);
@@ -786,7 +810,7 @@ private:
         const auto [base, high] = register_address(reg);
         Pair value { builder_.CreateLoad(i64_, base),
             two_state_ ? constant(0U) : builder_.CreateLoad(i64_, high) };
-        cache_[reg] = value;
+        cache_put(reg, value);
         return value;
     }
 
@@ -807,12 +831,12 @@ private:
                 tracked(reg) ? register_address(body_.shadow_base + reg).first
                              : nullptr);
             guarded_unknown_ = unknown;
-            cache_[reg] = Pair { value.a, constant(0U) };
+            cache_put(reg, Pair { value.a, constant(0U) });
             return;
         }
         builder_.CreateStore(value.a, base);
         builder_.CreateStore(value.b, high);
-        cache_[reg] = value;
+        cache_put(reg, value);
     }
 
     /// Two-state code (see StaticKernelTemplate::two_state) assumes every
@@ -3627,10 +3651,12 @@ private:
     /// Records the instruction after the current one as a continuation.
     std::uint32_t continue_point(const std::uint32_t offset = 1U)
     {
-        if (resume_points_ != nullptr
-            && std::ranges::find(*resume_points_, at_ + offset)
-                == resume_points_->end()) {
-            resume_points_->push_back(at_ + offset);
+        if (resume_points_ != nullptr) {
+            // The set mirrors the vector (see resume_points_), which keeps
+            // the order of first use.
+            if (resume_seen_.insert(at_ + offset).second) {
+                resume_points_->push_back(at_ + offset);
+            }
         }
         return at_ + offset;
     }
@@ -3661,6 +3687,7 @@ private:
     /// (read_or_hand_over) instead of calling the evaluate helper.
     bool hand_over_slow_paths_ { true };
     std::vector<std::uint32_t>* resume_points_ { };
+    std::unordered_set<std::uint32_t> resume_seen_;
     /// The template has a VHDL instance (prologue entry).
     bool vhdl_ { };
     std::uint32_t at_ { };
@@ -3688,6 +3715,8 @@ private:
     llvm::BasicBlock* step_leave_ { };
     std::vector<llvm::BasicBlock*> blocks_;
     std::map<std::uint32_t, Pair> cache_;
+    /// Registers written to `cache_` since the last sweep.
+    std::vector<std::uint32_t> fresh_;
     /// Blocks of the current KIR block in which an instruction started or
     /// ended (see emit).
     std::unordered_set<const llvm::BasicBlock*> spine_;
@@ -4038,6 +4067,8 @@ private:
         const std::uint8_t tier, const std::size_t chunk) const
     {
         auto context = std::make_unique<llvm::LLVMContext>();
+        // Value and block names only serve the IR dump.
+        context->setDiscardValueNames(std::getenv("FSIM_STATIC_KERNEL_DUMP_IR") == nullptr);
         auto module = std::make_unique<llvm::Module>("fsim_static_kernel", *context);
         module->setDataLayout(layout);
         auto* i32 = llvm::Type::getInt32Ty(*context);
@@ -4299,7 +4330,10 @@ private:
                 }
             }
             for (std::size_t chunk = 0U; chunk < chunks.size(); ++chunk) {
-                const std::string bytes { objects[chunk]->getBuffer() };
+                std::string bytes;
+                if (store) {
+                    bytes = std::string { objects[chunk]->getBuffer() };
+                }
                 if (auto error = jit.addObjectFile(std::move(objects[chunk]))) {
                     throw std::runtime_error(error_text(std::move(error)));
                 }
@@ -4343,16 +4377,21 @@ private:
 
     [[nodiscard]] static std::string codegen_identity()
     {
+        // The host CPU and its features do not change within a process.
+        static const std::string host = [] {
+            std::string text = llvm::sys::getProcessTriple() + ";";
+            text += std::string { llvm::sys::getHostCPUName() } + ";";
+            for (const auto& [feature, enabled] : llvm::sys::getHostCPUFeatures()) {
+                if (enabled) {
+                    text += feature.str() + ",";
+                }
+            }
+            return text;
+        }();
         std::string identity = "fsim-static-kernel-object-v1;";
         identity += __DATE__ " " __TIME__ ";";
         identity += LLVM_VERSION_STRING ";";
-        identity += llvm::sys::getProcessTriple() + ";";
-        identity += std::string { llvm::sys::getHostCPUName() } + ";";
-        for (const auto& [feature, enabled] : llvm::sys::getHostCPUFeatures()) {
-            if (enabled) {
-                identity += feature.str() + ",";
-            }
-        }
+        identity += host;
         for (const char* name : { "FSIM_STATIC_KERNEL_LOCAL_REGISTERS",
                  "FSIM_STATIC_KERNEL_VHDL_LOCALS", "FSIM_STATIC_KERNEL_OPT_MAX_SIZE",
                  "FSIM_STATIC_KERNEL_OPT_MIN_SIZE", "FSIM_STATIC_KERNEL_OPT_FULL",

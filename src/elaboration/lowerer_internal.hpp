@@ -171,8 +171,17 @@ fully_effective_systemverilog_type(
 [[nodiscard]] inline SourceLocation runtime_source_location(
     const frontend::SourceSpan& span)
 {
+    // Consecutive statements come from one file. The cache holds its own
+    // SourceName copy, so the compared address names a live string and
+    // cannot alias a freed buffer.
+    thread_local frontend::SourceName cached_name;
+    thread_local InternedString cached_path;
+    if (&cached_name.str() != &span.source_name.str()) {
+        cached_name = span.source_name;
+        cached_path = InternedString { span.source_name.str() };
+    }
     return SourceLocation {
-        span.source_name.str(),
+        cached_path,
         static_cast<std::uint32_t>(span.begin.line),
         static_cast<std::uint32_t>(span.begin.column),
     };
@@ -663,7 +672,7 @@ private:
         semantic::vhdl::SubtypeIndication subtype;
         semantic::ScopeId scope;
         std::size_t binding_frames { };
-        semantic::vhdl::SubtypeIndication result;
+        std::shared_ptr<const semantic::vhdl::SubtypeIndication> result;
     };
 
     // The visible callables a VHDL name denotes from a scope under one set
@@ -784,7 +793,8 @@ private:
         semantic::ScopeId scope;
         std::optional<std::size_t> callable;
         std::size_t binding_frames { };
-        std::optional<semantic::vhdl::SubtypeIndication> result;
+        // Null when the expression has no subtype.
+        std::shared_ptr<const semantic::vhdl::SubtypeIndication> result;
     };
     mutable std::unordered_map<std::uint32_t,
         std::vector<HirVhdlExpressionSubtypeCacheEntry>>
@@ -2576,6 +2586,17 @@ private:
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_expression_subtype(
         semantic::ExpressionId expression) const;
+    // The same result without a copy of a cached one; null when there is
+    // none. A held result stays valid whatever the caches do.
+    [[nodiscard]] std::shared_ptr<const semantic::vhdl::SubtypeIndication>
+    hir_vhdl_expression_subtype_ref(
+        semantic::ExpressionId expression) const;
+    // The cached result, or null with an uncached result in `fresh`; a
+    // cached absence is null with an empty `fresh`.
+    [[nodiscard]] std::shared_ptr<const semantic::vhdl::SubtypeIndication>
+    lookup_hir_vhdl_expression_subtype(
+        semantic::ExpressionId expression,
+        std::optional<semantic::vhdl::SubtypeIndication>& fresh) const;
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     compute_hir_vhdl_expression_subtype(
         semantic::ExpressionId expression) const;
@@ -3420,6 +3441,16 @@ private:
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_effective_vhdl_subtype(
         const semantic::vhdl::SubtypeIndication& subtype) const;
+    // The same result without a copy of a cached one; null when there is
+    // none. A held result stays valid whatever the caches do.
+    [[nodiscard]] std::shared_ptr<const semantic::vhdl::SubtypeIndication>
+    hir_effective_vhdl_subtype_ref(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    // The cached result, or null with an uncached result in `fresh`.
+    [[nodiscard]] std::shared_ptr<const semantic::vhdl::SubtypeIndication>
+    lookup_hir_effective_vhdl_subtype(
+        const semantic::vhdl::SubtypeIndication& subtype,
+        std::optional<semantic::vhdl::SubtypeIndication>& fresh) const;
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_type_actual(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirCallableResolution>
@@ -5050,6 +5081,9 @@ private:
         DebugPointKind kind,
         const frontend::SourceSpan& span);
     [[nodiscard]] std::string debug_scope_name() const;
+    /// debug_scope_name() interned; the last result is reused when the
+    /// recomputed text is unchanged, which skips the intern table.
+    [[nodiscard]] InternedString debug_scope();
     RegisterId allocate_register(
         std::size_t width,
         frontend::ValueDomain domain);
@@ -5584,6 +5618,7 @@ private:
     std::unordered_map<std::string, StringRegisterId> string_locals_;
     std::unordered_set<std::string> debug_local_names_;
     std::vector<std::string> local_scope_;
+    InternedString debug_scope_cache_;
     struct LoopControlContext {
         std::optional<InstructionIndex> continue_target;
         std::vector<InstructionIndex> continue_jumps;
