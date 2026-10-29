@@ -2080,18 +2080,28 @@ namespace codec_detail {
         bool read(T& value)
         {
             using Value = std::remove_cv_t<T>;
+            // Leaf scalars skip the enter()/leave() pair; the depth check is
+            // the one enter() would make, with the same diagnostic.
+            if constexpr (std::same_as<Value, bool>
+                || (std::is_integral_v<Value> && !std::is_enum_v<Value>)) {
+                if (depth_ >= kMaximumNesting) {
+                    return fail("design state exceeds the safe structural nesting depth");
+                }
+                return read_scalar(value);
+            } else {
+                return read_structured(value);
+            }
+        }
+
+        template <typename T>
+        bool read_structured(T& value)
+        {
+            using Value = std::remove_cv_t<T>;
             if (!enter()) {
                 return false;
             }
             const bool result = [&]() {
-                if constexpr (std::same_as<Value, bool>) {
-                    unsigned char byte { };
-                    if (!read_byte(byte) || byte > 1) {
-                        return fail("design state contains an invalid boolean");
-                    }
-                    value = byte != 0;
-                    return true;
-                } else if constexpr (std::is_enum_v<Value>) {
+                if constexpr (std::is_enum_v<Value>) {
                     std::underlying_type_t<Value> decoded { };
                     if (!read(decoded)) {
                         return false;
@@ -2099,26 +2109,6 @@ namespace codec_detail {
                     value = static_cast<Value>(decoded);
                     return valid_archive_enum(value)
                         || fail("design state contains an invalid scalar enumeration");
-                } else if constexpr (std::is_integral_v<Value>) {
-                    if (remaining() < sizeof(Value)) {
-                        return fail("design state is truncated");
-                    }
-                    using Unsigned = std::make_unsigned_t<Value>;
-                    static_assert(sizeof(Value) <= sizeof(std::uint64_t));
-                    std::array<char, sizeof(Value)> bytes { };
-                    if (!read_exact(bytes.data(), bytes.size())) {
-                        return false;
-                    }
-                    std::uint64_t encoded { };
-                    for (unsigned shift = 0;
-                         shift < sizeof(Value) * 8U; shift += 8U) {
-                        const auto byte = static_cast<unsigned char>(
-                            bytes[shift / 8U]);
-                        encoded |= static_cast<std::uint64_t>(byte) << shift;
-                    }
-                    value = std::bit_cast<Value>(
-                        static_cast<Unsigned>(encoded));
-                    return true;
                 } else if constexpr (
                     std::same_as<Value, runtime::simir::InternedString>) {
                     if (runtime_string_table_) {
@@ -2239,6 +2229,18 @@ namespace codec_detail {
                         && !consume_allocation(
                             words, planes * sizeof(std::uint64_t))) {
                         return false;
+                    }
+                    if (words == 1U && !logic9) {
+                        // Single-word two-plane value: same masking as
+                        // from_word_planes, without the plane spans.
+                        std::uint64_t aval { };
+                        std::uint64_t bval { };
+                        if (!u64(aval) || !u64(bval)) {
+                            return false;
+                        }
+                        value = runtime::PackedLogic4::from_aval_bval(
+                            static_cast<std::size_t>(width), aval, bval);
+                        return true;
                     }
                     std::array<std::uint64_t, 4U> narrow { };
                     std::vector<std::uint64_t> wide;
@@ -2423,6 +2425,25 @@ namespace codec_detail {
                         return fail("design state vector exceeds the payload");
                     }
                     value.clear();
+                    using Element = typename Value::value_type;
+                    if constexpr (std::is_integral_v<Element>
+                        && !std::same_as<Element, bool>
+                        && std::endian::native == std::endian::little) {
+                        // Little-endian wire integers: one bulk copy. A
+                        // truncated payload reports the same diagnostic the
+                        // per-element read would.
+                        if (size != 0U && depth_ >= kMaximumNesting) {
+                            return fail("design state exceeds the safe structural nesting depth");
+                        }
+                        if (size > remaining() / sizeof(Element)) {
+                            return fail("design state is truncated");
+                        }
+                        value.resize(static_cast<std::size_t>(size));
+                        return size == 0U
+                            || read_exact(
+                                reinterpret_cast<char*>(value.data()),
+                                static_cast<std::size_t>(size) * sizeof(Element));
+                    }
                     value.reserve(static_cast<std::size_t>(size));
                     for (std::uint64_t index = 0; index < size; ++index) {
                         value.emplace_back();
@@ -2556,6 +2577,39 @@ namespace codec_detail {
         }
 
     private:
+        template <typename Value>
+        bool read_scalar(Value& value)
+        {
+            if constexpr (std::same_as<Value, bool>) {
+                unsigned char byte { };
+                if (!read_byte(byte) || byte > 1) {
+                    return fail("design state contains an invalid boolean");
+                }
+                value = byte != 0;
+                return true;
+            } else {
+                if (remaining() < sizeof(Value)) {
+                    return fail("design state is truncated");
+                }
+                using Unsigned = std::make_unsigned_t<Value>;
+                static_assert(sizeof(Value) <= sizeof(std::uint64_t));
+                std::array<char, sizeof(Value)> bytes { };
+                if (!read_exact(bytes.data(), bytes.size())) {
+                    return false;
+                }
+                std::uint64_t encoded { };
+                for (unsigned shift = 0;
+                     shift < sizeof(Value) * 8U; shift += 8U) {
+                    const auto byte = static_cast<unsigned char>(
+                        bytes[shift / 8U]);
+                    encoded |= static_cast<std::uint64_t>(byte) << shift;
+                }
+                value = std::bit_cast<Value>(
+                    static_cast<Unsigned>(encoded));
+                return true;
+            }
+        }
+
         bool read_runtime_process_table(
             elaboration::detail::RuntimeProcessProgramTable& table)
         {

@@ -1523,6 +1523,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::bitset<static_kernel_detail::operation_kind_count> kinds;
         bool sampled_read { };
         bool transaction_wait { };
+        // Canonical signal IDs of each non-current ReadSignal, in program
+        // order; instances map them through their own signal remap.
+        struct SampledReadSignals {
+            SignalId signal { };
+            std::optional<SignalId> clock { };
+            std::optional<SignalId> gate { };
+        };
+        std::vector<SampledReadSignals> sampled_reads;
     };
     std::unordered_map<const void*, OperationBodyKinds> operation_body_kinds;
     [[nodiscard]] const OperationBodyKinds* body_kinds(

@@ -194,7 +194,8 @@ bool ProcessExecutorProgramBinding::valid() const noexcept
         && generated_process_ == generated_program_id_;
 }
 
-std::shared_ptr<const std::string> InternedString::intern(std::string value)
+std::shared_ptr<const std::string> InternedString::intern(
+    const std::string_view value, std::string* const owned)
 {
     if (value.empty()) {
         return { };
@@ -208,9 +209,17 @@ std::shared_ptr<const std::string> InternedString::intern(std::string value)
     if (auto existing = bucket.find(probe, value)) {
         return existing;
     }
-    auto result = std::make_shared<const std::string>(std::move(value));
+    // Only a miss allocates; reuse the caller's string when it has one.
+    auto result = owned != nullptr
+        ? std::make_shared<const std::string>(std::move(*owned))
+        : std::make_shared<const std::string>(value);
     bucket.insert(probe, result);
     return result;
+}
+
+std::shared_ptr<const std::string> InternedString::intern(std::string value)
+{
+    return intern(std::string_view { value }, &value);
 }
 
 InternedString::InternedString(std::string value)
@@ -219,7 +228,7 @@ InternedString::InternedString(std::string value)
 }
 
 InternedString::InternedString(const std::string_view value)
-    : InternedString(std::string { value })
+    : value_(intern(value, nullptr))
 {
 }
 
@@ -236,7 +245,8 @@ InternedString& InternedString::operator=(std::string value)
 
 InternedString& InternedString::operator=(const std::string_view value)
 {
-    return *this = std::string { value };
+    value_ = intern(value, nullptr);
+    return *this;
 }
 
 InternedString& InternedString::operator=(const char* const value)

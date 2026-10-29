@@ -788,6 +788,7 @@ void Interpreter::Impl::StaticKernel::native_fail(
 void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
 {
     std::unordered_map<std::uint32_t, std::uint32_t> slot_of_offset;
+    slot_of_offset.reserve(slots_.size());
     for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
         slot_of_offset.emplace(slots_[slot].offset, slot);
     }
@@ -1484,7 +1485,8 @@ void Interpreter::Impl::StaticKernel::run_partition(const std::uint32_t partitio
 
 void Interpreter::Impl::StaticKernel::forward_partition_stores(
     CompiledBody& program,
-    const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset)
+    const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset,
+    std::vector<std::uint32_t>& register_of_slot)
 {
     // A partition runs its members in order, every pass from the start. A
     // load of a whole narrow slot that a branch-free member stored earlier
@@ -1492,21 +1494,34 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
     // reads the stored register instead of the arena (the store itself
     // stays). The optimizing backend then keeps the value in a machine
     // register; it cannot see through arena offsets, which are bindings.
-    std::unordered_map<std::uint32_t, std::uint32_t> register_of_slot;
-    std::unordered_map<std::uint32_t, std::uint32_t> slot_of_register;
+    // Flat maps (no_slot = absent): register_of_slot is scratch sized to
+    // the slots and left all-absent between calls; live lists the slots
+    // that may hold an entry (stale names are skipped).
+    if (register_of_slot.size() < slots_.size()) {
+        register_of_slot.assign(slots_.size(), no_slot);
+    }
+    std::vector<std::uint32_t> slot_of_register(program.registers.size(), no_slot);
+    std::vector<std::uint32_t> live;
     const auto forget_slot = [&](const std::uint32_t slot) {
-        if (const auto found = register_of_slot.find(slot);
-            found != register_of_slot.end()) {
-            slot_of_register.erase(found->second);
-            register_of_slot.erase(found);
+        if (slot < register_of_slot.size() && register_of_slot[slot] != no_slot) {
+            slot_of_register[register_of_slot[slot]] = no_slot;
+            register_of_slot[slot] = no_slot;
         }
     };
     const auto forget_register = [&](const std::uint32_t reg) {
-        if (const auto found = slot_of_register.find(reg);
-            found != slot_of_register.end()) {
-            register_of_slot.erase(found->second);
-            slot_of_register.erase(found);
+        if (reg < slot_of_register.size() && slot_of_register[reg] != no_slot) {
+            register_of_slot[slot_of_register[reg]] = no_slot;
+            slot_of_register[reg] = no_slot;
         }
+    };
+    const auto forget_all = [&] {
+        for (const auto slot : live) {
+            if (register_of_slot[slot] != no_slot) {
+                slot_of_register[register_of_slot[slot]] = no_slot;
+                register_of_slot[slot] = no_slot;
+            }
+        }
+        live.clear();
     };
     const auto whole_narrow = [&](const std::uint32_t slot, const std::uint32_t width) {
         return slot < slots_.size() && slots_[slot].words == 1U
@@ -1539,10 +1554,10 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
             // load_slot reads the whole slot (its width is not set).
             if (!branching && slot != slot_of_offset.end()
                 && whole_narrow(slot->second, slots_[slot->second].width)) {
-                if (const auto found = register_of_slot.find(slot->second);
-                    found != register_of_slot.end() && found->second != inst.d) {
+                if (const auto found = register_of_slot[slot->second];
+                    found != no_slot && found != inst.d) {
                     inst.op = KOp::copy;
-                    inst.x = found->second;
+                    inst.x = found;
                     ++forwarded_loads_;
                 }
             }
@@ -1553,8 +1568,13 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
             if (!branching && (inst.flags & flag_linear) == 0U
                 && whole_narrow(inst.d, inst.width)) {
                 forget_register(inst.x);
-                register_of_slot.emplace(inst.d, inst.x);
-                slot_of_register.emplace(inst.x, inst.d);
+                if (inst.x >= slot_of_register.size()) {
+                    slot_of_register.resize(
+                        static_cast<std::size_t>(inst.x) + 1U, no_slot);
+                }
+                register_of_slot[inst.d] = inst.x;
+                slot_of_register[inst.x] = inst.d;
+                live.push_back(inst.d);
             }
             continue;
         }
@@ -1572,8 +1592,7 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
         case KOp::mem_copy:
         case KOp::mem_read:
             // May write any slot (or a memory a slot holds).
-            register_of_slot.clear();
-            slot_of_register.clear();
+            forget_all();
             continue;
         default:
             break;
@@ -1584,6 +1603,7 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
             forget_register(*def);
         }
     }
+    forget_all();
 }
 
 NodeLevels static_kernel_detail::condensed_levels(
@@ -1912,11 +1932,11 @@ void Interpreter::Impl::StaticKernel::build_partitions(
         }
         const auto partition = static_cast<std::uint32_t>(partitions_.size());
         Partition state;
-        state.members = members;
         for (std::uint32_t position = 0U; position < members.size(); ++position) {
             members_[members[position]].partition = partition;
             members_[members[position]].position = position;
         }
+        state.members = std::move(members);
         partitions_.push_back(std::move(state));
     }
 
@@ -1952,14 +1972,41 @@ void Interpreter::Impl::StaticKernel::build_partitions(
     // Concatenate member programs.
     // Slots by arena offset (load_slot names its slot by offset).
     std::unordered_map<std::uint32_t, std::uint32_t> slot_of_offset;
+    slot_of_offset.reserve(slots_.size());
     for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
         slot_of_offset.emplace(slots_[slot].offset, slot);
     }
+    std::vector<std::uint32_t> register_of_slot;
     for (std::uint32_t partition = 0U; partition < partitions_.size();
          ++partition) {
         auto& state = partitions_[partition];
         state.level = node_level[count + partition];
         auto& program = state.program;
+        {
+            // Size the concatenated vectors once.
+            std::size_t code_total = 1U * state.members.size();
+            std::size_t register_total = 0U;
+            std::size_t index_total = 0U;
+            std::size_t part_total = 0U;
+            std::size_t concat_total = 0U;
+            std::size_t constant_total = 0U;
+            for (const auto member : state.members) {
+                const auto& sized = *members_[member].compiled;
+                code_total += sized.code.size();
+                register_total += sized.registers.size();
+                index_total += sized.indices.size();
+                part_total += sized.parts.size();
+                concat_total += sized.concat.size();
+                constant_total += sized.wide_constants.size();
+            }
+            program.code.reserve(code_total);
+            program.registers.reserve(register_total);
+            program.register_widths.reserve(register_total);
+            program.indices.reserve(index_total);
+            program.parts.reserve(part_total);
+            program.concat.reserve(concat_total);
+            program.wide_constants.reserve(constant_total);
+        }
         for (std::uint32_t position = 0U; position < state.members.size();
              ++position) {
             const auto index = state.members[position];
@@ -2183,7 +2230,7 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                 not_compiled_reason_[index] = "partitioned";
             }
         }
-        forward_partition_stores(program, slot_of_offset);
+        forward_partition_stores(program, slot_of_offset, register_of_slot);
     }
 
     if (profile_) {

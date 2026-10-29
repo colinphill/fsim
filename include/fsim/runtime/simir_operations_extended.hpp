@@ -306,6 +306,9 @@ public:
 
 private:
     static std::shared_ptr<const std::string> intern(std::string value);
+    // `owned`, when non-null, aliases `value` and is moved from on a miss.
+    static std::shared_ptr<const std::string> intern(
+        std::string_view value, std::string* owned);
     std::shared_ptr<const std::string> value_;
 };
 

@@ -945,6 +945,9 @@ private:
     /// Schedules an edge reader: a member, or a tagged dispatch group.
     void schedule_edge(std::uint32_t id);
     void schedule_target(const ScheduleTarget& target);
+    /// schedule_target for the leader thread without profiling: returns
+    /// early for a target that is already pending.
+    void schedule_target_serial(const ScheduleTarget& target);
     void enqueue(std::uint32_t level, std::uint32_t entry);
     void build_schedule_targets();
     void build_dispatch_groups();
@@ -978,7 +981,8 @@ private:
     /// build_partitions: forwards slot stores to later loads in a partition
     /// pass.
     void forward_partition_stores(CompiledBody& program,
-        const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset);
+        const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset,
+        std::vector<std::uint32_t>& register_of_slot);
     std::size_t forwarded_loads_ { };
     /// Returns whether a two-state caller got a result with X or U bits.
     /// execute_generic's in-place path for a narrow field written into a

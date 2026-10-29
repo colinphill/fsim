@@ -1379,8 +1379,11 @@ const Interpreter::Impl::OperationBodyKinds* Interpreter::Impl::body_kinds(
             summary.kinds.set(
                 static_kernel_detail::operation_kind_ordinal(operation));
             if (const auto* read = operation_get_if<ReadSignal>(&operation)) {
-                summary.sampled_read = summary.sampled_read
-                    || read->kind != SignalReadKind::current;
+                if (read->kind != SignalReadKind::current) {
+                    summary.sampled_read = true;
+                    summary.sampled_reads.push_back({
+                        read->signal, read->clock, read->gate });
+                }
             } else if (const auto* wait
                        = operation_get_if<WaitOn>(&operation)) {
                 summary.transaction_wait = summary.transaction_wait
@@ -1423,26 +1426,39 @@ void Interpreter::Impl::record_sampled_dependencies(
         }
         sampled_value_dependency_mask[signal] = 1U;
     };
+    const auto& operations = process.operations();
+    // A shared body lists its sampled reads once; only the per-instance
+    // signal remap is applied here.
+    if (const auto* const kinds = body_kinds(operations)) {
+        for (const auto& read : kinds->sampled_reads) {
+            requires_sampled_values = true;
+            record_sampled_dependency(operations.signal(read.signal));
+            if (read.clock) {
+                record_sampled_dependency(operations.signal(*read.clock));
+            }
+            if (read.gate) {
+                record_sampled_dependency(operations.signal(*read.gate));
+            }
+        }
+        return;
+    }
     // Like transaction observation in add_process_program_impl, map just
     // the IDs that contribute to the sampled-value mask without copying
     // expanded operation payloads.
     for (std::size_t instruction = 0U;
-         instruction < process.operations().size(); ++instruction) {
-        const auto& operation = process.operations()[instruction];
+         instruction < operations.size(); ++instruction) {
+        const auto& operation = operations[instruction];
         const auto* read = operation_get_if<ReadSignal>(&operation);
         if (read == nullptr || read->kind == SignalReadKind::current) {
             continue;
         }
         requires_sampled_values = true;
-        record_sampled_dependency(
-            process.operations().signal(read->signal));
+        record_sampled_dependency(operations.signal(read->signal));
         if (read->clock) {
-            record_sampled_dependency(
-                process.operations().signal(*read->clock));
+            record_sampled_dependency(operations.signal(*read->clock));
         }
         if (read->gate) {
-            record_sampled_dependency(
-                process.operations().signal(*read->gate));
+            record_sampled_dependency(operations.signal(*read->gate));
         }
     }
 }

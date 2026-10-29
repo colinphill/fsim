@@ -524,6 +524,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     }
     const bool keep_names = profile_ || trace_
         || std::getenv("FSIM_KERNEL_DUMP") != nullptr;
+    Operation expand_scratch;
     for (const auto& member_spec : spec.members) {
         const ProcessProgramView program = member_spec.process == spec.host
             ? ProcessProgramView { spec.host_original }
@@ -606,7 +607,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         // SystemVerilog process's that hold them across a mixed-language
         // port) take each value in their kind, as the reference's do
         // (Impl::register_value_kind).
-        if (const auto kinds = program.register_value_kinds();
+        if (const auto& kinds = program.register_value_kinds();
             member.vhdl
             || std::ranges::any_of(kinds, [](const ValueKind kind) {
                    return kind != ValueKind::logic4;
@@ -620,7 +621,14 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                                                   : std::chrono::steady_clock::time_point { };
         member.operations.reserve(operations.size());
         for (std::size_t op = 0U; op < operations.size(); ++op) {
-            member.operations.push_back(operations.expanded(op));
+            // A body operation that needs no instance fields copies once,
+            // straight from the shared body (expanded_ref returns it).
+            const auto& expanded = operations.expanded_ref(op, expand_scratch);
+            if (&expanded == &expand_scratch) {
+                member.operations.push_back(std::move(expand_scratch));
+            } else {
+                member.operations.push_back(expanded);
+            }
         }
         member.body_identity = operations.body_identity();
         if (const auto target = member_spec.conversion_target;
@@ -1955,6 +1963,36 @@ Interpreter::Impl::StaticKernel::read_field(const std::uint32_t slot_index,
     return { value_a & m, value_b & m };
 }
 
+void Interpreter::Impl::StaticKernel::schedule_target_serial(
+    const ScheduleTarget& target)
+{
+    // Only for the leader (no worker lane) with profiling off. A target that
+    // is already queued or triggered is a no-op in schedule_target, except
+    // for the collapsed, mixed-kernel and committing-round paths, which are
+    // left to it.
+    const auto id = target.id;
+    if ((id & partition_tag) != 0U) {
+        if (!committing_round_ && partition_queued_[id & ~partition_tag] != 0U) {
+            return;
+        }
+    } else if (!mixed_) {
+        const auto& state = member_schedule_[id];
+        if (!state.collapse) {
+            if (state.kind == StaticKernelMemberKind::combinational) {
+                if (state.partition == no_slot
+                        ? state.queued
+                        : partition_queued_[state.partition] != 0U) {
+                    return;
+                }
+            } else if (state.kind == StaticKernelMemberKind::sequential
+                && state.triggered) {
+                return;
+            }
+        }
+    }
+    schedule_target(target);
+}
+
 void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_index,
     const std::uint64_t changed_mask, const std::uint64_t* before,
     const std::uint32_t field_offset)
@@ -1988,8 +2026,14 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
         ++profile_slot_change_counts_[slot_index];
     }
     const auto notify = slot_notify_[slot_index];
-    for (auto index = notify.begin; index < notify.end; ++index) {
-        schedule_target(notify_targets_[index]);
+    if (profile_) {
+        for (auto index = notify.begin; index < notify.end; ++index) {
+            schedule_target(notify_targets_[index]);
+        }
+    } else {
+        for (auto index = notify.begin; index < notify.end; ++index) {
+            schedule_target_serial(notify_targets_[index]);
+        }
     }
     if (notify.general) {
         slot_changed_general(slot_index, changed_mask, before, field_offset);
@@ -2163,6 +2207,17 @@ void Interpreter::Impl::StaticKernel::native_notify(
         ++kernel.profile_native_calls_[2];
     }
     try {
+        if (kernel.worker_lane_ == nullptr && !kernel.profile_) {
+            // The leader: a slot with whole-slot readers only.
+            kernel.scratch_.running_position = frame->position;
+            const auto notify = kernel.slot_notify_[slot];
+            if (!notify.general) {
+                for (auto index = notify.begin; index < notify.end; ++index) {
+                    kernel.schedule_target_serial(kernel.notify_targets_[index]);
+                }
+                return;
+            }
+        }
         kernel.scratch().running_position = frame->position;
         // Only a general slot can have several writers.
         if (kernel.slot_notify_[slot].general) {
@@ -2186,6 +2241,16 @@ void Interpreter::Impl::StaticKernel::native_notify_field(
         ++kernel.profile_native_calls_[2];
     }
     try {
+        if (kernel.worker_lane_ == nullptr && !kernel.profile_) {
+            kernel.scratch_.running_position = frame->position;
+            const auto notify = kernel.slot_notify_[slot];
+            if (!notify.general) {
+                for (auto index = notify.begin; index < notify.end; ++index) {
+                    kernel.schedule_target_serial(kernel.notify_targets_[index]);
+                }
+                return;
+            }
+        }
         kernel.scratch().running_position = frame->position;
         if (kernel.slot_notify_[slot].general) {
             if (auto& state = kernel.slots_[slot]; !state.single_writer) {

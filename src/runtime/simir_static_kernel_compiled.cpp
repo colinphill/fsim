@@ -83,17 +83,21 @@ void Interpreter::Impl::StaticKernel::compile_members()
         for (std::uint64_t entry = 0U; valid && entry < count; ++entry) {
             std::uint32_t index { };
             bool has_body { };
-            RestoredBody restored;
+            RestoredBody scratch;
             valid = reader.get(index) && index < members_.size()
-                && !entries[index].present && reader.get(restored.process)
-                && reader.get(restored.operations) && reader.get(has_body);
-            if (valid && has_body) {
+                && !entries[index].present && reader.get(scratch.process)
+                && reader.get(scratch.operations) && reader.get(has_body);
+            if (!valid) {
+                break;
+            }
+            // Decoded in place; a corrupt stream discards every entry.
+            auto& restored = entries[index];
+            restored.process = scratch.process;
+            restored.operations = scratch.operations;
+            restored.present = true;
+            if (has_body) {
                 restored.body.emplace();
                 valid = reader.body(*restored.body);
-            }
-            restored.present = true;
-            if (valid) {
-                entries[index] = std::move(restored);
             }
         }
         if (valid && reader.done()) {
