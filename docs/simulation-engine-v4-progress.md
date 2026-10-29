@@ -138,6 +138,51 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-28: hosted kinds into the kernel — resolvers, proxy waits, host-access arrays, nonblocking host writes, disconnections (`a1783bcd`, sweep `v4c43`)
+
+**`a1783bcd`** (five changesets)
+- **Resolution functions of port associations as kernel threads** (IEEE 1076-2019 4.6, 14.7.3.2).
+  - A resolver program without sources becomes a resolver member, which never starts or waits on its own.
+  - The update commit's `run_vhdl_resolver` runs it through `StaticKernel::run_resolver`: a thread over the driving values that returns the resolved value, coerced as the reference coerces it.
+- **Thread waits on alias proxies** (IEEE 1800-2023 9.4.2).
+  - A behavioral thread's any-change wait on a kernel-owned alias family (an unpacked net array's aggregate) waits on each leaf it overlaps, with the leaf-local range. The first leaf to wake the thread makes the rest stale.
+  - The planner only refuses edge waits on proxies. `assign x = y` over net arrays now runs in the kernel.
+- **Host-access arrays.**
+  - A fixed array that the kernel cannot hold (forced, observed by VPI, signals otherwise on the host) is reached by SystemVerilog members through the host, as they reach dynamic arrays: its binds and object writes use reference-format registers.
+  - The planner plans again with each new set of such arrays (`plan_access`). It first takes arrays the kernel cannot hold, then those kept off the kernel only by a hosted accessor.
+  - Static-tier candidates that touch one go to the behavioral tier.
+- **Nonblocking writes of host objects** (IEEE 1800-2023 10.4.2).
+  - `Impl::write_object` and `Impl::write_object_element` are shared by the interpreter and the kernel's members: a blocking write now, a nonblocking one from the NBA region.
+  - A transaction signal, or a nonblocking write into a kernel array, keeps the process hosted.
+  - The census splits `dynamic_container_object` into `_type`, `_alias`, `_transaction` and `_nonblocking`.
+- **Guarded-signal disconnection** (IEEE 1076-2019 11.6, 10.5.2.2).
+  - A VHDL member's `@vhdl-disconnect` call cancels its later transactions and schedules the null transaction on its host driver, through the reference's `try_vhdl_disconnect_call`.
+  - The disconnected signal stays a host signal. `vhdl_disconnect_signal` is now shared by the region graph and the kernel.
+- `FSIM_PROFILE_KERNEL_PLAN` prints why each container a rejected process uses is unowned.
+- A member's `$finish` reports the process's suspension at that instruction, as the reference's halt does. ct4 `fsim.application.sv_functions` caught the missing execution point once host-access arrays made its process a member.
+
+**Validation.**
+- Caseruns had 0 losses: c46a (64 resolver cases), c47a (416 SV container cases), c48a (416), c49a (1,267 SV cases with hosted processes), c50a (151 VHDL cases with hosted processes).
+- ct4: 1087/1087 in all four variants.
+- Sweep `v4c43` (frozen `a1783bcd`) has 0 losses vs `b96x1`:
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Hosted processes in the sweep: 1,278 (v4c42 1,499). The memory reaper stopped the first sweep during sv-tests; its partial rows were dropped and the suite was rerun on the same archive.
+
+**Next.**
+- Implicit 'transaction and 'delayed drivers (behavioral_not_initialized).
+- Switch networks (behavioral_switch, commit_program_switch).
+- Port-array and slice accesses that the region graph marks unknown (opaque_access:ReadContainerObject).
+- Classes last.
+
 ### 2026-10-28: hosted kinds into the kernel — VHDL dynamic containers, aliased host containers, host services, postponed processes (`9a46cd7e`, sweep `v4c42`)
 
 **`9a46cd7e`** (five changesets)
