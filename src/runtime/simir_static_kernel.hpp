@@ -503,8 +503,8 @@ struct StaticKernelInlinedProgram {
 }
 
 /// A container register type the kernel's arena holds: a fixed array of
-/// packed or scalar elements. A SystemVerilog behavioral member holds
-/// other registers in the reference's format (Member::dynamic_containers).
+/// packed or scalar elements. A behavioral member holds other registers in
+/// the reference's format (Member::dynamic_containers).
 [[nodiscard]] inline bool static_kernel_arena_container_type(
     const ContainerType& type)
 {
@@ -708,17 +708,19 @@ inline void static_kernel_container_operands(
 
 /// The container registers a behavioral member holds in reference format:
 /// those a reference container operation names, those of a type the arena
-/// does not hold that a SystemVerilog member uses (`by_type`; a VHDL
-/// member's other registers keep their kernel shapes), and those a copy
-/// connects to either. `operation_at(op)` is the member's operation `op` of
-/// `count`; `types` its container register types. `host_objects` marks the
-/// design objects that stay on the host: a register bound to one, or
-/// written to one, holds a reference-format copy of the host's value.
-template <typename OperationAt, typename Types>
+/// does not hold, those whose elements are nine-valued
+/// (`nine_valued(register)` of the register an element moves through: a VHDL
+/// array of std_ulogic values, IEEE 1076-2019 16.7, where the arena holds
+/// Logic4 elements), and those a copy connects to any of them.
+/// `operation_at(op)` is the member's operation `op` of `count`; `types` its
+/// container register types. `host_objects` marks the design objects that
+/// stay on the host: a register bound to one, or written to one, holds a
+/// reference-format copy of the host's value.
+template <typename OperationAt, typename Types, typename NineValued = std::nullptr_t>
 [[nodiscard]] std::vector<std::uint8_t> static_kernel_dynamic_container_registers(
     const std::size_t count, OperationAt&& operation_at, const Types& types,
-    const bool by_type = true,
-    const std::vector<std::uint8_t>* host_objects = nullptr)
+    const std::vector<std::uint8_t>* host_objects = nullptr,
+    NineValued&& nine_valued = nullptr)
 {
     const auto host_object = [&](const ContainerObjectId object) {
         return host_objects != nullptr && object < host_objects->size()
@@ -744,11 +746,20 @@ template <typename OperationAt, typename Types>
         static_kernel_container_operands(operation,
             [&](const ContainerRegisterId id) {
                 if (reference
-                    || (by_type && id < types.size()
+                    || (id < types.size()
                         && !static_kernel_arena_container_type(types[id]))) {
                     mark(id);
                 }
             });
+        if constexpr (!std::is_same_v<std::decay_t<NineValued>, std::nullptr_t>) {
+            if (const auto* read = operation_get_if<ContainerRead>(&operation);
+                read != nullptr && nine_valued(read->destination)) {
+                mark(read->source);
+            } else if (const auto* write = operation_get_if<ContainerWrite>(&operation);
+                       write != nullptr && nine_valued(write->source)) {
+                mark(write->target);
+            }
+        }
         if (const auto* bind = operation_get_if<ReadContainerObject>(&operation);
             bind != nullptr && host_object(bind->object)) {
             mark(bind->destination);
@@ -757,12 +768,7 @@ template <typename OperationAt, typename Types>
                    write != nullptr && host_object(write->object)) {
             mark(write->source);
         }
-        if (!by_type) {
-            if (const auto* copy
-                = operation_get_if<CopyContainerRegister>(&operation)) {
-                copies.emplace_back(copy->destination, copy->source);
-            }
-        } else if (const auto* bind
+        if (const auto* bind
             = operation_get_if<ReadContainerObject>(&operation);
             bind != nullptr && bind->destination < types.size()
             && !static_kernel_arena_container_type(types[bind->destination])) {
@@ -962,6 +968,7 @@ template <typename OperationAt, typename Types>
                 || std::is_same_v<T, CoverageQuery>
                 || std::is_same_v<T, CoverageControl>
                 || std::is_same_v<T, CoverageAccess>
+                || std::is_same_v<T, CoverageDatabaseControl>
                 || std::is_same_v<T, SystemCommand>
                 || std::is_same_v<T, RandomValue>
                 || std::is_same_v<T, ConcatenateStrings>
@@ -1195,8 +1202,11 @@ template <typename OperationAt, typename Types>
             return value.function >= SystemVerilogMathFunction::Time;
         } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
             // A guarded assignment's driver disconnection (IEEE 1076-2019
-            // 11.6, 10.5.2.2) through the host's projected drivers.
-            return vhdl_disconnect_signal(value.method_identity).has_value();
+            // 11.6, 10.5.2.2) through the host's projected drivers, or a
+            // foreign subprogram (20.2.1.2, VHPI) through the application's
+            // services, as the reference calls it.
+            (void)value;
+            return true;
         } else if constexpr (std::is_same_v<T, SignalDriving>
             || std::is_same_v<T, SignalDrivingValue>) {
             // 'DRIVING and 'DRIVING_VALUE (16.2.4) of the member's host

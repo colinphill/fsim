@@ -821,6 +821,7 @@ bool visit_known_region_accesses(
             || std::is_same_v<T, CoverageQuery>
             || std::is_same_v<T, CoverageControl>
             || std::is_same_v<T, CoverageAccess>
+            || std::is_same_v<T, CoverageDatabaseControl>
             || std::is_same_v<T, SystemCommand>) {
             // The host's coverage database (sampled from register actuals)
             // and $system's shell: neither reads or writes a signal.

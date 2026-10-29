@@ -342,7 +342,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             [&](const std::size_t op) -> const Operation& {
                 return operations[op];
             },
-            types, systemverilog, systemverilog ? &host_objects : nullptr);
+            types, systemverilog ? &host_objects : nullptr,
+            [&](const RegisterId reg) {
+                return !systemverilog
+                    && process_layout_detail::ProcessLayoutAccess::copy_at_or(
+                           program.register_value_kinds(), reg, ValueKind::logic4)
+                        != ValueKind::logic4;
+            });
         for (std::size_t id = 0U; id < dynamic.size(); ++id) {
             if (dynamic[id] != 0U) {
                 dynamic_containers[index].emplace_back(

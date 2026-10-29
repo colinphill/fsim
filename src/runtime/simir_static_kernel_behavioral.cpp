@@ -2631,6 +2631,14 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 packed_register(op.destination)
                     = impl_.run_coverage_access(op, read, read_string);
             }
+        } else if constexpr (std::is_same_v<T, CoverageDatabaseControl>) {
+            // $set_coverage_db_name and $load_coverage_db (IEEE 1800-2023
+            // 20.14.2, 20.14.3), the host's.
+            if (!impl_.coverage_database_control_hook) {
+                fail(member_index, pc, "coverage database service is unavailable");
+            }
+            impl_.coverage_database_control_hook(
+                { op.kind, string_register(op.filename) });
         } else if constexpr (std::is_same_v<T, SystemCommand>) {
             // $system (IEEE 1800-2023 20.18.1).
             if (!impl_.system_command_hook) {
@@ -2805,7 +2813,8 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             // 11.6, 10.5.2.2): the null transaction on the member's host
             // driver, as the reference schedules it. Any other is a static
             // method or DPI function call (IEEE 1800-2023 8.10, 35.5) for
-            // the running process.
+            // the running process, or a VHDL foreign subprogram (IEEE
+            // 1076-2019 20.2.1.2, VHPI).
             bool disconnected = false;
             try {
                 disconnected = impl_.try_vhdl_disconnect_call(member.process,
@@ -2814,10 +2823,6 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 fail(member_index, pc, error.what());
             }
             if (!disconnected) {
-                if (member.vhdl) {
-                    fail(member_index, pc,
-                        "static kernel static call is not a driver disconnection");
-                }
                 MemberContainerAccess access { *this, member_index, pc };
                 if (const auto* error = impl_.run_class_operation(access, op,
                         running_process(member_index))) {
@@ -3523,6 +3528,14 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                             timer_sequence_++, index, threads_[index].epoch });
                     }
                 }
+            } else if (delay == 0U && member.phase != SchedulerPhase::active) {
+                // A region member's #0 resumes in the Inactive region, as the
+                // reference's queue_zero_delay_resume schedules it.
+                if (member.phase == SchedulerPhase::postponed) {
+                    fail(member_index, pc,
+                        "static kernel #0 in the Postponed region");
+                }
+                ready_thread_in(index, SchedulerPhase::inactive);
             } else if (delay == 0U) {
                 // #0 resumes in the Inactive region of this time step.
                 inactive_threads_.push_back(index);

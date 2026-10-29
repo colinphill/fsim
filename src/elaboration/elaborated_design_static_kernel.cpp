@@ -254,6 +254,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     std::vector<std::string> rejection(census ? this->process_count() : 0U);
     std::vector<std::string> opaque(rejection.size());
     std::vector<std::uint8_t> census_valid(rejection.size(), 1U);
+    // Design memories a region member writes (a program's processes): they
+    // stay host objects, reached through the host as region members reach
+    // host signals (plan_access plans again with them).
+    std::vector<ContainerObjectId> region_written_objects;
     std::vector<std::string> census_names(rejection.size());
     const auto reject = [&](const std::size_t index, const char* reason) {
         if (census && rejection[index].empty()) {
@@ -1047,20 +1051,38 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // (the kernel gives each private register its own storage) and saved by
     // automatic frames. Returns the reason the kernel cannot hold them, or
     // nullptr.
-    // SystemVerilog members also hold registers in reference format
-    // (static_kernel_dynamic_container_registers): their ReadContainerObject
-    // copies the object's value and their WriteContainerObject writes it, as
-    // the reference's do. An object of another shape than the arena's is a
-    // host object (never kernel storage) without signal aliases: a member's
-    // write through the host changes the signals its elements alias, which
-    // stay host signals (host_alias_signals below), and the kernel rescans
-    // its inputs after it. `dynamic_written` receives the host objects
-    // written.
+    // Members also hold registers in reference format
+    // (static_kernel_dynamic_container_registers; a VHDL member's are those
+    // its reference operations name, such as access values, IEEE 1076-2019
+    // 5.4): their ReadContainerObject copies the object's value and their
+    // WriteContainerObject writes it, as the reference's do. An object of
+    // another shape than the arena's is a host object (never kernel
+    // storage) outside signal alias families: a member's write through the
+    // host changes the signals its elements alias, which stay host signals
+    // (container_aliased below), and the kernel rescans its inputs after it.
+    // `dynamic_written` receives the host objects written.
+    // A family (an unpacked net array whose elements are signals, IEEE
+    // 1800-2023 7.4) stays with the host: through host access, a member's
+    // write of the whole object and the leaves' mirrored updates reach
+    // readers in another delta order than the reference's.
+    // A slice-alias view (an array slice connected to a port) is reached
+    // through the host with its root object (slice_alias_root), whose
+    // storage it is.
+    const auto slice_alias_root = [&](ContainerObjectId object) {
+        while (object < container_objects_.size()
+            && container_objects_[object].slice_alias) {
+            object = container_objects_[object].slice_alias->object;
+        }
+        return object;
+    };
     const auto host_container_ok = [&](const ContainerObjectId object) {
+        const auto root = slice_alias_root(object);
         return object < container_objects_.size()
-            && !container_objects_[object].slice_alias
+            && root < container_objects_.size()
             && std::ranges::none_of(graph.signal_alias_families(),
-                [&](const auto& family) { return family.object == object; });
+                [&](const auto& family) {
+                    return family.object == object || family.object == root;
+                });
     };
     // Container objects a member writes through the host (see below), and
     // those it reads through the host.
@@ -1077,7 +1099,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             [&](const std::size_t op) -> const Operation& {
                 return operations[op];
             },
-            types, !vhdl, vhdl ? nullptr : &host_access_objects);
+            types, vhdl ? nullptr : &host_access_objects,
+            [&](const RegisterId reg) {
+                return vhdl
+                    && process_layout_detail::ProcessLayoutAccess::copy_at_or(
+                           view.register_value_kinds(), reg, ValueKind::logic4)
+                        != ValueKind::logic4;
+            });
         const auto is_dynamic = [&](const ContainerRegisterId id) {
             return id < dynamic.size() && dynamic[id] != 0U;
         };
@@ -1090,7 +1118,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 ? "dynamic_container_type" : "dynamic_container_alias";
         };
         // An object of the arena's shape is kernel storage (container_uses
-        // keeps it); another is a host object without signal aliases.
+        // keeps it); another is a host object outside alias families.
         const auto dynamic_object_ok = [&](const ContainerObjectId object,
                                            const ContainerRegisterId reg) {
             if (object >= container_objects_.size() || reg >= types.size()
@@ -1140,11 +1168,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 using T = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<T, ReadContainerObject>) {
                     if (is_dynamic(value.destination)) {
-                        // A VHDL member's reference-format registers are its
-                        // own (access values, arrays with run-time ranges).
-                        if (vhdl) {
-                            dynamic_reason = "dynamic_container_object";
-                        } else if (!dynamic_object_ok(value.object, value.destination)) {
+                        if (!dynamic_object_ok(value.object, value.destination)) {
                             dynamic_reason = dynamic_object_reason(
                                 value.object, value.destination);
                         }
@@ -1197,9 +1221,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                                 types[value.source])
                             || (value.object < host_access_objects.size()
                                 && host_access_objects[value.object] != 0U);
-                        if (vhdl) {
-                            dynamic_reason = "dynamic_container_object";
-                        } else if (!dynamic_object_ok(value.object, value.source)) {
+                        if (!dynamic_object_ok(value.object, value.source)) {
                             dynamic_reason = dynamic_object_reason(
                                 value.object, value.source);
                         } else if (value.transaction_signal) {
@@ -1365,6 +1387,97 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         return nullptr;
     };
+    // Objects a behavioral member reaches only through reference-format
+    // registers need no kernel ownership; those written stay host objects.
+    // Rebuilds the member's container uses without them and returns, per
+    // operation, whether it writes a host object (`systemverilog`: the
+    // registers the member holds in reference format by type and for
+    // host-access objects; static_kernel_dynamic_container_registers).
+    const auto host_object_uses = [&](const auto& view, const std::size_t index,
+                                      const std::set<ContainerObjectId>& dynamic_written,
+                                      const bool systemverilog) {
+        const auto& operations = view.operations();
+        const auto count = operations.size();
+        std::vector<std::uint8_t> host_container_write(count, 0U);
+        const auto types = process_layout_detail::ProcessLayoutAccess::view(
+            view.container_register_types());
+        const auto dynamic = static_kernel_dynamic_container_registers(
+            count,
+            [&](const std::size_t op) -> const Operation& {
+            return operations[op];
+        },
+            types, systemverilog ? &host_access_objects : nullptr,
+            [&](const RegisterId reg) {
+                return !systemverilog
+                    && process_layout_detail::ProcessLayoutAccess::copy_at_or(
+                           view.register_value_kinds(), reg, ValueKind::logic4)
+                        != ValueKind::logic4;
+            });
+        const auto is_dynamic = [&](const ContainerRegisterId id) {
+            return id < dynamic.size() && dynamic[id] != 0U;
+        };
+        // A reference-format register bound to, or written to, a host
+        // object (dynamic or host-access).
+        const auto host_object = [&](const ContainerObjectId object,
+                                     const ContainerRegisterId reg) {
+            return is_dynamic(reg)
+                && (!static_kernel_arena_container_type(types[reg])
+                    || (object < host_access_objects.size()
+                        && host_access_objects[object] != 0U));
+        };
+        for (std::size_t op = 0U; op < count; ++op) {
+            const auto operation = operations.expanded(op);
+            if (const auto* write = operation_get_if<ContainerWrite>(&operation)) {
+                host_container_write[op] = is_dynamic(write->target);
+            } else if (const auto* object
+                = operation_get_if<WriteContainerObject>(&operation)) {
+                host_container_write[op] = host_object(object->object, object->source);
+            } else if (const auto* element
+                = operation_get_if<WriteContainerObjectElement>(&operation)) {
+                host_container_write[op] = dynamic_written.contains(element->object);
+            }
+        }
+        auto& uses = container_uses[index];
+        const bool rebuild = !dynamic_written.empty()
+            || std::ranges::any_of(dynamic,
+                [](const std::uint8_t value) { return value != 0U; });
+        if (rebuild) {
+            uses.clear();
+        }
+        for (std::size_t op = 0U; rebuild && op < count; ++op) {
+            const auto operation = operations.expanded(op);
+            if (const auto* bind = operation_get_if<ReadContainerObject>(&operation);
+                bind != nullptr && host_object(bind->object, bind->destination)) {
+                // A slice view reads its root's elements (slice_alias_root).
+                for (const auto object : { bind->object, slice_alias_root(bind->object) }) {
+                    if (object < host_read_object.size()) {
+                        host_read_object[object] = 1U;
+                    }
+                }
+                continue;
+            }
+            if (const auto* write = operation_get_if<WriteContainerObject>(&operation);
+                write != nullptr && host_object(write->object, write->source)) {
+                continue;
+            }
+            if (const auto* element
+                = operation_get_if<WriteContainerObjectElement>(&operation);
+                element != nullptr && dynamic_written.contains(element->object)) {
+                continue;
+            }
+            collect_container_objects(operation, uses);
+        }
+        std::ranges::sort(uses);
+        uses.erase(std::unique(uses.begin(), uses.end()), uses.end());
+        for (const auto object : dynamic_written) {
+            for (const auto selected : { object, slice_alias_root(object) }) {
+                if (selected < host_container_object.size()) {
+                    host_container_object[selected] = 1U;
+                }
+            }
+        }
+        return host_container_write;
+    };
     // Behavioral members: SystemVerilog testbench processes that run as
     // resumable kernel threads (plan §3.5). FSIM_STATIC_KERNEL_BEHAVIORAL=0
     // keeps them on the host.
@@ -1492,81 +1605,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
             }
             if (supported) {
-                // Objects reached only through reference-format registers
-                // need no kernel ownership; those written stay host objects.
-                const auto types = process_layout_detail::ProcessLayoutAccess::view(
-                    view.container_register_types());
-                const auto dynamic = static_kernel_dynamic_container_registers(
-                    count,
-                    [&](const std::size_t op) -> const Operation& {
-                    return operations[op];
-                },
-                    types, true, &host_access_objects);
-                const auto is_dynamic = [&](const ContainerRegisterId id) {
-                    return id < dynamic.size() && dynamic[id] != 0U;
-                };
-                // A reference-format register bound to, or written to, a
-                // host object (dynamic or host-access).
-                const auto host_object = [&](const ContainerObjectId object,
-                                             const ContainerRegisterId reg) {
-                    return is_dynamic(reg)
-                        && (!static_kernel_arena_container_type(types[reg])
-                            || (object < host_access_objects.size()
-                                && host_access_objects[object] != 0U));
-                };
-                for (std::size_t op = 0U; op < count; ++op) {
-                    const auto operation = operations.expanded(op);
-                    if (const auto* write
-                        = operation_get_if<ContainerWrite>(&operation)) {
-                        host_container_write[op] = is_dynamic(write->target);
-                    } else if (const auto* object
-                        = operation_get_if<WriteContainerObject>(&operation)) {
-                        host_container_write[op]
-                            = host_object(object->object, object->source);
-                    } else if (const auto* element
-                        = operation_get_if<WriteContainerObjectElement>(
-                            &operation)) {
-                        host_container_write[op]
-                            = dynamic_written.contains(element->object);
-                    }
-                }
-                auto& uses = container_uses[index];
-                const bool rebuild = !dynamic_written.empty()
-                    || std::ranges::any_of(dynamic,
-                        [](const std::uint8_t value) { return value != 0U; });
-                if (rebuild) {
-                    uses.clear();
-                }
-                for (std::size_t op = 0U; rebuild && op < count; ++op) {
-                    const auto operation = operations.expanded(op);
-                    if (const auto* bind
-                        = operation_get_if<ReadContainerObject>(&operation);
-                        bind != nullptr
-                        && host_object(bind->object, bind->destination)) {
-                        if (bind->object < host_read_object.size()) {
-                            host_read_object[bind->object] = 1U;
-                        }
-                        continue;
-                    }
-                    if (const auto* write
-                        = operation_get_if<WriteContainerObject>(&operation);
-                        write != nullptr
-                        && host_object(write->object, write->source)) {
-                        continue;
-                    }
-                    if (const auto* element
-                        = operation_get_if<WriteContainerObjectElement>(&operation);
-                        element != nullptr
-                        && dynamic_written.contains(element->object)) {
-                        continue;
-                    }
-                    collect_container_objects(operation, uses);
-                }
-                std::ranges::sort(uses);
-                uses.erase(std::unique(uses.begin(), uses.end()), uses.end());
-                for (const auto object : dynamic_written) {
-                    host_container_object[object] = 1U;
-                }
+                host_container_write
+                    = host_object_uses(view, index, dynamic_written, true);
             }
             // A region member runs outside the kernel's rounds: it writes
             // host signals (marked below), blocking assignments committed at
@@ -1593,11 +1633,23 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 const auto operation = operations.expanded(op);
                 const bool denied = visit_operation([&](const auto& value) {
                     using T = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<T, WriteContainerObjectElement>
+                        || std::is_same_v<T, WriteContainerObject>) {
+                        if (host_container_write[op] == 0U
+                            && value.object < container_objects_.size()
+                            && host_access_objects[value.object] == 0U
+                            && host_container_ok(value.object)) {
+                            region_written_objects.push_back(value.object);
+                        }
+                        return true;
+                    }
                     if constexpr (std::is_same_v<T, WaitFor>) {
                         // A delay resumes the thread in its region at the
-                        // later time (Impl::queue_at); a #0 resumes it in
-                        // this time step's Inactive region instead.
-                        return value.source.has_value() || value.delay == 0U;
+                        // later time (Impl::queue_at), a #0 in this time
+                        // step's Inactive region; a Postponed process's #0
+                        // waits for the next delta instead.
+                        (void)value;
+                        return view.postponed();
                     }
                     if constexpr (std::is_same_v<T, ContainerWrite>) {
                         return bound_registers.contains(value.target);
@@ -1616,9 +1668,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         || std::is_same_v<T, FileBinaryRead>
                         || std::is_same_v<T, FileReadLine>
                         || std::is_same_v<T, FileErrorStatus>
-                        || std::is_same_v<T, FileScan>
-                        || std::is_same_v<T, WriteContainerObject>
-                        || std::is_same_v<T, WriteContainerObjectElement>;
+                        || std::is_same_v<T, FileScan>;
                 }, operation);
                 if (denied && host_container_write[op] == 0U) {
                     supported = false;
@@ -1768,11 +1818,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     }
                 }, operation);
             }
+            std::set<ContainerObjectId> dynamic_written;
             if (supported) {
-                if (const char* reason = container_rule(view, true)) {
+                if (const char* reason
+                    = container_rule(view, true, &dynamic_written)) {
                     supported = false;
                     failed_at = count;
                     failed_reason = reason;
+                } else {
+                    (void)host_object_uses(view, index, dynamic_written, false);
                 }
             }
             if (!supported && census) {
@@ -3176,11 +3230,21 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     {
         const bool primary = std::ranges::any_of(access_candidates,
             [](const std::uint8_t kind) { return kind == 1U; });
+        const auto make_host_access = [&](const ContainerObjectId object) {
+            for (const auto selected : { object, slice_alias_root(object) }) {
+                if (host_access_objects[selected] == 0U) {
+                    host_access_objects[selected] = 1U;
+                    host_access_grew = true;
+                }
+            }
+        };
         for (std::size_t object = 0U; object < object_count; ++object) {
             if (access_candidates[object] == (primary ? 1U : 2U)) {
-                host_access_objects[object] = 1U;
-                host_access_grew = true;
+                make_host_access(static_cast<ContainerObjectId>(object));
             }
+        }
+        for (const auto object : region_written_objects) {
+            make_host_access(object);
         }
     }
 
