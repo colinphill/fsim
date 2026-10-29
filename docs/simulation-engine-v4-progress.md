@@ -138,6 +138,47 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29: efficiency audit G1 — load/publish trust and copies, persisted class specializations (`c717aeb8`, sweep `v4c50`)
+
+**`c717aeb8`** (three earlier changesets plus audit batch G1; audit report `.local-artifacts/v4-migration/triage/efficiency-audit-1029.md`)
+- **Earlier changesets.**
+  - `wide_part_insert` checks its range; new ctest `fsim.application.static-kernel-vhdl-generic-wide` (FSIM_KERNEL_WIDE_MASK=0) runs the generic wide path.
+  - `KOp::step` is a chain of successor branches instead of a switch.
+  - Publish moves its payloads instead of copying them.
+- **Publish (#4, #12, 2.10).**
+  - The runtime encoder consumes the elaborated design (`take_artifact_state`) and moves the owned runtime state.
+  - Both encoders bind to the canonical hierarchy digest instead of re-encoding the path table.
+  - The mailbox, package-startup and HIR-state validations of freshly elaborated data run only under `FSIM_VERIFY_ARTIFACT=1` (`TrustedArtifactLoad::verify_requested`); ctest covers them.
+- **Compiled-HIR bundle (#5).** One-pass `FSIMCHIR` writer, `string_view` decode, and the semantic model is serialized from a records view instead of a copy.
+- **Load (#6).** The checks the checksum already covers are trust-gated, and signal names resolve straight into `signal_by_path_`.
+- **Packed values (#13).** `PackedLogic4` is stored as width plus raw word planes instead of one character per bit (runtime schema 91, bodies magic `v5`).
+- **Object cache (#14).** The kernel payload is read once into an uninitialized buffer (`ObjectCachePayload`), shared as a view, and the restored buffers are released once the kernel is built.
+- **Class specializations persisted.**
+  - The SystemVerilog class specializations travel as payload `sv-classes` (`FSIMSVCS` schema 1, design format 15).
+  - Simulate no longer re-runs `specialize_classes` at load. Under `FSIM_VERIFY_ARTIFACT=1` it recomputes them and compares bytes (FSIM-ART-0014 on a difference).
+  - UVM sv-tests `design_artifact_load` median: 1064 → 424 ms (61 cases).
+
+**Validation.**
+- Targeted ctest (140 artifact, codec, kernel and governance tests) passes normally and under `FSIM_VERIFY_ARTIFACT=1`. An SV caserun under verify mode shows the stored specializations equal to the recompute.
+- ct4: 1088/1088 in all four variants.
+- Sweep `v4c50` (frozen `e0b294bd`, rebased as `c717aeb8` onto `aadf5071`) has 0 losses vs `b96x1`. The table equals v4c49's.
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Census `v4c50`:
+  - every planned case is admitted with `host=0`;
+  - 0 hosted processes;
+  - 0 runs with interpreted>0.
+  - `specialize_folding` (177 cases) and `kernel_deopts` (9 cases) are unchanged.
+- Audit #3 (access types switching off the VHDL subtype memos) does not fire on the benchmark designs: mixed_codec elaboration shows `uncached_access=0` (332k hits, 73k misses). Parked; it can only matter for large VHDL designs that link `std.textio`.
+
 ### 2026-10-29: hosted processes at zero — nine-valued SV registers, exact family access, unroll nest bound (`baa27c0a`, sweep `v4c49`)
 
 **`baa27c0a`** (changesets 49–51)
