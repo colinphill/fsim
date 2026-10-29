@@ -138,6 +138,52 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29: hosted kinds into the kernel — region-written objects, VHPI calls, VHDL host containers (`5f04a717`, sweep `v4c48`)
+
+**`5f04a717`** (six changesets)
+- **Region members' object writes.**
+  - An object a region member writes takes host access in the next plan.
+  - So does a slice view and its root. A slice view read or written through the host marks its root's aliased signals as host signals.
+- **Region delays.** A region member's `#0` resumes in the Inactive region. A region `WaitFor` is refused only in Postponed.
+- **`$set_coverage_db_name` and `$load_coverage_db`** (IEEE 1800-2023 20.14) through the host's coverage database hook.
+- **VHDL foreign subprograms** (IEEE 1076-2019 20.2.1.2, VHPI) from kernel members, through `run_class_operation`.
+- **VHDL host containers.**
+  - VHDL members reach host objects through reference-format registers, as SystemVerilog members do. Examples are access values (5.4) and protected-type state.
+  - The rebuild of a member's container uses without its host objects is shared (`host_object_uses`).
+- **Reference-format registers by need.**
+  - A member holds in reference format every container register the arena cannot: one of another type, or one with nine-valued elements (std_ulogic arrays, 16.7).
+  - `static_kernel_dynamic_container_registers` loses `by_type` and takes a `nine_valued` predicate. The planner and the kernel pass the same one.
+- **Tried and reverted:** host access for every signal alias family (an unpacked net array whose elements are signals, 1800-2023 7.4).
+  - ct4 failed in `fsim.application.static-kernel` (observe-all mode). A host-read family's leaves lose the kernel's sole-writer mirroring (`container_aliased`), so the element assigns' delta order changed.
+  - The exact rule is in the next changesets (below).
+
+**Validation.**
+- Caseruns had 0 losses: c73a (70 hosted and VHPI cases), c74w (nvc, vests and vhdl-compliance whole) and c76a.
+- ct4: 1087/1087 in all four variants, after the family revert.
+- Sweep `v4c48` (frozen `5f04a717`) has 0 losses vs `b96x1`. nvc `case11` and `issue705` are exclusions.
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Hosted processes in the sweep: 8 in 5 cases (v4c47 60).
+  - 6 are `container_unowned` (net-array families: ivtest `array_lval_select4a` and `pr1703346`, verilator `t_forceable_array_cycle`).
+  - 2 are `behavioral_register_kind` (nvc `vlog1` and `issue1285`: a Verilog process reading a VHDL std_logic port).
+
+**Next** (built, uncommitted).
+- **SystemVerilog members with nine-valued registers.**
+  - Their registers take each value in its kind, as the reference's do (`Impl::register_value_kind`). The kernel's coercion sites already key on `Member::register_kinds`.
+  - They run on the operation tier.
+- **Family host access where it is exact** (`host_family_ok`).
+  - Allowed only when no leaf or proxy could be a sole-writer input: the design forces, a foreign library is attached, the resolution is not one driver's value, or there are several or strength drivers.
+  - Family leaves and proxies of host-accessed objects are `container_aliased`.
+  - This admits all three family cases, and `fsim.application.static-kernel` passes.
+
 ### 2026-10-29: hosted kinds into the kernel — yield, deposits, isolated forks, nonblocking objects, coverage (`16555bc5`, sweep `v4c47`)
 
 **`16555bc5`** (six changesets)
