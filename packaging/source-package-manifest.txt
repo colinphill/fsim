@@ -2159,6 +2159,7 @@ tests/fixtures/sdf/vital/timing_30.sdf
 tests/fixtures/sdf/vital/timing_40.sdf
 tests/fixtures/sdf/vital/wrapper.vhd
 tests/fixtures/systemverilog/kernel_image/kernel_image_lanes.sv
+tests/fixtures/systemverilog/kernel_image/kernel_image_vhdl.vhd
 tests/fixtures/systemverilog/kernel_image/run_kernel_image.cmake
 tests/fixtures/systemverilog/scheduling/README.md
 tests/fixtures/systemverilog/scheduling/a1_alias_leaf_native_read.sv

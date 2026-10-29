@@ -808,17 +808,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                 throw std::invalid_argument(
                     "static kernel conversion does not fit its signal");
             }
-            const auto write = static_cast<InstructionIndex>(member.operations.size());
-            for (auto& operation : member.operations) {
-                if (operation_holds<Halt>(operation)) {
-                    operation = Operation { Jump { write } };
-                }
-            }
-            member.operations.emplace_back(WriteUpdate { target,
-                resolver->second.output, SignalUpdateDomain::generic });
-            member.operations.emplace_back(WaitSensitivity { });
-            member.operations.emplace_back(Jump { 0U });
-            member.body_identity = nullptr;
+            rewrite_conversion(member, target, resolver->second.output);
             member.conversion = true;
             conversion_members_.push_back(static_cast<std::uint32_t>(members_.size()));
         }
@@ -1266,148 +1256,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
     }
 
     stage("mirrors");
-    // Conversions: each source slot runs its conversion members in the
-    // order the host queues the formals it converts (its dependents list);
-    // the host resolves none of them again.
-    if (!conversion_members_.empty()) {
-        slot_conversions_.assign(slots_.size(), { });
-        conversion_queued_.assign(members_.size(), 0U);
-        std::unordered_map<SignalId, std::uint32_t> member_of_target;
-        for (const auto index : conversion_members_) {
-            const auto& write = operation_get<WriteUpdate>(
-                members_[index].operations[members_[index].body_end - 1U]);
-            member_of_target.emplace(write.signal, index);
-        }
-        std::vector<SignalId> sources;
-        for (const auto& [target, index] : member_of_target) {
-            const auto& resolver = impl_.vhdl_resolvers.at(target);
-            sources.insert(sources.end(), resolver.sources.begin(),
-                resolver.sources.end());
-        }
-        std::ranges::sort(sources);
-        sources.erase(std::ranges::unique(sources).begin(), sources.end());
-        for (const auto source : sources) {
-            if (source >= signal_count || slot_of_signal_[source] == no_slot) {
-                throw std::invalid_argument(
-                    "static kernel conversion source is not a kernel slot");
-            }
-            auto& dependents = impl_.vhdl_conversion_dependents[source];
-            for (const auto target : dependents) {
-                if (const auto found = member_of_target.find(target);
-                    found != member_of_target.end()) {
-                    slot_conversions_[slot_of_signal_[source]].push_back(found->second);
-                }
-            }
-            std::erase_if(dependents, [&](const SignalId target) {
-                return member_of_target.contains(target);
-            });
-        }
-        for (const auto& [target, index] : member_of_target) {
-            impl_.vhdl_resolvers.erase(target);
-        }
-    }
-    // Wired formals: an owned signal whose host resolver is a pure-routing
-    // program over an owned source (static_kernel_wiring) is driven by the
-    // kernel from now on; the host does not resolve it again.
-    for (const auto signal : spec.owned_signals) {
-        const auto resolver = impl_.vhdl_resolvers.find(signal);
-        if (resolver == impl_.vhdl_resolvers.end()
-            || resolver->second.sources.size() != 1U
-            || !resolver->second.drivers.empty()
-            || !resolver->second.variants.empty()
-            || resolver->second.driving_mirror
-            || resolver->second.process >= impl_.processes.size()) {
-            continue;
-        }
-        const auto source = resolver->second.sources.front();
-        const auto wire = static_kernel_wiring(
-            impl_.processes.program_view(resolver->second.process).operations(),
-            resolver->second.output, [&](const SignalId id) {
-                return static_cast<std::uint64_t>(
-                    impl_.get_signal(id).initial_value.width());
-            });
-        if (!wire || wire->source != source || source >= signal_count
-            || slot_of_signal_[source] == no_slot) {
-            continue;
-        }
-        const auto& from = slots_[slot_of_signal_[source]];
-        const auto& to = slots_[slot_of_signal_[signal]];
-        if (from.planes != to.planes || to.width != wire->width
-            || wire->offset + wire->width > from.width) {
-            throw std::invalid_argument(
-                "static kernel wiring does not fit its signals");
-        }
-        wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
-            wire->offset, wire->width, 0U });
-        auto& dependents = impl_.vhdl_conversion_dependents[source];
-        std::erase(dependents, signal);
-        impl_.vhdl_resolvers.erase(resolver);
-    }
-    // Wired actual parts: an owned signal whose conversion drivers are
-    // pure-routing programs over owned output formals (the planner owns it
-    // only then) is driven part by part by the kernel; the host runs none of
-    // them again.
-    for (const auto signal : spec.owned_signals) {
-        const auto found = impl_.vhdl_conversion_drivers.find(signal);
-        if (found == impl_.vhdl_conversion_drivers.end()) {
-            continue;
-        }
-        for (const auto& driver : found->second) {
-            const auto wire = driver.sources.size() == 1U
-                    && driver.program < impl_.processes.size()
-                ? static_kernel_wiring(
-                      impl_.processes.program_view(driver.program).operations(),
-                      driver.output, [&](const SignalId id) {
-                          return static_cast<std::uint64_t>(
-                              impl_.get_signal(id).initial_value.width());
-                      })
-                : std::nullopt;
-            const auto source = wire ? wire->source : SignalId { };
-            const auto target_offset = driver.offset.value_or(0U);
-            if (!wire || source != driver.sources.front()
-                || source >= signal_count || slot_of_signal_[source] == no_slot
-                || impl_.vhdl_resolvers.contains(signal)) {
-                throw std::invalid_argument(
-                    "static kernel wiring does not fit its signals");
-            }
-            const auto& from = slots_[slot_of_signal_[source]];
-            const auto& to = slots_[slot_of_signal_[signal]];
-            if (from.planes != to.planes || wire->offset + wire->width > from.width
-                || target_offset + wire->width > to.width
-                || (!driver.offset && wire->width != to.width)) {
-                throw std::invalid_argument(
-                    "static kernel wiring does not fit its signals");
-            }
-            wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
-                wire->offset, wire->width,
-                static_cast<std::uint32_t>(target_offset) });
-            std::erase(impl_.vhdl_conversion_dependents[source], signal);
-        }
-        impl_.vhdl_conversion_drivers.erase(found);
-    }
-    std::ranges::stable_sort(wires_, {}, &Wire::source);
-    slot_wires_.assign(slots_.size(), { 0U, 0U });
-    for (std::uint32_t index = 0U; index < wires_.size();) {
-        auto end = index;
-        while (end < wires_.size() && wires_[end].source == wires_[index].source) {
-            ++end;
-        }
-        slot_wires_[wires_[index].source] = { index, end };
-        index = end;
-    }
-    // A wired formal starts at its source's initial value (IEEE 1076-2008
-    // 14.7.5.2); wires chain, so repeat until the values settle. This runs
-    // before any activation, so a value deposited on the formal before the
-    // first cycle (a VHPI start-of-simulation callback) is kept.
-    for (std::size_t pass = 0U; pass <= wires_.size(); ++pass) {
-        bool changed = false;
-        for (const auto& wire : wires_) {
-            changed = copy_wire(wire) || changed;
-        }
-        if (!changed) {
-            break;
-        }
-    }
+    plan_conversions_and_wires(spec);
 
     stage("wiring");
     // Level combinational members: writer before reader, cycles last.
@@ -1669,6 +1518,170 @@ void Interpreter::Impl::StaticKernel::build_container_info()
         if (container_info_[index].storage == 1U) {
             container_info_[index].elements
                 = container_elements_.data() + element_begin[index];
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::rewrite_conversion(Member& member,
+    const SignalId target, const RegisterId output)
+{
+    const auto write = static_cast<InstructionIndex>(member.operations.size());
+    for (auto& operation : member.operations) {
+        if (operation_holds<Halt>(operation)) {
+            operation = Operation { Jump { write } };
+        }
+    }
+    member.operations.emplace_back(WriteUpdate { target, output,
+        SignalUpdateDomain::generic });
+    member.operations.emplace_back(WaitSensitivity { });
+    member.operations.emplace_back(Jump { 0U });
+    member.body_identity = nullptr;
+}
+
+void Interpreter::Impl::StaticKernel::plan_conversions_and_wires(
+    const StaticKernelRuntimeSpec& spec)
+{
+    const auto signal_count = impl_.signals.size();
+    // Conversions: each source slot runs its conversion members in the
+    // order the host queues the formals it converts (its dependents list);
+    // the host resolves none of them again.
+    if (!conversion_members_.empty()) {
+        slot_conversions_.assign(slots_.size(), { });
+        conversion_queued_.assign(members_.size(), 0U);
+        std::unordered_map<SignalId, std::uint32_t> member_of_target;
+        for (const auto index : conversion_members_) {
+            const auto& write = operation_get<WriteUpdate>(
+                members_[index].operations[members_[index].body_end - 1U]);
+            member_of_target.emplace(write.signal, index);
+        }
+        std::vector<SignalId> sources;
+        for (const auto& [target, index] : member_of_target) {
+            const auto& resolver = impl_.vhdl_resolvers.at(target);
+            sources.insert(sources.end(), resolver.sources.begin(),
+                resolver.sources.end());
+        }
+        std::ranges::sort(sources);
+        sources.erase(std::ranges::unique(sources).begin(), sources.end());
+        for (const auto source : sources) {
+            if (source >= signal_count || slot_of_signal_[source] == no_slot) {
+                throw std::invalid_argument(
+                    "static kernel conversion source is not a kernel slot");
+            }
+            auto& dependents = impl_.vhdl_conversion_dependents[source];
+            for (const auto target : dependents) {
+                if (const auto found = member_of_target.find(target);
+                    found != member_of_target.end()) {
+                    slot_conversions_[slot_of_signal_[source]].push_back(found->second);
+                }
+            }
+            std::erase_if(dependents, [&](const SignalId target) {
+                return member_of_target.contains(target);
+            });
+        }
+        for (const auto& [target, index] : member_of_target) {
+            impl_.vhdl_resolvers.erase(target);
+        }
+    }
+    // Wired formals: an owned signal whose host resolver is a pure-routing
+    // program over an owned source (static_kernel_wiring) is driven by the
+    // kernel from now on; the host does not resolve it again.
+    for (const auto signal : spec.owned_signals) {
+        const auto resolver = impl_.vhdl_resolvers.find(signal);
+        if (resolver == impl_.vhdl_resolvers.end()
+            || resolver->second.sources.size() != 1U
+            || !resolver->second.drivers.empty()
+            || !resolver->second.variants.empty()
+            || resolver->second.driving_mirror
+            || resolver->second.process >= impl_.processes.size()) {
+            continue;
+        }
+        const auto source = resolver->second.sources.front();
+        const auto wire = static_kernel_wiring(
+            impl_.processes.program_view(resolver->second.process).operations(),
+            resolver->second.output, [&](const SignalId id) {
+                return static_cast<std::uint64_t>(
+                    impl_.get_signal(id).initial_value.width());
+            });
+        if (!wire || wire->source != source || source >= signal_count
+            || slot_of_signal_[source] == no_slot) {
+            continue;
+        }
+        const auto& from = slots_[slot_of_signal_[source]];
+        const auto& to = slots_[slot_of_signal_[signal]];
+        if (from.planes != to.planes || to.width != wire->width
+            || wire->offset + wire->width > from.width) {
+            throw std::invalid_argument(
+                "static kernel wiring does not fit its signals");
+        }
+        wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
+            wire->offset, wire->width, 0U });
+        auto& dependents = impl_.vhdl_conversion_dependents[source];
+        std::erase(dependents, signal);
+        impl_.vhdl_resolvers.erase(resolver);
+    }
+    // Wired actual parts: an owned signal whose conversion drivers are
+    // pure-routing programs over owned output formals (the planner owns it
+    // only then) is driven part by part by the kernel; the host runs none of
+    // them again.
+    for (const auto signal : spec.owned_signals) {
+        const auto found = impl_.vhdl_conversion_drivers.find(signal);
+        if (found == impl_.vhdl_conversion_drivers.end()) {
+            continue;
+        }
+        for (const auto& driver : found->second) {
+            const auto wire = driver.sources.size() == 1U
+                    && driver.program < impl_.processes.size()
+                ? static_kernel_wiring(
+                      impl_.processes.program_view(driver.program).operations(),
+                      driver.output, [&](const SignalId id) {
+                          return static_cast<std::uint64_t>(
+                              impl_.get_signal(id).initial_value.width());
+                      })
+                : std::nullopt;
+            const auto source = wire ? wire->source : SignalId { };
+            const auto target_offset = driver.offset.value_or(0U);
+            if (!wire || source != driver.sources.front()
+                || source >= signal_count || slot_of_signal_[source] == no_slot
+                || impl_.vhdl_resolvers.contains(signal)) {
+                throw std::invalid_argument(
+                    "static kernel wiring does not fit its signals");
+            }
+            const auto& from = slots_[slot_of_signal_[source]];
+            const auto& to = slots_[slot_of_signal_[signal]];
+            if (from.planes != to.planes || wire->offset + wire->width > from.width
+                || target_offset + wire->width > to.width
+                || (!driver.offset && wire->width != to.width)) {
+                throw std::invalid_argument(
+                    "static kernel wiring does not fit its signals");
+            }
+            wires_.push_back({ slot_of_signal_[source], slot_of_signal_[signal],
+                wire->offset, wire->width,
+                static_cast<std::uint32_t>(target_offset) });
+            std::erase(impl_.vhdl_conversion_dependents[source], signal);
+        }
+        impl_.vhdl_conversion_drivers.erase(found);
+    }
+    std::ranges::stable_sort(wires_, {}, &Wire::source);
+    slot_wires_.assign(slots_.size(), { 0U, 0U });
+    for (std::uint32_t index = 0U; index < wires_.size();) {
+        auto end = index;
+        while (end < wires_.size() && wires_[end].source == wires_[index].source) {
+            ++end;
+        }
+        slot_wires_[wires_[index].source] = { index, end };
+        index = end;
+    }
+    // A wired formal starts at its source's initial value (IEEE 1076-2008
+    // 14.7.5.2); wires chain, so repeat until the values settle. This runs
+    // before any activation, so a value deposited on the formal before the
+    // first cycle (a VHPI start-of-simulation callback) is kept.
+    for (std::size_t pass = 0U; pass <= wires_.size(); ++pass) {
+        bool changed = false;
+        for (const auto& wire : wires_) {
+            changed = copy_wire(wire) || changed;
+        }
+        if (!changed) {
+            break;
         }
     }
 }

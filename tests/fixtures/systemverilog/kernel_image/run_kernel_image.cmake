@@ -53,6 +53,8 @@ endfunction()
 
 set(cases
   kernel_image_lanes
+  kernel_image_vhdl
+  mixed_domain_boundary
   a2_native_chain
   a2_chain_fork_merge
   fixed_array_write
@@ -62,22 +64,38 @@ set(cases
 foreach(case_name IN LISTS cases)
   set(case_dir "${workspace}/${case_name}")
   file(MAKE_DIRECTORY "${case_dir}")
-  if(EXISTS "${FSIM_FIXTURE_DIR}/${case_name}.sv")
+  set(top "${case_name}")
+  if(EXISTS "${FSIM_FIXTURE_DIR}/${case_name}.vhd")
+    set(top "${case_name}(tb)")
+    file(COPY_FILE "${FSIM_FIXTURE_DIR}/${case_name}.vhd"
+      "${case_dir}/${case_name}.vhd")
+    run_fsim_step("${case_name}" compile
+      compile -q --lang vhdl --standard 2008 "${case_name}.vhd")
+  elseif(case_name STREQUAL "mixed_domain_boundary")
+    file(COPY_FILE "${FSIM_SCHEDULING_FIXTURE_DIR}/mixed_language_leaf.vhd"
+      "${case_dir}/mixed_language_leaf.vhd")
+    file(COPY_FILE "${FSIM_SCHEDULING_FIXTURE_DIR}/${case_name}.sv"
+      "${case_dir}/${case_name}.sv")
+    run_fsim_step("${case_name}" compile_vhdl
+      compile -q --standard 2008 mixed_language_leaf.vhd)
+    run_fsim_step("${case_name}" compile compile -q "${case_name}.sv")
+  elseif(EXISTS "${FSIM_FIXTURE_DIR}/${case_name}.sv")
     file(COPY_FILE "${FSIM_FIXTURE_DIR}/${case_name}.sv"
       "${case_dir}/${case_name}.sv")
+    run_fsim_step("${case_name}" compile compile -q "${case_name}.sv")
   else()
     file(COPY_FILE "${FSIM_SCHEDULING_FIXTURE_DIR}/${case_name}.sv"
       "${case_dir}/${case_name}.sv")
+    run_fsim_step("${case_name}" compile compile -q "${case_name}.sv")
   endif()
-  run_fsim_step("${case_name}" compile compile -q "${case_name}.sv")
 
   run_fsim_step("${case_name}" elaborate_reference
-    elaborate -q --top "${case_name}" --no-aot --optimization O2)
+    elaborate -q --top "${top}" --no-aot --optimization O2)
   run_fsim_step("${case_name}" simulate_reference simulate --engine v4)
   read_transcript(simulate_reference expected)
 
   run_fsim_step("${case_name}" elaborate_aot
-    elaborate -q --top "${case_name}" --aot --aot-scope kernel --optimization O2)
+    elaborate -q --top "${top}" --aot --aot-scope kernel --optimization O2)
   set(ENV{FSIM_KERNEL_IMAGE_REQUIRED} 1)
   run_fsim_step("${case_name}" simulate_restored simulate --engine v4)
   unset(ENV{FSIM_KERNEL_IMAGE_REQUIRED})

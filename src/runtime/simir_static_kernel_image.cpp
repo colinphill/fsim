@@ -73,6 +73,14 @@ struct is_map<std::map<K, V, C, A>> : std::true_type { };
 template <typename K, typename V, typename H, typename E, typename A>
 struct is_map<std::unordered_map<K, V, H, E, A>> : std::true_type { };
 
+/// Stands for a reference-format register's initial value in a decoded
+/// image until restore_image creates it.
+[[nodiscard]] const std::shared_ptr<ContainerValue>& dynamic_marker()
+{
+    static const auto marker = std::make_shared<ContainerValue>();
+    return marker;
+}
+
 /// Settings that change only how the kernel runs, not what it builds.
 [[nodiscard]] bool run_only_setting(const std::string_view name)
 {
@@ -138,10 +146,16 @@ public:
         } else if constexpr (std::is_pointer_v<T> || std::is_same_v<T, NativeUnit>
             || std::is_same_v<T, std::vector<Operation>>) {
             // Rebuilt on restore: body identities, native code, operations.
-        } else if constexpr (std::is_same_v<T, SharedContainerValue>) {
-            // Reference-format registers are not imaged (record_image).
-            ok_ = ok_ && value == nullptr;
-            out_.put(0U);
+        } else if constexpr (std::is_same_v<T, std::vector<SharedContainerValue>>) {
+            // Reference-format registers hold their initial values, which
+            // restore_image creates again: only which registers have one.
+            out_.put(value.size());
+            for (const auto& element : value) {
+                out_.put(element ? 1U : 0U);
+            }
+        } else if constexpr (std::is_same_v<T, Member::Frame>) {
+            // No thread has run, so no automatic frame is saved.
+            ok_ = false;
         } else if constexpr (std::is_same_v<T, std::vector<PackedLogic4>>) {
             // Register files before the first run: mostly empty values.
             const bool empty = std::ranges::all_of(value,
@@ -225,10 +239,24 @@ public:
             || std::is_same_v<T, std::vector<Operation>>) {
             value = T { };
             return true;
-        } else if constexpr (std::is_same_v<T, SharedContainerValue>) {
-            std::uint64_t present { };
-            value = nullptr;
-            return in_.get(present) && present == 0U;
+        } else if constexpr (std::is_same_v<T, std::vector<SharedContainerValue>>) {
+            std::uint64_t count { };
+            if (!in_.get(count) || count > in_.remaining()) {
+                return false;
+            }
+            value.assign(static_cast<std::size_t>(count), nullptr);
+            for (auto& element : value) {
+                bool present { };
+                if (!in_.get(present)) {
+                    return false;
+                }
+                if (present) {
+                    element = dynamic_marker();
+                }
+            }
+            return true;
+        } else if constexpr (std::is_same_v<T, Member::Frame>) {
+            return false;
         } else if constexpr (std::is_same_v<T, std::vector<PackedLogic4>>) {
             std::uint64_t count { };
             bool empty { };
@@ -325,11 +353,10 @@ void Interpreter::Impl::StaticKernel::visit_image_fields(Self& self, Visit&& vis
     visit(self.vhdl_threads_);
     visit(self.named_disable_);
     visit(self.mirror_of_signal_);
+    // slot_conversions_, conversion_queued_, wires_ and slot_wires_ are
+    // planned again (plan_conversions_and_wires), with the host resolvers
+    // they replace.
     visit(self.conversion_members_);
-    visit(self.conversion_queued_);
-    visit(self.slot_conversions_);
-    visit(self.wires_);
-    visit(self.slot_wires_);
     visit(self.partitions_);
     visit(self.compiled_members_);
     visit(self.specialized_members_);
@@ -359,11 +386,10 @@ std::uint64_t Interpreter::Impl::StaticKernel::image_spec_digest(
 bool Interpreter::Impl::StaticKernel::image_scope(
     const StaticKernelRuntimeSpec& spec) const
 {
-    // SystemVerilog kernels only: VHDL members are specialized, pruned and
-    // converted, and their update commits change the host's resolvers.
-    return !spec.vhdl && !spec.mixed && !vhdl_ && spec.hosted.empty()
-        && !spec.debug_points && !debug_points_ && !profile_ && !trace_
-        && impl_.vhdl_resolvers.empty() && impl_.vhdl_conversion_drivers.empty()
+    // Hosted processes and debug points are planned with the host; the
+    // keep-names diagnostics name every member.
+    return spec.hosted.empty() && !spec.debug_points && !debug_points_
+        && !profile_ && !trace_
         && std::getenv("FSIM_KERNEL_DUMP") == nullptr
         && std::getenv("FSIM_KERNEL_VERIFY_BODIES") == nullptr
         && std::getenv("FSIM_STATIC_KERNEL_GENERIC") == nullptr;
@@ -382,7 +408,7 @@ bool Interpreter::Impl::StaticKernel::record_image(
     const StaticKernelRuntimeSpec& spec, std::string& out) const
 {
     out.clear();
-    if (!image_scope(spec) || !conversion_members_.empty() || !wires_.empty()) {
+    if (!image_scope(spec)) {
         note_image("record", "out_of_scope", 0U);
         return false;
     }
@@ -400,7 +426,7 @@ bool Interpreter::Impl::StaticKernel::record_image(
     }
     if (!writer.ok()) {
         out.clear();
-        note_image("record", "dynamic_containers", 0U);
+        note_image("record", "frames", 0U);
         return false;
     }
     note_image("record", "recorded", out.size());
@@ -408,7 +434,7 @@ bool Interpreter::Impl::StaticKernel::record_image(
 }
 
 bool Interpreter::Impl::StaticKernel::restore_image(
-    const StaticKernelRuntimeSpec& spec)
+    StaticKernelRuntimeSpec& spec)
 {
     if (!image_scope(spec)) {
         return false;
@@ -446,8 +472,7 @@ bool Interpreter::Impl::StaticKernel::restore_image(
         failure = "fields";
     }
     const auto signal_count = impl_.signals.size();
-    ok = ok && conversion_members_.empty() && wires_.empty()
-        && members_.size() == spec.members.size()
+    ok = ok && members_.size() == spec.members.size()
         && member_process_.size() == members_.size()
         && slot_of_signal_.size() == signal_count
         && family_of_signal_.size() == signal_count
@@ -459,12 +484,24 @@ bool Interpreter::Impl::StaticKernel::restore_image(
         failure = "shape";
     }
     // The operations, as build_fresh expands them: the program's, with a
-    // SystemVerilog member's calls inlined in its body.
+    // conversion's resolver program rewritten, a SystemVerilog member's calls
+    // inlined in its body, and a VHDL member's specialization (from the
+    // persisted specializations) appended.
+    std::unordered_map<ProcessId, StaticKernelSpecialization*> specialized;
+    if (spec.specializations) {
+        for (auto& entry : spec.specializations->members) {
+            if (entry.specialized) {
+                specialized.emplace(entry.process, &entry);
+            }
+        }
+    }
+    std::vector<StaticKernelSpecialization*> moved;
     Operation expand_scratch;
     for (std::size_t index = 0U; ok && index < members_.size(); ++index) {
         auto& member = members_[index];
         const auto& member_spec = spec.members[index];
-        if (member.process != member_spec.process || member.conversion) {
+        if (member.process != member_spec.process) {
+            failure = "operations:process";
             ok = false;
             break;
         }
@@ -482,8 +519,23 @@ bool Interpreter::Impl::StaticKernel::restore_image(
             }
         }
         member.body_identity = operations.body_identity();
+        if (member.conversion) {
+            const auto resolver
+                = impl_.vhdl_resolvers.find(member_spec.conversion_target);
+            if (resolver == impl_.vhdl_resolvers.end()
+                || resolver->second.process != member.process) {
+                failure = "operations:conversion";
+                ok = false;
+                break;
+            }
+            rewrite_conversion(member, member_spec.conversion_target,
+                resolver->second.output);
+        }
+        // As build_fresh checks the body.
         if (member_spec.body_end > member.operations.size()
-            || member_spec.body_begin > member_spec.body_end) {
+            || member_spec.body_begin > (member.vhdl ? member.operations.size()
+                                                     : member_spec.body_end)) {
+            failure = "operations:bounds";
             ok = false;
             break;
         }
@@ -502,18 +554,69 @@ bool Interpreter::Impl::StaticKernel::restore_image(
             if (!inlined || inlined->body_begin != member.body_begin
                 || inlined->body_end != member.body_end
                 || inlined->exit_alt != member.exit_alt) {
+                failure = "operations:inline";
                 ok = false;
                 break;
             }
             member.operations = std::move(inlined->operations);
-        } else if (member.body_begin != member_spec.body_begin
+        } else if (member.prologue_end != member_spec.body_begin
             || member.body_end != member_spec.body_end
             || member.exit_alt != member_spec.exit_alt) {
+            failure = "operations:body";
             ok = false;
             break;
         }
+        const auto original_size = static_cast<std::uint32_t>(member.operations.size());
+        if (!member.origin.empty()) {
+            // As compile_members applies a restored specialization.
+            const auto found = specialized.find(member.process);
+            if (found == specialized.end()
+                || found->second->original_size != original_size
+                || member.origin.size()
+                    != original_size + found->second->operations.size()
+                || member.body_begin != original_size) {
+                failure = "operations:specialization";
+                ok = false;
+                break;
+            }
+            // Each persisted entry serves one member: move it, as
+            // compile_members does (a later refusal specializes afresh).
+            member.operations.insert(member.operations.end(),
+                std::make_move_iterator(found->second->operations.begin()),
+                std::make_move_iterator(found->second->operations.end()));
+            found->second->operations.clear();
+            moved.push_back(found->second);
+            member.body_identity = nullptr;
+        } else if (member.body_begin != member.prologue_end) {
+            failure = "operations:body_begin";
+            ok = false;
+            break;
+        }
+        if (std::ranges::find(member.dynamic_containers, dynamic_marker())
+            != member.dynamic_containers.end()) {
+            // As build_fresh gives them their initial values.
+            const auto types = process_layout_detail::ProcessLayoutAccess::view(
+                program.container_register_types());
+            for (std::size_t id = 0U; id < member.dynamic_containers.size(); ++id) {
+                if (member.dynamic_containers[id] != dynamic_marker()) {
+                    continue;
+                }
+                if (id >= types.size()) {
+                    failure = "operations:dynamic";
+                    ok = false;
+                    break;
+                }
+                member.dynamic_containers[id]
+                    = impl_.default_container_register(types[id]);
+            }
+        }
     }
     if (!ok) {
+        // Entries whose operations moved no longer match their members:
+        // compile_members specializes those members afresh.
+        for (auto* entry : moved) {
+            entry->original_size = std::numeric_limits<std::uint32_t>::max();
+        }
         visit_image_fields(*this, [](auto& field) {
             field = std::remove_cvref_t<decltype(field)> { };
         });
@@ -528,6 +631,7 @@ bool Interpreter::Impl::StaticKernel::restore_image(
             impl_.static_kernel_region_host_phase = member.phase;
         }
     }
+    plan_conversions_and_wires(spec);
     image_reasons_.clear();
     image_reasons_.reserve(reasons.size());
     not_compiled_reason_.assign(reasons.size(), nullptr);

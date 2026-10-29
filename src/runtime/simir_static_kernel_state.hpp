@@ -1149,6 +1149,14 @@ private:
         const std::function<void(const char*)>& stage);
     /// The native view of containers_ (container_info_, container_elements_).
     void build_container_info();
+    /// A port-association conversion's resolver program as a member body
+    /// (build_fresh).
+    static void rewrite_conversion(Member& member, SignalId target,
+        RegisterId output);
+    /// Conversion members per source slot and wired formals, and the host
+    /// resolvers they replace (erased from the Impl), after the members and
+    /// mirrors exist; the wired formals start at their sources' values.
+    void plan_conversions_and_wires(const StaticKernelRuntimeSpec& spec);
     /// Kernel images (StaticKernelRuntimeSpec::kernel_image;
     /// simir_static_kernel_image.cpp). image_scope: the kernel may record or
     /// restore one. record_image: the image of the state build_fresh made,
@@ -1158,7 +1166,7 @@ private:
     [[nodiscard]] bool image_scope(const StaticKernelRuntimeSpec& spec) const;
     [[nodiscard]] bool record_image(
         const StaticKernelRuntimeSpec& spec, std::string& out) const;
-    [[nodiscard]] bool restore_image(const StaticKernelRuntimeSpec& spec);
+    [[nodiscard]] bool restore_image(StaticKernelRuntimeSpec& spec);
     [[nodiscard]] static std::uint64_t image_spec_digest(
         const StaticKernelRuntimeSpec& spec);
     /// FSIM_PROFILE_PHASES: `static-kernel-image ACTION=OUTCOME bytes=N`.
