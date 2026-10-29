@@ -2132,6 +2132,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process,
         InstructionIndex instruction,
         SignalChangeOrigin origin = { });
+    // A process's write of a design object or of one of its elements (IEEE
+    // 1800-2023 10.4.1, 10.4.2): a blocking one now, a nonblocking one from
+    // the NBA region (the update phase outside SystemVerilog). The
+    // interpreter and the static kernel's members both make it.
+    void write_object(const WriteContainerObject& operation,
+        ProcessSchedulingDomain process_domain, ProcessId driver,
+        InstructionIndex instruction, const ContainerValue& source);
+    void write_object_element(const WriteContainerObjectElement& operation,
+        ProcessSchedulingDomain process_domain, ProcessId driver,
+        InstructionIndex instruction, const PackedLogic4& index,
+        const PackedLogic4& value, const std::optional<PackedLogic4>& base,
+        std::vector<PackedLogic4> level_indices);
     void write_container_object_member_value(
         ContainerObjectId id,
         const PackedLogic4& index,

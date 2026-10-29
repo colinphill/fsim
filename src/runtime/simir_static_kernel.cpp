@@ -276,6 +276,10 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     // (static_kernel_dynamic_container_registers): their initial values.
     std::vector<std::vector<std::pair<ContainerRegisterId, SharedContainerValue>>>
         dynamic_containers(spec.members.size());
+    std::vector<std::uint8_t> host_objects(container_of_object_.size(), 0U);
+    for (std::size_t object = 0U; object < host_objects.size(); ++object) {
+        host_objects[object] = container_of_object_[object] == no_container;
+    }
     for (std::size_t index = 0U; index < spec.members.size(); ++index) {
         const auto& member_spec = spec.members[index];
         if (member_spec.kind != StaticKernelMemberKind::behavioral) {
@@ -329,13 +333,16 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         }
         const auto types = process_layout_detail::ProcessLayoutAccess::view(
             program.container_register_types());
+        // A SystemVerilog member reaches a design object the kernel does not
+        // hold through the host (the planner's host-access objects).
+        const bool systemverilog
+            = program.scheduling_domain() == ProcessSchedulingDomain::systemverilog;
         const auto dynamic = static_kernel_dynamic_container_registers(
             operations.size(),
             [&](const std::size_t op) -> const Operation& {
                 return operations[op];
             },
-            types,
-            program.scheduling_domain() == ProcessSchedulingDomain::systemverilog);
+            types, systemverilog, systemverilog ? &host_objects : nullptr);
         for (std::size_t id = 0U; id < dynamic.size(); ++id) {
             if (dynamic[id] != 0U) {
                 dynamic_containers[index].emplace_back(
@@ -454,6 +461,19 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     std::size_t expanded_ops = 0U;
     std::unordered_set<const void*> distinct_bodies;
     members_.reserve(spec.members.size());
+    // The programs of VHDL resolution functions (Impl::vhdl_resolvers): a
+    // member among them is a resolver member (run_resolver).
+    std::unordered_set<ProcessId> resolver_processes;
+    for (const auto& [signal, resolver] : impl_.vhdl_resolvers) {
+        static_cast<void>(signal);
+        if (!resolver.sources.empty() || resolver.driving_mirror) {
+            continue;
+        }
+        resolver_processes.insert(resolver.process);
+        for (const auto& variant : resolver.variants) {
+            resolver_processes.insert(variant.process);
+        }
+    }
     const bool keep_names = profile_ || trace_
         || std::getenv("FSIM_KERNEL_DUMP") != nullptr;
     for (const auto& member_spec : spec.members) {
@@ -512,6 +532,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             startup_members_.push_back({ member.process,
                 static_cast<std::uint32_t>(members_.size()),
                 program.startup_order() });
+        }
+        member.resolver = resolver_processes.contains(member.process);
+        if (member.resolver) {
+            resolver_members_.emplace(member.process,
+                static_cast<std::uint32_t>(members_.size()));
         }
         member.partition_key = member.lazy ? no_slot : member_spec.partition;
         member.body_begin = member_spec.body_begin;
@@ -671,12 +696,24 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             vhdl_threads_ = vhdl_threads_ || member.vhdl;
             member.strings.assign(program.string_register_count(), std::string { });
             member.wait_sensitivity = member_spec.sensitivity;
-            const auto waitable = [&](const SignalId signal) {
-                if (signal >= signal_count || family_of_signal_[signal] != no_slot) {
+            const auto waitable = [&](const SignalId signal, const EdgeKind edge) {
+                if (signal >= signal_count) {
                     throw std::invalid_argument(
                         "static kernel behavioral wait targets an unsupported signal");
                 }
-                if (const auto slot = slot_of_signal_[signal]; slot != no_slot) {
+                if (const auto family = family_of_signal_[signal];
+                    family != no_slot) {
+                    // An alias proxy has no edge; an any-change wait waits
+                    // on its leaves (wait_on).
+                    if (edge != EdgeKind::any) {
+                        throw std::invalid_argument(
+                            "static kernel proxy edge wait is unsupported");
+                    }
+                    slot_waitable_.resize(slots_.size(), 0U);
+                    for (const auto& leaf : families_[family].leaves) {
+                        slot_waitable_[leaf.slot] = 1U;
+                    }
+                } else if (const auto slot = slot_of_signal_[signal]; slot != no_slot) {
                     slot_waitable_.resize(slots_.size(), 0U);
                     slot_waitable_[slot] = 1U;
                 } else {
@@ -684,12 +721,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                 }
             };
             for (const auto& entry : member.wait_sensitivity) {
-                waitable(entry.signal);
+                waitable(entry.signal, entry.edge);
             }
             for (const auto& operation : member.operations) {
                 if (const auto* wait = operation_get_if<WaitOn>(&operation)) {
-                    for (const auto signal : wait->signals) {
-                        waitable(signal);
+                    for (std::size_t entry = 0U; entry < wait->signals.size(); ++entry) {
+                        waitable(wait->signals[entry], wait->edges.empty()
+                            ? EdgeKind::any : wait->edges[entry]);
                     }
                 }
             }

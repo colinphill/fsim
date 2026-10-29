@@ -485,6 +485,63 @@ void Interpreter::Impl::StaticKernel::run_startup_member(const ProcessId process
     }
 }
 
+PackedLogic4 Interpreter::Impl::StaticKernel::run_resolver(
+    const ProcessId process, const std::optional<PackedLogic4>& driving,
+    const RegisterId input, const RegisterId output)
+{
+    const auto found = resolver_members_.find(process);
+    if (found == resolver_members_.end()) {
+        throw std::logic_error("static kernel resolver is not a member");
+    }
+    const auto member = found->second;
+    if (driving) {
+        set_member_register(member, input, *driving);
+    }
+    // A resolution function neither waits nor forks: one pass runs to its
+    // halt, or to an assertion failure that ends the simulation.
+    const auto thread = spawn_thread(member, 0U, static_kernel_detail::no_slot,
+        static_kernel_detail::no_slot);
+    run_thread(thread);
+    if (threads_[thread].alive && threads_[thread].member == member
+        && !impl_.stopped_by_design) {
+        throw std::logic_error("VHDL resolution function did not finish synchronously");
+    }
+    return member_register(member, output);
+}
+
+PackedLogic4 Interpreter::Impl::StaticKernel::member_register(
+    const std::uint32_t member_index, const RegisterId reg)
+{
+    auto& member = members_[member_index];
+    if (member.compiled && !member.generic_mode) {
+        sync_behavioral_registers(member_index, static_kernel_detail::no_slot);
+    }
+    if (reg >= member.registers.size()) {
+        throw std::out_of_range { "invalid SimIR register ID" };
+    }
+    return member.registers[reg];
+}
+
+void Interpreter::Impl::StaticKernel::set_member_register(
+    const std::uint32_t member_index, const RegisterId reg,
+    const PackedLogic4& value)
+{
+    auto& member = members_[member_index];
+    if (reg >= member.registers.size()) {
+        throw std::out_of_range { "invalid SimIR register ID" };
+    }
+    const bool native = member.compiled && !member.generic_mode;
+    if (native) {
+        sync_behavioral_registers(member_index, static_kernel_detail::no_slot);
+    }
+    member.registers[reg] = Impl::coerce_value_kind(value,
+        reg < member.register_kinds.size() ? member.register_kinds[reg]
+                                           : ValueKind::logic4);
+    if (native) {
+        sync_compiled_registers(member_index);
+    }
+}
+
 void Interpreter::Impl::StaticKernel::collect_hosted()
 {
     const auto now = impl_.scheduler.now();

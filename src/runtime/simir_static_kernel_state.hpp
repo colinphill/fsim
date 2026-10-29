@@ -246,6 +246,18 @@ public:
     /// Runs a package static initializer member to its end, before time
     /// zero (IEEE 1800-2023 6.21).
     void run_startup_member(ProcessId process);
+    /// Whether the resolver program `process` is a member (run_resolver).
+    [[nodiscard]] bool resolver_member(const ProcessId process) const noexcept
+    {
+        return resolver_members_.contains(process);
+    }
+    /// One pass of a resolution function's program (IEEE 1076-2019
+    /// 14.7.3.2), as Impl::run_vhdl_resolver runs it: `driving` (the
+    /// connected drivers' values, when there is one) in register `input`,
+    /// the program run to its halt, the effective value from `output`.
+    [[nodiscard]] PackedLogic4 run_resolver(ProcessId process,
+        const std::optional<PackedLogic4>& driving, RegisterId input,
+        RegisterId output);
     /// Debugger plan: members stop at their debug points.
     [[nodiscard]] bool debug_points() const noexcept { return debug_points_; }
     /// A mixed kernel with a host boundary: its first round, the VHDL
@@ -348,6 +360,9 @@ private:
         bool final_block { };
         /// A package static initializer (run_startup_member).
         bool package_startup { };
+        /// A VHDL resolution function's program (run_resolver): never
+        /// starts; the host's update commit runs one pass per resolution.
+        bool resolver { };
         /// The scheduler region its threads resume in (IEEE 1800-2023 4.4.2):
         /// a concurrent assertion's process runs in the Observed region, a
         /// program's in the Reactive region. Such threads run from the
@@ -735,6 +750,11 @@ private:
     /// Copies the reference registers into the compiled register file, or
     /// keeps the member on the reference evaluator.
     void sync_compiled_registers(std::uint32_t member);
+    /// A behavioral member's register, from its compiled body when it runs
+    /// compiled; and its write, kept coherent with that body.
+    [[nodiscard]] PackedLogic4 member_register(std::uint32_t member, RegisterId reg);
+    void set_member_register(std::uint32_t member, RegisterId reg,
+        const PackedLogic4& value);
     [[nodiscard]] Word read_field(std::uint32_t slot, std::uint32_t offset,
         std::uint32_t width) const noexcept;
     [[nodiscard]] bool owned(SignalId signal) const noexcept
@@ -2365,6 +2385,8 @@ private:
     /// The final members' processes and member indices (run_finals).
     std::vector<std::pair<ProcessId, std::uint32_t>> final_members_;
     std::vector<StartupMember> startup_members_;
+    /// The resolver members' processes and member indices (run_resolver).
+    std::unordered_map<ProcessId, std::uint32_t> resolver_members_;
     /// A SystemVerilog member makes delayed writes (after, delayed and
     /// inertial updates), which the host matures at the writer's order.
     bool host_delayed_writes_ { };

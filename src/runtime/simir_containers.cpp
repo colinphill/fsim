@@ -2947,23 +2947,38 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const WriteContainerObject& operation)
 {
-    const auto& source = read_container_register(process, operation.source);
     const auto process_domain = process.program().scheduling_domain();
+    write_object(operation, process_domain, process.id, process.pc,
+        read_container_register(process, operation.source));
+    if (!operation.nonblocking && operation.transaction_signal) {
+        stage_update(
+            process.id,
+            *operation.transaction_signal,
+            PackedLogic4 { 1, Logic4::zero },
+            process_domain == ProcessSchedulingDomain::systemverilog
+                ? SignalUpdateDomain::systemverilog_active
+                : SignalUpdateDomain::generic);
+    }
+    ++process.pc;
+}
+
+void Interpreter::Impl::write_object(const WriteContainerObject& operation,
+    const ProcessSchedulingDomain process_domain, const ProcessId driver,
+    const InstructionIndex instruction, const ContainerValue& source)
+{
     const auto update_domain
         = process_domain == ProcessSchedulingDomain::systemverilog
         ? operation.nonblocking
             ? SignalUpdateDomain::systemverilog_nba
             : SignalUpdateDomain::systemverilog_active
         : SignalUpdateDomain::generic;
-    auto origin = capture_signal_change_origin(
-        process.id, update_domain);
+    auto origin = capture_signal_change_origin(driver, update_domain);
     if (operation.nonblocking) {
         if (update_domain == SignalUpdateDomain::generic) {
             origin.phase = SchedulerPhase::update;
         }
         const auto publish = [this, object = operation.object,
-                                 value = source, driver = process.id,
-                                 instruction = process.pc,
+                                 value = source, driver, instruction,
                                  origin](Scheduler&) {
             try {
                 write_container_object_value(
@@ -2973,30 +2988,17 @@ void Interpreter::Impl::execute_container(
             }
         };
         if (process_domain == ProcessSchedulingDomain::systemverilog) {
-            scheduler.schedule_systemverilog(
-                origin.phase, process.id, publish);
+            scheduler.schedule_systemverilog(origin.phase, driver, publish);
         } else {
-            scheduler.schedule(
-                SchedulerPhase::update, process.id, publish);
+            scheduler.schedule(SchedulerPhase::update, driver, publish);
         }
-        ++process.pc;
         return;
     }
     try {
-        write_container_object_value(
-            operation.object, source, process.id, origin);
+        write_container_object_value(operation.object, source, driver, origin);
     } catch (const std::invalid_argument& error) {
-        container_error(
-            process.id, process.pc, error.what());
+        container_error(driver, instruction, error.what());
     }
-    if (operation.transaction_signal) {
-        stage_update(
-            process.id,
-            *operation.transaction_signal,
-            PackedLogic4 { 1, Logic4::zero },
-            update_domain);
-    }
-    ++process.pc;
 }
 
 void Interpreter::Impl::execute_container(
@@ -3057,41 +3059,62 @@ void Interpreter::Impl::execute_container(
     ProcessState& process,
     const WriteContainerObjectElement& operation)
 {
-    const auto index = get_register(process, operation.index);
-    const auto value = get_register(process, operation.source);
-    const auto base = operation.dynamic_part
-        ? std::optional { get_register(
-              process, operation.dynamic_part->base) }
-        : std::nullopt;
+    std::vector<PackedLogic4> level_indices;
+    level_indices.reserve(operation.levels.size());
+    for (const auto& level : operation.levels) {
+        level_indices.push_back(get_register(process, level.index));
+    }
     const auto process_domain = process.program().scheduling_domain();
+    write_object_element(operation, process_domain, process.id, process.pc,
+        get_register(process, operation.index),
+        get_register(process, operation.source),
+        operation.dynamic_part
+            ? std::optional { get_register(process, operation.dynamic_part->base) }
+            : std::nullopt,
+        std::move(level_indices));
+    if (operation.transaction_signal) {
+        stage_update(
+            process.id,
+            *operation.transaction_signal,
+            PackedLogic4 { 1, Logic4::zero },
+            process_domain == ProcessSchedulingDomain::systemverilog
+                ? operation.nonblocking
+                    ? SignalUpdateDomain::systemverilog_nba
+                    : SignalUpdateDomain::systemverilog_active
+                : SignalUpdateDomain::generic);
+    }
+    ++process.pc;
+}
+
+void Interpreter::Impl::write_object_element(
+    const WriteContainerObjectElement& operation,
+    const ProcessSchedulingDomain process_domain, const ProcessId driver,
+    const InstructionIndex instruction, const PackedLogic4& index,
+    const PackedLogic4& value, const std::optional<PackedLogic4>& base,
+    std::vector<PackedLogic4> level_indices)
+{
     const auto update_domain
         = process_domain == ProcessSchedulingDomain::systemverilog
         ? operation.nonblocking
             ? SignalUpdateDomain::systemverilog_nba
             : SignalUpdateDomain::systemverilog_active
         : SignalUpdateDomain::generic;
-    auto origin = capture_signal_change_origin(
-        process.id, update_domain);
+    auto origin = capture_signal_change_origin(driver, update_domain);
     if (update_domain == SignalUpdateDomain::generic
         && operation.nonblocking) {
         origin.phase = SchedulerPhase::update;
     }
     if (!operation.levels.empty()) {
-        // A nested element: capture every level's index now and rebuild the
-        // object value when the write is published.
-        std::vector<PackedLogic4> level_indices;
-        level_indices.reserve(operation.levels.size());
-        for (const auto& level : operation.levels) {
-            level_indices.push_back(get_register(process, level.index));
-        }
+        // A nested element: every level's index is captured now and the
+        // object value rebuilt when the write is published.
         auto write = [this, object = operation.object,
                 levels = operation.levels,
                 level_indices = std::move(level_indices), index,
                 signed_index = operation.signed_index,
                 linear_index = operation.linear_index, value, base,
                 dynamic_part = operation.dynamic_part,
-                members = operation.members, driver = process.id,
-                instruction = process.pc, origin](Scheduler&) {
+                members = operation.members, driver,
+                instruction, origin](Scheduler&) {
                 write_container_object_path_value(object, levels,
                     level_indices, index, signed_index, linear_index,
                     members, value, base ? &*base : nullptr,
@@ -3102,10 +3125,10 @@ void Interpreter::Impl::execute_container(
             write(scheduler);
         } else if (process_domain == ProcessSchedulingDomain::systemverilog) {
             scheduler.schedule_systemverilog(
-                origin.phase, process.id, std::move(write));
+                origin.phase, driver, std::move(write));
         } else {
             scheduler.schedule(
-                SchedulerPhase::update, process.id, std::move(write));
+                SchedulerPhase::update, driver, std::move(write));
         }
     } else if (operation.nonblocking) {
         const auto publish = [this, object = operation.object, index,
@@ -3113,8 +3136,7 @@ void Interpreter::Impl::execute_container(
                 linear_index = operation.linear_index, value,
                 base, dynamic_part = operation.dynamic_part,
                 members = operation.members,
-                driver = process.id,
-                instruction = process.pc, origin](Scheduler&) {
+                driver, instruction, origin](Scheduler&) {
                 if (!members.empty()) {
                     write_container_object_member_value(
                         object, index, signed_index, linear_index, members,
@@ -3137,41 +3159,30 @@ void Interpreter::Impl::execute_container(
                 }
             };
         if (process_domain == ProcessSchedulingDomain::systemverilog) {
-            scheduler.schedule_systemverilog(
-                origin.phase, process.id, publish);
+            scheduler.schedule_systemverilog(origin.phase, driver, publish);
         } else {
-            scheduler.schedule(
-                SchedulerPhase::update, process.id, publish);
+            scheduler.schedule(SchedulerPhase::update, driver, publish);
         }
     } else if (!operation.members.empty()) {
         write_container_object_member_value(
             operation.object, index, operation.signed_index,
             operation.linear_index, operation.members, value,
-            process.id, process.pc, origin);
+            driver, instruction, origin);
     } else if (operation.dynamic_part) {
         if (!base) {
             container_error(
-                process.id, process.pc,
+                driver, instruction,
                 "dynamic container element write is missing its captured base");
         }
         write_container_object_dynamic_part_element_value(
             operation.object, index, operation.signed_index,
             operation.linear_index, value, *base, *operation.dynamic_part,
-            process.id, process.pc, origin);
+            driver, instruction, origin);
     } else {
         write_container_object_element_value(
             operation.object, index, operation.signed_index,
-            operation.linear_index, value,
-            process.id, process.pc, origin);
+            operation.linear_index, value, driver, instruction, origin);
     }
-    if (operation.transaction_signal) {
-        stage_update(
-            process.id,
-            *operation.transaction_signal,
-            PackedLogic4 { 1, Logic4::zero },
-            update_domain);
-    }
-    ++process.pc;
 }
 
 void Interpreter::Impl::execute_container(

@@ -165,7 +165,7 @@ void Interpreter::Impl::StaticKernel::prepare_behavioral()
         auto& member = members_[index];
         if (member.kind != StaticKernelMemberKind::behavioral
             || member.start_late || member.final_block
-            || member.package_startup
+            || member.package_startup || member.resolver
             || member.wait_sensitivity.empty()
             || member.operations.empty()
             || !operation_holds<WaitSensitivity>(member.operations.front())) {
@@ -189,7 +189,7 @@ void Interpreter::Impl::StaticKernel::start_behavioral()
             const auto& member = members_[index];
             if (member.kind != StaticKernelMemberKind::behavioral
                 || member.prearmed || member.final_block
-                || member.package_startup
+                || member.package_startup || member.resolver
                 || (member.after_procedures && !member.vhdl)
                     != after_procedures) {
                 continue;
@@ -338,6 +338,26 @@ void Interpreter::Impl::StaticKernel::wait_on(const std::uint32_t index,
 {
     const auto epoch = threads_[index].epoch;
     for (const auto& entry : entries) {
+        if (const auto family = family_of_signal_[entry.signal];
+            family != no_slot) {
+            // An alias proxy's change is a change of a leaf it overlaps
+            // (IEEE 1800-2023 9.4.2); each overlapped leaf gets a waiter for
+            // its part of the range. The first to wake makes the rest stale.
+            const auto begin = entry.offset;
+            const auto end = entry.width == 0U ? families_[family].width
+                : entry.offset + entry.width;
+            for (const auto& leaf : families_[family].leaves) {
+                const auto low = std::max(begin, leaf.offset);
+                const auto high = std::min(end, leaf.offset + leaf.width);
+                if (low < high) {
+                    slot_waiters_[leaf.slot].push_back({ index, epoch,
+                        EdgeKind::any, low - leaf.offset,
+                        low == leaf.offset && high == leaf.offset + leaf.width
+                            ? 0U : high - low });
+                }
+            }
+            continue;
+        }
         const Waiter waiter { index, epoch, entry.edge, entry.offset,
             entry.edge == EdgeKind::any ? entry.width : 0U };
         if (const auto slot = slot_of_signal_[entry.signal]; slot != no_slot) {
@@ -1511,43 +1531,27 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
         } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
             if (op.object >= container_of_object_.size()
                 || container_of_object_[op.object] == no_container) {
-                // A blocking element write of a host object (the planner
-                // admits plain dynamic ones), as the reference makes it.
-                const auto instruction
-                    = pc < member.origin.size() ? member.origin[pc] : pc;
-                const auto index = packed_register(op.index);
-                const auto value = packed_register(op.source);
-                const auto base = op.dynamic_part
-                    ? std::optional { packed_register(op.dynamic_part->base) }
-                    : std::nullopt;
-                const auto origin = impl_.capture_signal_change_origin(
-                    member.process, SignalUpdateDomain::systemverilog_active);
-                if (!op.levels.empty()) {
-                    std::vector<PackedLogic4> level_indices;
-                    level_indices.reserve(op.levels.size());
-                    for (const auto& level : op.levels) {
-                        level_indices.push_back(packed_register(level.index));
-                    }
-                    impl_.write_container_object_path_value(op.object, op.levels,
-                        level_indices, index, op.signed_index, op.linear_index,
-                        op.members, value, base ? &*base : nullptr,
-                        op.dynamic_part ? &*op.dynamic_part : nullptr,
-                        member.process, instruction, origin);
-                } else if (!op.members.empty()) {
-                    impl_.write_container_object_member_value(op.object, index,
-                        op.signed_index, op.linear_index, op.members, value,
-                        member.process, instruction, origin);
-                } else if (op.dynamic_part) {
-                    impl_.write_container_object_dynamic_part_element_value(
-                        op.object, index, op.signed_index, op.linear_index, value,
-                        *base, *op.dynamic_part, member.process, instruction,
-                        origin);
-                } else {
-                    impl_.write_container_object_element_value(op.object, index,
-                        op.signed_index, op.linear_index, value, member.process,
-                        instruction, origin);
+                // An element write of a host object (the planner admits
+                // those without a transaction signal), as the reference
+                // makes it: blocking now, nonblocking from the NBA region.
+                std::vector<PackedLogic4> level_indices;
+                level_indices.reserve(op.levels.size());
+                for (const auto& level : op.levels) {
+                    level_indices.push_back(packed_register(level.index));
                 }
-                host_object_written();
+                impl_.write_object_element(op, member.vhdl
+                        ? ProcessSchedulingDomain::generic
+                        : ProcessSchedulingDomain::systemverilog,
+                    member.process,
+                    pc < member.origin.size() ? member.origin[pc] : pc,
+                    packed_register(op.index), packed_register(op.source),
+                    op.dynamic_part
+                        ? std::optional { packed_register(op.dynamic_part->base) }
+                        : std::nullopt,
+                    std::move(level_indices));
+                if (!op.nonblocking) {
+                    host_object_written();
+                }
                 return;
             }
         } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
@@ -1573,17 +1577,17 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                     }
                     return;
                 }
-                // A blocking write of a host object (the planner keeps the
-                // object on the host), as the reference makes it.
-                const auto origin = impl_.capture_signal_change_origin(
-                    member.process, SignalUpdateDomain::systemverilog_active);
-                try {
-                    impl_.write_container_object_value(op.object, value,
-                        member.process, origin);
-                } catch (const std::invalid_argument& error) {
-                    fail(member_index, pc, error.what());
+                // A write of a host object (the planner keeps the object on
+                // the host), as the reference makes it: blocking now,
+                // nonblocking from the NBA region.
+                impl_.write_object(op, member.vhdl
+                        ? ProcessSchedulingDomain::generic
+                        : ProcessSchedulingDomain::systemverilog,
+                    member.process,
+                    pc < member.origin.size() ? member.origin[pc] : pc, value);
+                if (!op.nonblocking) {
+                    host_object_written();
                 }
-                host_object_written();
                 return;
             }
         }
@@ -1969,6 +1973,19 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
                 event.value = *converted;
             }
             impl_.control_vcd(member.process, op, std::move(event));
+        } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
+            // A guarded assignment's driver disconnection (IEEE 1076-2019
+            // 11.6, 10.5.2.2): the null transaction on the member's host
+            // driver, as the reference schedules it.
+            try {
+                if (!impl_.try_vhdl_disconnect_call(member.process,
+                        op.method_identity)) {
+                    fail(member_index, pc,
+                        "static kernel static call is not a driver disconnection");
+                }
+            } catch (const std::exception& error) {
+                fail(member_index, pc, error.what());
+            }
         } else if constexpr (std::is_same_v<T, VhdlAssertApi>) {
             // The std.env assertion controls and counts (IEEE 1076-2019
             // 16.5.6), as the reference runs them.
@@ -2707,6 +2724,8 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                 impl_.scheduler.request_stop();
             }
             stopped_ = true;
+            // The process halts here, as the reference's does at $finish.
+            suspend_point = true;
             outcome = Boundary::finish;
         } else if constexpr (std::is_same_v<T, Pause>) {
             // $stop (IEEE 1800-2023 20.2) suspends the simulation at a safe
@@ -2853,8 +2872,9 @@ void Interpreter::Impl::StaticKernel::debug_suspend(
         thread.debug_process != no_slot ? thread.debug_process : member.process,
         member.process, program_of(member), instruction,
         ExecutionPointKind::process_suspend, source, scope);
-    if (impl_.scheduler.stop_requested()) {
+    if (impl_.scheduler.stop_requested() && !impl_.stopped_by_design) {
         // The thread is already registered as waiting: only the run stops.
+        // ($finish stops the run itself.)
         debug_stop(no_slot);
     }
 }

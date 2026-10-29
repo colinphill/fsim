@@ -10,6 +10,7 @@
 #pragma once
 
 #include "fsim/runtime/simir.hpp"
+#include "fsim/runtime/simir_region_graph.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -627,12 +628,19 @@ inline void static_kernel_container_operands(
 /// does not hold that a SystemVerilog member uses (`by_type`; a VHDL
 /// member's other registers keep their kernel shapes), and those a copy
 /// connects to either. `operation_at(op)` is the member's operation `op` of
-/// `count`; `types` its container register types.
+/// `count`; `types` its container register types. `host_objects` marks the
+/// design objects that stay on the host: a register bound to one, or
+/// written to one, holds a reference-format copy of the host's value.
 template <typename OperationAt, typename Types>
 [[nodiscard]] std::vector<std::uint8_t> static_kernel_dynamic_container_registers(
     const std::size_t count, OperationAt&& operation_at, const Types& types,
-    const bool by_type = true)
+    const bool by_type = true,
+    const std::vector<std::uint8_t>* host_objects = nullptr)
 {
+    const auto host_object = [&](const ContainerObjectId object) {
+        return host_objects != nullptr && object < host_objects->size()
+            && (*host_objects)[object] != 0U;
+    };
     std::vector<std::uint8_t> dynamic(types.size(), 0U);
     const auto mark = [&](const ContainerRegisterId id) {
         if (id < dynamic.size() && dynamic[id] == 0U) {
@@ -656,6 +664,14 @@ template <typename OperationAt, typename Types>
                     mark(id);
                 }
             });
+        if (const auto* bind = operation_get_if<ReadContainerObject>(&operation);
+            bind != nullptr && host_object(bind->object)) {
+            mark(bind->destination);
+        } else if (const auto* write
+                   = operation_get_if<WriteContainerObject>(&operation);
+                   write != nullptr && host_object(write->object)) {
+            mark(write->source);
+        }
         if (!by_type) {
             if (const auto* copy
                 = operation_get_if<CopyContainerRegister>(&operation)) {
@@ -1019,6 +1035,10 @@ template <typename OperationAt, typename Types>
         } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
             // `now` (IEEE 1076-2019 16.3): the time query.
             return value.function >= SystemVerilogMathFunction::Time;
+        } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
+            // A guarded assignment's driver disconnection (IEEE 1076-2019
+            // 11.6, 10.5.2.2) through the host's projected drivers.
+            return vhdl_disconnect_signal(value.method_identity).has_value();
         } else if constexpr (std::is_same_v<T, VhdlAssertApi>
             || std::is_same_v<T, VhdlEnvironmentTime>
             || std::is_same_v<T, VhdlEnvironmentTimeToString>
@@ -1175,6 +1195,10 @@ template <typename OperationAt, typename Types>
             // The triggered state of an event (IEEE 1800-2023 15.5.3) is
             // the host's history of its synchronization object.
             return value.event;
+        } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
+            // A driver disconnection (IEEE 1076-2019 10.5.2.2) edits the
+            // projected output waveform of the member's host driver.
+            return vhdl_disconnect_signal(value.method_identity);
         } else if constexpr (std::is_same_v<T, WriteProjected>
             || std::is_same_v<T, WriteProjectedSlice>
             || std::is_same_v<T, WriteProjectedDynamicSlice>) {

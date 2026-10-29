@@ -369,33 +369,6 @@ infer_static_read_ranges(
     return ranges;
 }
 
-// A guarded VHDL signal assignment whose guard is false disconnects the
-// driver (IEEE 1076-2019 11.6, 10.5.2.2): the lowerer emits a static call
-// "@vhdl-disconnect:<signal>:<delay>" that cancels the process's later
-// transactions on that signal and schedules the null transaction
-// (Interpreter::Impl::schedule_vhdl_disconnect). Its only signal access is a
-// driver write to the named signal, so it is a known write.
-std::optional<SignalId> vhdl_disconnect_signal(std::string_view identity)
-{
-    constexpr std::string_view prefix { "@vhdl-disconnect:" };
-    if (!identity.starts_with(prefix)) {
-        return std::nullopt;
-    }
-    const auto fields = identity.substr(prefix.size());
-    const auto separator = fields.find(':');
-    if (separator == std::string_view::npos) {
-        return std::nullopt;
-    }
-    SignalId signal { };
-    const auto parsed = std::from_chars(
-        fields.data(), fields.data() + separator, signal);
-    if (parsed.ec != std::errc { }
-        || parsed.ptr != fields.data() + separator) {
-        return std::nullopt;
-    }
-    return signal;
-}
-
 // Access completeness is independent from the smaller pure-execution subset.
 // The default stays opaque so a newly added operation cannot silently become
 // proof that the whole signal inventory is complete.
@@ -1276,6 +1249,31 @@ void classify_drivers(RegionSignalNode& signal)
 }
 
 } // namespace
+
+// The disconnection cancels the process's later transactions on the signal
+// and schedules the null transaction (Interpreter::Impl::
+// schedule_vhdl_disconnect). Its only signal access is a driver write to the
+// named signal, so it is a known write.
+std::optional<SignalId> vhdl_disconnect_signal(std::string_view identity)
+{
+    constexpr std::string_view prefix { "@vhdl-disconnect:" };
+    if (!identity.starts_with(prefix)) {
+        return std::nullopt;
+    }
+    const auto fields = identity.substr(prefix.size());
+    const auto separator = fields.find(':');
+    if (separator == std::string_view::npos) {
+        return std::nullopt;
+    }
+    SignalId signal { };
+    const auto parsed = std::from_chars(
+        fields.data(), fields.data() + separator, signal);
+    if (parsed.ec != std::errc { }
+        || parsed.ptr != fields.data() + separator) {
+        return std::nullopt;
+    }
+    return signal;
+}
 
 namespace detail {
 

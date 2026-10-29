@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "simir_internal.hpp"
+#include "simir_static_kernel_state.hpp"
 
 #include <charconv>
 #include <algorithm>
@@ -1581,6 +1582,14 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
             ? record->value
             : vhdl_driver_initial_values.at(signal_id);
         driving.insert_bits(value, (count - 1U - index) * width);
+    }
+    if (static_kernel && static_kernel->resolver_member(program_process)) {
+        // The program is a kernel member (StaticKernel::run_resolver).
+        return coerce_value_kind(
+            static_kernel->run_resolver(program_process,
+                count != 0U ? std::optional { std::move(driving) } : std::nullopt,
+                program_input, program_output),
+            signal.value_kind);
     }
     auto& process = get_process(program_process);
     if (count != 0U) {

@@ -110,8 +110,10 @@ struct Candidate {
     std::uint32_t body_end { };
     std::uint32_t exit_alt { std::numeric_limits<std::uint32_t>::max() };
     std::vector<Sensitivity> sensitivity;
-    /// Behavioral members: signals named by their dynamic waits.
+    /// Behavioral members: signals named by their dynamic waits, and those
+    /// waited on for an edge.
     std::vector<SignalId> waited;
+    std::vector<SignalId> edge_waited;
 };
 
 /// Candidate::kind of a behavioral member (StaticKernelMemberKind).
@@ -227,6 +229,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // A mixed kernel can be refused where a single-language one is not;
     // the majority language's kernel is planned instead.
     bool mixed_planned = false;
+    // Host-access objects: fixed arrays the kernel cannot hold (their
+    // signals are forced, observed or otherwise host signals) that
+    // SystemVerilog members reach through the host, as they reach dynamic
+    // arrays (reference-format registers). A plan that finds new ones is
+    // planned again with them.
+    std::vector<std::uint8_t> host_access_objects(container_objects_.size(), 0U);
+    bool host_access_grew = false;
     const auto plan_for = [&](const bool allow_mixed) -> StaticKernelPlan {
     StaticKernelPlan plan;
     // Access plan: clients outside the SimIR processes that reach any
@@ -483,6 +492,26 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
         return false;
     };
+    // The programs of VHDL resolution functions (IEEE 1076-2019 4.6,
+    // 14.7.3.2): a resolver over drivers, or a guarded signal's variant for
+    // fewer connected drivers. Not scheduled processes: the update commit
+    // runs one pass for each resolution (Impl::run_vhdl_resolver), which a
+    // behavioral member runs in the kernel (StaticKernel::run_resolver).
+    std::vector<std::uint8_t> resolution_program(process_count, 0U);
+    for (const auto& signal : signals_) {
+        const auto& resolver = signal.vhdl_resolver;
+        if (!resolver || !resolver->sources.empty() || resolver->driving_mirror) {
+            continue;
+        }
+        if (resolver->process < process_count) {
+            resolution_program[resolver->process] = 1U;
+        }
+        for (const auto& variant : resolver->variants) {
+            if (variant.process < process_count) {
+                resolution_program[variant.process] = 1U;
+            }
+        }
+    }
     // The first property that keeps a process off the kernel whatever its
     // body, or nullptr; `behavioral` applies the behavioral tier's rules.
     // With `all`, every such property is appended to it (the blockers
@@ -530,7 +559,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             return first;
         }
         // A final procedure does not start at time zero (run_finals).
-        if (!view.initialize() && !view.final() && hit("not_initialized")) {
+        if (!view.initialize() && !view.final()
+            && !(behavioral && vhdl && view.id() < process_count
+                && resolution_program[view.id()] != 0U)
+            && hit("not_initialized")) {
             return first;
         }
         // Package static initializers run once, before time zero, in the
@@ -678,6 +710,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             // Debugger plan: no comb/seq/once shape. Every process is
             // classified by the behavioral tiers below (a resumable thread
             // that can stop at any debug point) or stays hosted.
+            continue;
+        }
+        // A host-access object is reached through reference-format
+        // registers, which only behavioral members hold.
+        if (!vhdl && std::ranges::any_of(container_uses[index],
+                [&](const ContainerObjectId object) {
+                    return object < host_access_objects.size()
+                        && host_access_objects[object] != 0U;
+                })) {
             continue;
         }
         if (const char* flag = flag_rejection(view, vhdl, false)) {
@@ -997,9 +1038,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             [&](const std::size_t op) -> const Operation& {
                 return operations[op];
             },
-            types, !vhdl);
+            types, !vhdl, vhdl ? nullptr : &host_access_objects);
         const auto is_dynamic = [&](const ContainerRegisterId id) {
             return id < dynamic.size() && dynamic[id] != 0U;
+        };
+        // Why a reference-format register cannot reach an object: another
+        // type, or signal alias structure the host access does not keep.
+        const auto dynamic_object_reason = [&](const ContainerObjectId object,
+                                               const ContainerRegisterId reg) {
+            return object >= container_objects_.size() || reg >= types.size()
+                    || !(container_objects_[object].initial_value.type == types[reg])
+                ? "dynamic_container_type" : "dynamic_container_alias";
         };
         // An object of the arena's shape is kernel storage (container_uses
         // keeps it); another is a host object without signal aliases.
@@ -1009,7 +1058,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 || !(container_objects_[object].initial_value.type == types[reg])) {
                 return false;
             }
-            if (static_kernel_arena_container_type(types[reg])) {
+            if (static_kernel_arena_container_type(types[reg])
+                && host_access_objects[object] == 0U) {
                 return true;
             }
             return host_container_ok(object);
@@ -1052,9 +1102,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     if (is_dynamic(value.destination)) {
                         // A VHDL member's reference-format registers are its
                         // own (access values, arrays with run-time ranges).
-                        if (vhdl
-                            || !dynamic_object_ok(value.object, value.destination)) {
+                        if (vhdl) {
                             dynamic_reason = "dynamic_container_object";
+                        } else if (!dynamic_object_ok(value.object, value.destination)) {
+                            dynamic_reason = dynamic_object_reason(
+                                value.object, value.destination);
                         }
                         return;
                     }
@@ -1063,13 +1115,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
                     // An element write of a host object (a dynamic array,
                     // queue or associative array of the design, IEEE
-                    // 1800-2023 7.5-7.10): blocking, through the host.
+                    // 1800-2023 7.5-7.10, or a host-access array), through
+                    // the host: blocking now, nonblocking from its NBA
+                    // region (Impl::write_object_element).
                     if (!vhdl && value.object < container_objects_.size()
-                        && !static_kernel_arena_container_type(
-                            container_objects_[value.object].initial_value.type)) {
-                        if (!host_container_ok(value.object)
-                            || value.nonblocking || value.transaction_signal) {
-                            dynamic_reason = "dynamic_container_object";
+                        && (!static_kernel_arena_container_type(
+                                container_objects_[value.object].initial_value.type)
+                            || host_access_objects[value.object] != 0U)) {
+                        if (!host_container_ok(value.object)) {
+                            dynamic_reason = "dynamic_container_alias";
+                        } else if (value.transaction_signal) {
+                            dynamic_reason = "dynamic_container_transaction";
                         } else if (dynamic_written != nullptr) {
                             dynamic_written->insert(value.object);
                         }
@@ -1094,11 +1150,24 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     private_containers.insert(value.target);
                 } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
                     if (is_dynamic(value.source)) {
-                        if (vhdl || !dynamic_object_ok(value.object, value.source)
-                            || value.nonblocking || value.transaction_signal) {
+                        // A nonblocking write goes through the host's NBA
+                        // region (Impl::write_object): host objects only.
+                        const bool host = !static_kernel_arena_container_type(
+                                types[value.source])
+                            || (value.object < host_access_objects.size()
+                                && host_access_objects[value.object] != 0U);
+                        if (vhdl) {
                             dynamic_reason = "dynamic_container_object";
+                        } else if (!dynamic_object_ok(value.object, value.source)) {
+                            dynamic_reason = dynamic_object_reason(
+                                value.object, value.source);
+                        } else if (value.transaction_signal) {
+                            dynamic_reason = "dynamic_container_transaction";
+                        } else if (value.nonblocking && !host) {
+                            dynamic_reason = "dynamic_container_nonblocking";
                         } else if (dynamic_written != nullptr
-                            && !static_kernel_arena_container_type(types[value.source])) {
+                            && (!static_kernel_arena_container_type(types[value.source])
+                                || host_access_objects[value.object] != 0U)) {
                             dynamic_written->insert(value.object);
                         }
                         return;
@@ -1343,6 +1412,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                                             != 0U));
                             if (supported) {
                                 member.waited.push_back(signal);
+                                if (edge != EdgeKind::any) {
+                                    member.edge_waited.push_back(signal);
+                                }
                             }
                         }
                     }
@@ -1389,9 +1461,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     [&](const std::size_t op) -> const Operation& {
                     return operations[op];
                 },
-                    types);
+                    types, true, &host_access_objects);
                 const auto is_dynamic = [&](const ContainerRegisterId id) {
                     return id < dynamic.size() && dynamic[id] != 0U;
+                };
+                // A reference-format register bound to, or written to, a
+                // host object (dynamic or host-access).
+                const auto host_object = [&](const ContainerObjectId object,
+                                             const ContainerRegisterId reg) {
+                    return is_dynamic(reg)
+                        && (!static_kernel_arena_container_type(types[reg])
+                            || (object < host_access_objects.size()
+                                && host_access_objects[object] != 0U));
                 };
                 for (std::size_t op = 0U; op < count; ++op) {
                     const auto operation = operations.expanded(op);
@@ -1400,9 +1481,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         host_container_write[op] = is_dynamic(write->target);
                     } else if (const auto* object
                         = operation_get_if<WriteContainerObject>(&operation)) {
-                        host_container_write[op] = is_dynamic(object->source)
-                            && !static_kernel_arena_container_type(
-                                types[object->source]);
+                        host_container_write[op]
+                            = host_object(object->object, object->source);
                     } else if (const auto* element
                         = operation_get_if<WriteContainerObjectElement>(
                             &operation)) {
@@ -1421,9 +1501,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     const auto operation = operations.expanded(op);
                     if (const auto* bind
                         = operation_get_if<ReadContainerObject>(&operation);
-                        bind != nullptr && is_dynamic(bind->destination)
-                        && !static_kernel_arena_container_type(
-                            types[bind->destination])) {
+                        bind != nullptr
+                        && host_object(bind->object, bind->destination)) {
                         if (bind->object < host_read_object.size()) {
                             host_read_object[bind->object] = 1U;
                         }
@@ -1431,9 +1510,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     }
                     if (const auto* write
                         = operation_get_if<WriteContainerObject>(&operation);
-                        write != nullptr && is_dynamic(write->source)
-                        && !static_kernel_arena_container_type(
-                            types[write->source])) {
+                        write != nullptr
+                        && host_object(write->object, write->source)) {
                         continue;
                     }
                     if (const auto* element
@@ -2604,10 +2682,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     const auto signal_ok = [&](const SignalId signal) {
         return signal < signal_count && basic_ok(signal) && writers_ok(signal);
     };
-    // Signals some candidate is edge-sensitive to, or a behavioral thread
-    // waits on (the kernel gives a thread no wait on an alias proxy);
-    // recomputed for each fixpoint pass (candidates only drop out between
-    // passes).
+    // Signals some candidate is edge-sensitive to (the kernel gives an
+    // alias proxy no edge; a thread's any-change wait on one waits on the
+    // leaves it overlaps); recomputed for each fixpoint pass (candidates
+    // only drop out between passes).
     std::vector<std::uint8_t> edge_sensitive(signal_count, 0U);
     const auto mark_edge_sensitive = [&] {
         std::ranges::fill(edge_sensitive, 0U);
@@ -2615,18 +2693,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             if (!candidates[index]) {
                 continue;
             }
-            const bool thread = candidates[index]->kind == behavioral_kind;
             for (const auto& entry : candidates[index]->sensitivity) {
-                if ((thread || entry.edge != EdgeKind::any)
-                    && entry.signal < signal_count) {
+                if (entry.edge != EdgeKind::any && entry.signal < signal_count) {
                     edge_sensitive[entry.signal] = 1U;
                 }
             }
-            if (thread) {
-                for (const auto signal : candidates[index]->waited) {
-                    if (signal < signal_count) {
-                        edge_sensitive[signal] = 1U;
-                    }
+            for (const auto signal : candidates[index]->edge_waited) {
+                if (signal < signal_count) {
+                    edge_sensitive[signal] = 1U;
                 }
             }
         }
@@ -2695,6 +2769,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     for (const auto& conversion : conversions) {
         undriven_actual[conversion.target] = 0U;
     }
+    // Unowned fixed arrays that rejected a SystemVerilog member: 1 when the
+    // kernel cannot hold the array, 2 when only a hosted accessor keeps it
+    // off the kernel (that accessor may become a member once the arrays of
+    // the first kind are host-access objects).
+    std::vector<std::uint8_t> access_candidates(object_count, 0U);
     for (bool revalidate = true; revalidate;) {
     revalidate = false;
     for (bool changed = true; changed;) {
@@ -2777,6 +2856,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 again = true;
             }
         }
+        std::vector<const char*> unowned_reason(object_count, "");
         for (std::size_t object = 0U; object < object_count; ++object) {
             // A VHDL variable's storage (a shared variable, protected-type
             // state; IEEE 1076-2019 6.4.2.4, 5.6.2) is kernel storage when
@@ -2787,13 +2867,27 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     [&](const ProcessId process) {
                         return candidates[process] && candidates[process]->vhdl;
                     }));
-            if (container_shape_ok[object] == 0U
-                || host_container_object[object] != 0U
-                || (vhdl_accessed && !vhdl_variable_storage[object])
-                || std::ranges::any_of(accessors[object],
+            if (host_access_objects[object] != 0U) {
+                unowned_reason[object] = "host_access";
+                continue;
+            }
+            if (container_shape_ok[object] == 0U) {
+                unowned_reason[object] = "shape";
+                continue;
+            }
+            if (host_container_object[object] != 0U) {
+                unowned_reason[object] = "host_object";
+                continue;
+            }
+            if (vhdl_accessed && !vhdl_variable_storage[object]) {
+                unowned_reason[object] = "vhdl_storage";
+                continue;
+            }
+            if (std::ranges::any_of(accessors[object],
                     [&](const ProcessId process) {
                         return !candidates[process];
                     })) {
+                unowned_reason[object] = "host_accessor";
                 continue;
             }
             if (packed_alias[object]) {
@@ -2801,6 +2895,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (signal_ok(signal)) {
                     owned[signal] = 1U;
                     owned_container[object] = 1U;
+                } else {
+                    unowned_reason[object] = "packed_alias_signal";
                 }
                 continue;
             }
@@ -2811,12 +2907,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 // host could write back, so such a container stays on the
                 // host; signal-backed containers are imported as signals.
                 if (publish_all) {
+                    unowned_reason[object] = "publish_all";
                     continue;
                 }
                 owned_container[object] = 1U;
                 continue;
             }
             if (element_complete[object] == 0U) {
+                unowned_reason[object] = "elements_incomplete";
                 continue;
             }
             const auto* family = family_of_object[object];
@@ -2824,9 +2922,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 && (!family->complete || family->proxy >= signal_count
                     || !signal_ok(family->proxy)
                     || edge_sensitive_member(family->proxy))) {
+                unowned_reason[object] = !family->complete
+                    ? "family_incomplete"
+                    : family->proxy >= signal_count ? "family_proxy"
+                    : !basic_ok(family->proxy) ? "family_proxy_signal"
+                    : !writers_ok(family->proxy) ? "family_proxy_writers"
+                    : "family_edge_sensitive";
                 continue;
             }
             if (!std::ranges::all_of(element_signals[object], signal_ok)) {
+                unowned_reason[object] = !std::ranges::all_of(
+                        element_signals[object], basic_ok)
+                    ? "element_signal" : "element_writers";
                 continue;
             }
             for (const auto signal : element_signals[object]) {
@@ -2842,10 +2949,32 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         return object >= object_count
                             || owned_container[object] == 0U;
                     })) {
-                if (candidates[index]->kind == behavioral_kind
-                    && std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
-                    std::cerr << "fsim-kernel-plan: behavioral container process="
-                              << views[index].name() << '\n';
+                if (!candidates[index]->vhdl) {
+                    for (const auto object : container_uses[index]) {
+                        if (object < object_count && owned_container[object] == 0U
+                            && host_access_objects[object] == 0U
+                            && host_container_ok(object)) {
+                            const std::uint8_t kind
+                                = std::string_view { unowned_reason[object] }
+                                    == "host_accessor" ? 2U : 1U;
+                            if (access_candidates[object] == 0U
+                                || kind < access_candidates[object]) {
+                                access_candidates[object] = kind;
+                            }
+                        }
+                    }
+                }
+                if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
+                    for (const auto object : container_uses[index]) {
+                        if (object < object_count
+                            && owned_container[object] == 0U) {
+                            std::cerr << "fsim-kernel-plan: container process="
+                                      << views[index].name() << " object="
+                                      << container_objects_[object].name
+                                      << " reason=" << unowned_reason[object]
+                                      << '\n';
+                        }
+                    }
                 }
                 candidates[index].reset();
                 reject(index, "container_unowned");
@@ -2908,6 +3037,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             revalidate = true;
         }
     }
+    }
+    // New host-access objects plan the design again (plan_access).
+    {
+        const bool primary = std::ranges::any_of(access_candidates,
+            [](const std::uint8_t kind) { return kind == 1U; });
+        for (std::size_t object = 0U; object < object_count; ++object) {
+            if (access_candidates[object] == (primary ? 1U : 2U)) {
+                host_access_objects[object] = 1U;
+                host_access_grew = true;
+            }
+        }
     }
 
     const bool diagnose = std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr;
@@ -4454,9 +4594,18 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     take_census(plan, &member, &kernel_owned);
     return plan;
     };
-    auto plan = plan_for(true);
+    const auto plan_access = [&](const bool allow_mixed) {
+        auto planned = plan_for(allow_mixed);
+        while (host_access_grew) {
+            host_access_grew = false;
+            planned = plan_for(allow_mixed);
+        }
+        return planned;
+    };
+    auto plan = plan_access(true);
     if (plan.disabled && mixed_planned) {
-        plan = plan_for(false);
+        std::ranges::fill(host_access_objects, 0U);
+        plan = plan_access(false);
     }
     return plan;
 }
