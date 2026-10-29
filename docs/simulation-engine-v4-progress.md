@@ -138,6 +138,64 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29: hosted kinds into the kernel — yield, deposits, isolated forks, nonblocking objects, coverage (`16555bc5`, sweep `v4c47`)
+
+**`16555bc5`** (six changesets)
+- **`Yield` and host deposits.**
+  - A yielding kernel thread resumes in the next delta.
+  - A host deposit (`Interpreter::deposit_signal`, class-heap changes, VPI) reaches kernel readers from the next delta.
+  - **Fix:** a deferred deposit asks for the host's next delta again on every scan that keeps it. A request made while the host process was already queued was dropped, which stalled the UVM flow.
+- **Region members:**
+  - they may write private arrays (`ContainerWrite`);
+  - `WaitRegion` counts the start activation as the active region;
+  - NBA and Re-NBA `WaitRegion`, `Assert` and `RuntimeStringFormat` run in the kernel.
+- **Nonblocking string and whole-array writes** (10.4.2).
+  - A string write is a host NBA task in the writer's region.
+  - A whole-array write becomes one pending element write per element.
+  - The planner's write-back rule now excludes nonblocking writes, so the `dynamic_container_nonblocking` rule is gone.
+- **`EventAlias`** (15.5.5), port-segment forces and empty forks.
+  - The alias code is shared with the reference (`Impl::alias_event`).
+  - The kernel's `Fork` consults the host's spawn filter.
+- **Forks with an isolated register frame** (9.3.2, automatic variables of each child).
+  - Members that use them run on the operation tier.
+  - Each child thread owns a copy of the frame. It is loaded when the thread runs and stored when it parks.
+  - **Kernel children are visible to the host:** `design_process`, `dynamic_process_root` and `kill_dynamic_processes` consult the kernel's child-thread table. The assertion engine's pending attempts (`eventually` properties) are keyed by the child process; without this, ct4 failed in `fsim.application.assertions`.
+- **Coverage and `$system`** (19, 20.14).
+  - Covers sampling, queries, control, coverage-object access and `SystemCommand`.
+  - `Impl::run_coverage_control` and `Impl::run_coverage_access` are shared with the reference.
+- **Region graph:** a slice alias takes its root's completeness and bindings.
+
+**Validation.**
+- Caseruns had 0 losses:
+  - c66u (110), c67a (1,241, the c65 list), c68h (163) and c69a (360 assertion, fork and UVM cases);
+  - the UVM `ClassAllocate` hosted rows are gone.
+- ct4: 1087/1087 in all four variants.
+- Sweep `v4c47` (frozen `16555bc5`) has 0 losses vs `b96x1`.
+  - nvc `case11` and `issue705` now count as excluded (overlapping matching choices, 10.9 and 11.6), not lost.
+  - verilator `t_dpi_open_elem` timed out under sweep load. Run alone on the same archive it passes in 10 s.
+  - It has taken 10–23 s on v4 since `v4c46` (b96x1 took 1.6 s): a perf lead for after the hosted work.
+
+| Suite | Passed / in scope | Excluded |
+|---|---:|---:|
+| nvc | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 273 |
+| verilator | 2070 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 2 |
+
+- Hosted processes in the sweep: 60 in 11 cases (v4c46 161).
+  - 45 are `container_unowned`: arrays whose elements alias host signals.
+
+**Next** (in progress, uncommitted).
+- **Region-written objects** take host access in the next plan, and so do slice views of host-access roots.
+- A region member's `#0` waits in the inactive region; a region `WaitFor` is refused only in Postponed.
+- **`CoverageDatabaseControl`**.
+- **VHDL foreign subprograms** (VHPI, 20.2.1.2) from kernel members.
+- **Remaining reasons:**
+  - VHDL container and register kinds (`access11`, `issue726`, `vlog1`, `protected10`);
+  - `container_unowned` arrays.
+
 ### 2026-10-29: hosted kinds into the kernel — process handles, mailboxes, semaphores, dynamic events (`ef472b4f`, sweep `v4c46`)
 
 **`ef472b4f`** (five changesets)
