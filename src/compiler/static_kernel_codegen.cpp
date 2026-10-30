@@ -17,6 +17,8 @@
 #include <llvm/ExecutionEngine/ObjectCache.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
+#include <llvm/ExecutionEngine/SectionMemoryManager.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/TargetParser/Host.h>
@@ -57,6 +59,13 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#  if !defined(NOMINMAX)
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#endif
+
 #if defined(__MINGW32__)
 // LLVM emits GNU Windows stack probes for large JIT frames. Referencing the
 // compiler-rt implementation keeps it in the host for the absolute binding.
@@ -66,6 +75,77 @@ extern "C" void ___chkstk_ms();
 namespace fsim::compiler {
 
 namespace {
+
+#if defined(_WIN32)
+/// Registers the Windows unwind table (.pdata) of each object RuntimeDyld
+/// loads. LLVM's default memory manager only knows DWARF frame registration,
+/// so Windows could not unwind JIT frames, and libunwind logged a missing
+/// table whenever a C++ handler was entered from JIT code.
+class WindowsUnwindMemoryManager final : public llvm::SectionMemoryManager {
+public:
+    /// One reservation per object keeps its sections within the 32-bit
+    /// offsets of its unwind table.
+    WindowsUnwindMemoryManager()
+        : llvm::SectionMemoryManager(nullptr, true)
+    {
+    }
+
+    ~WindowsUnwindMemoryManager() override
+    {
+        WindowsUnwindMemoryManager::deregisterEHFrames();
+    }
+
+    std::uint8_t* allocateCodeSection(const std::uintptr_t size,
+        const unsigned alignment, const unsigned section,
+        const llvm::StringRef name) override
+    {
+        return note(llvm::SectionMemoryManager::allocateCodeSection(
+            size, alignment, section, name));
+    }
+
+    std::uint8_t* allocateDataSection(const std::uintptr_t size,
+        const unsigned alignment, const unsigned section,
+        const llvm::StringRef name, const bool read_only) override
+    {
+        return note(llvm::SectionMemoryManager::allocateDataSection(
+            size, alignment, section, name, read_only));
+    }
+
+    void registerEHFrames(std::uint8_t* const table, std::uint64_t,
+        const std::size_t size) override
+    {
+        auto* const functions = reinterpret_cast<RUNTIME_FUNCTION*>(table);
+        const auto count = static_cast<DWORD>(size / sizeof(RUNTIME_FUNCTION));
+        if (count != 0U && RtlAddFunctionTable(functions, count, image_base_)) {
+            tables_.push_back(functions);
+        }
+    }
+
+    void deregisterEHFrames() override
+    {
+        for (auto* const functions : tables_) {
+            (void)RtlDeleteFunctionTable(functions);
+        }
+        tables_.clear();
+    }
+
+private:
+    /// The .pdata entries are relative to the object's lowest section, the
+    /// image base RuntimeDyld relocates them against; every section it loads
+    /// is allocated here.
+    std::uint8_t* note(std::uint8_t* const section)
+    {
+        if (section != nullptr) {
+            image_base_ = std::min(image_base_,
+                static_cast<DWORD64>(reinterpret_cast<std::uintptr_t>(section)));
+        }
+        return section;
+    }
+
+    DWORD64 image_base_ { std::numeric_limits<DWORD64>::max() };
+    std::vector<RUNTIME_FUNCTION*> tables_;
+};
+#endif
 
 using runtime::simir::StaticKernelCodegen;
 using runtime::simir::StaticKernelNativeEntry;
@@ -4163,22 +4243,35 @@ private:
     [[nodiscard]] static std::unique_ptr<llvm::orc::LLJIT> make_jit(
         ObjectCapture& capture, const TierMachine& machine)
     {
-        auto jit = llvm::orc::LLJITBuilder()
-                       .setJITTargetMachineBuilder(target_builder(machine))
-                       .setNumCompileThreads(0U)
-                       .setCompileFunctionCreator(
-                           [&capture](llvm::orc::JITTargetMachineBuilder builder)
-                               -> llvm::Expected<std::unique_ptr<
-                                   llvm::orc::IRCompileLayer::IRCompiler>> {
-                               auto machine = builder.createTargetMachine();
-                               if (!machine) {
-                                   return machine.takeError();
-                               }
-                               return std::make_unique<
-                                   llvm::orc::TMOwningSimpleCompiler>(
-                                   std::move(*machine), &capture);
-                           })
-                       .create();
+        llvm::orc::LLJITBuilder builder;
+        builder.setJITTargetMachineBuilder(target_builder(machine))
+            .setNumCompileThreads(0U)
+            .setCompileFunctionCreator(
+                [&capture](llvm::orc::JITTargetMachineBuilder target)
+                    -> llvm::Expected<std::unique_ptr<
+                        llvm::orc::IRCompileLayer::IRCompiler>> {
+                    auto machine = target.createTargetMachine();
+                    if (!machine) {
+                        return machine.takeError();
+                    }
+                    return std::make_unique<llvm::orc::TMOwningSimpleCompiler>(
+                        std::move(*machine), &capture);
+                });
+#if defined(_WIN32)
+        builder.setObjectLinkingLayerCreator(
+            [](llvm::orc::ExecutionSession& session)
+                -> llvm::Expected<std::unique_ptr<llvm::orc::ObjectLayer>> {
+                auto layer = std::make_unique<llvm::orc::RTDyldObjectLinkingLayer>(
+                    session, [](const llvm::MemoryBuffer&) {
+                        return std::make_unique<WindowsUnwindMemoryManager>();
+                    });
+                // As LLJIT's default layer for COFF objects.
+                layer->setOverrideObjectFlagsWithResponsibilityFlags(true);
+                layer->setAutoClaimResponsibilityForObjectSymbols(true);
+                return std::unique_ptr<llvm::orc::ObjectLayer> { std::move(layer) };
+            });
+#endif
+        auto jit = builder.create();
         if (!jit) {
             throw std::runtime_error(error_text(jit.takeError()));
         }
@@ -4215,6 +4308,11 @@ private:
             function->addParamAttr(1, llvm::Attribute::NoAlias);
             function->addParamAttr(0, llvm::Attribute::NoAlias);
             function->addFnAttr(llvm::Attribute::NoUnwind);
+#if defined(_WIN32)
+            // Windows x64 expects unwind data for every non-leaf function;
+            // without it nothing can walk through kernel frames.
+            function->setUWTableKind(llvm::UWTableKind::Async);
+#endif
             // Exits flush local registers (failure_block_), so VHDL bodies,
             // which deoptimize from the register file, may use them too
             // (FSIM_STATIC_KERNEL_VHDL_LOCALS=1). Off by default: with the
