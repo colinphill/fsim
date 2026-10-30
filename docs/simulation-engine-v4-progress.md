@@ -138,6 +138,84 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-30: Phase 6 third gate — notify skip (S1), VHDL unchanged-write skip, collapse witnesses; Phase 6 static scheduling closed (`83f52168`, sweeps `v4c57`, `v4c57a`)
+
+**Gate** (five changesets):
+- ct4: 1090/1090 in all four variants (`session-1029/ct4-phase6c.log`).
+- Normal sweep `v4c57` (frozen `83f52168`): 0 losses against `b96x1` (census) and against `v4c56` (skipping case11 and issue705, as before).
+- AOT sweep `v4c57a`: 0 losses against `v4c56a`.
+- Census `v4c57`: every planned case is admitted with `host=0`, with 0 hosted processes and 0 runs with interpreted>0. `kernel_deopts` (9 cases) is unchanged.
+- Track V gate steps on the frozen binary:
+  - `vgate.sh`: mixed_codec (kept 4,155 of 6,595) and mixed_throughput (kept 1,844 of 3,667) are byte-identical with collapse on, off and on the reference scheduler.
+  - `tools/collapse_fuzz.py` seeds 1–200: 0 failures, every seed collapses (4,183 members kept).
+
+| Suite | Passed / in scope (`v4c56`) | Passed / in scope (`v4c57`) | Passed / in scope (`v4c57a`) | Excluded |
+|---|---:|---:|---:|---:|
+| nvc | 1259 / 1259 | 1259 / 1259 | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 3663 / 3663 | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 2638 / 2638 | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 1495 / 1495 | 2 |
+
+**Changesets.**
+1. **Collapse witnesses where collapse happens** (owner side note: three of the four new mixed cases only proved refusals).
+   - The delta-collapse ctest has 13 cases; 8 collapse, each guarded by a `min_kept_<case>` floor:
+     - collapsed neighbours of the refused cones: dc_observe_glitch 2, dc_regions 2;
+     - selected/case assignments 2, numeric_std arithmetic 3, records 3, fan-out/fan-in across levels 5.
+   - dc_attributes stays a kernel-wide refusal (`host_boundary_`). dc_sv_reader (VHDL cells sampled by an SV flop) is refused as `reader_sv`, an admission gap.
+   - New tool `tools/collapse_fuzz.py FSIM DIR FIRST COUNT`: seeded random pure VHDL nets with an SV testbench, run collapse on / off / reference.
+2. **S1 notify skip.** Generated stores read a per-slot fast-notify table (frame offsets 80/88/96: the slot's one partition target and that target's earliest reader position, partition-queued flags, running partition). They skip the notify helper where it would do nothing. Before the change, 15.5 M of 21.5 M schedules on the throughput fixture were "later in the running partition".
+   - Throughput fixture: instructions 19.05 → 17.71 G, run ~947 → ~866 ms (−8.5%).
+   - original_codec: instructions 24.82 → 23.67 G, run ~1207 → ~1136 ms (−6%).
+3. **VHDL unchanged-write skip.** On mixed_codec, 17.3 M of the 25.3 M queued VHDL assignments went to an untouched slot whose field they left as it was, and `commit_writes` dropped them.
+   - Generated `store_vhdl` now compares the field with the slot's current planes (Logic9 planes as `logic9_planes` builds them) and checks a per-slot round mark (`write_marks`/`write_round`, frame offsets 104/100). An unchanged assignment to an unmarked slot is not queued. Every queued write marks its slot, so a later write after a queued one is always queued (last write wins).
+   - `store_vhdl` carries the slot's words and planes in `imm_a`/`imm_b`. `commit_writes` stores narrow fields inline.
+   - Single-threaded kernels only: worker lanes queue without marks, so the marks are cleared when the pool starts. `FSIM_KERNEL_WRITE_SKIP=0` is a run-only switch.
+   - mixed_codec: queued writes 25.3 → 8.1 M; skip on vs off (image restored in both) instructions 28.10 → 26.30 G, cycles −5.6%. Against `v4c56`: instructions 27.47 → 26.30 G, cycles −2.6%.
+4. **Profile counters.** `FSIM_PROFILE_KERNEL` reports schedule outcomes (partition later/queued/enqueued, member schedules, fast-notify-eligible changes) and `commit_writes` counts (writes, unchanged, calls, touched).
+5. **Leaner member fast path.** `run()` reads the worker lane once and sets the two-state flag only for two-state units.
+
+Tried and reverted (no diff):
+- inline first target in SlotNotify (−0.17%);
+- a compact 16-byte slot-commit record for `write_slot_word` (−0.2%; `session-1029/s3lite-slot-commit-attempt.patch`);
+- a single-word Logic9 decode fast path (decode time unchanged).
+
+**Measurement note.** Every `FSIM_KERNEL_*`/`FSIM_STATIC_KERNEL_*` variable enters the kernel image identity unless `run_only_setting` lists it. An A/B with such a switch therefore rebuilds the kernel fresh: +0.75 G instructions on mixed_codec, mostly the collapse planner. The first write-skip A/B made that mistake; the numbers above are corrected.
+
+**Phase 6 static scheduling closed** (plan `triage/phase6-static-scheduling-plan-1029.md`, section "Stage closure"):
+- **Landed:** S1, V1, the VHDL unchanged-write skip, and S5 part 1.
+- **S2 closed as measured.** C++ dispatch layers are ~9.5% of the throughput fixture's instructions; generated code is 58.7%. A generated settle loop still loads per-unit state; it belongs to the Phase 7 full-cycle decision.
+- **S3 closed as measured** (−0.2%).
+- **S4 closed as measured.** One partition per key, in place of one per connected component: +10% instructions, run ~907 → ~1015 ms.
+- **S5 rest deferred with measurements.** mixed_codec setup ~190 ms: artifact decode ~81 ms, mostly container values; image ~66 ms. These are structural items.
+- **S6 tried and reverted** (gate 1).
+- **V2 closed as measured.** Collapse is worth about −13% of mixed_codec user cycles. The kernel's 2,440 dropped members are exactness refusals (assertions 545, integer range checks 222, dynamic part inserts 113, plus cascades). Collapsed members already make no rounds; delta-depth publication would admit only the planner's 79 reader-rejected members.
+- **V3 closed as measured.** No corpus design has a delta-delayed clock.
+- Reaching 2× Verilator needs the Phase 7 full-cycle structure (owner decision).
+
+**D6 campaign `v4c57-g5`** (frozen `83f52168`, `tools/perf.sh`, 3 samples, CPU 9, ASLR off, xsim in the same session).
+- Every simulate phase is at least 3.67× xsim (3.55× in `v4c56-g5`; mixed_codec simulate 1.831 → 1.780 s). original_codec simulate 1.884 → 1.831 s (4.04×); original_throughput 1.279 → 1.229 s.
+- The geomean e2e is 3.67× (3.79× before), because elaborate grew: mixed_codec 6.14 → 6.85 s, original_throughput 3.29 → 3.54 s.
+  - A quiet-host A/B of mixed_codec elaborate (planning forced) gives +0.4 s (+6%); the rest of the campaign's +0.7 s was host load after the sweeps.
+  - Cold-tier codegen went 2,213 → 2,555 ms (+15%), templates 2,701 → 2,718. The cause is the inline per-store code this gate adds (the VHDL unchanged-write check, write marks, the notify skip).
+  - **Follow-up:** emit these checks as one non-inlined helper per module and call it from each store, so compile cost no longer grows with the number of stores.
+
+| Case | fsim e2e | xsim e2e | e2e × | fsim sim | xsim sim | sim × |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 10.960 | 28.764 | 2.62 | 1.831 | 7.395 | 4.04 |
+| original_throughput | 5.042 | 15.920 | 3.16 | 1.229 | 7.495 | 6.10 |
+| mixed_codec | 9.229 | 25.019 | 2.71 | 1.780 | 6.542 | 3.67 |
+| mixed_throughput | 4.466 | 12.637 | 2.83 | 1.429 | 5.992 | 4.19 |
+| codex_reference_mode0_frames1 | 2.162 | 9.328 | 4.31 | 0.126 | 3.785 | 30.01 |
+| codex_reference_mode0_frames2 | 2.110 | 9.329 | 4.42 | 0.126 | 3.836 | 30.46 |
+| codex_reference_mode1_frames1 | 2.161 | 10.030 | 4.64 | 0.126 | 3.836 | 30.38 |
+| codex_reference_mode1_frames2 | 2.210 | 10.031 | 4.54 | 0.127 | 3.836 | 30.27 |
+| codex_throughput_default | 2.362 | 10.031 | 4.25 | 0.277 | 3.936 | 14.23 |
+| codex_throughput_direct_syndrome | 2.161 | 8.777 | 4.06 | 0.277 | 3.937 | 14.20 |
+
+**Open with the owner:** the Phase 7 decision (full-cycle evaluation for 2× Verilator), `--max-deltas` with collapsed deltas, deleting the kept delta-collapse ctest workspaces, and more real mixed designs for the V gate.
+
 ### 2026-10-29 (night): Phase 6 second gate — cheaper kernel setup, fork-filter observation, mixed collapse witnesses (`28d3cc3f`, sweeps `v4c56`, `v4c56a`)
 
 **Gate** (five changesets):
