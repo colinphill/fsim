@@ -571,13 +571,6 @@ target_include_directories(
 target_link_libraries(fsim_tf_link_probe_plugin PRIVATE fsim_tf)
 fsim_enable_warnings(fsim_tf_link_probe_plugin)
 fsim_configure_debug_footprint(fsim_tf_link_probe_plugin)
-add_custom_command(
-  TARGET fsim_tf_link_probe_plugin
-  POST_BUILD
-  COMMAND
-    "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:fsim_tf>"
-    "$<TARGET_FILE_DIR:fsim_tf_link_probe_plugin>"
-)
 
 add_library(fsim_tf_cpp_probe_plugin SHARED tf_cpp_probe_plugin.cpp)
 target_compile_features(fsim_tf_cpp_probe_plugin PRIVATE cxx_std_20)
@@ -586,13 +579,6 @@ target_include_directories(
 target_link_libraries(fsim_tf_cpp_probe_plugin PRIVATE fsim_tf)
 fsim_enable_warnings(fsim_tf_cpp_probe_plugin)
 fsim_configure_debug_footprint(fsim_tf_cpp_probe_plugin)
-add_custom_command(
-  TARGET fsim_tf_cpp_probe_plugin
-  POST_BUILD
-  COMMAND
-    "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:fsim_tf>"
-    "$<TARGET_FILE_DIR:fsim_tf_cpp_probe_plugin>"
-)
 
 add_library(fsim_acc_link_probe_plugin SHARED acc_link_probe_plugin.c)
 target_compile_features(fsim_acc_link_probe_plugin PRIVATE c_std_11)
@@ -601,13 +587,6 @@ target_include_directories(
 target_link_libraries(fsim_acc_link_probe_plugin PRIVATE fsim_tf)
 fsim_enable_warnings(fsim_acc_link_probe_plugin)
 fsim_configure_debug_footprint(fsim_acc_link_probe_plugin)
-add_custom_command(
-  TARGET fsim_acc_link_probe_plugin
-  POST_BUILD
-  COMMAND
-    "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:fsim_tf>"
-    "$<TARGET_FILE_DIR:fsim_acc_link_probe_plugin>"
-)
 
 add_library(fsim_acc_cpp_probe_plugin SHARED acc_cpp_probe_plugin.cpp)
 target_compile_features(fsim_acc_cpp_probe_plugin PRIVATE cxx_std_20)
@@ -616,13 +595,12 @@ target_include_directories(
 target_link_libraries(fsim_acc_cpp_probe_plugin PRIVATE fsim_tf)
 fsim_enable_warnings(fsim_acc_cpp_probe_plugin)
 fsim_configure_debug_footprint(fsim_acc_cpp_probe_plugin)
-add_custom_command(
-  TARGET fsim_acc_cpp_probe_plugin
-  POST_BUILD
-  COMMAND
-    "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:fsim_tf>"
-    "$<TARGET_FILE_DIR:fsim_acc_cpp_probe_plugin>"
-)
+
+# The tests and plug-ins here load libfsim_tf from beside themselves.
+fsim_copy_library_beside(fsim_tf fsim_tf_link_probe_plugin
+  fsim_tf_cpp_probe_plugin fsim_acc_link_probe_plugin
+  fsim_acc_cpp_probe_plugin fsim_acc_lifecycle_tests fsim_dpi_test_plugin
+  fsim_vpi_standard_startup_plugin)
 
 add_executable(fsim_tf_plugin_link_tests tf_plugin_link_test.cpp)
 target_compile_definitions(

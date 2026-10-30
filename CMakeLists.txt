@@ -518,6 +518,28 @@ function(fsim_configure_test target)
   fsim_configure_test_platform(${target})
 endfunction()
 
+# Keeps a copy of LIBRARY's file beside the first consumer for the consumers
+# (all in one directory) that load it from there. The copy follows LIBRARY
+# itself: a POST_BUILD step on a consumer runs only when that consumer
+# relinks, so a change to LIBRARY alone left the old copy in place.
+function(fsim_copy_library_beside library first_consumer)
+  set(copy_target "${library}_beside_${first_consumer}")
+  set(stamp "${CMAKE_CURRENT_BINARY_DIR}/${copy_target}.stamp")
+  add_custom_command(
+    OUTPUT "${stamp}"
+    COMMAND
+      "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:${library}>"
+      "$<TARGET_FILE_DIR:${first_consumer}>"
+    COMMAND "${CMAKE_COMMAND}" -E touch "${stamp}"
+    DEPENDS ${library}
+    VERBATIM
+  )
+  add_custom_target(${copy_target} ALL DEPENDS "${stamp}")
+  foreach(consumer IN ITEMS ${first_consumer} ${ARGN})
+    add_dependencies(${consumer} ${copy_target})
+  endforeach()
+endfunction()
+
 # Support, diagnostics, platform, project, object cache, and CLI parsing.
 add_library(
   fsim_base ${FSIM_SUBSYSTEM_LIBRARY_TYPE}

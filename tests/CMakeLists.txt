@@ -6261,17 +6261,6 @@ fsim_register_simple_test(
     fsim_api_tests PRIVATE fsim_api fsim_application)
   add_test(NAME fsim.api COMMAND fsim_api_tests)
   set_tests_properties(fsim.api PROPERTIES TIMEOUT 120)
-  if(WIN32)
-    add_custom_command(
-      TARGET fsim_api_tests
-      POST_BUILD
-      COMMAND
-        "${CMAKE_COMMAND}" -E copy_if_different
-        "$<TARGET_FILE:fsim_api>"
-        "$<TARGET_FILE_DIR:fsim_api_tests>"
-      VERBATIM
-    )
-  endif()
 
   add_executable(fsim_schema_identity_test api/schema_identity_test.cpp)
   fsim_configure_test(fsim_schema_identity_test)
@@ -6304,17 +6293,6 @@ fsim_register_simple_test(
   )
   fsim_configure_test_platform(fsim_api_header_c_test)
   add_test(NAME fsim.api.c_header COMMAND fsim_api_header_c_test)
-  if(WIN32)
-    add_custom_command(
-      TARGET fsim_api_header_c_test
-      POST_BUILD
-      COMMAND
-        "${CMAKE_COMMAND}" -E copy_if_different
-        "$<TARGET_FILE:fsim_api>"
-        "$<TARGET_FILE_DIR:fsim_api_header_c_test>"
-      VERBATIM
-    )
-  endif()
 
   add_executable(
     fsim_api_abi_tests
@@ -6332,16 +6310,11 @@ fsim_register_simple_test(
     fsim_api_abi_tests
     "api;abi;c;cxx;runtime;positive;negative;fast"
   )
+
   if(WIN32)
-    add_custom_command(
-      TARGET fsim_api_abi_tests
-      POST_BUILD
-      COMMAND
-        "${CMAKE_COMMAND}" -E copy_if_different
-        "$<TARGET_FILE:fsim_api>"
-        "$<TARGET_FILE_DIR:fsim_api_abi_tests>"
-      VERBATIM
-    )
+    # The API tests load libfsim_api from beside themselves.
+    fsim_copy_library_beside(fsim_api fsim_api_tests
+      fsim_api_header_c_test fsim_api_abi_tests)
   endif()
 
   # Batch 188A Change 19 is an inventory over existing focused tests. Keep the
