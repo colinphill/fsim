@@ -489,7 +489,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 fail_at(at, "call-stack underflow");
             }
             const auto target = registers[inst.y + depth - 1U];
-            if (target.b != 0U || target.a >= current->operations.size()) {
+            if (target.b != 0U || target.a >= current->operations().size()) {
                 fail_at(at, "call-stack return target is invalid");
             }
             registers[inst.x] = { depth - 1U, 0U };
@@ -559,7 +559,7 @@ void Interpreter::Impl::StaticKernel::handle_deopt(const std::uint32_t member_in
         profile_member_deopts_.resize(members_.size(), 0U);
         ++profile_member_deopts_[member_index];
         if (member_index < profile_names_.size()
-            && deopt.resume < member.operations.size()) {
+            && deopt.resume < member.operations().size()) {
             std::string key = profile_names_[member_index];
             std::erase_if(key, [](const char c) {
                 return std::isdigit(static_cast<unsigned char>(c)) != 0;
@@ -573,7 +573,7 @@ void Interpreter::Impl::StaticKernel::handle_deopt(const std::uint32_t member_in
                 key += " @" + std::to_string(deopt.resume)
                     + (deopt.executed ? "x " : " ")
                     + text.substr(text.rfind(':') + 1U);
-            }, member.operations[deopt.resume]);
+            }, member.operations()[deopt.resume]);
             ++profile_generic_ops_["deopt " + key];
         }
     }
@@ -770,7 +770,7 @@ bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
     const bool two_state_code)
 {
     auto& member = members_[member_index];
-    const auto& operation = member.operations[inst.x];
+    const auto& operation = member.operations()[inst.x];
     auto& reads = scratch().generic_reads;
     std::optional<RegisterId> write;
     operation_registers(operation, reads, write);
@@ -805,7 +805,7 @@ bool Interpreter::Impl::StaticKernel::execute_generic_kind(CompiledBody& body,
 {
     using T = OperationKindAt<K>;
     auto& member = members_[member_index];
-    const auto& op = operation_get<T>(member.operations[inst.x]);
+    const auto& op = operation_get<T>(member.operations()[inst.x]);
     auto& reads = scratch().generic_reads;
     std::optional<RegisterId> write;
     operation_registers_of(op, reads, write);
@@ -1065,7 +1065,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
         }
         const auto target = member.call_stack.back();
         member.call_stack.pop_back();
-        if (target >= member.operations.size()) {
+        if (target >= member.operations().size()) {
             fail_at("call-stack return target is invalid");
         }
         return { target, 0U };
@@ -1088,7 +1088,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
     }
     case KOp::integer_binary: {
         const auto& op = *operation_get_if<IntegerBinary>(
-            &members_[member_index].operations[body_begin + at]);
+            &members_[member_index].operations()[body_begin + at]);
         if (inst.width == 32U && ((x.b | y.b) & kw::mask(32U)) == 0U) {
             const auto left = static_cast<std::int64_t>(
                 static_cast<std::int32_t>(static_cast<std::uint32_t>(x.a)));
@@ -1117,7 +1117,7 @@ Interpreter::Impl::StaticKernel::evaluate_slow_op(const CompiledBody& body,
     }
     case KOp::integer_unary: {
         const auto& op = *operation_get_if<IntegerUnary>(
-            &members_[member_index].operations[body_begin + at]);
+            &members_[member_index].operations()[body_begin + at]);
         return reference(op, { { op.source, x } }, op.destination);
     }
     case KOp::load_host: {
@@ -1406,7 +1406,7 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
             }
         }
         const auto& op = *operation_get_if<IntegerCheck>(
-            &members_[member_index].operations[body_begin + at]);
+            &members_[member_index].operations()[body_begin + at]);
         reference(op, op.source, x);
         return;
     }
@@ -1447,7 +1447,7 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
             return;
         }
         const auto& op = *operation_get_if<Assert>(
-            &members_[member_index].operations[body_begin + at]);
+            &members_[member_index].operations()[body_begin + at]);
         reference(op, op.condition, x);
         return;
     }

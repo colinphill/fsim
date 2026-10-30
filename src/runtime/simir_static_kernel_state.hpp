@@ -522,7 +522,28 @@ private:
         std::uint32_t body_end { };
         std::uint32_t exit_alt { static_kernel_detail::no_slot };
         std::uint32_t level { };
-        std::vector<Operation> operations;
+        /// The member's operations (operations()). A member restored from
+        /// the kernel image without changes to its program's copies them
+        /// from operations_source's process table on first use.
+        mutable std::vector<Operation> operations_;
+        mutable const Impl* operations_source { };
+        /// build_fresh inlined the calls of the body (static_kernel_inline_calls).
+        bool inlined_calls { };
+        [[nodiscard]] std::vector<Operation>& operations()
+        {
+            if (operations_source != nullptr) [[unlikely]] {
+                materialize_operations();
+            }
+            return operations_;
+        }
+        [[nodiscard]] const std::vector<Operation>& operations() const
+        {
+            if (operations_source != nullptr) [[unlikely]] {
+                materialize_operations();
+            }
+            return operations_;
+        }
+        void materialize_operations() const;
         std::vector<PackedLogic4> registers;
         /// Register value kinds (VHDL delta mode; empty means Logic4).
         std::vector<ValueKind> register_kinds;
@@ -1549,6 +1570,16 @@ private:
     };
     std::optional<CollapsePlan> restored_collapse_;
     std::shared_ptr<std::string> recording_image_;
+    /// What the constructor's scan of the members' operations found. A
+    /// recorded image holds it before the collapse plan, so a restored
+    /// kernel need not read the operations (Member::operations_source).
+    struct HostScan {
+        bool host_written { };
+        bool host_delayed_writes { };
+        bool vhdl_host_cycles { };
+    };
+    std::optional<HostScan> restored_host_scan_;
+    void record_host_scan(const HostScan& scan);
     /// plan_delta_collapse's parts: deciding (the analysis), applying, and
     /// appending the plan to the image being recorded.
     [[nodiscard]] CollapsePlan decide_delta_collapse();

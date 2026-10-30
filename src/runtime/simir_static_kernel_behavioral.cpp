@@ -215,7 +215,7 @@ void Interpreter::Impl::StaticKernel::prepare_behavioral()
             || member.start_late || member.final_block
             || member.package_startup || member.resolver
             || member.wait_sensitivity.empty()
-            || member.operations.empty()) {
+            || member.operations().empty()) {
             continue;
         }
         if (member.start_waiting) {
@@ -229,7 +229,7 @@ void Interpreter::Impl::StaticKernel::prepare_behavioral()
                 member.wait_sensitivity);
             continue;
         }
-        if (!operation_holds<WaitSensitivity>(member.operations.front())) {
+        if (!operation_holds<WaitSensitivity>(member.operations().front())) {
             continue;
         }
         member.prearmed = true;
@@ -251,7 +251,7 @@ void Interpreter::Impl::StaticKernel::run_behavioral_initializers()
         if (member.kind != StaticKernelMemberKind::behavioral || member.vhdl
             || member.prearmed || member.start_late || member.final_block
             || member.package_startup || member.resolver
-            || member.operations.empty()) {
+            || member.operations().empty()) {
             continue;
         }
         // A member's host process is dormant, its initialize flag cleared
@@ -1324,7 +1324,7 @@ Interpreter::Impl::StaticKernel::disable_block(const std::uint32_t index,
     // hierarchical name is disable_named_scope's). The running thread's
     // position is past the disable, as the reference's process counter is.
     const auto member_index = threads_[index].member;
-    const auto& operations = members_[member_index].operations;
+    const auto& operations = members_[member_index].operations();
     if (!op.scopes.empty() || op.begin >= op.end || op.end > operations.size()) {
         fail(member_index, pc, "DisableBlock has an invalid lexical interval");
     }
@@ -1724,23 +1724,23 @@ void Interpreter::Impl::StaticKernel::emit_lane_output(const LaneOutput& output)
         // Formatted here: a $timeformat earlier in the replay applies.
         behavioral_output(output.member,
             format_display_text(
-                operation_get<FormatDisplay>(member.operations[output.pc]),
+                operation_get<FormatDisplay>(member.operations()[output.pc]),
                 output.value),
             output.newline);
         break;
     case LaneOutput::Kind::time:
         behavioral_output(output.member,
             time_display_text(
-                operation_get<TimeDisplay>(member.operations[output.pc])),
+                operation_get<TimeDisplay>(member.operations()[output.pc])),
             output.newline);
         break;
     case LaneOutput::Kind::report:
         if (member.vhdl_2019) {
-            const auto& op = operation_get<Report>(member.operations[output.pc]);
+            const auto& op = operation_get<Report>(member.operations()[output.pc]);
             report_vhdl(output.member, output.pc, op.message.str(), op.severity,
                 op.source, true);
         } else if (impl_.report_hook) {
-            const auto& op = operation_get<Report>(member.operations[output.pc]);
+            const auto& op = operation_get<Report>(member.operations()[output.pc]);
             impl_.report_hook(member.process, op.message.str(), op.severity,
                 op.source, kernel_now(), warp_time_ ? 0U : impl_.scheduler.delta());
         }
@@ -1755,7 +1755,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
     ++interpreted_by_cause_[static_cast<std::size_t>(interpreting_)];
     return visit_operation([&](const auto& op) {
         return behavioral_operation(member_index, pc, op);
-    }, members_[member_index].operations[pc]);
+    }, members_[member_index].operations()[pc]);
 }
 
 template <typename Op>
@@ -1763,7 +1763,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation_at(
     const std::uint32_t member_index, const std::uint32_t pc)
 {
     return behavioral_operation(member_index, pc,
-        operation_get<Op>(members_[member_index].operations[pc]));
+        operation_get<Op>(members_[member_index].operations()[pc]));
 }
 
 const std::array<Interpreter::Impl::StaticKernel::BehavioralOperationStep,
@@ -3483,7 +3483,7 @@ Interpreter::Impl::StaticKernel::behavioral_boundary(const std::uint32_t index,
 {
     return visit_operation([&](const auto& op) {
         return behavioral_boundary_op(index, pc, op);
-    }, members_[threads_[index].member].operations[pc]);
+    }, members_[threads_[index].member].operations()[pc]);
 }
 
 template <typename Op>
@@ -3492,7 +3492,7 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_at(const std::uint32_t inde
     const std::uint32_t pc)
 {
     return behavioral_boundary_op(index, pc,
-        operation_get<Op>(members_[threads_[index].member].operations[pc]));
+        operation_get<Op>(members_[threads_[index].member].operations()[pc]));
 }
 
 const std::array<Interpreter::Impl::StaticKernel::BoundaryStep,
@@ -3696,7 +3696,7 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
             // a blocked thread waits until a put, get or trigger resumes it.
             MemberSynchronizationClient client { *this, index, pc };
             const auto result = impl_.run_synchronization(client,
-                member.operations[pc]);
+                member.operations()[pc]);
             if (result == Impl::SynchronizationResult::waiting) {
                 suspend_point = true;
                 outcome = Boundary::suspend;
@@ -3888,7 +3888,9 @@ Interpreter::Impl::StaticKernel::behavioral_boundary_op(const std::uint32_t inde
                 // The host may refuse the children (a disabled concurrent
                 // assertion's attempts); the thread then requeues, as for
                 // the reference's spawn_fork.
-                impl_.prepare_callback_observation();
+                if (impl_.fork_spawn_filter_observes) {
+                    impl_.prepare_callback_observation();
+                }
                 if (!(*filter)(member.process)) {
                     suspend_point = true;
                     ready_thread(index);
@@ -3943,8 +3945,8 @@ bool Interpreter::Impl::StaticKernel::debug_point(
     thread.last_point = pc;
     auto& member = members_[thread.member];
     member.debug_pc = pc;
-    if (member.debug_hit.size() != member.operations.size()) {
-        member.debug_hit.assign(member.operations.size(), 0U);
+    if (member.debug_hit.size() != member.operations().size()) {
+        member.debug_hit.assign(member.operations().size(), 0U);
     }
     if (std::exchange(member.debug_hit[pc], std::uint8_t { 1 }) == 0U) {
         // A newly reached statement may have made more registers written.
@@ -3953,7 +3955,7 @@ bool Interpreter::Impl::StaticKernel::debug_point(
     if (!impl_.execution_point_hook) {
         return false;
     }
-    const auto* point = operation_get_if<DebugPoint>(&member.operations[pc]);
+    const auto* point = operation_get_if<DebugPoint>(&member.operations()[pc]);
     if (point == nullptr) {
         return false;
     }
@@ -4006,9 +4008,9 @@ void Interpreter::Impl::StaticKernel::debug_suspend(
     const auto& member = members_[thread.member];
     SourceLocation source;
     std::string scope;
-    if (thread.last_point < member.operations.size()) {
+    if (thread.last_point < member.operations().size()) {
         if (const auto* point = operation_get_if<DebugPoint>(
-                &member.operations[thread.last_point])) {
+                &member.operations()[thread.last_point])) {
             source = point->source;
             scope = point->scope.str();
         }
@@ -4267,7 +4269,7 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
         }
     }
     auto pc = threads_[index].pc;
-    const auto size = static_cast<std::uint32_t>(member.operations.size());
+    const auto size = static_cast<std::uint32_t>(member.operations().size());
     const auto park = [&](const std::uint32_t resume) {
         if (member.thread_contexts) {
             store_contexts(index);

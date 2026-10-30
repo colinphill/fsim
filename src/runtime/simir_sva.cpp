@@ -120,7 +120,9 @@ void Interpreter::Impl::run_sva(
     // $assertoff and its VPI form stop new attempts; attempts already
     // running complete (IEEE 1800-2017 20.12).
     if (const auto filter = fork_spawn_filter; start && filter) {
-        prepare_callback_observation();
+        if (fork_spawn_filter_observes) {
+            prepare_callback_observation();
+        }
         start = (*filter)(storage.design_process());
     }
     const bool disabled = known_one(storage.read(operation.disabled, 1U), 0U);

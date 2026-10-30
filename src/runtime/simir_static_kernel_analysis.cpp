@@ -221,7 +221,7 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
     // Under the debugger plan every statement is a debug point, so a write
     // whose statement's next point was never reached (an untaken branch)
     // did not run; one followed by a control transfer first still counts.
-    const auto size = static_cast<std::uint32_t>(member.operations.size());
+    const auto size = static_cast<std::uint32_t>(member.operations().size());
     const auto registers = member.registers.size();
     if (member.debug_pc == no_slot && debug_points_) {
         // Under the debugger plan every statement is a debug point: a member
@@ -238,7 +238,7 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
             return true;
         }
         for (auto next = pc + 1U; next < size; ++next) {
-            const auto& operation = member.operations[next];
+            const auto& operation = member.operations()[next];
             if (const auto* point = operation_get_if<DebugPoint>(&operation)) {
                 if (debug_point_executable(point->kind)) {
                     return member.debug_hit[next] != 0U;
@@ -263,7 +263,7 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
         std::vector<std::uint8_t> seen(size, 0U);
         std::vector<std::uint32_t> return_targets;
         bool has_fork = false;
-        for (const auto& operation : member.operations) {
+        for (const auto& operation : member.operations()) {
             if (const auto* call = operation_get_if<Call>(&operation)) {
                 return_targets.push_back(call->return_target);
             } else if (operation_holds<Fork>(operation)) {
@@ -281,7 +281,7 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
             work.pop_back();
             std::copy_n(in.begin() + static_cast<std::ptrdiff_t>(pc * words),
                 words, out.begin());
-            operation_registers(member.operations[pc], reads, write);
+            operation_registers(member.operations()[pc], reads, write);
             if (write && *write < registers && executed(pc)) {
                 out[*write / 64U] |= std::uint64_t { 1 } << (*write % 64U);
             }
@@ -312,7 +312,7 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
                 } else {
                     next.push_back(pc + 1U);
                 }
-            }, member.operations[pc]);
+            }, member.operations()[pc]);
             for (const auto target : next) {
                 if (target >= size) {
                     continue;
@@ -336,7 +336,7 @@ bool Interpreter::Impl::StaticKernel::debug_register_defined(
             in.begin() + static_cast<std::ptrdiff_t>((member.debug_pc + 1U) * words));
         if (has_fork) {
             for (std::uint32_t pc = 0U; pc < member.debug_pc; ++pc) {
-                operation_registers(member.operations[pc], reads, write);
+                operation_registers(member.operations()[pc], reads, write);
                 if (write && *write < registers && executed(pc)) {
                     member.debug_defined[*write / 64U]
                         |= std::uint64_t { 1 } << (*write % 64U);
@@ -353,7 +353,7 @@ void Interpreter::Impl::StaticKernel::prune_operations(
     std::vector<std::uint64_t>& live_at_entry) const
 {
     const auto& member = members_[member_index];
-    const auto& operations = member.operations;
+    const auto& operations = member.operations();
     const auto size = static_cast<std::uint32_t>(operations.size());
     const auto entry = member.body_begin;
     const auto stop = member.body_end;
@@ -579,7 +579,7 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
         changed = false;
         for (std::uint32_t at = 0U; at < size; ++at) {
             const auto& inst = body.code[at];
-            kinst_flow(inst, at, body, member.operations, member.body_end, use,
+            kinst_flow(inst, at, body, member.operations(), member.body_end, use,
                 def, next);
             if (!def || !narrow(*def) || tracked[*def] != 0U) {
                 continue;
@@ -648,7 +648,7 @@ void Interpreter::Impl::StaticKernel::track_unknowns(CompiledBody& body,
     body.u_mode.assign(size, 0U);
     for (std::uint32_t at = 0U; at < size; ++at) {
         const auto& inst = body.code[at];
-        kinst_flow(inst, at, body, member.operations, member.body_end, use, def,
+        kinst_flow(inst, at, body, member.operations(), member.body_end, use, def,
             next);
         const bool reads_tracked = std::ranges::any_of(use,
             [&](const std::uint32_t reg) { return reg < count && tracked[reg] != 0U; });
@@ -772,7 +772,7 @@ void Interpreter::Impl::StaticKernel::eliminate_dead_constants(
     std::vector<std::vector<std::uint32_t>> successors(size);
     const auto& member = members_[member_index];
     for (std::uint32_t at = 0U; at < size; ++at) {
-        kinst_flow(body.code[at], at, body, member.operations, member.body_end,
+        kinst_flow(body.code[at], at, body, member.operations(), member.body_end,
             uses[at], defs[at], successors[at]);
     }
     std::vector<std::uint64_t> live(words);
@@ -929,7 +929,7 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
         if (inst.op == KOp::call || inst.op == KOp::ret) {
             return nullptr;
         }
-        kinst_flow(inst, at, body, member.operations, member.body_end, use, def,
+        kinst_flow(inst, at, body, member.operations(), member.body_end, use, def,
             next);
         first_use[at] = static_cast<std::uint32_t>(uses.size());
         for (const auto reg : use) {
@@ -1017,7 +1017,7 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
             out[0] = target == member.body_end || target >= size
                 ? leave : node(contexts[context].caller, target);
         } else {
-            kinst_flow(inst, at, body, member.operations, member.body_end, use,
+            kinst_flow(inst, at, body, member.operations(), member.body_end, use,
                 def, next);
             if (next.empty()) {
                 out[0] = leave;
@@ -1652,7 +1652,7 @@ Interpreter::Impl::StaticKernel::decide_delta_collapse()
     for (std::uint32_t source = 0U; source < slot_conversions_.size(); ++source) {
         for (const auto member : slot_conversions_[source]) {
             const auto& write = operation_get<WriteUpdate>(
-                members_[member].operations[members_[member].body_end - 1U]);
+                members_[member].operations()[members_[member].body_end - 1U]);
             slot_sources.emplace_back(slot_of_signal_[write.signal], source);
         }
     }
@@ -1803,8 +1803,8 @@ void Interpreter::Impl::StaticKernel::report_mt_plan() const
                 return "store_host";
             case KOp::generic:
                 if (member < members_.size()
-                    && inst.x < members_[member].operations.size()
-                    && operation_holds<Report>(members_[member].operations[inst.x])) {
+                    && inst.x < members_[member].operations().size()
+                    && operation_holds<Report>(members_[member].operations()[inst.x])) {
                     break;
                 }
                 return "generic";

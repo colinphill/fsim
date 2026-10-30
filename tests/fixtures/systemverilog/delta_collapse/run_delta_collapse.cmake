@@ -1,15 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # VHDL delta collapsing must be invisible. Each case is elaborated and
-# simulated on the v4 engine twice from one workspace: with collapsing, and
-# with FSIM_STATIC_KERNEL_DELTA_COLLAPSE=0 (the reference delta schedule).
-# The exit status, the transcript and the diagnostics must be equal. The
-# glitch cases must show their glitch in both runs (a report, a fatal range
-# check), the nested-loop case must be refused for its data-dependent
-# inner loop, and the static case must keep collapsed members, so that none
-# passes by not exercising its rule. The static case also runs from an
-# ahead-of-time snapshot, whose kernel image holds the collapse plan: the
-# restored run must keep as many members and match the reference.
+# simulated on the v4 engine three times from one workspace: with
+# collapsing, with FSIM_STATIC_KERNEL_DELTA_COLLAPSE=0 (the reference delta
+# schedule in the kernel) and with FSIM_STATIC_KERNEL=0 (the reference
+# scheduler). The exit status, the transcript and the diagnostics must be
+# equal. Each case must also exercise its rule rather than pass by
+# avoiding it:
+#   dc_glitch_assert, dc_glitch_count: the glitch shows in the reference
+#     (a report, a fatal range check);
+#   dc_nested_loop: refused for its data-dependent inner loop;
+#   dc_observe_glitch: the testbench sees the glitch on the output port;
+#   dc_attributes: 'EVENT counts every pulse of the internal signal;
+#   dc_regions: a report for each value of the inputs' exclusive or;
+#   dc_static, dc_chain: collapsed members are kept (dc_chain eight
+#     levels deep).
+# The static case also runs from an ahead-of-time snapshot, whose kernel
+# image holds the collapse plan: the restored run must keep as many
+# members and match the reference.
 
 if(NOT DEFINED FSIM_EXECUTABLE OR NOT EXISTS "${FSIM_EXECUTABLE}")
   message(FATAL_ERROR "FSIM_EXECUTABLE must name the built fsim command")
@@ -67,7 +75,8 @@ function(simulate_step STEP_NAME)
   set(${STEP_NAME}_result "${result}" PARENT_SCOPE)
 endfunction()
 
-set(cases dc_glitch_assert dc_glitch_count dc_static dc_nested_loop)
+set(cases dc_glitch_assert dc_glitch_count dc_static dc_nested_loop
+  dc_observe_glitch dc_attributes dc_chain dc_regions)
 
 foreach(case_name IN LISTS cases)
   set(case_dir "${workspace}/${case_name}")
@@ -91,11 +100,24 @@ foreach(case_name IN LISTS cases)
   simulate_step(reference)
   unset(ENV{FSIM_STATIC_KERNEL_DELTA_COLLAPSE})
 
+  set(ENV{FSIM_STATIC_KERNEL} 0)
+  run_fsim_step("${case_name}" elaborate_scheduler
+    elaborate -q --top "${case_name}_tb" --no-aot --optimization O2)
+  simulate_step(scheduler)
+  unset(ENV{FSIM_STATIC_KERNEL})
+
   foreach(part IN ITEMS result stdout stderr)
     if(NOT "${collapsed_${part}}" STREQUAL "${reference_${part}}")
       message(FATAL_ERROR
         "${case_name}: the collapsed run's ${part} differs from the reference\n"
         "Reference:\n${reference_${part}}\nCollapsed:\n${collapsed_${part}}\n"
+        "workspace: ${case_dir}")
+    endif()
+    if(NOT "${scheduler_${part}}" STREQUAL "${reference_${part}}")
+      message(FATAL_ERROR
+        "${case_name}: the reference scheduler's ${part} differs from the "
+        "kernel's reference schedule\n"
+        "Kernel:\n${reference_${part}}\nScheduler:\n${scheduler_${part}}\n"
         "workspace: ${case_dir}")
     endif()
   endforeach()
@@ -119,6 +141,30 @@ foreach(case_name IN LISTS cases)
       message(FATAL_ERROR
         "${case_name}: the data-dependent inner loop must keep its process "
         "uncollapsed (kept ${kept})\n${collapsed_profile}\nworkspace: ${case_dir}")
+    endif()
+  elseif(case_name STREQUAL "dc_observe_glitch")
+    # Six input changes, each a 0-1-0 glitch on q, after q's first value.
+    if(NOT reference_stdout MATCHES "events=([0-9]+)" OR CMAKE_MATCH_1 LESS 13)
+      message(FATAL_ERROR "${case_name}: the testbench must see every glitch\n"
+        "${reference_stdout}\nworkspace: ${case_dir}")
+    endif()
+  elseif(case_name STREQUAL "dc_attributes")
+    if(NOT reference_stdout MATCHES "q=9\n")
+      message(FATAL_ERROR "${case_name}: each of the nine pulses must count\n"
+        "${reference_stdout}\nworkspace: ${case_dir}")
+    endif()
+  elseif(case_name STREQUAL "dc_regions")
+    string(REGEX MATCHALL "x='[01]'" reports "${reference_stdout}\n${reference_stderr}")
+    list(LENGTH reports report_count)
+    if(report_count LESS 4)
+      message(FATAL_ERROR "${case_name}: each value of x must be reported "
+        "(${report_count} reports)\nworkspace: ${case_dir}")
+    endif()
+  elseif(case_name STREQUAL "dc_chain")
+    if(kept LESS 9 OR NOT collapsed_profile MATCHES "levels=9")
+      message(FATAL_ERROR
+        "${case_name}: the rotation and the eight cells must collapse in "
+        "nine levels (kept ${kept})\n${collapsed_profile}\nworkspace: ${case_dir}")
     endif()
   elseif(case_name STREQUAL "dc_static")
     if(kept LESS 9)

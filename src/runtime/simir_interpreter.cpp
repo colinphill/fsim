@@ -4477,13 +4477,15 @@ void Interpreter::set_report_hook(ReportHook hook)
     impl_->report_hook = std::move(hook);
 }
 
-void Interpreter::set_fork_spawn_filter(ForkSpawnFilter filter)
+void Interpreter::set_fork_spawn_filter(
+    ForkSpawnFilter filter, const bool observes_signals)
 {
     std::shared_ptr<const ForkSpawnFilter> prepared;
     if (filter) {
         prepared = std::make_shared<ForkSpawnFilter>(std::move(filter));
     }
     impl_->fork_spawn_filter = std::move(prepared);
+    impl_->fork_spawn_filter_observes = observes_signals;
 }
 
 } // namespace fsim::runtime::simir

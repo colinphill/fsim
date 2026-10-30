@@ -730,10 +730,16 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                     recorded_bodies = std::make_shared<std::string>();
                     plan.spec->record_compiled_bodies = recorded_bodies;
                 } else {
-                    std::error_code error;
-                    if (auto bytes = bodies.cache->load_payload(bodies.key, error)) {
-                        plan.spec->compiled_bodies = std::move(*bytes).share();
-                    }
+                    // Read only when the kernel builds afresh: a restored
+                    // kernel image holds the bodies.
+                    plan.spec->load_compiled_bodies = [bodies]()
+                        -> std::shared_ptr<const std::string_view> {
+                        std::error_code error;
+                        if (auto bytes = bodies.cache->load_payload(bodies.key, error)) {
+                            return std::move(*bytes).share();
+                        }
+                        return nullptr;
+                    };
                 }
             }
             // Canonical templates and bindings, likewise.
@@ -2460,13 +2466,15 @@ Simulation::Impl::Impl(
         });
     setup_execution(engine);
     refresh_observation_hooks();
+    // The filter reads only the assertion control state, no signal.
     interpreter->set_fork_spawn_filter(
         [this](const runtime::simir::ProcessId process) {
             return !concurrent_assertion_design_processes.contains(process)
                 || enabled_vpi_assertion_processes.contains(process)
                 || (concurrent_assertions_enabled
                     && !disabled_vpi_assertion_processes.contains(process));
-        });
+        },
+        false);
     interpreter_output_hook =
         [this](
             const runtime::simir::ProcessId process,

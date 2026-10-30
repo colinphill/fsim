@@ -271,136 +271,144 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     // say) is staged on the host and matures in the host's regions of its
     // time step: the kernel is not closed.
     bool host_written = false;
-    for (const auto& member : members_) {
-        for (const auto& operation : member.operations) {
-            visit_operation([&](const auto& op) {
-                using T = std::decay_t<decltype(op)>;
-                if constexpr (std::is_same_v<T, WriteBlocking>
-                    || std::is_same_v<T, WriteBlockingSlice>
-                    || std::is_same_v<T, WriteBlockingDynamicSlice>
-                    || std::is_same_v<T, WriteBlockingDynamicPartSlice>
-                    || std::is_same_v<T, WriteUpdate>
-                    || std::is_same_v<T, WriteUpdateSlice>
-                    || std::is_same_v<T, WriteUpdateDynamicSlice>
-                    || std::is_same_v<T, WriteUpdateDynamicPartSlice>
-                    || std::is_same_v<T, WriteAfter>
-                    || std::is_same_v<T, WriteAfterSlice>
-                    || std::is_same_v<T, WriteAfterDynamicSlice>
-                    || std::is_same_v<T, WriteAfterDynamicPartSlice>
-                    || std::is_same_v<T, WriteDelayed>
-                    || std::is_same_v<T, WriteInertial>
-                    || std::is_same_v<T, WriteInertialSlice>
-                    || std::is_same_v<T, WriteProjected>
-                    || std::is_same_v<T, WriteProjectedSlice>
-                    || std::is_same_v<T, WriteProjectedDynamicSlice>
-                    || std::is_same_v<T, WriteProjectedWaveform>
-                    || std::is_same_v<T, WriteProjectedWaveformSlice>
-                    || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
-                    host_written = host_written || !owned(op.signal);
-                    if constexpr (std::is_same_v<T, WriteAfter>
+    if (restored_host_scan_) {
+        host_written = restored_host_scan_->host_written;
+        host_delayed_writes_ = restored_host_scan_->host_delayed_writes;
+        vhdl_host_cycles_ = restored_host_scan_->vhdl_host_cycles;
+        restored_host_scan_.reset();
+    } else {
+        for (const auto& member : members_) {
+            for (const auto& operation : member.operations()) {
+                visit_operation([&](const auto& op) {
+                    using T = std::decay_t<decltype(op)>;
+                    if constexpr (std::is_same_v<T, WriteBlocking>
+                        || std::is_same_v<T, WriteBlockingSlice>
+                        || std::is_same_v<T, WriteBlockingDynamicSlice>
+                        || std::is_same_v<T, WriteBlockingDynamicPartSlice>
+                        || std::is_same_v<T, WriteUpdate>
+                        || std::is_same_v<T, WriteUpdateSlice>
+                        || std::is_same_v<T, WriteUpdateDynamicSlice>
+                        || std::is_same_v<T, WriteUpdateDynamicPartSlice>
+                        || std::is_same_v<T, WriteAfter>
                         || std::is_same_v<T, WriteAfterSlice>
                         || std::is_same_v<T, WriteAfterDynamicSlice>
                         || std::is_same_v<T, WriteAfterDynamicPartSlice>
                         || std::is_same_v<T, WriteDelayed>
                         || std::is_same_v<T, WriteInertial>
-                        || std::is_same_v<T, WriteInertialSlice>) {
-                        // The host matures the update at its writer's
-                        // stable order (run_merged_active).
-                        host_delayed_writes_ = host_delayed_writes_ || !member.vhdl;
-                    }
-                    if constexpr (!std::is_same_v<T, WriteBlocking>
-                        && !std::is_same_v<T, WriteBlockingSlice>
-                        && !std::is_same_v<T, WriteBlockingDynamicSlice>
-                        && !std::is_same_v<T, WriteBlockingDynamicPartSlice>) {
+                        || std::is_same_v<T, WriteInertialSlice>
+                        || std::is_same_v<T, WriteProjected>
+                        || std::is_same_v<T, WriteProjectedSlice>
+                        || std::is_same_v<T, WriteProjectedDynamicSlice>
+                        || std::is_same_v<T, WriteProjectedWaveform>
+                        || std::is_same_v<T, WriteProjectedWaveformSlice>
+                        || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
+                        host_written = host_written || !owned(op.signal);
+                        if constexpr (std::is_same_v<T, WriteAfter>
+                            || std::is_same_v<T, WriteAfterSlice>
+                            || std::is_same_v<T, WriteAfterDynamicSlice>
+                            || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                            || std::is_same_v<T, WriteDelayed>
+                            || std::is_same_v<T, WriteInertial>
+                            || std::is_same_v<T, WriteInertialSlice>) {
+                            // The host matures the update at its writer's
+                            // stable order (run_merged_active).
+                            host_delayed_writes_ = host_delayed_writes_ || !member.vhdl;
+                        }
+                        if constexpr (!std::is_same_v<T, WriteBlocking>
+                            && !std::is_same_v<T, WriteBlockingSlice>
+                            && !std::is_same_v<T, WriteBlockingDynamicSlice>
+                            && !std::is_same_v<T, WriteBlockingDynamicPartSlice>) {
+                            vhdl_host_cycles_ = vhdl_host_cycles_
+                                || (member.vhdl && !owned(op.signal));
+                        }
+                    } else if constexpr (std::is_same_v<T, ForceSignalSlice>
+                        || std::is_same_v<T, ReleaseSignalSlice>) {
+                        // A VHDL force applies in the host's update phase.
+                        host_written = host_written || !owned(op.signal);
                         vhdl_host_cycles_ = vhdl_host_cycles_
                             || (member.vhdl && !owned(op.signal));
-                    }
-                } else if constexpr (std::is_same_v<T, ForceSignalSlice>
-                    || std::is_same_v<T, ReleaseSignalSlice>) {
-                    // A VHDL force applies in the host's update phase.
-                    host_written = host_written || !owned(op.signal);
-                    vhdl_host_cycles_ = vhdl_host_cycles_
-                        || (member.vhdl && !owned(op.signal));
-                } else if constexpr (std::is_same_v<T, SignalEvent>
-                    || std::is_same_v<T, SignalActive>
-                    || std::is_same_v<T, SignalLastValue>
-                    || std::is_same_v<T, SignalLastEvent>
-                    || std::is_same_v<T, SignalLastActive>) {
-                    // The host's history of the cycles it ran, which
-                    // counts the host's time: no time warp.
-                    vhdl_host_cycles_ = vhdl_host_cycles_
-                        || (member.vhdl && !owned(op.signal));
-                    host_written = host_written || !owned(op.signal);
-                } else if constexpr (std::is_same_v<T, MonitorInstall>
-                    || std::is_same_v<T, MonitorControl>
-                    || std::is_same_v<T, EventTriggered>) {
-                    // The host's monitor prints in the host's time steps
-                    // (IEEE 1800-2023 21.2.3), and an event's triggered
-                    // state is of the host's time step (15.5.3): no time
-                    // warp.
-                    host_written = true;
-                } else if constexpr (std::is_same_v<T, WriteStringObject>) {
-                    // `s <= v` matures in the host's NBA region of the
-                    // host's time step: no time warp.
-                    host_written = host_written || op.nonblocking;
-                } else if constexpr (std::is_same_v<T, Yield>) {
-                    // A yield resumes in the host's next delta: no time
-                    // warp.
-                    host_written = true;
-                } else if constexpr (std::is_same_v<T, DynamicEvent>) {
-                    // `->>` triggers the event in the host's NBA region of
-                    // the host's time step (IEEE 1800-2023 15.5.1): no time
-                    // warp.
-                    host_written = host_written
-                        || (op.operation == DynamicEventOperation::trigger
-                            && op.nonblocking);
-                } else if constexpr (std::is_same_v<T, ClassAllocate>
-                    || std::is_same_v<T, ClassPropertyWrite>
-                    || std::is_same_v<T, ClassStaticPropertyWrite>
-                    || std::is_same_v<T, ClassPropertyContainerWrite>
-                    || std::is_same_v<T, ClassMethodCall>
-                    || std::is_same_v<T, ClassStaticMethodCall>) {
-                    // The class services toggle the host's
-                    // $sv_class_heap_change, whose waiters wake in the
-                    // host's next delta (IEEE 1800-2023 9.4.2;
-                    // Simulation::Impl::notify_class_changes), and a class
-                    // body may write any host signal.
-                    host_written = true;
-                } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
-                    // A host object read into a reference-format register.
-                    host_written = host_written
-                        || (member.dynamic_container(op.destination)
-                            && (op.object >= container_of_object_.size()
-                                || container_of_object_[op.object] == no_container));
-                } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
-                    // An element write of a host object.
-                    host_written = host_written
-                        || (!member.vhdl
-                            && (op.object >= container_of_object_.size()
-                                || container_of_object_[op.object] == no_container));
-                } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
-                    // A host object written from a reference-format register.
-                    host_written = host_written
-                        || (member.dynamic_container(op.source)
-                            && (op.object >= container_of_object_.size()
-                                || container_of_object_[op.object] == no_container));
-                } else if constexpr (std::is_same_v<T, FileReadLine>
-                    || std::is_same_v<T, FileErrorStatus>) {
-                    // A text read into a signal (commit_driver).
-                    host_written = host_written
-                        || (op.target_kind == FileTextTargetKind::packed_signal
-                            && !owned(static_cast<SignalId>(op.target)));
-                } else if constexpr (std::is_same_v<T, FileScan>) {
-                    for (const auto& conversion : op.conversions) {
+                    } else if constexpr (std::is_same_v<T, SignalEvent>
+                        || std::is_same_v<T, SignalActive>
+                        || std::is_same_v<T, SignalLastValue>
+                        || std::is_same_v<T, SignalLastEvent>
+                        || std::is_same_v<T, SignalLastActive>) {
+                        // The host's history of the cycles it ran, which
+                        // counts the host's time: no time warp.
+                        vhdl_host_cycles_ = vhdl_host_cycles_
+                            || (member.vhdl && !owned(op.signal));
+                        host_written = host_written || !owned(op.signal);
+                    } else if constexpr (std::is_same_v<T, MonitorInstall>
+                        || std::is_same_v<T, MonitorControl>
+                        || std::is_same_v<T, EventTriggered>) {
+                        // The host's monitor prints in the host's time steps
+                        // (IEEE 1800-2023 21.2.3), and an event's triggered
+                        // state is of the host's time step (15.5.3): no time
+                        // warp.
+                        host_written = true;
+                    } else if constexpr (std::is_same_v<T, WriteStringObject>) {
+                        // `s <= v` matures in the host's NBA region of the
+                        // host's time step: no time warp.
+                        host_written = host_written || op.nonblocking;
+                    } else if constexpr (std::is_same_v<T, Yield>) {
+                        // A yield resumes in the host's next delta: no time
+                        // warp.
+                        host_written = true;
+                    } else if constexpr (std::is_same_v<T, DynamicEvent>) {
+                        // `->>` triggers the event in the host's NBA region of
+                        // the host's time step (IEEE 1800-2023 15.5.1): no time
+                        // warp.
                         host_written = host_written
-                            || (conversion.target.kind
-                                    == InputScanTargetKind::packed_signal
-                                && !owned(static_cast<SignalId>(
-                                    conversion.target.id)));
+                            || (op.operation == DynamicEventOperation::trigger
+                                && op.nonblocking);
+                    } else if constexpr (std::is_same_v<T, ClassAllocate>
+                        || std::is_same_v<T, ClassPropertyWrite>
+                        || std::is_same_v<T, ClassStaticPropertyWrite>
+                        || std::is_same_v<T, ClassPropertyContainerWrite>
+                        || std::is_same_v<T, ClassMethodCall>
+                        || std::is_same_v<T, ClassStaticMethodCall>) {
+                        // The class services toggle the host's
+                        // $sv_class_heap_change, whose waiters wake in the
+                        // host's next delta (IEEE 1800-2023 9.4.2;
+                        // Simulation::Impl::notify_class_changes), and a class
+                        // body may write any host signal.
+                        host_written = true;
+                    } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
+                        // A host object read into a reference-format register.
+                        host_written = host_written
+                            || (member.dynamic_container(op.destination)
+                                && (op.object >= container_of_object_.size()
+                                    || container_of_object_[op.object] == no_container));
+                    } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+                        // An element write of a host object.
+                        host_written = host_written
+                            || (!member.vhdl
+                                && (op.object >= container_of_object_.size()
+                                    || container_of_object_[op.object] == no_container));
+                    } else if constexpr (std::is_same_v<T, WriteContainerObject>) {
+                        // A host object written from a reference-format register.
+                        host_written = host_written
+                            || (member.dynamic_container(op.source)
+                                && (op.object >= container_of_object_.size()
+                                    || container_of_object_[op.object] == no_container));
+                    } else if constexpr (std::is_same_v<T, FileReadLine>
+                        || std::is_same_v<T, FileErrorStatus>) {
+                        // A text read into a signal (commit_driver).
+                        host_written = host_written
+                            || (op.target_kind == FileTextTargetKind::packed_signal
+                                && !owned(static_cast<SignalId>(op.target)));
+                    } else if constexpr (std::is_same_v<T, FileScan>) {
+                        for (const auto& conversion : op.conversions) {
+                            host_written = host_written
+                                || (conversion.target.kind
+                                        == InputScanTargetKind::packed_signal
+                                    && !owned(static_cast<SignalId>(
+                                        conversion.target.id)));
+                        }
                     }
-                }
-            }, operation);
+                }, operation);
+            }
         }
+        record_host_scan({ host_written, host_delayed_writes_, vhdl_host_cycles_ });
     }
     stage("host_scan");
     // A hosted VHDL process writes through the host's update phase, so every
@@ -783,15 +791,15 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         const auto& operations = program.operations();
         const auto expand_started = stage_profile ? std::chrono::steady_clock::now()
                                                   : std::chrono::steady_clock::time_point { };
-        member.operations.reserve(operations.size());
+        member.operations().reserve(operations.size());
         for (std::size_t op = 0U; op < operations.size(); ++op) {
             // A body operation that needs no instance fields copies once,
             // straight from the shared body (expanded_ref returns it).
             const auto& expanded = operations.expanded_ref(op, expand_scratch);
             if (&expanded == &expand_scratch) {
-                member.operations.push_back(std::move(expand_scratch));
+                member.operations().push_back(std::move(expand_scratch));
             } else {
-                member.operations.push_back(expanded);
+                member.operations().push_back(expanded);
             }
         }
         member.body_identity = operations.body_identity();
@@ -808,7 +816,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                 || resolver->second.process != member.process
                 || target >= signal_count || slot_of_signal_[target] == no_slot
                 || member.body_begin != 0U
-                || member.body_end != member.operations.size() + 1U) {
+                || member.body_end != member.operations().size() + 1U) {
                 throw std::invalid_argument(
                     "static kernel conversion does not fit its signal");
             }
@@ -819,26 +827,26 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         if (!member.vhdl && member.kind == StaticKernelMemberKind::behavioral) {
             bool fork = false;
             bool push = false;
-            for (const auto& operation : member.operations) {
+            for (const auto& operation : member.operations()) {
                 fork = fork || operation_holds<Fork>(operation);
                 push = push || operation_holds<CallableFramePush>(operation);
             }
             member.thread_contexts = fork && push
                 && static_kernel_fork_holds_suspended_frame(
                     operations, operations.size());
-            member.isolated_forks = std::ranges::any_of(member.operations,
+            member.isolated_forks = std::ranges::any_of(member.operations(),
                 [](const Operation& operation) {
                     const auto* fork = operation_get_if<Fork>(&operation);
                     return fork != nullptr && fork->isolate_register_frame;
                 });
             named_disable_ = named_disable_
-                || std::ranges::any_of(member.operations,
+                || std::ranges::any_of(member.operations(),
                     [](const Operation& operation) {
                         const auto* disable = operation_get_if<DisableBlock>(&operation);
                         return disable != nullptr && !disable->scopes.empty();
                     });
             member.assertion = (!member.vhdl && member.phase != SchedulerPhase::active)
-                || std::ranges::any_of(member.operations,
+                || std::ranges::any_of(member.operations(),
                     [](const Operation& operation) {
                         return static_kernel_assertion_operation(operation);
                     });
@@ -849,8 +857,8 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             distinct_bodies.insert(operations.body_identity());
             expanded_ops += operations.size();
         }
-        if (member.body_end > member.operations.size()
-            || member.body_begin > (member.vhdl ? member.operations.size()
+        if (member.body_end > member.operations().size()
+            || member.body_begin > (member.vhdl ? member.operations().size()
                                                 : member.body_end)) {
             throw std::invalid_argument("static kernel member body is invalid");
         }
@@ -859,20 +867,21 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         if (!member.vhdl
             && (member.kind == StaticKernelMemberKind::combinational
                 || member.kind == StaticKernelMemberKind::sequential)
-            && std::any_of(member.operations.begin() + member.body_begin,
-                member.operations.begin() + member.body_end,
+            && std::any_of(member.operations().begin() + member.body_begin,
+                member.operations().begin() + member.body_end,
                 [](const Operation& operation) {
                     return operation_holds<Call>(operation);
                 })) {
             const bool wait_first = member.exit_alt == 0U;
-            auto inlined = static_kernel_inline_calls(member.operations,
+            auto inlined = static_kernel_inline_calls(member.operations(),
                 wait_first ? 0U : member.body_end,
                 wait_first ? member.body_end : member.exit_alt);
             if (!inlined) {
                 throw std::invalid_argument(
                     "static kernel member calls cannot be expanded");
             }
-            member.operations = std::move(inlined->operations);
+            member.operations() = std::move(inlined->operations);
+            member.inlined_calls = true;
             member.body_begin = inlined->body_begin;
             member.prologue_end = inlined->body_begin;
             member.body_end = inlined->body_end;
@@ -901,7 +910,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                 member.copy_storage[id] = member.container_registers[id];
             }
         }
-        for (const auto& operation : member.operations) {
+        for (const auto& operation : member.operations()) {
             const auto* push = operation_get_if<CallableFramePush>(&operation);
             if (push != nullptr
                 && std::ranges::any_of(push->containers,
@@ -963,7 +972,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             for (const auto& entry : member.wait_sensitivity) {
                 waitable(entry.signal, entry.edge);
             }
-            for (const auto& operation : member.operations) {
+            for (const auto& operation : member.operations()) {
                 if (const auto* wait = operation_get_if<WaitOn>(&operation)) {
                     for (std::size_t entry = 0U; entry < wait->signals.size(); ++entry) {
                         waitable(wait->signals[entry], wait->edges.empty()
@@ -1219,7 +1228,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         std::vector<std::uint8_t> read(signal_count, 0U);
         std::vector<std::uint8_t> blocking(signal_count, 0U);
         for (const auto& member : members_) {
-            for (const auto& operation : member.operations) {
+            for (const auto& operation : member.operations()) {
                 visit_operation([&](const auto& op) {
                     using T = std::decay_t<decltype(op)>;
                     if constexpr (std::is_same_v<T, ReadSignal>) {
@@ -1278,7 +1287,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         if (members_[index].kind != StaticKernelMemberKind::combinational) {
             continue;
         }
-        for (const auto& operation : members_[index].operations) {
+        for (const auto& operation : members_[index].operations()) {
             const auto* read = operation_get_if<ReadSignal>(&operation);
             if (read == nullptr || read->signal >= signal_count) {
                 continue;
@@ -1306,7 +1315,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         }
         std::vector<std::uint32_t> written;
         std::vector<SignalId> assigned;
-        for (const auto& operation : member.operations) {
+        for (const auto& operation : member.operations()) {
             // A write in the NBA region lands after the Active region has
             // drained, so it orders nothing within a pass: its readers wake
             // when the commit changes the slot.
@@ -1385,7 +1394,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         if (members_[index].kind != StaticKernelMemberKind::combinational) {
             continue;
         }
-        for (const auto& operation : members_[index].operations) {
+        for (const auto& operation : members_[index].operations()) {
             const auto* read = operation_get_if<ReadSignal>(&operation);
             if (read != nullptr && read->signal < signal_count
                 && slot_of_signal_[read->signal] == no_slot
@@ -1450,6 +1459,9 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         restored_specializations_ = std::move(spec.specializations);
         recorded_specializations_ = std::move(spec.record_specializations);
         restored_bodies_ = std::move(spec.compiled_bodies);
+        if (!restored_bodies_ && spec.load_compiled_bodies) {
+            restored_bodies_ = spec.load_compiled_bodies();
+        }
         recorded_bodies_ = std::move(spec.record_compiled_bodies);
         compile_members();
         // Only compile_members reads these; the images are payload-sized.
@@ -1532,16 +1544,16 @@ void Interpreter::Impl::StaticKernel::build_container_info()
 void Interpreter::Impl::StaticKernel::rewrite_conversion(Member& member,
     const SignalId target, const RegisterId output)
 {
-    const auto write = static_cast<InstructionIndex>(member.operations.size());
-    for (auto& operation : member.operations) {
+    const auto write = static_cast<InstructionIndex>(member.operations().size());
+    for (auto& operation : member.operations()) {
         if (operation_holds<Halt>(operation)) {
             operation = Operation { Jump { write } };
         }
     }
-    member.operations.emplace_back(WriteUpdate { target, output,
+    member.operations().emplace_back(WriteUpdate { target, output,
         SignalUpdateDomain::generic });
-    member.operations.emplace_back(WaitSensitivity { });
-    member.operations.emplace_back(Jump { 0U });
+    member.operations().emplace_back(WaitSensitivity { });
+    member.operations().emplace_back(Jump { 0U });
     member.body_identity = nullptr;
 }
 
@@ -1558,7 +1570,7 @@ void Interpreter::Impl::StaticKernel::plan_conversions_and_wires(
         std::unordered_map<SignalId, std::uint32_t> member_of_target;
         for (const auto index : conversion_members_) {
             const auto& write = operation_get<WriteUpdate>(
-                members_[index].operations[members_[index].body_end - 1U]);
+                members_[index].operations()[members_[index].body_end - 1U]);
             member_of_target.emplace(write.signal, index);
         }
         std::vector<SignalId> sources;
@@ -2821,7 +2833,7 @@ void Interpreter::Impl::StaticKernel::settle_conversions()
     // the kernel's first activation publishes them.
     for (const auto member : conversion_members_) {
         const auto& write = operation_get<WriteUpdate>(
-            members_[member].operations[members_[member].body_end - 1U]);
+            members_[member].operations()[members_[member].body_end - 1U]);
         const auto signal = write.signal;
         auto value = Impl::coerce_value_kind(slot_value(slot_of_signal_[signal]),
             impl_.signals[signal].value_kind);
@@ -4013,10 +4025,10 @@ void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
 
 bool Interpreter::Impl::StaticKernel::first_run_is_activation(const Member& member)
 {
-    if (member.prologue_end >= member.operations.size()) {
+    if (member.prologue_end >= member.operations().size()) {
         return false;
     }
-    const auto* jump = operation_get_if<Jump>(&member.operations[member.prologue_end]);
+    const auto* jump = operation_get_if<Jump>(&member.operations()[member.prologue_end]);
     return member.prologue_end == 0U || (jump != nullptr && jump->target == 0U);
 }
 
@@ -4383,7 +4395,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::run_generic_from(
     // Subprogram bodies may lie anywhere; the run ends at the wait (or the
     // halt of a process without sensitivity), or at `until`.
     const auto& member = members_[member_index];
-    const auto size = member.operations.size();
+    const auto size = member.operations().size();
     if (until == no_slot) {
         // Native code from `pc`; the reference loop below only finishes a
         // run the operation tier could not (no code, an unexpected stop).
@@ -4415,7 +4427,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
     ++interpreted_by_cause_[static_cast<std::size_t>(interpreting_)];
     return visit_operation([&](const auto& op) {
         return step_operation(member_index, pc, op);
-    }, members_[member_index].operations[pc]);
+    }, members_[member_index].operations()[pc]);
 }
 
 template <typename Op>
@@ -4423,7 +4435,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation_at(
     const std::uint32_t member_index, const std::uint32_t pc)
 {
     return step_operation(member_index, pc,
-        operation_get<Op>(members_[member_index].operations[pc]));
+        operation_get<Op>(members_[member_index].operations()[pc]));
 }
 
 const std::array<Interpreter::Impl::StaticKernel::OperationStep,
@@ -4457,7 +4469,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                                                  : ValueKind::logic4;
     };
     {
-        const auto& operation = member.operations[pc];
+        const auto& operation = member.operations()[pc];
         (void)operation;
         std::uint32_t next = pc + 1U;
         const auto signal_write = [&](const SignalId signal, PackedLogic4 value,
@@ -5058,7 +5070,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                     impl_.code_coverage_overflow_hook(op.counter);
                 }
             } else if constexpr (std::is_same_v<T, Call>) {
-                const auto size = member.operations.size();
+                const auto size = member.operations().size();
                 if (op.stack.capacity == 0U) {
                     if (op.stack.pointer != 0U || op.stack.entries != 0U) {
                         fail(member_index, pc,
@@ -5094,7 +5106,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                     = PackedLogic4::from_aval_bval(32, pointer.aval + 1U, 0);
                 next = op.target;
             } else if constexpr (std::is_same_v<T, Return>) {
-                const auto size = member.operations.size();
+                const auto size = member.operations().size();
                 if (op.stack.capacity == 0U) {
                     if (op.stack.pointer != 0U || op.stack.entries != 0U) {
                         fail(member_index, pc,
@@ -5633,7 +5645,7 @@ void Interpreter::Impl::StaticKernel::initialize()
     // write persists for the procedures that read it.
     const bool ordered_once = (behavioral_ || has_hosted_) && !vhdl_ && !mixed_;
     const auto triggers_event = [&](const Member& member) {
-        return std::ranges::any_of(member.operations,
+        return std::ranges::any_of(member.operations(),
             [&](const Operation& operation) {
                 const auto* write = operation_get_if<WriteBlocking>(&operation);
                 return write != nullptr

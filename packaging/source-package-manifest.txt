@@ -2158,9 +2158,13 @@ tests/fixtures/sdf/vital/timing_21.sdf
 tests/fixtures/sdf/vital/timing_30.sdf
 tests/fixtures/sdf/vital/timing_40.sdf
 tests/fixtures/sdf/vital/wrapper.vhd
+tests/fixtures/systemverilog/delta_collapse/dc_attributes_tb.sv
+tests/fixtures/systemverilog/delta_collapse/dc_chain_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_glitch_assert_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_glitch_count_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_nested_loop_tb.sv
+tests/fixtures/systemverilog/delta_collapse/dc_observe_glitch_tb.sv
+tests/fixtures/systemverilog/delta_collapse/dc_regions_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_static_tb.sv
 tests/fixtures/systemverilog/delta_collapse/delta_collapse_dut.vhd
 tests/fixtures/systemverilog/delta_collapse/run_delta_collapse.cmake

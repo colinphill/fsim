@@ -558,6 +558,8 @@ public:
     void push_back(const Operation& operation);
     void push_back(Operation&& operation);
     void replace(size_type index, Operation operation);
+    // replace() for each (index, operation), indices strictly increasing.
+    void replace_sorted(std::vector<std::pair<size_type, Operation>> operations);
     template <typename... Arguments>
     Operation& emplace_back(Arguments&&... arguments)
     {

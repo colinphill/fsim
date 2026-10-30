@@ -2615,7 +2615,9 @@ public:
     void set_vcd_control_hook(VcdControlHook hook);
     void set_coverage_database_control_hook(
         CoverageDatabaseControlHook hook);
-    void set_fork_spawn_filter(ForkSpawnFilter filter);
+    /// A filter that reads no signal (observes_signals false) runs without
+    /// the callback observation barrier that publishes every signal first.
+    void set_fork_spawn_filter(ForkSpawnFilter filter, bool observes_signals = true);
     void set_class_allocate_context_hook(ClassAllocateContextHook hook);
     // The seed a new object's random number generator takes from the
     // allocating process's generator (IEEE 1800-2017 18.14.1), available

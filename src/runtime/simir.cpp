@@ -552,6 +552,37 @@ void OperationList::replace(const size_type index, Operation operation)
     advance_access_revision();
 }
 
+void OperationList::replace_sorted(
+    std::vector<std::pair<size_type, Operation>> operations)
+{
+    if (operations.empty()) {
+        return;
+    }
+    if (operation_overrides_ && !operation_overrides_->empty()) {
+        for (auto& [index, operation] : operations) {
+            replace(index, std::move(operation));
+        }
+        return;
+    }
+    auto overrides = std::make_shared<OperationOverrideList>();
+    overrides->reserve(operations.size());
+    auto filter = operation_override_filter_;
+    for (auto& [index, operation] : operations) {
+        if (index >= size()) {
+            throw std::out_of_range { "SimIR operation index is out of range" };
+        }
+        if (!overrides->empty() && index <= overrides->back().instruction) {
+            throw std::invalid_argument { "SimIR operation overrides are not sorted" };
+        }
+        overrides->push_back({ static_cast<InstructionIndex>(index),
+            std::move(operation) });
+        filter |= UINT64_C(1) << (index & 63U);
+    }
+    operation_overrides_ = std::move(overrides);
+    operation_override_filter_ = filter;
+    advance_access_revision();
+}
+
 SignalId OperationList::signal(const SignalId canonical) const noexcept
 {
     const auto found = std::ranges::lower_bound(

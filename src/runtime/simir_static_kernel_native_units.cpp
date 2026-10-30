@@ -419,10 +419,10 @@ Interpreter::Impl::StaticKernel::build_operation_tier(
     // (run_generic_from at the VHDL wait, run_generic outside the body); the
     // thread variant stops at the boundaries its helpers report.
     const auto& member = members_[member_index];
-    const auto size = static_cast<std::uint32_t>(member.operations.size());
+    const auto size = static_cast<std::uint32_t>(member.operations().size());
     auto tier = std::make_unique<OperationTier>();
     auto& body = tier->body;
-    build_step_code(body, member.operations, thread ? 1U : 0U,
+    build_step_code(body, member.operations(), thread ? 1U : 0U,
         [&](const std::uint32_t pc) {
             return !thread
                 && (member.vhdl ? pc == member.body_end
@@ -454,7 +454,7 @@ Interpreter::Impl::StaticKernel::operation_tier(const std::uint32_t member_index
 {
     // Helpers are bound once build_native has run.
     if (codegen_ == nullptr || verify_ || native_helpers_.step_ops[0] == nullptr
-        || members_[member_index].operations.empty()) {
+        || members_[member_index].operations().empty()) {
         return nullptr;
     }
     const bool built = operation_tiers_.size() == members_.size()
@@ -1417,7 +1417,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         for (std::uint32_t index = 0U; index < members_.size(); ++index) {
             const auto& member = members_[index];
             if (member.compiled || member.partition != no_slot
-                || member.operations.empty()) {
+                || member.operations().empty()) {
                 continue;
             }
             const bool thread = member.kind == StaticKernelMemberKind::behavioral;
@@ -1797,7 +1797,7 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                 } else if constexpr (std::is_same_v<T, Branch>) {
                     backward = op.when_true <= pc || op.when_false <= pc;
                 }
-            }, member.operations[pc]);
+            }, member.operations()[pc]);
             if (backward) {
                 return true;
             }

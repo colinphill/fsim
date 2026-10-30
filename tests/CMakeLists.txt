@@ -6760,8 +6760,9 @@ if(FSIM_WITH_LLVM)
     TIMEOUT 600)
 endif()
 
-# VHDL delta collapsing: each witness is simulated with and without it, and
-# the exit status, transcript and diagnostics must be equal.
+# VHDL delta collapsing: each witness is simulated with and without it and
+# on the reference scheduler, and the exit status, transcript and
+# diagnostics must be equal.
 if(FSIM_WITH_LLVM)
   add_test(
     NAME fsim.application.static-kernel-delta-collapse

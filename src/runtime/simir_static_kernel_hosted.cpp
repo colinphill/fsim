@@ -507,7 +507,7 @@ PackedLogic4 Interpreter::Impl::StaticKernel::run_resolver(
     auto& inputs = initialized_ ? members_[member].resolver_inputs : collected;
     if (!inputs) {
         inputs.emplace();
-        for (const auto& operation : members_[member].operations) {
+        for (const auto& operation : members_[member].operations()) {
             visit_operation([&](const auto& value) {
                 if constexpr (requires { value.signal; }) {
                     if constexpr (std::is_same_v<

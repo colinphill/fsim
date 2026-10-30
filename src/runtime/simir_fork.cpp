@@ -773,7 +773,9 @@ void Interpreter::Impl::spawn_fork(
     }
     const auto selected_fork_spawn_filter = fork_spawn_filter;
     if (selected_fork_spawn_filter) {
-        prepare_callback_observation();
+        if (fork_spawn_filter_observes) {
+            prepare_callback_observation();
+        }
         if (!(*selected_fork_spawn_filter)(parent.cold().design_process)) {
             parent.status = ProcessStatus::running;
             queue_current(parent_id);

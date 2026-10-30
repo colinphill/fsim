@@ -448,6 +448,37 @@ bool Interpreter::Impl::StaticKernel::record_image(
     return true;
 }
 
+void Interpreter::Impl::StaticKernel::Member::materialize_operations() const
+{
+    // As restore_image copies the operations of a member it does not change.
+    const auto& operations
+        = operations_source->processes.program_view(process).operations();
+    operations_source = nullptr;
+    operations_.reserve(operations.size());
+    Operation expand_scratch;
+    for (std::size_t op = 0U; op < operations.size(); ++op) {
+        const auto& expanded = operations.expanded_ref(op, expand_scratch);
+        if (&expanded == &expand_scratch) {
+            operations_.push_back(std::move(expand_scratch));
+        } else {
+            operations_.push_back(expanded);
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::record_host_scan(const HostScan& scan)
+{
+    // Between the image's reasons and the collapse plan.
+    if (!recording_image_ || recording_image_->empty()) {
+        return;
+    }
+    ImageWriter writer { *recording_image_ };
+    writer.write(scan);
+    if (!writer.ok()) {
+        recording_image_->clear();
+    }
+}
+
 void Interpreter::Impl::StaticKernel::record_collapse_plan(const CollapsePlan& plan)
 {
     // record_image wrote build_fresh's state; the constructor plans
@@ -508,8 +539,10 @@ bool Interpreter::Impl::StaticKernel::restore_image(
         visit_image_fields(*this, [&](auto& field) { ok = ok && reader.read(field); });
     }
     std::vector<std::optional<std::string>> reasons;
+    HostScan host_scan;
     CollapsePlan collapse;
-    ok = ok && reader.read(reasons) && reader.read(collapse) && reader.done();
+    ok = ok && reader.read(reasons) && reader.read(host_scan)
+        && reader.read(collapse) && reader.done();
     if (!ok && failure == nullptr) {
         failure = "fields";
     }
@@ -558,15 +591,25 @@ bool Interpreter::Impl::StaticKernel::restore_image(
             ? ProcessProgramView { spec.host_original }
             : impl_.processes.program_view(member_spec.process);
         const auto& operations = program.operations();
-        member.operations.reserve(operations.size());
-        for (std::size_t op = 0U; op < operations.size(); ++op) {
-            const auto& expanded = operations.expanded_ref(op, expand_scratch);
-            if (&expanded == &expand_scratch) {
-                member.operations.push_back(std::move(expand_scratch));
-            } else {
-                member.operations.push_back(expanded);
+        // A member whose operations are its program's copies them on first
+        // use (Member::materialize_operations); a parallel kernel's lanes
+        // could do that at once, so it copies them now.
+        const bool lazy = member_spec.process != spec.host && !member.conversion
+            && !member.inlined_calls && member.origin.empty() && mt_threads_ == 1U;
+        if (lazy) {
+            member.operations_source = &impl_;
+        } else {
+            member.operations().reserve(operations.size());
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                const auto& expanded = operations.expanded_ref(op, expand_scratch);
+                if (&expanded == &expand_scratch) {
+                    member.operations().push_back(std::move(expand_scratch));
+                } else {
+                    member.operations().push_back(expanded);
+                }
             }
         }
+        const auto operation_count = lazy ? operations.size() : member.operations_.size();
         member.body_identity = operations.body_identity();
         if (member.conversion) {
             const auto resolver
@@ -581,23 +624,17 @@ bool Interpreter::Impl::StaticKernel::restore_image(
                 resolver->second.output);
         }
         // As build_fresh checks the body.
-        if (member_spec.body_end > member.operations.size()
-            || member_spec.body_begin > (member.vhdl ? member.operations.size()
+        if (member_spec.body_end > operation_count
+            || member_spec.body_begin > (member.vhdl ? operation_count
                                                      : member_spec.body_end)) {
             failure = "operations:bounds";
             ok = false;
             break;
         }
-        if (!member.vhdl
-            && (member.kind == StaticKernelMemberKind::combinational
-                || member.kind == StaticKernelMemberKind::sequential)
-            && std::any_of(member.operations.begin() + member_spec.body_begin,
-                member.operations.begin() + member_spec.body_end,
-                [](const Operation& operation) {
-                    return operation_holds<Call>(operation);
-                })) {
+        if (member.inlined_calls) {
+            // build_fresh found calls in the body.
             const bool wait_first = member_spec.exit_alt == 0U;
-            auto inlined = static_kernel_inline_calls(member.operations,
+            auto inlined = static_kernel_inline_calls(member.operations(),
                 wait_first ? 0U : member_spec.body_end,
                 wait_first ? member_spec.body_end : member_spec.exit_alt);
             if (!inlined || inlined->body_begin != member.body_begin
@@ -607,7 +644,7 @@ bool Interpreter::Impl::StaticKernel::restore_image(
                 ok = false;
                 break;
             }
-            member.operations = std::move(inlined->operations);
+            member.operations() = std::move(inlined->operations);
         } else if (member.prologue_end != member_spec.body_begin
             || member.body_end != member_spec.body_end
             || member.exit_alt != member_spec.exit_alt) {
@@ -615,7 +652,8 @@ bool Interpreter::Impl::StaticKernel::restore_image(
             ok = false;
             break;
         }
-        const auto original_size = static_cast<std::uint32_t>(member.operations.size());
+        const auto original_size = static_cast<std::uint32_t>(
+            lazy ? operation_count : member.operations_.size());
         if (!member.origin.empty()) {
             // As compile_members applies a restored specialization.
             const auto found = specialized.find(member.process);
@@ -630,7 +668,7 @@ bool Interpreter::Impl::StaticKernel::restore_image(
             }
             // Each persisted entry serves one member: move it, as
             // compile_members does (a later refusal specializes afresh).
-            member.operations.insert(member.operations.end(),
+            member.operations().insert(member.operations().end(),
                 std::make_move_iterator(found->second->operations.begin()),
                 std::make_move_iterator(found->second->operations.end()));
             found->second->operations.clear();
@@ -693,6 +731,7 @@ bool Interpreter::Impl::StaticKernel::restore_image(
     }
     build_container_info();
     fast_runs_.assign(members_.size(), FastRun { });
+    restored_host_scan_ = host_scan;
     restored_collapse_ = std::move(collapse);
     stage("finish");
     note_image("restore", "restored", spec.kernel_image->size());

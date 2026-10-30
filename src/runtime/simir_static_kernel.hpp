@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -216,6 +217,9 @@ struct StaticKernelRuntimeSpec {
     /// (static_kernel_compiler_identity), restored instead of compiling, and
     /// where this run records its own; the bytes are the kernel's own.
     std::shared_ptr<const std::string_view> compiled_bodies;
+    /// Loads compiled_bodies when the kernel builds afresh (a restored kernel
+    /// image holds its bodies, so the payload is not read then).
+    std::function<std::shared_ptr<const std::string_view>()> load_compiled_bodies;
     std::shared_ptr<std::string> record_compiled_bodies;
     /// Canonical templates and their units' bindings, likewise
     /// (static_kernel_canonical_identity).

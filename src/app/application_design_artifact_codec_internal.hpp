@@ -2830,27 +2830,27 @@ namespace codec_detail {
                     "design state operation overrides exceed the payload");
             }
 
-            std::uint64_t previous_index { };
-            bool has_previous_index { };
+            std::vector<std::pair<runtime::simir::OperationList::size_type,
+                runtime::simir::Operation>> overrides;
+            overrides.reserve(static_cast<std::size_t>(override_count));
             for (std::uint64_t override_index = 0;
                  override_index < override_count; ++override_index) {
                 std::uint64_t index { };
-                runtime::simir::Operation operation;
+                auto& [at, operation] = overrides.emplace_back();
                 if (!u64(index) || !read(operation)) {
                     return false;
                 }
                 if (index >= value.size()
                     || index
                         > std::numeric_limits<runtime::simir::InstructionIndex>::max()
-                    || (has_previous_index && index <= previous_index)) {
+                    || (override_index != 0U && index <= overrides[
+                            static_cast<std::size_t>(override_index) - 1U].first)) {
                     return fail(
                         "design state operation overrides are not canonical");
                 }
-                value.replace(static_cast<std::size_t>(index),
-                    std::move(operation));
-                previous_index = index;
-                has_previous_index = true;
+                at = static_cast<std::size_t>(index);
             }
+            value.replace_sorted(std::move(overrides));
             std::uint64_t scope_count { };
             if (!u64(scope_count)
                 || scope_count > static_cast<std::uint64_t>(remaining()) / 2U

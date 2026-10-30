@@ -172,7 +172,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
         if (specialize && members_[index].vhdl) {
             const auto specialize_start = std::chrono::steady_clock::now();
             auto& member = members_[index];
-            const auto original_size = static_cast<std::uint32_t>(member.operations.size());
+            const auto original_size = static_cast<std::uint32_t>(member.operations().size());
             auto* restored = [&]() -> StaticKernelSpecialization* {
                 const auto found = restored_by_process.find(member.process);
                 return found != restored_by_process.end()
@@ -191,7 +191,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
                     // Each restored entry serves one member: move it.
                     member.origin.insert(member.origin.end(),
                         restored->origin.begin(), restored->origin.end());
-                    member.operations.insert(member.operations.end(),
+                    member.operations().insert(member.operations().end(),
                         std::make_move_iterator(restored->operations.begin()),
                         std::make_move_iterator(restored->operations.end()));
                     restored->operations.clear();
@@ -211,8 +211,8 @@ void Interpreter::Impl::StaticKernel::compile_members()
                 entry.specialized = specialized;
                 if (specialized) {
                     entry.operations.assign(
-                        member.operations.begin() + original_size,
-                        member.operations.end());
+                        member.operations().begin() + original_size,
+                        member.operations().end());
                     entry.origin.assign(member.origin.begin() + original_size,
                         member.origin.end());
                 }
@@ -224,7 +224,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
             if (index < restored_bodies.size() && restored_bodies[index].present
                 && restored_bodies[index].process == members_[index].process
                 && restored_bodies[index].operations
-                    == members_[index].operations.size()) {
+                    == members_[index].operations().size()) {
                 members_[index].compiled = std::move(restored_bodies[index].body);
                 static const bool verify_bodies
                     = std::getenv("FSIM_KERNEL_VERIFY_BODIES") != nullptr;
@@ -308,7 +308,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
                 BodyWriter writer { recorded_bodies };
                 writer.put(index);
                 writer.put(members_[index].process);
-                writer.put(static_cast<std::uint64_t>(members_[index].operations.size()));
+                writer.put(static_cast<std::uint64_t>(members_[index].operations().size()));
                 writer.put(members_[index].compiled.has_value());
                 if (members_[index].compiled) {
                     writer.body(*members_[index].compiled);
@@ -351,7 +351,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
             if (failures[failure.reason]++ == 0U && profile_
                 && index < profile_names_.size()) {
                 std::size_t widest = 0U;
-                for (const auto& operation : members_[index].operations) {
+                for (const auto& operation : members_[index].operations()) {
                     visit_operation([&](const auto& op) {
                         using T = std::decay_t<decltype(op)>;
                         if constexpr (std::is_same_v<T, LoadConstant>) {
@@ -365,11 +365,11 @@ void Interpreter::Impl::StaticKernel::compile_members()
                 std::cerr << "fsim-kernel: not compiled example reason="
                           << failure.reason << " member="
                           << profile_names_[index] << " widest=" << widest
-                          << " ops=" << members_[index].operations.size()
+                          << " ops=" << members_[index].operations().size()
                           << ' ' << compile_failure_detail_ << '\n';
-                for (std::size_t pc = 0U; pc < members_[index].operations.size(); ++pc) {
+                for (std::size_t pc = 0U; pc < members_[index].operations().size(); ++pc) {
                     std::cerr << "    " << pc << ": variant="
-                              << members_[index].operations[pc].storage.index();
+                              << members_[index].operations()[pc].storage.index();
                     visit_operation([&](const auto& op) {
                         if constexpr (requires { op.destination; }) {
                             if constexpr (std::is_integral_v<
@@ -388,7 +388,7 @@ void Interpreter::Impl::StaticKernel::compile_members()
                                 std::cerr << " src=" << op.source;
                             }
                         }
-                    }, members_[index].operations[pc]);
+                    }, members_[index].operations()[pc]);
                     std::cerr << '\n';
                 }
             }
@@ -429,7 +429,7 @@ void Interpreter::Impl::StaticKernel::report_interpreted_sites() const
                                   const std::uint32_t member) {
         for (const auto& inst : code.code) {
             if (inst.op != KOp::generic
-                || inst.x >= members_[member].operations.size()) {
+                || inst.x >= members_[member].operations().size()) {
                 continue;
             }
             visit_operation([&](const auto& op) {
@@ -439,7 +439,7 @@ void Interpreter::Impl::StaticKernel::report_interpreted_sites() const
                 std::string key = name != nullptr ? name : "?";
                 std::free(name);
                 note("generic:" + key.substr(key.rfind(':') + 1U), member);
-            }, members_[member].operations[inst.x]);
+            }, members_[member].operations()[inst.x]);
         }
     };
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
@@ -510,7 +510,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     const bool vhdl = member.vhdl;
     const bool whole = vhdl || behavioral;
     const auto begin = whole ? 0U : member.body_begin;
-    const auto end = whole ? static_cast<std::uint32_t>(member.operations.size())
+    const auto end = whole ? static_cast<std::uint32_t>(member.operations().size())
                            : member.body_end;
     const auto stop = member.body_end;
     const auto register_count = member.registers.size();
@@ -541,7 +541,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     }
                     is_function[op.target] = 1U;
                 }
-            }, member.operations[pc]);
+            }, member.operations()[pc]);
         }
         if (frames) {
             // Callees reachable from each function entry, following control
@@ -587,7 +587,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         } else {
                             work.push_back(pc + 1U);
                         }
-                    }, member.operations[pc]);
+                    }, member.operations()[pc]);
                 }
             }
             std::vector<std::uint8_t> state(end, 0U);
@@ -817,7 +817,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         containers_[container_of_register[op.source]]
                             .type.element_width));
                 }
-            }, member.operations[pc]);
+            }, member.operations()[pc]);
         }
     }
 
@@ -847,7 +847,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                             && width[op.destination] > 64U;
                     }
                 }
-            }, member.operations[pc]);
+            }, member.operations()[pc]);
             wide_ops += wide ? 1U : 0U;
             ++total_ops;
         }
@@ -861,7 +861,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     CompiledBody body;
     // VHDL calls on the runtime-owned stack use a synthetic fixed stack in
     // the register file: a pointer and call_stack_depth entries.
-    if (whole && std::ranges::any_of(member.operations, [](const Operation& op) {
+    if (whole && std::ranges::any_of(member.operations(), [](const Operation& op) {
             const auto* call = operation_get_if<Call>(&op);
             return call != nullptr && call->stack.capacity == 0U;
         })) {
@@ -878,7 +878,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 compile_failure_detail_ = "reg=" + std::to_string(reg) + " width="
                     + std::to_string(reg < register_count ? width[reg] : 0U)
                     + " op_index=" + std::to_string(
-                        member.operations[translating].storage.index())
+                        member.operations()[translating].storage.index())
                     + " pc=" + std::to_string(translating);
             }
             throw reject("register_width");
@@ -1002,7 +1002,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             if (skip[pc] != 0U) {
                 continue;
             }
-            const auto& operation = member.operations[pc];
+            const auto& operation = member.operations()[pc];
             operation_registers(operation, operand_reads, operand_write);
             if (operand_write && *operand_write < register_count) {
                 ++definitions[*operand_write];
@@ -1181,7 +1181,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             if (skip[pc] != 0U) {
                 continue;
             }
-            operation_registers(member.operations[pc], operand_reads,
+            operation_registers(member.operations()[pc], operand_reads,
                 operand_write);
             if (operand_write && *operand_write < register_count) {
                 ++defs[*operand_write];
@@ -1227,7 +1227,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                             ok = op.signal != signal;
                         }
                     }
-                }, member.operations[pc]);
+                }, member.operations()[pc]);
                 if (!ok) {
                     return false;
                 }
@@ -1239,7 +1239,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 continue;
             }
             const auto* read = operation_get_if<ReadSignal>(
-                &member.operations[read_pc]);
+                &member.operations()[read_pc]);
             if (read == nullptr || read->kind != SignalReadKind::current
                 || read->ticks != 1U || read->clock || read->gate
                 || !single_use(read->destination)) {
@@ -1258,7 +1258,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             std::uint32_t select_pc = no_slot;
             std::optional<DynamicPartIndex> selection;
             if (const auto* select = operation_get_if<DynamicPartSelect>(
-                    &member.operations[write_pc])) {
+                    &member.operations()[write_pc])) {
                 if (select->source != value || !single_use(select->destination)
                     || select->width != width[select->destination]
                     || select->base >= register_count
@@ -1324,7 +1324,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         move.flags | (deferred ? flag_nba : 0U));
                     matched = true;
                 }
-            }, member.operations[write_pc]);
+            }, member.operations()[write_pc]);
             if (!matched || !straight(read_pc, write_pc, read->signal)) {
                 continue;
             }
@@ -1332,7 +1332,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 // The base must still hold its value at the write.
                 bool base_kept = true;
                 for (auto pc = select_pc + 1U; pc < write_pc; ++pc) {
-                    operation_registers(member.operations[pc], operand_reads,
+                    operation_registers(member.operations()[pc], operand_reads,
                         operand_write);
                     base_kept = base_kept
                         && (!operand_write || *operand_write != move.y);
@@ -1452,7 +1452,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 } else {
                     translated = false;
                 }
-            }, member.operations[pc]);
+            }, member.operations()[pc]);
             if (translated) {
                 body.code.push_back(inst);
                 continue;
@@ -1666,7 +1666,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     inst.aux = has_unknowns(op.source) ? 1U : 0U;
                     lowered = true;
                 }
-            }, member.operations[pc]);
+            }, member.operations()[pc]);
             if (lowered) {
                 body.code.push_back(inst);
                 continue;
@@ -1675,7 +1675,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         // Operations on values wider than 64 bits, wide or proxy slots, and
         // dynamic host writes run through the reference value functions.
         {
-            const auto& operation = member.operations[pc];
+            const auto& operation = member.operations()[pc];
             operation_registers(operation, operand_reads, operand_write);
             bool generic = false;
             // Narrow selections may read a wide register directly.
@@ -1830,8 +1830,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     if (pc != stop
                         && !(pc > begin && !member.vhdl_2019
                             && static_kernel_halt_after_failure(
-                                member.operations[pc - 1U],
-                                member.operations[pc]))) {
+                                member.operations()[pc - 1U],
+                                member.operations()[pc]))) {
                         throw reject("vhdl_suspension");
                     }
                     inst.op = KOp::jump;
@@ -2011,7 +2011,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 } else {
                     handled = false;
                 }
-            }, member.operations[pc]);
+            }, member.operations()[pc]);
         }
         if (handled) {
             body.code.push_back(inst);
@@ -2521,7 +2521,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             } else {
                 throw reject("operation");
             }
-        }, member.operations[pc]);
+        }, member.operations()[pc]);
         body.code.push_back(inst);
     }
     // Every register an instruction reads must have a known narrow width.
@@ -2623,7 +2623,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         body.resume_entries.push_back(pc);
                     }
                 }
-            }, member.operations[pc]);
+            }, member.operations()[pc]);
         }
         std::ranges::sort(body.resume_entries);
         body.resume_entries.erase(std::unique(body.resume_entries.begin(),
@@ -2725,9 +2725,9 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     // Generated code calls each generic instruction's operation helper by
     // the operation's ordinal.
     for (auto& inst : body.code) {
-        if (inst.op == KOp::generic && inst.x < member.operations.size()) {
+        if (inst.op == KOp::generic && inst.x < member.operations().size()) {
             inst.sub = static_cast<std::uint8_t>(
-                operation_kind_ordinal(member.operations[inst.x]));
+                operation_kind_ordinal(member.operations()[inst.x]));
         }
     }
     return body;

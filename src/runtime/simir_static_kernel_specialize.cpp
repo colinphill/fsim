@@ -309,13 +309,13 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
     const std::uint32_t member_index)
 {
     auto& member = members_[member_index];
-    const auto size = static_cast<std::uint32_t>(member.operations.size());
+    const auto size = static_cast<std::uint32_t>(member.operations().size());
     const auto entry = member.body_begin;
     const auto stop = member.body_end;
     if (!member.vhdl || member.kind == StaticKernelMemberKind::behavioral
         || entry >= size || stop >= size
         || member.exit_alt != std::numeric_limits<std::uint32_t>::max()
-        || !operation_holds<WaitSensitivity>(member.operations[stop])) {
+        || !operation_holds<WaitSensitivity>(member.operations()[stop])) {
         return false;
     }
 
@@ -330,7 +330,7 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
             if (recipe.verbatim[index] == 0U) {
                 continue;
             }
-            const auto& here = member.operations[recipe.origin[index]];
+            const auto& here = member.operations()[recipe.origin[index]];
             const auto& there = recipe.out[index];
             bool same_kind = false;
             visit_operation([&](const auto& op) {
@@ -346,7 +346,7 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
         std::unordered_map<SignalId, SignalId> there_to_here;
         std::unordered_map<SignalId, SignalId> here_to_there;
         for (const auto& [pc, there] : recipe.signals) {
-            const auto here = operation_signal(member.operations[pc]);
+            const auto here = operation_signal(member.operations()[pc]);
             if (!here || there_to_here.try_emplace(there, *here).first->second != *here
                 || here_to_there.try_emplace(*here, there).first->second != there) {
                 return false;
@@ -364,15 +364,15 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
         }
         member.origin.insert(member.origin.end(), recipe.origin.begin(),
             recipe.origin.end());
-        member.operations.reserve(size + recipe.out.size());
+        member.operations().reserve(size + recipe.out.size());
         for (std::size_t index = 0U; index < recipe.out.size(); ++index) {
             if (recipe.verbatim[index] == 0U) {
-                member.operations.push_back(recipe.out[index]);
+                member.operations().push_back(recipe.out[index]);
                 continue;
             }
-            member.operations.push_back(member.operations[recipe.origin[index]]);
+            member.operations().push_back(member.operations()[recipe.origin[index]]);
             if (!recipe.renames[index].empty()) {
-                apply_renames(member.operations.back(), recipe.renames[index]);
+                apply_renames(member.operations().back(), recipe.renames[index]);
             }
         }
         member.body_begin = size;
@@ -472,8 +472,8 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
             }
             seen[pc] = 1U;
             ++reachable;
-            reads_before += wide_read(member.operations[pc]) ? 1U : 0U;
-            if (const auto signal = operation_signal(member.operations[pc])) {
+            reads_before += wide_read(member.operations()[pc]) ? 1U : 0U;
+            if (const auto signal = operation_signal(member.operations()[pc])) {
                 recipe->signals.emplace_back(pc, *signal);
             }
             visit_operation([&](const auto& op) {
@@ -499,7 +499,7 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
                 } else {
                     admitted = false;
                 }
-            }, member.operations[pc]);
+            }, member.operations()[pc]);
         }
         if (!admitted || !gain) {
             return finish(false);
@@ -765,7 +765,7 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
                 candidates.push_back(static_cast<std::uint32_t>(blocks.size()));
                 blocks.push_back(Block { pc, static_cast<std::uint32_t>(out.size()), state });
             }
-            const auto& operation = member.operations[pc];
+            const auto& operation = member.operations()[pc];
             bool ended = false;
             visit_operation([&](const auto& op) {
                 using T = std::decay_t<decltype(op)>;

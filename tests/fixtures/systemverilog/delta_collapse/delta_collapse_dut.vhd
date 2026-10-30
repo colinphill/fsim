@@ -192,3 +192,118 @@ begin
         end if;
     end process;
 end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+-- The intermediate combination reaches an output port: the SystemVerilog
+-- testbench counts every event on it, so the glitch must stay visible.
+entity dc_observe_glitch is
+    port (a : in std_logic; q : out std_logic);
+end entity;
+
+architecture rtl of dc_observe_glitch is
+    signal b, d, e : std_logic := '0';
+    signal c : std_logic := '1';
+begin
+    b <= a;
+    c <= not b;
+    d <= b;
+    e <= not c;
+    q <= d xor e;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+-- 'EVENT and 'LAST_VALUE of an internal signal that pulses for one delta
+-- on each input change: the count of its events is registered on clk.
+entity dc_attributes is
+    port (
+        clk, a : in std_logic;
+        q : out std_logic_vector(7 downto 0));
+end entity;
+
+architecture rtl of dc_attributes is
+    signal b, c, x : std_logic := '0';
+    signal count : unsigned(7 downto 0) := (others => '0');
+begin
+    b <= a;
+    c <= b;
+    x <= b xor c;
+    process (x)
+    begin
+        if x'event and x'last_value = '0' then
+            count <= count + 1;
+        end if;
+    end process;
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            q <= std_logic_vector(count);
+        end if;
+    end process;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+-- Eight GF(2^4) cells in a chain, each multiplying the previous product
+-- by the input: pure, so every cell may be collapsed, eight levels deep.
+-- (Each stage is its own signal: the planner's reader rule compares whole
+-- signals, so stages of one array would read their own output.)
+entity dc_chain is
+    port (
+        clk : in std_logic;
+        a : in std_logic_vector(3 downto 0);
+        q : out std_logic_vector(3 downto 0));
+end entity;
+
+architecture rtl of dc_chain is
+    signal s0, s1, s2, s3, s4, s5, s6, s7, s8 : std_logic_vector(3 downto 0);
+begin
+    s0 <= a(0) & a(3 downto 1);
+    c1 : entity work.dc_static_cell port map (a => s0, b => a, p => s1);
+    c2 : entity work.dc_static_cell port map (a => s1, b => a, p => s2);
+    c3 : entity work.dc_static_cell port map (a => s2, b => a, p => s3);
+    c4 : entity work.dc_static_cell port map (a => s3, b => a, p => s4);
+    c5 : entity work.dc_static_cell port map (a => s4, b => a, p => s5);
+    c6 : entity work.dc_static_cell port map (a => s5, b => a, p => s6);
+    c7 : entity work.dc_static_cell port map (a => s6, b => a, p => s7);
+    c8 : entity work.dc_static_cell port map (a => s7, b => a, p => s8);
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            q <= s8;
+        end if;
+    end process;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+-- Two inputs the testbench changes from different regions of one time
+-- step (a blocking in the active region, b nonblocking in every other
+-- step): a note reports each value their exclusive or takes.
+entity dc_regions is
+    port (
+        clk, a, b : in std_logic;
+        q : out std_logic);
+end entity;
+
+architecture rtl of dc_regions is
+    signal x : std_logic := '0';
+begin
+    x <= a xor b;
+    process (x)
+    begin
+        report "x=" & std_logic'image(x) severity note;
+    end process;
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            q <= x;
+        end if;
+    end process;
+end architecture;

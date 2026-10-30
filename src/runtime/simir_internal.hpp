@@ -1707,6 +1707,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     VcdControlHook vcd_control_hook;
     CoverageDatabaseControlHook coverage_database_control_hook;
     std::shared_ptr<const ForkSpawnFilter> fork_spawn_filter;
+    /// The filter may read signals: prepare_callback_observation runs first.
+    bool fork_spawn_filter_observes { true };
     ClassAllocateContextHook class_allocate_context_hook;
     std::optional<std::uint64_t> pending_class_allocation_seed;
     ClassPropertyReadHook class_property_read_hook;

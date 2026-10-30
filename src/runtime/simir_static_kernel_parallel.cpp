@@ -367,7 +367,7 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
         // An instruction the reference evaluator runs (generic, step): its
         // operation's signal accesses, or nothing known.
         const auto touch_operation = [&](const std::uint32_t member, const std::uint32_t at) {
-            if (member >= member_count || at >= members_[member].operations.size()) {
+            if (member >= member_count || at >= members_[member].operations().size()) {
                 opaque_level[group[unit]] = 1U;
                 return;
             }
@@ -385,7 +385,7 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                     touch_container(state.container_registers[reg], write);
                     found = true;
                 }
-                for (const auto& other : state.operations) {
+                for (const auto& other : state.operations()) {
                     const auto* const bind = operation_get_if<ReadContainerObject>(&other);
                     if (bind != nullptr && bind->destination == reg) {
                         const auto container = object_container(bind->object);
@@ -453,13 +453,13 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 } else {
                     return false;
                 }
-            }, members_[member].operations[at]);
+            }, members_[member].operations()[at]);
             if (!known) {
                 if (opaque_level[group[unit]] == 0U && std::getenv("FSIM_KERNEL_MT_STATS") != nullptr) {
                     std::cerr << "fsim-kernel: mt-plan opaque group=" << group[unit]
                               << " operation=" << visit_operation([](const auto& op) {
                                      return typeid(op).name();
-                                 }, members_[member].operations[at])
+                                 }, members_[member].operations()[at])
                               << " in " << program_of(members_[member]).name() << '\n';
                 }
                 opaque_level[group[unit]] = 1U;
@@ -551,9 +551,9 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                 // in the lane for the replay; every other generic operation
                 // runs on the leader.
                 ok = ok && group[unit] == sequential_group && current < member_count
-                    && inst.x < members_[current].operations.size()
+                    && inst.x < members_[current].operations().size()
                     && static_kernel_sequential_operation_supported(
-                        members_[current].operations[inst.x]);
+                        members_[current].operations()[inst.x]);
                 break;
             case KOp::step:
                 touch_operation(current, inst.x);
