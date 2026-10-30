@@ -138,6 +138,63 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29 (night): Phase 6 second gate — cheaper kernel setup, fork-filter observation, mixed collapse witnesses (`28d3cc3f`, sweeps `v4c56`, `v4c56a`)
+
+**Gate** (five changesets):
+- ct4: 1090/1090 in all four variants (`session-1029/ct4-phase6b.log`).
+- Normal sweep `v4c56` (frozen `28d3cc3f`): 0 losses against `b96x1` and against `v4c55` (skipping case11 and issue705, as before).
+- AOT sweep `v4c56a`: 0 losses against `v4c55a`.
+- Census `v4c56`: every planned case is admitted with `host=0`, with 0 hosted processes and 0 runs with interpreted>0. `kernel_deopts` (9 cases) is unchanged.
+- Track V gate step (new): `session-1029/vgate/vgate.sh` on the frozen binary. mixed_codec (kept 4,155 of 6,595 planned) and mixed_throughput (kept 1,844 of 3,667), 8 levels each, are byte-identical with collapse on, with `FSIM_STATIC_KERNEL_DELTA_COLLAPSE=0` and on the reference scheduler (`FSIM_STATIC_KERNEL=0`).
+
+| Suite | Passed / in scope (`v4c55`) | Passed / in scope (`v4c56`) | Passed / in scope (`v4c56a`) | Excluded |
+|---|---:|---:|---:|---:|
+| nvc | 1259 / 1259 | 1259 / 1259 | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 3663 / 3663 | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 2638 / 2638 | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 1495 / 1495 | 2 |
+
+**Changesets.**
+1. **Fork-filter observation.** `set_fork_spawn_filter(filter, observes_signals)`. The application's filter reads only the assertion-control state, so it passes false. The kernel, reference fork and SVA paths then skip `prepare_callback_observation`, which had materialized every kernel signal on each testbench fork. Throughput fixture run ~985 → ~950 ms; instructions 19.92 → 19.26 G.
+2. **Lazy compiled bodies.** `StaticKernelRuntimeSpec::load_compiled_bodies` reads the persisted bodies payload only when the kernel builds fresh. original_codec setup ~405 → ~395 ms.
+3. **Lazy member operations (S5 part 1).**
+   - A restored image leaves `Member::operations()` lazy: copied from the process program on first use. It is eager for the host, conversions, specialized members, members with inlined calls (a new image field), and multi-threaded kernels.
+   - The image records the host scan, so a restored kernel skips it.
+   - original_codec setup ~395 → ~314 ms (operations 83 → 6 ms, host scan 12.5 → 0.04 ms); throughput fixture setup ~187 → ~152 ms.
+4. **Mixed collapse evidence** (owner side note: the VHDL suites barely exercise collapse).
+   - The delta-collapse ctest has 8 cases and compares each with the reference scheduler as well as with collapse off. New witnesses:
+     - a glitch on an output port counted by an SV `always @(q)`;
+     - `'EVENT`/`'LAST_VALUE` of a one-delta pulse;
+     - a nine-level chain of GF(2⁴) cells (kept 9);
+     - SV blocking and nonblocking stimulus in one time step, with VHDL reports.
+   - Admission gap found, not closed. The planner's reader rule compares whole signals, so a generate chain over one array signal (cell i reads `stages(i)`, writes `stages(i+1)`) is refused as `reader_self`. mixed_codec has no such refusal (its 90 planner rejections are `reader_sv_thread` 66, `reader_vhdl_rejected` 13, `outputs_writers` 11).
+5. **`OperationList::replace_sorted`.** The design-state decoder built each process's instance overrides one at a time, regrowing the override vector. Building it in one pass saves about 10 ms of original_codec setup.
+
+Tried and reverted (no diff): a word-indexed ranged-reader list (`slot_changed_general` 2.7 → 7.2% self), and S6 known-value clones (guard cost above the gain; capped version +1% run; patch in `session-1029/s6-known-clones-attempt.patch`).
+
+**D6 campaign `v4c56-g5`** (frozen `28d3cc3f`, `tools/perf.sh`, 3 samples, CPU 9, ASLR off, xsim in the same session). The geomean e2e is 3.79× (3.78× in `v4-d6-1029a`). Every simulate phase is at least 3.55× xsim (3.47× before). original_codec simulate 2.131 → 1.884 s (3.47× → 4.01×); original_throughput 1.480 → 1.279 s.
+
+| Case | fsim e2e | xsim e2e | e2e × | fsim sim | xsim sim | sim × |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 10.916 | 29.723 | 2.72 | 1.884 | 7.550 | 4.01 |
+| original_throughput | 4.842 | 15.819 | 3.27 | 1.279 | 7.497 | 5.86 |
+| mixed_codec | 8.530 | 24.713 | 2.90 | 1.831 | 6.493 | 3.55 |
+| mixed_throughput | 4.467 | 12.894 | 2.89 | 1.480 | 6.095 | 4.12 |
+| codex_reference_mode0_frames1 | 2.164 | 9.588 | 4.43 | 0.127 | 3.889 | 30.56 |
+| codex_reference_mode0_frames2 | 2.063 | 9.534 | 4.62 | 0.127 | 3.888 | 30.67 |
+| codex_reference_mode1_frames1 | 2.162 | 10.037 | 4.64 | 0.127 | 3.888 | 30.67 |
+| codex_reference_mode1_frames2 | 2.163 | 10.087 | 4.66 | 0.127 | 3.839 | 30.26 |
+| codex_throughput_default | 2.263 | 10.035 | 4.43 | 0.276 | 3.937 | 14.24 |
+| codex_throughput_direct_syndrome | 2.116 | 8.782 | 4.15 | 0.278 | 3.937 | 14.17 |
+
+**Where setup and run stand** (original_codec, live tree):
+- Setup ~610 ms: runtime-state decode ~213 ms, kernel image ~100 ms, interpreter population ~170 ms.
+  - What remains are 10–40 ms items: hierarchy-path interning ~36 ms, container-value decode and copy ~40 ms, image `Member` field decode ~26 ms, driver registration ~36 ms.
+  - Each needs a structural change: recording the interpreter's populated state (S5 stage 3) or lazy path names.
+- Run: generated code is 37% of samples. The kernel's scheduling machinery is about 18%: `native_notify` 5.2%, `run` 2.6%, `schedule_target` 2.3%, `write_slot_word` 2.1%, `slot_changed_general` 1.4%, and the settle/partition loop. This is what S1 (inline notification) and S2 (generated settle loop) target.
+
 ### 2026-10-29 (late): Phase 6 first gate — wider VHDL delta collapse (V1), cheaper slot notification (`e0dbb3a6`, sweeps `v4c55`, `v4c55a`)
 
 **Gate** (five changesets):
