@@ -96,8 +96,10 @@ namespace di = semantic::design;
     case runtime::simir::EdgeKind::any:
       return di::EdgeKind::any;
     case runtime::simir::EdgeKind::posedge:
+    case runtime::simir::EdgeKind::rising:
       return di::EdgeKind::positive;
     case runtime::simir::EdgeKind::negedge:
+    case runtime::simir::EdgeKind::falling:
       return di::EdgeKind::negative;
     case runtime::simir::EdgeKind::transaction:
       return di::EdgeKind::transaction;

@@ -2212,6 +2212,8 @@ void Interpreter::Impl::handle_boundary(
                 break;
             case EdgeKind::posedge:
             case EdgeKind::negedge:
+            case EdgeKind::rising:
+            case EdgeKind::falling:
                 if (source.initial_value.width() == 0U) {
                     process.pc = instruction;
                     fail(process, "WaitOn edge requires a non-empty signal");

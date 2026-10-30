@@ -351,6 +351,9 @@ namespace codec_detail {
             return value >= runtime::simir::SignalUpdateDomain::generic
                 && value
                     <= runtime::simir::SignalUpdateDomain::systemverilog_nba;
+        } else if constexpr (std::same_as<T, runtime::simir::EdgeKind>) {
+            return value >= runtime::simir::EdgeKind::any
+                && value <= runtime::simir::EdgeKind::falling;
         } else if constexpr (
             std::same_as<T, runtime::simir::ProcessSchedulingDomain>) {
             return value

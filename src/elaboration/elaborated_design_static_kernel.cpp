@@ -893,7 +893,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 const bool edges = std::ranges::all_of(sensitivity,
                     [](const Sensitivity& entry) {
                         return entry.edge == EdgeKind::posedge
-                            || entry.edge == EdgeKind::negedge;
+                            || entry.edge == EdgeKind::negedge
+                            || entry.edge == EdgeKind::rising
+                            || entry.edge == EdgeKind::falling;
                     });
                 if (!wait || *wait + 1U >= count || !(any || edges)
                     || std::ranges::any_of(sensitivity,
@@ -932,7 +934,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             const bool edges = std::ranges::all_of(sensitivity,
                 [](const Sensitivity& entry) {
                     return entry.edge == EdgeKind::posedge
-                        || entry.edge == EdgeKind::negedge;
+                        || entry.edge == EdgeKind::negedge
+                        || entry.edge == EdgeKind::rising
+                        || entry.edge == EdgeKind::falling;
                 });
             // SystemVerilog bodies end at the loop jump. VHDL subprogram
             // bodies may follow it and are reached only through Call.

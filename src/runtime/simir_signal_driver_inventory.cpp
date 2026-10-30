@@ -22,6 +22,8 @@ static_assert(static_cast<std::uint8_t>(RegionDriverClass::unknown)
     == static_cast<std::uint8_t>(SignalDriverInventoryDriverClass::unknown));
 static_assert(static_cast<std::uint8_t>(EdgeKind::transaction)
     == static_cast<std::uint8_t>(SignalDriverInventoryEdge::transaction));
+static_assert(static_cast<std::uint8_t>(EdgeKind::falling)
+    == static_cast<std::uint8_t>(SignalDriverInventoryEdge::falling));
 
 std::size_t word_count(const std::uint32_t width) noexcept
 {

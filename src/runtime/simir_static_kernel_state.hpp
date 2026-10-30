@@ -1125,6 +1125,17 @@ private:
     void run_partition(std::uint32_t partition);
     void build_partitions(
         const std::vector<std::vector<std::uint32_t>>& successors);
+    void concatenate_members(CompiledBody& program,
+        const std::vector<std::uint32_t>& members, bool take);
+    /// FSIM_CYCLE_DRIVER (Phase 7 P3 driver v0): each SystemVerilog
+    /// dispatch group's member bodies concatenated into one program, run
+    /// as one native call when the group triggers alone.
+    void build_fused_groups();
+    /// A fused dispatch group is running (finish_native refuses a deopt).
+    bool fused_running_ { };
+    /// FSIM_PROFILE_KERNEL: dispatch groups by fusion outcome, and fused runs.
+    std::map<std::string, std::uint32_t> profile_fused_groups_;
+    std::uint64_t profile_fused_runs_ { };
     void build_native(StaticKernelCodegen& codegen);
     /// Whether every register's X plane and 'U' mask is zero (clearing them
     /// for registers each activation writes before reading).
@@ -2473,6 +2484,13 @@ private:
         /// (or are running) in this pass.
         bool running { };
         std::uint32_t next { };
+        /// FSIM_CYCLE_DRIVER: the members' bodies as one program (marks
+        /// give the running member and position), and whether it is
+        /// running: members up to the running position have run.
+        bool fused { };
+        bool fused_running { };
+        CompiledBody program;
+        NativeUnit native;
     };
     std::vector<DispatchGroup> dispatch_groups_;
     std::vector<std::uint32_t> expanded_groups_;
@@ -2947,7 +2965,12 @@ private:
     void report_unknown_census() const;
     /// FSIM_PROFILE_KERNEL_DOMAINS (Phase 7 P1): clock domains, their flops
     /// and combinational cones (simir_static_kernel_domains.cpp).
-    void report_domains() const;
+    void report_domains();
+    /// With FSIM_PROFILE_KERNEL, the runs of each admission status the
+    /// domain report gave the members.
+    void report_domain_runs() const;
+    std::vector<std::uint32_t> profile_domain_status_;
+    std::vector<std::string> profile_domain_status_names_;
     /// FSIM_PROFILE_KERNEL_BATCHES (diagnostic, multi-threading plan): the
     /// batches a parallel kernel could run at once. A batch is one settle
     /// level visit or one triggered round; per size class (log2 buckets)

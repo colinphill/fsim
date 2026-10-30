@@ -1431,7 +1431,7 @@ void Interpreter::Impl::rebuild_static_fanout()
         return;
     }
 
-    constexpr auto category_count = std::size_t { 4U };
+    constexpr auto category_count = std::size_t { 6U };
     using CategoryCounts = std::array<std::size_t, category_count>;
     std::vector<std::size_t> counts(signals.size(), 0U);
     std::vector<CategoryCounts> category_counts(
@@ -1596,6 +1596,8 @@ Interpreter::Impl::decode_static_transition(
     return {
         edge_matches(EdgeKind::posedge, old_value, new_value),
         edge_matches(EdgeKind::negedge, old_value, new_value),
+        edge_matches(EdgeKind::rising, old_value, new_value),
+        edge_matches(EdgeKind::falling, old_value, new_value),
     };
 }
 
@@ -1696,6 +1698,12 @@ void Interpreter::Impl::notify_static_value_change(
     }
     if (transition.negedge) {
         visit_category(EdgeKind::negedge);
+    }
+    if (transition.rising) {
+        visit_category(EdgeKind::rising);
+    }
+    if (transition.falling) {
+        visit_category(EdgeKind::falling);
     }
 }
 
@@ -3738,7 +3746,9 @@ void Interpreter::Impl::publish_native_word(
         = !static_fanout_indices_for(
                signal_id, EdgeKind::posedge).empty()
         || !static_fanout_indices_for(
-               signal_id, EdgeKind::negedge).empty();
+               signal_id, EdgeKind::negedge).empty()
+        || !static_fanout_indices_for(signal_id, EdgeKind::rising).empty()
+        || !static_fanout_indices_for(signal_id, EdgeKind::falling).empty();
     if (width != 0U && has_edge_fanout) {
         transition = decode_static_transition(
             decode_low(current), decode_low(value));
@@ -3824,7 +3834,9 @@ void Interpreter::Impl::publish_native_logic9_word(
         = !static_fanout_indices_for(
                signal_id, EdgeKind::posedge).empty()
         || !static_fanout_indices_for(
-               signal_id, EdgeKind::negedge).empty();
+               signal_id, EdgeKind::negedge).empty()
+        || !static_fanout_indices_for(signal_id, EdgeKind::rising).empty()
+        || !static_fanout_indices_for(signal_id, EdgeKind::falling).empty();
     if (width != 0U && has_edge_fanout) {
         transition = decode_static_transition(
             decode_low(current), decode_low(value));
@@ -4112,7 +4124,9 @@ void Interpreter::Impl::publish_value_change(
             = !static_fanout_indices_for(
                    signal_id, EdgeKind::posedge).empty()
             || !static_fanout_indices_for(
-                   signal_id, EdgeKind::negedge).empty();
+                   signal_id, EdgeKind::negedge).empty()
+        || !static_fanout_indices_for(signal_id, EdgeKind::rising).empty()
+        || !static_fanout_indices_for(signal_id, EdgeKind::falling).empty();
         if (old_value.width() != 0U
             && signal.initial_value.width() != 0U
             && has_static_edge_fanout) {

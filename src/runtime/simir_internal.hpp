@@ -1053,6 +1053,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     struct StaticTransitionMatches {
         bool posedge { };
         bool negedge { };
+        bool rising { };
+        bool falling { };
 
         [[nodiscard]] bool matches(const EdgeKind edge) const noexcept
         {
@@ -1061,6 +1063,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
                 return posedge;
             case EdgeKind::negedge:
                 return negedge;
+            case EdgeKind::rising:
+                return rising;
+            case EdgeKind::falling:
+                return falling;
             case EdgeKind::any:
             case EdgeKind::transaction:
                 return false;
@@ -1571,7 +1577,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<Fanout> static_fanout_entries;
     std::vector<std::size_t> static_fanout_offsets;
     std::vector<std::size_t> static_fanout_category_entries;
-    std::vector<std::array<FanoutSpan, 4U>> static_fanout_category_spans;
+    std::vector<std::array<FanoutSpan, 6U>> static_fanout_category_spans;
     bool static_fanout_dirty { true };
     // Exact static-sensitivity cohorts span the complete elaborated design,
     // including aliases which resolve to the same clock SignalId across

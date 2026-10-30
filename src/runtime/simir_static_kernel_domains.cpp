@@ -7,6 +7,18 @@
 // (written by a flop: a divider) or combinational (a gated clock). The
 // analysis reports what a cycle-based schedule could cover
 // (FSIM_PROFILE_KERNEL_DOMAINS); the cycle code builds on it.
+//
+// A VHDL flop with asynchronous controls (`process (clk, rst)` with
+// `if rst = '1' ... elsif rising_edge(clk)`) runs as a thread: its edge
+// entry is its clock. A derived clock's domain runs after its parent, the
+// domain of the flop that writes it. A gated clock is a combinational
+// function of a source clock and enables. The report screens out gates that
+// can pulse at the edge (the source reaching the gate at several delta
+// depths, an enable that is a flop on the same edge); what remains is only
+// a candidate. Triggering the gated domain from the source edge is exact
+// only if no enable changes at any delta of the edge's time step, including
+// after the edge, which this report does not prove (Phase 7 plan, gated
+// clocks).
 #include "simir_static_kernel_compiled_internal.hpp"
 
 #include <algorithm>
@@ -15,6 +27,7 @@
 #include <numeric>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -31,6 +44,274 @@ enum class ClockKind : std::uint8_t {
     combinational,
     mixed,
 };
+
+// The signal a write operation targets.
+std::optional<SignalId> written_signal(const Operation& operation)
+{
+    return visit_operation([](const auto& op) -> std::optional<SignalId> {
+        using T = std::decay_t<decltype(op)>;
+        if constexpr (std::is_same_v<T, WriteBlocking>
+            || std::is_same_v<T, WriteBlockingSlice>
+            || std::is_same_v<T, WriteBlockingDynamicSlice>
+            || std::is_same_v<T, WriteBlockingDynamicPartSlice>
+            || std::is_same_v<T, WriteUpdate>
+            || std::is_same_v<T, WriteUpdateSlice>
+            || std::is_same_v<T, WriteUpdateDynamicSlice>
+            || std::is_same_v<T, WriteUpdateDynamicPartSlice>
+            || std::is_same_v<T, WriteAfter>
+            || std::is_same_v<T, WriteAfterSlice>
+            || std::is_same_v<T, WriteAfterDynamicSlice>
+            || std::is_same_v<T, WriteAfterDynamicPartSlice>
+            || std::is_same_v<T, WriteInertial>
+            || std::is_same_v<T, WriteInertialSlice>
+            || std::is_same_v<T, WriteInertialDynamicSlice>
+            || std::is_same_v<T, WriteInertialDynamicPartSlice>
+            || std::is_same_v<T, WriteProjected>
+            || std::is_same_v<T, WriteProjectedSlice>
+            || std::is_same_v<T, WriteProjectedDynamicSlice>
+            || std::is_same_v<T, WriteProjectedWaveform>
+            || std::is_same_v<T, WriteProjectedWaveformSlice>
+            || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>
+            || std::is_same_v<T, WriteDelayed>) {
+            return op.signal;
+        } else {
+            return std::nullopt;
+        }
+    }, operation);
+}
+
+// A domain's edge: a VHDL RISING_EDGE (FALLING_EDGE) sensitivity shares the
+// clock's posedge (negedge) domain; the two differ only on metavalue
+// transitions, which the report does not model.
+constexpr EdgeKind domain_edge(const EdgeKind edge)
+{
+    return edge == EdgeKind::rising ? EdgeKind::posedge
+        : edge == EdgeKind::falling ? EdgeKind::negedge
+        : edge;
+}
+
+// The register an operation the shape matchers below follow defines.
+std::optional<RegisterId> defined_register(const Operation& operation)
+{
+    return visit_operation([](const auto& op) -> std::optional<RegisterId> {
+        using T = std::decay_t<decltype(op)>;
+        if constexpr (std::is_same_v<T, ReadSignal> || std::is_same_v<T, LoadConstant>
+            || std::is_same_v<T, Binary> || std::is_same_v<T, LogicalBinary>
+            || std::is_same_v<T, Extract> || std::is_same_v<T, ConvertToTwoState>
+            || std::is_same_v<T, CopyRegister>) {
+            return op.destination;
+        } else {
+            return std::nullopt;
+        }
+    }, operation);
+}
+
+// The level a '0', '1', 'L' or 'H' constant denotes: true for high.
+std::optional<bool> constant_level(const PackedLogic4& value)
+{
+    if (value == PackedLogic4::from_logic9_msb_string("1")
+        || value == PackedLogic4::from_logic9_msb_string("H")
+        || value == PackedLogic4(1U, Logic4::one)) {
+        return true;
+    }
+    if (value == PackedLogic4::from_logic9_msb_string("0")
+        || value == PackedLogic4::from_logic9_msb_string("L")
+        || value == PackedLogic4(1U, Logic4::zero)) {
+        return false;
+    }
+    return std::nullopt;
+}
+
+// The operations one activation runs. A VHDL member with a prologue keeps
+// its first run after the wait (body_begin past body_end); its activation
+// is then the operations before the wait.
+template <typename Member>
+std::pair<std::size_t, std::size_t> activation_range(const Member& member)
+{
+    const auto end = std::min<std::size_t>(member.body_end, member.operations().size());
+    return { member.body_begin <= member.body_end ? member.body_begin : 0U, end };
+}
+
+// The clock of a VHDL process sensitive to levels only (`process (clk,
+// rst)`): the one sensitivity signal its body tests with 'EVENT, which
+// RISING_EDGE and FALLING_EDGE lower to (IEEE 1076-2008 16.7). The edge is
+// the level the body compares the clock's current value with ('1' or 'H'
+// for a rising edge); every such comparison must agree. This is a shape
+// match on the lowered body, for the report only: cycle code needs the
+// branch structure proven (Phase 7 plan, P1 report shapes).
+template <typename Member>
+std::optional<std::vector<Sensitivity>> body_edge(
+    const Member& member, const std::vector<Sensitivity>& sensitivity)
+{
+    const auto& operations = member.operations();
+    const auto [begin, end] = activation_range(member);
+    std::optional<SignalId> clock;
+    std::unordered_map<RegisterId, std::size_t> definition;
+    for (auto index = begin; index < end; ++index) {
+        if (const auto* event = operation_get_if<SignalEvent>(&operations[index])) {
+            if ((clock && *clock != event->signal)
+                || std::ranges::none_of(sensitivity, [&](const Sensitivity& entry) {
+                       return entry.signal == event->signal;
+                   })) {
+                return std::nullopt;
+            }
+            clock = event->signal;
+        }
+        if (const auto destination = defined_register(operations[index])) {
+            definition[*destination] = index;
+        }
+    }
+    if (!clock) {
+        return std::nullopt;
+    }
+    // A register through bit selects and copies: the clock's current value,
+    // or a constant's level.
+    const auto source = [&](RegisterId reg) -> const Operation* {
+        for (std::size_t steps = 0U; steps < 8U; ++steps) {
+            const auto found = definition.find(reg);
+            if (found == definition.end()) {
+                return nullptr;
+            }
+            const auto& operation = operations[found->second];
+            if (const auto* extract = operation_get_if<Extract>(&operation)) {
+                reg = extract->source;
+            } else if (const auto* copy = operation_get_if<CopyRegister>(&operation)) {
+                reg = copy->source;
+            } else {
+                return &operation;
+            }
+        }
+        return nullptr;
+    };
+    const auto clock_value = [&](const Operation* operation) {
+        const auto* read = operation != nullptr ? operation_get_if<ReadSignal>(operation) : nullptr;
+        return read != nullptr && read->signal == *clock && read->kind == SignalReadKind::current;
+    };
+    std::optional<bool> high;
+    for (auto index = begin; index < end; ++index) {
+        const auto* binary = operation_get_if<Binary>(&operations[index]);
+        if (binary == nullptr
+            || (binary->operation != BinaryOperator::case_equal
+                && binary->operation != BinaryOperator::equal)) {
+            continue;
+        }
+        const auto* lhs = source(binary->lhs);
+        const auto* rhs = source(binary->rhs);
+        const auto* level_operand = clock_value(lhs) ? rhs : clock_value(rhs) ? lhs : nullptr;
+        const auto* constant = level_operand != nullptr
+            ? operation_get_if<LoadConstant>(level_operand)
+            : nullptr;
+        if (constant == nullptr) {
+            continue;
+        }
+        const auto level = constant_level(constant->value);
+        if (!level || (high && *high != *level)) {
+            return std::nullopt;
+        }
+        high = *level;
+    }
+    if (!high) {
+        return std::nullopt;
+    }
+    auto edges = sensitivity;
+    for (auto& entry : edges) {
+        if (entry.signal == *clock) {
+            entry.edge = *high ? EdgeKind::posedge : EdgeKind::negedge;
+        }
+    }
+    return edges;
+}
+
+// A level-sensitive latch on a clock (`if clk = '0' then q <= d; end
+// if;`): one branch on a comparison of one signal with a '0' or '1'
+// constant, and every signal write in its true arm. Returns the signal and
+// whether the latch is transparent while it is high. Report only.
+template <typename Member>
+std::optional<std::pair<SignalId, bool>> latch_level(const Member& member)
+{
+    const auto& operations = member.operations();
+    const auto [begin, end] = activation_range(member);
+    std::optional<std::size_t> branch_at;
+    std::unordered_map<RegisterId, std::size_t> definition;
+    for (auto index = begin; index < end; ++index) {
+        const auto& operation = operations[index];
+        if (operation_get_if<Branch>(&operation) != nullptr) {
+            if (branch_at) {
+                return std::nullopt;
+            }
+            branch_at = index;
+            continue;
+        }
+        if (branch_at) {
+            continue;
+        }
+        if (const auto destination = defined_register(operation)) {
+            definition[*destination] = index;
+        }
+    }
+    if (!branch_at) {
+        return std::nullopt;
+    }
+    const auto& branch = *operation_get_if<Branch>(&operations[*branch_at]);
+    if (branch.when_true <= *branch_at || branch.when_false <= branch.when_true) {
+        return std::nullopt;
+    }
+    // Writes only in the true arm.
+    for (auto index = begin; index < end; ++index) {
+        if (written_signal(operations[index])
+            && (index < branch.when_true || index >= branch.when_false)) {
+            return std::nullopt;
+        }
+    }
+    // The condition: one signal against '0' or '1' constants.
+    std::optional<SignalId> signal;
+    std::optional<bool> high;
+    std::vector<RegisterId> pending { branch.condition };
+    for (std::size_t steps = 0U; !pending.empty() && steps < 16U; ++steps) {
+        const auto reg = pending.back();
+        pending.pop_back();
+        const auto found = definition.find(reg);
+        if (found == definition.end()) {
+            return std::nullopt;
+        }
+        const auto& operation = operations[found->second];
+        if (const auto* read = operation_get_if<ReadSignal>(&operation)) {
+            if ((signal && *signal != read->signal) || read->kind != SignalReadKind::current) {
+                return std::nullopt;
+            }
+            signal = read->signal;
+        } else if (const auto* constant = operation_get_if<LoadConstant>(&operation)) {
+            const auto level = constant_level(constant->value);
+            if (!level || (high && *high != *level)) {
+                return std::nullopt;
+            }
+            high = *level;
+        } else if (const auto* binary = operation_get_if<Binary>(&operation)) {
+            if (binary->operation != BinaryOperator::case_equal
+                && binary->operation != BinaryOperator::equal) {
+                return std::nullopt;
+            }
+            pending.push_back(binary->lhs);
+            pending.push_back(binary->rhs);
+        } else if (const auto* logical = operation_get_if<LogicalBinary>(&operation)) {
+            if (logical->operation != LogicalBinaryOperator::logical_or) {
+                return std::nullopt;
+            }
+            pending.push_back(logical->lhs);
+            pending.push_back(logical->rhs);
+        } else if (const auto* extract = operation_get_if<Extract>(&operation)) {
+            pending.push_back(extract->source);
+        } else if (const auto* convert = operation_get_if<ConvertToTwoState>(&operation)) {
+            pending.push_back(convert->source);
+        } else if (const auto* copy = operation_get_if<CopyRegister>(&operation)) {
+            pending.push_back(copy->source);
+        }
+    }
+    if (!pending.empty() || !signal || !high) {
+        return std::nullopt;
+    }
+    return std::pair { *signal, *high };
+}
 
 constexpr const char* clock_kind_name(const ClockKind kind)
 {
@@ -51,7 +332,7 @@ constexpr const char* clock_kind_name(const ClockKind kind)
 
 } // namespace
 
-void Interpreter::Impl::StaticKernel::report_domains() const
+void Interpreter::Impl::StaticKernel::report_domains()
 {
     const auto member_count = static_cast<std::uint32_t>(members_.size());
     const auto slot_count = static_cast<std::uint32_t>(slots_.size());
@@ -82,22 +363,7 @@ void Interpreter::Impl::StaticKernel::report_domains() const
                     [&](const std::uint32_t node) { reads[index].push_back(node); });
                 continue;
             }
-            const auto written = visit_operation([](const auto& op)
-                -> std::optional<SignalId> {
-                using T = std::decay_t<decltype(op)>;
-                if constexpr (std::is_same_v<T, WriteBlocking>
-                    || std::is_same_v<T, WriteBlockingSlice>
-                    || std::is_same_v<T, WriteBlockingDynamicSlice>
-                    || std::is_same_v<T, WriteBlockingDynamicPartSlice>
-                    || std::is_same_v<T, WriteUpdate>
-                    || std::is_same_v<T, WriteUpdateSlice>
-                    || std::is_same_v<T, WriteUpdateDynamicSlice>
-                    || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
-                    return op.signal;
-                } else {
-                    return std::nullopt;
-                }
-            }, operation);
+            const auto written = written_signal(operation);
             if (written) {
                 nodes_of(*written,
                     [&](const std::uint32_t node) { writes[index].push_back(node); });
@@ -170,11 +436,11 @@ void Interpreter::Impl::StaticKernel::report_domains() const
             if ((reader.member & dispatch_group_tag) != 0U) {
                 for (const auto member :
                     dispatch_groups_[reader.member & ~dispatch_group_tag].members) {
-                    triggers[member].push_back({ node, reader.edge });
+                    triggers[member].push_back({ node, domain_edge(reader.edge) });
                     ++edge_readers[node];
                 }
             } else if (reader.member < member_count) {
-                triggers[reader.member].push_back({ node, reader.edge });
+                triggers[reader.member].push_back({ node, domain_edge(reader.edge) });
                 ++edge_readers[node];
             }
         }
@@ -185,16 +451,54 @@ void Interpreter::Impl::StaticKernel::report_domains() const
     for (std::uint32_t input = 0U; input < inputs_.size(); ++input) {
         add_edges(slot_count + input, inputs_[input].edges);
     }
+    // Flops: sequential members, and VHDL threads whose sensitivity is edge
+    // entries plus level entries (asynchronous controls).
+    std::vector<std::uint8_t> flop(member_count, 0U);
+    for (std::uint32_t index = 0U; index < member_count; ++index) {
+        const auto& member = members_[index];
+        if (member.kind == StaticKernelMemberKind::sequential) {
+            flop[index] = triggers[index].empty() ? 0U : 1U;
+            continue;
+        }
+        const auto& sensitivity = member.wait_sensitivity;
+        const auto is_edge = [](const Sensitivity& entry) {
+            return domain_edge(entry.edge) == EdgeKind::posedge
+                || domain_edge(entry.edge) == EdgeKind::negedge;
+        };
+        if (member.kind != StaticKernelMemberKind::behavioral || !member.vhdl
+            || sensitivity.empty()
+            || !std::ranges::all_of(sensitivity, [&](const Sensitivity& entry) {
+                   return is_edge(entry) || entry.edge == EdgeKind::any;
+               })) {
+            continue;
+        }
+        auto edges = std::ranges::any_of(sensitivity, is_edge)
+            ? std::optional { sensitivity }
+            : body_edge(member, sensitivity);
+        if (!edges) {
+            continue;
+        }
+        for (const auto& entry : *edges) {
+            if (is_edge(entry)) {
+                nodes_of(entry.signal, [&](const std::uint32_t node) {
+                    triggers[index].push_back({ node, domain_edge(entry.edge) });
+                    ++edge_readers[node];
+                });
+            }
+        }
+        flop[index] = triggers[index].empty() ? 0U : 2U;
+    }
+    const auto node_signal = [&](const std::uint32_t node) {
+        return node < slot_count ? slots_[node].signal : inputs_[node - slot_count].signal;
+    };
     const auto node_name = [&](const std::uint32_t node) -> std::string {
-        const auto signal = node < slot_count ? slots_[node].signal
-                                              : inputs_[node - slot_count].signal;
-        return impl_.get_signal_cold(signal).name;
+        return impl_.get_signal_cold(node_signal(node)).name;
     };
     const auto kind_of = [&](const std::uint32_t node) {
         std::optional<ClockKind> kind;
         for (const auto writer : writers[node]) {
             const auto member_kind = members_[writer].kind;
-            const auto next = member_kind == StaticKernelMemberKind::sequential
+            const auto next = flop[writer] != 0U
                 ? ClockKind::derived
                 : member_kind == StaticKernelMemberKind::combinational
                 ? ClockKind::combinational
@@ -209,15 +513,14 @@ void Interpreter::Impl::StaticKernel::report_domains() const
     std::vector<EdgeKind> edge_of(member_count, EdgeKind::posedge);
     std::uint32_t async_flops = 0U;
     for (std::uint32_t index = 0U; index < member_count; ++index) {
-        if (members_[index].kind != StaticKernelMemberKind::sequential
-            || triggers[index].empty()) {
+        if (flop[index] == 0U) {
             continue;
         }
         const auto best = std::ranges::max_element(triggers[index], { },
             [&](const Trigger& trigger) { return edge_readers[trigger.node]; });
         clock_of[index] = best->node;
         edge_of[index] = best->edge;
-        async_flops += triggers[index].size() > 1U ? 1U : 0U;
+        async_flops += triggers[index].size() > 1U || flop[index] == 2U ? 1U : 0U;
     }
     // Domains: (clock node, edge).
     std::map<std::pair<std::uint32_t, int>, std::uint32_t> domain_of_key;
@@ -260,8 +563,7 @@ void Interpreter::Impl::StaticKernel::report_domains() const
     for (std::uint32_t node = 0U; node < node_count; ++node) {
         for (const auto writer : writers[node]) {
             const auto kind = members_[writer].kind;
-            if (kind == StaticKernelMemberKind::sequential
-                && member_domain[writer] != no_slot) {
+            if (flop[writer] != 0U && member_domain[writer] != no_slot) {
                 node_domains[node].push_back(member_domain[writer]);
             } else if (kind != StaticKernelMemberKind::combinational
                 && kind != StaticKernelMemberKind::sequential) {
@@ -304,15 +606,188 @@ void Interpreter::Impl::StaticKernel::report_domains() const
             }
         }
     }
+    const auto edge_name = [](const EdgeKind edge) {
+        return edge == EdgeKind::posedge ? "pos" : edge == EdgeKind::negedge ? "neg" : "other";
+    };
+    // Each domain's admission status for the cycle schedule: "admitted", a
+    // "pending_" proof the cycle code still needs, or a "refused_" reason.
+    std::vector<std::string> domain_status(domains.size(), "admitted");
+    for (std::uint32_t domain_index = 0U; domain_index < domains.size(); ++domain_index) {
+        const auto& domain = domains[domain_index];
+        const auto clock_kind = kind_of(domain.clock);
+        if (clock_kind == ClockKind::mixed) {
+            domain_status[domain_index] = "refused_mixed_clock";
+            continue;
+        }
+        if (clock_kind == ClockKind::derived) {
+            // Parents: the domains of the flops that write the clock.
+            std::vector<std::uint32_t> parents;
+            for (const auto writer : writers[domain.clock]) {
+                if (member_domain[writer] != no_slot) {
+                    parents.push_back(member_domain[writer]);
+                }
+            }
+            std::ranges::sort(parents);
+            parents.erase(std::ranges::unique(parents).begin(), parents.end());
+            std::cerr << "fsim-kernel: domain-derived clock=" << node_name(domain.clock)
+                      << " edge=" << edge_name(domain.edge) << " parent=";
+            for (std::size_t at = 0U; at < parents.size(); ++at) {
+                const auto& parent = domains[parents[at]];
+                std::cerr << (at == 0U ? "" : ",") << node_name(parent.clock) << '/'
+                          << edge_name(parent.edge);
+            }
+            std::cerr << '\n';
+            continue;
+        }
+        if (clock_kind != ClockKind::combinational) {
+            continue;
+        }
+        // The gate cone: back from the clock through combinational writers
+        // to its leaves, with the delta depths at which each leaf reaches
+        // the clock.
+        std::map<std::uint32_t, std::vector<std::uint32_t>> leaf_depths;
+        // Enables written by a latch on a clock: the latch's clock and
+        // whether it is transparent while that clock is high.
+        std::map<std::uint32_t, std::pair<SignalId, bool>> latched;
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> stack { { domain.clock, 0U } };
+        std::map<std::pair<std::uint32_t, std::uint32_t>, bool> visited;
+        bool bounded = true;
+        while (!stack.empty()) {
+            const auto [node, depth] = stack.back();
+            stack.pop_back();
+            if (visited.contains({ node, depth })) {
+                continue;
+            }
+            visited[{ node, depth }] = true;
+            const bool combinational = !writers[node].empty()
+                && std::ranges::all_of(writers[node], [&](const std::uint32_t writer) {
+                       return members_[writer].kind == StaticKernelMemberKind::combinational;
+                   });
+            if (combinational && node != domain.clock && writers[node].size() == 1U
+                && members_[writers[node].front()].vhdl) {
+                if (const auto latch = latch_level(members_[writers[node].front()])) {
+                    latched[node] = *latch;
+                    leaf_depths[node].push_back(depth);
+                    continue;
+                }
+            }
+            if (!combinational) {
+                leaf_depths[node].push_back(depth);
+                continue;
+            }
+            if (depth >= 64U || visited.size() > 4096U) {
+                bounded = false;
+                break;
+            }
+            for (const auto writer : writers[node]) {
+                for (const auto read : reads[writer]) {
+                    stack.push_back({ read, depth + 1U });
+                }
+            }
+        }
+        // The source clock: the leaf edge readers watch (a clock of its own
+        // domains or testbench edges); the other leaves are enables.
+        std::vector<std::uint32_t> sources;
+        for (const auto& [leaf, depths] : leaf_depths) {
+            if (edge_readers[leaf] != 0U) {
+                sources.push_back(leaf);
+            }
+        }
+        // A buffered clock: the cone's one leaf is the source (or, without
+        // edge readers of its own, is written only by testbench threads or
+        // the host), with no enables and one delta depth, so each clock edge
+        // follows one leaf change (a converted or renamed clock).
+        const bool buffered = bounded && leaf_depths.size() == 1U
+            && leaf_depths.begin()->second.size() == 1U
+            && (sources.size() == 1U
+                || (sources.empty()
+                    && std::ranges::all_of(writers[leaf_depths.begin()->first],
+                        [&](const std::uint32_t writer) {
+                            return flop[writer] == 0U
+                                && members_[writer].kind
+                                != StaticKernelMemberKind::combinational;
+                        })));
+        if (buffered && sources.empty()) {
+            sources.push_back(leaf_depths.begin()->first);
+        }
+        const char* gate = nullptr;
+        std::size_t source_depths = 0U;
+        if (!bounded) {
+            gate = "refuse_unbounded";
+        } else if (sources.size() != 1U) {
+            gate = sources.empty() ? "refuse_no_source" : "refuse_multiple_sources";
+        } else {
+            auto depths = leaf_depths[sources.front()];
+            std::ranges::sort(depths);
+            depths.erase(std::ranges::unique(depths).begin(), depths.end());
+            source_depths = depths.size();
+            if (depths.size() != 1U) {
+                gate = "refuse_reconvergent_source";
+            }
+        }
+        std::size_t enables = 0U;
+        for (const auto& [leaf, depths] : leaf_depths) {
+            if (sources.size() == 1U && leaf == sources.front()) {
+                continue;
+            }
+            ++enables;
+            // A latch transparent while the source is at its pre-edge
+            // level holds the enable steady across the edge (a clock-gating
+            // cell); one transparent at the post-edge level can pass a
+            // change straight through.
+            if (const auto found = latched.find(leaf); found != latched.end()
+                && sources.size() == 1U
+                && found->second.first == node_signal(sources.front())) {
+                const bool post_edge_high = domain.edge == EdgeKind::posedge;
+                if (gate == nullptr && found->second.second == post_edge_high) {
+                    gate = "refuse_same_phase_latch";
+                }
+                continue;
+            }
+            for (const auto writer : writers[leaf]) {
+                // A flop on the source's edge updates the enable in the
+                // edge's own step: the gate can pulse.
+                if (gate == nullptr && flop[writer] != 0U && sources.size() == 1U
+                    && clock_of[writer] == sources.front()
+                    && edge_of[writer] == domain.edge) {
+                    gate = "refuse_same_edge_enable";
+                }
+            }
+        }
+        std::cerr << "fsim-kernel: domain-gate clock=" << node_name(domain.clock)
+                  << " edge=" << edge_name(domain.edge) << " source="
+                  << (sources.size() == 1U ? node_name(sources.front()) : std::string { "-" })
+                  << " source_depths=" << source_depths << " enables=" << enables
+                  << " gate=" << (gate != nullptr ? gate : buffered ? "buffer" : "candidate")
+                  << '\n';
+        // A candidate gate still needs the no-glitch certificate (Phase 7
+        // plan, P1 gated clocks).
+        domain_status[domain_index] = gate != nullptr
+            ? std::string { "refused_gate_" } + (gate + std::string_view { "refuse_" }.size())
+            : buffered ? "admitted" : "pending_gate_certificate";
+    }
     // Members by class.
-    std::map<std::string, std::pair<std::uint32_t, std::uint64_t>> classes;
+    struct Class {
+        std::uint32_t members { };
+        std::uint64_t code { };
+        std::uint32_t example { };
+    };
+    std::map<std::string, Class> classes;
     const auto count_class = [&](const std::string& name, const std::uint32_t index) {
         auto& entry = classes[name];
-        ++entry.first;
-        entry.second += code_size(index);
+        if (entry.members++ == 0U) {
+            entry.example = index;
+        }
+        entry.code += code_size(index);
     };
     for (std::uint32_t index = 0U; index < member_count; ++index) {
         const auto& member = members_[index];
+        if (flop[index] == 2U) {
+            count_class(member_domain[index] != no_slot ? "flop_async_thread"
+                                                        : "sequential_untriggered",
+                index);
+            continue;
+        }
         switch (member.kind) {
         case StaticKernelMemberKind::sequential:
             count_class(member_domain[index] != no_slot ? "flop" : "sequential_untriggered",
@@ -337,17 +812,82 @@ void Interpreter::Impl::StaticKernel::report_domains() const
         }
         default:
             count_class(std::string { "other_kind_" }
-                    + std::to_string(static_cast<int>(member.kind)),
+                    + std::to_string(static_cast<int>(member.kind))
+                    + (member.vhdl ? "_vhdl" : "_sv"),
                 index);
             break;
         }
     }
+    // Members by admission status. A flop takes its domain's status; a VHDL
+    // thread recognized as a flop by the report's shape match still needs
+    // the branch proof (Phase 7 plan, P3 prerequisite). A cone takes the
+    // first status among its domains that is not "admitted"; constant
+    // combinational members settle at time zero.
+    profile_domain_status_names_.clear();
+    profile_domain_status_.assign(member_count, 0U);
+    std::map<std::string, std::uint32_t> status_index;
+    const auto set_status = [&](const std::uint32_t index, const std::string& name) {
+        const auto [found, inserted] = status_index.emplace(name,
+            static_cast<std::uint32_t>(profile_domain_status_names_.size()));
+        if (inserted) {
+            profile_domain_status_names_.push_back(name);
+        }
+        profile_domain_status_[index] = found->second;
+    };
+    for (std::uint32_t index = 0U; index < member_count; ++index) {
+        const auto& member = members_[index];
+        if (flop[index] != 0U) {
+            const auto& status = member_domain[index] == no_slot
+                ? std::string { "refused_untriggered_sequential" }
+                : domain_status[member_domain[index]];
+            set_status(index,
+                flop[index] == 2U && status == "admitted" ? "pending_vhdl_flop_proof" : status);
+            continue;
+        }
+        switch (member.kind) {
+        case StaticKernelMemberKind::sequential:
+            set_status(index, "refused_untriggered_sequential");
+            break;
+        case StaticKernelMemberKind::combinational: {
+            if (fed[index].empty()) {
+                set_status(index,
+                    testbench_input[index] != 0U ? "refused_testbench_only" : "admitted");
+                break;
+            }
+            const auto blocked = std::ranges::find_if(fed[index],
+                [&](const std::uint32_t domain) { return domain_status[domain] != "admitted"; });
+            set_status(index, blocked == fed[index].end() ? "admitted" : domain_status[*blocked]);
+            break;
+        }
+        case StaticKernelMemberKind::once:
+            set_status(index, "refused_once");
+            break;
+        default:
+            set_status(index, member.vhdl ? "refused_thread_vhdl" : "refused_thread_sv");
+            break;
+        }
+    }
+    std::map<std::string, Class> admission;
+    for (std::uint32_t index = 0U; index < member_count; ++index) {
+        auto& entry = admission[profile_domain_status_names_[profile_domain_status_[index]]];
+        ++entry.members;
+        entry.code += code_size(index);
+    }
+    for (const auto& [name, entry] : admission) {
+        std::cerr << "fsim-kernel: domain-admission " << name << " members=" << entry.members
+                  << " code=" << entry.code << '\n';
+    }
     std::cerr << "fsim-kernel: domains count=" << domains.size()
               << " members=" << member_count << " async_flops=" << async_flops
               << '\n';
+    // Member names are kept under FSIM_PROFILE_KERNEL.
     for (const auto& [name, entry] : classes) {
-        std::cerr << "fsim-kernel: domain-class " << name << " members=" << entry.first
-                  << " code=" << entry.second << '\n';
+        std::cerr << "fsim-kernel: domain-class " << name << " members=" << entry.members
+                  << " code=" << entry.code;
+        if (entry.example < profile_names_.size()) {
+            std::cerr << " example=" << profile_names_[entry.example];
+        }
+        std::cerr << '\n';
     }
     std::vector<std::uint32_t> order(domains.size());
     std::iota(order.begin(), order.end(), 0U);
@@ -364,6 +904,27 @@ void Interpreter::Impl::StaticKernel::report_domains() const
                   << " flops=" << domain.flops << " flop_code=" << domain.flop_code
                   << " cone=" << domain.cone << " cone_code=" << domain.cone_code << '\n';
     }
+}
+
+void Interpreter::Impl::StaticKernel::report_domain_runs() const
+{
+    // Runs by admission status: member runs, and partition runs counted once
+    // per member of the partition.
+    std::vector<std::uint64_t> runs(profile_domain_status_names_.size(), 0U);
+    for (std::uint32_t index = 0U; index < profile_member_runs_.size(); ++index) {
+        runs[profile_domain_status_[index]] += profile_member_runs_[index];
+    }
+    for (std::uint32_t partition = 0U; partition < profile_partition_counts_.size();
+         ++partition) {
+        for (const auto member : partitions_[partition].members) {
+            runs[profile_domain_status_[member]] += profile_partition_counts_[partition];
+        }
+    }
+    std::cerr << "fsim-kernel: domain-runs";
+    for (std::size_t status = 0U; status < runs.size(); ++status) {
+        std::cerr << ' ' << profile_domain_status_names_[status] << '=' << runs[status];
+    }
+    std::cerr << '\n';
 }
 
 } // namespace fsim::runtime::simir

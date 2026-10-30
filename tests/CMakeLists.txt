@@ -6750,6 +6750,23 @@ if(FSIM_WITH_LLVM)
     TIMEOUT 600)
 endif()
 
+# Clock domain analysis: derived, gated and asynchronous-reset clocks are
+# classified (FSIM_PROFILE_KERNEL_DOMAINS), and the kernel run matches the
+# reference scheduler.
+if(FSIM_WITH_LLVM)
+  add_test(
+    NAME fsim.application.static-kernel-clock-domains
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/clock_domains"
+      -P
+      "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/clock_domains/run_clock_domains.cmake"
+  )
+  set_tests_properties(fsim.application.static-kernel-clock-domains PROPERTIES
+    LABELS "application;vhdl;systemverilog;static-kernel;llvm;positive"
+    TIMEOUT 600)
+endif()
+
 # Application cases can create Tcl interpreters directly or launch the CLI
 # from a temporary working directory. Cover both Tcl's native initializer and
 # fsim's override; the separate installed/relocation tests must remain unseeded.

@@ -38,6 +38,8 @@ enum class SignalDriverInventoryEdge : std::uint8_t {
     posedge,
     negedge,
     transaction,
+    rising,
+    falling,
 };
 
 /// Storage class proven from the immutable writer/access inventory.

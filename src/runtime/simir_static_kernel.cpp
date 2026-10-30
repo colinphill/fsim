@@ -231,6 +231,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             }
         }
     }
+    // FSIM_STATIC_KERNEL_DISPATCH_GROUPS=0 schedules every sequential member
+    // on its own. Fused groups (FSIM_CYCLE_DRIVER) are native units.
+    if (const char* groups = std::getenv("FSIM_STATIC_KERNEL_DISPATCH_GROUPS");
+        groups == nullptr || std::string_view { groups } != "0") {
+        build_dispatch_groups();
+        build_fused_groups();
+    }
     if (std::getenv("FSIM_STATIC_KERNEL_GENERIC") == nullptr) {
         restored_native_ = std::move(spec.native_image);
         recorded_native_ = std::move(spec.record_native_image);
@@ -241,12 +248,6 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         // Only build_native reads the restored image.
         restored_native_.reset();
         stage("native");
-    }
-    // FSIM_STATIC_KERNEL_DISPATCH_GROUPS=0 schedules every sequential member
-    // on its own.
-    if (const char* groups = std::getenv("FSIM_STATIC_KERNEL_DISPATCH_GROUPS");
-        groups == nullptr || std::string_view { groups } != "0") {
-        build_dispatch_groups();
     }
     build_schedule_targets();
     // FSIM_KERNEL_WRITE_SKIP=0 queues every VHDL assignment.
@@ -1043,7 +1044,9 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                 continue;
             }
             if (sensitivity.edge == EdgeKind::posedge
-                || sensitivity.edge == EdgeKind::negedge) {
+                || sensitivity.edge == EdgeKind::negedge
+                || sensitivity.edge == EdgeKind::rising
+                || sensitivity.edge == EdgeKind::falling) {
                 const EdgeReader reader { index, sensitivity.edge };
                 if (slot != no_slot) {
                     slots_[slot].edges.push_back(reader);
@@ -1914,7 +1917,11 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
         }
     }
     std::cerr << "fsim-kernel: deopts=" << profile_deopts_
-              << " generic_runs=" << profile_generic_runs_ << '\n';
+              << " generic_runs=" << profile_generic_runs_
+              << " fused_group_runs=" << profile_fused_runs_ << '\n';
+    if (!profile_domain_status_.empty()) {
+        report_domain_runs();
+    }
     if (std::getenv("FSIM_PROFILE_KERNEL_MT") != nullptr) {
         report_mt_plan();
     }
@@ -3787,7 +3794,8 @@ void Interpreter::Impl::StaticKernel::build_dispatch_groups()
         for (const auto member : members) {
             group_of[member] = group;
         }
-        dispatch_groups_.push_back({ std::move(members), false, false });
+        dispatch_groups_.emplace_back();
+        dispatch_groups_.back().members = std::move(members);
     }
     if (dispatch_groups_.empty()) {
         return;
@@ -4141,7 +4149,9 @@ void Interpreter::Impl::StaticKernel::schedule_edge(const std::uint32_t id)
     if (group.running) {
         // The members that have run (or are running) in this pass are
         // scheduled again; the rest are still pending.
-        for (std::uint32_t position = 0U; position < group.next; ++position) {
+        const auto ran = group.fused_running ? scratch().running_position + 1U
+                                             : group.next;
+        for (std::uint32_t position = 0U; position < ran; ++position) {
             schedule(group.members[position]);
         }
         return;
@@ -4225,6 +4235,36 @@ void Interpreter::Impl::StaticKernel::run_triggered_round()
             group.running = true;
             group.next = 0U;
             groups[entry] = &group;
+        }
+        if (auto& group = *groups[0]; count == 1U && group.fused
+            && group.native.entry != nullptr && pool_ == nullptr && !trace_) {
+            // One native call runs the members in index order, as the
+            // merge below would.
+            if (profile_) {
+                ++profile_fused_runs_;
+                profile_runs_[1] += group.members.size();
+                if (profile_member_runs_.empty()) {
+                    profile_member_runs_.assign(members_.size(), 0U);
+                }
+                for (const auto member : group.members) {
+                    ++profile_member_runs_[member];
+                }
+            }
+            group.fused_running = true;
+            fused_running_ = true;
+            scratch().running_position = 0U;
+            try {
+                run_native(group.native, group.program, group.members.front());
+            } catch (...) {
+                group.fused_running = false;
+                fused_running_ = false;
+                group.running = false;
+                throw;
+            }
+            group.fused_running = false;
+            fused_running_ = false;
+            group.running = false;
+            return;
         }
         if (pool_ != nullptr) {
             // The merged order is fixed before any member runs (a member

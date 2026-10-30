@@ -2759,10 +2759,13 @@ std::optional<Process> Lowerer::lower_hir_process(
                     || condition->vhdl->text == "falling_edge")) {
                 edge_signal = hir_referenced_declaration(
                     condition->vhdl->operands.front());
+                // The process then wakes only where the predicate holds:
+                // '0' or 'L' to '1' or 'H' (IEEE 1076-2008 16.7), not a
+                // Verilog edge, which also counts 0 to X and X to 1.
                 if (edge_signal) {
                     edge = condition->vhdl->text == "rising_edge"
-                        ? runtime::simir::EdgeKind::posedge
-                        : runtime::simir::EdgeKind::negedge;
+                        ? runtime::simir::EdgeKind::rising
+                        : runtime::simir::EdgeKind::falling;
                 }
             }
         }

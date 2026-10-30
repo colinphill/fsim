@@ -741,6 +741,11 @@ void Interpreter::Impl::StaticKernel::finish_native(NativeUnit& unit,
         if (behavioral) {
             return;
         }
+        if (fused_running_) {
+            // handle_deopt reads the member's registers at base 0; a fused
+            // group's members sit at their concatenation bases.
+            throw std::logic_error("static kernel fused dispatch group deoptimized");
+        }
         const auto deopt = *scratch().pending_deopt;
         scratch().pending_deopt.reset();
         handle_deopt(frame.member, body, deopt);
@@ -808,6 +813,12 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     for (auto& member : members_) {
         if (member.compiled && member.partition == no_slot) {
             units.push_back({ &member.native, &*member.compiled, member.vhdl });
+        }
+    }
+    const auto fused_begin = units.size();
+    for (auto& group : dispatch_groups_) {
+        if (group.fused) {
+            units.push_back({ &group.native, &group.program, false });
         }
     }
     // Canonical templates and per-unit bindings recorded ahead of time
@@ -1176,7 +1187,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     for (std::size_t unit = 0U; unit < template_of_unit.size(); ++unit) {
         ++template_units[template_of_unit[unit]];
         template_vhdl[template_of_unit[unit]] |= units[unit].vhdl ? 1U : 0U;
-        if (unit < partitions_.size()) {
+        if (unit < partitions_.size() || unit >= fused_begin) {
             template_partition[template_of_unit[unit]] = 1U;
         }
     }
@@ -1705,6 +1716,355 @@ NodeLevels static_kernel_detail::condensed_levels(
     return result;
 }
 
+void Interpreter::Impl::StaticKernel::build_fused_groups()
+{
+    static const bool enabled = [] {
+        const char* text = std::getenv("FSIM_CYCLE_DRIVER");
+        return text != nullptr && std::string_view { text } != "0";
+    }();
+    if (!enabled) {
+        return;
+    }
+    // Instructions concatenate_members does not take (VHDL bodies).
+    const auto concatenable = [](const KInst& inst) {
+        switch (inst.op) {
+        case KOp::load_slot9:
+        case KOp::store_vhdl:
+        case KOp::integer_binary:
+        case KOp::integer_unary:
+        case KOp::integer_check:
+        case KOp::call:
+        case KOp::ret:
+        case KOp::assert_check:
+        case KOp::deopt:
+        case KOp::load_field9:
+            return false;
+        default:
+            return true;
+        }
+    };
+    // SystemVerilog two-state code (FSIM_STATIC_KERNEL_TWO_STATE=2) keeps
+    // per-member state the fused program would not update.
+    static const bool two_state_sv = [] {
+        const char* text = std::getenv("FSIM_STATIC_KERNEL_TWO_STATE");
+        return text != nullptr && std::string_view { text } == "2";
+    }();
+    if (two_state_sv) {
+        return;
+    }
+    // The fused program holds copies of the members' registers, and a group
+    // still runs member by member in merged or expanded rounds, so only
+    // members whose registers are all dead at entry are fused: then neither
+    // copy carries a value from one activation to the next. SystemVerilog
+    // members do not deoptimize (their generic results are exact words);
+    // run_triggered_round checks that.
+    // Compiled SystemVerilog bodies keep no liveness (live_at_entry is
+    // VHDL's), so the operations' register liveness decides.
+    const auto dead_at_entry = [&](const std::uint32_t index) {
+        std::vector<std::uint8_t> skip(members_[index].operations().size(), 0U);
+        std::vector<std::uint64_t> live;
+        prune_operations(index, skip, live);
+        return std::ranges::all_of(live,
+            [](const std::uint64_t word) { return word == 0U; });
+    };
+    for (auto& group : dispatch_groups_) {
+        const bool fusable = std::ranges::all_of(group.members,
+            [&](const std::uint32_t index) {
+                const auto& member = members_[index];
+                return !member.vhdl && member.kind == StaticKernelMemberKind::sequential
+                    && member.compiled && member.partition == no_slot
+                    && member.compiled->resume_entries.empty() && !member.generic_mode
+                    && !member.fresh && dead_at_entry(index)
+                    && std::ranges::all_of(member.compiled->code, concatenable);
+            });
+        if (fusable) {
+            concatenate_members(group.program, group.members, false);
+            group.fused = true;
+        }
+        if (profile_) {
+            // Why a group is not fused: the first member's first reason.
+            std::string reason = "fused";
+            for (const auto index : group.members) {
+                const auto& member = members_[index];
+                reason = member.vhdl ? "vhdl"
+                    : member.kind != StaticKernelMemberKind::sequential ? "kind"
+                    : !member.compiled ? "not_compiled"
+                    : member.partition != no_slot ? "partitioned"
+                    : !member.compiled->resume_entries.empty() ? "resumable"
+                    : member.generic_mode || member.fresh ? "generic_or_fresh"
+                    : !dead_at_entry(index) ? "live_at_entry"
+                    : !std::ranges::all_of(member.compiled->code, concatenable)
+                    ? "instructions"
+                    : "fused";
+                if (reason != "fused") {
+                    break;
+                }
+            }
+            ++profile_fused_groups_[reason];
+        }
+    }
+    for (const auto& [reason, count] : profile_fused_groups_) {
+        std::cerr << "fsim-kernel: dispatch-groups " << reason << '=' << count << '\n';
+    }
+}
+
+void Interpreter::Impl::StaticKernel::concatenate_members(CompiledBody& program,
+    const std::vector<std::uint32_t>& members, const bool take)
+{
+    // One program running the members' bodies in order, each after a mark
+    // (member, position); `take` moves the member state into it.
+    {
+        // Size the concatenated vectors once.
+        std::size_t code_total = 1U * members.size();
+        std::size_t register_total = 0U;
+        std::size_t index_total = 0U;
+        std::size_t part_total = 0U;
+        std::size_t concat_total = 0U;
+        std::size_t constant_total = 0U;
+        for (const auto member : members) {
+            const auto& sized = *members_[member].compiled;
+            code_total += sized.code.size();
+            register_total += sized.registers.size();
+            index_total += sized.indices.size();
+            part_total += sized.parts.size();
+            concat_total += sized.concat.size();
+            constant_total += sized.wide_constants.size();
+        }
+        program.code.reserve(code_total);
+        program.registers.reserve(register_total);
+        program.register_widths.reserve(register_total);
+        program.indices.reserve(index_total);
+        program.parts.reserve(part_total);
+        program.concat.reserve(concat_total);
+        program.wide_constants.reserve(constant_total);
+    }
+    for (std::uint32_t position = 0U; position < members.size();
+         ++position) {
+        const auto index = members[position];
+        const auto& body = *members_[index].compiled;
+        const auto register_base
+            = static_cast<std::uint32_t>(program.registers.size());
+        const auto code_base = static_cast<std::uint32_t>(program.code.size())
+            + 1U;
+        const auto exit = code_base
+            + static_cast<std::uint32_t>(body.code.size());
+        const auto index_base
+            = static_cast<std::uint32_t>(program.indices.size());
+        const auto part_base = static_cast<std::uint32_t>(program.parts.size());
+        const auto concat_base
+            = static_cast<std::uint32_t>(program.concat.size());
+        const auto constant_base
+            = static_cast<std::uint32_t>(program.wide_constants.size());
+        if (!body.wide_base.empty() || !program.wide_base.empty()) {
+            program.wide_base.resize(register_base, 0U);
+            program.wide_base.resize(register_base + body.registers.size(), 0U);
+            for (std::size_t reg = 0U; reg < body.wide_base.size(); ++reg) {
+                if (const auto entry = body.wide_base[reg]; entry != 0U) {
+                    program.wide_base[register_base + reg] = entry + register_base;
+                }
+            }
+        }
+        program.wide_constants.insert(program.wide_constants.end(),
+            body.wide_constants.begin(), body.wide_constants.end());
+        program.registers.insert(program.registers.end(),
+            body.registers.begin(), body.registers.end());
+        if (!body.wide_registers.empty() || !program.wide_registers.empty()) {
+            program.wide_registers.resize(register_base, PackedLogic4 { });
+            if (body.wide_registers.empty()) {
+                program.wide_registers.resize(
+                    register_base + body.registers.size(), PackedLogic4 { });
+            } else {
+                program.wide_registers.insert(program.wide_registers.end(),
+                    body.wide_registers.begin(), body.wide_registers.end());
+            }
+        }
+        program.register_widths.insert(program.register_widths.end(),
+            body.register_widths.begin(), body.register_widths.end());
+        program.indices.insert(program.indices.end(), body.indices.begin(),
+            body.indices.end());
+        program.parts.insert(program.parts.end(), body.parts.begin(),
+            body.parts.end());
+        for (auto operand : body.concat) {
+            operand.reg += register_base;
+            program.concat.push_back(operand);
+        }
+        KInst mark;
+        mark.op = KOp::mark;
+        mark.d = position;
+        mark.x = index;
+        program.code.push_back(mark);
+        for (auto inst : body.code) {
+            const auto target = [&](std::uint32_t& value) {
+                value = value >= body.code.size() ? exit : code_base + value;
+            };
+            const auto reg = [&](std::uint32_t& value) {
+                value += register_base;
+            };
+            switch (inst.op) {
+            case KOp::nop:
+            case KOp::mem_bind:
+            case KOp::mark:
+            case KOp::suspend:
+            case KOp::step:
+                break;
+            case KOp::generic:
+                inst.y += register_base;
+                break;
+            case KOp::constant:
+            case KOp::load_slot:
+            case KOp::load_host:
+                reg(inst.d);
+                break;
+            case KOp::copy:
+            case KOp::reduce:
+            case KOp::unary_not:
+            case KOp::logical_not:
+            case KOp::two_state:
+            case KOp::extract:
+                reg(inst.d);
+                reg(inst.x);
+                break;
+            case KOp::binary:
+            case KOp::logical_binary:
+            case KOp::shift:
+            case KOp::insert:
+                reg(inst.d);
+                reg(inst.x);
+                reg(inst.y);
+                break;
+            case KOp::concat:
+                reg(inst.d);
+                inst.aux += concat_base;
+                break;
+            case KOp::conditional:
+            case KOp::dynamic_insert:
+                reg(inst.d);
+                reg(inst.x);
+                reg(inst.y);
+                reg(inst.z);
+                if (inst.op == KOp::dynamic_insert) {
+                    inst.aux += index_base;
+                }
+                break;
+            case KOp::dynamic_part_insert:
+                reg(inst.d);
+                reg(inst.x);
+                reg(inst.y);
+                reg(inst.z);
+                inst.aux += part_base;
+                break;
+            case KOp::dynamic_extract:
+                reg(inst.d);
+                if (inst.sub != 1U) {
+                    reg(inst.x);
+                }
+                reg(inst.y);
+                inst.aux += index_base;
+                break;
+            case KOp::dynamic_part_select:
+                reg(inst.d);
+                if (inst.sub != 1U) {
+                    reg(inst.x);
+                }
+                reg(inst.y);
+                inst.aux += part_base;
+                break;
+            case KOp::load_field:
+                reg(inst.d);
+                break;
+            case KOp::jump:
+                target(inst.d);
+                break;
+            case KOp::branch:
+                reg(inst.x);
+                target(inst.y);
+                target(inst.z);
+                break;
+            case KOp::store_slot:
+            case KOp::store_slot_nba:
+            case KOp::store_host:
+                reg(inst.x);
+                break;
+            case KOp::store_slot_dynamic:
+                reg(inst.x);
+                reg(inst.y);
+                inst.aux += index_base;
+                break;
+            case KOp::store_slot_part:
+                reg(inst.x);
+                reg(inst.y);
+                inst.aux += part_base;
+                break;
+            case KOp::mem_read:
+                reg(inst.d);
+                reg(inst.y);
+                break;
+            case KOp::mem_write:
+                reg(inst.x);
+                reg(inst.y);
+                if (inst.aux != 0U) {
+                    reg(inst.z);
+                    inst.aux += part_base;
+                }
+                break;
+            case KOp::wide_move:
+                if (inst.sub == 1U) {
+                    reg(inst.y);
+                    inst.aux += part_base;
+                }
+                break;
+            case KOp::mem_copy:
+                break;
+            case KOp::wide_load:
+                reg(inst.d);
+                break;
+            case KOp::wide_copy:
+                reg(inst.d);
+                reg(inst.x);
+                break;
+            case KOp::wide_const:
+                reg(inst.d);
+                inst.imm_a += constant_base;
+                break;
+            case KOp::wide_concat:
+                reg(inst.d);
+                inst.aux += concat_base;
+                break;
+            case KOp::wide_store:
+                reg(inst.x);
+                break;
+            case KOp::wide_part_insert:
+                reg(inst.d);
+                reg(inst.x);
+                reg(inst.y);
+                reg(inst.z);
+                inst.aux += part_base;
+                break;
+            case KOp::load_slot9:
+            case KOp::store_vhdl:
+            case KOp::integer_binary:
+            case KOp::integer_unary:
+            case KOp::integer_check:
+            case KOp::call:
+            case KOp::ret:
+            case KOp::assert_check:
+            case KOp::deopt:
+            case KOp::load_field9:
+                throw std::logic_error(
+                    "VHDL kernel instructions are not partitioned");
+            }
+            program.code.push_back(inst);
+        }
+        if (take) {
+            // Member state now lives in the partition program.
+            members_[index].compiled.reset();
+            if (index < not_compiled_reason_.size()) {
+                not_compiled_reason_[index] = "partitioned";
+            }
+        }
+    }
+}
+
 void Interpreter::Impl::StaticKernel::build_partitions(
     const std::vector<std::vector<std::uint32_t>>& successors)
 {
@@ -1985,254 +2345,7 @@ void Interpreter::Impl::StaticKernel::build_partitions(
         auto& state = partitions_[partition];
         state.level = node_level[count + partition];
         auto& program = state.program;
-        {
-            // Size the concatenated vectors once.
-            std::size_t code_total = 1U * state.members.size();
-            std::size_t register_total = 0U;
-            std::size_t index_total = 0U;
-            std::size_t part_total = 0U;
-            std::size_t concat_total = 0U;
-            std::size_t constant_total = 0U;
-            for (const auto member : state.members) {
-                const auto& sized = *members_[member].compiled;
-                code_total += sized.code.size();
-                register_total += sized.registers.size();
-                index_total += sized.indices.size();
-                part_total += sized.parts.size();
-                concat_total += sized.concat.size();
-                constant_total += sized.wide_constants.size();
-            }
-            program.code.reserve(code_total);
-            program.registers.reserve(register_total);
-            program.register_widths.reserve(register_total);
-            program.indices.reserve(index_total);
-            program.parts.reserve(part_total);
-            program.concat.reserve(concat_total);
-            program.wide_constants.reserve(constant_total);
-        }
-        for (std::uint32_t position = 0U; position < state.members.size();
-             ++position) {
-            const auto index = state.members[position];
-            const auto& body = *members_[index].compiled;
-            const auto register_base
-                = static_cast<std::uint32_t>(program.registers.size());
-            const auto code_base = static_cast<std::uint32_t>(program.code.size())
-                + 1U;
-            const auto exit = code_base
-                + static_cast<std::uint32_t>(body.code.size());
-            const auto index_base
-                = static_cast<std::uint32_t>(program.indices.size());
-            const auto part_base = static_cast<std::uint32_t>(program.parts.size());
-            const auto concat_base
-                = static_cast<std::uint32_t>(program.concat.size());
-            const auto constant_base
-                = static_cast<std::uint32_t>(program.wide_constants.size());
-            if (!body.wide_base.empty() || !program.wide_base.empty()) {
-                program.wide_base.resize(register_base, 0U);
-                program.wide_base.resize(register_base + body.registers.size(), 0U);
-                for (std::size_t reg = 0U; reg < body.wide_base.size(); ++reg) {
-                    if (const auto entry = body.wide_base[reg]; entry != 0U) {
-                        program.wide_base[register_base + reg] = entry + register_base;
-                    }
-                }
-            }
-            program.wide_constants.insert(program.wide_constants.end(),
-                body.wide_constants.begin(), body.wide_constants.end());
-            program.registers.insert(program.registers.end(),
-                body.registers.begin(), body.registers.end());
-            if (!body.wide_registers.empty() || !program.wide_registers.empty()) {
-                program.wide_registers.resize(register_base, PackedLogic4 { });
-                if (body.wide_registers.empty()) {
-                    program.wide_registers.resize(
-                        register_base + body.registers.size(), PackedLogic4 { });
-                } else {
-                    program.wide_registers.insert(program.wide_registers.end(),
-                        body.wide_registers.begin(), body.wide_registers.end());
-                }
-            }
-            program.register_widths.insert(program.register_widths.end(),
-                body.register_widths.begin(), body.register_widths.end());
-            program.indices.insert(program.indices.end(), body.indices.begin(),
-                body.indices.end());
-            program.parts.insert(program.parts.end(), body.parts.begin(),
-                body.parts.end());
-            for (auto operand : body.concat) {
-                operand.reg += register_base;
-                program.concat.push_back(operand);
-            }
-            KInst mark;
-            mark.op = KOp::mark;
-            mark.d = position;
-            mark.x = index;
-            program.code.push_back(mark);
-            for (auto inst : body.code) {
-                const auto target = [&](std::uint32_t& value) {
-                    value = value >= body.code.size() ? exit : code_base + value;
-                };
-                const auto reg = [&](std::uint32_t& value) {
-                    value += register_base;
-                };
-                switch (inst.op) {
-                case KOp::nop:
-                case KOp::mem_bind:
-                case KOp::mark:
-                case KOp::suspend:
-                case KOp::step:
-                    break;
-                case KOp::generic:
-                    inst.y += register_base;
-                    break;
-                case KOp::constant:
-                case KOp::load_slot:
-                case KOp::load_host:
-                    reg(inst.d);
-                    break;
-                case KOp::copy:
-                case KOp::reduce:
-                case KOp::unary_not:
-                case KOp::logical_not:
-                case KOp::two_state:
-                case KOp::extract:
-                    reg(inst.d);
-                    reg(inst.x);
-                    break;
-                case KOp::binary:
-                case KOp::logical_binary:
-                case KOp::shift:
-                case KOp::insert:
-                    reg(inst.d);
-                    reg(inst.x);
-                    reg(inst.y);
-                    break;
-                case KOp::concat:
-                    reg(inst.d);
-                    inst.aux += concat_base;
-                    break;
-                case KOp::conditional:
-                case KOp::dynamic_insert:
-                    reg(inst.d);
-                    reg(inst.x);
-                    reg(inst.y);
-                    reg(inst.z);
-                    if (inst.op == KOp::dynamic_insert) {
-                        inst.aux += index_base;
-                    }
-                    break;
-                case KOp::dynamic_part_insert:
-                    reg(inst.d);
-                    reg(inst.x);
-                    reg(inst.y);
-                    reg(inst.z);
-                    inst.aux += part_base;
-                    break;
-                case KOp::dynamic_extract:
-                    reg(inst.d);
-                    if (inst.sub != 1U) {
-                        reg(inst.x);
-                    }
-                    reg(inst.y);
-                    inst.aux += index_base;
-                    break;
-                case KOp::dynamic_part_select:
-                    reg(inst.d);
-                    if (inst.sub != 1U) {
-                        reg(inst.x);
-                    }
-                    reg(inst.y);
-                    inst.aux += part_base;
-                    break;
-                case KOp::load_field:
-                    reg(inst.d);
-                    break;
-                case KOp::jump:
-                    target(inst.d);
-                    break;
-                case KOp::branch:
-                    reg(inst.x);
-                    target(inst.y);
-                    target(inst.z);
-                    break;
-                case KOp::store_slot:
-                case KOp::store_slot_nba:
-                case KOp::store_host:
-                    reg(inst.x);
-                    break;
-                case KOp::store_slot_dynamic:
-                    reg(inst.x);
-                    reg(inst.y);
-                    inst.aux += index_base;
-                    break;
-                case KOp::store_slot_part:
-                    reg(inst.x);
-                    reg(inst.y);
-                    inst.aux += part_base;
-                    break;
-                case KOp::mem_read:
-                    reg(inst.d);
-                    reg(inst.y);
-                    break;
-                case KOp::mem_write:
-                    reg(inst.x);
-                    reg(inst.y);
-                    if (inst.aux != 0U) {
-                        reg(inst.z);
-                        inst.aux += part_base;
-                    }
-                    break;
-                case KOp::wide_move:
-                    if (inst.sub == 1U) {
-                        reg(inst.y);
-                        inst.aux += part_base;
-                    }
-                    break;
-                case KOp::mem_copy:
-                    break;
-                case KOp::wide_load:
-                    reg(inst.d);
-                    break;
-                case KOp::wide_copy:
-                    reg(inst.d);
-                    reg(inst.x);
-                    break;
-                case KOp::wide_const:
-                    reg(inst.d);
-                    inst.imm_a += constant_base;
-                    break;
-                case KOp::wide_concat:
-                    reg(inst.d);
-                    inst.aux += concat_base;
-                    break;
-                case KOp::wide_store:
-                    reg(inst.x);
-                    break;
-                case KOp::wide_part_insert:
-                    reg(inst.d);
-                    reg(inst.x);
-                    reg(inst.y);
-                    reg(inst.z);
-                    inst.aux += part_base;
-                    break;
-                case KOp::load_slot9:
-                case KOp::store_vhdl:
-                case KOp::integer_binary:
-                case KOp::integer_unary:
-                case KOp::integer_check:
-                case KOp::call:
-                case KOp::ret:
-                case KOp::assert_check:
-                case KOp::deopt:
-                case KOp::load_field9:
-                    throw std::logic_error(
-                        "VHDL kernel instructions are not partitioned");
-                }
-                program.code.push_back(inst);
-            }
-            // Member state now lives in the partition program.
-            members_[index].compiled.reset();
-            if (index < not_compiled_reason_.size()) {
-                not_compiled_reason_[index] = "partitioned";
-            }
-        }
+        concatenate_members(program, state.members, true);
         forward_partition_stores(program, slot_of_offset, register_of_slot);
     }
 

@@ -546,6 +546,14 @@ namespace fsim::runtime::simir {
     if (edge == EdgeKind::any) {
         return true;
     }
+    // Nine-state values arrive through to_logic4: '0' and 'L' are 0, '1'
+    // and 'H' are 1, the rest X or Z.
+    if (edge == EdgeKind::rising) {
+        return old_value == Logic4::zero && new_value == Logic4::one;
+    }
+    if (edge == EdgeKind::falling) {
+        return old_value == Logic4::one && new_value == Logic4::zero;
+    }
     if (edge == EdgeKind::posedge) {
         return (old_value == Logic4::zero && (new_value == Logic4::one || new_value == Logic4::x || new_value == Logic4::z)) || ((old_value == Logic4::x || old_value == Logic4::z) && new_value == Logic4::one);
     }

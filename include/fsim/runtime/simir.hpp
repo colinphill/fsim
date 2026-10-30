@@ -1404,6 +1404,11 @@ enum class EdgeKind : std::uint8_t {
     posedge,
     negedge,
     transaction,
+    /// VHDL RISING_EDGE and FALLING_EDGE of a sensitivity narrowed to the
+    /// clock: '0' or 'L' to '1' or 'H', and the reverse (IEEE 1076-2008
+    /// 16.7). A Verilog edge also counts 0 to X and X to 1.
+    rising,
+    falling,
 };
 
 /// Suspend until a listed signal has its corresponding edge. An empty edge

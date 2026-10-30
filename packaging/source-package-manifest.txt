@@ -2160,6 +2160,13 @@ tests/fixtures/sdf/vital/timing_21.sdf
 tests/fixtures/sdf/vital/timing_30.sdf
 tests/fixtures/sdf/vital/timing_40.sdf
 tests/fixtures/sdf/vital/wrapper.vhd
+tests/fixtures/systemverilog/clock_domains/cd_buffer_tb.sv
+tests/fixtures/systemverilog/clock_domains/cd_divider_tb.sv
+tests/fixtures/systemverilog/clock_domains/cd_edge_tb.sv
+tests/fixtures/systemverilog/clock_domains/cd_glitch_tb.sv
+tests/fixtures/systemverilog/clock_domains/cd_icg_tb.sv
+tests/fixtures/systemverilog/clock_domains/clock_domains_dut.vhd
+tests/fixtures/systemverilog/clock_domains/run_clock_domains.cmake
 tests/fixtures/systemverilog/delta_collapse/dc_attributes_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_case_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_chain_tb.sv
