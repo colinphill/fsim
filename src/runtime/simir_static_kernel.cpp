@@ -185,6 +185,10 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         batch_profile_.barrier_pair_ns = std::strtod(barrier, nullptr);
     }
     check_inputs_ = std::getenv("FSIM_KERNEL_CHECK_INPUTS") != nullptr;
+    if (const char* census = std::getenv("FSIM_KERNEL_UNKNOWN_CENSUS")) {
+        unknown_census_.stride = std::max<std::uint64_t>(
+            1U, std::strtoull(census, nullptr, 10));
+    }
     if (const char* threads = std::getenv("FSIM_KERNEL_THREADS")) {
         mt_threads_ = static_cast<std::uint32_t>(
             std::clamp(std::strtol(threads, nullptr, 10), 1L, 256L));
@@ -433,6 +437,9 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         settle_conversions();
     }
     plan_delta_collapse();
+    if (std::getenv("FSIM_PROFILE_KERNEL_DOMAINS") != nullptr) {
+        report_domains();
+    }
     stage("finish");
     if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
         report_interpreted_sites();
@@ -711,6 +718,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         member.kind = member_spec.kind;
         member.lazy = member_spec.lazy;
         member.collapse = member_spec.collapse;
+        member.first_delta = member_spec.first_delta;
         if (member.collapse) {
             // Plain kernel slots; no_slot for anything else, which makes
             // plan_delta_collapse drop the member, except an input on the
@@ -1710,8 +1718,186 @@ void Interpreter::Impl::StaticKernel::plan_conversions_and_wires(
     }
 }
 
+void Interpreter::Impl::StaticKernel::sample_unknown_census()
+{
+    auto& census = unknown_census_;
+    const auto now = kernel_now();
+    if (census.last_time == now) {
+        return;
+    }
+    census.last_time = now;
+    if (census.steps++ % census.stride != 0U) {
+        return;
+    }
+    const auto slot_count = slots_.size();
+    if (census.memory_slot.empty()) {
+        census.memory_slot.assign(slot_count, 0U);
+        for (std::uint32_t index = 0U; index < containers_.size(); ++index) {
+            const auto& container = containers_[index];
+            for (const auto slot : container.element_slots) {
+                census.memory_slot[slot] = 1U;
+            }
+            if (container.packed_slot != no_slot) {
+                census.memory_slot[container.packed_slot] = 1U;
+            }
+            if (container.storage == StaticKernelContainerStorage::elements) {
+                census.element_container.insert(
+                    census.element_container.end(), container.count, index);
+            }
+        }
+        census.unknown.assign(slot_count + census.element_container.size(), 0U);
+        census.last_unknown.assign(census.unknown.size(), 0U);
+    }
+    ++census.samples;
+    bool scalar_known = true;
+    bool memory_known = true;
+    const auto mark = [&](const std::size_t entry, const bool memory) {
+        ++census.unknown[entry];
+        census.last_unknown[entry] = census.samples;
+        (memory ? memory_known : scalar_known) = false;
+    };
+    for (std::size_t index = 0U; index < slot_count; ++index) {
+        const auto& slot = slots_[index];
+        const auto* words = arena_.data() + slot.offset;
+        bool unknown = false;
+        for (std::uint32_t word = 0U; word < slot.words && !unknown; ++word) {
+            const auto bits = slot.width - 64U * word;
+            const auto mask = bits >= 64U ? ~std::uint64_t { 0 }
+                                          : (std::uint64_t { 1 } << bits) - 1U;
+            if (slot.planes == 4U) {
+                // Strong '0' and '1' are codes 2 and 3: plane 1 set, planes
+                // 2 and 3 clear.
+                unknown = ((~words[slot.words + word] | words[2U * slot.words + word]
+                               | words[3U * slot.words + word])
+                              & mask)
+                    != 0U;
+            } else {
+                unknown = (words[slot.words + word] & mask) != 0U;
+            }
+        }
+        if (unknown) {
+            mark(index, census.memory_slot[index] != 0U);
+            census.unknown_scalar_sum += census.memory_slot[index] == 0U ? 1U : 0U;
+        }
+    }
+    std::size_t entry = slot_count;
+    for (const auto& container : containers_) {
+        if (container.storage != StaticKernelContainerStorage::elements) {
+            continue;
+        }
+        for (std::uint32_t element = 0U; element < container.count; ++element, ++entry) {
+            const auto base = container.element_offset + 2U * container.element_words * element;
+            for (std::uint32_t word = 0U; word < container.element_words; ++word) {
+                if (arena_[base + container.element_words + word] != 0U) {
+                    mark(entry, true);
+                    break;
+                }
+            }
+        }
+    }
+    census.zero_scalar += scalar_known ? 1U : 0U;
+    census.zero_memory += memory_known ? 1U : 0U;
+    census.zero_all += scalar_known && memory_known ? 1U : 0U;
+}
+
+void Interpreter::Impl::StaticKernel::report_unknown_census() const
+{
+    const auto& census = unknown_census_;
+    if (census.samples == 0U) {
+        return;
+    }
+    // Persistent entries are unknown in the last sample. The design has
+    // settled once every other entry is known for good: the samples after
+    // that see only persistent entries unknown.
+    const auto slot_count = slots_.size();
+    std::uint64_t settled_scalar = 0U;
+    std::uint64_t settled_all = 0U;
+    std::uint64_t persistent_scalar = 0U;
+    std::uint64_t persistent_memory_slots = 0U;
+    std::uint64_t persistent_elements = 0U;
+    std::uint64_t unknown_ever = 0U;
+    std::vector<std::pair<std::uint64_t, std::size_t>> persistent;
+    for (std::size_t entry = 0U; entry < census.unknown.size(); ++entry) {
+        if (census.unknown[entry] == 0U) {
+            continue;
+        }
+        ++unknown_ever;
+        const bool memory = entry >= slot_count || census.memory_slot[entry] != 0U;
+        if (census.last_unknown[entry] == census.samples) {
+            if (entry >= slot_count) {
+                ++persistent_elements;
+            } else if (memory) {
+                ++persistent_memory_slots;
+            } else {
+                ++persistent_scalar;
+                persistent.emplace_back(census.unknown[entry], entry);
+            }
+            continue;
+        }
+        settled_all = std::max(settled_all, census.last_unknown[entry]);
+        if (!memory) {
+            settled_scalar = std::max(settled_scalar, census.last_unknown[entry]);
+        }
+    }
+    std::cerr << "fsim-kernel: unknown-census steps=" << census.steps
+              << " samples=" << census.samples << " slots=" << slot_count
+              << " kernel_elements=" << census.element_container.size()
+              << " unknown_ever=" << unknown_ever
+              << " zero_scalar=" << census.zero_scalar
+              << " zero_memory=" << census.zero_memory
+              << " zero_all=" << census.zero_all
+              << " persistent_scalar=" << persistent_scalar
+              << " persistent_memory_slots=" << persistent_memory_slots
+              << " persistent_elements=" << persistent_elements
+              << " settled_scalar_sample=" << settled_scalar
+              << " settled_all_sample=" << settled_all << '\n';
+    // Non-container slots by the share of samples they were unknown in, and
+    // the transient ones unknown latest.
+    std::array<std::uint64_t, 6> share { };
+    std::vector<std::pair<std::uint64_t, std::size_t>> transient;
+    for (std::size_t slot = 0U; slot < slot_count; ++slot) {
+        if (census.memory_slot[slot] != 0U) {
+            continue;
+        }
+        const auto count = census.unknown[slot];
+        const auto bucket = count == 0U ? 0U
+            : count == census.samples ? 5U
+            : count * 100U <= census.samples ? 1U
+            : count * 10U <= census.samples ? 2U
+            : count * 2U <= census.samples ? 3U
+            : 4U;
+        ++share[bucket];
+        if (count != 0U && census.last_unknown[slot] != census.samples) {
+            transient.emplace_back(census.last_unknown[slot], slot);
+        }
+    }
+    std::cerr << "fsim-kernel: unknown-census scalar mean_unknown="
+              << census.unknown_scalar_sum / census.samples << " never=" << share[0]
+              << " le1pct=" << share[1] << " le10pct=" << share[2]
+              << " le50pct=" << share[3] << " gt50pct=" << share[4]
+              << " always=" << share[5] << '\n';
+    std::ranges::sort(transient, std::greater<> { });
+    for (std::size_t rank = 0U; rank < transient.size() && rank < 20U; ++rank) {
+        const auto slot = transient[rank].second;
+        std::cerr << "fsim-kernel: unknown-census transient last=" << transient[rank].first
+                  << " samples=" << census.unknown[slot] << " width=" << slots_[slot].width
+                  << ' ' << impl_.get_signal_cold(slots_[slot].signal).name << '\n';
+    }
+    std::ranges::sort(persistent, std::greater<> { });
+    for (std::size_t rank = 0U; rank < persistent.size() && rank < 40U; ++rank) {
+        const auto slot = persistent[rank].second;
+        std::cerr << "fsim-kernel: unknown-census persistent samples="
+                  << persistent[rank].first << " width=" << slots_[slot].width
+                  << " planes=" << slots_[slot].planes << ' '
+                  << impl_.get_signal_cold(slots_[slot].signal).name << '\n';
+    }
+}
+
 Interpreter::Impl::StaticKernel::~StaticKernel()
 {
+    if (unknown_census_.stride != 0U) {
+        report_unknown_census();
+    }
     if (mt_stats_.enabled) {
         report_mt_stats();
     }
@@ -1777,6 +1963,8 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
               << " fast_notify_changes=" << profile_schedule_outcomes_[4]
               << " dispatch_groups=" << dispatch_groups_.size()
               << " collapsed=" << profile_collapsed_runs_
+              << " guards_open=" << profile_guards_[0]
+              << " guards_closed=" << profile_guards_[1]
               << " commit_writes=" << profile_commit_writes_[0]
               << " commit_unchanged=" << profile_commit_writes_[1]
               << " commits=" << profile_commit_writes_[2]
@@ -2592,8 +2780,16 @@ void Interpreter::Impl::StaticKernel::commit_round()
 {
     // After time zero (whose delta order the collapsed members' readers may
     // observe; plan_delta_collapse) a collapsed member woken by this update
-    // phase runs in it.
-    collapsing_ = collapse_enabled_ && impl_.scheduler.now() != 0U;
+    // phase runs in it. The kernel's own time: a warped step is past the
+    // scheduler's.
+    collapsing_ = collapse_enabled_ && kernel_now() != 0U;
+    if (collapsing_ && !guard_groups_.empty()) {
+        ++guard_commit_;
+        if (const auto now = kernel_now(); now != guard_time_) {
+            guard_time_ = now;
+            ++guard_epoch_;
+        }
+    }
     commit_writes();
     if (collapse_pending_ != 0U) {
         run_collapsed();
@@ -2618,6 +2814,12 @@ void Interpreter::Impl::StaticKernel::run_collapsed()
         std::ranges::sort(collapse_batch_);
         for (const auto member : collapse_batch_) {
             member_schedule_[member].collapse_queued = false;
+            if (!member_guard_.empty() && member_guard_[member] != 0U
+                && !open_guard(member_guard_[member] - 1U)) {
+                // Its group runs in the delta schedule in this step.
+                schedule(member);
+                continue;
+            }
             run(member);
         }
         if (profile_) {
@@ -2628,6 +2830,65 @@ void Interpreter::Impl::StaticKernel::run_collapsed()
     }
     collapse_low_ = static_cast<std::uint32_t>(collapse_buckets_.size());
     collapse_floor_ = 0U;
+}
+
+bool Interpreter::Impl::StaticKernel::slot_known(const std::uint32_t slot_index) const
+{
+    const auto& slot = slots_[slot_index];
+    const auto* words = arena_.data() + slot.offset;
+    for (std::uint32_t word = 0U; word < slot.words; ++word) {
+        const auto bits = slot.width - 64U * word;
+        const auto mask = bits >= 64U ? ~std::uint64_t { 0 }
+                                      : (std::uint64_t { 1 } << bits) - 1U;
+        if (slot.planes == 4U) {
+            // Strong '0' and '1' are codes 2 and 3: plane 1 set, planes 2
+            // and 3 clear.
+            if (((~words[slot.words + word] | words[2U * slot.words + word]
+                     | words[3U * slot.words + word])
+                    & mask)
+                != 0U) {
+                return false;
+            }
+        } else if (slot.planes == 2U && (words[slot.words + word] & mask) != 0U) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Interpreter::Impl::StaticKernel::guard_closed(const std::uint32_t member) const
+{
+    if (member_guard_.empty() || member_guard_[member] == 0U) {
+        return false;
+    }
+    const auto& group = guard_groups_[member_guard_[member] - 1U];
+    return group.epoch == guard_epoch_ && !group.open;
+}
+
+bool Interpreter::Impl::StaticKernel::open_guard(const std::uint32_t index)
+{
+    // A group's sources change only in the update phase of a time step's
+    // first delta (decide_delta_collapse), so it activates at most once
+    // per step. If every slot its members read holds strong 0/1 values
+    // then, each member maps known inputs to known values, so every value
+    // the delta schedule would pass through is known and no metavalue
+    // assertion fires: running it collapsed is exact. Otherwise it runs in
+    // the delta schedule from this update phase on, as the reference does,
+    // from the same (settled) state.
+    auto& group = guard_groups_[index];
+    if (group.epoch != guard_epoch_) {
+        group.epoch = guard_epoch_;
+        group.commit = guard_commit_;
+        group.open = std::ranges::all_of(group.inputs,
+            [&](const std::uint32_t slot) { return slot_known(slot); });
+        if (profile_) {
+            ++profile_guards_[group.open ? 0U : 1U];
+        }
+    } else if (group.open && group.commit != guard_commit_) {
+        throw std::logic_error(
+            "static kernel guarded collapse group woken in two update phases of a time step");
+    }
+    return group.open;
 }
 
 void Interpreter::Impl::StaticKernel::commit_writes()
@@ -3797,7 +4058,7 @@ void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
         ++profile_schedule_outcomes_[3];
     }
     auto& state = member_schedule_[member];
-    if (state.collapse && collapsing_) {
+    if (state.collapse && collapsing_ && !guard_closed(member)) {
         // Runs in this update phase (run_collapsed).
         if (!state.collapse_queued) {
             if (state.collapse_level < collapse_floor_) {
@@ -6058,6 +6319,9 @@ bool Interpreter::Impl::StaticKernel::activate()
     if (profile_) {
         profile_activations_ += 1U;
     }
+    if (unknown_census_.stride != 0U) {
+        sample_unknown_census();
+    }
     if (trace_) {
         std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now() << "+"
                   << impl_.scheduler.delta() << " activate phase="
@@ -6158,6 +6422,9 @@ bool Interpreter::Impl::StaticKernel::activate()
         nonblocking_committed_ = false;
         if (profile_) {
             profile_warps_ += 1U;
+        }
+        if (unknown_census_.stride != 0U) {
+            sample_unknown_census();
         }
         activate_step();
     }

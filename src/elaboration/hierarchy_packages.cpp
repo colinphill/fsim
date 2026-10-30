@@ -10,6 +10,7 @@
 #include "hierarchy_sv_ports_internal.hpp"
 #include "lowerer_internal.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
+#include "fsim/support/phase_profile.hpp"
 #include "vhdl_hir_type_validation.hpp"
 #include "vhdl_callable_legality.hpp"
 #include "fsim/frontend/systemverilog_scalars.hpp"
@@ -34392,7 +34393,11 @@ void HierarchyBuilder::add_root(
 
 void HierarchyBuilder::finalize()
 {
-    lower_forward_deferred_systemverilog({ }, true);
+    {
+        const support::ScopedPhaseProfile phase {
+            "elaboration_forward_deferred" };
+        lower_forward_deferred_systemverilog({ }, true);
+    }
     finish();
 }
 

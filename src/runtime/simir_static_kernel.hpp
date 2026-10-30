@@ -87,6 +87,11 @@ struct StaticKernelMemberSpec {
     /// time step's first delta. The kernel may evaluate it in the update
     /// phase that changed its inputs (StaticKernel::plan_delta_collapse).
     bool collapse { };
+    /// A VHDL member that wakes only before a time step's first delta and
+    /// assigns only with zero delay, or a thread that suspends only on
+    /// positive constant delays: what it writes changes at most once per
+    /// time step, no later than the update phase of its first delta.
+    bool first_delta { };
     /// A VHDL port-association conversion (IEEE 1076-2008 6.5.7.1,
     /// 14.7.3.3): the member is the program of this signal's resolver,
     /// which the kernel runs in the update phase that changes one of its

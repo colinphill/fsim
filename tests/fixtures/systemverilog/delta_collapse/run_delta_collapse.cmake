@@ -19,11 +19,18 @@
 #     assignments, numeric_std arithmetic, record field drivers, and fan-in
 #     across levels, all collapsed;
 #   dc_sv_reader: VHDL cells sampled by a SystemVerilog flop (refused while
-#     SystemVerilog readers are not first-delta readers).
+#     SystemVerilog readers are not first-delta readers);
+#   dc_popcount, dc_slice: integer arithmetic and range checks under a data
+#     condition, and dynamic part inserts (narrow and wide targets) whose
+#     bases are loop indices, all collapsed by the range certificate;
+#   dc_guard: to_integer's metavalue warnings in cones fed by a register
+#     and by the testbench input, collapsed under the known-value guard
+#     while their sources are known and run in the delta schedule while one
+#     holds a metavalue (the guards must both open and close).
 # Where a case collapses, the collapsed run must keep at least the members
 # listed in min_kept_<case> (the refusal cases' unobserved neighbours
-# included), so that it exercises collapsed evaluation as well as the
-# refusal rules.
+# included) and run some of them collapsed, so that it exercises collapsed
+# evaluation as well as the refusal rules.
 # The static case also runs from an ahead-of-time snapshot, whose kernel
 # image holds the collapse plan: the restored run must keep as many
 # members and match the reference.
@@ -36,6 +43,7 @@ if(NOT DEFINED FSIM_FIXTURE_DIR OR NOT IS_DIRECTORY "${FSIM_FIXTURE_DIR}")
 endif()
 foreach(variable IN ITEMS FSIM_STATIC_KERNEL_DELTA_COLLAPSE FSIM_STATIC_KERNEL
     FSIM_STATIC_KERNEL_PLAN_CACHE FSIM_KERNEL_VERIFY FSIM_PROFILE_PHASES
+    FSIM_PROFILE_KERNEL FSIM_STATIC_KERNEL_COLLAPSE_GUARDS
     FSIM_KERNEL_IMAGE_REQUIRED FSIM_VERIFY_ARTIFACT)
   unset(ENV{${variable}})
 endforeach()
@@ -76,7 +84,7 @@ function(simulate_step STEP_NAME)
     if(stream STREQUAL "stderr")
       set(${STEP_NAME}_profile "${text}" PARENT_SCOPE)
     endif()
-    string(REGEX REPLACE "(^|\n)(FSIM-PROFILE|FSIM-PHASE|fsim-profile|fsim-kernel-plan)[^\n]*" ""
+    string(REGEX REPLACE "(^|\n)(FSIM-PROFILE|FSIM-PHASE|fsim-profile|fsim-kernel)[^\n]*" ""
       text "${text}")
     string(STRIP "${text}" text)
     set(${STEP_NAME}_${stream} "${text}" PARENT_SCOPE)
@@ -86,13 +94,16 @@ endfunction()
 
 set(cases dc_glitch_assert dc_glitch_count dc_static dc_nested_loop
   dc_observe_glitch dc_attributes dc_chain dc_regions dc_case dc_numeric
-  dc_record dc_diamond dc_sv_reader)
+  dc_record dc_diamond dc_sv_reader dc_popcount dc_slice dc_guard)
 set(min_kept_dc_observe_glitch 2)
 set(min_kept_dc_regions 2)
 set(min_kept_dc_case 2)
 set(min_kept_dc_numeric 3)
 set(min_kept_dc_record 3)
 set(min_kept_dc_diamond 5)
+set(min_kept_dc_popcount 2)
+set(min_kept_dc_slice 3)
+set(min_kept_dc_guard 3)
 
 foreach(case_name IN LISTS cases)
   set(case_dir "${workspace}/${case_name}")
@@ -107,8 +118,10 @@ foreach(case_name IN LISTS cases)
   run_fsim_step("${case_name}" elaborate_collapsed
     elaborate -q --top "${case_name}_tb" --no-aot --optimization O2)
   set(ENV{FSIM_PROFILE_PHASES} 1)
+  set(ENV{FSIM_PROFILE_KERNEL} 1)
   simulate_step(collapsed)
   unset(ENV{FSIM_PROFILE_PHASES})
+  unset(ENV{FSIM_PROFILE_KERNEL})
 
   set(ENV{FSIM_STATIC_KERNEL_DELTA_COLLAPSE} 0)
   run_fsim_step("${case_name}" elaborate_reference
@@ -147,6 +160,13 @@ foreach(case_name IN LISTS cases)
       "${case_name}: at least ${min_kept_${case_name}} members must collapse "
       "(kept ${kept})\n${collapsed_profile}\nworkspace: ${case_dir}")
   endif()
+  # Kept members must also run collapsed (FSIM_PROFILE_KERNEL's count).
+  if(DEFINED min_kept_${case_name}
+      AND NOT collapsed_profile MATCHES " collapsed=[1-9]")
+    message(FATAL_ERROR
+      "${case_name}: the kept members never ran collapsed\n"
+      "${collapsed_profile}\nworkspace: ${case_dir}")
+  endif()
   if(case_name STREQUAL "dc_glitch_assert")
     if(NOT reference_stdout MATCHES "glitch" AND NOT reference_stderr MATCHES "glitch")
       message(FATAL_ERROR "${case_name}: the reference must report the glitch\n"
@@ -180,6 +200,18 @@ foreach(case_name IN LISTS cases)
     if(report_count LESS 4)
       message(FATAL_ERROR "${case_name}: each value of x must be reported "
         "(${report_count} reports)\nworkspace: ${case_dir}")
+    endif()
+  elseif(case_name STREQUAL "dc_guard")
+    string(REGEX MATCHALL "detected a metavalue" warnings
+      "${reference_stdout}\n${reference_stderr}")
+    list(LENGTH warnings warning_count)
+    if(warning_count LESS 4 OR NOT collapsed_profile MATCHES " guarded=2 "
+        OR NOT collapsed_profile MATCHES " guards_open=[1-9]"
+        OR NOT collapsed_profile MATCHES " guards_closed=[1-9]")
+      message(FATAL_ERROR
+        "${case_name}: the guarded conversion must collapse, and its guard "
+        "must open and close (${warning_count} warnings)\n${collapsed_profile}\n"
+        "workspace: ${case_dir}")
     endif()
   elseif(case_name STREQUAL "dc_chain")
     if(kept LESS 9 OR NOT collapsed_profile MATCHES "levels=9")

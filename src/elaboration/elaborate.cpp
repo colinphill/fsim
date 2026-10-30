@@ -2,6 +2,10 @@
 #include "hierarchy_builder_internal.hpp"
 #include "lowerer_internal.hpp"
 
+#include "fsim/support/phase_profile.hpp"
+
+#include <optional>
+
 namespace fsim::elaboration {
 using namespace elaboration_detail;
 
@@ -488,6 +492,10 @@ ElaborationResult elaborate_impl(
         emitted[*selected] = true;
     }
     elaboration_roots = std::move(dependency_order);
+    // FSIM_PROFILE_PHASES: the hierarchy walk (specialization and process
+    // lowering together) and the closing passes.
+    std::optional<support::ScopedPhaseProfile> hierarchy_phase;
+    hierarchy_phase.emplace("elaboration_hierarchy");
     for (const auto* const root : elaboration_roots) {
         if (root->compiled_unit) {
             append_compiled_constant_effects(
@@ -503,7 +511,12 @@ ElaborationResult elaborate_impl(
             builder->set_root_generic_overrides({ });
         }
     }
-    builder->finalize();
+    hierarchy_phase.reset();
+    {
+        const support::ScopedPhaseProfile finalize_phase {
+            "elaboration_finalize" };
+        builder->finalize();
+    }
 
     if (!result.diagnostics.empty()) {
         return result;

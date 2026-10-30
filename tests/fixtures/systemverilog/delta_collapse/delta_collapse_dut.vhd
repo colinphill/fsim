@@ -450,3 +450,119 @@ begin
         end if;
     end process;
 end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+-- A counter incremented under a data condition inside a static loop
+-- (popcount): bounded by the trip count, so its integer arithmetic and the
+-- ranged signal's check cannot fail on any input, glitch or not.
+entity dc_popcount is
+    port (
+        clk : in std_logic;
+        a : in std_logic_vector(23 downto 0);
+        q : out std_logic_vector(7 downto 0));
+end entity;
+
+architecture rtl of dc_popcount is
+    function popcount(v : std_logic_vector) return integer is
+        variable c : integer := 0;
+    begin
+        for i in v'range loop
+            if v(i) = '1' then c := c + 1; end if;
+        end loop;
+        return c;
+    end function;
+    signal x : std_logic_vector(23 downto 0);
+    signal n : integer range 0 to 24;
+begin
+    x <= a xor x"a5c3e1";
+    n <= popcount(x);
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            q <= std_logic_vector(to_unsigned(n, 8));
+        end if;
+    end process;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+-- Slices assembled bit by bit and byte by byte in static loops: dynamic
+-- part inserts whose bases are loop indices, into a narrow and into a wide
+-- (80-bit) target.
+entity dc_slice is
+    port (
+        clk : in std_logic;
+        a : in std_logic_vector(11 downto 0);
+        q : out std_logic_vector(7 downto 0));
+end entity;
+
+architecture rtl of dc_slice is
+    function get_slice(v : std_logic_vector; idx : integer; w : integer)
+        return std_logic_vector is
+        variable r : std_logic_vector(w-1 downto 0);
+    begin
+        for j in 0 to w-1 loop
+            r(j) := v(v'low + idx*w + j);
+        end loop;
+        return r;
+    end function;
+    function spread(v : std_logic_vector(3 downto 0)) return std_logic_vector is
+        variable r : std_logic_vector(79 downto 0) := (others => '0');
+    begin
+        for j in 0 to 9 loop
+            r(j*8+7 downto j*8) := v & v;
+        end loop;
+        return r;
+    end function;
+    signal x : std_logic_vector(11 downto 0);
+    signal s : std_logic_vector(3 downto 0);
+    signal w : std_logic_vector(79 downto 0);
+begin
+    x <= not a;
+    s <= get_slice(x, 1, 4);
+    w <= spread(s);
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            q <= w(43 downto 36);
+        end if;
+    end process;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+-- Known-value guard: to_integer's metavalue assertion under a cone fed by
+-- a register (a first-delta writer), and under one fed by the testbench
+-- input (a delay-only thread). With known sources a cone is collapsed;
+-- while a source holds a metavalue it runs in the delta schedule, and the
+-- warnings match the reference.
+entity dc_guard is
+    port (
+        clk : in std_logic;
+        a : in std_logic_vector(5 downto 0);
+        q : out std_logic_vector(7 downto 0));
+end entity;
+
+architecture rtl of dc_guard is
+    signal r : std_logic_vector(5 downto 0);
+    signal s : std_logic_vector(5 downto 0);
+    signal i : integer range 0 to 63;
+    signal j : integer range 0 to 7;
+begin
+    s <= r xor "101010";
+    i <= to_integer(unsigned(s));
+    j <= to_integer(unsigned(a(2 downto 0)));
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            r <= a;
+            q <= std_logic_vector(to_unsigned((i * 3 + j) mod 256, 8));
+        end if;
+    end process;
+end architecture;

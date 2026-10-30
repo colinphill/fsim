@@ -4101,6 +4101,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // under the reader rule (StaticKernel::plan_delta_collapse). Clients
     // that observe arbitrary signals turn it off.
     std::vector<std::uint8_t> collapse(process_count, 0U);
+    // First-delta members whose assignments are all zero-delay, and
+    // delay-only threads: what they write changes at most once per time
+    // step, no later than the update phase of its first delta
+    // (StaticKernel::decide_delta_collapse's guarded groups).
+    std::vector<std::uint8_t> first_delta_writer(process_count, 0U);
     {
         // FSIM_PROFILE_KERNEL_PLAN: why each candidate stays out.
         std::vector<const char*> why(diagnose ? process_count : 0U, nullptr);
@@ -4222,6 +4227,50 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                                 && time_only[sensitivity.signal] != 0U;
                         })
                 ? 1U : 0U;
+        }
+        for (std::size_t index = 0U; enabled && index < process_count; ++index) {
+            if (first_delta[index] == 0U || !views[index].valid()) {
+                continue;
+            }
+            const auto& operations = views[index].operations();
+            bool zero_delay = true;
+            for (std::size_t op = 0U; zero_delay && op < operations.size(); ++op) {
+                Operation expanded_scratch;
+                const auto& operation = operations.expanded_ref(op, expanded_scratch);
+                zero_delay = !(operation_holds<WriteAfter>(operation)
+                    || operation_holds<WriteAfterSlice>(operation)
+                    || operation_holds<WriteAfterDynamicSlice>(operation)
+                    || operation_holds<WriteAfterDynamicPartSlice>(operation)
+                    || operation_holds<WriteInertial>(operation)
+                    || operation_holds<WriteInertialSlice>(operation)
+                    || operation_holds<WriteInertialDynamicSlice>(operation)
+                    || operation_holds<WriteInertialDynamicPartSlice>(operation)
+                    || operation_holds<WriteProjectedWaveform>(operation)
+                    || operation_holds<WriteProjectedWaveformSlice>(operation)
+                    || operation_holds<WriteProjectedWaveformDynamicSlice>(operation)
+                    || operation_holds<WriteDelayed>(operation));
+                // A VHDL assignment without `after` is projected at zero delay.
+                if (const auto* write = operation_get_if<WriteProjected>(&operation)) {
+                    zero_delay = zero_delay && write->delay == 0U;
+                } else if (const auto* slice
+                           = operation_get_if<WriteProjectedSlice>(&operation)) {
+                    zero_delay = zero_delay && slice->delay == 0U;
+                } else if (const auto* dynamic
+                           = operation_get_if<WriteProjectedDynamicSlice>(&operation)) {
+                    zero_delay = zero_delay && dynamic->delay == 0U;
+                }
+            }
+            first_delta_writer[index] = zero_delay ? 1U : 0U;
+        }
+        // A delay-only thread's writes change signals before the first
+        // delta (it resumes outside the kernel's rounds, and its writes wake
+        // their readers into the next round); a process that runs once runs
+        // at time zero, where nothing collapses.
+        for (std::size_t index = 0U; enabled && index < process_count; ++index) {
+            if (clock_thread(static_cast<ProcessId>(index))
+                || (candidates[index] && candidates[index]->kind == 2U)) {
+                first_delta_writer[index] = 1U;
+            }
         }
         // A slice driver: another VHDL kernel member may drive the rest of a
         // collapsed member's output. Each scalar subelement then has one
@@ -4582,6 +4631,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         runtime_member.sensitivity = std::move(candidate.sensitivity);
         runtime_member.lazy = lazy[index] != 0U;
         runtime_member.collapse = collapse[index] != 0U;
+        runtime_member.first_delta = first_delta_writer[index] != 0U;
         plan.lazy_members += lazy[index];
         plan.collapse_members += collapse[index];
         spec->members.push_back(std::move(runtime_member));
@@ -5019,7 +5069,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
 namespace detail {
 namespace {
 
-constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v8" };
+constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v9" };
 
 class PlanWriter {
 public:
@@ -5168,6 +5218,7 @@ std::string serialize_static_kernel_plan(const StaticKernelPlan& plan)
         out.put(member.start_waiting);
         out.put(member.lazy);
         out.put(member.collapse);
+        out.put(member.first_delta);
         out.put(member.conversion_target);
     });
     out.list(spec.hosted, [&](const runtime::simir::StaticKernelMemberSpec& member) {
@@ -5243,7 +5294,7 @@ std::optional<StaticKernelPlan> restore_static_kernel_plan(
                    && in.get(member.partition) && in.get(member.vhdl)
                    && in.get(member.start_late)
                    && in.get(member.start_waiting) && in.get(member.lazy)
-                   && in.get(member.collapse)
+                   && in.get(member.collapse) && in.get(member.first_delta)
                    && in.get(member.conversion_target)
                    && (member.conversion_target
                            == std::numeric_limits<SignalId>::max()

@@ -303,6 +303,11 @@ public:
         }
     }
 
+    void outline_stores(const bool outline)
+    {
+        outline_stores_ = outline;
+    }
+
     void emit()
     {
         const auto size = static_cast<std::uint32_t>(body_.code.size());
@@ -2356,6 +2361,122 @@ private:
         builder_.SetInsertPoint(queue);
     }
 
+    /// Large cold templates' deferred store (emit_deferred_store), one
+    /// function per module so that each store is a call:
+    /// i1 fsim_sk_local_deferred_store(frame, slot, offset, width, a, b,
+    /// unknown, at, field, words, planes) skips an unchanged write (planes
+    /// 2 or 4 with field, the slot's first word, and words per plane; 0
+    /// for none), else appends the write and marks the slot. False: the
+    /// queue is full, and the caller takes the effect helper's path.
+    [[nodiscard]] llvm::Function* local_deferred_store()
+    {
+        static constexpr const char* name = "fsim_sk_local_deferred_store";
+        if (auto* existing = module_.getFunction(name)) {
+            return existing;
+        }
+        auto* i1 = llvm::Type::getInt1Ty(context_);
+        auto* type = llvm::FunctionType::get(i1,
+            { ptr_, i32_, i32_, i32_, i64_, i64_, i64_, i32_, ptr_, i64_, i32_ }, false);
+        auto* function = llvm::Function::Create(type, llvm::Function::InternalLinkage,
+            name, module_);
+        function->addFnAttr(llvm::Attribute::NoInline);
+        function->addFnAttr(llvm::Attribute::NoUnwind);
+        auto* frame = function->getArg(0);
+        auto* slot = function->getArg(1);
+        auto* offset = function->getArg(2);
+        auto* width = function->getArg(3);
+        auto* value_a = function->getArg(4);
+        auto* value_b = function->getArg(5);
+        auto* unknown = function->getArg(6);
+        auto* at = function->getArg(7);
+        auto* field_base = function->getArg(8);
+        auto* words = function->getArg(9);
+        auto* planes = function->getArg(10);
+        const auto block = [&](const char* label) {
+            return llvm::BasicBlock::Create(context_, label, function);
+        };
+        auto* entry = block("entry");
+        auto* compare = block("same_check");
+        auto* four = block("logic4");
+        auto* nine = block("logic9");
+        auto* check = block("unqueued");
+        auto* skipped = block("skipped");
+        auto* queue = block("queue_write");
+        auto* fast = block("append");
+        auto* full = block("append_full");
+        llvm::IRBuilder<> b(entry);
+        const auto word = [&](llvm::Value* base, const std::uint64_t bytes) {
+            return b.CreateConstInBoundsGEP1_64(i8_, base, bytes);
+        };
+        const auto k64 = [&](const std::uint64_t value) {
+            return llvm::ConstantInt::get(i64_, value);
+        };
+        auto* marks = b.CreateLoad(ptr_, word(frame, 104U));
+        auto* round = b.CreateLoad(i32_, word(frame, 100U));
+        auto* shift = b.CreateZExt(offset, i64_);
+        auto* width64 = b.CreateZExt(width, i64_);
+        auto* usable = b.CreateAnd(
+            b.CreateAnd(b.CreateICmpNE(planes, llvm::ConstantInt::get(i32_, 0U)),
+                b.CreateIsNotNull(marks)),
+            b.CreateICmpULE(b.CreateAdd(shift, width64), k64(64U)));
+        b.CreateCondBr(usable, compare, queue);
+        b.SetInsertPoint(compare);
+        auto* m = b.CreateSelect(b.CreateICmpUGE(width64, k64(64U)), k64(~0ULL),
+            b.CreateSub(b.CreateShl(k64(1U), b.CreateAnd(width64, k64(63U))), k64(1U)));
+        auto* field = b.CreateShl(m, shift);
+        const auto differs = [&](const std::uint64_t plane, llvm::Value* bits) {
+            auto* current = b.CreateLoad(i64_, b.CreateInBoundsGEP(i64_, field_base,
+                b.CreateMul(words, k64(plane))));
+            return b.CreateAnd(b.CreateXor(current, b.CreateShl(bits, shift)), field);
+        };
+        b.CreateCondBr(b.CreateICmpEQ(planes, llvm::ConstantInt::get(i32_, 4U)), nine,
+            four);
+        b.SetInsertPoint(four);
+        auto* changed4 = b.CreateOr(differs(0U, value_a), differs(1U, value_b));
+        b.CreateCondBr(b.CreateICmpEQ(changed4, k64(0U)), check, queue);
+        b.SetInsertPoint(nine);
+        // kernel_word::logic9_planes: 'U' elements have code 0000.
+        auto* known = b.CreateAnd(m, b.CreateNot(unknown));
+        auto* p0 = b.CreateAnd(value_a, known);
+        auto* p1 = b.CreateAnd(b.CreateNot(value_b), known);
+        auto* p2 = b.CreateAnd(b.CreateAnd(b.CreateNot(value_a), value_b), known);
+        auto* changed9 = b.CreateOr(b.CreateOr(differs(0U, p0), differs(1U, p1)),
+            b.CreateOr(differs(2U, p2), differs(3U, k64(0U))));
+        b.CreateCondBr(b.CreateICmpEQ(changed9, k64(0U)), check, queue);
+        b.SetInsertPoint(check);
+        auto* mark_at = b.CreateInBoundsGEP(i32_, marks, b.CreateZExt(slot, i64_));
+        b.CreateCondBr(b.CreateICmpNE(b.CreateLoad(i32_, mark_at), round), skipped, queue);
+        b.SetInsertPoint(skipped);
+        b.CreateRet(llvm::ConstantInt::getTrue(context_));
+        b.SetInsertPoint(queue);
+        auto* writes = b.CreateLoad(ptr_, word(frame, 56U));
+        auto* count = b.CreateLoad(i32_, word(writes, 8U));
+        auto* capacity = b.CreateLoad(i32_, word(writes, 12U));
+        b.CreateCondBr(b.CreateICmpULT(count, capacity), fast, full);
+        b.SetInsertPoint(fast);
+        auto* entry_at = b.CreateInBoundsGEP(i8_, b.CreateLoad(ptr_, writes),
+            b.CreateMul(b.CreateZExt(count, i64_), k64(48U)));
+        b.CreateStore(slot, word(entry_at, 0U));
+        b.CreateStore(offset, word(entry_at, 4U));
+        b.CreateStore(width, word(entry_at, 8U));
+        b.CreateStore(b.CreateLoad(i32_, word(frame, 32U)), word(entry_at, 12U));
+        b.CreateStore(value_a, word(entry_at, 16U));
+        b.CreateStore(value_b, word(entry_at, 24U));
+        b.CreateStore(unknown, word(entry_at, 32U));
+        b.CreateStore(llvm::ConstantInt::get(i32_, 0U), word(entry_at, 40U));
+        b.CreateStore(at, word(entry_at, 44U));
+        b.CreateStore(b.CreateAdd(count, llvm::ConstantInt::get(i32_, 1U)),
+            word(writes, 8U));
+        auto* mark = block("write_mark");
+        b.CreateCondBr(b.CreateIsNull(marks), skipped, mark);
+        b.SetInsertPoint(mark);
+        b.CreateStore(round, b.CreateInBoundsGEP(i32_, marks, b.CreateZExt(slot, i64_)));
+        b.CreateRet(llvm::ConstantInt::getTrue(context_));
+        b.SetInsertPoint(full);
+        b.CreateRet(llvm::ConstantInt::getFalse(context_));
+        return function;
+    }
+
     void emit_deferred_store(const KInst& inst, const std::uint32_t at,
         llvm::Value* offset = nullptr)
     {
@@ -2365,6 +2486,33 @@ private:
         auto* slot = builder_.CreateAnd(binding(inst.d, 1U),
             llvm::ConstantInt::get(i32_, ~silent_bit));
         auto* done = llvm::BasicBlock::Create(context_, "appended", &function_);
+        if (outline_stores_) {
+            const bool check = inst.op == KOp::store_vhdl && inst.sub == 0U
+                && (inst.imm_b == 2U || inst.imm_b == 4U) && inst.imm_a != 0U
+                && inst.width != 0U && inst.width <= 64U
+                && (offset != nullptr || inst.offset + inst.width <= 64U);
+            auto* helper = local_deferred_store();
+            auto* appended = builder_.CreateCall(helper,
+                { frame_, slot,
+                    offset != nullptr ? offset : llvm::ConstantInt::get(i32_, inst.offset),
+                    llvm::ConstantInt::get(i32_, inst.width), value.a, value.b, unknown,
+                    llvm::ConstantInt::get(i32_, at),
+                    check ? slot_word(inst.d, 0U)
+                          : llvm::ConstantPointerNull::get(
+                                llvm::cast<llvm::PointerType>(ptr_)),
+                    constant(check ? inst.imm_a : 0U),
+                    llvm::ConstantInt::get(i32_, check ? inst.imm_b : 0U) });
+            auto* slow = llvm::BasicBlock::Create(context_, "append_full", &function_);
+            builder_.CreateCondBr(appended, done, slow);
+            builder_.SetInsertPoint(slow);
+            call_effect(at, value,
+                inst.sub == 1U || inst.op == KOp::store_slot_part ? load_register(inst.y)
+                                                                   : zero_pair(),
+                Pair { unknown, constant(0U) });
+            builder_.CreateBr(done);
+            builder_.SetInsertPoint(done);
+            return;
+        }
         emit_unchanged_write_skip(inst, value, unknown, slot, offset, done);
         auto* queue = builder_.CreateLoad(ptr_, frame_field(56U));
         auto* count = builder_.CreateLoad(i32_,
@@ -3755,6 +3903,14 @@ private:
     /// the helper.
     void emit_notify_skip(llvm::Value* slot, llvm::BasicBlock* skip)
     {
+        if (outline_stores_) {
+            // Large cold templates: one function per module.
+            auto* call = llvm::BasicBlock::Create(context_, "notify_call", &function_);
+            builder_.CreateCondBr(builder_.CreateCall(local_notify_skip(), { frame_, slot }),
+                skip, call);
+            builder_.SetInsertPoint(call);
+            return;
+        }
         auto* call = llvm::BasicBlock::Create(context_, "notify_call", &function_);
         auto* lookup = llvm::BasicBlock::Create(context_, "notify_lookup", &function_);
         auto* running = llvm::BasicBlock::Create(context_, "notify_running", &function_);
@@ -3785,6 +3941,64 @@ private:
             builder_.CreateICmpNE(flag, llvm::ConstantInt::get(llvm::Type::getInt8Ty(context_), 0U)),
             skip, call);
         builder_.SetInsertPoint(call);
+    }
+
+    /// i1 fsim_sk_local_notify_skip(frame, slot): emit_notify_skip's test
+    /// (true: skip the notify helper) as one function per module.
+    [[nodiscard]] llvm::Function* local_notify_skip()
+    {
+        static constexpr const char* name = "fsim_sk_local_notify_skip";
+        if (auto* existing = module_.getFunction(name)) {
+            return existing;
+        }
+        auto* i1 = llvm::Type::getInt1Ty(context_);
+        auto* type = llvm::FunctionType::get(i1, { ptr_, i32_ }, false);
+        auto* function = llvm::Function::Create(type, llvm::Function::InternalLinkage,
+            name, module_);
+        function->addFnAttr(llvm::Attribute::NoInline);
+        function->addFnAttr(llvm::Attribute::NoUnwind);
+        auto* frame = function->getArg(0);
+        auto* slot = function->getArg(1);
+        const auto block = [&](const char* label) {
+            return llvm::BasicBlock::Create(context_, label, function);
+        };
+        auto* entry = block("entry");
+        auto* lookup = block("notify_lookup");
+        auto* running = block("notify_running");
+        auto* queued = block("notify_queued");
+        auto* skip = block("notify_skip");
+        auto* call = block("notify_call");
+        llvm::IRBuilder<> b(entry);
+        const auto field = [&](const std::uint64_t bytes) {
+            return b.CreateConstInBoundsGEP1_64(i8_, frame, bytes);
+        };
+        auto* table = b.CreateLoad(ptr_, field(80U));
+        b.CreateCondBr(b.CreateIsNull(table), call, lookup);
+        b.SetInsertPoint(lookup);
+        auto* entry_at = b.CreateInBoundsGEP(i32_, table,
+            b.CreateShl(b.CreateZExt(slot, i64_), 1U));
+        auto* partition = b.CreateLoad(i32_, entry_at);
+        b.CreateCondBr(b.CreateICmpEQ(partition,
+                           llvm::ConstantInt::get(i32_,
+                               runtime::simir::static_kernel_no_fast_notify)),
+            call, running);
+        b.SetInsertPoint(running);
+        auto* min_position = b.CreateLoad(i32_,
+            b.CreateConstInBoundsGEP1_64(i32_, entry_at, 1U));
+        auto* later = b.CreateAnd(
+            b.CreateICmpEQ(partition, b.CreateLoad(i32_, field(96U))),
+            b.CreateICmpUGE(min_position, b.CreateLoad(i32_, field(36U))));
+        b.CreateCondBr(later, skip, queued);
+        b.SetInsertPoint(queued);
+        auto* flags = b.CreateLoad(ptr_, field(88U));
+        auto* flag = b.CreateLoad(i8_, b.CreateInBoundsGEP(i8_, flags,
+            b.CreateZExt(partition, i64_)));
+        b.CreateCondBr(b.CreateICmpNE(flag, llvm::ConstantInt::get(i8_, 0U)), skip, call);
+        b.SetInsertPoint(skip);
+        b.CreateRet(llvm::ConstantInt::getTrue(context_));
+        b.SetInsertPoint(call);
+        b.CreateRet(llvm::ConstantInt::getFalse(context_));
+        return function;
     }
 
     void emit_store_slot(const KInst& inst, const Pair value)
@@ -3856,6 +4070,11 @@ private:
     bool local_registers_ { };
     /// Compiled by the optimizing backend (hot tier).
     bool optimizing_ { };
+    /// Large cold templates: deferred stores and notify skips call one
+    /// helper per module instead of inlining their checks. Warm and small
+    /// members run often enough that the call costs more run time than it
+    /// saves compile time.
+    bool outline_stores_ { };
     /// Exits store local registers to the register file (VHDL).
     bool flush_locals_ { };
     /// Records the instruction after the current one as a continuation.
@@ -4326,6 +4545,20 @@ private:
                 templates[index].vhdl,
                 templates[index].two_state,
                 templates[index].resume_points, templates[index].vhdl);
+            // Cold tiering is static, so small cold templates include the
+            // most frequently run members: outlining them costs 3-5% run
+            // instructions, and it is runtime-neutral only from about 1024
+            // instructions. Off by default.
+            // FSIM_STATIC_KERNEL_OUTLINE_STORES=N: the smallest outlined
+            // template (0: none).
+            static const std::size_t outline_size = [] {
+                const char* text = std::getenv("FSIM_STATIC_KERNEL_OUTLINE_STORES");
+                return text == nullptr ? std::size_t { 0 }
+                                       : static_cast<std::size_t>(
+                                             std::strtoull(text, nullptr, 10));
+            }();
+            emitter.outline_stores(outline_size != 0U && tier == 0U
+                && templates[index].body->code.size() >= outline_size);
             emitter.emit();
         }
         if (std::getenv("FSIM_STATIC_KERNEL_VERIFY") != nullptr
@@ -4631,7 +4864,7 @@ private:
                  "FSIM_STATIC_KERNEL_WARM_LEVEL", "FSIM_STATIC_KERNEL_WARM_FAST_ISEL",
                  "FSIM_STATIC_KERNEL_HOT_THRESHOLD",
                  "FSIM_STATIC_KERNEL_PIPELINE", "FSIM_STATIC_KERNEL_HOT_PIPELINE",
-                 "FSIM_STATIC_KERNEL_LLVM_ARGS" }) {
+                 "FSIM_STATIC_KERNEL_LLVM_ARGS", "FSIM_STATIC_KERNEL_OUTLINE_STORES" }) {
             const char* value = std::getenv(name);
             identity += ";";
             identity += name;

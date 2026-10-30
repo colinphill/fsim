@@ -583,6 +583,7 @@ include/fsim/support/index_distance.hpp
 include/fsim/support/native_filesystem.hpp
 include/fsim/support/path.hpp
 include/fsim/support/payload_checksum.hpp
+include/fsim/support/phase_profile.hpp
 include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
 include/fsim/support/teardown.hpp
@@ -1219,6 +1220,7 @@ src/runtime/simir_static_kernel_analysis.cpp
 src/runtime/simir_static_kernel_behavioral.cpp
 src/runtime/simir_static_kernel_compiled.cpp
 src/runtime/simir_static_kernel_compiled_internal.hpp
+src/runtime/simir_static_kernel_domains.cpp
 src/runtime/simir_static_kernel_execute.cpp
 src/runtime/simir_static_kernel_hosted.cpp
 src/runtime/simir_static_kernel_image.cpp
@@ -2164,11 +2166,14 @@ tests/fixtures/systemverilog/delta_collapse/dc_chain_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_diamond_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_glitch_assert_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_glitch_count_tb.sv
+tests/fixtures/systemverilog/delta_collapse/dc_guard_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_nested_loop_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_numeric_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_observe_glitch_tb.sv
+tests/fixtures/systemverilog/delta_collapse/dc_popcount_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_record_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_regions_tb.sv
+tests/fixtures/systemverilog/delta_collapse/dc_slice_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_static_tb.sv
 tests/fixtures/systemverilog/delta_collapse/dc_sv_reader_tb.sv
 tests/fixtures/systemverilog/delta_collapse/delta_collapse_dut.vhd

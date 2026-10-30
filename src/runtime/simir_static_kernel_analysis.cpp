@@ -821,8 +821,9 @@ void Interpreter::Impl::StaticKernel::eliminate_dead_constants(
     }
 }
 
-const char* Interpreter::Impl::StaticKernel::collapse_impurity(
-    const Member& member, KOp& rejected_op) const
+const char* Interpreter::Impl::StaticKernel::collapse_impurity(const Member& member,
+    KOp& rejected_op, std::uint32_t* rejected_at, const CollapseGuard guard,
+    bool* guarded) const
 {
     // A collapsed member may run in a different delta, and never on the
     // intermediate input combinations the delta schedule passes through,
@@ -908,6 +909,8 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
         case KOp::wide_copy:
         case KOp::wide_const:
         case KOp::wide_concat:
+        // Its base is checked below, as dynamic_part_insert's.
+        case KOp::wide_part_insert:
             allowed = true;
             break;
         case KOp::store_vhdl:
@@ -1323,6 +1326,7 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
         case KOp::wide_copy:
         case KOp::wide_const:
         case KOp::wide_concat:
+        case KOp::wide_part_insert:
             return false;
         case KOp::dynamic_extract:
         case KOp::dynamic_part_select:
@@ -1499,53 +1503,50 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
         }
         return std::nullopt;
     };
+    // Checks that may depend on slot values are proven below, over every
+    // run (pending); the first one's reason is the refusal if that fails.
+    std::vector<std::uint8_t> pending(size, 0U);
+    const char* pending_reason = nullptr;
+    std::uint32_t pending_at = no_slot;
+    bool assertions = false;
+    const auto defer = [&](const std::uint32_t at, const char* reason) {
+        pending[node_at[at]] = 1U;
+        if (pending_reason == nullptr) {
+            pending_reason = reason;
+            pending_at = node_at[at];
+        }
+    };
     for (std::uint32_t at = 0U; at < nodes; ++at) {
         const auto& inst = code[node_at[at]];
         switch (inst.op) {
-        case KOp::dynamic_extract: {
-            if ((inst.flags & flag_strict) == 0U || is_static(at, { inst.y })) {
-                break;
-            }
-            const auto index = constant(inst.y);
-            const auto offset = index
-                ? kw::dynamic_index(*index, body.indices[inst.aux]) : std::nullopt;
-            if (!offset || *offset >= inst.width) {
-                return "strict_extract";
+        case KOp::dynamic_extract:
+            if ((inst.flags & flag_strict) != 0U && !is_static(at, { inst.y })) {
+                defer(at, "strict_extract");
             }
             break;
-        }
-        case KOp::dynamic_insert: {
-            if ((inst.flags & flag_strict) == 0U || is_static(at, { inst.z })) {
-                break;
-            }
-            const auto index = constant(inst.z);
-            const auto offset = index
-                ? kw::dynamic_index(*index, body.indices[inst.aux]) : std::nullopt;
-            if (!offset || *offset > inst.width || inst.offset > inst.width - *offset) {
-                return "strict_insert";
+        case KOp::dynamic_insert:
+            if ((inst.flags & flag_strict) != 0U && !is_static(at, { inst.z })) {
+                defer(at, "strict_insert");
             }
             break;
-        }
-        case KOp::dynamic_part_insert: {
-            if (is_static(at, { inst.z })) {
-                break;
-            }
-            const auto base = constant(inst.z);
-            if (!base) {
-                return "dynamic_part_insert";
-            }
-            const auto write = kw::dynamic_part_write({ }, *base, body.parts[inst.aux]);
-            if (!write.valid
-                || (write.write
-                    && (write.write->offset > inst.width
-                        || write.write->width > inst.width - write.write->offset))) {
-                return "part_insert_range";
+        case KOp::dynamic_part_insert:
+        case KOp::wide_part_insert:
+            if (!is_static(at, { inst.z })) {
+                defer(at, "dynamic_part_insert");
             }
             break;
-        }
         case KOp::assert_check: {
             const auto condition = constant(inst.x);
             if (!condition || (condition->a & 1U) == 0U || (condition->b & 1U) != 0U) {
+                if (guard != CollapseGuard::none) {
+                    // Proven exactly true under the known-value guard.
+                    defer(at, "assertion");
+                    assertions = true;
+                    break;
+                }
+                if (rejected_at != nullptr) {
+                    *rejected_at = node_at[at];
+                }
                 return "assertion";
             }
             break;
@@ -1553,19 +1554,1110 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
         case KOp::integer_check:
         case KOp::integer_unary:
             if (!is_static(at, { inst.x })) {
-                return "integer_data";
+                defer(at, "integer_data");
             }
             break;
         case KOp::integer_binary:
             if (!is_static(at, { inst.x, inst.y })) {
-                return "integer_data";
+                defer(at, "integer_data");
             }
             break;
         default:
             break;
         }
     }
+    // A guarded member, and a member upstream of one, must also map known
+    // inputs to known values.
+    const bool known = guard == CollapseGuard::preserve || assertions;
+    if (pending_reason != nullptr || known) {
+        int failed = -1;
+        if (const auto* range = prove_collapse_ranges(member, pending, nodes, node_at,
+                successor, ipdom, controlled, data, known, &failed)) {
+            if (rejected_at != nullptr && pending_at != no_slot) {
+                // Census: the prover's reason, after the check's own (an
+                // assignment's when that failed).
+                *rejected_at = failed == static_cast<int>(KOp::store_vhdl)
+                        || failed == static_cast<int>(KOp::wide_store)
+                    ? range_failure_at_ : pending_at;
+                range_failure_ = std::string { range } + ":" + std::to_string(failed);
+            }
+            return failed == static_cast<int>(KOp::assert_check) ? "assertion"
+                : failed == static_cast<int>(KOp::store_vhdl)
+                    || failed == static_cast<int>(KOp::wide_store)
+                ? "unknown_store"
+                : pending_reason != nullptr ? pending_reason : "unknown_value";
+        }
+    }
+    if (guarded != nullptr) {
+        *guarded = assertions;
+    }
     return nullptr;
+}
+
+namespace {
+
+/// prove_collapse_ranges' value of a register: an exact fully known word,
+/// an interval of the signed integers of `width` (32 or 64) bits (or, from
+/// an unsigned widening, of nonnegative ones at any width), a fully known
+/// word (under the known-value guard), or anything.
+struct AbstractValue {
+    enum class Kind : std::uint8_t {
+        unknown,
+        exact,
+        range,
+        known,
+        /// Known in the bits `word.a`, or over 64 bits in `bits` (a value
+        /// assembled bit by bit); never counts as known.
+        partial,
+    };
+    Kind kind { Kind::unknown };
+    std::uint32_t width { };
+    kw::Word word { };
+    std::int64_t low { };
+    std::int64_t high { };
+    /// A known value's identity: registers with the same nonzero id hold
+    /// the same value (one load of a slot, or one definition and its
+    /// copies).
+    std::uint32_t id { };
+    std::vector<std::uint64_t> bits { };
+};
+
+} // namespace
+
+const char* Interpreter::Impl::StaticKernel::prove_collapse_ranges(const Member& member,
+    const std::vector<std::uint8_t>& pending, const std::uint32_t nodes,
+    const std::vector<std::uint32_t>& node_at,
+    const std::vector<std::array<std::uint32_t, 2>>& successor,
+    const std::vector<std::uint32_t>& ipdom,
+    const std::vector<std::uint8_t>& controlled,
+    const std::vector<std::uint8_t>& data, const bool known, int* failed) const
+{
+    using Kind = AbstractValue::Kind;
+    constexpr std::uint32_t none = std::numeric_limits<std::uint32_t>::max();
+    constexpr std::uint32_t leave = none - 1U;
+    // An interval check enumerates at most this many values; the execution
+    // visits at most `steps` instructions and joined registers.
+    constexpr std::int64_t value_limit = 4096;
+    constexpr std::uint32_t depth_limit = 256U;
+    std::uint64_t steps = std::uint64_t { 1 } << 22U;
+    const auto& body = *member.compiled;
+    const auto& code = body.code;
+    const auto size = static_cast<std::uint32_t>(code.size());
+    const auto registers = static_cast<std::uint32_t>(body.registers.size());
+    const auto& operations = member.operations();
+    const auto origin = member.vhdl ? 0U : member.body_begin;
+    // The census reports the failing instruction's operation, or for a
+    // static branch the operation that last defined its condition.
+    int failed_op = -1;
+    std::vector<std::uint32_t> use;
+    std::optional<std::uint32_t> def;
+    std::vector<std::uint32_t> next;
+    const auto definer = [&](const std::uint32_t reg, const std::uint32_t before) {
+        for (auto index = before; index-- > 0U;) {
+            kinst_flow(code[index], index, body, operations, member.body_end, use, def, next);
+            if (def == reg) {
+                return static_cast<int>(code[index].op);
+            }
+        }
+        return -1;
+    };
+    using Interval = std::pair<std::int64_t, std::int64_t>;
+    // The integers a value stands for, read at its width or, for a
+    // constant (which has none), at the reader's: signed at 32 and 64 bits
+    // (VHDL integers), unsigned below.
+    const auto interval = [](const AbstractValue& value,
+                              const std::uint32_t reader) -> std::optional<Interval> {
+        if (value.kind == Kind::range) {
+            return Interval { value.low, value.high };
+        }
+        const auto width = value.width != 0U ? value.width : reader;
+        if (value.kind != Kind::exact || width == 0U || width > 64U) {
+            return std::nullopt;
+        }
+        const auto bits = value.word.a & kw::mask(width);
+        if (width == 32U || width == 64U) {
+            const auto signed_value = kw::sign_extend(bits, width);
+            return Interval { signed_value, signed_value };
+        }
+        const auto unsigned_value = static_cast<std::int64_t>(bits);
+        return Interval { unsigned_value, unsigned_value };
+    };
+    // The values of an exact word or interval, as the words a run holds.
+    const auto each_word = [&](const AbstractValue& value, const auto& visit) {
+        if (value.kind == Kind::exact) {
+            return visit(value.word);
+        }
+        if (value.kind != Kind::range || value.high - value.low >= value_limit) {
+            return false;
+        }
+        for (auto integer = value.low; integer <= value.high; ++integer) {
+            if (!visit(kw::Word { static_cast<std::uint64_t>(integer)
+                        & kw::mask(value.width),
+                    0U })) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto integer_value = [](const std::uint32_t width, const __int128 low,
+                                   const __int128 high) -> std::optional<AbstractValue> {
+        const __int128 minimum = width == 32U
+            ? std::numeric_limits<std::int32_t>::min()
+            : std::numeric_limits<std::int64_t>::min();
+        const __int128 maximum = width == 32U
+            ? std::numeric_limits<std::int32_t>::max()
+            : std::numeric_limits<std::int64_t>::max();
+        if (low < minimum || high > maximum) {
+            return std::nullopt;
+        }
+        if (low == high) {
+            return AbstractValue { Kind::exact, width,
+                { static_cast<std::uint64_t>(static_cast<std::int64_t>(low))
+                        & kw::mask(width),
+                    0U } };
+        }
+        return AbstractValue { Kind::range, width, { },
+            static_cast<std::int64_t>(low), static_cast<std::int64_t>(high) };
+    };
+    // The hull of two values: equal words stay exact, integers of one
+    // width (a constant takes the other's) form an interval.
+    // Identities of known values (prove_collapse_ranges' `known` mode):
+    // one per load of a slot, else one per definition.
+    std::uint32_t next_id = 0U;
+    std::map<std::array<std::uint64_t, 5>, std::uint32_t> load_ids;
+    // Only the member's inputs are known: its guard checks those slots,
+    // and a slot it reads without waiting on it may hold anything.
+    // load_slot names a slot by its arena offset.
+    auto inputs = member.collapse_inputs;
+    std::vector<std::uint32_t> input_offsets;
+    for (const auto slot : inputs) {
+        if (slot < slots_.size()) {
+            input_offsets.push_back(slots_[slot].offset);
+        }
+    }
+    std::ranges::sort(inputs);
+    std::ranges::sort(input_offsets);
+    const auto input_slot = [&](const std::uint32_t slot) {
+        return std::ranges::binary_search(inputs, slot);
+    };
+    // The bits a value holds known (0/1 in every run), at most 64.
+    const auto known_bits = [](const AbstractValue& value, const std::uint32_t width) {
+        if (value.kind == Kind::unknown || width > 64U) {
+            return std::uint64_t { 0 };
+        }
+        return value.kind == Kind::partial ? value.word.a & kw::mask(width) : kw::mask(width);
+    };
+    const auto bits_value = [&](const std::uint64_t bits, const std::uint32_t width) {
+        if (bits == kw::mask(width)) {
+            return AbstractValue { Kind::known, width, { }, 0, 0, ++next_id };
+        }
+        return bits == 0U ? AbstractValue { }
+                          : AbstractValue { Kind::partial, width, { bits, 0U } };
+    };
+    // known_bits() by 64-bit chunk, for any width.
+    const auto wide_bits = [](const AbstractValue& value, const std::uint32_t width) {
+        std::vector<std::uint64_t> bits(wide_chunks(width), 0U);
+        for (std::uint32_t chunk = 0U; chunk < bits.size(); ++chunk) {
+            const auto m = kw::mask(std::min(64U, width - 64U * chunk));
+            if (value.kind == Kind::partial) {
+                bits[chunk] = width <= 64U ? value.word.a & m
+                    : chunk < value.bits.size() ? value.bits[chunk] & m : 0U;
+            } else if (value.kind != Kind::unknown) {
+                bits[chunk] = m;
+            }
+        }
+        return bits;
+    };
+    const auto wide_value = [&](std::vector<std::uint64_t> bits, const std::uint32_t width) {
+        if (width <= 64U) {
+            return bits_value(bits.empty() ? 0U : bits[0], width);
+        }
+        bool full = true;
+        bool empty = true;
+        for (std::uint32_t chunk = 0U; chunk < bits.size(); ++chunk) {
+            full = full && bits[chunk] == kw::mask(std::min(64U, width - 64U * chunk));
+            empty = empty && bits[chunk] == 0U;
+        }
+        if (full) {
+            return AbstractValue { Kind::known, width, { }, 0, 0, ++next_id };
+        }
+        if (empty) {
+            return AbstractValue { };
+        }
+        AbstractValue value { Kind::partial, width };
+        value.bits = std::move(bits);
+        return value;
+    };
+    const auto merge = [&](AbstractValue& into, const AbstractValue& other) {
+        if (known && into.kind != Kind::unknown
+            && (into.kind == Kind::partial || other.kind == Kind::partial)) {
+            const auto width = into.width != 0U ? into.width : other.width;
+            if (width == 0U) {
+                into = { };
+                return;
+            }
+            auto bits = wide_bits(into, width);
+            const auto with = wide_bits(other, width);
+            for (std::uint32_t chunk = 0U; chunk < bits.size(); ++chunk) {
+                bits[chunk] &= with[chunk];
+            }
+            into = wide_value(std::move(bits), width);
+            return;
+        }
+        if (into.kind == Kind::unknown
+            || (into.kind == Kind::exact && other.kind == Kind::exact
+                && into.width == other.width && into.word.a == other.word.a)
+            || (into.kind == Kind::known && other.kind == Kind::known
+                && into.id == other.id)) {
+            return;
+        }
+        const auto width = into.width != 0U ? into.width : other.width;
+        const auto a = interval(into, width);
+        const auto b = interval(other, width);
+        if (a && b && (width == 32U || width == 64U)
+            && (other.width == 0U || other.width == width)) {
+            into = *integer_value(width, std::min(a->first, b->first),
+                std::max(a->second, b->second));
+        } else if (known && other.kind != Kind::unknown) {
+            into = { Kind::known, width, { }, 0, 0, ++next_id };
+        } else {
+            into = { };
+        }
+    };
+    // Applies one instruction to exact words and intervals; false when a
+    // pending check may fail.
+    const auto apply_exact = [&](const std::uint32_t at, std::vector<AbstractValue>& values) {
+        const auto& inst = code[at];
+        const bool checked = pending[at] != 0U;
+        const auto value = [&](const std::uint32_t reg) -> const AbstractValue& {
+            static const AbstractValue unknown { };
+            return reg < registers ? values[reg] : unknown;
+        };
+        const auto exact = [&](const std::uint32_t reg) -> std::optional<kw::Word> {
+            if (reg < registers && values[reg].kind == Kind::exact) {
+                return values[reg].word;
+            }
+            return std::nullopt;
+        };
+        const auto clear = [&](const std::uint32_t reg, const std::uint32_t count) {
+            for (std::uint32_t index = 0U; index < count && reg + index < registers;
+                 ++index) {
+                values[reg + index] = { };
+            }
+        };
+        const auto set = [&](const std::optional<kw::Word> word, const std::uint32_t width) {
+            if (inst.d >= registers) {
+                return;
+            }
+            // Fully known words only: an unknown or 'U' bit has a shadow
+            // this execution does not follow. Width 0: a constant's whole
+            // word.
+            const auto m = width == 0U ? ~std::uint64_t { 0 } : kw::mask(width);
+            if (word && width <= 64U && (word->b & m) == 0U) {
+                values[inst.d] = { Kind::exact, width, { word->a & m, 0U } };
+            } else {
+                values[inst.d] = { };
+            }
+        };
+        const auto chunks = [&](const std::uint32_t width) {
+            return 2U * ((width + 63U) / 64U);
+        };
+        switch (inst.op) {
+        case KOp::nop:
+        case KOp::jump:
+        case KOp::branch:
+        case KOp::mark:
+        case KOp::store_vhdl:
+        case KOp::wide_store:
+        case KOp::assert_check:
+            return true;
+        case KOp::call:
+            // The synthetic call stack: its pointer and return slots.
+            if (inst.z != 0U) {
+                clear(inst.x, 1U);
+                clear(inst.y, inst.z);
+            }
+            return true;
+        case KOp::ret:
+            if (inst.z != 0U) {
+                clear(inst.x, 1U);
+            }
+            return true;
+        case KOp::constant:
+            set(kw::Word { inst.imm_a, inst.imm_b }, inst.width);
+            return true;
+        case KOp::copy:
+            if (inst.d < registers) {
+                values[inst.d] = value(inst.x);
+            }
+            return true;
+        case KOp::two_state:
+            // Identity on a fully known word.
+            if (inst.d < registers) {
+                values[inst.d] = value(inst.x).kind == Kind::exact ? value(inst.x)
+                                                                   : AbstractValue { };
+            }
+            return true;
+        case KOp::binary: {
+            const auto x = exact(inst.x);
+            const auto y = exact(inst.y);
+            set(x && y ? std::optional { kw::binary(static_cast<BinaryOperator>(inst.sub),
+                                             *x, *y, inst.width) }
+                       : std::nullopt,
+                inst.width);
+            return true;
+        }
+        case KOp::reduce: {
+            const auto x = exact(inst.x);
+            set(x ? std::optional { kw::reduce(static_cast<ReductionOperator>(inst.sub), *x,
+                                        inst.width) }
+                  : std::nullopt,
+                1U);
+            return true;
+        }
+        case KOp::unary_not: {
+            const auto x = exact(inst.x);
+            set(x ? std::optional { kw::unary_not(*x, inst.width) } : std::nullopt,
+                inst.width);
+            return true;
+        }
+        case KOp::logical_not: {
+            const auto x = exact(inst.x);
+            set(x ? std::optional { kw::logical_not(*x) } : std::nullopt, 1U);
+            return true;
+        }
+        case KOp::logical_binary: {
+            const auto x = exact(inst.x);
+            const auto y = exact(inst.y);
+            set(x && y ? std::optional { kw::logical_binary(
+                             static_cast<LogicalBinaryOperator>(inst.sub), *x, *y) }
+                       : std::nullopt,
+                1U);
+            return true;
+        }
+        case KOp::shift: {
+            const auto x = exact(inst.x);
+            const auto y = exact(inst.y);
+            set(x && y ? std::optional { kw::shift(static_cast<ShiftOperator>(inst.sub), *x,
+                             inst.width, *y, inst.offset, (inst.flags & flag_signed) != 0U) }
+                       : std::nullopt,
+                inst.width);
+            return true;
+        }
+        case KOp::extract: {
+            const auto x = inst.sub == 0U ? exact(inst.x) : std::nullopt;
+            set(x ? std::optional { kw::extract(*x, inst.offset, inst.width) } : std::nullopt,
+                inst.width);
+            return true;
+        }
+        case KOp::insert: {
+            const auto x = exact(inst.x);
+            const auto y = exact(inst.y);
+            set(x && y ? std::optional { kw::insert(*x, *y, inst.offset, inst.width) }
+                       : std::nullopt,
+                value(inst.x).width);
+            return true;
+        }
+        case KOp::concat: {
+            kw::Word result { };
+            std::uint32_t offset = 0U;
+            bool known = true;
+            for (std::uint32_t index = inst.x; index-- > 0U && known;) {
+                const auto& operand = body.concat[inst.aux + index];
+                const auto word = exact(operand.reg);
+                known = word.has_value();
+                if (known) {
+                    result = kw::insert(result, *word, offset, operand.width);
+                    offset += operand.width;
+                }
+            }
+            set(known ? std::optional { result } : std::nullopt, offset);
+            return true;
+        }
+        case KOp::conditional: {
+            if (inst.d >= registers) {
+                return true;
+            }
+            if (const auto x = exact(inst.x)) {
+                values[inst.d] = value((x->a & 1U) != 0U ? inst.y : inst.z);
+                return true;
+            }
+            values[inst.d] = value(inst.y);
+            merge(values[inst.d], value(inst.z));
+            return true;
+        }
+        case KOp::integer_binary:
+        case KOp::integer_unary: {
+            const auto index = origin + at;
+            const auto* binary = inst.op == KOp::integer_binary && index < operations.size()
+                ? operation_get_if<IntegerBinary>(&operations[index]) : nullptr;
+            const auto* unary = inst.op == KOp::integer_unary && index < operations.size()
+                ? operation_get_if<IntegerUnary>(&operations[index]) : nullptr;
+            const auto left = interval(value(inst.x), inst.width);
+            const auto right = inst.op == KOp::integer_binary
+                ? interval(value(inst.y), inst.width) : left;
+            std::optional<AbstractValue> result;
+            if (left && right && (inst.width == 32U || inst.width == 64U)) {
+                const __int128 a = left->first;
+                const __int128 b = left->second;
+                const __int128 c = right->first;
+                const __int128 d = right->second;
+                if (binary != nullptr) {
+                    switch (binary->operation) {
+                    case IntegerBinaryOperator::add:
+                        result = integer_value(inst.width, a + c, b + d);
+                        break;
+                    case IntegerBinaryOperator::subtract:
+                        result = integer_value(inst.width, a - d, b - c);
+                        break;
+                    case IntegerBinaryOperator::multiply: {
+                        const std::array<__int128, 4> products { a * c, a * d, b * c,
+                            b * d };
+                        result = integer_value(inst.width, std::ranges::min(products),
+                            std::ranges::max(products));
+                        break;
+                    }
+                    default:
+                        break;
+                    }
+                } else if (unary != nullptr) {
+                    switch (unary->operation) {
+                    case IntegerUnaryOperator::negate:
+                        result = integer_value(inst.width, -b, -a);
+                        break;
+                    case IntegerUnaryOperator::absolute:
+                        result = a >= 0 ? integer_value(inst.width, a, b)
+                            : b <= 0    ? integer_value(inst.width, -b, -a)
+                                        : integer_value(inst.width, 0, std::max(-a, b));
+                        break;
+                    }
+                }
+            }
+            if (!result && checked) {
+                return false;
+            }
+            if (inst.d < registers) {
+                values[inst.d] = result.value_or(AbstractValue { });
+            }
+            return true;
+        }
+        case KOp::integer_check: {
+            if (!checked) {
+                return true;
+            }
+            // As the check reads its operand: signed at 32 and 64 bits or
+            // with a negative bound, else unsigned (nonnegative values read
+            // the same either way).
+            const auto lower = static_cast<std::int64_t>(inst.imm_a);
+            const auto upper = static_cast<std::int64_t>(inst.imm_b);
+            const auto& source = value(inst.x);
+            const bool signed_read = inst.width == 32U || inst.width == 64U || lower < 0;
+            if (source.kind == Kind::exact) {
+                const auto bits = source.word.a & kw::mask(inst.width);
+                if (!signed_read
+                    && bits > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max())) {
+                    return false;
+                }
+                const auto read = signed_read ? kw::sign_extend(bits, inst.width)
+                                              : static_cast<std::int64_t>(bits);
+                return read >= lower && read <= upper;
+            }
+            return source.kind == Kind::range && source.width == inst.width
+                && (signed_read || source.low >= 0) && source.low >= lower
+                && source.high <= upper;
+        }
+        case KOp::dynamic_part_insert:
+        case KOp::wide_part_insert: {
+            if (checked
+                && !each_word(value(inst.z), [&](const kw::Word base) {
+                       const auto write = kw::dynamic_part_write({ }, base,
+                           body.parts[inst.aux]);
+                       return write.valid
+                           && (!write.write
+                               || (write.write->offset <= inst.width
+                                   && write.write->width
+                                       <= inst.width - write.write->offset));
+                   })) {
+                return false;
+            }
+            clear(inst.d, inst.op == KOp::wide_part_insert ? chunks(inst.width) : 1U);
+            return true;
+        }
+        case KOp::dynamic_extract:
+            if (checked
+                && !each_word(value(inst.y), [&](const kw::Word index) {
+                       const auto offset = kw::dynamic_index(index, body.indices[inst.aux]);
+                       return offset && *offset < inst.width;
+                   })) {
+                return false;
+            }
+            clear(inst.d, 1U);
+            return true;
+        case KOp::dynamic_insert:
+            if (checked
+                && !each_word(value(inst.z), [&](const kw::Word index) {
+                       const auto offset = kw::dynamic_index(index, body.indices[inst.aux]);
+                       return offset && *offset <= inst.width
+                           && inst.offset <= inst.width - *offset;
+                   })) {
+                return false;
+            }
+            clear(inst.d, 1U);
+            return true;
+        case KOp::wide_load:
+        case KOp::wide_copy:
+        case KOp::wide_const:
+        case KOp::wide_concat:
+            clear(inst.d, chunks(inst.width));
+            return true;
+        default:
+            kinst_flow(inst, at, body, operations, member.body_end, use, def, next);
+            if (def) {
+                clear(*def, 1U);
+            }
+            return !checked;
+        }
+    };
+    // An operation that maps known operands to a known result: not
+    // division, modulus or power (a zero divisor or a negative exponent
+    // gives X), and not a selection that may read past its source.
+    const auto known_result = [&](const KInst& inst) {
+        switch (inst.op) {
+        case KOp::copy:
+        case KOp::two_state:
+        case KOp::reduce:
+        case KOp::unary_not:
+        case KOp::logical_not:
+        case KOp::logical_binary:
+        case KOp::shift:
+        case KOp::insert:
+        case KOp::concat:
+        case KOp::conditional:
+        case KOp::integer_binary:
+        case KOp::integer_unary:
+        case KOp::dynamic_insert:
+        case KOp::dynamic_part_insert:
+        case KOp::wide_copy:
+        case KOp::wide_concat:
+        case KOp::wide_part_insert:
+            return true;
+        case KOp::extract:
+            return inst.sub != 1U;
+        case KOp::dynamic_extract:
+            return (inst.flags & flag_strict) != 0U;
+        case KOp::binary:
+            switch (static_cast<BinaryOperator>(inst.sub)) {
+            case BinaryOperator::power_unsigned:
+            case BinaryOperator::divide_unsigned:
+            case BinaryOperator::modulo_unsigned:
+            case BinaryOperator::power_signed:
+            case BinaryOperator::divide_signed:
+            case BinaryOperator::remainder_signed:
+            case BinaryOperator::modulo_signed:
+                return false;
+            default:
+                return true;
+            }
+        default:
+            return false;
+        }
+    };
+    // Applies one instruction; false when a pending check may fail. With
+    // `known`, every slot read is a known word: a load holds one (the same
+    // for every load of one slot field), a pending assertion needs an
+    // exactly true condition and an assignment a known value.
+    const auto transfer = [&](const std::uint32_t at, std::vector<AbstractValue>& values) {
+        const auto& inst = code[at];
+        // An operand the instruction also defines, as it was before.
+        std::uint32_t aliased = none;
+        AbstractValue before;
+        const auto operand = [&](const std::uint32_t reg) -> const AbstractValue& {
+            return reg == aliased ? before : values[reg];
+        };
+        const auto is_known = [&](const std::uint32_t reg) {
+            return reg < registers && operand(reg).kind != Kind::unknown
+                && operand(reg).kind != Kind::partial;
+        };
+        if (known) {
+            switch (inst.op) {
+            case KOp::assert_check:
+                return pending[at] == 0U
+                    || (inst.x < registers && values[inst.x].kind == Kind::exact
+                        && (values[inst.x].word.a & 1U) != 0U);
+            case KOp::store_vhdl:
+            case KOp::wide_store:
+                return is_known(inst.x);
+            case KOp::load_slot:
+            case KOp::load_slot9:
+            case KOp::load_field:
+            case KOp::load_field9:
+            case KOp::wide_load:
+                if (inst.d < registers) {
+                    if (inst.op == KOp::wide_load) {
+                        for (std::uint32_t chunk = 0U;
+                             chunk < 2U * ((inst.width + 63U) / 64U) && inst.d + chunk < registers;
+                             ++chunk) {
+                            values[inst.d + chunk] = { };
+                        }
+                    }
+                    if (inst.op == KOp::load_slot
+                            ? !std::ranges::binary_search(input_offsets, inst.x)
+                            : !input_slot(inst.x)) {
+                        values[inst.d] = { };
+                        return true;
+                    }
+                    const auto [found, added] = load_ids.try_emplace(
+                        std::array<std::uint64_t, 5> {
+                            (std::uint64_t { static_cast<std::uint8_t>(inst.op) } << 40U)
+                                | (std::uint64_t { inst.sub } << 32U) | inst.width,
+                            inst.x, (std::uint64_t { inst.offset } << 32U) | inst.z,
+                            inst.imm_a, inst.imm_b },
+                        0U);
+                    if (added) {
+                        found->second = ++next_id;
+                    }
+                    values[inst.d] = { Kind::known, inst.width, { }, 0, 0, found->second };
+                }
+                return true;
+            default:
+                break;
+            }
+        }
+        if (known) {
+            kinst_flow(inst, at, body, operations, member.body_end, use, def, next);
+            if (def && *def < registers && std::ranges::find(use, *def) != use.end()) {
+                aliased = *def;
+                before = values[*def];
+            }
+        }
+        if (!apply_exact(at, values)) {
+            return false;
+        }
+        if (!known) {
+            return true;
+        }
+        if (inst.op == KOp::conditional && inst.d < registers && !is_known(inst.x)) {
+            // An unknown condition merges the operands bit by bit.
+            values[inst.d] = { };
+            return true;
+        }
+        kinst_flow(inst, at, body, operations, member.body_end, use, def, next);
+        if (!def || *def >= registers || values[*def].kind != Kind::unknown) {
+            return true;
+        }
+        if (inst.op == KOp::wide_const) {
+            // Value words, then (with 'U' masks) the masks.
+            const auto chunks = wide_chunks(inst.width);
+            bool constant_known = inst.imm_a + inst.aux <= body.wide_constants.size();
+            for (std::uint32_t index = 0U; constant_known && index < inst.aux; ++index) {
+                const auto& word = body.wide_constants[inst.imm_a + index];
+                const auto bits = index < chunks
+                    ? std::min(64U, inst.width - 64U * index) : 64U;
+                constant_known = index < chunks ? (word.b & kw::mask(bits)) == 0U
+                                                : word.a == 0U;
+            }
+            if (constant_known) {
+                values[*def] = { Kind::known, inst.width, { }, 0, 0, ++next_id };
+            }
+            return true;
+        }
+        if (inst.op == KOp::dynamic_part_insert && inst.width <= 64U) {
+            // Bit-by-bit assembly: the target's known bits outside the
+            // field written, plus the source's inside it, for every base.
+            const auto& part = body.parts[inst.aux];
+            const auto full = kw::mask(inst.width);
+            const auto target = inst.x < registers ? known_bits(operand(inst.x), inst.width) : 0U;
+            const auto source = inst.y < registers ? known_bits(operand(inst.y), part.width) : 0U;
+            auto bits = full;
+            const bool bases = inst.z < registers
+                && each_word(operand(inst.z), [&](const kw::Word base) {
+                       const auto write = kw::dynamic_part_write({ source, 0U }, base, part);
+                       if (!write.valid) {
+                           return false;
+                       }
+                       if (!write.write) {
+                           bits &= target;
+                           return true;
+                       }
+                       const auto [_, offset, width] = *write.write;
+                       if (offset >= inst.width || width > inst.width - offset) {
+                           return false;
+                       }
+                       const auto field = kw::mask(width) << offset;
+                       bits &= (target & ~field)
+                           | ((write.write->value.a & kw::mask(width)) << offset);
+                       return true;
+                   });
+            if (!bases) {
+                // Any write of a known source keeps a known target known.
+                bits = target == full && source == kw::mask(part.width) ? full : 0U;
+            }
+            values[*def] = bits_value(bits, inst.width);
+            return true;
+        }
+        if (inst.op == KOp::wide_part_insert) {
+            // dynamic_part_insert over chunks.
+            const auto& part = body.parts[inst.aux];
+            const auto target = wide_bits(operand(inst.x), inst.width);
+            const auto source = inst.y < registers ? known_bits(operand(inst.y), part.width) : 0U;
+            const auto all = wide_bits(AbstractValue { Kind::known, inst.width }, inst.width);
+            auto bits = all;
+            const bool bases = inst.z < registers
+                && each_word(operand(inst.z), [&](const kw::Word base) {
+                       const auto write = kw::dynamic_part_write({ source, 0U }, base, part);
+                       if (!write.valid) {
+                           return false;
+                       }
+                       auto written = target;
+                       if (write.write) {
+                           const auto offset = write.write->offset;
+                           const auto width = write.write->width;
+                           if (offset > inst.width || width > inst.width - offset) {
+                               return false;
+                           }
+                           for (std::uint32_t index = 0U; index < width; ++index) {
+                               const auto bit = offset + index;
+                               const auto one = std::uint64_t { 1 } << (bit % 64U);
+                               written[bit / 64U] = (written[bit / 64U] & ~one)
+                                   | (((write.write->value.a >> index) & 1U) << (bit % 64U));
+                           }
+                       }
+                       for (std::uint32_t chunk = 0U; chunk < bits.size(); ++chunk) {
+                           bits[chunk] &= written[chunk];
+                       }
+                       return true;
+                   });
+            if (!bases) {
+                bits = target == all && source == kw::mask(part.width)
+                    ? all : std::vector<std::uint64_t>(all.size(), 0U);
+            }
+            values[*def] = wide_value(std::move(bits), inst.width);
+            return true;
+        }
+        if (inst.op == KOp::wide_copy && operand(inst.x).kind == Kind::partial) {
+            values[*def] = operand(inst.x);
+            values[*def].width = inst.width;
+            return true;
+        }
+        if (inst.op == KOp::dynamic_part_select) {
+            // Known when its source is and every selected bit lies inside
+            // the source for every base it may have (outside bits read X).
+            const bool source = inst.sub == 1U ? input_slot(inst.x) : is_known(inst.x);
+            const auto& part = body.parts[inst.aux];
+            const bool increasing = (inst.flags & flag_increasing) != 0U;
+            const bool descending = (inst.flags & flag_descending) != 0U;
+            const auto inside = [&](const kw::Word base) {
+                if ((base.b & kw::mask(32U)) != 0U) {
+                    return false;
+                }
+                const auto signed_base = static_cast<std::int64_t>(
+                    static_cast<std::int32_t>(static_cast<std::uint32_t>(base.a)));
+                const auto lower = std::min(part.left, part.right);
+                const auto upper = std::max(part.left, part.right);
+                const auto edge = static_cast<std::int64_t>(inst.width) - 1;
+                const auto selected_right = increasing
+                    ? signed_base + (descending ? 0 : edge)
+                    : signed_base - (descending ? edge : 0);
+                for (std::uint32_t index = 0U; index < inst.width; ++index) {
+                    const auto selected = descending
+                        ? selected_right + static_cast<std::int64_t>(index)
+                        : selected_right - static_cast<std::int64_t>(index);
+                    if (selected < lower || selected > upper) {
+                        return false;
+                    }
+                    const auto offset = selected >= part.right
+                        ? static_cast<std::uint64_t>(selected - part.right)
+                        : static_cast<std::uint64_t>(part.right - selected);
+                    if (part.base_offset + offset >= inst.offset) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            if (source
+                && ((inst.flags & flag_two_state) != 0U
+                    || (inst.y < registers && each_word(operand(inst.y), inside)))) {
+                values[*def] = { Kind::known, inst.width, { }, 0, 0, ++next_id };
+            }
+            return true;
+        }
+        if (inst.op == KOp::two_state && !is_known(inst.x)) {
+            // No unknown bit survives.
+            values[*def] = { Kind::known, inst.width, { }, 0, 0, ++next_id };
+            return true;
+        }
+        if (!known_result(inst) || !std::ranges::all_of(use, is_known)
+            || (inst.op == KOp::dynamic_extract && inst.sub == 1U && !input_slot(inst.x))) {
+            return true;
+        }
+        if (inst.op == KOp::concat) {
+            // A known word under zero high bits (an unsigned widening): the
+            // interval of its low bits, nonnegative at any width, or the
+            // low operand's own interval when it is the only one.
+            std::uint32_t total = 0U;
+            std::uint32_t zeros = 0U;
+            std::uint32_t first_low = inst.x;
+            bool leading = true;
+            for (std::uint32_t index = 0U; index < inst.x; ++index) {
+                const auto& piece = body.concat[inst.aux + index];
+                const auto& part = operand(piece.reg);
+                leading = leading && part.kind == Kind::exact
+                    && (part.word.a & kw::mask(piece.width)) == 0U;
+                if (leading) {
+                    zeros += piece.width;
+                } else if (first_low == inst.x) {
+                    first_low = index;
+                }
+                total += piece.width;
+            }
+            const auto low = total - zeros;
+            if (total <= 64U && low < 63U && low < total) {
+                auto high = static_cast<std::int64_t>((std::uint64_t { 1 } << low) - 1U);
+                std::int64_t least = 0;
+                if (first_low + 1U == inst.x) {
+                    const auto& part = operand(body.concat[inst.aux + first_low].reg);
+                    if (part.kind == Kind::range && part.low >= 0 && part.high <= high) {
+                        least = part.low;
+                        high = part.high;
+                    }
+                }
+                values[*def] = { Kind::range, total, { }, least, high };
+                return true;
+            }
+        }
+        if (inst.op == KOp::binary) {
+            // A known value equals itself.
+            const auto operation = static_cast<BinaryOperator>(inst.sub);
+            const bool same = inst.x == inst.y
+                || (operand(inst.x).kind == Kind::known && operand(inst.x).id != 0U
+                    && operand(inst.x).id == operand(inst.y).id);
+            if (same
+                && (operation == BinaryOperator::equal
+                    || operation == BinaryOperator::case_equal
+                    || operation == BinaryOperator::vhdl_match_equal
+                    || operation == BinaryOperator::not_equal)) {
+                values[*def] = { Kind::exact, inst.width,
+                    { operation == BinaryOperator::not_equal ? 0U : 1U, 0U } };
+                return true;
+            }
+        }
+        values[*def] = { Kind::known, inst.width, { }, 0, 0,
+            inst.op == KOp::two_state && operand(inst.x).kind == Kind::known
+                ? operand(inst.x).id
+                : ++next_id };
+        return true;
+    };
+    const auto join = [&](std::vector<AbstractValue>& into,
+                          const std::vector<AbstractValue>& other) {
+        for (std::uint32_t reg = 0U; reg < registers; ++reg) {
+            merge(into[reg], other[reg]);
+        }
+    };
+    const auto target = [&](const std::uint32_t node) {
+        return node == leave || node == none ? nodes : node;
+    };
+    // Runs from node `at` until `stop` (nodes: the exit).
+    const auto run = [&](const auto& self, std::uint32_t at, const std::uint32_t stop,
+                         std::vector<AbstractValue>& values,
+                         const std::uint32_t depth) -> const char* {
+        while (at != stop && at < nodes) {
+            if (steps == 0U) {
+                return "range_steps";
+            }
+            --steps;
+            const auto instruction = node_at[at];
+            if (instruction >= size || !transfer(instruction, values)) {
+                failed_op = instruction < size ? static_cast<int>(code[instruction].op) : -1;
+                range_failure_at_ = instruction;
+                return "range_check";
+            }
+            const auto first = successor[at][0];
+            const auto second = successor[at][1];
+            if (second == none) {
+                at = target(first);
+                continue;
+            }
+            // A branch: the first successor when its condition is 1.
+            const auto& inst = code[instruction];
+            if (inst.op != KOp::branch || inst.sub == 2U) {
+                return "range_branch_shape";
+            }
+            if (inst.x < registers && values[inst.x].kind == Kind::exact) {
+                at = target((values[inst.x].word.a & 1U) != 0U ? first : second);
+                continue;
+            }
+            // Only data branches fork; a static one this execution cannot
+            // evaluate (an operation it does not model) may be a loop exit.
+            if (controlled[at] == 0U && (inst.x >= registers || data[inst.x] == 0U)) {
+                failed_op = static_cast<int>(definer(inst.x, instruction));
+                return "range_static_branch";
+            }
+            const auto meet = ipdom[at];
+            if (meet == none || depth >= depth_limit || steps < registers) {
+                return "range_limit";
+            }
+            steps -= registers;
+            auto other = values;
+            if (const auto* reason = self(self, target(first), meet, other, depth + 1U)) {
+                return reason;
+            }
+            if (const auto* reason = self(self, target(second), meet, values, depth + 1U)) {
+                return reason;
+            }
+            join(values, other);
+            at = meet;
+        }
+        return nullptr;
+    };
+    std::vector<AbstractValue> values(registers);
+    {
+        // A register no instruction defines holds its initial word in
+        // every run.
+        std::vector<std::uint8_t> defined(registers, 0U);
+        for (std::uint32_t index = 0U; index < size; ++index) {
+            kinst_flow(code[index], index, body, operations, member.body_end, use, def, next);
+            if (def && *def < registers) {
+                defined[*def] = 1U;
+            }
+            switch (code[index].op) {
+            case KOp::wide_load:
+            case KOp::wide_copy:
+            case KOp::wide_const:
+            case KOp::wide_concat:
+            case KOp::wide_part_insert:
+                // What the transfer clears with a wide definition.
+                for (std::uint32_t chunk = 0U;
+                     chunk < 2U * ((code[index].width + 63U) / 64U)
+                     && code[index].d + chunk < registers;
+                     ++chunk) {
+                    defined[code[index].d + chunk] = 1U;
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        for (std::uint32_t reg = 0U; reg < registers; ++reg) {
+            const auto width = reg < body.register_widths.size() ? body.register_widths[reg] : 0U;
+            if (defined[reg] == 0U && width != 0U && width <= 64U
+                && (body.registers[reg].b & kw::mask(width)) == 0U) {
+                values[reg] = { Kind::exact, width,
+                    { body.registers[reg].a & kw::mask(width), 0U } };
+            }
+        }
+        if (known) {
+            // So does wide storage (a constant array): known when its
+            // chunks and 'U' masks hold no unknown bit.
+            for (std::uint32_t reg = 0U; reg < body.wide_base.size(); ++reg) {
+                const auto entry = body.wide_base[reg];
+                const auto base = entry & ~wide_unknown_flag;
+                if (entry == 0U || reg >= body.register_widths.size()) {
+                    continue;
+                }
+                const auto width = body.register_widths[reg];
+                const auto chunks = wide_chunks(width);
+                const auto count = (entry & wide_unknown_flag) != 0U ? 2U * chunks : chunks;
+                if (base + count > registers || base + count > body.registers.size()) {
+                    continue;
+                }
+                bool initial = true;
+                for (std::uint32_t chunk = 0U; initial && chunk < count; ++chunk) {
+                    const auto& word = body.registers[base + chunk];
+                    initial = defined[base + chunk] == 0U
+                        && (chunk < chunks
+                                ? (word.b & kw::mask(std::min(64U, width - 64U * chunk))) == 0U
+                                : word.a == 0U);
+                }
+                if (initial) {
+                    values[base] = { Kind::known, width, { }, 0, 0, ++next_id };
+                }
+            }
+        }
+    }
+    const auto* reason = run(run, 0U, nodes, values, 0U);
+    if (failed != nullptr) {
+        *failed = failed_op;
+    }
+    return reason;
+}
+
+std::string Interpreter::Impl::StaticKernel::collapse_census_detail(
+    const Member& member, const std::uint32_t at) const
+{
+    const auto& body = *member.compiled;
+    const auto& code = body.code;
+    const auto size = static_cast<std::uint32_t>(code.size());
+    std::vector<std::uint32_t> use;
+    std::optional<std::uint32_t> def;
+    std::vector<std::uint32_t> next;
+    std::vector<std::uint32_t> defines(size, no_slot);
+    for (std::uint32_t index = 0U; index < size; ++index) {
+        kinst_flow(code[index], index, body, member.operations(), member.body_end,
+            use, def, next);
+        defines[index] = def.value_or(no_slot);
+    }
+    // The nearest earlier definition of reg (an approximation across
+    // branches, which is enough for a census).
+    const auto definition = [&](const std::uint32_t reg, const std::uint32_t before) {
+        for (auto index = before; index-- > 0U;) {
+            if (defines[index] == reg) {
+                return index;
+            }
+        }
+        return no_slot;
+    };
+    std::string text;
+    const auto describe = [&](const auto& self, const std::uint32_t index,
+                              const unsigned depth) -> void {
+        const auto& inst = code[index];
+        text += std::to_string(static_cast<int>(inst.op));
+        if (inst.sub != 0U) {
+            text += '.' + std::to_string(inst.sub);
+        }
+        if (inst.width != 0U) {
+            text += 'w' + std::to_string(inst.width);
+        }
+        if (inst.op == KOp::integer_check) {
+            text += '[' + std::to_string(static_cast<std::int64_t>(inst.imm_a)) + ','
+                + std::to_string(static_cast<std::int64_t>(inst.imm_b)) + ']';
+        }
+        if (inst.op == KOp::constant) {
+            text += '=' + std::to_string(inst.imm_a);
+        }
+        kinst_flow(inst, index, body, member.operations(), member.body_end, use, def,
+            next);
+        const auto operands = use;
+        if (operands.empty() || depth == 0U) {
+            return;
+        }
+        text += '(';
+        for (std::size_t operand = 0U; operand < operands.size() && operand < 3U;
+             ++operand) {
+            if (operand != 0U) {
+                text += ',';
+            }
+            const auto source = definition(operands[operand], index);
+            if (source == no_slot) {
+                text += '?';
+            } else {
+                self(self, source, depth - 1U);
+            }
+        }
+        text += ')';
+    };
+    describe(describe, at, 3U);
+    if (code[at].op == KOp::assert_check) {
+        const auto origin = member.vhdl ? 0U : member.body_begin;
+        if (const auto* assertion
+            = operation_get_if<Assert>(&member.operations()[origin + at])) {
+            auto message = assertion->message.str().substr(0U, 60U);
+            std::ranges::replace(message, ' ', '_');
+            text += " severity=" + std::to_string(static_cast<int>(assertion->severity))
+                + " message=" + message;
+        }
+    }
+    return text;
 }
 
 void Interpreter::Impl::StaticKernel::plan_delta_collapse()
@@ -1600,6 +2692,20 @@ Interpreter::Impl::StaticKernel::decide_delta_collapse()
     std::vector<std::uint32_t> dropped;
     auto& planned = plan.planned;
     auto& impurities = plan.impurities;
+    // FSIM_KERNEL_COLLAPSE_CENSUS: each refusal's root reason, the members
+    // its drop cascades to, and what the impure instructions compute.
+    static const bool census = std::getenv("FSIM_KERNEL_COLLAPSE_CENSUS") != nullptr;
+    std::vector<std::string> root_cause(census ? count : 0U);
+    std::vector<std::uint8_t> direct(census ? count : 0U, 0U);
+    std::map<std::string, std::uint32_t> census_details;
+    std::map<std::string, std::uint32_t> census_example;
+    // Members with metavalue assertions proven under the known-value guard
+    // (FSIM_STATIC_KERNEL_COLLAPSE_GUARDS=0: none).
+    static const bool guards = [] {
+        const char* text = std::getenv("FSIM_STATIC_KERNEL_COLLAPSE_GUARDS");
+        return text == nullptr || std::string_view { text } != "0";
+    }();
+    std::vector<std::uint8_t> guarded(count, 0U);
     for (std::uint32_t index = 0U; index < count; ++index) {
         const auto& member = members_[index];
         if (!member.collapse) {
@@ -1621,16 +2727,34 @@ Interpreter::Impl::StaticKernel::decide_delta_collapse()
             ? "shape:outputs"
             : nullptr;
         KOp op { };
-        const auto* impurity
-            = shape != nullptr ? shape : collapse_impurity(member, op);
+        std::uint32_t rejected_at = no_slot;
+        range_failure_.clear();
+        bool has_guard = false;
+        const auto* impurity = shape != nullptr
+            ? shape
+            : collapse_impurity(member, op, census ? &rejected_at : nullptr,
+                  guards ? CollapseGuard::guard : CollapseGuard::none, &has_guard);
         if (impurity != nullptr) {
-            ++impurities[std::string { impurity }
+            const auto reason = std::string { impurity }
                 + (std::string_view { impurity } == "operation"
-                        ? ":" + std::to_string(static_cast<int>(op)) : "")];
+                        ? ":" + std::to_string(static_cast<int>(op)) : "");
+            ++impurities[reason];
+            if (census) {
+                root_cause[index] = reason;
+                direct[index] = 1U;
+                if (rejected_at != no_slot) {
+                    const auto key = reason + ' '
+                        + collapse_census_detail(member, rejected_at)
+                        + (range_failure_.empty() ? "" : " prover=" + range_failure_);
+                    ++census_details[key];
+                    census_example.try_emplace(key, index);
+                }
+            }
             dropped.push_back(index);
             continue;
         }
         keep[index] = 1U;
+        guarded[index] = has_guard ? 1U : 0U;
     }
     // The collapsed writers whose changes reach a slot in the update phase
     // that makes them: its own (slice drivers share a slot) and those of
@@ -1681,20 +2805,179 @@ Interpreter::Impl::StaticKernel::decide_delta_collapse()
             }
         }
     };
-    while (!dropped.empty() && !slot_writers.empty()) {
-        const auto index = dropped.back();
-        dropped.pop_back();
-        for (const auto slot : members_[index].collapse_inputs) {
-            if (slot == no_slot) {
+    const auto cascade = [&] {
+        while (!dropped.empty() && !slot_writers.empty()) {
+            const auto index = dropped.back();
+            dropped.pop_back();
+            for (const auto slot : members_[index].collapse_inputs) {
+                if (slot == no_slot) {
+                    continue;
+                }
+                for_each_writer(slot, [&](const std::uint32_t source) {
+                    if (keep[source] != 0U) {
+                        keep[source] = 0U;
+                        dropped.push_back(source);
+                        if (census) {
+                            root_cause[source] = root_cause[index];
+                        }
+                    }
+                });
+            }
+        }
+        dropped.clear();
+    };
+    cascade();
+    // Known-value guard groups. A guarded member keeps its place when, in
+    // every delta of a step, every slot it reads is known whenever its
+    // group's input slots are known when the group activates: then its
+    // metavalue assertions cannot fire on a glitch (Phase 7 plan 2.4 item
+    // 4). Its group is the member and the collapsed writers of what it
+    // reads, transitively; each must map known inputs to known values
+    // (CollapseGuard::preserve). Every other writer of what the group
+    // reads, through wires and conversions, must be a first-delta member or
+    // a delay-only thread (Member::first_delta), whose writes change slots
+    // at most once per step, by the update phase of its first delta, so the
+    // group activates at most once per step and its check then covers
+    // every value the delta schedule would pass through.
+    std::unordered_map<ProcessId, std::uint32_t> member_of_process;
+    for (std::uint32_t index = 0U; index < count; ++index) {
+        member_of_process.try_emplace(members_[index].process, index);
+    }
+    // Slots whose writers outside the kernel are the routing programs its
+    // wires replaced: each such writer's bits are exactly a different wire's.
+    // A wire copies its source in the same update phase (followed through
+    // slot_sources), so those writers are no guard sources of their own.
+    std::vector<std::uint8_t> wired_only(slots_.size(), 0U);
+    {
+        std::map<std::uint32_t, std::vector<SlotPair>> wire_ranges;
+        for (const auto& wire : wires_) {
+            wire_ranges[wire.target].emplace_back(wire.target_offset, wire.width);
+        }
+        std::vector<SlotPair> outside;
+        for (auto& [slot, ranges] : wire_ranges) {
+            outside.clear();
+            for (const auto& writer : slots_[slot].writers) {
+                if (!member_of_process.contains(writer.process)) {
+                    outside.emplace_back(writer.offset, writer.width);
+                }
+            }
+            std::ranges::sort(ranges);
+            std::ranges::sort(outside);
+            wired_only[slot] = std::ranges::includes(ranges, outside) ? 1U : 0U;
+        }
+    }
+    std::vector<std::uint8_t> preserving(count, 0U); // 0 untested, 1 yes, 2 no
+    std::vector<std::uint32_t> seen(count, 0U);
+    std::uint32_t seen_epoch = 0U;
+    std::vector<std::uint32_t> seen_slot(slots_.size(), 0U);
+    std::uint32_t slot_epoch = 0U;
+    std::vector<std::uint32_t> upstream;
+    std::vector<std::uint32_t> walk;
+    std::vector<std::uint32_t> slot_walk;
+    // Visits each member of `root`'s group; null, or why it cannot have
+    // one.
+    const auto each_group_member = [&](const std::uint32_t root, const auto& visit)
+        -> const char* {
+        ++seen_epoch;
+        ++slot_epoch;
+        seen[root] = seen_epoch;
+        walk.assign(1U, root);
+        while (!walk.empty()) {
+            const auto at = walk.back();
+            walk.pop_back();
+            visit(at);
+            for (const auto input : members_[at].collapse_inputs) {
+                if (input == no_slot || seen_slot[input] == slot_epoch) {
+                    continue;
+                }
+                seen_slot[input] = slot_epoch;
+                slot_walk.assign(1U, input);
+                while (!slot_walk.empty()) {
+                    const auto slot = slot_walk.back();
+                    slot_walk.pop_back();
+                    for (const auto& writer : slots_[slot].writers) {
+                        const auto found = member_of_process.find(writer.process);
+                        if (found == member_of_process.end()) {
+                            if (wired_only[slot] != 0U) {
+                                continue;
+                            }
+                            return "guard_source:host";
+                        }
+                        const auto source = found->second;
+                        if (members_[source].conversion) {
+                            // Followed through slot_sources below.
+                            continue;
+                        }
+                        if (keep[source] == 0U) {
+                            const auto& other = members_[source];
+                            if (!other.first_delta) {
+                                return !other.vhdl ? "guard_source:sv"
+                                    : other.kind == StaticKernelMemberKind::combinational
+                                    ? (other.collapse ? "guard_source:dropped"
+                                                      : "guard_source:comb")
+                                    : other.kind == StaticKernelMemberKind::sequential
+                                    ? "guard_source:seq"
+                                    : "guard_source:other";
+                            }
+                            continue;
+                        }
+                        if (seen[source] != seen_epoch) {
+                            seen[source] = seen_epoch;
+                            walk.push_back(source);
+                        }
+                    }
+                    for (const auto& [target, from] : std::ranges::equal_range(
+                             slot_sources, slot, {}, &SlotPair::first)) {
+                        if (seen_slot[from] != slot_epoch) {
+                            seen_slot[from] = slot_epoch;
+                            slot_walk.push_back(from);
+                        }
+                    }
+                }
+            }
+        }
+        return nullptr;
+    };
+    for (bool changed = guards; changed;) {
+        changed = false;
+        for (std::uint32_t index = 0U; index < count; ++index) {
+            if (keep[index] == 0U || guarded[index] == 0U) {
                 continue;
             }
-            for_each_writer(slot, [&](const std::uint32_t source) {
-                if (keep[source] != 0U) {
-                    keep[source] = 0U;
-                    dropped.push_back(source);
+            upstream.clear();
+            const auto* refusal = each_group_member(index,
+                [&](const std::uint32_t member) { upstream.push_back(member); });
+            for (std::size_t at = 0U; refusal == nullptr && at < upstream.size(); ++at) {
+                const auto member = upstream[at];
+                if (preserving[member] == 0U) {
+                    KOp op { };
+                    bool has_guard = false;
+                    preserving[member] = guarded[member] != 0U
+                            || collapse_impurity(members_[member], op, nullptr,
+                                   CollapseGuard::preserve, &has_guard)
+                                == nullptr
+                        ? 1U : 2U;
                 }
-            });
+                if (preserving[member] != 1U) {
+                    refusal = "guard_upstream";
+                }
+            }
+            if (refusal == nullptr) {
+                continue;
+            }
+            const auto reason = std::string { "assertion:" } + refusal;
+            ++impurities[reason];
+            if (census) {
+                root_cause[index] = reason;
+                direct[index] = 1U;
+                ++census_details[reason];
+                census_example.try_emplace(reason, index);
+            }
+            keep[index] = 0U;
+            dropped.push_back(index);
+            changed = true;
         }
+        cascade();
     }
     // Levels: a member after the collapsed writers of its inputs (the
     // planner left no cycle).
@@ -1722,6 +3005,28 @@ Interpreter::Impl::StaticKernel::decide_delta_collapse()
             ready.push_back(index);
         }
     }
+    if (census) {
+        std::map<std::string, std::pair<std::uint32_t, std::uint32_t>> causes;
+        for (std::uint32_t index = 0U; index < count; ++index) {
+            if (members_[index].collapse && keep[index] == 0U) {
+                auto& entry = causes[root_cause[index]];
+                ++(direct[index] != 0U ? entry.first : entry.second);
+            }
+        }
+        for (const auto& [cause, counts] : causes) {
+            std::cerr << "fsim-profile: collapse-census cause=" << cause
+                      << " direct=" << counts.first << " cascade=" << counts.second
+                      << '\n';
+        }
+        for (const auto& [detail, members] : census_details) {
+            const auto example = census_example[detail];
+            std::cerr << "fsim-profile: collapse-census-detail members=" << members
+                      << ' ' << detail << " example="
+                      << (example < profile_names_.size() ? profile_names_[example]
+                                                          : std::string { "?" })
+                      << '\n';
+        }
+    }
     std::vector<std::uint32_t> level(count, 0U);
     std::uint32_t levels = 0U;
     std::uint32_t ordered = 0U;
@@ -1746,6 +3051,48 @@ Interpreter::Impl::StaticKernel::decide_delta_collapse()
                 plan.member_levels[index] = level[index] + 1U;
             }
         }
+        // Groups that share a member are one group.
+        std::vector<std::uint32_t> parent(count);
+        std::iota(parent.begin(), parent.end(), 0U);
+        const auto find = [&](std::uint32_t member) {
+            while (parent[member] != member) {
+                member = parent[member] = parent[parent[member]];
+            }
+            return member;
+        };
+        std::vector<std::uint8_t> grouped(count, 0U);
+        for (std::uint32_t index = 0U; index < count; ++index) {
+            if (keep[index] == 0U || guarded[index] == 0U) {
+                continue;
+            }
+            ++plan.guarded;
+            (void)each_group_member(index, [&](const std::uint32_t member) {
+                grouped[member] = 1U;
+                parent[find(member)] = find(index);
+            });
+        }
+        if (plan.guarded != 0U) {
+            std::vector<std::uint32_t> group_of(count, no_slot);
+            plan.member_guards.assign(count, 0U);
+            for (std::uint32_t index = 0U; index < count; ++index) {
+                if (grouped[index] == 0U) {
+                    continue;
+                }
+                auto& group = group_of[find(index)];
+                if (group == no_slot) {
+                    group = static_cast<std::uint32_t>(plan.guard_inputs.size());
+                    plan.guard_inputs.emplace_back();
+                }
+                plan.member_guards[index] = group + 1U;
+                auto& inputs = plan.guard_inputs[group];
+                inputs.insert(inputs.end(), members_[index].collapse_inputs.begin(),
+                    members_[index].collapse_inputs.end());
+            }
+            for (auto& inputs : plan.guard_inputs) {
+                std::ranges::sort(inputs);
+                inputs.erase(std::ranges::unique(inputs).begin(), inputs.end());
+            }
+        }
     }
     return plan;
 }
@@ -1761,10 +3108,22 @@ void Interpreter::Impl::StaticKernel::apply_delta_collapse(const CollapsePlan& p
     }
     collapse_buckets_.assign(collapse_enabled_ ? plan.levels : 0U, { });
     collapse_low_ = static_cast<std::uint32_t>(collapse_buckets_.size());
+    member_guard_.clear();
+    guard_groups_.clear();
+    if (collapse_enabled_ && !plan.guard_inputs.empty()
+        && plan.member_guards.size() == count) {
+        member_guard_ = plan.member_guards;
+        guard_groups_.resize(plan.guard_inputs.size());
+        for (std::size_t group = 0U; group < guard_groups_.size(); ++group) {
+            guard_groups_[group].inputs = plan.guard_inputs[group];
+        }
+    }
     if (std::getenv("FSIM_PROFILE_PHASES") != nullptr && plan.planned != 0U) {
         std::cerr << "fsim-profile: static-kernel-collapse planned=" << plan.planned
                   << " kept=" << (collapse_enabled_ ? plan.kept : 0U)
                   << " levels=" << (collapse_enabled_ ? plan.levels : 0U)
+                  << " guarded=" << (collapse_enabled_ ? plan.guarded : 0U)
+                  << " guard_groups=" << guard_groups_.size()
                   << (plan.allowed ? "" : " host-boundary");
         for (const auto& [reason, members] : plan.impurities) {
             std::cerr << ' ' << reason << '=' << members;

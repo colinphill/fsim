@@ -10369,8 +10369,6 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
             : profile.width - 1U;
         const auto narrowed = resize_register(
             *value, value_width, signed_operand);
-        const auto restored = resize_register(
-            narrowed, *source_width, signed_operand);
 
         // A metavalue is not an integer-range failure: the IEEE numeric
         // packages warn and return zero.  Keep the range assertion disabled
@@ -10400,21 +10398,27 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
             location,
         });
 
-        const auto fits = allocate_register(
-            1U, frontend::ValueDomain::Logic4);
-        process_.operations.emplace_back(Binary {
-            BinaryOperator::equal, fits, *value, restored });
-        const auto fits_or_unknown = allocate_register(
-            1U, frontend::ValueDomain::Logic4);
-        process_.operations.emplace_back(ConditionalSelect {
-            fits_or_unknown, known, fits, one });
-        process_.operations.emplace_back(Assert {
-            fits_or_unknown,
-            "VHDL numeric to_integer operand is outside the predefined "
-            "integer range",
-            AssertionSeverity::failure,
-            location,
-        });
+        // An operand no wider than the representable width always
+        // survives the round trip.
+        if (*source_width > value_width) {
+            const auto restored = resize_register(
+                narrowed, *source_width, signed_operand);
+            const auto fits = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::equal, fits, *value, restored });
+            const auto fits_or_unknown = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(ConditionalSelect {
+                fits_or_unknown, known, fits, one });
+            process_.operations.emplace_back(Assert {
+                fits_or_unknown,
+                "VHDL numeric to_integer operand is outside the predefined "
+                "integer range",
+                AssertionSeverity::failure,
+                location,
+            });
+        }
 
         const auto resized = resize_register(
             narrowed, profile.width, signed_operand);

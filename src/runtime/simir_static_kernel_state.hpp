@@ -514,6 +514,9 @@ private:
         bool collapse { };
         std::vector<std::uint32_t> collapse_inputs;
         std::vector<std::uint32_t> collapse_outputs;
+        /// StaticKernelMemberSpec::first_delta: what it writes changes at
+        /// most once per time step, by the update phase of its first delta.
+        bool first_delta { };
         /// A port-association conversion (StaticKernelMemberSpec::
         /// conversion_target): never scheduled; run_conversions runs it in
         /// the update phase that changes one of its sources.
@@ -891,10 +894,48 @@ private:
     /// Keeps the planner's collapsed members whose compiled code is pure,
     /// closes the set under the reader rule and levels it.
     void plan_delta_collapse();
+    /// How collapse_impurity treats an assertion whose condition is not a
+    /// constant true. none: the member is impure. guard: the assertion is
+    /// a check proven under the known-value guard (every slot the member
+    /// reads holds strong 0/1 values), which also proves every value it
+    /// assigns known; *guarded tells whether the member has one. preserve:
+    /// only that proof, for a member upstream of a guarded one.
+    enum class CollapseGuard : std::uint8_t {
+        none,
+        guard,
+        preserve,
+    };
     /// Why a collapsed member's compiled code is not pure (null when it
-    /// is); rejected_op names an operation it cannot run.
+    /// is); rejected_op names an operation it cannot run, and rejected_at
+    /// (when given) receives the instruction of a check, assertion or
+    /// dynamic insert that made it impure.
     [[nodiscard]] const char* collapse_impurity(const Member& member,
-        static_kernel_detail::KOp& rejected_op) const;
+        static_kernel_detail::KOp& rejected_op,
+        std::uint32_t* rejected_at = nullptr,
+        CollapseGuard guard = CollapseGuard::none, bool* guarded = nullptr) const;
+    /// collapse_impurity's range certificate: every pending check (a range
+    /// or integer check, or a dynamic insert's base, that may read slot
+    /// values) passes in every run. An abstract execution of the flow graph
+    /// (nodes, with call contexts expanded) follows static branches with
+    /// their exact values, so loops run their time-zero trip counts, and
+    /// runs both sides of a data branch, joining them at its immediate
+    /// postdominator; values are exact words, integer intervals, known
+    /// words or unknown. With `known`, every slot read is a known word, a
+    /// pending assertion's condition must be exactly true and every
+    /// assigned value must be known (the known-value guard).
+    [[nodiscard]] const char* prove_collapse_ranges(const Member& member,
+        const std::vector<std::uint8_t>& pending, std::uint32_t nodes,
+        const std::vector<std::uint32_t>& node_at,
+        const std::vector<std::array<std::uint32_t, 2>>& successor,
+        const std::vector<std::uint32_t>& ipdom,
+        const std::vector<std::uint8_t>& controlled,
+        const std::vector<std::uint8_t>& data, bool known,
+        int* failed = nullptr) const;
+    /// FSIM_KERNEL_COLLAPSE_CENSUS: what an impure instruction computes (its
+    /// operand definitions, three levels deep) and, for an assertion, its
+    /// severity and message.
+    [[nodiscard]] std::string collapse_census_detail(const Member& member,
+        std::uint32_t at) const;
     void write_slot_immediate(std::uint32_t slot, PackedLogic4 value,
         std::optional<std::uint32_t> offset, std::uint32_t member,
         InstructionIndex instruction);
@@ -1588,6 +1629,29 @@ private:
     /// While run_collapsed commits a level, the lowest level its changes
     /// may wake (the planner orders every reader above its writers).
     std::uint32_t collapse_floor_ { };
+    /// Known-value guards (decide_delta_collapse): per member its group + 1
+    /// (0 when none); per group its input slots, the step (guard_epoch_)
+    /// and commit_round (guard_commit_) of its last activation, and whether
+    /// that step runs it collapsed (open) or in the delta schedule.
+    struct GuardGroup {
+        std::vector<std::uint32_t> inputs;
+        std::uint64_t epoch { };
+        std::uint64_t commit { };
+        bool open { };
+    };
+    std::vector<std::uint32_t> member_guard_;
+    std::vector<GuardGroup> guard_groups_;
+    SimulationTick guard_time_ { };
+    std::uint64_t guard_epoch_ { };
+    std::uint64_t guard_commit_ { };
+    /// True when the member's guard group runs in the delta schedule in
+    /// this step.
+    [[nodiscard]] bool guard_closed(std::uint32_t member) const;
+    /// Decides a guard group at its first activation in a step: open when
+    /// every input slot holds only strong 0/1 values.
+    bool open_guard(std::uint32_t group);
+    /// A slot holds no unknown (or, for Logic9, no non-strong) element.
+    [[nodiscard]] bool slot_known(std::uint32_t slot) const;
     /// FSIM_KERNEL_VERIFY's reference replay of a compiled run
     /// (verify_run): its reports repeat the compiled run's and are not
     /// emitted again.
@@ -1604,6 +1668,11 @@ private:
         bool allowed { };
         std::map<std::string, std::size_t> impurities;
         std::vector<std::uint32_t> member_levels;
+        /// Known-value guard groups: per member its group + 1 (0 when
+        /// none), each group's input slots, and the guarded members.
+        std::vector<std::uint32_t> member_guards;
+        std::vector<std::vector<std::uint32_t>> guard_inputs;
+        std::uint32_t guarded { };
     };
     std::optional<CollapsePlan> restored_collapse_;
     std::shared_ptr<std::string> recording_image_;
@@ -2874,6 +2943,11 @@ private:
     void finish_hosted();
     bool profile_ { };
     bool trace_ { };
+    void sample_unknown_census();
+    void report_unknown_census() const;
+    /// FSIM_PROFILE_KERNEL_DOMAINS (Phase 7 P1): clock domains, their flops
+    /// and combinational cones (simir_static_kernel_domains.cpp).
+    void report_domains() const;
     /// FSIM_PROFILE_KERNEL_BATCHES (diagnostic, multi-threading plan): the
     /// batches a parallel kernel could run at once. A batch is one settle
     /// level visit or one triggered round; per size class (log2 buckets)
@@ -2910,6 +2984,8 @@ private:
     /// entry.
     std::array<std::uint64_t, 5> profile_schedule_outcomes_ { };
     std::uint64_t profile_collapsed_runs_ { };
+    /// Guard group activations decided open and closed.
+    std::array<std::uint64_t, 2> profile_guards_ { };
     std::map<std::string, std::uint64_t> profile_generic_ops_;
     std::uint64_t profile_runs_[3] { };
     std::uint64_t profile_compiled_runs_ { };
@@ -2946,6 +3022,36 @@ private:
     std::size_t wide_members_ { };
     std::size_t wide_member_ops_ { };
     std::size_t wide_member_total_ops_ { };
+    /// FSIM_KERNEL_UNKNOWN_CENSUS=STRIDE (diagnostic, Phase 7 P0.1b): every
+    /// STRIDE-th time step, at the start of its first activation, which
+    /// slots and kernel-held container elements hold an unknown bit (X or
+    /// Z, or a Logic9 value other than '0' and '1'). Reported at teardown.
+    /// Declared last, so that it moves no hot member.
+    struct UnknownCensus {
+        std::uint64_t stride { };
+        std::uint64_t steps { };
+        std::uint64_t samples { };
+        std::optional<SimulationTick> last_time;
+        /// Samples with no unknown non-container slot, with no unknown
+        /// container element, and with neither.
+        std::uint64_t zero_scalar { };
+        std::uint64_t zero_memory { };
+        std::uint64_t zero_all { };
+        /// Unknown non-container slots summed over the samples.
+        std::uint64_t unknown_scalar_sum { };
+        /// Per slot: 1 when it stores container elements.
+        std::vector<std::uint8_t> memory_slot;
+        /// Per slot and per kernel-held element (after the slots): samples
+        /// it was unknown in, and 1 + the last such sample.
+        std::vector<std::uint64_t> unknown;
+        std::vector<std::uint64_t> last_unknown;
+        std::vector<std::uint32_t> element_container;
+    } unknown_census_;
+    /// FSIM_KERNEL_COLLAPSE_CENSUS: the last prover failure
+    /// (reason:operation).
+    mutable std::string range_failure_;
+    /// The instruction prove_collapse_ranges failed at (census only).
+    mutable std::uint32_t range_failure_at_ { };
 };
 
 } // namespace fsim::runtime::simir

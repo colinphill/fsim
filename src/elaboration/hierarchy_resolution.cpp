@@ -2,6 +2,7 @@
 #include "hierarchy_builder_internal.hpp"
 #include "fsim/runtime/logic.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/support/phase_profile.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -11,6 +12,7 @@
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <ranges>
 #include <type_traits>
 #include <unordered_map>
@@ -1921,8 +1923,11 @@ void HierarchyBuilder::finish()
                   << vhdl_generated_concurrent_occurrences_
                   << '\n';
     }
+    std::optional<support::ScopedPhaseProfile> element_net_phase;
+    element_net_phase.emplace("elaboration_element_nets");
     const auto element_net_census
         = rewrite_eligible_element_net_families();
+    element_net_phase.reset();
     if (lowering_census_enabled_) {
         std::cerr << "fsim-profile: element-net-family-census"
                   << " shape_families="
@@ -2019,9 +2024,12 @@ void HierarchyBuilder::finish()
     if (!materialize_compiled_systemverilog_package_initializers()) {
         return;
     }
+    std::optional<support::ScopedPhaseProfile> closing_phase;
+    closing_phase.emplace("elaboration_routes_drivers");
     compose_vhdl_output_routes();
     validate_process_drivers();
     initialize_constant_driven_nets();
+    closing_phase.reset();
     // A multi-bit VHDL scalar's projected transactions are marked as one
     // value (IEEE 1076-2008 10.5.2.2).
     for (std::size_t index = 0U; index < design_.signal_info_.size()
@@ -2087,6 +2095,8 @@ void HierarchyBuilder::finish()
         }
     }
     diagnostics_ = std::move(unique_diagnostics);
+    const support::ScopedPhaseProfile freeze_phase {
+        "elaboration_freeze_inventory" };
     design_.freeze_hierarchy_paths();
     if (diagnostics_.empty()) {
         try {
