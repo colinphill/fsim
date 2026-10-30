@@ -4,10 +4,12 @@
 // pruning, 'U' tracking and dead-constant elimination.
 #include "simir_static_kernel_compiled_internal.hpp"
 
+#include <array>
 #include <cxxabi.h>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <queue>
 #include <string>
 #include <tuple>
@@ -826,36 +828,47 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
     // intermediate input combinations the delta schedule passes through,
     // so its compiled code must compute a function of the slots it reads
     // and do nothing else: no state carried between runs (a register read
-    // before this run writes it, unless no run writes it), no check or
-    // assertion that could fail, no loop (the step limit), no generic
-    // operation, and only deferred static-range assignments. A selection
-    // whose index is a constant is checked here once.
+    // before this run writes it, unless no run writes it), no generic
+    // operation, only deferred static-range assignments, and no check,
+    // assertion or loop whose outcome could differ between runs. Collapsing
+    // is off at time zero, where every member runs once (run_at_start), so
+    // a check that is static (it reads no value derived from a slot and is
+    // not control dependent on a branch that does) passes in every run as
+    // it did then, and a loop whose exits are static ends as it did then.
+    // Range checks fail fatally; an assertion may only report, so it needs
+    // a condition that is a constant true.
     const auto& body = *member.compiled;
     const auto& code = body.code;
     const auto size = static_cast<std::uint32_t>(code.size());
     const auto registers = static_cast<std::uint32_t>(body.registers.size());
-    if (size == 0U || body.entry >= size || !body.resume_entries.empty()
-        || body.call_stack_base != 0U) {
+    // A VHDL signal assignment of a narrow or wide register, deferred to
+    // the update phase.
+    const auto deferred_store = [](const KInst& inst) {
+        return ((inst.op == KOp::store_vhdl && inst.sub == 0U)
+                   || (inst.op == KOp::wide_store && inst.sub == 2U))
+            && (inst.flags & flag_blocking) == 0U;
+    };
+    if (size == 0U || body.entry >= size || !body.resume_entries.empty()) {
         return "code_shape";
     }
-    std::vector<std::uint8_t> reached(size, 0U);
+    // Each reached instruction once: allowed, and its register uses and
+    // definition (call and return touch only the synthetic call stack).
+    std::vector<std::uint8_t> checked(size, 0U);
+    std::vector<std::uint32_t> use_begin(size + 1U, 0U);
+    std::vector<std::uint32_t> uses;
+    std::vector<std::uint32_t> defined(size, no_slot);
     std::vector<std::uint32_t> definitions(registers, 0U);
     std::vector<const KInst*> definition(registers, nullptr);
-    // Successors of each reached instruction: successor_begin[at] ..
-    // successor_begin[at] + successor_count[at] in successors.
-    std::vector<std::uint32_t> successor_begin(size, 0U);
-    std::vector<std::uint8_t> successor_count(size, 0U);
-    // Instructions that may end the run.
-    std::vector<std::uint8_t> exits(size, 0U);
-    std::vector<std::uint32_t> successors;
     std::vector<std::uint32_t> use;
     std::optional<std::uint32_t> def;
     std::vector<std::uint32_t> next;
-    std::vector<std::uint32_t> work { body.entry };
-    reached[body.entry] = 1U;
-    while (!work.empty()) {
-        const auto at = work.back();
-        work.pop_back();
+    std::vector<std::uint32_t> first_use(size, no_slot);
+    std::vector<std::uint32_t> use_count(size, 0U);
+    const auto check_instruction = [&](const std::uint32_t at) -> const char* {
+        if (checked[at] != 0U) {
+            return nullptr;
+        }
+        checked[at] = 1U;
         const auto& inst = code[at];
         bool allowed = false;
         switch (inst.op) {
@@ -882,18 +895,29 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
         case KOp::dynamic_insert:
         case KOp::dynamic_part_insert:
         case KOp::assert_check:
-            allowed = true;
-            break;
-        // Sub 2 and 3 read a wide register, which only generic and wide
-        // instructions write.
+        case KOp::integer_binary:
+        case KOp::integer_unary:
+        case KOp::integer_check:
+        // Wide registers (sub 2 and 3 of the selections read one), which
+        // only these and generic instructions write.
         case KOp::extract:
         case KOp::dynamic_extract:
         case KOp::dynamic_part_select:
         case KOp::branch:
-            allowed = inst.sub != 2U && inst.sub != 3U;
+        case KOp::wide_load:
+        case KOp::wide_copy:
+        case KOp::wide_const:
+        case KOp::wide_concat:
+            allowed = true;
             break;
         case KOp::store_vhdl:
-            allowed = inst.sub == 0U && (inst.flags & flag_blocking) == 0U;
+        case KOp::wide_store:
+            allowed = deferred_store(inst);
+            break;
+        // Fixed-register calls; the dynamic call stack (z 0) is the host's.
+        case KOp::call:
+        case KOp::ret:
+            allowed = inst.z != 0U;
             break;
         default:
             break;
@@ -902,62 +926,145 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
             rejected_op = inst.op;
             return "operation";
         }
+        if (inst.op == KOp::call || inst.op == KOp::ret) {
+            return nullptr;
+        }
         kinst_flow(inst, at, body, member.operations, member.body_end, use, def,
             next);
+        first_use[at] = static_cast<std::uint32_t>(uses.size());
         for (const auto reg : use) {
             if (reg >= registers) {
                 return "register";
             }
+            uses.push_back(reg);
         }
+        use_count[at] = static_cast<std::uint32_t>(use.size());
         if (def) {
             if (*def >= registers) {
                 return "register";
             }
+            defined[at] = *def;
             ++definitions[*def];
             definition[*def] = &inst;
         }
-        successor_begin[at] = static_cast<std::uint32_t>(successors.size());
-        exits[at] = next.empty() ? 1U : 0U;
-        for (const auto target : next) {
-            if (target >= size) {
-                exits[at] = 1U;
-                continue;
+        return nullptr;
+    };
+    // The flow graph with calls expanded: a node is (context, instruction),
+    // context 0 the body and each call a new context that returns to its
+    // caller's return target. A node's successors are nodes or `leave`
+    // (the exit).
+    constexpr std::uint32_t none = std::numeric_limits<std::uint32_t>::max();
+    constexpr std::uint32_t leave = none - 1U;
+    constexpr std::size_t node_limit = std::size_t { 1 } << 16U;
+    struct Context {
+        std::uint32_t caller { };
+        std::uint32_t return_at { };
+        std::uint32_t callee { };
+    };
+    std::vector<Context> contexts { { none, none, none } };
+    // Context 0's nodes by instruction; the expanded calls' in a map.
+    std::vector<std::uint32_t> body_node(size, none);
+    std::unordered_map<std::uint64_t, std::uint32_t> node_of;
+    std::vector<std::uint32_t> node_context;
+    std::vector<std::uint32_t> node_at;
+    std::vector<std::array<std::uint32_t, 2>> successor;
+    node_context.reserve(size);
+    node_at.reserve(size);
+    successor.reserve(size);
+    const auto node = [&](const std::uint32_t context, const std::uint32_t at) {
+        const auto created = static_cast<std::uint32_t>(node_at.size());
+        auto& slot = context == 0U ? body_node[at]
+                                   : node_of.try_emplace(
+                                         (std::uint64_t { context } << 32U) | at, none)
+                                         .first->second;
+        if (slot == none) {
+            slot = created;
+            node_context.push_back(context);
+            node_at.push_back(at);
+        }
+        return slot;
+    };
+    node(0U, body.entry);
+    for (std::uint32_t current = 0U; current < node_at.size(); ++current) {
+        if (node_at.size() > node_limit) {
+            return "size";
+        }
+        const auto at = node_at[current];
+        const auto context = node_context[current];
+        if (const auto* reason = check_instruction(at)) {
+            return reason;
+        }
+        const auto& inst = code[at];
+        std::array<std::uint32_t, 2> out { none, none };
+        if (inst.op == KOp::call) {
+            if (inst.d >= size) {
+                return "code_shape";
             }
-            successors.push_back(target);
-            ++successor_count[at];
-            if (reached[target] == 0U) {
-                reached[target] = 1U;
-                work.push_back(target);
+            for (auto caller = context; caller != 0U; caller = contexts[caller].caller) {
+                if (contexts[caller].callee == inst.d) {
+                    return "recursion";
+                }
+            }
+            contexts.push_back({ context, static_cast<std::uint32_t>(inst.imm_a), inst.d });
+            out[0] = node(static_cast<std::uint32_t>(contexts.size() - 1U), inst.d);
+        } else if (inst.op == KOp::ret) {
+            if (context == 0U) {
+                return "code_shape";
+            }
+            // VHDL bodies map SimIR operation n to instruction n; the wait
+            // is the exit.
+            const auto target = contexts[context].return_at;
+            out[0] = target == member.body_end || target >= size
+                ? leave : node(contexts[context].caller, target);
+        } else {
+            kinst_flow(inst, at, body, member.operations, member.body_end, use,
+                def, next);
+            if (next.empty()) {
+                out[0] = leave;
+            }
+            for (std::size_t index = 0U; index < next.size() && index < 2U; ++index) {
+                out[index] = next[index] >= size ? leave : node(context, next[index]);
+            }
+            if (next.size() > 2U) {
+                return "code_shape";
+            }
+            if (out[1] == out[0]) {
+                out[1] = none;
             }
         }
+        successor.push_back(out);
     }
-    // No loop: depth-first postorder, rejecting a back edge.
+    const auto nodes = static_cast<std::uint32_t>(node_at.size());
+    const auto each_successor = [&](const std::uint32_t at, const auto& visit) {
+        for (const auto target : successor[at]) {
+            if (target != none) {
+                visit(target);
+            }
+        }
+    };
+    // Depth-first postorder from the entry.
     std::vector<std::uint32_t> postorder;
+    postorder.reserve(nodes);
     {
-        std::vector<std::uint8_t> color(size, 0U);
-        std::vector<std::pair<std::uint32_t, std::uint32_t>> stack {
-            { body.entry, 0U } };
-        color[body.entry] = 1U;
+        std::vector<std::uint8_t> seen(nodes, 0U);
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> stack { { 0U, 0U } };
+        seen[0] = 1U;
         while (!stack.empty()) {
             auto& [at, position] = stack.back();
-            if (position < successor_count[at]) {
-                const auto target = successors[successor_begin[at] + position++];
-                if (color[target] == 1U) {
-                    return "loop";
-                }
-                if (color[target] == 0U) {
-                    color[target] = 1U;
+            if (position < 2U) {
+                const auto target = successor[at][position++];
+                if (target < nodes && seen[target] == 0U) {
+                    seen[target] = 1U;
                     stack.push_back({ target, 0U });
                 }
                 continue;
             }
-            color[at] = 2U;
             postorder.push_back(at);
             stack.pop_back();
         }
     }
     // Upward-exposed uses of registers some run writes: backward liveness
-    // in postorder (successors first), on the written registers only.
+    // to a fixed point, on the written registers only.
     std::vector<std::uint32_t> compact(registers, no_slot);
     std::uint32_t written = 0U;
     for (std::uint32_t reg = 0U; reg < registers; ++reg) {
@@ -967,87 +1074,419 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
     }
     const std::size_t words = (written + 63U) / 64U;
     if (words != 0U) {
-        if (static_cast<std::uint64_t>(size) * words > (std::uint64_t { 1 } << 21U)) {
+        if (static_cast<std::uint64_t>(nodes) * words > (std::uint64_t { 1 } << 21U)) {
             return "size";
         }
-        std::vector<std::uint64_t> live(static_cast<std::size_t>(size) * words, 0U);
-        for (const auto at : postorder) {
-            kinst_flow(code[at], at, body, member.operations, member.body_end, use,
-                def, next);
-            auto* in = live.data() + static_cast<std::size_t>(at) * words;
-            for (std::uint32_t position = 0U; position < successor_count[at];
-                 ++position) {
-                const auto target = successors[successor_begin[at] + position];
-                const auto* out = live.data() + static_cast<std::size_t>(target) * words;
-                for (std::size_t word = 0U; word < words; ++word) {
-                    in[word] |= out[word];
+        std::vector<std::uint64_t> live(static_cast<std::size_t>(nodes) * words, 0U);
+        std::vector<std::uint64_t> in(words, 0U);
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (const auto at : postorder) {
+                std::ranges::fill(in, 0U);
+                each_successor(at, [&](const std::uint32_t target) {
+                    if (target < nodes) {
+                        const auto* out = live.data() + static_cast<std::size_t>(target) * words;
+                        for (std::size_t word = 0U; word < words; ++word) {
+                            in[word] |= out[word];
+                        }
+                    }
+                });
+                const auto instruction = node_at[at];
+                if (defined[instruction] != no_slot) {
+                    const auto bit = compact[defined[instruction]];
+                    in[bit / 64U] &= ~(std::uint64_t { 1 } << (bit % 64U));
                 }
-            }
-            if (def) {
-                const auto bit = compact[*def];
-                in[bit / 64U] &= ~(std::uint64_t { 1 } << (bit % 64U));
-            }
-            for (const auto reg : use) {
-                if (const auto bit = compact[reg]; bit != no_slot) {
-                    in[bit / 64U] |= std::uint64_t { 1 } << (bit % 64U);
+                for (std::uint32_t index = 0U; index < use_count[instruction]; ++index) {
+                    if (const auto bit = compact[uses[first_use[instruction] + index]];
+                        bit != no_slot) {
+                        in[bit / 64U] |= std::uint64_t { 1 } << (bit % 64U);
+                    }
+                }
+                auto* stored = live.data() + static_cast<std::size_t>(at) * words;
+                if (!std::equal(in.begin(), in.end(), stored)) {
+                    std::ranges::copy(in, stored);
+                    changed = true;
                 }
             }
         }
-        const auto* entry = live.data() + static_cast<std::size_t>(body.entry) * words;
         for (std::size_t word = 0U; word < words; ++word) {
-            if (entry[word] != 0U) {
+            if (live[word] != 0U) {
                 return "carried_state";
             }
         }
     }
-    // Every run assigns every bit of what it drives: an assignment on some
-    // paths only keeps the previous value on the others (a latch), which
-    // depends on the inputs it saw in earlier deltas. Forward must-analysis
-    // in reverse postorder over the driven bits.
+    // Every run assigns every bit it assigns on any path: an assignment on
+    // some paths only keeps the previous value on the others (a latch),
+    // which depends on the inputs it saw in earlier deltas. Bits no path
+    // assigns (another member's slice of the signal) are not its own.
+    // Forward must-analysis to a fixed point over the assigned bits.
     {
         std::vector<std::uint32_t> base(slots_.size(), no_slot);
         std::uint32_t bits = 0U;
-        for (const auto at : postorder) {
+        for (std::uint32_t at = 0U; at < size; ++at) {
             if (const auto& inst = code[at];
-                inst.op == KOp::store_vhdl && base[inst.d] == no_slot) {
+                checked[at] != 0U && deferred_store(inst) && base[inst.d] == no_slot) {
                 base[inst.d] = bits;
                 bits += slots_[inst.d].width;
             }
         }
         const std::size_t span = (bits + 63U) / 64U;
         if (span != 0U) {
-            if (static_cast<std::uint64_t>(size) * span > (std::uint64_t { 1 } << 21U)) {
+            if (static_cast<std::uint64_t>(nodes) * span > (std::uint64_t { 1 } << 21U)) {
                 return "size";
             }
-            std::vector<std::uint64_t> must(static_cast<std::size_t>(size) * span, 0U);
-            std::vector<std::uint8_t> seen(size, 0U);
+            const auto add_stored = [&](const KInst& inst, std::vector<std::uint64_t>& set) {
+                for (auto bit = base[inst.d] + inst.offset;
+                     bit < base[inst.d] + inst.offset + inst.width; ++bit) {
+                    set[bit / 64U] |= std::uint64_t { 1 } << (bit % 64U);
+                }
+            };
+            std::vector<std::uint64_t> assigned(span, 0U);
+            for (std::uint32_t at = 0U; at < size; ++at) {
+                if (checked[at] != 0U && deferred_store(code[at])) {
+                    add_stored(code[at], assigned);
+                }
+            }
+            // Must-assigned bits on entry to each node, from all-assigned
+            // down (the entry starts with none).
+            std::vector<std::uint64_t> must(static_cast<std::size_t>(nodes) * span,
+                ~std::uint64_t { 0 });
+            std::fill_n(must.begin(), span, 0U);
             std::vector<std::uint64_t> out(span, 0U);
-            for (auto position = postorder.size(); position-- > 0U;) {
-                const auto at = postorder[position];
-                const auto* in = must.data() + static_cast<std::size_t>(at) * span;
-                std::copy(in, in + span, out.begin());
-                if (const auto& inst = code[at]; inst.op == KOp::store_vhdl) {
-                    for (auto bit = base[inst.d] + inst.offset;
-                         bit < base[inst.d] + inst.offset + inst.width; ++bit) {
-                        out[bit / 64U] |= std::uint64_t { 1 } << (bit % 64U);
+            for (bool changed = true; changed;) {
+                changed = false;
+                for (auto position = postorder.size(); position-- > 0U;) {
+                    const auto at = postorder[position];
+                    const auto* in = must.data() + static_cast<std::size_t>(at) * span;
+                    std::copy(in, in + span, out.begin());
+                    if (const auto& inst = code[node_at[at]]; deferred_store(inst)) {
+                        add_stored(inst, out);
+                    }
+                    each_successor(at, [&](const std::uint32_t target) {
+                        if (target >= nodes) {
+                            return;
+                        }
+                        auto* target_in = must.data() + static_cast<std::size_t>(target) * span;
+                        for (std::size_t word = 0U; word < span; ++word) {
+                            if ((target_in[word] & out[word]) != target_in[word]) {
+                                target_in[word] &= out[word];
+                                changed = true;
+                            }
+                        }
+                    });
+                }
+            }
+            for (const auto at : postorder) {
+                if (successor[at][0] != leave && successor[at][1] != leave) {
+                    continue;
+                }
+                std::copy_n(must.begin() + static_cast<std::ptrdiff_t>(at * span), span,
+                    out.begin());
+                if (const auto& inst = code[node_at[at]]; deferred_store(inst)) {
+                    add_stored(inst, out);
+                }
+                for (std::size_t word = 0U; word < span; ++word) {
+                    if ((assigned[word] & ~out[word]) != 0U) {
+                        return "partial_assignment";
                     }
                 }
-                if (exits[at] != 0U) {
-                    for (std::uint32_t bit = 0U; bit < bits; ++bit) {
-                        if (((out[bit / 64U] >> (bit % 64U)) & 1U) == 0U) {
-                            return "partial_assignment";
+            }
+        }
+    }
+    // Immediate postdominators (Cooper, Harvey and Kennedy) on the reverse
+    // graph, `nodes` standing for the exit; a node that cannot reach the
+    // exit never ends.
+    std::vector<std::uint32_t> predecessor_begin(nodes + 2U, 0U);
+    std::vector<std::uint32_t> predecessors;
+    {
+        const auto target_of = [&](const std::uint32_t target) {
+            return target == leave ? nodes : target;
+        };
+        for (std::uint32_t at = 0U; at < nodes; ++at) {
+            each_successor(at, [&](const std::uint32_t target) {
+                ++predecessor_begin[target_of(target) + 1U];
+            });
+        }
+        for (std::uint32_t at = 0U; at <= nodes; ++at) {
+            predecessor_begin[at + 1U] += predecessor_begin[at];
+        }
+        predecessors.resize(predecessor_begin[nodes + 1U]);
+        auto fill = predecessor_begin;
+        for (std::uint32_t at = 0U; at < nodes; ++at) {
+            each_successor(at, [&](const std::uint32_t target) {
+                predecessors[fill[target_of(target)]++] = at;
+            });
+        }
+    }
+    std::vector<std::uint32_t> reverse_post(nodes + 1U, none);
+    std::vector<std::uint32_t> reverse_order;
+    {
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> stack {
+            { nodes, predecessor_begin[nodes] } };
+        std::vector<std::uint8_t> seen(nodes + 1U, 0U);
+        seen[nodes] = 1U;
+        while (!stack.empty()) {
+            auto& [at, position] = stack.back();
+            if (position < predecessor_begin[at + 1U]) {
+                const auto source = predecessors[position++];
+                if (seen[source] == 0U) {
+                    seen[source] = 1U;
+                    stack.push_back({ source, predecessor_begin[source] });
+                }
+                continue;
+            }
+            reverse_post[at] = static_cast<std::uint32_t>(reverse_order.size());
+            reverse_order.push_back(at);
+            stack.pop_back();
+        }
+        if (reverse_order.size() != nodes + 1U) {
+            return "no_exit";
+        }
+    }
+    std::vector<std::uint32_t> ipdom(nodes + 1U, none);
+    ipdom[nodes] = nodes;
+    {
+        const auto intersect = [&](std::uint32_t left, std::uint32_t right) {
+            while (left != right) {
+                while (reverse_post[left] < reverse_post[right]) {
+                    left = ipdom[left];
+                }
+                while (reverse_post[right] < reverse_post[left]) {
+                    right = ipdom[right];
+                }
+            }
+            return left;
+        };
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (auto position = reverse_order.size() - 1U; position-- > 0U;) {
+                const auto at = reverse_order[position];
+                std::uint32_t chosen = none;
+                each_successor(at, [&](const std::uint32_t target) {
+                    const auto other = target == leave ? nodes : target;
+                    if (ipdom[other] == none) {
+                        return;
+                    }
+                    chosen = chosen == none ? other : intersect(other, chosen);
+                });
+                if (chosen != ipdom[at]) {
+                    ipdom[at] = chosen;
+                    changed = true;
+                }
+            }
+        }
+    }
+    // Control dependence (Ferrante, Ottenstein and Warren): each node on
+    // the postdominator path from a branch's successor up to the branch's
+    // immediate postdominator depends on that branch.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> dependence;
+    for (std::uint32_t at = 0U; at < nodes; ++at) {
+        if (successor[at][1] == none) {
+            continue;
+        }
+        for (const auto target : successor[at]) {
+            for (auto runner = target == leave ? nodes : target;
+                 runner != ipdom[at] && runner != nodes; runner = ipdom[runner]) {
+                dependence.emplace_back(runner, at);
+            }
+        }
+    }
+    std::ranges::sort(dependence);
+    // Values derived from slots (data), and nodes that run or not by them
+    // (controlled), to a fixed point. Registers are taken whole: one data
+    // definition makes every use data.
+    std::vector<std::uint8_t> data(registers, 0U);
+    std::vector<std::uint8_t> controlled(nodes, 0U);
+    // Only instructions that read nothing but registers (and constant
+    // inputs) can define a register that is not data; every other one,
+    // including selections that read a slot in place (sub 1), is a source.
+    const auto data_source = [](const KInst& inst) {
+        switch (inst.op) {
+        case KOp::constant:
+        case KOp::load_host:
+        case KOp::copy:
+        case KOp::binary:
+        case KOp::reduce:
+        case KOp::unary_not:
+        case KOp::logical_not:
+        case KOp::logical_binary:
+        case KOp::shift:
+        case KOp::extract:
+        case KOp::insert:
+        case KOp::concat:
+        case KOp::conditional:
+        case KOp::two_state:
+        case KOp::dynamic_insert:
+        case KOp::dynamic_part_insert:
+        case KOp::integer_binary:
+        case KOp::integer_unary:
+        case KOp::wide_copy:
+        case KOp::wide_const:
+        case KOp::wide_concat:
+            return false;
+        case KOp::dynamic_extract:
+        case KOp::dynamic_part_select:
+            return inst.sub == 1U;
+        default:
+            return true;
+        }
+    };
+    const auto data_use = [&](const std::uint32_t instruction) {
+        for (std::uint32_t index = 0U; index < use_count[instruction]; ++index) {
+            if (data[uses[first_use[instruction] + index]] != 0U) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (std::uint32_t at = 0U; at < nodes; ++at) {
+            const auto instruction = node_at[at];
+            if (controlled[at] == 0U) {
+                for (const auto& [dependent, branch] : std::ranges::equal_range(
+                         dependence, at, {}, &std::pair<std::uint32_t, std::uint32_t>::first)) {
+                    if (controlled[branch] != 0U || data_use(node_at[branch])) {
+                        controlled[at] = 1U;
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+            if (const auto reg = defined[instruction]; reg != no_slot && data[reg] == 0U
+                && (controlled[at] != 0U || data_source(code[instruction])
+                    || data_use(instruction))) {
+                data[reg] = 1U;
+                changed = true;
+            }
+        }
+    }
+    const auto is_static = [&](const std::uint32_t at,
+                               std::initializer_list<std::uint32_t> operands) {
+        return controlled[at] == 0U
+            && std::ranges::none_of(operands, [&](const std::uint32_t reg) {
+                   return reg < registers && data[reg] != 0U;
+               });
+    };
+    // Loops end as they did at time zero: every branch that leaves a loop,
+    // at every nesting depth, is static. Loops are strongly connected
+    // components (Tarjan); inside one, the edges into its headers (the
+    // nodes entered from outside it) are removed and the rest is searched
+    // again for inner loops.
+    {
+        std::vector<std::uint32_t> in_set(nodes, none);
+        std::vector<std::uint8_t> header(nodes, 0U);
+        std::vector<std::uint32_t> component(nodes, none);
+        std::vector<std::uint32_t> order(nodes, none);
+        std::vector<std::uint32_t> low(nodes, 0U);
+        std::vector<std::uint8_t> on_stack(nodes, 0U);
+        std::vector<std::uint32_t> stack;
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> calls;
+        std::vector<std::vector<std::uint32_t>> found;
+        std::vector<std::vector<std::uint32_t>> pending(1U);
+        pending.front().resize(nodes);
+        std::iota(pending.front().begin(), pending.front().end(), 0U);
+        std::uint32_t set = 0U;
+        std::uint32_t next_component = 0U;
+        // The successor of `at` at `position` inside the searched set, or
+        // none.
+        const auto edge = [&](const std::uint32_t at, const std::uint32_t position) {
+            const auto target = successor[at][position];
+            return target < nodes && in_set[target] == in_set[at] && header[target] == 0U
+                ? target : none;
+        };
+        while (!pending.empty()) {
+            const auto subset = std::move(pending.back());
+            pending.pop_back();
+            ++set;
+            for (const auto at : subset) {
+                in_set[at] = set;
+                order[at] = none;
+            }
+            found.clear();
+            std::uint32_t counter = 0U;
+            for (const auto root : subset) {
+                if (order[root] != none) {
+                    continue;
+                }
+                order[root] = low[root] = counter++;
+                stack.push_back(root);
+                on_stack[root] = 1U;
+                calls.assign(1U, { root, 0U });
+                while (!calls.empty()) {
+                    auto& [at, position] = calls.back();
+                    if (position < 2U) {
+                        const auto target = edge(at, position++);
+                        if (target == none) {
+                            continue;
+                        }
+                        if (order[target] == none) {
+                            order[target] = low[target] = counter++;
+                            stack.push_back(target);
+                            on_stack[target] = 1U;
+                            calls.push_back({ target, 0U });
+                        } else if (on_stack[target] != 0U) {
+                            low[at] = std::min(low[at], order[target]);
+                        }
+                        continue;
+                    }
+                    const auto finished = at;
+                    calls.pop_back();
+                    if (!calls.empty()) {
+                        low[calls.back().first]
+                            = std::min(low[calls.back().first], low[finished]);
+                    }
+                    if (low[finished] != order[finished]) {
+                        continue;
+                    }
+                    const auto id = next_component++;
+                    auto& members = found.emplace_back();
+                    for (std::uint32_t popped = none; popped != finished;) {
+                        popped = stack.back();
+                        stack.pop_back();
+                        on_stack[popped] = 0U;
+                        component[popped] = id;
+                        members.push_back(popped);
+                    }
+                    if (members.size() == 1U && edge(finished, 0U) != finished
+                        && edge(finished, 1U) != finished) {
+                        found.pop_back();
+                    }
+                }
+            }
+            for (auto& members : found) {
+                const auto id = component[members.front()];
+                for (const auto at : members) {
+                    if (successor[at][1] == none) {
+                        continue;
+                    }
+                    const bool leaves = std::ranges::any_of(successor[at],
+                        [&](const std::uint32_t target) {
+                            return target == leave
+                                || (target < nodes && component[target] != id);
+                        });
+                    if (leaves && !is_static(at, { code[node_at[at]].x })) {
+                        return "loop";
+                    }
+                }
+                bool entered = false;
+                for (const auto at : members) {
+                    for (auto position = predecessor_begin[at];
+                         position < predecessor_begin[at + 1U]; ++position) {
+                        if (component[predecessors[position]] != id) {
+                            header[at] = 1U;
+                            entered = true;
                         }
                     }
-                }
-                for (std::uint32_t index = 0U; index < successor_count[at]; ++index) {
-                    const auto target = successors[successor_begin[at] + index];
-                    auto* target_in = must.data() + static_cast<std::size_t>(target) * span;
-                    for (std::size_t word = 0U; word < span; ++word) {
-                        target_in[word] = seen[target] != 0U
-                            ? target_in[word] & out[word] : out[word];
+                    if (at == 0U) {
+                        header[at] = 1U;
+                        entered = true;
                     }
-                    seen[target] = 1U;
                 }
+                if (!entered) {
+                    return "loop";
+                }
+                pending.push_back(std::move(members));
             }
         }
     }
@@ -1060,11 +1499,11 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
         }
         return std::nullopt;
     };
-    for (const auto at : postorder) {
-        const auto& inst = code[at];
+    for (std::uint32_t at = 0U; at < nodes; ++at) {
+        const auto& inst = code[node_at[at]];
         switch (inst.op) {
         case KOp::dynamic_extract: {
-            if ((inst.flags & flag_strict) == 0U) {
+            if ((inst.flags & flag_strict) == 0U || is_static(at, { inst.y })) {
                 break;
             }
             const auto index = constant(inst.y);
@@ -1076,7 +1515,7 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
             break;
         }
         case KOp::dynamic_insert: {
-            if ((inst.flags & flag_strict) == 0U) {
+            if ((inst.flags & flag_strict) == 0U || is_static(at, { inst.z })) {
                 break;
             }
             const auto index = constant(inst.z);
@@ -1088,6 +1527,9 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
             break;
         }
         case KOp::dynamic_part_insert: {
+            if (is_static(at, { inst.z })) {
+                break;
+            }
             const auto base = constant(inst.z);
             if (!base) {
                 return "dynamic_part_insert";
@@ -1108,6 +1550,17 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
             }
             break;
         }
+        case KOp::integer_check:
+        case KOp::integer_unary:
+            if (!is_static(at, { inst.x })) {
+                return "integer_data";
+            }
+            break;
+        case KOp::integer_binary:
+            if (!is_static(at, { inst.x, inst.y })) {
+                return "integer_data";
+            }
+            break;
         default:
             break;
         }
@@ -1116,6 +1569,20 @@ const char* Interpreter::Impl::StaticKernel::collapse_impurity(
 }
 
 void Interpreter::Impl::StaticKernel::plan_delta_collapse()
+{
+    // A restored kernel image holds the plan its recording made.
+    auto plan = restored_collapse_ ? std::move(*restored_collapse_)
+                                   : decide_delta_collapse();
+    restored_collapse_.reset();
+    if (recording_image_) {
+        record_collapse_plan(plan);
+        recording_image_.reset();
+    }
+    apply_delta_collapse(plan);
+}
+
+Interpreter::Impl::StaticKernel::CollapsePlan
+Interpreter::Impl::StaticKernel::decide_delta_collapse()
 {
     // The planner admitted members whose readers are collapsed members or
     // run only in a time step's first round, after signals that only
@@ -1126,12 +1593,13 @@ void Interpreter::Impl::StaticKernel::plan_delta_collapse()
     // Members whose compiled code is not pure leave the set, and so do the
     // collapsed writers of what they read (they become ordinary readers).
     const auto count = static_cast<std::uint32_t>(members_.size());
-    const bool allowed = vhdl_ && !host_boundary_ && !has_hosted_
-        && !vhdl_host_cycles_;
+    CollapsePlan plan;
+    plan.allowed = vhdl_ && !host_boundary_ && !has_hosted_ && !vhdl_host_cycles_;
+    const bool allowed = plan.allowed;
     std::vector<std::uint8_t> keep(count, 0U);
     std::vector<std::uint32_t> dropped;
-    std::uint32_t planned = 0U;
-    std::map<std::string, std::size_t> impurities;
+    auto& planned = plan.planned;
+    auto& impurities = plan.impurities;
     for (std::uint32_t index = 0U; index < count; ++index) {
         const auto& member = members_[index];
         if (!member.collapse) {
@@ -1164,26 +1632,68 @@ void Interpreter::Impl::StaticKernel::plan_delta_collapse()
         }
         keep[index] = 1U;
     }
-    std::vector<std::uint32_t> writer(slots_.size(), no_slot);
+    // The collapsed writers whose changes reach a slot in the update phase
+    // that makes them: its own (slice drivers share a slot) and those of
+    // the slots it follows through a wire or a conversion member, which
+    // commit_writes runs in that phase.
+    using SlotPair = std::pair<std::uint32_t, std::uint32_t>;
+    std::vector<SlotPair> slot_writers;
     for (std::uint32_t index = 0U; index < count; ++index) {
         if (keep[index] != 0U) {
             for (const auto slot : members_[index].collapse_outputs) {
-                writer[slot] = index;
+                slot_writers.emplace_back(slot, index);
             }
         }
     }
-    while (!dropped.empty()) {
+    std::vector<SlotPair> slot_sources;
+    for (const auto& wire : wires_) {
+        slot_sources.emplace_back(wire.target, wire.source);
+    }
+    for (std::uint32_t source = 0U; source < slot_conversions_.size(); ++source) {
+        for (const auto member : slot_conversions_[source]) {
+            const auto& write = operation_get<WriteUpdate>(
+                members_[member].operations[members_[member].body_end - 1U]);
+            slot_sources.emplace_back(slot_of_signal_[write.signal], source);
+        }
+    }
+    std::ranges::sort(slot_writers);
+    std::ranges::sort(slot_sources);
+    std::vector<std::uint32_t> visited(slot_writers.empty() ? 0U : slots_.size(), 0U);
+    std::uint32_t epoch = 0U;
+    std::vector<std::uint32_t> pending_slots;
+    const auto for_each_writer = [&](const std::uint32_t slot, const auto& visit) {
+        ++epoch;
+        visited[slot] = epoch;
+        pending_slots.assign(1U, slot);
+        while (!pending_slots.empty()) {
+            const auto at = pending_slots.back();
+            pending_slots.pop_back();
+            for (const auto& [written, member] : std::ranges::equal_range(
+                     slot_writers, at, {}, &SlotPair::first)) {
+                visit(member);
+            }
+            for (const auto& [target, source] : std::ranges::equal_range(
+                     slot_sources, at, {}, &SlotPair::first)) {
+                if (visited[source] != epoch) {
+                    visited[source] = epoch;
+                    pending_slots.push_back(source);
+                }
+            }
+        }
+    };
+    while (!dropped.empty() && !slot_writers.empty()) {
         const auto index = dropped.back();
         dropped.pop_back();
         for (const auto slot : members_[index].collapse_inputs) {
             if (slot == no_slot) {
                 continue;
             }
-            if (const auto source = writer[slot];
-                source != no_slot && keep[source] != 0U) {
-                keep[source] = 0U;
-                dropped.push_back(source);
-            }
+            for_each_writer(slot, [&](const std::uint32_t source) {
+                if (keep[source] != 0U) {
+                    keep[source] = 0U;
+                    dropped.push_back(source);
+                }
+            });
         }
     }
     // Levels: a member after the collapsed writers of its inputs (the
@@ -1201,11 +1711,12 @@ void Interpreter::Impl::StaticKernel::plan_delta_collapse()
         std::ranges::sort(inputs);
         inputs.erase(std::ranges::unique(inputs).begin(), inputs.end());
         for (const auto slot : inputs) {
-            if (const auto source = writer[slot];
-                source != no_slot && keep[source] != 0U) {
-                successors[source].push_back(index);
-                ++indegree[index];
-            }
+            for_each_writer(slot, [&](const std::uint32_t source) {
+                if (keep[source] != 0U) {
+                    successors[source].push_back(index);
+                    ++indegree[index];
+                }
+            });
         }
         if (indegree[index] == 0U) {
             ready.push_back(index);
@@ -1226,20 +1737,36 @@ void Interpreter::Impl::StaticKernel::plan_delta_collapse()
             }
         }
     }
-    collapse_enabled_ = kept != 0U && ordered == kept;
+    if (kept != 0U && ordered == kept) {
+        plan.kept = kept;
+        plan.levels = levels;
+        plan.member_levels.assign(count, 0U);
+        for (std::uint32_t index = 0U; index < count; ++index) {
+            if (keep[index] != 0U) {
+                plan.member_levels[index] = level[index] + 1U;
+            }
+        }
+    }
+    return plan;
+}
+
+void Interpreter::Impl::StaticKernel::apply_delta_collapse(const CollapsePlan& plan)
+{
+    const auto count = static_cast<std::uint32_t>(members_.size());
+    collapse_enabled_ = plan.kept != 0U && plan.member_levels.size() == count;
     for (std::uint32_t index = 0U; index < count; ++index) {
         auto& state = member_schedule_[index];
-        state.collapse = collapse_enabled_ && keep[index] != 0U;
-        state.collapse_level = state.collapse ? level[index] : 0U;
+        state.collapse = collapse_enabled_ && plan.member_levels[index] != 0U;
+        state.collapse_level = state.collapse ? plan.member_levels[index] - 1U : 0U;
     }
-    collapse_buckets_.assign(collapse_enabled_ ? levels : 0U, { });
+    collapse_buckets_.assign(collapse_enabled_ ? plan.levels : 0U, { });
     collapse_low_ = static_cast<std::uint32_t>(collapse_buckets_.size());
-    if (std::getenv("FSIM_PROFILE_PHASES") != nullptr && planned != 0U) {
-        std::cerr << "fsim-profile: static-kernel-collapse planned=" << planned
-                  << " kept=" << (collapse_enabled_ ? kept : 0U)
-                  << " levels=" << (collapse_enabled_ ? levels : 0U)
-                  << (allowed ? "" : " host-boundary");
-        for (const auto& [reason, members] : impurities) {
+    if (std::getenv("FSIM_PROFILE_PHASES") != nullptr && plan.planned != 0U) {
+        std::cerr << "fsim-profile: static-kernel-collapse planned=" << plan.planned
+                  << " kept=" << (collapse_enabled_ ? plan.kept : 0U)
+                  << " levels=" << (collapse_enabled_ ? plan.levels : 0U)
+                  << (plan.allowed ? "" : " host-boundary");
+        for (const auto& [reason, members] : plan.impurities) {
             std::cerr << ' ' << reason << '=' << members;
         }
         std::cerr << '\n';

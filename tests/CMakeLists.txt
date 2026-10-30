@@ -6760,6 +6760,22 @@ if(FSIM_WITH_LLVM)
     TIMEOUT 600)
 endif()
 
+# VHDL delta collapsing: each witness is simulated with and without it, and
+# the exit status, transcript and diagnostics must be equal.
+if(FSIM_WITH_LLVM)
+  add_test(
+    NAME fsim.application.static-kernel-delta-collapse
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/delta_collapse"
+      -P
+      "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/delta_collapse/run_delta_collapse.cmake"
+  )
+  set_tests_properties(fsim.application.static-kernel-delta-collapse PROPERTIES
+    LABELS "application;vhdl;systemverilog;static-kernel;llvm;positive"
+    TIMEOUT 600)
+endif()
+
 # Application cases can create Tcl interpreters directly or launch the CLI
 # from a temporary working directory. Cover both Tcl's native initializer and
 # fsim's override; the separate installed/relocation tests must remain unseeded.

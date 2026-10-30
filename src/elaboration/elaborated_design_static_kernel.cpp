@@ -4223,6 +4223,85 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         })
                 ? 1U : 0U;
         }
+        // A slice driver: another VHDL kernel member may drive the rest of a
+        // collapsed member's output. Each scalar subelement then has one
+        // source (IEEE 1076-2019 14.7.2), so the kernel's commit of each
+        // driver's bits is the signal's value whichever delta each runs in.
+        const auto disjoint_writer = [&](const RegionSignalNode& written,
+                                         const std::size_t index,
+                                         const RegionAccess& writer) {
+            if (writer.process == index) {
+                return true;
+            }
+            if (writer.process >= process_count || !candidates[writer.process]
+                || !candidates[writer.process]->vhdl) {
+                return false;
+            }
+            return std::ranges::none_of(written.writers,
+                [&](const RegionAccess& own) {
+                    return own.process == index
+                        && (own.width == 0U || writer.width == 0U
+                            || (own.offset < writer.offset + writer.width
+                                && writer.offset < own.offset + own.width));
+                });
+        };
+        // Live pure-routing programs (wirings and port drivers): the kernel
+        // copies each in the update phase that changes its source, so its
+        // target changes in the same delta as the source does (IEEE
+        // 1076-2019 14.7.3.3). A collapsed member's change reaches the
+        // targets' readers in the phase the member runs in. A conversion
+        // is not followed: its function may check, assert or report, and
+        // would no longer see the source's intermediate values.
+        std::vector<std::vector<SignalId>> follows(enabled ? process_count : 0U);
+        for (const auto& wiring : driver_wirings) {
+            if (enabled && wiring.live && wiring.program < process_count) {
+                follows[wiring.program].push_back(wiring.target);
+            }
+        }
+        for (const auto& wiring : wirings) {
+            if (enabled && wiring.live && wiring.program < process_count) {
+                follows[wiring.program].push_back(wiring.target);
+            }
+        }
+        const auto followed = [&](const SignalId target) {
+            if (target >= signal_count) {
+                return false;
+            }
+            const auto& node = graph_signals[target];
+            return owned[target] != 0U && alias_role[target] == 0U
+                && host_touched[target] == 0U
+                && node.observations == RegionObservation::none
+                && node.descriptor.observations == RegionObservation::none;
+        };
+        // Calls visit(reader) for each reader of `signal`, directly or
+        // through live pure-routing programs, until it returns false;
+        // false also when a followed target is observable outside the
+        // kernel (no_reader is then the failing reader).
+        constexpr ProcessId no_reader = std::numeric_limits<ProcessId>::max();
+        const auto each_reader = [&](const auto& self, const SignalId signal,
+                                     const auto& visit, ProcessId& failed,
+                                     const std::uint32_t depth) -> bool {
+            for (const auto& reader : graph_signals[signal].readers) {
+                if (reader.process < process_count
+                    && !follows[reader.process].empty()) {
+                    for (const auto target : follows[reader.process]) {
+                        if (depth == 16U || !followed(target)) {
+                            failed = no_reader;
+                            return false;
+                        }
+                        if (!self(self, target, visit, failed, depth + 1U)) {
+                            return false;
+                        }
+                    }
+                    continue;
+                }
+                if (!visit(reader.process)) {
+                    failed = reader.process;
+                    return false;
+                }
+            }
+            return true;
+        };
         for (std::size_t index = 0U; enabled && index < process_count; ++index) {
             const auto& candidate = candidates[index];
             if (!candidate || !candidate->vhdl || !candidate->run_at_start
@@ -4262,7 +4341,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         && written.descriptor.observations == RegionObservation::none
                         && std::ranges::all_of(written.writers,
                             [&](const RegionAccess& writer) {
-                                return writer.process == index;
+                                return disjoint_writer(written, index, writer);
                             });
                 });
             collapse[index] = covered && outputs ? 1U : 0U;
@@ -4297,7 +4376,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             ? "outputs_observed"
                             : !std::ranges::all_of(written.writers,
                                   [&](const RegionAccess& writer) {
-                                      return writer.process == index;
+                                      return disjoint_writer(written, index, writer);
                                   })
                             ? "outputs_writers" : nullptr;
                         if (why[index] != nullptr) {
@@ -4317,44 +4396,36 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (collapse[index] == 0U) {
                     continue;
                 }
+                ProcessId failed = no_reader;
                 const bool readers_ok = std::ranges::all_of(
                     graph_processes[index].writes,
                     [&](const Process::DriverRegion& region) {
-                        return std::ranges::all_of(graph_signals[region.signal].readers,
-                            [&](const RegionAccess& reader) {
-                                return reader.process < process_count
-                                    && reader.process != index
-                                    && (collapse[reader.process] != 0U
-                                        || first_delta[reader.process] != 0U);
-                            });
+                        return each_reader(each_reader, region.signal,
+                            [&](const ProcessId reader) {
+                                return reader < process_count && reader != index
+                                    && (collapse[reader] != 0U
+                                        || first_delta[reader] != 0U);
+                            },
+                            failed, 0U);
                     });
                 if (!readers_ok) {
                     collapse[index] = 0U;
                     changed = true;
-                    if (diagnose) {
+                    if (diagnose && why[index] == nullptr) {
                         // The first reader that fails the rule.
-                        for (const auto& region : graph_processes[index].writes) {
-                            for (const auto& reader : graph_signals[region.signal].readers) {
-                                const auto other = reader.process;
-                                if (why[index] != nullptr
-                                    || (other < process_count && other != index
-                                        && (collapse[other] != 0U
-                                            || first_delta[other] != 0U))) {
-                                    continue;
-                                }
-                                const auto* found = other < process_count
-                                        && candidates[other]
-                                    ? &*candidates[other] : nullptr;
-                                why_reader[index] = other;
-                                why[index] = other == index ? "reader_self"
-                                    : found == nullptr ? "reader_host"
-                                    : found->kind == behavioral_kind
-                                    ? (found->vhdl ? "reader_vhdl_thread" : "reader_sv_thread")
-                                    : !found->vhdl ? "reader_sv"
-                                    : why[other] != nullptr ? "reader_vhdl_rejected"
-                                    : "reader_vhdl_wakes";
-                            }
-                        }
+                        const auto other = failed;
+                        const auto* found = other < process_count
+                                && candidates[other]
+                            ? &*candidates[other] : nullptr;
+                        why_reader[index] = other;
+                        why[index] = other == no_reader ? "reader_follow_observed"
+                            : other == index ? "reader_self"
+                            : found == nullptr ? "reader_host"
+                            : found->kind == behavioral_kind
+                            ? (found->vhdl ? "reader_vhdl_thread" : "reader_sv_thread")
+                            : !found->vhdl ? "reader_sv"
+                            : why[other] != nullptr ? "reader_vhdl_rejected"
+                            : "reader_vhdl_wakes";
                     }
                 }
             }
@@ -4367,11 +4438,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             const auto for_each_successor = [&](const std::size_t index,
                                                 const auto& visit) {
                 for (const auto& region : graph_processes[index].writes) {
-                    for (const auto& reader : graph_signals[region.signal].readers) {
-                        if (collapse[reader.process] != 0U) {
-                            visit(reader.process);
-                        }
-                    }
+                    ProcessId failed = no_reader;
+                    each_reader(each_reader, region.signal,
+                        [&](const ProcessId reader) {
+                            if (reader < process_count && collapse[reader] != 0U) {
+                                visit(reader);
+                            }
+                            return true;
+                        },
+                        failed, 0U);
                 }
             };
             for (std::size_t index = 0U; index < process_count; ++index) {

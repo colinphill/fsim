@@ -1367,7 +1367,7 @@ void Interpreter::Impl::StaticKernel::effect_slow_op(const CompiledBody& body,
         }
         if ((inst.flags & flag_blocking) != 0U) {
             // Shared variable: immediate.
-            slot.last_writer = member_process_[member_index];
+            last_writer_[resolved] = member_process_[member_index];
             const WordSnapshot before(
                 arena_.data() + slot.offset, slot.planes * slot.words);
             store_slot_word(resolved, x, offset, inst.width, z.a);
@@ -2126,7 +2126,7 @@ void Interpreter::Impl::StaticKernel::execute_wide(const CompiledBody& body,
         };
         if (inst.sub == 2U && (inst.flags & flag_blocking) != 0U) {
             // A shared variable: immediate, one change report.
-            slot.last_writer = member_process_[member_index];
+            last_writer_[resolved] = member_process_[member_index];
             const WordSnapshot before(
                 arena_.data() + slot.offset, slot.planes * slot.words);
             for (std::uint32_t chunk = 0U; chunk < chunks; ++chunk) {

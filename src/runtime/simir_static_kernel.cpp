@@ -23,6 +23,7 @@
 #include "simir_container_helpers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cstring>
@@ -218,9 +219,12 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         stage("image");
     } else {
         build_fresh(spec, stage);
-        if (spec.record_kernel_image
-            && !record_image(spec, *spec.record_kernel_image)) {
-            spec.record_kernel_image->clear();
+        if (spec.record_kernel_image) {
+            if (record_image(spec, *spec.record_kernel_image)) {
+                recording_image_ = spec.record_kernel_image;
+            } else {
+                spec.record_kernel_image->clear();
+            }
         }
     }
     if (std::getenv("FSIM_STATIC_KERNEL_GENERIC") == nullptr) {
@@ -1180,7 +1184,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
     for (auto& slot : slots_) {
         if (slot.writers.size() == 1U) {
             slot.last_writer = slot.writers.front().process;
-            slot.single_writer = true;
+            slot.tracks_writer = false;
             continue;
         }
         ordered_writers.assign(slot.writers.begin(), slot.writers.end());
@@ -1194,12 +1198,15 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                 slot.disjoint_writers = false;
             }
         }
+        // Writers the plan does not know (procedural writes to a variable)
+        // are tracked as they write.
+        slot.tracks_writer = true;
         if (!slot.writers.empty()) {
             slot.last_writer = slot.writers.front().process;
-            slot.single_writer = std::ranges::all_of(slot.writers,
-                [&](const auto& writer) {
-                    return writer.process == slot.last_writer;
-                });
+            slot.tracks_writer = !slot.disjoint_writers
+                && !std::ranges::all_of(slot.writers, [&](const auto& writer) {
+                       return writer.process == slot.last_writer;
+                   });
         }
     }
 
@@ -1796,6 +1803,25 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
             }
         }
         std::ranges::sort(ranked, std::greater<> { });
+        // Changes by what makes their slot general (a slot counts under
+        // each of its reasons) and those of plain slots.
+        std::array<std::uint64_t, 7U> reasons { };
+        for (const auto& [changes, index] : ranked) {
+            const auto& slot = slots_[index];
+            const bool waitable
+                = index < slot_waitable_.size() && slot_waitable_[index] != 0U;
+            reasons[0] += slot_notify_[index].general ? 0U : changes;
+            reasons[1] += slot.ranged.empty() ? 0U : changes;
+            reasons[2] += slot.output ? changes : 0U;
+            reasons[3] += slot.edges.empty() ? 0U : changes;
+            reasons[4] += slot.tracks_writer ? changes : 0U;
+            reasons[5] += waitable ? changes : 0U;
+            reasons[6] += slot.writers.empty() ? changes : 0U;
+        }
+        std::cerr << "fsim-kernel: slot change reasons plain=" << reasons[0]
+                  << " ranged=" << reasons[1] << " output=" << reasons[2]
+                  << " edges=" << reasons[3] << " writers=" << reasons[4]
+                  << " waitable=" << reasons[5] << " no_writer=" << reasons[6] << '\n';
         for (std::size_t rank = 0U; rank < ranked.size() && rank < 16U; ++rank) {
             const auto& slot = slots_[ranked[rank].second];
             std::cerr << "fsim-kernel: slot changes=" << ranked[rank].first
@@ -1807,7 +1833,20 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
                       << " ranged=" << slot.ranged.size()
                       << " output=" << (slot.output ? 1 : 0)
                       << " edges=" << slot.edges.size()
-                      << " single_writer=" << (slot.single_writer ? 1 : 0) << '\n';
+                      << " tracks_writer=" << (slot.tracks_writer ? 1 : 0)
+                      << " writers=" << slot.writers.size();
+            for (std::size_t writer = 0U; writer < slot.writers.size() && writer < 3U;
+                 ++writer) {
+                const auto process = slot.writers[writer].process;
+                const auto member = std::ranges::find(member_process_, process);
+                const auto at = static_cast<std::size_t>(member - member_process_.begin());
+                std::cerr << ' '
+                          << (at < profile_names_.size() ? profile_names_[at]
+                                                         : "process" + std::to_string(process))
+                          << '[' << slot.writers[writer].offset << ':'
+                          << slot.writers[writer].width << ']';
+            }
+            std::cerr << '\n';
         }
     }
     std::cerr << "fsim-kernel: activations=" << profile_activations_
@@ -2260,6 +2299,9 @@ void Interpreter::Impl::StaticKernel::native_notify(
             // The leader: a slot with whole-slot readers only.
             kernel.scratch_.running_position = frame->position;
             const auto notify = kernel.slot_notify_[slot];
+            if (notify.tracks) {
+                kernel.last_writer_[slot] = kernel.member_process_[frame->member];
+            }
             if (!notify.general) {
                 for (auto index = notify.begin; index < notify.end; ++index) {
                     kernel.schedule_target_serial(kernel.notify_targets_[index]);
@@ -2268,11 +2310,8 @@ void Interpreter::Impl::StaticKernel::native_notify(
             }
         }
         kernel.scratch().running_position = frame->position;
-        // Only a general slot can have several writers.
-        if (kernel.slot_notify_[slot].general) {
-            if (auto& state = kernel.slots_[slot]; !state.single_writer) {
-                state.last_writer = kernel.member_process_[frame->member];
-            }
+        if (kernel.slot_notify_[slot].tracks) {
+            kernel.last_writer_[slot] = kernel.member_process_[frame->member];
         }
         kernel.slot_changed(slot, changed, nullptr);
     } catch (...) {
@@ -2293,6 +2332,9 @@ void Interpreter::Impl::StaticKernel::native_notify_field(
         if (kernel.worker_lane_ == nullptr && !kernel.profile_) {
             kernel.scratch_.running_position = frame->position;
             const auto notify = kernel.slot_notify_[slot];
+            if (notify.tracks) {
+                kernel.last_writer_[slot] = kernel.member_process_[frame->member];
+            }
             if (!notify.general) {
                 for (auto index = notify.begin; index < notify.end; ++index) {
                     kernel.schedule_target_serial(kernel.notify_targets_[index]);
@@ -2301,10 +2343,8 @@ void Interpreter::Impl::StaticKernel::native_notify_field(
             }
         }
         kernel.scratch().running_position = frame->position;
-        if (kernel.slot_notify_[slot].general) {
-            if (auto& state = kernel.slots_[slot]; !state.single_writer) {
-                state.last_writer = kernel.member_process_[frame->member];
-            }
+        if (kernel.slot_notify_[slot].tracks) {
+            kernel.last_writer_[slot] = kernel.member_process_[frame->member];
         }
         kernel.slot_changed(slot, changed, nullptr, field_offset);
     } catch (...) {
@@ -2318,8 +2358,8 @@ void Interpreter::Impl::StaticKernel::write_slot_word(
     const std::uint32_t width, const std::uint32_t member)
 {
     auto& slot = slots_[slot_index];
-    if (!slot.single_writer) {
-        slot.last_writer = member_process_[member];
+    if (slot_notify_[slot_index].tracks) {
+        last_writer_[slot_index] = member_process_[member];
     }
     if (slot.words != 1U) {
         auto* a = arena_.data() + slot.offset;
@@ -2395,7 +2435,7 @@ void Interpreter::Impl::StaticKernel::write_slot_value(
             offset.value_or(0U), width, member);
         return;
     }
-    slot.last_writer = member_process_[member];
+    last_writer_[slot_index] = member_process_[member];
     auto next = offset ? insert_value(slot_value(slot_index), value, *offset)
                        : value;
     const WordSnapshot before(arena_.data() + slot.offset, 2U * slot.words);
@@ -2446,7 +2486,7 @@ void Interpreter::Impl::StaticKernel::write_slot_immediate(
         fail(member, instruction,
             "static kernel write width does not match its signal");
     }
-    slot.last_writer = member_process_[member];
+    last_writer_[slot_index] = member_process_[member];
     const WordSnapshot before(
         arena_.data() + slot.offset, slot.planes * slot.words);
     store_slot_bits(slot_index, value, offset.value_or(0U));
@@ -2544,6 +2584,7 @@ void Interpreter::Impl::StaticKernel::run_collapsed()
         }
         collapse_batch_.swap(bucket);
         collapse_pending_ -= collapse_batch_.size();
+        collapse_floor_ = level + 1U;
         std::ranges::sort(collapse_batch_);
         for (const auto member : collapse_batch_) {
             member_schedule_[member].collapse_queued = false;
@@ -2556,6 +2597,7 @@ void Interpreter::Impl::StaticKernel::run_collapsed()
         commit_writes();
     }
     collapse_low_ = static_cast<std::uint32_t>(collapse_buckets_.size());
+    collapse_floor_ = 0U;
 }
 
 void Interpreter::Impl::StaticKernel::commit_writes()
@@ -2570,7 +2612,7 @@ void Interpreter::Impl::StaticKernel::commit_writes()
             commit.offset = slots_[index].offset;
             commit.words = slots_[index].words;
             commit.planes = static_cast<std::uint8_t>(slots_[index].planes);
-            commit.single_writer = slots_[index].single_writer;
+            commit.tracks_writer = slots_[index].tracks_writer;
         }
     }
     const auto touch = [&](const std::uint32_t slot_index) -> CommitSlot& {
@@ -2616,8 +2658,8 @@ void Interpreter::Impl::StaticKernel::commit_writes()
         const auto& item = writes_.data[index];
         if (item.kind == 0U) {
             auto& pending = commit_slots_[item.slot];
-            if (!pending.single_writer) {
-                slots_[item.slot].last_writer = member_process_[item.member];
+            if (pending.tracks_writer) {
+                last_writer_[item.slot] = member_process_[item.member];
             }
             if (!pending.touched && item.offset + item.width <= 64U) {
                 // Most assignments rewrite the value a signal already
@@ -2670,7 +2712,7 @@ void Interpreter::Impl::StaticKernel::commit_writes()
                     + std::to_string(width) + ")");
         }
         touch(slot_index);
-        slot.last_writer = member_process_[entry.member];
+        last_writer_[slot_index] = member_process_[entry.member];
         store_slot_bits(slot_index, value,
             entry.kind == PendingKind::slice ? entry.offset : 0U);
     }
@@ -3618,6 +3660,7 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
         queue.cursor = static_cast<std::uint32_t>(queue.bits.size());
     }
     slot_notify_.resize(slots_.size());
+    last_writer_.resize(slots_.size());
     notify_targets_.clear();
     for (std::size_t index = 0U; index < slots_.size(); ++index) {
         const auto& slot = slots_[index];
@@ -3627,8 +3670,10 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
             notify_targets_.end(), slot.targets.begin(), slot.targets.end());
         notify.end = static_cast<std::uint32_t>(notify_targets_.size());
         notify.general = !slot.ranged.empty() || slot.output
-            || !slot.edges.empty() || !slot.single_writer
+            || !slot.edges.empty()
             || (index < slot_waitable_.size() && slot_waitable_[index] != 0U);
+        notify.tracks = slot.tracks_writer;
+        last_writer_[index] = slot.last_writer;
     }
     if (profile_ && std::getenv("FSIM_PROFILE_KERNEL_SLOTS") != nullptr) {
         profile_slot_change_counts_.assign(slots_.size(), 0U);
@@ -3671,6 +3716,10 @@ void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
     if (state.collapse && collapsing_) {
         // Runs in this update phase (run_collapsed).
         if (!state.collapse_queued) {
+            if (state.collapse_level < collapse_floor_) {
+                throw std::logic_error(
+                    "static kernel collapsed member woken below its writer's level");
+            }
             state.collapse_queued = true;
             collapse_buckets_[state.collapse_level].push_back(member);
             collapse_low_ = std::min(collapse_low_, state.collapse_level);
@@ -4172,8 +4221,17 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
             kind);
     }
     {
+        // The compiled run emitted the run's reports; the replay's are the
+        // same messages (a difference shows in the writes or registers).
         const InterpretingScope scope { *this, InterpretedCause::verify };
-        run_generic_from(member_index, member.body_begin);
+        replaying_ = true;
+        try {
+            run_generic_from(member_index, member.body_begin);
+        } catch (...) {
+            replaying_ = false;
+            throw;
+        }
+        replaying_ = false;
     }
     const auto reference_writes = writes();
     std::string mismatch;
@@ -4918,7 +4976,8 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 }
             } else if constexpr (std::is_same_v<T, Assert>) {
                 const auto& condition = reg(op.condition, pc);
-                if (condition.width() != 1U || condition.get(0) != Logic4::one) {
+                if ((condition.width() != 1U || condition.get(0) != Logic4::one)
+                    && !(replaying_ && op.severity != AssertionSeverity::failure)) {
                     const auto message = op.message.empty()
                         ? std::string_view { "assertion failed" }
                         : std::string_view { op.message };
@@ -4953,6 +5012,9 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 // IEEE 1076-2019 10.9: the message goes through the
                 // assertion hook (in 2019 mode, report_vhdl). On a worker
                 // the leader emits it in the replay.
+                if (replaying_ && op.severity != AssertionSeverity::failure) {
+                    return;
+                }
                 if (auto* const lane = worker_lane_;
                     lane != nullptr && op.severity != AssertionSeverity::failure) {
                     LaneOutput output;
@@ -5488,9 +5550,9 @@ void Interpreter::Impl::StaticKernel::publish(
                 }
             }
         } else if (commit_now) {
-            impl_.commit_driver(slot.last_writer, slot.signal, value);
+            impl_.commit_driver(last_writer_[slot_index], slot.signal, value);
         } else {
-            impl_.stage_update(slot.last_writer, slot.signal, value, domain);
+            impl_.stage_update(last_writer_[slot_index], slot.signal, value, domain);
         }
         std::copy_n(arena_.begin() + slot.offset, slot.planes * slot.words,
             arena_.begin() + slot.published);
@@ -6654,7 +6716,7 @@ void Interpreter::Impl::StaticKernel::materialize(const SignalId signal)
             }
         }
     } else {
-        impl_.commit_driver(slot.last_writer, signal, value);
+        impl_.commit_driver(last_writer_[slot_index], signal, value);
     }
 }
 

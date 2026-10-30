@@ -704,9 +704,13 @@ private:
         /// (IEEE 1800-2023 4.5): readers see the value only after the commit,
         /// so no reader can be ordered after the writer within one pass.
         bool deferred_write { };
+        /// The first writer; the run's last one is last_writer_[slot].
         ProcessId last_writer { };
-        /// Every writer is one process, so last_writer never changes.
-        bool single_writer { };
+        /// Writes record their member's process in last_writer_: the slot has
+        /// several writer processes and publish and materialize commit its
+        /// value as the last one's (their regions overlap or are not known;
+        /// disjoint writers commit each their own region).
+        bool tracks_writer { };
         /// A mirror of a host signal members read; refreshed by scan_inputs.
         bool mirror { };
     };
@@ -1237,13 +1241,18 @@ private:
         std::uint32_t queue_slot { static_kernel_detail::no_slot };
     };
     /// Whole-slot targets [begin, end) in notify_targets_. `general` marks
-    /// a slot that also has ranged readers, an output, edges or several
-    /// writers, which slot_changed handles from the full Slot record.
+    /// a slot that also has ranged readers, an output, edges, waiters or
+    /// which slot_changed handles from the full Slot record. `tracks` marks
+    /// a slot whose writes record their process (Slot::tracks_writer).
     struct SlotNotify {
         std::uint32_t begin { };
         std::uint32_t end { };
         bool general { };
+        bool tracks { };
     };
+    /// Per slot, the process of its last write where Slot::tracks_writer
+    /// (publish and materialize commit the value as that process's).
+    std::vector<ProcessId> last_writer_;
     std::vector<MemberSchedule> member_schedule_;
     std::vector<std::uint8_t> partition_queued_;
     std::vector<std::uint32_t> partition_level_;
@@ -1518,6 +1527,33 @@ private:
     std::vector<std::uint32_t> collapse_batch_;
     std::size_t collapse_pending_ { };
     std::uint32_t collapse_low_ { };
+    /// While run_collapsed commits a level, the lowest level its changes
+    /// may wake (the planner orders every reader above its writers).
+    std::uint32_t collapse_floor_ { };
+    /// FSIM_KERNEL_VERIFY's reference replay of a compiled run
+    /// (verify_run): its reports repeat the compiled run's and are not
+    /// emitted again.
+    bool replaying_ { };
+    /// What plan_delta_collapse decided: per member its level + 1 (0 when
+    /// not collapsed), and the counts FSIM_PROFILE_PHASES reports. A kernel
+    /// image holds it after build_fresh's state; restore_image keeps it in
+    /// restored_collapse_, and a recorded image gets it appended
+    /// (recording_image_, set while the constructor records one).
+    struct CollapsePlan {
+        std::uint32_t planned { };
+        std::uint32_t kept { };
+        std::uint32_t levels { };
+        bool allowed { };
+        std::map<std::string, std::size_t> impurities;
+        std::vector<std::uint32_t> member_levels;
+    };
+    std::optional<CollapsePlan> restored_collapse_;
+    std::shared_ptr<std::string> recording_image_;
+    /// plan_delta_collapse's parts: deciding (the analysis), applying, and
+    /// appending the plan to the image being recorded.
+    [[nodiscard]] CollapsePlan decide_delta_collapse();
+    void apply_delta_collapse(const CollapsePlan& plan);
+    void record_collapse_plan(const CollapsePlan& plan);
     std::vector<std::uint32_t> next_round_;
     /// The round being run (swapped with next_round_ to keep capacity).
     std::vector<std::uint32_t> round_;
@@ -2237,7 +2273,7 @@ private:
         std::uint32_t words { };
         std::uint8_t planes { };
         bool touched { };
-        bool single_writer { };
+        bool tracks_writer { };
     };
     std::vector<CommitSlot> commit_slots_;
     /// Kernel wiring (static_kernel_wiring): the update phase that changes

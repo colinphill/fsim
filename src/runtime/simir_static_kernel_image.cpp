@@ -6,7 +6,9 @@
 // planning members, levels and partitions again. The image holds every
 // field build_fresh writes except the member operations, which are expanded
 // again from the programs (they are the design's own), and the native view
-// of the containers, which is derived from the containers and slots.
+// of the containers, which is derived from the containers and slots. The
+// VHDL delta-collapse plan, which the constructor makes after the native
+// and schedule stages, follows that state (record_collapse_plan).
 //
 // The bytes are BodyWriter varints, field by field in declaration order
 // (boost::pfr), and are read back only by the same build: the cache key
@@ -18,6 +20,7 @@
 #include <boost/pfr.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -416,7 +419,19 @@ bool Interpreter::Impl::StaticKernel::record_image(
     ImageWriter writer { out };
     writer.write(std::string { image_magic });
     writer.write(digest);
-    visit_image_fields(*this, [&](const auto& field) { writer.write(field); });
+    // FSIM_PROFILE_PHASES: the bytes of each field, in visit order.
+    const bool sizes = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    std::string field_sizes;
+    visit_image_fields(*this, [&](const auto& field) {
+        const auto before = out.size();
+        writer.write(field);
+        if (sizes) {
+            field_sizes += ' ' + std::to_string(out.size() - before);
+        }
+    });
+    if (sizes) {
+        std::cerr << "fsim-profile: static-kernel-image fields" << field_sizes << '\n';
+    }
     writer.write(not_compiled_reason_.size());
     for (const char* reason : not_compiled_reason_) {
         writer.write(reason != nullptr);
@@ -431,6 +446,20 @@ bool Interpreter::Impl::StaticKernel::record_image(
     }
     note_image("record", "recorded", out.size());
     return true;
+}
+
+void Interpreter::Impl::StaticKernel::record_collapse_plan(const CollapsePlan& plan)
+{
+    // record_image wrote build_fresh's state; the constructor plans
+    // collapsing after the native and schedule stages, so the plan follows.
+    if (recording_image_->empty()) {
+        return;
+    }
+    ImageWriter writer { *recording_image_ };
+    writer.write(plan);
+    if (!writer.ok()) {
+        recording_image_->clear();
+    }
 }
 
 bool Interpreter::Impl::StaticKernel::restore_image(
@@ -453,6 +482,18 @@ bool Interpreter::Impl::StaticKernel::restore_image(
     if (!spec.kernel_image || spec.kernel_image->empty()) {
         return refuse("none");
     }
+    // FSIM_PROFILE_PHASES: `static-kernel-image-stage NAME_ms=` per part.
+    const bool stages = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    auto stage_started = std::chrono::steady_clock::now();
+    const auto stage = [&](const char* name) {
+        if (stages) {
+            const auto now = std::chrono::steady_clock::now();
+            std::cerr << "fsim-profile: static-kernel-image-stage " << name << "_ms="
+                      << std::chrono::duration<double, std::milli>(now - stage_started).count()
+                      << '\n';
+            stage_started = now;
+        }
+    };
     ImageReader reader { *spec.kernel_image };
     std::string magic;
     std::uint64_t digest { };
@@ -467,7 +508,8 @@ bool Interpreter::Impl::StaticKernel::restore_image(
         visit_image_fields(*this, [&](auto& field) { ok = ok && reader.read(field); });
     }
     std::vector<std::optional<std::string>> reasons;
-    ok = ok && reader.read(reasons) && reader.done();
+    CollapsePlan collapse;
+    ok = ok && reader.read(reasons) && reader.read(collapse) && reader.done();
     if (!ok && failure == nullptr) {
         failure = "fields";
     }
@@ -479,7 +521,13 @@ bool Interpreter::Impl::StaticKernel::restore_image(
         && input_of_signal_.size() == signal_count
         && mirror_of_signal_.size() == signal_count
         && container_of_object_.size() == impl_.container_objects.size()
-        && (reasons.empty() || reasons.size() == members_.size());
+        && (reasons.empty() || reasons.size() == members_.size())
+        && (collapse.member_levels.empty()
+            || (collapse.member_levels.size() == members_.size()
+                && std::ranges::all_of(collapse.member_levels,
+                    [&](const std::uint32_t level) {
+                        return level <= collapse.levels;
+                    })));
     if (!ok && failure == nullptr) {
         failure = "shape";
     }
@@ -487,6 +535,7 @@ bool Interpreter::Impl::StaticKernel::restore_image(
     // conversion's resolver program rewritten, a SystemVerilog member's calls
     // inlined in its body, and a VHDL member's specialization (from the
     // persisted specializations) appended.
+    stage("decode");
     std::unordered_map<ProcessId, StaticKernelSpecialization*> specialized;
     if (spec.specializations) {
         for (auto& entry : spec.specializations->members) {
@@ -631,6 +680,7 @@ bool Interpreter::Impl::StaticKernel::restore_image(
             impl_.static_kernel_region_host_phase = member.phase;
         }
     }
+    stage("operations");
     plan_conversions_and_wires(spec);
     image_reasons_.clear();
     image_reasons_.reserve(reasons.size());
@@ -643,6 +693,8 @@ bool Interpreter::Impl::StaticKernel::restore_image(
     }
     build_container_info();
     fast_runs_.assign(members_.size(), FastRun { });
+    restored_collapse_ = std::move(collapse);
+    stage("finish");
     note_image("restore", "restored", spec.kernel_image->size());
     return true;
 }
