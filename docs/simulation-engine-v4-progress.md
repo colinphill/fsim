@@ -138,6 +138,56 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-30: Phase 7 first gate — known-value collapse guard, range certificates, warp-collapse fix (`5a92a2e0`, sweeps `v4c58`, `v4c58a`)
+
+Plan: `.local-artifacts/v4-migration/triage/phase7-cycle-based-plan-1030.md` (Phase 7, cycle-based evaluation; owner GO 2026-10-30).
+
+**What landed in `5a92a2e0`:**
+- **P0 instrumentation.** The collapse refusal census, the unknown-after-reset census, the elaborate stage timers and the P1 domain report.
+- **P0.3.** Outlined per-store helper. It is off by default: outlining costs run time in the cold tier.
+- **P2 certificates 1 and 2.**
+  - An abstract-execution range certificate for loop counters and dynamic part inserts.
+  - Admission of op 52.
+- **P2 certificate 4 (known-value guard).** Collapse members whose metavalue assertions cannot fire while every group input holds a strong 0/1 are collapsed under a guard. A step with an unknown input runs on the delta schedule.
+  - The prover tracks per-bit known masks for narrow and wide values, and reads an aliasing snapshot when an instruction redefines its own operand.
+  - Only collapse inputs count as known sources.
+  - A wired port counts as known only when its outside writers map one-to-one onto wire ranges.
+- **Warp-collapse fix.**
+- **Collapse census (kept members):**
+
+  | Design | Before | After | Guarded | Invariant throws | Output |
+  |---|---:|---:|---:|---:|---|
+  | mixed_codec | 5520 | 5637 | 301 | 0 | identical |
+  | mixed_throughput | 2270 | 3358 | 299 | 0 | identical |
+
+**Testing record** (as in the commit message):
+- Full ctest ran on the code before the final wired-rule change. `FSIM_KERNEL_VERIFY` passed 1090/1090.
+- In the normal, strict and MT4 variants, the only failure was `fsim.source-package-manifest`; normal and strict also failed `fsim.uvm-closure-audit`, and offline-producer-consumer-closure did not run. The cause was missing fixture entries and a stray `node_modules`.
+- Those tests passed in all four variants after the fix.
+- The final change ran only the static-kernel tests and the census.
+
+**Gate:**
+- Normal sweep `v4c58` (frozen `5a92a2e0`): 0 losses against `v4c57` in all six suites.
+- AOT sweep `v4c58a`: 0 losses against `v4c57a`.
+- Census `v4c58`: 0 losses against `b96x1`.
+- vgate: mixed_codec and mixed_throughput transcripts are identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 members kept.
+
+**D6 campaign `v4c58-g5`** (3 samples, CPU 9):
+
+| Measure | v4c57 | v4c58 |
+|---|---:|---:|
+| Geomean e2e (× xsim) | 3.67× | 3.72× |
+| Minimum simulate (× xsim) | 3.67× | 3.63× (mixed_codec) |
+
+- mixed_codec simulate went from 1.780 to 1.832 s (+3%). The likely cause is the guard checks of the newly kept members; no A/B was run.
+- Every other simulate phase is within ±1%.
+- The e2e floor of 3.5× holds.
+
+**Found during the gate, not fixed** (plan section "Pre-existing exactness bug"):
+- Elaboration narrows `process (clk) if rising_edge(clk)` to a Verilog posedge wake and strips the test. Such a process therefore counts U→1, 0→X and X→1 as rising edges: 5 against the LRM's 2 on the witness, on both engines.
+- Keeping the test exact demotes the flops to threads (mixed_codec 27.8 s), so the proposed fix is a strict VHDL edge kind. It awaits an owner decision.
+
 ### 2026-10-30: Phase 6 third gate — notify skip (S1), VHDL unchanged-write skip, collapse witnesses; Phase 6 static scheduling closed (`83f52168`, sweeps `v4c57`, `v4c57a`)
 
 **Gate** (five changesets):
