@@ -138,6 +138,63 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-30: Phase 7 second gate — P1 domain report, strict VHDL edges, P3 driver v0 measured and stopped (`9c177cf0`, sweeps `v4c59`, `v4c59a`)
+
+Plan: `.local-artifacts/v4-migration/triage/phase7-cycle-based-plan-1030.md`. The owner decisions of this gate are in its sections after "P0.2 results".
+
+**What landed in `9c177cf0`:**
+- **P1 domain report** (`FSIM_PROFILE_KERNEL_DOMAINS=1`). It is a report only; admission that cycle code may rely on needs a proof over the branch structure. It covers:
+  - flops per edge, including asynchronous controls and VHDL edge threads;
+  - derived clocks with their parents;
+  - gated clocks, screened for same-edge enables and same-phase latches;
+  - buffered clocks: one leaf, no enables, one delta depth;
+  - cones per domain, with their testbench inputs;
+  - each member's admission status, and the admitted share of members and, under `FSIM_PROFILE_KERNEL`, of runs.
+- **Strict VHDL edges** (fixes the bug found at the first gate, owner approved). `EdgeKind::rising` and `falling` are Logic4 0→1 and 1→0 after To_X01 (IEEE 1076-2008 16.7). Narrowed `rising_edge`/`falling_edge` processes wake on them, and every edge decision site knows them.
+  - The witness now counts 2 rising edges on both engines (5 before).
+  - mixed_codec is unchanged: 253 sequential flops, transcript identical.
+- **P3 driver v0** behind `FSIM_CYCLE_DRIVER=1`, off by default. A SystemVerilog dispatch group whose members have no register live at entry runs as one concatenated native body. `concatenate_members` is now shared with partitions.
+- **Test** `fsim.application.static-kernel-clock-domains`: divider chain, latch clock gate, glitchy AND gate, strict edges, buffered clock.
+
+**P1 results:**
+- D6 admitted share of members:
+
+  | Design | Members admitted |
+  |---|---|
+  | mixed_codec / mixed_throughput | 79–81% |
+  | original_codec / original_throughput | 78% / 65% |
+  | codex designs | 93% |
+
+- In the D6 designs, every member run outside threads and once members is in an admitted domain, except the testbench-only combinational stimulus logic of the SystemVerilog originals: 21% and 35% of member runs.
+- The VHDL corpora pass with the report on (vests 3663, nvc 1259, vhdl-compliance 65). They are almost all testbench-style designs: 34 nvc cases have a domain, there are no derived or gated clocks, and one converted clock led to the buffered-clock rule.
+
+**P3 driver v0 measured** (original_throughput; host load average 1.4–4, interleaved, so indicative):
+- With default tiering the fused body (23.8 k instructions) gets the fast backend: instructions −4.8%, cycles +6%, run +7%.
+- With the optimizing backend: instructions −11%, cycles −3%, run about −40 ms, at about +9 s of elaborate.
+- The criterion was the 0.22 s scheduling bound and ≤ 2.5× Verilator for the run phase. The run phase stays at about 3.3–3.5×, and the bound is not reached by dispatch changes: member compute and the write and change-detection path dominate.
+- **Owner decision:** stop the P3 driver work, keep v0 committed off by default, P4 (two-state) next. A driver-free P4 plan with its measured gain goes to the owner before any P4 code.
+
+**Gate** (five changesets):
+- ct4: 1091/1091 in all four variants, plus a fifth full pass with `FSIM_CYCLE_DRIVER=1`, also 1091/1091.
+- Normal sweep `v4c59` (frozen `9c177cf0`): 0 losses against `v4c58` in all six suites.
+- AOT sweep `v4c59a`: 0 losses against `v4c58a`.
+- Census `v4c59`: 0 losses against `b96x1`.
+- vgate: mixed_codec and mixed_throughput identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+**D6 campaign `v4c59-g5`** (3 samples, CPU 9):
+
+| Measure | v4c58 | v4c59 |
+|---|---:|---:|
+| Geomean e2e (× xsim) | 3.72× | 3.76× |
+| Minimum simulate (× xsim) | 3.63× | 3.55× (mixed_codec) |
+
+- fsim's simulate phases are unchanged within ±4% (mixed_codec 1.832 → 1.829 s).
+- The lower minimum comes from xsim, whose mixed_codec simulate phase measured 6.49 s against 6.65 s at v4c58.
+- The e2e floor of 3.5× holds.
+
+**Side finding, outside Phase 7:** `to_bit` on a `std_logic` port fails to elaborate (FSIM-ELAB-VHLOGIC-002) when a SystemVerilog module drives the port, because the port register is not Logic9. Repro in the plan doc; not scheduled.
+
 ### 2026-10-30: Phase 7 first gate — known-value collapse guard, range certificates, warp-collapse fix (`5a92a2e0`, sweeps `v4c58`, `v4c58a`)
 
 Plan: `.local-artifacts/v4-migration/triage/phase7-cycle-based-plan-1030.md` (Phase 7, cycle-based evaluation; owner GO 2026-10-30).
