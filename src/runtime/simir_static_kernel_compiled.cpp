@@ -1919,6 +1919,10 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         inst.op = KOp::store_vhdl;
                         inst.d = *slot;
                         inst.flags = blocking ? flag_blocking : 0U;
+                        // The target's shape, for generated code's check of
+                        // an unchanged assignment (words per plane, planes).
+                        inst.imm_a = slots_[*slot].words;
+                        inst.imm_b = slots_[*slot].planes;
                     } else {
                         SignalUpdateDomain domain = SignalUpdateDomain::generic;
                         if constexpr (std::is_same_v<T, WriteUpdate>

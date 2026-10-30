@@ -96,6 +96,11 @@ static_assert(offsetof(StaticKernelNativeFrame, reserved) == 44U);
 static_assert(offsetof(StaticKernelNativeFrame, writes) == 56U);
 static_assert(offsetof(StaticKernelNativeFrame, containers) == 64U);
 static_assert(offsetof(StaticKernelNativeFrame, boundary) == 72U);
+static_assert(offsetof(StaticKernelNativeFrame, fast_notify) == 80U);
+static_assert(offsetof(StaticKernelNativeFrame, partition_queued) == 88U);
+static_assert(offsetof(StaticKernelNativeFrame, running_partition) == 96U);
+static_assert(offsetof(StaticKernelNativeFrame, write_round) == 100U);
+static_assert(offsetof(StaticKernelNativeFrame, write_marks) == 104U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, slot) == 4U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, count) == 8U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, left) == 16U);
@@ -1795,7 +1800,7 @@ private:
         builder_.CreateStore(
             builder_.CreateAdd(count, llvm::ConstantInt::get(i32_, 1U)),
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
-        builder_.CreateBr(done);
+        emit_write_mark(location.slot, done);
         builder_.SetInsertPoint(slow);
         call_effect(at, value, index, zero_pair());
         builder_.CreateBr(done);
@@ -2185,12 +2190,102 @@ private:
         return builder_.CreateAnd(value, constant(mask_of(inst.width)));
     }
 
+    /// StaticKernelNativeFrame::write_marks and write_round, fixed for a
+    /// run: read once in the entry block.
+    [[nodiscard]] std::pair<llvm::Value*, llvm::Value*> write_marks()
+    {
+        if (write_marks_ == nullptr) {
+            auto& builder = entry_builder();
+            write_marks_ = builder.CreateLoad(ptr_,
+                builder.CreateConstInBoundsGEP1_64(i8_, frame_, 104U));
+            write_round_ = builder.CreateLoad(i32_,
+                builder.CreateConstInBoundsGEP1_64(i8_, frame_, 100U));
+        }
+        return { write_marks_, write_round_ };
+    }
+
+    /// Records in StaticKernelNativeFrame::write_marks that a write to
+    /// `slot` is queued this round. Branches to `done`.
+    void emit_write_mark(llvm::Value* slot, llvm::BasicBlock* done)
+    {
+        const auto [marks, round] = write_marks();
+        auto* mark = llvm::BasicBlock::Create(context_, "write_mark", &function_);
+        builder_.CreateCondBr(builder_.CreateIsNull(marks), done, mark);
+        builder_.SetInsertPoint(mark);
+        builder_.CreateStore(round,
+            builder_.CreateInBoundsGEP(i32_, marks, builder_.CreateZExt(slot, i64_)));
+        builder_.CreateBr(done);
+    }
+
+    /// A VHDL assignment (store_vhdl sub 0; imm_a words per plane, imm_b
+    /// planes) to a slot no write has been queued for this round, whose
+    /// field it leaves as it is: StaticKernel::commit_writes would skip it,
+    /// so it is not queued. Branches to `skip` or falls through.
+    void emit_unchanged_write_skip(const KInst& inst, const Pair value,
+        llvm::Value* unknown, llvm::Value* slot, llvm::Value* offset,
+        llvm::BasicBlock* skip)
+    {
+        if (inst.op != KOp::store_vhdl || inst.sub != 0U
+            || (inst.imm_b != 2U && inst.imm_b != 4U) || inst.imm_a == 0U
+            || inst.width == 0U || inst.width > 64U
+            || (offset == nullptr && inst.offset + inst.width > 64U)) {
+            return;
+        }
+        const auto [marks, round] = write_marks();
+        auto* compare = llvm::BasicBlock::Create(context_, "same_check", &function_);
+        auto* check = llvm::BasicBlock::Create(context_, "unqueued", &function_);
+        auto* queue = llvm::BasicBlock::Create(context_, "queue_write", &function_);
+        llvm::Value* shift = constant(inst.offset);
+        llvm::Value* usable = builder_.CreateIsNotNull(marks);
+        if (offset != nullptr) {
+            // A bound offset: the field must lie in the first word.
+            shift = builder_.CreateZExt(offset, i64_);
+            usable = builder_.CreateAnd(usable, builder_.CreateICmpULE(
+                builder_.CreateAdd(shift, constant(inst.width)), constant(64U)));
+        }
+        builder_.CreateCondBr(usable, compare, queue);
+        builder_.SetInsertPoint(compare);
+        auto* m = constant(mask_of(inst.width));
+        auto* field = builder_.CreateShl(m, shift);
+        const auto differs = [&](const std::uint64_t plane, llvm::Value* bits) {
+            auto* current = builder_.CreateLoad(i64_,
+                slot_word(inst.d, plane * inst.imm_a));
+            return builder_.CreateAnd(builder_.CreateXor(current,
+                                          builder_.CreateShl(bits, shift)),
+                field);
+        };
+        llvm::Value* changed = nullptr;
+        if (inst.imm_b == 2U) {
+            changed = builder_.CreateOr(differs(0U, value.a), differs(1U, value.b));
+        } else {
+            // kernel_word::logic9_planes: 'U' elements have code 0000.
+            auto* known = builder_.CreateAnd(m, builder_.CreateNot(unknown));
+            auto* p0 = builder_.CreateAnd(value.a, known);
+            auto* p1 = builder_.CreateAnd(builder_.CreateNot(value.b), known);
+            auto* p2 = builder_.CreateAnd(
+                builder_.CreateAnd(builder_.CreateNot(value.a), value.b), known);
+            changed = builder_.CreateOr(
+                builder_.CreateOr(differs(0U, p0), differs(1U, p1)),
+                builder_.CreateOr(differs(2U, p2), differs(3U, constant(0U))));
+        }
+        builder_.CreateCondBr(builder_.CreateICmpEQ(changed, constant(0U)), check, queue);
+        builder_.SetInsertPoint(check);
+        auto* mark = builder_.CreateLoad(i32_,
+            builder_.CreateInBoundsGEP(i32_, marks, builder_.CreateZExt(slot, i64_)));
+        builder_.CreateCondBr(builder_.CreateICmpNE(mark, round), skip, queue);
+        builder_.SetInsertPoint(queue);
+    }
+
     void emit_deferred_store(const KInst& inst, const std::uint32_t at,
         llvm::Value* offset = nullptr)
     {
         const auto value = load_register(inst.x);
         auto* unknown = builder_.CreateAnd(unknown_of(inst.x),
             constant(mask_of(inst.width)));
+        auto* slot = builder_.CreateAnd(binding(inst.d, 1U),
+            llvm::ConstantInt::get(i32_, ~silent_bit));
+        auto* done = llvm::BasicBlock::Create(context_, "appended", &function_);
+        emit_unchanged_write_skip(inst, value, unknown, slot, offset, done);
         auto* queue = builder_.CreateLoad(ptr_, frame_field(56U));
         auto* count = builder_.CreateLoad(i32_,
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
@@ -2198,7 +2293,6 @@ private:
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 12U));
         auto* fast = llvm::BasicBlock::Create(context_, "append", &function_);
         auto* slow = llvm::BasicBlock::Create(context_, "append_full", &function_);
-        auto* done = llvm::BasicBlock::Create(context_, "appended", &function_);
         builder_.CreateCondBr(builder_.CreateICmpULT(count, capacity), fast, slow);
         builder_.SetInsertPoint(fast);
         auto* data = builder_.CreateLoad(ptr_, queue);
@@ -2207,9 +2301,7 @@ private:
         const auto field = [&](const std::uint64_t offset) {
             return builder_.CreateConstInBoundsGEP1_64(i8_, entry, offset);
         };
-        builder_.CreateStore(builder_.CreateAnd(binding(inst.d, 1U),
-                                 llvm::ConstantInt::get(i32_, ~silent_bit)),
-            field(0U));
+        builder_.CreateStore(slot, field(0U));
         builder_.CreateStore(offset != nullptr ? offset
                                                : llvm::ConstantInt::get(i32_, inst.offset),
             field(4U));
@@ -2223,7 +2315,7 @@ private:
         builder_.CreateStore(llvm::ConstantInt::get(i32_, at), field(44U));
         builder_.CreateStore(builder_.CreateAdd(count, llvm::ConstantInt::get(i32_, 1U)),
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
-        builder_.CreateBr(done);
+        emit_write_mark(slot, done);
         builder_.SetInsertPoint(slow);
         // y: a dynamic index (store_vhdl sub 1) or a part-select base.
         call_effect(at, value,
@@ -3562,18 +3654,57 @@ private:
         store(1U, old_b, next_b);
         builder_.CreateCondBr(silent, after, notify);
         builder_.SetInsertPoint(notify);
+        auto* slot = builder_.CreateAnd(info, llvm::ConstantInt::get(i32_, ~silent_bit));
+        emit_notify_skip(slot, after);
         auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
             { ptr_, i32_, i64_, i32_ }, false);
         auto* callee = helper_symbol("fsim_sk_notify_field", type);
         builder_.CreateCall(type, callee,
-            { frame_, builder_.CreateAnd(info,
-                          llvm::ConstantInt::get(i32_, ~silent_bit)),
-                changed, llvm::ConstantInt::get(i32_, inst.offset) });
+            { frame_, slot, changed, llvm::ConstantInt::get(i32_, inst.offset) });
         auto* status = builder_.CreateLoad(i32_, frame_field(40U));
         builder_.CreateCondBr(
             builder_.CreateICmpNE(status, llvm::ConstantInt::get(i32_, 0U)),
             failure_block_, after);
         builder_.SetInsertPoint(after);
+    }
+
+    /// Branches to `skip` where the notify helper would do nothing for the
+    /// changed slot (the frame's fast_notify table): its one target is the
+    /// running partition with readers at or after the frame's position, or
+    /// is already queued. Otherwise continues in a new block that calls
+    /// the helper.
+    void emit_notify_skip(llvm::Value* slot, llvm::BasicBlock* skip)
+    {
+        auto* call = llvm::BasicBlock::Create(context_, "notify_call", &function_);
+        auto* lookup = llvm::BasicBlock::Create(context_, "notify_lookup", &function_);
+        auto* running = llvm::BasicBlock::Create(context_, "notify_running", &function_);
+        auto* queued = llvm::BasicBlock::Create(context_, "notify_queued", &function_);
+        auto* table = builder_.CreateLoad(ptr_, frame_field(80U));
+        builder_.CreateCondBr(builder_.CreateIsNull(table), call, lookup);
+        builder_.SetInsertPoint(lookup);
+        auto* entry = builder_.CreateInBoundsGEP(i32_, table,
+            builder_.CreateShl(builder_.CreateZExt(slot, i64_), 1U));
+        auto* partition = builder_.CreateLoad(i32_, entry);
+        builder_.CreateCondBr(
+            builder_.CreateICmpEQ(partition,
+                llvm::ConstantInt::get(i32_, runtime::simir::static_kernel_no_fast_notify)),
+            call, running);
+        builder_.SetInsertPoint(running);
+        auto* min_position = builder_.CreateLoad(i32_,
+            builder_.CreateConstInBoundsGEP1_64(i32_, entry, 1U));
+        auto* later = builder_.CreateAnd(
+            builder_.CreateICmpEQ(partition, builder_.CreateLoad(i32_, frame_field(96U))),
+            builder_.CreateICmpUGE(min_position, builder_.CreateLoad(i32_, frame_field(36U))));
+        builder_.CreateCondBr(later, skip, queued);
+        builder_.SetInsertPoint(queued);
+        auto* flags = builder_.CreateLoad(ptr_, frame_field(88U));
+        auto* flag = builder_.CreateLoad(llvm::Type::getInt8Ty(context_),
+            builder_.CreateInBoundsGEP(llvm::Type::getInt8Ty(context_), flags,
+                builder_.CreateZExt(partition, i64_)));
+        builder_.CreateCondBr(
+            builder_.CreateICmpNE(flag, llvm::ConstantInt::get(llvm::Type::getInt8Ty(context_), 0U)),
+            skip, call);
+        builder_.SetInsertPoint(call);
     }
 
     void emit_store_slot(const KInst& inst, const Pair value)
@@ -3615,13 +3746,12 @@ private:
         builder_.CreateStore(next.b, high);
         builder_.CreateCondBr(silent, after, notify);
         builder_.SetInsertPoint(notify);
+        auto* slot = builder_.CreateAnd(info, llvm::ConstantInt::get(i32_, ~silent_bit));
+        emit_notify_skip(slot, after);
         auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
             { ptr_, i32_, i64_ }, false);
         auto* callee = helper_symbol("fsim_sk_notify", type);
-        builder_.CreateCall(type, callee,
-            { frame_, builder_.CreateAnd(info,
-                          llvm::ConstantInt::get(i32_, ~silent_bit)),
-                changed });
+        builder_.CreateCall(type, callee, { frame_, slot, changed });
         auto* status = builder_.CreateLoad(i32_, frame_field(40U));
         builder_.CreateCondBr(
             builder_.CreateICmpNE(status, llvm::ConstantInt::get(i32_, 0U)),
@@ -3705,6 +3835,8 @@ private:
     /// Entry-block values: binding words by index * 2 + word, and slot
     /// pointers by binding index.
     std::unordered_map<std::uint64_t, llvm::Value*> binding_values_;
+    llvm::Value* write_marks_ { };
+    llvm::Value* write_round_ { };
     std::unordered_map<std::uint32_t, llvm::Value*> slot_pointers_;
     llvm::BasicBlock* return_block_ { };
     llvm::BasicBlock* failure_block_ { };

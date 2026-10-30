@@ -885,6 +885,9 @@ private:
     /// reporting them.
     bool quiet_commit_ { };
     std::uint32_t quiet_changes_ { };
+    /// FSIM_PROFILE_KERNEL: commit_writes' writes, unchanged untouched
+    /// writes, calls and touched slots.
+    std::array<std::uint64_t, 4> profile_commit_writes_ { };
     /// Keeps the planner's collapsed members whose compiled code is pure,
     /// closes the set under the reader rule and levels it.
     void plan_delta_collapse();
@@ -1279,6 +1282,40 @@ private:
     std::vector<std::uint32_t> partition_level_;
     std::vector<std::uint32_t> partition_queue_slot_;
     std::vector<SlotNotify> slot_notify_;
+    /// StaticKernelNativeFrame::fast_notify: two words per slot, the
+    /// partition of its one whole-slot target (when nothing else needs the
+    /// notify helper) and the target's earliest reader position.
+    std::vector<std::uint32_t> fast_notify_;
+    /// Gives generated code the fast_notify table where the notify helper
+    /// would take its leader fast path (StaticKernelNativeFrame::fast_notify).
+    void bind_fast_notify(StaticKernelNativeFrame& frame) noexcept
+    {
+        if (worker_lane_ == nullptr && !profile_ && !committing_round_) {
+            frame.fast_notify = fast_notify_.data();
+            frame.partition_queued = partition_queued_.data();
+            frame.running_partition = scratch_.running_partition;
+        }
+        bind_write_marks(frame);
+    }
+    /// Gives generated code the write marks where its writes go to writes_
+    /// (StaticKernelNativeFrame::write_marks).
+    void bind_write_marks(StaticKernelNativeFrame& frame) noexcept
+    {
+        if (worker_lane_ == nullptr && !write_marks_.empty()) {
+            frame.write_round = write_round_;
+            frame.write_marks = write_marks_.data();
+        }
+    }
+    /// StaticKernelNativeFrame::write_marks: VHDL kernels without a worker
+    /// pool. Every write queued in the leader's writes_ marks its slot.
+    std::vector<std::uint32_t> write_marks_;
+    std::uint32_t write_round_ { 1U };
+    void mark_write(const std::uint32_t slot) noexcept
+    {
+        if (slot < write_marks_.size()) {
+            write_marks_[slot] = write_round_;
+        }
+    }
 
     /// Behavioral tier. A thread is one resumable execution context of a
     /// behavioral member; fork children are threads of the same member and
@@ -2868,6 +2905,10 @@ private:
     /// FSIM_PROFILE_KERNEL_SLOTS: changes per slot.
     std::vector<std::uint64_t> profile_slot_change_counts_;
     std::uint64_t profile_schedules_ { };
+    /// Partition schedules: later in the running partition, already
+    /// queued, enqueued; member schedules; slot changes with a fast_notify
+    /// entry.
+    std::array<std::uint64_t, 5> profile_schedule_outcomes_ { };
     std::uint64_t profile_collapsed_runs_ { };
     std::map<std::string, std::uint64_t> profile_generic_ops_;
     std::uint64_t profile_runs_[3] { };

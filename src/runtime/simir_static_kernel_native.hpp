@@ -76,6 +76,8 @@ struct StaticKernelWriteQueue {
     std::uint32_t capacity { };
 };
 
+inline constexpr std::uint32_t static_kernel_no_fast_notify_value = 0xFFFF'FFFFU;
+
 /// Generated code's view of one unit activation. Field offsets are part of
 /// the ABI and are checked by static_asserts in the code generator.
 struct StaticKernelNativeFrame {
@@ -103,7 +105,28 @@ struct StaticKernelNativeFrame {
     /// operation it stopped at (`fsim_sk_boundary_<ordinal>`), stored by
     /// native code and called by the thread runner.
     void* boundary { };
+    /// Two words per slot: its one whole-slot target partition (or
+    /// static_kernel_no_fast_notify) and that target's earliest reader
+    /// position. A changed store skips the notify helper where the helper
+    /// would do nothing (StaticKernel::schedule_target): the target is the
+    /// running partition and its readers come at or after `position`, or
+    /// it is already queued. Null where the helper must run (worker lanes,
+    /// profiling, committing rounds).
+    const std::uint32_t* fast_notify { };
+    /// Per partition, nonzero while it is queued.
+    const std::uint8_t* partition_queued { };
+    /// The partition running this frame's code, or static_kernel_no_fast_notify.
+    std::uint32_t running_partition { static_kernel_no_fast_notify_value };
+    /// VHDL delta mode: the update round `write_marks` entries compare with.
+    std::uint32_t write_round { };
+    /// VHDL delta mode, per slot: the last round a write to it was queued.
+    /// A queued write that leaves a slot unqueued this round as it is would
+    /// be skipped by the commit (StaticKernel::commit_writes), so generated
+    /// code does not queue it. Null where writes go elsewhere (worker
+    /// lanes, multi-threaded kernels).
+    std::uint32_t* write_marks { };
 };
+inline constexpr std::uint32_t static_kernel_no_fast_notify = static_kernel_no_fast_notify_value;
 
 /// A helper for one kind of template instruction: it executes instruction
 /// `at` on the given operand words (the registers named by its x, y and z

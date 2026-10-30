@@ -1217,6 +1217,8 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
         mt_commit_min_ = std::strtoull(minimum, nullptr, 10);
     }
     pool_ = std::make_unique<KernelPool>(mt_threads_, spin);
+    // Lanes queue writes without marks: every assignment is queued.
+    write_marks_.clear();
 }
 
 Interpreter::Impl::StaticKernel::Clusters Interpreter::Impl::StaticKernel::cluster_components(

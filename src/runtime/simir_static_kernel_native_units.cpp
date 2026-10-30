@@ -244,6 +244,7 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     // Behavioral bodies start at a resume point and return 3 when they
     // reach a suspension, whose operation index comes back in `reserved`.
     frame.reserved = behavioral ? behavioral_entry_ : start;
+    bind_fast_notify(frame);
     if (profile_) {
         profile_operations_ += body.code.size();
     }
@@ -526,6 +527,7 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_operation_tier
     frame.containers = container_info_.data();
     frame.member = member_index;
     frame.reserved = pc;
+    bind_write_marks(frame);
     // A step may run another member's tier (nested runs keep their counts).
     const auto steps = std::exchange(operation_tier_steps_, 0U);
     const auto status = tier->entry(&frame, nullptr);
@@ -644,6 +646,7 @@ bool Interpreter::Impl::StaticKernel::run_hosted_tier(ProcessState& process)
     frame.writes = &write_queue();
     frame.containers = container_info_.data();
     frame.member = process.id;
+    bind_write_marks(frame);
     // The process runs to its next suspension. A step that leaves the
     // operation's static successors (a disable, a fork redirect) re-enters
     // at the process's new position.

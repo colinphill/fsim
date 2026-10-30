@@ -14,7 +14,16 @@
 #   dc_attributes: 'EVENT counts every pulse of the internal signal;
 #   dc_regions: a report for each value of the inputs' exclusive or;
 #   dc_static, dc_chain: collapsed members are kept (dc_chain eight
-#     levels deep).
+#     levels deep);
+#   dc_case, dc_numeric, dc_record, dc_diamond: selected and case
+#     assignments, numeric_std arithmetic, record field drivers, and fan-in
+#     across levels, all collapsed;
+#   dc_sv_reader: VHDL cells sampled by a SystemVerilog flop (refused while
+#     SystemVerilog readers are not first-delta readers).
+# Where a case collapses, the collapsed run must keep at least the members
+# listed in min_kept_<case> (the refusal cases' unobserved neighbours
+# included), so that it exercises collapsed evaluation as well as the
+# refusal rules.
 # The static case also runs from an ahead-of-time snapshot, whose kernel
 # image holds the collapse plan: the restored run must keep as many
 # members and match the reference.
@@ -76,7 +85,14 @@ function(simulate_step STEP_NAME)
 endfunction()
 
 set(cases dc_glitch_assert dc_glitch_count dc_static dc_nested_loop
-  dc_observe_glitch dc_attributes dc_chain dc_regions)
+  dc_observe_glitch dc_attributes dc_chain dc_regions dc_case dc_numeric
+  dc_record dc_diamond dc_sv_reader)
+set(min_kept_dc_observe_glitch 2)
+set(min_kept_dc_regions 2)
+set(min_kept_dc_case 2)
+set(min_kept_dc_numeric 3)
+set(min_kept_dc_record 3)
+set(min_kept_dc_diamond 5)
 
 foreach(case_name IN LISTS cases)
   set(case_dir "${workspace}/${case_name}")
@@ -126,6 +142,11 @@ foreach(case_name IN LISTS cases)
   if(collapsed_profile MATCHES "static-kernel-collapse planned=[0-9]+ kept=([0-9]+)")
     set(kept "${CMAKE_MATCH_1}")
   endif()
+  if(DEFINED min_kept_${case_name} AND kept LESS min_kept_${case_name})
+    message(FATAL_ERROR
+      "${case_name}: at least ${min_kept_${case_name}} members must collapse "
+      "(kept ${kept})\n${collapsed_profile}\nworkspace: ${case_dir}")
+  endif()
   if(case_name STREQUAL "dc_glitch_assert")
     if(NOT reference_stdout MATCHES "glitch" AND NOT reference_stderr MATCHES "glitch")
       message(FATAL_ERROR "${case_name}: the reference must report the glitch\n"
@@ -149,7 +170,7 @@ foreach(case_name IN LISTS cases)
         "${reference_stdout}\nworkspace: ${case_dir}")
     endif()
   elseif(case_name STREQUAL "dc_attributes")
-    if(NOT reference_stdout MATCHES "q=9\n")
+    if(NOT reference_stdout MATCHES "q=9 ")
       message(FATAL_ERROR "${case_name}: each of the nine pulses must count\n"
         "${reference_stdout}\nworkspace: ${case_dir}")
     endif()

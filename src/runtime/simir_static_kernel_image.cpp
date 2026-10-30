@@ -89,7 +89,8 @@ struct is_map<std::unordered_map<K, V, H, E, A>> : std::true_type { };
 {
     return name == "FSIM_KERNEL_THREADS" || name.starts_with("FSIM_KERNEL_MT_")
         || name == "FSIM_STATIC_KERNEL_PLAN_CACHE"
-        || name == "FSIM_KERNEL_IMAGE_REQUIRED";
+        || name == "FSIM_KERNEL_IMAGE_REQUIRED"
+        || name == "FSIM_KERNEL_WRITE_SKIP";
 }
 
 } // namespace

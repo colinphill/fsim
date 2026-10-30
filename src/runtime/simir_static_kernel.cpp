@@ -245,6 +245,11 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         build_dispatch_groups();
     }
     build_schedule_targets();
+    // FSIM_KERNEL_WRITE_SKIP=0 queues every VHDL assignment.
+    if (const char* skip = std::getenv("FSIM_KERNEL_WRITE_SKIP");
+        vhdl_ && (skip == nullptr || std::string_view { skip } != "0")) {
+        write_marks_.assign(slots_.size(), 0U);
+    }
     stage("schedule");
     for (const auto signal : spec.unwritten_inputs) {
         if (signal < input_of_signal_.size() && input_of_signal_[signal] != no_slot) {
@@ -1765,8 +1770,17 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
               << " generic=" << profile_native_calls_[3]
               << " slot_changes=" << profile_slot_changes_
               << " schedules=" << profile_schedules_
+              << " partition_later=" << profile_schedule_outcomes_[0]
+              << " partition_queued=" << profile_schedule_outcomes_[1]
+              << " partition_enqueued=" << profile_schedule_outcomes_[2]
+              << " member_schedules=" << profile_schedule_outcomes_[3]
+              << " fast_notify_changes=" << profile_schedule_outcomes_[4]
               << " dispatch_groups=" << dispatch_groups_.size()
-              << " collapsed=" << profile_collapsed_runs_ << '\n';
+              << " collapsed=" << profile_collapsed_runs_
+              << " commit_writes=" << profile_commit_writes_[0]
+              << " commit_unchanged=" << profile_commit_writes_[1]
+              << " commits=" << profile_commit_writes_[2]
+              << " commit_touched=" << profile_commit_writes_[3] << '\n';
     if (batch_profile_.enabled) {
         const auto& batches = batch_profile_;
         for (std::size_t bucket = 0U; bucket < BatchProfile::classes; ++bucket) {
@@ -2124,6 +2138,10 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
     }
     if (profile_ && slot_index < profile_slot_change_counts_.size()) {
         ++profile_slot_change_counts_[slot_index];
+    }
+    if (profile_ && 2U * slot_index < fast_notify_.size()
+        && fast_notify_[2U * slot_index] != static_kernel_no_fast_notify) {
+        ++profile_schedule_outcomes_[4];
     }
     const auto notify = slot_notify_[slot_index];
     if (profile_) {
@@ -2627,7 +2645,8 @@ void Interpreter::Impl::StaticKernel::commit_writes()
             commit.tracks_writer = slots_[index].tracks_writer;
         }
     }
-    const auto touch = [&](const std::uint32_t slot_index) -> CommitSlot& {
+    const auto touch = [&](const std::uint32_t slot_index)
+        __attribute__((always_inline)) -> CommitSlot& {
         auto& slot = commit_slots_[slot_index];
         if (!slot.touched) {
             slot.touched = true;
@@ -2657,6 +2676,7 @@ void Interpreter::Impl::StaticKernel::commit_writes()
     for (std::uint32_t at = 0U; at < std::min(count, slot_ahead); ++at) {
         fetch_slot(at);
     }
+    std::uint64_t unchanged = 0U;
     for (std::uint32_t index = 0U; index < count; ++index) {
         if (index + slot_ahead < count) {
             fetch_slot(index + slot_ahead);
@@ -2688,6 +2708,7 @@ void Interpreter::Impl::StaticKernel::commit_writes()
                 };
                 if (pending.planes == 2U) {
                     if (same(0U, item.a) && same(1U, item.b)) {
+                        ++unchanged;
                         continue;
                     }
                 } else if (pending.planes == 4U) {
@@ -2695,11 +2716,32 @@ void Interpreter::Impl::StaticKernel::commit_writes()
                         { item.a, item.b }, item.width, item.unknown);
                     if (same(0U, codes.p0) && same(1U, codes.p1)
                         && same(2U, codes.p2) && same(3U, codes.p3)) {
+                        ++unchanged;
                         continue;
                     }
                 }
             }
             const auto& slot = touch(item.slot);
+            if (item.offset + item.width <= 64U) {
+                // store_planes_word's narrow case, inline.
+                auto* const base = arena_.data() + slot.offset;
+                const auto field = kernel_word::mask(item.width) << item.offset;
+                const auto put = [&](std::uint64_t& word, const std::uint64_t bits) {
+                    word = (word & ~field) | ((bits << item.offset) & field);
+                };
+                if (slot.planes == 4U) {
+                    const auto codes = kernel_word::logic9_planes(
+                        { item.a, item.b }, item.width, item.unknown);
+                    put(base[0], codes.p0);
+                    put(base[slot.words], codes.p1);
+                    put(base[2U * slot.words], codes.p2);
+                    put(base[3U * slot.words], codes.p3);
+                } else {
+                    put(base[0], item.a);
+                    put(base[slot.words], item.b);
+                }
+                continue;
+            }
             store_planes_word(arena_.data() + slot.offset, slot.words,
                 slot.planes, { item.a, item.b }, item.offset, item.width,
                 item.unknown);
@@ -2728,8 +2770,17 @@ void Interpreter::Impl::StaticKernel::commit_writes()
         store_slot_bits(slot_index, value,
             entry.kind == PendingKind::slice ? entry.offset : 0U);
     }
+    if (profile_) {
+        profile_commit_writes_[0] += count;
+        profile_commit_writes_[1] += unchanged;
+        profile_commit_writes_[2] += 1U;
+        profile_commit_writes_[3] += touched_.size();
+    }
     writes_.count = 0U;
     pending_generic_.clear();
+    // Marks of this round no longer match (a wrapped round only makes a
+    // stale mark look queued, which queues the write).
+    ++write_round_;
     // Wired formals follow their sources' new values in this update phase.
     // A wire's target joins the touched list, so wires chain.
     for (std::size_t at = 0U; !wires_.empty() && at < touched_.size(); ++at) {
@@ -3260,6 +3311,9 @@ void Interpreter::Impl::StaticKernel::push_write(const StaticKernelWrite& write)
         queue.data[queue.count++] = write;
         return;
     }
+    if (write.kind == 0U) {
+        mark_write(write.slot);
+    }
     if (writes_.count == writes_.capacity) {
         write_storage_.resize(std::max<std::size_t>(256U,
             2U * write_storage_.size()));
@@ -3281,6 +3335,9 @@ void Interpreter::Impl::StaticKernel::push_generic_pending(Pending pending)
         return;
     }
     write.member = static_cast<std::uint32_t>(pending_generic_.size());
+    if (pending.target < slot_of_signal_.size()) {
+        mark_write(slot_of_signal_[pending.target]);
+    }
     pending_generic_.push_back(std::move(pending));
     push_write(write);
 }
@@ -3399,6 +3456,9 @@ void Interpreter::Impl::StaticKernel::schedule_target(const ScheduleTarget& targ
             && target.min_position >= scratch().running_position) {
             // Later readers run in this pass; the running member itself does
             // not wake on its own writes (it is not waiting while it runs).
+            if (profile_) {
+                ++profile_schedule_outcomes_[0];
+            }
             return;
         }
         if (partition_queued_[partition] == 0U) {
@@ -3406,8 +3466,13 @@ void Interpreter::Impl::StaticKernel::schedule_target(const ScheduleTarget& targ
                 schedule_in_domain(*lane, target.id);
                 return;
             }
+            if (profile_) {
+                ++profile_schedule_outcomes_[2];
+            }
             partition_queued_[partition] = 1U;
             enqueue(partition_level_[partition], target.id);
+        } else if (profile_) {
+            ++profile_schedule_outcomes_[1];
         }
         return;
     }
@@ -3672,6 +3737,7 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
         queue.cursor = static_cast<std::uint32_t>(queue.bits.size());
     }
     slot_notify_.resize(slots_.size());
+    fast_notify_.assign(2U * slots_.size(), static_kernel_no_fast_notify);
     last_writer_.resize(slots_.size());
     notify_targets_.clear();
     for (std::size_t index = 0U; index < slots_.size(); ++index) {
@@ -3686,6 +3752,11 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
             || (index < slot_waitable_.size() && slot_waitable_[index] != 0U);
         notify.tracks = slot.tracks_writer;
         last_writer_[index] = slot.last_writer;
+        if (!notify.general && !notify.tracks && slot.targets.size() == 1U
+            && (slot.targets.front().id & partition_tag) != 0U) {
+            fast_notify_[2U * index] = slot.targets.front().id & ~partition_tag;
+            fast_notify_[2U * index + 1U] = slot.targets.front().min_position;
+        }
     }
     if (profile_ && std::getenv("FSIM_PROFILE_KERNEL_SLOTS") != nullptr) {
         profile_slot_change_counts_.assign(slots_.size(), 0U);
@@ -3723,6 +3794,7 @@ void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
 {
     if (profile_) {
         profile_schedules_ += 1U;
+        ++profile_schedule_outcomes_[3];
     }
     auto& state = member_schedule_[member];
     if (state.collapse && collapsing_) {
@@ -3992,25 +4064,31 @@ void Interpreter::Impl::StaticKernel::run_triggered_round()
 void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
 {
     if (const auto& fast = fast_runs_[member_index]; fast.entry != nullptr) {
+        auto* const lane = worker_lane_;
         StaticKernelNativeFrame frame;
         frame.arena = arena_.data();
         frame.bindings = fast.bindings;
         frame.kernel = this;
         frame.program = fast.program;
         frame.instance = fast.body;
-        frame.writes = &write_queue();
+        frame.writes = lane != nullptr ? &lane->writes : &writes_;
         frame.containers = container_info_.data();
         frame.member = member_index;
         frame.position = 0U;
         frame.status = 0U;
         frame.reserved = 0U;
-        scratch().two_state_running = fast.two_state;
-        const auto status = fast.entry(&frame, fast.registers);
-        scratch().two_state_running = false;
-        if (fast.two_state) {
+        bind_fast_notify(frame);
+        std::uint32_t status = 0U;
+        if (fast.two_state) [[unlikely]] {
+            auto& running = (lane != nullptr ? lane->scratch : scratch_).two_state_running;
+            running = true;
+            status = fast.entry(&frame, fast.registers);
+            running = false;
             ++fast_runs_[member_index].two_state_runs;
+        } else {
+            status = fast.entry(&frame, fast.registers);
         }
-        if (status == 0U && frame.status == 0U) {
+        if (status == 0U && frame.status == 0U) [[likely]] {
             return;
         }
         auto& member = members_[member_index];

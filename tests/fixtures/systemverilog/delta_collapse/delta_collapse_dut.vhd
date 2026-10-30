@@ -199,11 +199,13 @@ use ieee.std_logic_1164.all;
 -- The intermediate combination reaches an output port: the SystemVerilog
 -- testbench counts every event on it, so the glitch must stay visible.
 entity dc_observe_glitch is
-    port (a : in std_logic; q : out std_logic);
+    port (clk, a : in std_logic; q, r : out std_logic);
 end entity;
 
+-- k1 and k2 are an unobserved neighbour of the observed chain, registered
+-- into r: they may be collapsed.
 architecture rtl of dc_observe_glitch is
-    signal b, d, e : std_logic := '0';
+    signal b, d, e, k1, k2 : std_logic := '0';
     signal c : std_logic := '1';
 begin
     b <= a;
@@ -211,6 +213,14 @@ begin
     d <= b;
     e <= not c;
     q <= d xor e;
+    k1 <= not a;
+    k2 <= k1 xor a;
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            r <= k2;
+        end if;
+    end process;
 end architecture;
 
 library ieee;
@@ -222,16 +232,20 @@ use ieee.numeric_std.all;
 entity dc_attributes is
     port (
         clk, a : in std_logic;
-        q : out std_logic_vector(7 downto 0));
+        q : out std_logic_vector(7 downto 0);
+        r : out std_logic_vector(1 downto 0));
 end entity;
 
 architecture rtl of dc_attributes is
-    signal b, c, x : std_logic := '0';
+    signal b, c, x, n1, n2 : std_logic := '0';
     signal count : unsigned(7 downto 0) := (others => '0');
 begin
     b <= a;
     c <= b;
     x <= b xor c;
+    -- A collapsible neighbour of the pulse, registered into r.
+    n1 <= not a;
+    n2 <= n1 and a;
     process (x)
     begin
         if x'event and x'last_value = '0' then
@@ -242,6 +256,12 @@ begin
     begin
         if rising_edge(clk) then
             q <= std_logic_vector(count);
+        end if;
+    end process;
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            r <= n1 & n2;
         end if;
     end process;
 end architecture;
@@ -289,13 +309,16 @@ use ieee.std_logic_1164.all;
 entity dc_regions is
     port (
         clk, a, b : in std_logic;
-        q : out std_logic);
+        q, r : out std_logic);
 end entity;
 
 architecture rtl of dc_regions is
-    signal x : std_logic := '0';
+    signal x, y, z : std_logic := '0';
 begin
     x <= a xor b;
+    -- A collapsible neighbour of the reported signal, registered into r.
+    y <= a and b;
+    z <= y or not a;
     process (x)
     begin
         report "x=" & std_logic'image(x) severity note;
@@ -304,6 +327,126 @@ begin
     begin
         if rising_edge(clk) then
             q <= x;
+            r <= z;
+        end if;
+    end process;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+-- A selected assignment and a case statement in one pure cone, registered
+-- on clk: every member may be collapsed.
+entity dc_case is
+    port (
+        clk : in std_logic;
+        a : in std_logic_vector(3 downto 0);
+        q : out std_logic_vector(7 downto 0));
+end entity;
+
+architecture rtl of dc_case is
+    signal s, t : std_logic_vector(3 downto 0);
+begin
+    with a select s <=
+        "0001" when "0000",
+        "0010" when "0001",
+        "0100" when "0011",
+        a xor "1010" when others;
+    process (s)
+    begin
+        case s is
+            when "0001" | "0010" => t <= "1111";
+            when "0100" => t <= s(2 downto 0) & '1';
+            when others => t <= not s;
+        end case;
+    end process;
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            q <= s & t;
+        end if;
+    end process;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+-- numeric_std addition, subtraction and resizing on static widths.
+entity dc_numeric is
+    port (
+        clk : in std_logic;
+        a : in std_logic_vector(3 downto 0);
+        q : out std_logic_vector(7 downto 0));
+end entity;
+
+architecture rtl of dc_numeric is
+    signal x, y, z : unsigned(7 downto 0);
+begin
+    x <= resize(unsigned(a), 8) + 3;
+    y <= x + x;
+    z <= y - resize(unsigned(a), 8);
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            q <= std_logic_vector(z);
+        end if;
+    end process;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+-- A record signal whose fields have separate drivers (disjoint slices of
+-- one signal) and a record computed from it.
+entity dc_record is
+    port (
+        clk : in std_logic;
+        a : in std_logic_vector(3 downto 0);
+        q : out std_logic_vector(7 downto 0));
+end entity;
+
+architecture rtl of dc_record is
+    type pair_t is record
+        lo, hi : std_logic_vector(3 downto 0);
+    end record;
+    signal p, r : pair_t;
+begin
+    p.lo <= a;
+    p.hi <= not a(0) & a(3 downto 1);
+    r <= (lo => p.hi xor p.lo, hi => p.lo and p.hi);
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            q <= r.hi & r.lo;
+        end if;
+    end process;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+-- Fan-out and fan-in across levels: y and z read signals of different
+-- depth from a, so their inputs change in different deltas.
+entity dc_diamond is
+    port (
+        clk : in std_logic;
+        a : in std_logic_vector(3 downto 0);
+        q : out std_logic_vector(7 downto 0));
+end entity;
+
+architecture rtl of dc_diamond is
+    signal x1, x2, x3, y, z : std_logic_vector(3 downto 0);
+begin
+    x1 <= a(2 downto 0) & a(3);
+    x2 <= a xor x1;
+    x3 <= x2 and not a;
+    y <= x1 xor x3;
+    z <= x3 or (a and x2);
+    process (clk)
+    begin
+        if rising_edge(clk) then
+            q <= y & z;
         end if;
     end process;
 end architecture;
