@@ -138,6 +138,54 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-29 (late): Phase 6 first gate — wider VHDL delta collapse (V1), cheaper slot notification (`e0dbb3a6`, sweeps `v4c55`, `v4c55a`)
+
+**Gate** (five changesets):
+- ct4: 1090/1090 in all four variants (`session-1029/ct4-phase6a.log`).
+- Normal sweep `v4c55` (frozen `e0dbb3a6`): 0 losses against `b96x1` and against `v4c54` (skipping case11 and issue705, as before).
+- AOT sweep `v4c55a`: 0 losses against `v4c54a`.
+- Census `v4c55`: every planned case is admitted with `host=0`, with 0 hosted processes and 0 runs with interpreted>0. `kernel_deopts` (9 cases) is unchanged.
+
+| Suite | Passed / in scope (`v4c54`) | Passed / in scope (`v4c55`) | Passed / in scope (`v4c55a`) | Excluded |
+|---|---:|---:|---:|---:|
+| nvc | 1259 / 1259 | 1259 / 1259 | 1259 / 1259 | 223 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 65 / 65 | 7 |
+| vests | 3663 / 3663 | 3663 / 3663 | 3663 / 3663 | 2 |
+| ivtest | 2638 / 2638 | 2638 / 2638 | 2638 / 2638 | 273 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 2071 / 2071 | 344 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 1495 / 1495 | 2 |
+
+**V1: VHDL delta-collapse admission** (plan `.local-artifacts/v4-migration/triage/phase6-static-scheduling-plan-1029.md`, track V; exact only).
+- The planner admits slice drivers: VHDL co-writers of disjoint regions of one signal.
+- It follows live driver wirings and wirings to their readers, recursively, when the targets are owned, unobserved and not host-touched. Conversions are not followed, because a conversion function may check, assert or report, and would then no longer see the source's intermediate values.
+- `collapse_impurity` was rewritten around a CFG with calls expanded per context; recursion is refused. It computes liveness, must-assign, postdominators and control dependence. A data/controlled taint decides what must be static: integer operations and checks, strict selections, and the exits of every loop, nested ones included (recursive SCC decomposition). Assertions still need a constant-true condition.
+- `run_collapsed` checks that no collapsed member is woken below its writer's level.
+- The collapse plan is stored in the kernel image after the build's state, so a restored kernel skips the analysis. On mixed_codec the finish stage drops from 56 ms to 0.1 ms.
+- mixed_codec: the planner admits 553 → 6,595 members, and the kernel keeps 335 → 4,155 in 8 levels.
+  - The output is byte-identical to the reference scheduler (`FSIM_STATIC_KERNEL=0`). With `FSIM_KERNEL_VERIFY=1` the run reports 0 mismatches.
+  - Remaining drops: assertion 545 (numeric_std metavalue checks), integer_data 222, dynamic_part_insert 113, `op 52` 16.
+  - Run time ~1,617 → ~1,567 ms (−3%). V1 removes no delta round; V2 is where rounds disappear.
+- New ctest `fsim.application.static-kernel-delta-collapse` compares collapse on against off. Its witnesses:
+  - a reported glitch;
+  - a fatal range check fed by a 72-bit in-place selection;
+  - a static GF(2⁴) multiplier with slice drivers (kept 9), which also runs restored from an AOT snapshot;
+  - a data-dependent inner loop, which is refused.
+- An independent review of the time-zero and staticness argument found three holes; all are fixed: conversions, nested loop exits, and slice co-writers that must be VHDL. The `--max-deltas` question (collapsed deltas are not counted toward the limit; this has been so since `11dc5c30`) is open with the owner.
+
+**Slot notification.** `FSIM_PROFILE_KERNEL_SLOTS` now reports slot changes by why their slot takes the general path. On the Verilog throughput fixture, 17.1 M of 19.8 M changes were on "several writers" slots: bit-sliced continuous assigns in generate loops, whose writers are disjoint.
+- `Slot::tracks_writer` replaces `single_writer`. Publish and materialize commit disjoint writers' regions separately and never read the last writer, so those slots no longer record one or take the general path. This covers `native_notify`, `write_slot_word` and VHDL `commit_writes`.
+- The run's last writer (overlapping or unknown writers, such as procedural writes to variables) is kept in a compact `last_writer_` array, recorded on the notify fast path.
+- Throughput fixture simulate: user instructions 21.96 G → 19.92 G (−9.3%) and cycles −10% against `v4c54`; run ~1,121 → ~985 ms. mixed_codec run −2%. Outputs are identical.
+- S1 (inline dirty marking in generated code) is re-estimated at 2–3% of run. Templates bind slots at run time, so the remaining cost is dependent table loads. S1 moves behind S3 and S2.
+
+**`FSIM_KERNEL_VERIFY` reports.** The reference replay re-emitted every report and non-failure assertion of the compiled run, so mixed_codec printed 25,370 metavalue warnings instead of 12,872. The replay now emits none; a failure still stops the run. The verify transcript now equals the normal run's.
+
+**Setup measurements** (throughput fixture, restored image):
+- `static-kernel-image-stage`: decode 43 ms, operation expansion 39 ms.
+- `static-kernel-image fields`: `members_` 6.9 MB and `partitions_` 7.5 MB of 17.5 MB.
+- The 2,525 compiled bodies are 2,520 distinct, so deduplication cannot help. Raw instruction encoding would save about 20 ms.
+- Lazy member operations (S5) is the cut that matters, but `member.operations` has about 166 uses.
+
 ### 2026-10-29: D6 standing, SystemVerilog process-template memory aliasing (`5e1bfc1a`), kernel image stage 1b (`dc17e9b0`), MT and Verilator measurements (sweeps `v4c54`, `v4c54a`)
 
 **Gate** (owner, 2026-10-29: gate these two changesets now, as an exception to the five-changeset rule, because one is a correctness fix).
