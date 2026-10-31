@@ -138,6 +138,82 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-31: Phase 7 closed — fifth gate: R1 set aside, R2 setup changes, R3 measured (`e36a69e1`, sweeps `v4c62n`, `v4c62na`)
+
+Plan: `.local-artifacts/v4-migration/triage/phase7-cycle-based-plan-1030.md`, sections "R1 first measurements" to the end.
+
+**R1, tier policy by weight: set aside for D6.** No answer came within 2 minutes, so the recommendation was taken. Every D6 sample is cold, so promoting a template to the optimizing tier costs 4–9× more elaborate time than it saves in simulate.
+
+| Case | Hot threshold | Elaborate | Simulate |
+|---|---|---|---|
+| original_throughput | 32768 (default) | 3.43 s | 7.02 G cycles |
+| original_throughput | 1 | 4.28 s | 6.58 G cycles |
+| mixed_codec | 4096 | +0.6 s | −150 ms |
+
+Applying it would cut the D6 geomean e2e to ≈ 3.6×. The default policy stays. Profile-guided tiers remain a candidate for repeated user runs.
+
+**R2, load and setup.** Setup is the simulate time before the run starts. Measured on v4c61:
+
+| Case | Setup | Share of simulate |
+|---|---:|---:|
+| original_codec | ≈ 700 ms | 35% |
+| mixed_codec | ≈ 335 ms | 18% |
+| original_throughput | ≈ 310 ms | 24% |
+
+- **Kept in `e36a69e1`:**
+  - Exact kinds summaries for processes whose operations carry per-instance overrides: the shared body's per-kind counts, with each replaced operation exchanged for its override. Registration no longer scans those processes' operations.
+  - A group encoding for kernel-body and image arrays: four values led by a size-class byte, decoded with masked unaligned loads.
+- **Result** (interleaved A/B against v4c61): interpreter creation −24 / −11 / −7 ms on original_codec / original_throughput / mixed_codec; cached artifacts 6–12% smaller.
+- **Below the approved estimate** (mixed_codec −100 to −130 ms):
+  - Paths were already interned once and container values already decoded in bulk.
+  - What remains is object construction: about 20 vector allocations per kernel member, operation lists, and VHDL prologues on the operation tier, which need copied operations.
+- **Tried and dropped:**
+  - Raw `memcpy` arrays: faster, but about +100 MB of cache per codec workspace.
+  - Lazy operations for specialized VHDL members: the cost only moved into the first run.
+- **Owner decision:** close R2. A struct-of-arrays image is a candidate project.
+
+**R3, write-path helpers: closed as measured.**
+- `write_slot_word`, `slot_changed_general` and `native_notify` are about 6% of original_throughput samples and do not appear on mixed_codec. There the VHDL `commit_writes`, which already prefetches, `schedule` and round sorting dominate.
+- A prefetch pipeline in `commit_pending` measured neutral to slightly worse and was reverted.
+- Per-shape specialization is bounded at about −2% on original_throughput and 0 on the D6 minimum.
+- Owner decision: close R3 and close Phase 7.
+
+**Gate** (an exception to the five-changeset rule, by owner decision):
+- ct4: 1093/1093 in all four variants.
+- Normal sweep `v4c62n` (frozen `e36a69e1`): 0 losses against `v4c61` and `b96x1`.
+- AOT sweep `v4c62na`: 0 losses against `v4c61a`.
+- Census tables identical to `v4c61` and `v4c61a`.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+- The first sweep pair (`v4c62`, `v4c62a`) is invalid. It was given a relative archive path, so every case crashed; its result directories are kept until deletion is approved.
+
+**D6 campaign `v4c62-g5`** (3 samples, CPU 9):
+
+| Measure | v4c61 | v4c62 |
+|---|---:|---:|
+| Geomean e2e (× xsim) | 3.76× | 3.80× |
+| Minimum simulate (× xsim) | 3.57× (mixed_codec) | 3.60× (mixed_codec) |
+| original_codec e2e / simulate | 2.66× / 4.12× | 2.88× / 4.15× |
+| original_throughput simulate | 6.30× | 6.44× |
+
+**Phase 7 over all five gates** (D6, starting from Phase 6's close at v4c57):
+- Geomean e2e: 3.67× → 3.80×.
+- Minimum simulate: 3.67× → 3.60× (mixed_codec).
+- The e2e floor of 3.5× holds.
+
+What Phase 7 delivered:
+- Known-value collapse guards and range certificates.
+- Strict VHDL edges.
+- The P1 domain report.
+- The mixed-language `to_bit` fix.
+- Track E: parallel post-walk elaboration, shared body scans and the AOT graph handoff.
+- The R2 setup changes.
+
+The cycle-based targets, ≤ 2.5× and ≤ 2× Verilator for the run phase, were not reached:
+- The measurements in plan §8.1 show that about 80% of the run is member compute in the current representation.
+- P3 and P4 as designed were closed by those measurements. The P3 v0 driver stays behind `FSIM_CYCLE_DRIVER`, off.
+- The planned continuation is a register-resident cone code generator: values stay in machine registers across members and only boundary signals are published. It needs its own P0 bound before any build.
+
 ### 2026-10-31: Phase 7 fourth gate — Track E post-walk stages: parallel elaboration, shared body scans, AOT graph handoff (`3ef8ec21`, sweeps `v4c61`, `v4c61a`)
 
 Plan: `.local-artifacts/v4-migration/triage/phase7-cycle-based-plan-1030.md`, sections "Track E post-walk stages" and after.
