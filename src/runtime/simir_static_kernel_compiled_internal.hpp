@@ -8,6 +8,8 @@
 #include "simir_container_helpers.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <optional>
@@ -493,9 +495,13 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
     }
 }
 
-/// Compiled member bodies as bytes: every integer as a LEB128 varint, field
-/// by field (most are small or zero). They are read back only by the same
-/// build (the cache key includes static_kernel_compiler_identity).
+/// Bytes of each size class in BodyWriter::group.
+inline constexpr std::array<unsigned, 4U> group_sizes { 0U, 1U, 4U, 8U };
+
+/// Compiled member bodies as bytes: scalars as LEB128 varints, arrays four
+/// values to a group (group), field by field (most are small or zero). They
+/// are read back only by the same build (the cache key includes
+/// static_kernel_compiler_identity).
 class BodyWriter {
 public:
     explicit BodyWriter(std::string& out) : out_ { out } { }
@@ -527,33 +533,86 @@ public:
     {
         list(values, [&](const T value) { put(static_cast<std::uint64_t>(value)); });
     }
-    void body(const static_kernel_detail::CompiledBody& body)
+    /// Four values led by a byte of their size classes, two bits each:
+    /// zero, one byte, four bytes or eight (little-endian). About as short as
+    /// varints, and BodyReader::group decodes it without a branch per byte.
+    void group(const std::array<std::uint64_t, 4U>& values)
     {
-        list(body.code, [&](const KInst& inst) {
-            put(static_cast<std::uint64_t>(inst.op));
-            put(inst.sub);
-            put(inst.flags);
-            put(inst.width);
-            put(inst.d);
-            put(inst.x);
-            put(inst.y);
-            put(inst.z);
-            put(inst.offset);
-            put(inst.aux);
-            put(inst.imm_a);
-            put(inst.imm_b);
-        });
-        const bool zero = std::ranges::all_of(body.registers,
-            [](const kernel_word::Word& word) { return word.a == 0U && word.b == 0U; });
-        put(body.registers.size());
-        put(zero ? 1U : 0U);
-        if (!zero) {
-            for (const auto& word : body.registers) {
-                put(word.a);
-                put(word.b);
+        const auto size_class = [](const std::uint64_t value) -> unsigned {
+            return value == 0U ? 0U
+                : value <= 0xffU ? 1U
+                : value <= 0xffffffffU ? 2U : 3U;
+        };
+        unsigned classes { };
+        for (std::size_t index = 0U; index < values.size(); ++index) {
+            classes |= size_class(values[index]) << (2U * index);
+        }
+        out_.push_back(static_cast<char>(classes));
+        for (std::size_t index = 0U; index < values.size(); ++index) {
+            for (unsigned byte = 0U; byte < group_sizes[(classes >> (2U * index)) & 3U];
+                 ++byte) {
+                out_.push_back(static_cast<char>(values[index] >> (8U * byte)));
             }
         }
-        integers(body.register_widths);
+    }
+    /// The count, then the values four at a time (the last group padded with
+    /// zeros).
+    template <typename T>
+        requires std::is_integral_v<T> && (!std::is_same_v<T, bool>)
+    void grouped(const std::vector<T>& values)
+    {
+        put(values.size());
+        for (std::size_t index = 0U; index < values.size(); index += 4U) {
+            std::array<std::uint64_t, 4U> four { };
+            for (std::size_t lane = 0U; lane < 4U && index + lane < values.size(); ++lane) {
+                four[lane] = static_cast<std::uint64_t>(values[index + lane]);
+            }
+            group(four);
+        }
+    }
+    void grouped(const std::vector<kernel_word::Word>& words)
+    {
+        put(words.size());
+        for (std::size_t index = 0U; index < words.size(); index += 2U) {
+            std::array<std::uint64_t, 4U> four { };
+            four[0] = words[index].a;
+            four[1] = words[index].b;
+            if (index + 1U < words.size()) {
+                four[2] = words[index + 1U].a;
+                four[3] = words[index + 1U].b;
+            }
+            group(four);
+        }
+    }
+    /// Instructions: three groups each (opcode, sub, flags, width; d, x, y,
+    /// z; offset, aux and the two immediates).
+    void grouped(const std::vector<KInst>& code)
+    {
+        put(code.size());
+        for (const auto& inst : code) {
+            group({ static_cast<std::uint64_t>(inst.op), inst.sub, inst.flags, inst.width });
+            group({ inst.d, inst.x, inst.y, inst.z });
+            group({ inst.offset, inst.aux, inst.imm_a, inst.imm_b });
+        }
+    }
+    /// Bytes as they are.
+    void raw(const std::vector<std::uint8_t>& values)
+    {
+        put(values.size());
+        out_.append(reinterpret_cast<const char*>(values.data()), values.size());
+    }
+    void body(const static_kernel_detail::CompiledBody& body)
+    {
+        grouped(body.code);
+        const bool zero = std::ranges::all_of(body.registers,
+            [](const kernel_word::Word& word) { return word.a == 0U && word.b == 0U; });
+        put(zero ? 1U : 0U);
+        if (zero) {
+            put(body.registers.size());
+        } else {
+            grouped(body.registers);
+        }
+        grouped(body.register_widths);
         list(body.indices, [&](const DynamicIndex& index) {
             put(index.index);
             put_signed(index.left);
@@ -575,23 +634,20 @@ public:
             put(operand.width);
             put(operand.unknown);
         });
-        integers(body.containers);
+        grouped(body.containers);
         put(body.entry);
         list(body.wide_registers, [&](const PackedLogic4& value) { packed(value); });
-        integers(body.wide_base);
-        list(body.wide_constants, [&](const kernel_word::Word& word) {
-            put(word.a);
-            put(word.b);
-        });
-        integers(body.return_targets);
-        integers(body.live_at_entry);
+        grouped(body.wide_base);
+        grouped(body.wide_constants);
+        grouped(body.return_targets);
+        grouped(body.live_at_entry);
         put(body.shadow_base);
-        integers(body.tracked);
-        integers(body.u_mode);
-        integers(body.u_operand_begin);
-        integers(body.u_operands);
+        raw(body.tracked);
+        raw(body.u_mode);
+        grouped(body.u_operand_begin);
+        grouped(body.u_operands);
         put(body.call_stack_base);
-        integers(body.resume_entries);
+        grouped(body.resume_entries);
     }
     /// Width plus the raw bit planes (two four-state, four logic9).
     void packed(const PackedLogic4& value)
@@ -712,29 +768,144 @@ public:
     {
         return list(values, [&](T& value) { return get(value); });
     }
-    bool body(static_kernel_detail::CompiledBody& body)
+    /// BodyWriter::group. The bytes come from the same build, so each value
+    /// fits the field it is read into.
+    bool group(std::array<std::uint64_t, 4U>& values)
     {
-        std::uint64_t registers { };
-        bool zero { };
-        if (!list(body.code, [&](KInst& inst) {
-                return get(inst.op) && get(inst.sub) && get(inst.flags)
-                    && get(inst.width) && get(inst.d) && get(inst.x) && get(inst.y)
-                    && get(inst.z) && get(inst.offset) && get(inst.aux)
-                    && get(inst.imm_a) && get(inst.imm_b);
-            })
-            || !get(registers) || !get(zero)
-            || registers > (std::uint64_t { 1 } << 32U)) {
+        // The longest group: its class byte and four eight-byte values. With
+        // that many bytes left each value is one unaligned load, masked.
+        constexpr std::size_t longest = 1U + 4U * 8U;
+        static constexpr std::array<std::uint64_t, 4U> masks {
+            0U, 0xffU, 0xffffffffU, ~std::uint64_t { 0 } };
+        const auto* data = bytes_.data();
+        if (bytes_.size() - at_ >= longest + 8U) {
+            const auto classes = static_cast<unsigned char>(data[at_++]);
+            for (std::size_t index = 0U; index < values.size(); ++index) {
+                const auto size_class = (classes >> (2U * index)) & 3U;
+                std::uint64_t word { };
+                std::memcpy(&word, data + at_, sizeof(word));
+                values[index] = word & masks[size_class];
+                at_ += group_sizes[size_class];
+            }
+            return true;
+        }
+        if (at_ == bytes_.size()) {
             return false;
         }
-        body.registers.assign(static_cast<std::size_t>(registers), { });
-        if (!zero) {
-            for (auto& word : body.registers) {
-                if (!get(word.a) || !get(word.b)) {
-                    return false;
-                }
+        const auto classes = static_cast<unsigned char>(data[at_++]);
+        for (std::size_t index = 0U; index < values.size(); ++index) {
+            const auto size = group_sizes[(classes >> (2U * index)) & 3U];
+            if (bytes_.size() - at_ < size) {
+                return false;
+            }
+            values[index] = 0U;
+            for (unsigned byte = 0U; byte < size; ++byte) {
+                values[index] |= static_cast<std::uint64_t>(
+                    static_cast<unsigned char>(data[at_++])) << (8U * byte);
             }
         }
-        return integers(body.register_widths)
+        return true;
+    }
+    template <typename T>
+        requires std::is_integral_v<T> && (!std::is_same_v<T, bool>)
+    bool grouped(std::vector<T>& values)
+    {
+        std::uint64_t count { };
+        // Each group of four takes at least one byte.
+        if (!get(count) || count / 4U > bytes_.size() - at_) {
+            return false;
+        }
+        values.resize(static_cast<std::size_t>(count));
+        std::array<std::uint64_t, 4U> four { };
+        for (std::size_t index = 0U; index < values.size(); index += 4U) {
+            if (!group(four)) {
+                return false;
+            }
+            for (std::size_t lane = 0U; lane < 4U && index + lane < values.size(); ++lane) {
+                values[index + lane] = static_cast<T>(four[lane]);
+            }
+        }
+        return true;
+    }
+    bool grouped(std::vector<kernel_word::Word>& words)
+    {
+        std::uint64_t count { };
+        if (!get(count) || count / 2U > bytes_.size() - at_) {
+            return false;
+        }
+        words.resize(static_cast<std::size_t>(count));
+        std::array<std::uint64_t, 4U> four { };
+        for (std::size_t index = 0U; index < words.size(); index += 2U) {
+            if (!group(four)) {
+                return false;
+            }
+            words[index] = { four[0], four[1] };
+            if (index + 1U < words.size()) {
+                words[index + 1U] = { four[2], four[3] };
+            }
+        }
+        return true;
+    }
+    bool grouped(std::vector<KInst>& code)
+    {
+        std::uint64_t count { };
+        // Each instruction takes at least three bytes.
+        if (!get(count) || count > (bytes_.size() - at_) / 3U) {
+            return false;
+        }
+        code.resize(static_cast<std::size_t>(count));
+        std::array<std::uint64_t, 4U> four { };
+        for (auto& inst : code) {
+            if (!group(four)) {
+                return false;
+            }
+            inst.op = static_cast<KOp>(four[0]);
+            inst.sub = static_cast<std::uint8_t>(four[1]);
+            inst.flags = static_cast<std::uint8_t>(four[2]);
+            inst.width = static_cast<std::uint32_t>(four[3]);
+            if (!group(four)) {
+                return false;
+            }
+            inst.d = static_cast<std::uint32_t>(four[0]);
+            inst.x = static_cast<std::uint32_t>(four[1]);
+            inst.y = static_cast<std::uint32_t>(four[2]);
+            inst.z = static_cast<std::uint32_t>(four[3]);
+            if (!group(four)) {
+                return false;
+            }
+            inst.offset = static_cast<std::uint32_t>(four[0]);
+            inst.aux = static_cast<std::uint32_t>(four[1]);
+            inst.imm_a = four[2];
+            inst.imm_b = four[3];
+        }
+        return true;
+    }
+    bool raw(std::vector<std::uint8_t>& values)
+    {
+        std::uint64_t count { };
+        if (!get(count) || count > bytes_.size() - at_) {
+            return false;
+        }
+        values.assign(bytes_.data() + at_, bytes_.data() + at_ + count);
+        at_ += static_cast<std::size_t>(count);
+        return true;
+    }
+    bool body(static_kernel_detail::CompiledBody& body)
+    {
+        bool zero { };
+        if (!grouped(body.code) || !get(zero)) {
+            return false;
+        }
+        if (zero) {
+            std::uint64_t registers { };
+            if (!get(registers) || registers > (std::uint64_t { 1 } << 32U)) {
+                return false;
+            }
+            body.registers.assign(static_cast<std::size_t>(registers), { });
+        } else if (!grouped(body.registers)) {
+            return false;
+        }
+        return grouped(body.register_widths)
             && list(body.indices, [&](DynamicIndex& index) {
                    return get(index.index) && get_signed(index.left)
                        && get_signed(index.right) && get(index.base_offset)
@@ -749,17 +920,14 @@ public:
                    return get(operand.reg) && get(operand.width)
                        && get(operand.unknown);
                })
-            && integers(body.containers) && get(body.entry)
+            && grouped(body.containers) && get(body.entry)
             && list(body.wide_registers, [&](PackedLogic4& value) { return packed(value); })
-            && integers(body.wide_base)
-            && list(body.wide_constants, [&](kernel_word::Word& word) {
-                   return get(word.a) && get(word.b);
-               })
-            && integers(body.return_targets) && integers(body.live_at_entry)
-            && get(body.shadow_base) && integers(body.tracked)
-            && integers(body.u_mode) && integers(body.u_operand_begin)
-            && integers(body.u_operands) && get(body.call_stack_base)
-            && integers(body.resume_entries);
+            && grouped(body.wide_base) && grouped(body.wide_constants)
+            && grouped(body.return_targets) && grouped(body.live_at_entry)
+            && get(body.shadow_base) && raw(body.tracked)
+            && raw(body.u_mode) && grouped(body.u_operand_begin)
+            && grouped(body.u_operands) && get(body.call_stack_base)
+            && grouped(body.resume_entries);
     }
     bool packed(PackedLogic4& value)
     {

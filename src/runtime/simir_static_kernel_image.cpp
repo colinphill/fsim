@@ -11,7 +11,8 @@
 // and schedule stages, follows that state (record_collapse_plan).
 //
 // The bytes are BodyWriter varints, field by field in declaration order
-// (boost::pfr), and are read back only by the same build: the cache key
+// (boost::pfr), with arrays of integers and words four values to a group
+// (BodyWriter::group); they are read back only by the same build: the cache key
 // includes static_kernel_image_identity, and the image starts with a digest
 // of the specification it was made for. Under FSIM_VERIFY_ARTIFACT=1 the
 // caller builds afresh and compares the images instead.
@@ -58,6 +59,14 @@ template <typename T>
 struct is_vector : std::false_type { };
 template <typename T, typename A>
 struct is_vector<std::vector<T, A>> : std::true_type { };
+
+/// Vectors stored four values to a group (BodyWriter::grouped).
+template <typename T>
+struct is_grouped_vector : std::false_type { };
+template <typename T, typename A>
+struct is_grouped_vector<std::vector<T, A>>
+    : std::bool_constant<(std::is_integral_v<T> && !std::is_same_v<T, bool>)
+          || std::is_same_v<T, kernel_word::Word>> { };
 
 template <typename T>
 struct is_optional : std::false_type { };
@@ -173,6 +182,8 @@ public:
                     out_.packed(element);
                 }
             }
+        } else if constexpr (is_grouped_vector<T>::value) {
+            out_.grouped(value);
         } else if constexpr (is_vector<T>::value) {
             out_.put(value.size());
             for (const auto& element : value) {
@@ -280,6 +291,8 @@ public:
                 }
             }
             return true;
+        } else if constexpr (is_grouped_vector<T>::value) {
+            return in_.grouped(value);
         } else if constexpr (is_vector<T>::value) {
             std::uint64_t count { };
             // Each element takes at least one byte.

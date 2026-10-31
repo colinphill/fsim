@@ -1363,36 +1363,85 @@ ProcessId Interpreter::add_process_impl(
 }
 
 const Interpreter::Impl::OperationBodyKinds* Interpreter::Impl::body_kinds(
-    const OperationList& operations)
+    const OperationList& operations, OperationBodyKinds& scratch)
 {
-    if (operations.empty() || operations.has_operation_overrides()) {
+    if (operations.empty()) {
         return nullptr;
     }
+    using SampledRead = OperationBodyKinds::SampledReadSignals;
+    const auto sampled = [](const Operation& operation,
+                             const std::size_t instruction)
+        -> std::optional<SampledRead> {
+        const auto* read = operation_get_if<ReadSignal>(&operation);
+        if (read == nullptr || read->kind == SignalReadKind::current) {
+            return std::nullopt;
+        }
+        return SampledRead { instruction, read->signal, read->clock, read->gate };
+    };
+    const auto transaction_wait = [](const Operation& operation) {
+        const auto* wait = operation_get_if<WaitOn>(&operation);
+        return wait != nullptr
+            && std::ranges::find(wait->edges, EdgeKind::transaction)
+                != wait->edges.end();
+    };
     const auto [entry, inserted]
         = operation_body_kinds.try_emplace(operations.body_identity());
-    auto& summary = entry->second;
+    auto& shared = entry->second;
     if (inserted) {
-        summary.body = operations;
+        shared.body = operations;
         const auto* const body = operations.data();
         for (std::size_t index = 0U; index < operations.size(); ++index) {
             const auto& operation = body[index];
-            summary.kinds.set(
-                static_kernel_detail::operation_kind_ordinal(operation));
-            if (const auto* read = operation_get_if<ReadSignal>(&operation)) {
-                if (read->kind != SignalReadKind::current) {
-                    summary.sampled_read = true;
-                    summary.sampled_reads.push_back({
-                        read->signal, read->clock, read->gate });
-                }
-            } else if (const auto* wait
-                       = operation_get_if<WaitOn>(&operation)) {
-                summary.transaction_wait = summary.transaction_wait
-                    || std::ranges::find(wait->edges, EdgeKind::transaction)
-                        != wait->edges.end();
+            ++shared.kind_counts[
+                static_kernel_detail::operation_kind_ordinal(operation)];
+            if (auto read = sampled(operation, index)) {
+                shared.summary.sampled_reads.push_back(*read);
+            } else if (transaction_wait(operation)) {
+                ++shared.transaction_waits;
             }
         }
+        for (std::size_t kind = 0U; kind < shared.kind_counts.size(); ++kind) {
+            shared.summary.kinds.set(kind, shared.kind_counts[kind] != 0U);
+        }
+        shared.summary.sampled_read = !shared.summary.sampled_reads.empty();
+        shared.summary.transaction_wait = shared.transaction_waits != 0U;
     }
-    return &summary;
+    if (!operations.has_operation_overrides()) {
+        return &shared.summary;
+    }
+    // The body's counts with each replaced operation exchanged for the
+    // instance's override; sampled reads merged in program order.
+    auto counts = shared.kind_counts;
+    auto waits = shared.transaction_waits;
+    const auto* const body = operations.data();
+    scratch.sampled_reads.clear();
+    auto read = shared.summary.sampled_reads.begin();
+    const auto reads_end = shared.summary.sampled_reads.end();
+    operations.visit_operation_override_positions(
+        [&](const std::size_t position) {
+            const auto& replaced = body[position];
+            const auto& own_operation = operations[position];
+            --counts[static_kernel_detail::operation_kind_ordinal(replaced)];
+            ++counts[static_kernel_detail::operation_kind_ordinal(own_operation)];
+            waits -= transaction_wait(replaced) ? 1U : 0U;
+            waits += transaction_wait(own_operation) ? 1U : 0U;
+            for (; read != reads_end && read->instruction < position; ++read) {
+                scratch.sampled_reads.push_back(*read);
+            }
+            if (read != reads_end && read->instruction == position) {
+                ++read;
+            }
+            if (auto own = sampled(own_operation, position)) {
+                scratch.sampled_reads.push_back(*own);
+            }
+        });
+    scratch.sampled_reads.insert(scratch.sampled_reads.end(), read, reads_end);
+    for (std::size_t kind = 0U; kind < counts.size(); ++kind) {
+        scratch.kinds.set(kind, counts[kind] != 0U);
+    }
+    scratch.sampled_read = !scratch.sampled_reads.empty();
+    scratch.transaction_wait = waits != 0U;
+    return &scratch;
 }
 
 void Interpreter::Impl::observe_signal_transaction(const SignalId signal)
@@ -1429,36 +1478,19 @@ void Interpreter::Impl::record_sampled_dependencies(
     const auto& operations = process.operations();
     // A shared body lists its sampled reads once; only the per-instance
     // signal remap is applied here.
-    if (const auto* const kinds = body_kinds(operations)) {
-        for (const auto& read : kinds->sampled_reads) {
-            requires_sampled_values = true;
-            record_sampled_dependency(operations.signal(read.signal));
-            if (read.clock) {
-                record_sampled_dependency(operations.signal(*read.clock));
-            }
-            if (read.gate) {
-                record_sampled_dependency(operations.signal(*read.gate));
-            }
-        }
+    OperationBodyKinds scratch;
+    const auto* const kinds = body_kinds(operations, scratch);
+    if (kinds == nullptr) {
         return;
     }
-    // Like transaction observation in add_process_program_impl, map just
-    // the IDs that contribute to the sampled-value mask without copying
-    // expanded operation payloads.
-    for (std::size_t instruction = 0U;
-         instruction < operations.size(); ++instruction) {
-        const auto& operation = operations[instruction];
-        const auto* read = operation_get_if<ReadSignal>(&operation);
-        if (read == nullptr || read->kind == SignalReadKind::current) {
-            continue;
-        }
+    for (const auto& read : kinds->sampled_reads) {
         requires_sampled_values = true;
-        record_sampled_dependency(operations.signal(read->signal));
-        if (read->clock) {
-            record_sampled_dependency(operations.signal(*read->clock));
+        record_sampled_dependency(operations.signal(read.signal));
+        if (read.clock) {
+            record_sampled_dependency(operations.signal(*read.clock));
         }
-        if (read->gate) {
-            record_sampled_dependency(operations.signal(*read->gate));
+        if (read.gate) {
+            record_sampled_dependency(operations.signal(*read.gate));
         }
     }
 }
@@ -1769,7 +1801,9 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     }
     // Instances of one body share a kinds summary; a body without the
     // operations below skips each per-instruction scan.
-    const auto* const kinds = body_kinds(process.operations());
+    OperationBodyKinds process_scratch;
+    OperationBodyKinds registration_scratch;
+    const auto* const kinds = body_kinds(process.operations(), process_scratch);
     const auto has_kind = [&]<typename... Kinds>() {
         return kinds == nullptr
             || (kinds->kinds.test(static_kernel_detail::operation_kind_of<Kinds>)
@@ -1779,7 +1813,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     // add_process_program_impl's `registration`).
     const auto& registered = registration != nullptr ? *registration : process;
     const auto* const registered_kinds = registration != nullptr
-        ? body_kinds(registered.operations()) : kinds;
+        ? body_kinds(registered.operations(), registration_scratch) : kinds;
     const auto has_registered_kind = [&]<typename... Kinds>() {
         return registered_kinds == nullptr
             || (registered_kinds->kinds.test(

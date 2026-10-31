@@ -1364,7 +1364,8 @@ void Interpreter::Impl::prepare_systemverilog_update_pool()
         const auto program = processes.program_view(id);
         // Instances of one operation body share its summary; a body with
         // none of the tagged write kinds skips the per-operation scan.
-        const auto* const kinds = body_kinds(program.operations());
+        OperationBodyKinds scratch;
+        const auto* const kinds = body_kinds(program.operations(), scratch);
         if (kinds != nullptr
             && !kinds->kinds.test(
                 static_kernel_detail::operation_kind_of<WriteUpdate>)

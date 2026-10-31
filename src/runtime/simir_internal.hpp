@@ -1521,26 +1521,37 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::unordered_map<const void*,
         std::shared_ptr<ProcessStartupWriteBodyCache>>
         startup_write_body_caches;
-    // Operation kinds present in each shared body, so registration scans a
-    // body once rather than once per instance. The copied list pins the body
-    // until start; instances with operation overrides scan themselves.
+    // Operation kinds present in a process's operations, so registration
+    // scans each shared body once rather than once per instance.
     struct OperationBodyKinds {
-        OperationList body;
         std::bitset<static_kernel_detail::operation_kind_count> kinds;
         bool sampled_read { };
         bool transaction_wait { };
         // Canonical signal IDs of each non-current ReadSignal, in program
         // order; instances map them through their own signal remap.
         struct SampledReadSignals {
+            std::size_t instruction { };
             SignalId signal { };
             std::optional<SignalId> clock { };
             std::optional<SignalId> gate { };
         };
         std::vector<SampledReadSignals> sampled_reads;
     };
-    std::unordered_map<const void*, OperationBodyKinds> operation_body_kinds;
+    // A shared body's summary. The copied list pins the body until start;
+    // the counts let an instance with operation overrides exchange each
+    // replaced operation for its override (body_kinds).
+    struct SharedBodyKinds {
+        OperationList body;
+        OperationBodyKinds summary;
+        std::array<std::uint32_t, static_kernel_detail::operation_kind_count>
+            kind_counts { };
+        std::uint32_t transaction_waits { };
+    };
+    std::unordered_map<const void*, SharedBodyKinds> operation_body_kinds;
+    /// The summary of `operations`, or null when they are empty. An instance
+    /// with operation overrides gets its own summary, in `scratch`.
     [[nodiscard]] const OperationBodyKinds* body_kinds(
-        const OperationList& operations);
+        const OperationList& operations, OperationBodyKinds& scratch);
     // Index by the original ProcessId. Eligible constant continuous
     // assignments keep their process identity and startup literal, while
     // startup execution stages the write without materializing a register
