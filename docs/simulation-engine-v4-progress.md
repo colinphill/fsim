@@ -138,6 +138,49 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-31: Phase 7 fourth gate — Track E post-walk stages: parallel elaboration, shared body scans, AOT graph handoff (`3ef8ec21`, sweeps `v4c61`, `v4c61a`)
+
+Plan: `.local-artifacts/v4-migration/triage/phase7-cycle-based-plan-1030.md`, sections "Track E post-walk stages" and after.
+
+**What landed in `3ef8ec21`:**
+- **S1: the `--aot` reload adopts the region graph built during elaboration** instead of rebuilding it (owner's graph-handoff variant).
+- **S2: each shared template body is scanned once.** `SharedBodyOperationScan` keeps the positions of the operations a pass cares about per body and visits instance overrides on top. It serves the finalize scans (constant nets, driver validation, element nets, freeze), the planner scans and the region graph.
+- **P1: the post-walk stages run on the `--jobs` threads.** This is `fsim/support/parallel_for.hpp`. Each work item writes only its own slot, or its worker's. Results merge in index order, and the exception of the lowest failing index is the one raised. Outside `--aot`, the planner and kernel build stay serial.
+  - publish: the compiled-HIR, design-IR and coverage payloads are encoded beside the runtime encode;
+  - finalize: driver validation pass 2, element-net candidates, constant-nets pass A, freeze collection and sort;
+  - planner: the classify loop and the VCD, group, nonmember-touch and hosted-lazy scans;
+  - region graph: per-process effect logs replayed in process order; read ranges computed per distinct body;
+  - kernel build: members built in parallel, with shared records made in member order; partition programs concatenated in parallel.
+- **S3 ended with no change.** A memo for encode-collect path lookups measured slower (126 vs 118 ms) and was reverted. Decode already interns each string once. Design IR's lookups are ancestor-prefix probes, which a memo does not help.
+- **Also:** VHDL indexing of a function call result (`to_bitvector(v)(0)`) now lowers. The constant evaluator's "being examined" mark is scoped. New test `fsim.support.parallel_for`.
+- **Owner decisions:**
+  - No ct4 or sweeps until parallel elaboration was finished.
+  - Questions unanswered for 2 minutes take the recommended option.
+  - TSan run skipped.
+  - The P1 pieces first left serial (plan touch scans, partition concatenation) were finished before the gate.
+
+**Identity and timing** (live builds, `--jobs 8`, CPUs 8–15, 5 interleaved runs against v4c60):
+- All six D6 cases are identical: the snapshot byte for byte, native objects after masking build-identity names. Codegen chunking makes native objects of jobs 1 and jobs 8 differ on any binary; snapshots do not.
+- original_codec elaboration: wall 8.74 → 7.82 s, static kernel plan 671 → 200 ms, finalize 1110 → 517 ms, kernel member loop 169 → 77 ms.
+
+**Gate:**
+- ct4: 1086/1093 in all four variants. The 7 failures were source-tree audits of the new files: manifest order, and a missing SPDX notice on `simir_shared_body_scan.hpp`. Both were fixed; the 7, with their fixture dependencies (24 tests), then passed.
+- Normal sweep `v4c61` (frozen `3ef8ec21`): 0 losses against `v4c60` and against `b96x1`.
+- AOT sweep `v4c61a`: 0 losses against `v4c60a`.
+- Census tables identical to `v4c60` and `v4c60a`.
+- vgate: mixed_codec and mixed_throughput identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+**D6 campaign `v4c61-g5`** (3 samples, CPU 9). The campaign elaborates at `--jobs 1`, so it shows only the serial changes (S1, S2) and none of P1's threading:
+
+| Measure | v4c60 | v4c61 |
+|---|---:|---:|
+| Geomean e2e (× xsim) | 3.67× | 3.76× |
+| Minimum simulate (× xsim) | 3.50× (mixed_codec) | 3.57× (mixed_codec) |
+
+- fsim elaborate, median: original_throughput 3.59 → 3.34 s, mixed_codec 7.00 → 6.70 s, original_codec 8.91 → 8.96 s, mixed_throughput 2.53 → 2.53 s.
+- xsim times moved by up to 8% between campaigns, which is part of the ratio change.
+
 ### 2026-10-31: Phase 7 third gate — Track E E1a, VHDL `to_bit` on SystemVerilog-driven ports (`f92a22a0`, sweeps `v4c60`, `v4c60a`)
 
 Plan: `.local-artifacts/v4-migration/triage/phase7-cycle-based-plan-1030.md`, sections "Track E" and after.
