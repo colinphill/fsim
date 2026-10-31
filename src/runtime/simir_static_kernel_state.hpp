@@ -1136,6 +1136,12 @@ private:
     /// FSIM_PROFILE_KERNEL: dispatch groups by fusion outcome, and fused runs.
     std::map<std::string, std::uint32_t> profile_fused_groups_;
     std::uint64_t profile_fused_runs_ { };
+    /// FSIM_PROFILE_KERNEL: partition pass instructions (all, before the
+    /// earliest woken member, passes without a recorded wake) and each
+    /// queued partition's earliest woken position.
+    std::vector<std::uint64_t> profile_partition_pass_ops_;
+    std::vector<std::uint32_t> profile_partition_first_wake_;
+    void note_partition_wake(std::uint32_t partition, std::uint32_t position);
     void build_native(StaticKernelCodegen& codegen);
     /// Whether every register's X plane and 'U' mask is zero (clearing them
     /// for registers each activation writes before reading).

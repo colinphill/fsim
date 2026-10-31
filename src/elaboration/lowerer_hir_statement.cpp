@@ -6713,10 +6713,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     span);
                 return true;
             }
+            const auto diagnostics_before = diagnostics_.size();
             const auto lowered = lower_hir_container_assignment_pattern(
                 *value, *container);
             if (!lowered) {
-                return !diagnostics_.empty();
+                return diagnostics_.size() != diagnostics_before;
             }
             if (container->local) {
                 process_.operations.emplace_back(CopyContainerRegister {
@@ -7343,6 +7344,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     return true;
                 }
                 if (static_slice || typed_container_value) {
+                    const auto diagnostics_before = diagnostics_.size();
                     const auto source_register
                         = lower_hir_static_container_actual(
                             *value, *container->type);
@@ -7361,7 +7363,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 hir_source_span(container_source.source));
                             return true;
                         }
-                        return !diagnostics_.empty();
+                        return diagnostics_.size() != diagnostics_before;
                     }
                     process_.operations.emplace_back(
                         CopyContainerRegister {
@@ -7373,11 +7375,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     if (source_container->type != nullptr
                         && source_container->type->fixed
                         && container->type->fixed) {
+                        const auto diagnostics_before = diagnostics_.size();
                         const auto source_register
                             = lower_hir_static_container_actual(
                                 *value, *container->type);
                         if (!source_register) {
-                            return !diagnostics_.empty();
+                            return diagnostics_.size() != diagnostics_before;
                         }
                         process_.operations.emplace_back(
                             CopyContainerRegister {
@@ -8405,13 +8408,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     HirContainerObjectBinding element_binding {
                         element->declaration, { }, element->object,
                         std::nullopt, element->selected_type, false };
+                    const auto diagnostics_before = diagnostics_.size();
                     if (!lower_hir_container_assignment_pattern(*value,
                             element_binding,
                             HirAggregateElementTarget { target_container,
                                 *target_index,
                                 element->indices.size() > 1U
                                     || element->type->signed_indices })) {
-                        return !diagnostics_.empty()
+                        return diagnostics_.size() != diagnostics_before
                             || assignment_rejected(__LINE__);
                     }
                     if (!element->local) {
@@ -11965,10 +11969,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && *element_width < binding->width
                 && *vhdl_dynamic_slice_width != 0U
                 && *vhdl_dynamic_slice_width <= *element_width) {
+                const auto diagnostics_before = diagnostics_.size();
                 const auto within = lower_hir_vhdl_dynamic_slice(
                     *target, *element_width, *vhdl_dynamic_slice_width);
                 if (!within) {
-                    return !diagnostics_.empty();
+                    return diagnostics_.size() != diagnostics_before;
                 }
                 const auto offset = lower_hir_vhdl_dynamic_element_offset(
                     element->vhdl->operands[0], element->vhdl->operands[1],
@@ -12011,6 +12016,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto source_width = member_width
                 ? *member_width
                 : binding->width;
+            const auto diagnostics_before = diagnostics_.size();
             dynamic_vhdl_selection = lower_hir_vhdl_dynamic_slice(
                 *target,
                 source_width,
@@ -12019,7 +12025,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     ? static_cast<std::uint32_t>(*member_offset)
                     : 0U);
             if (!dynamic_vhdl_selection) {
-                return !diagnostics_.empty();
+                return diagnostics_.size() != diagnostics_before;
             }
         }
         const auto dynamic_part_width = slice && !constant_selection
@@ -21199,6 +21205,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         span);
                     return true;
                 }
+                guard_design_write();
                 design_.sdf_annotation_requests_.push_back(
                     { std::move(file), std::move(scope) });
                 return true;
@@ -25873,6 +25880,7 @@ std::optional<SignalId> Lowerer::hir_procedural_assign_owner(
     if (design_.signals_.size() >= std::numeric_limits<SignalId>::max()) {
         return std::nullopt;
     }
+    guard_design_write();
     const auto id = static_cast<SignalId>(design_.signals_.size());
     SignalInfo info;
     info.id = id;
@@ -25956,6 +25964,7 @@ void Lowerer::materialize_hir_procedural_continuous_assignments()
                 hir_source_span(assignment.source));
             continue;
         }
+        guard_design_write();
         const auto process_index = design_.process_count()
             + 1U + generated_processes_.size();
         if (process_index > std::numeric_limits<ProcessId>::max()) {
@@ -26202,6 +26211,7 @@ std::optional<SignalId> Lowerer::hir_local_event_notifier(
     if (design_.signals_.size() >= std::numeric_limits<SignalId>::max()) {
         return std::nullopt;
     }
+    guard_design_write();
     const auto id = static_cast<SignalId>(design_.signals_.size());
     SignalInfo info;
     info.id = id;
@@ -26534,6 +26544,7 @@ std::optional<SignalId> Lowerer::hir_class_heap_notifier()
     if (design_.signals_.size() >= std::numeric_limits<SignalId>::max()) {
         return std::nullopt;
     }
+    guard_design_write();
     const auto id = static_cast<SignalId>(design_.signals_.size());
     SignalInfo info;
     info.id = id;
@@ -26707,6 +26718,7 @@ std::optional<SignalId> Lowerer::hir_monitor_expression_signal(
         || design_.signals_.size() >= std::numeric_limits<SignalId>::max()) {
         return std::nullopt;
     }
+    guard_design_write();
     const auto id = static_cast<SignalId>(design_.signals_.size());
     const auto name = (process_.name.empty() ? hierarchy_ : process_.name)
         + ".$monitor_" + std::to_string(id);
@@ -26777,6 +26789,7 @@ void Lowerer::materialize_hir_monitor_drivers()
         description.always_comb_or_latch = true;
         auto driver = driver_lowerer.lower_hir_process_body(
             description, language_, hierarchy_);
+        guard_design_write();
         const auto process_index = design_.process_count()
             + 1U + generated_processes_.size();
         if (!driver

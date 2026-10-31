@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -25,6 +26,13 @@ namespace fsim::elaboration {
 /// the same overlay class whose overlay determines them share one instance
 /// (HierarchyBuilder::overlay_class).
 struct SpecializationConstants {
+    /// Held (semantic::detail::SharedCacheLock) for each lookup and each
+    /// insert of this instance's own tables, never while computing a value:
+    /// lowerers on several threads share the constants.
+    std::mutex mutex;
+    /// The same for the unit_* tables, which derived occurrence
+    /// specializations share with this one.
+    std::shared_ptr<std::mutex> unit_mutex { std::make_shared<std::mutex>() };
     /// evaluate_hir_systemverilog_constant results and errors.
     std::unordered_map<std::uint32_t,
         std::pair<std::optional<HirSystemVerilogConstant>, std::string>>
@@ -130,6 +138,9 @@ struct SpecializationCache {
     const semantic::SpecializedHirUnit& specialization)
 {
     auto& cache = specialization.client_cache();
+    semantic::detail::SharedCacheLock lock {
+        semantic::detail::shared_cache_creation_mutex()
+    };
     if (!cache) {
         cache = std::make_shared<SpecializationCache>();
     }
@@ -147,6 +158,7 @@ derive_occurrence_specialization(
     auto derived = parent.with_hierarchy_identities(identities);
     auto& derived_constants = *specialization_cache(derived).constants;
     const auto& parent_constants = *specialization_cache(parent).constants;
+    derived_constants.unit_mutex = parent_constants.unit_mutex;
     derived_constants.unit_declarations = parent_constants.unit_declarations;
     derived_constants.unit_expressions = parent_constants.unit_expressions;
     derived_constants.unit_calls = parent_constants.unit_calls;

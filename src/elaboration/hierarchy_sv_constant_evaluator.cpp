@@ -19,6 +19,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <set>
 #include <ranges>
 #include <string_view>
 #include <unordered_set>
@@ -32,6 +33,7 @@ using boost::multiprecision::cpp_int;
 using runtime::Logic4;
 using runtime::PackedLogic4;
 using Value = HirSystemVerilogConstant;
+using semantic::detail::SharedCacheLock;
 using ExpressionKind = semantic::sv::ExpressionKind;
 using Scalar = frontend::SystemVerilogScalarConstant;
 using ScalarKind = frontend::SystemVerilogScalarKind;
@@ -215,13 +217,18 @@ systemverilog_constant_name_declaration(
     const semantic::SpecializedHirUnit& specialization,
     const semantic::sv::Expression& expression)
 {
-    auto& known = specialization_cache(specialization).constants->name_declarations;
-    if (const auto found = known.find(&expression); found != known.end()) {
-        return found->second;
+    auto& constants = *specialization_cache(specialization).constants;
+    {
+        SharedCacheLock lock { constants.mutex };
+        if (const auto found = constants.name_declarations.find(&expression);
+            found != constants.name_declarations.end()) {
+            return found->second;
+        }
     }
     const auto result
         = resolve_constant_name_declaration(specialization, expression);
-    known.emplace(&expression, result);
+    SharedCacheLock lock { constants.mutex };
+    constants.name_declarations.emplace(&expression, result);
     return result;
 }
 
@@ -1727,16 +1734,23 @@ private:
     [[nodiscard]] std::optional<Value> convert_record_type(Value value,
         const semantic::sv::TypeReference& type)
     {
-        auto& widths = specialization_cache(specialization_)
-                           .constants->record_type_widths;
-        auto found = widths.find(&type);
-        if (found == widths.end()) {
+        auto& constants = *specialization_cache(specialization_).constants;
+        std::optional<std::optional<std::uint64_t>> width;
+        {
+            SharedCacheLock lock { constants.mutex };
+            if (const auto found = constants.record_type_widths.find(&type);
+                found != constants.record_type_widths.end()) {
+                width = found->second;
+            }
+        }
+        if (!width) {
             std::unordered_set<std::uint32_t> visiting;
-            found = widths.emplace(&type,
-                resolved_type_width(type, &specialization_, visiting)).first;
+            width = resolved_type_width(type, &specialization_, visiting);
+            SharedCacheLock lock { constants.mutex };
+            constants.record_type_widths.emplace(&type, *width);
         }
         return convert_constant_to_width(std::move(value), type, error_,
-            found->second);
+            *width);
     }
 
     // Hierarchy identities read so far, including through cached values
@@ -1933,11 +1947,14 @@ private:
         if (fixed_one_dimensional_array_type(type)) {
             return type;
         }
-        auto& kept = specialization_cache(specialization_)
-                         .constants->unpacked_array_types;
-        if (const auto found = kept.find(&type);
-            found != kept.end() && found->second.first == scope) {
-            return found->second.second;
+        auto& constants = *specialization_cache(specialization_).constants;
+        {
+            SharedCacheLock lock { constants.mutex };
+            if (const auto found = constants.unpacked_array_types.find(&type);
+                found != constants.unpacked_array_types.end()
+                && found->second.first == scope) {
+                return found->second.second;
+            }
         }
         auto resolved = semantic::CompiledDesignResolver {
             specialization_
@@ -1945,7 +1962,9 @@ private:
         if (resolved && !fixed_one_dimensional_array_type(*resolved)) {
             resolved.reset();
         }
-        kept.insert_or_assign(&type, std::pair { scope, resolved });
+        SharedCacheLock lock { constants.mutex };
+        constants.unpacked_array_types.insert_or_assign(
+            &type, std::pair { scope, resolved });
         return resolved;
     }
 
@@ -2322,15 +2341,19 @@ private:
     [[nodiscard]] std::optional<std::uint32_t> expression_width(
         const semantic::ExpressionId expression) const
     {
-        auto& widths = specialization_cache(specialization_)
-                           .constants->expression_widths;
-        if (const auto found = widths.find(expression.value());
-            found != widths.end()) {
-            return found->second;
+        auto& constants = *specialization_cache(specialization_).constants;
+        {
+            SharedCacheLock lock { constants.mutex };
+            if (const auto found
+                = constants.expression_widths.find(expression.value());
+                found != constants.expression_widths.end()) {
+                return found->second;
+            }
         }
         std::unordered_set<std::uint32_t> visiting;
         const auto width = expression_width(expression, visiting);
-        widths.emplace(expression.value(), width);
+        SharedCacheLock lock { constants.mutex };
+        constants.expression_widths.emplace(expression.value(), width);
         return width;
     }
 
@@ -2384,16 +2407,22 @@ private:
         // (derive_occurrence_specialization). A failure can depend on the
         // remaining work budget, so only values are kept.
         auto& constants = *specialization_cache(specialization_).constants;
-        if (const auto found = constants.declarations.find(
-                declaration.value());
-            found != constants.declarations.end()) {
-            ++hierarchy_reads_;
-            return found->second;
+        {
+            SharedCacheLock lock { constants.mutex };
+            if (const auto found = constants.declarations.find(
+                    declaration.value());
+                found != constants.declarations.end()) {
+                ++hierarchy_reads_;
+                return found->second;
+            }
         }
         auto& unit_values = *constants.unit_declarations;
-        if (const auto found = unit_values.find(declaration.value());
-            found != unit_values.end()) {
-            return found->second;
+        {
+            SharedCacheLock lock { *constants.unit_mutex };
+            if (const auto found = unit_values.find(declaration.value());
+                found != unit_values.end()) {
+                return found->second;
+            }
         }
         const auto reads = hierarchy_reads_;
         const auto keep = [&](std::optional<Value> value) {
@@ -2402,9 +2431,11 @@ private:
                 const bool unit_scope = view && view->systemverilog != nullptr
                     && view->systemverilog->scope == specialization_.scope();
                 if (unit_scope && hierarchy_reads_ == reads) {
+                    SharedCacheLock lock { *constants.unit_mutex };
                     unit_values.emplace(declaration.value(), *value);
                 } else {
                     ++hierarchy_reads_;
+                    SharedCacheLock lock { constants.mutex };
                     constants.declarations.emplace(declaration.value(), *value);
                 }
             }
@@ -3022,11 +3053,14 @@ private:
     [[nodiscard]] const SpecializationConstants::BinaryPlan& binary_plan(
         const semantic::sv::Expression& record)
     {
-        auto& plans = specialization_cache(specialization_)
-                          .constants->binary_plans;
-        if (const auto found = plans.find(record.id.value());
-            found != plans.end()) {
-            return found->second;
+        auto& constants = *specialization_cache(specialization_).constants;
+        {
+            SharedCacheLock lock { constants.mutex };
+            if (const auto found = constants.binary_plans.find(
+                    record.id.value());
+                found != constants.binary_plans.end()) {
+                return found->second;
+            }
         }
         SpecializationConstants::BinaryPlan plan;
         const auto& op = record.text;
@@ -3069,7 +3103,10 @@ private:
                 plan.right_width = expression_width(record.operands.back());
             }
         }
-        return plans.insert_or_assign(record.id.value(), std::move(plan))
+        // A plan once recorded never changes, so callers may keep it.
+        SharedCacheLock lock { constants.mutex };
+        return constants.binary_plans
+            .try_emplace(record.id.value(), std::move(plan))
             .first->second;
     }
 
@@ -4334,15 +4371,20 @@ private:
     [[nodiscard]] const std::optional<semantic::sv::TypeReference>&
     declaration_type(const semantic::DeclarationId declaration_id) const
     {
-        auto& types = specialization_cache(specialization_)
-                          .constants->declaration_types;
-        if (const auto found = types.find(declaration_id.value());
-            found != types.end()) {
-            return found->second;
+        auto& constants = *specialization_cache(specialization_).constants;
+        {
+            SharedCacheLock lock { constants.mutex };
+            if (const auto found = constants.declaration_types.find(
+                    declaration_id.value());
+                found != constants.declaration_types.end()) {
+                return found->second;
+            }
         }
         auto type = resolve_declaration_type(declaration_id);
         // Resolution can resolve other declarations; the entry stays put.
-        return types.try_emplace(declaration_id.value(), std::move(type))
+        SharedCacheLock lock { constants.mutex };
+        return constants.declaration_types
+            .try_emplace(declaration_id.value(), std::move(type))
             .first->second;
     }
 
@@ -5265,13 +5307,20 @@ private:
                        || active.class_owner != nullptr;
                })) {
             memo_key = call_memo_key(callable.id, formals, frame.values);
-            const auto& calls = *specialization_cache(specialization_)
-                                     .constants->unit_calls;
-            if (const auto found = calls.find(memo_key); found != calls.end()) {
-                if (!consume_work(found->second.work)) {
+            auto& constants = *specialization_cache(specialization_).constants;
+            std::optional<SpecializationConstants::CallResult> known;
+            {
+                SharedCacheLock lock { *constants.unit_mutex };
+                if (const auto found = constants.unit_calls->find(memo_key);
+                    found != constants.unit_calls->end()) {
+                    known = found->second;
+                }
+            }
+            if (known) {
+                if (!consume_work(known->work)) {
                     return std::nullopt;
                 }
-                return found->second.value;
+                return std::move(known->value);
             }
         }
         const auto reads_before = hierarchy_reads_;
@@ -5408,8 +5457,9 @@ private:
             std::move(value), callable.callable->return_type);
         if (converted && !memo_key.empty() && hierarchy_reads_ == reads_before
             && error_ == error_before) {
-            specialization_cache(specialization_).constants->unit_calls->emplace(
-                std::move(memo_key),
+            auto& constants = *specialization_cache(specialization_).constants;
+            SharedCacheLock lock { *constants.unit_mutex };
+            constants.unit_calls->emplace(std::move(memo_key),
                 SpecializationConstants::CallResult {
                     *converted, work_units_used_ - work_before });
         }
@@ -5946,14 +5996,19 @@ private:
     [[nodiscard]] bool record_unpacked_aggregate(
         const semantic::sv::TypeReference& type)
     {
-        auto& kinds = specialization_cache(specialization_)
-                          .constants->record_unpacked_aggregates;
-        if (const auto found = kinds.find(&type); found != kinds.end()) {
-            return found->second;
+        auto& constants = *specialization_cache(specialization_).constants;
+        {
+            SharedCacheLock lock { constants.mutex };
+            if (const auto found
+                = constants.record_unpacked_aggregates.find(&type);
+                found != constants.record_unpacked_aggregates.end()) {
+                return found->second;
+            }
         }
         const bool result = unpacked_aggregate(type);
         if (with_unpacked_dimensions(type).unpacked_dimensions.empty()) {
-            kinds.emplace(&type, result);
+            SharedCacheLock lock { constants.mutex };
+            constants.record_unpacked_aggregates.emplace(&type, result);
         }
         return result;
     }
@@ -6210,10 +6265,13 @@ private:
         const semantic::sv::Expression& name,
         const semantic::sv::TypeReference& type) const
     {
-        auto& names = specialization_cache(specialization_)
-                          .constants->structure_array_names;
-        if (const auto found = names.find(&name); found != names.end()) {
-            return found->second;
+        auto& constants = *specialization_cache(specialization_).constants;
+        {
+            SharedCacheLock lock { constants.mutex };
+            if (const auto found = constants.structure_array_names.find(&name);
+                found != constants.structure_array_names.end()) {
+                return found->second;
+            }
         }
         const bool nested = type.packed_dimensions.size() == 2U;
         bool result = type.packed_range && type.packed_dimensions.size() <= 2U
@@ -6231,7 +6289,8 @@ private:
             element.signed_value = false;
             result = packed_members(element) != nullptr;
         }
-        names.emplace(&name, result);
+        SharedCacheLock lock { constants.mutex };
+        constants.structure_array_names.emplace(&name, result);
         return result;
     }
 
@@ -6241,20 +6300,26 @@ private:
         const semantic::sv::Expression& record, const bool integer_literal,
         std::string& error) const
     {
-        auto& literals = specialization_cache(specialization_)
-                             .constants->literals[integer_literal ? 1U : 0U];
-        auto found = literals.find(&record);
-        if (found == literals.end()) {
-            std::string parse_error;
-            auto value = parse_literal(record.text, integer_literal,
-                parse_error);
-            found = literals.emplace(&record,
-                std::pair { std::move(value), std::move(parse_error) }).first;
+        auto& constants = *specialization_cache(specialization_).constants;
+        auto& literals = constants.literals[integer_literal ? 1U : 0U];
+        {
+            SharedCacheLock lock { constants.mutex };
+            if (const auto found = literals.find(&record);
+                found != literals.end()) {
+                if (!found->second.first) {
+                    error = found->second.second;
+                }
+                return found->second.first;
+            }
         }
-        if (!found->second.first) {
-            error = found->second.second;
+        std::string parse_error;
+        auto value = parse_literal(record.text, integer_literal, parse_error);
+        if (!value) {
+            error = parse_error;
         }
-        return found->second.first;
+        SharedCacheLock lock { constants.mutex };
+        literals.emplace(&record, std::pair { value, std::move(parse_error) });
+        return value;
     }
 
     /// The value and type of a constant reached through packed structure
@@ -9175,10 +9240,18 @@ private:
     [[nodiscard]] std::optional<Value> run_callable_program(
         const semantic::sv::Declaration& callable)
     {
-        auto& programs = *specialization_cache(specialization_)
-                              .constants->unit_programs;
-        auto found = programs.find(callable.id.value());
-        if (found == programs.end()) {
+        auto& constants = *specialization_cache(specialization_).constants;
+        auto& programs = *constants.unit_programs;
+        std::optional<std::shared_ptr<const sv_constant_program::Program>>
+            known;
+        {
+            SharedCacheLock lock { *constants.unit_mutex };
+            if (const auto found = programs.find(callable.id.value());
+                found != programs.end()) {
+                known = found->second;
+            }
+        }
+        if (!known) {
             const auto reads = hierarchy_reads_;
             auto program = compile_callable_program(callable);
             // A program folds no hierarchy identity, so it holds for every
@@ -9190,10 +9263,11 @@ private:
                 std::cerr << "FSIM_SV_CONST_PROGRAM compiled " << callable.name
                           << ": " << program->ops.size() << " ops\n";
             }
-            found = programs.emplace(callable.id.value(), std::move(program))
-                        .first;
+            SharedCacheLock lock { *constants.unit_mutex };
+            known = programs.emplace(callable.id.value(), std::move(program))
+                        .first->second;
         }
-        const auto* const program = found->second.get();
+        const auto* const program = known->get();
         if (program == nullptr) {
             return std::nullopt;
         }
@@ -9240,16 +9314,27 @@ private:
     /// Kept for the specialization: it reads declared types, not frames.
     [[nodiscard]] bool real_valued(const semantic::ExpressionId expression)
     {
-        auto& known = specialization_cache(specialization_)
-                          .constants->real_valued;
-        if (const auto found = known.find(expression.value());
-            found != known.end()) {
-            return found->second;
+        auto& constants = *specialization_cache(specialization_).constants;
+        {
+            SharedCacheLock lock { constants.mutex };
+            if (const auto found = constants.real_valued.find(
+                    expression.value());
+                found != constants.real_valued.end()) {
+                return found->second;
+            }
         }
-        // Not real while its own operands are examined.
-        known.emplace(expression.value(), false);
+        // Not real while its own operands are examined. The mark is this
+        // thread's: another lowerer must not read it as the answer.
+        thread_local std::set<std::pair<const SpecializationConstants*,
+            std::uint32_t>> examining;
+        const std::pair key { &constants, expression.value() };
+        if (!examining.insert(key).second) {
+            return false;
+        }
         const auto result = real_valued_impl(expression);
-        known[expression.value()] = result;
+        examining.erase(key);
+        SharedCacheLock lock { constants.mutex };
+        constants.real_valued.emplace(expression.value(), result);
         return result;
     }
 
@@ -10186,15 +10271,21 @@ evaluate_hir_systemverilog_value(
     // occurrence derived from the specialization.
     auto& constants = *specialization_cache(specialization).constants;
     auto& results = constants.expressions;
-    if (const auto found = results.find(expression.value());
-        found != results.end()) {
-        error = found->second.second;
-        return found->second.first;
+    {
+        SharedCacheLock lock { constants.mutex };
+        if (const auto found = results.find(expression.value());
+            found != results.end()) {
+            error = found->second.second;
+            return found->second.first;
+        }
     }
     auto& unit_values = *constants.unit_expressions;
-    if (const auto found = unit_values.find(expression.value());
-        found != unit_values.end()) {
-        return found->second;
+    {
+        SharedCacheLock lock { *constants.unit_mutex };
+        if (const auto found = unit_values.find(expression.value());
+            found != unit_values.end()) {
+            return found->second;
+        }
     }
     HirConstantEvaluator evaluator { specialization, error };
     auto value = evaluator.evaluate(expression);
@@ -10202,8 +10293,10 @@ evaluate_hir_systemverilog_value(
     if (value && evaluator.hierarchy_reads() == 0U && view
         && view->systemverilog != nullptr
         && view->systemverilog->scope == specialization.scope()) {
+        SharedCacheLock lock { *constants.unit_mutex };
         unit_values.emplace(expression.value(), *value);
     } else {
+        SharedCacheLock lock { constants.mutex };
         results.emplace(expression.value(), std::pair { value, error });
     }
     return value;

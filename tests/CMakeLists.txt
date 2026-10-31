@@ -6767,6 +6767,20 @@ if(FSIM_WITH_LLVM)
     TIMEOUT 600)
 endif()
 
+# Standard-logic functions on VHDL std_logic in ports driven from
+# SystemVerilog equal the same entity driven from VHDL.
+add_test(
+  NAME fsim.application.vhdl-logic-port-from-systemverilog
+  COMMAND "${CMAKE_COMMAND}"
+    "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+    "-DFSIM_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/vhdl_logic_port"
+    -P
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/systemverilog/vhdl_logic_port/run_vhdl_logic_port.cmake"
+)
+set_tests_properties(fsim.application.vhdl-logic-port-from-systemverilog PROPERTIES
+  LABELS "application;vhdl;systemverilog;positive"
+  TIMEOUT 600)
+
 # Application cases can create Tcl interpreters directly or launch the CLI
 # from a temporary working directory. Cover both Tcl's native initializer and
 # fsim's override; the separate installed/relocation tests must remain unseeded.

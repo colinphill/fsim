@@ -7496,7 +7496,7 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
                         || record->systemverilog->form
                             == semantic::sv::DeclarationForm::net)
                     && package_constant_signal_
-            ? package_constant_signal_(*declaration)
+            ? request_package_constant_signal(*declaration)
             : std::nullopt;
         if (lexical && record && record->systemverilog != nullptr
             && (hir_static_variable_signal(*declaration) || package_signal)
@@ -8639,7 +8639,7 @@ Lowerer::hir_runtime_binding(
         // A package variable binds to its single design-global signal.
         if (!process_variable && !package_constant && package_constant_signal_
             && source.form != semantic::sv::DeclarationForm::port) {
-            package_constant = package_constant_signal_(declaration_id);
+            package_constant = request_package_constant_signal(declaration_id);
         }
         if (process_variable) {
             auto width = source.type
@@ -8728,7 +8728,7 @@ Lowerer::hir_runtime_binding(
                 return true;
             }
             if (package_constant_signal_) {
-                package_constant = package_constant_signal_(declaration_id);
+                package_constant = request_package_constant_signal(declaration_id);
             }
             return package_constant.has_value();
         };
@@ -9571,7 +9571,7 @@ Lowerer::hir_container_object_binding_for_declaration(
     }
     if (package_container_object_) {
         if (const auto package_object
-            = package_container_object_(*declaration_id)) {
+            = request_package_container_object(*declaration_id)) {
             const auto info = std::ranges::find_if(
                 design_.container_object_info_.rbegin(),
                 design_.container_object_info_.rend(),
@@ -11979,7 +11979,7 @@ Lowerer::hir_string_binding(
         };
     }
     if (package_string_object_) {
-        if (const auto object = package_string_object_(declaration_id)) {
+        if (const auto object = request_package_string_object(declaration_id)) {
             return HirStringBinding {
                 declaration_id, HirStringBindingKind::object, source.name,
                 std::nullopt, object,

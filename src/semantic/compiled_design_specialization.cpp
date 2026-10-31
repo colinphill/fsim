@@ -45,6 +45,29 @@ namespace fsim::semantic {
 
 namespace detail {
 
+namespace {
+
+std::atomic<bool> shared_caches_concurrent_flag { false };
+
+} // namespace
+
+bool shared_caches_concurrent() noexcept
+{
+    return shared_caches_concurrent_flag.load(std::memory_order_relaxed);
+}
+
+void set_shared_caches_concurrent(const bool concurrent) noexcept
+{
+    shared_caches_concurrent_flag.store(
+        concurrent, std::memory_order_relaxed);
+}
+
+std::mutex& shared_cache_creation_mutex() noexcept
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
 std::optional<std::uint64_t> decimal_physical_magnitude(
     const std::string_view text, const std::uint64_t factor)
 {
@@ -424,6 +447,8 @@ struct VhdlOperatorSelection {
 };
 
 struct VhdlOperatorSelectionMemo {
+    /// Held (SharedCacheLock) for each lookup and each insert.
+    std::mutex mutex;
     std::unordered_map<std::uint32_t, VhdlOperatorSelection> selections;
 };
 
@@ -5228,13 +5253,20 @@ private:
         const bool memoized = call_frames_.empty() && class_frames_.empty()
             && expression.id.valid();
         if (memoized) {
-            const auto& selections = unit_.vhdl_operator_selections()
-                                         .selections;
-            if (const auto found = selections.find(expression.id.value());
-                found != selections.end()) {
-                predefined_only = found->second.predefined_only;
-                return found->second.body
-                    ? evaluate_vhdl_callable(expression, *found->second.body)
+            auto& memo = unit_.vhdl_operator_selections();
+            std::optional<detail::VhdlOperatorSelection> known;
+            {
+                detail::SharedCacheLock lock { memo.mutex };
+                if (const auto found
+                    = memo.selections.find(expression.id.value());
+                    found != memo.selections.end()) {
+                    known = found->second;
+                }
+            }
+            if (known) {
+                predefined_only = known->predefined_only;
+                return known->body
+                    ? evaluate_vhdl_callable(expression, *known->body)
                     : std::nullopt;
             }
         }
@@ -5245,7 +5277,9 @@ private:
             name, expression.scope);
         if (visible.candidates.empty()) {
             if (memoized) {
-                unit_.vhdl_operator_selections().selections.insert_or_assign(
+                auto& memo = unit_.vhdl_operator_selections();
+                detail::SharedCacheLock lock { memo.mutex };
+                memo.selections.insert_or_assign(
                     expression.id.value(), detail::VhdlOperatorSelection { });
             }
             return std::nullopt;
@@ -5626,8 +5660,9 @@ private:
             ? std::optional { candidates.front().body }
             : std::nullopt;
         if (memoized) {
-            unit_.vhdl_operator_selections().selections.insert_or_assign(
-                expression.id.value(),
+            auto& memo = unit_.vhdl_operator_selections();
+            detail::SharedCacheLock lock { memo.mutex };
+            memo.selections.insert_or_assign(expression.id.value(),
                 detail::VhdlOperatorSelection { selected, predefined_only });
         }
         return selected ? evaluate_vhdl_callable(expression, *selected)
@@ -8286,14 +8321,19 @@ private:
         const ExpressionId expression,
         const CompiledDeclarationPredicate& predicate) const
     {
-        auto& known = unit_.resolution_memo().named_declarations;
+        auto& memo = unit_.resolution_memo();
         const auto key = detail::ResolutionMemo::named_key(kind, expression);
-        if (const auto found = known.find(key); found != known.end()) {
-            return found->second;
+        {
+            detail::SharedCacheLock lock { memo.mutex };
+            if (const auto found = memo.named_declarations.find(key);
+                found != memo.named_declarations.end()) {
+                return found->second;
+            }
         }
         const auto declaration
             = resolve_vhdl_expression_declaration(expression, predicate);
-        known.emplace(key, declaration);
+        detail::SharedCacheLock lock { memo.mutex };
+        memo.named_declarations.emplace(key, declaration);
         return declaration;
     }
 
@@ -18319,6 +18359,7 @@ detail::VhdlOperatorSelectionMemo&
 SpecializedHirUnit::vhdl_operator_selections() const
 {
     auto& selections = vhdl_operator_selections_.get();
+    detail::SharedCacheLock lock { detail::shared_cache_creation_mutex() };
     if (!selections) {
         selections = std::make_shared<detail::VhdlOperatorSelectionMemo>();
     }
@@ -18328,6 +18369,7 @@ SpecializedHirUnit::vhdl_operator_selections() const
 detail::ResolutionMemo& SpecializedHirUnit::resolution_memo() const
 {
     auto& memo = resolution_memo_.get();
+    detail::SharedCacheLock lock { detail::shared_cache_creation_mutex() };
     if (!memo) {
         memo = std::make_shared<detail::ResolutionMemo>();
     }
@@ -18358,10 +18400,13 @@ SpecializedHirUnit::evaluate_integral_expression(
             memo = family;
         }
     }
-    auto& values = memo->integral_values;
-    if (const auto found = values.find(expression.value());
-        found != values.end()) {
-        return found->second;
+    {
+        detail::SharedCacheLock lock { memo->mutex };
+        const auto& values = memo->integral_values;
+        if (const auto found = values.find(expression.value());
+            found != values.end()) {
+            return found->second;
+        }
     }
     if (systemverilog_multiplication_exceeds_work_limit(
             *this, expression)) {
@@ -18377,6 +18422,7 @@ SpecializedHirUnit::evaluate_integral_expression(
         value = shared_constant_integral(*this, expression, &consulted);
     }
     if (value || consulted) {
+        detail::SharedCacheLock lock { memo->mutex };
         memo->integral_values.emplace(expression.value(), value);
     }
     return value;
@@ -19162,11 +19208,11 @@ SpecializedHirUnit SpecializedHirUnit::with_hierarchy_identities(
     for (const auto& identity : identities) {
         names.push_back(identity.name);
     }
-    auto& families = (iteration_family_memo_ != nullptr
-            ? *iteration_family_memo_
-            : resolution_memo())
-                         .iteration_families;
-    auto& family = families[std::move(names)];
+    auto& owner = iteration_family_memo_ != nullptr
+        ? *iteration_family_memo_
+        : resolution_memo();
+    detail::SharedCacheLock lock { owner.mutex };
+    auto& family = owner.iteration_families[std::move(names)];
     if (family == nullptr) {
         family = std::make_shared<detail::ResolutionMemo>();
     }

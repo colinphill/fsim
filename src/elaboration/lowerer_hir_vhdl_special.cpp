@@ -662,6 +662,7 @@ ContainerObjectId Lowerer::hir_vhdl_protected_pool(
     issued.two_state = true;
     issued.fixed = true;
     issued.dimensions.push_back({ 0, 0 });
+    guard_design_write();
     const auto counter = static_cast<ContainerObjectId>(
         design_.container_objects_.size());
     design_.container_object_info_.push_back(ContainerObjectInfo {
@@ -1112,6 +1113,7 @@ ContainerObjectId Lowerer::create_hir_vhdl_protected_anchor(
     type.index_left = 0;
     type.index_right = 0;
     type.dimensions.push_back({ 0, 0 });
+    guard_design_write();
     const auto storage = static_cast<ContainerObjectId>(
         design_.container_objects_.size());
     design_.container_object_info_.push_back(ContainerObjectInfo {
@@ -1297,6 +1299,7 @@ std::vector<Lowerer::HirVhdlGlobalFile> Lowerer::bind_hir_vhdl_global_files(
                 type.index_left = 0;
                 type.index_right = 0;
                 type.dimensions.push_back({ 0, 0 });
+                guard_design_write();
                 const auto storage = static_cast<ContainerObjectId>(
                     design_.container_objects_.size());
                 design_.container_object_info_.push_back(ContainerObjectInfo {
@@ -1440,6 +1443,7 @@ bool Lowerer::materialize_hir_vhdl_global_constant(
         type.index_left = 0;
         type.index_right = 0;
         type.dimensions.push_back({ 0, 0 });
+        guard_design_write();
         const auto storage = static_cast<ContainerObjectId>(
             design_.container_objects_.size());
         design_.container_object_info_.push_back(ContainerObjectInfo {
@@ -1494,6 +1498,7 @@ bool Lowerer::materialize_hir_vhdl_global_constant(
         type.index_left = 0;
         type.index_right = 0;
         type.dimensions.push_back({ 0, 0 });
+        guard_design_write();
         const auto storage = static_cast<ContainerObjectId>(
             design_.container_objects_.size());
         design_.container_object_info_.push_back(ContainerObjectInfo {
@@ -1632,6 +1637,7 @@ Lowerer::hir_vhdl_protected_object_storage(const ContainerObjectId anchor,
                 type.index_right = 0;
                 type.dimensions.push_back({ 0, 0 });
             }
+            guard_design_write();
             const auto storage = static_cast<ContainerObjectId>(
                 design_.container_objects_.size());
             design_.container_object_info_.push_back(ContainerObjectInfo {

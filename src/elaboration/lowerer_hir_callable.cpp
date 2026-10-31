@@ -6595,6 +6595,7 @@ Lowerer::hir_class_static_container_binding(
         }
         initial = std::move(*constant);
     }
+    guard_design_write();
     const auto object = static_cast<ContainerObjectId>(
         design_.container_objects_.size());
     design_.container_object_info_.push_back(ContainerObjectInfo {
@@ -7447,6 +7448,7 @@ bool Lowerer::ensure_hir_class_static_local(
             }
             initial = *value;
         }
+        guard_design_write();
         const auto object = static_cast<StringObjectId>(
             design_.string_objects_.size());
         design_.string_object_info_.push_back(StringObjectInfo {
@@ -7482,6 +7484,7 @@ bool Lowerer::ensure_hir_class_static_local(
             }
             initial = std::move(*constant);
         }
+        guard_design_write();
         const auto object = static_cast<ContainerObjectId>(
             design_.container_objects_.size());
         design_.container_object_info_.push_back(ContainerObjectInfo {
@@ -7518,6 +7521,7 @@ bool Lowerer::ensure_hir_class_static_local(
         }
         initial = std::move(constant->packed);
     }
+    guard_design_write();
     const auto id = static_cast<SignalId>(design_.signals_.size());
     SignalInfo info;
     info.id = id;
@@ -23864,11 +23868,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     const auto memo_key = hir_callable_body_memo_key(*initial_frame);
     std::shared_ptr<const HirCallableBodyRecording> recorded_body;
     if (memo_key) {
-        const auto& bodies = vhdl_lowering_index().callable_bodies;
-        if (const auto found = bodies.find(*memo_key);
-            found != bodies.end()) {
-            recorded_body = found->second;
-        }
+        recorded_body = vhdl_lowering_index().callable_bodies->find(*memo_key);
     }
     if (recorded_body && !memo_verify) {
         const auto active = std::exchange(active_hir_callable_, callable_index);
@@ -24523,16 +24523,10 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 std::abort();
             }
         } else if (!recorded_body && recording) {
-            auto& index = vhdl_lowering_index();
-            if (index.callable_bodies
-                    .emplace(*memo_key,
-                        std::make_shared<const HirCallableBodyRecording>(
-                            std::move(*recording)))
-                    .second
-                && memo_key->starts_with("module-function|")) {
-                index.instance_callable_bodies[unit_callable_body_scope_]
-                    .push_back(*memo_key);
-            }
+            vhdl_lowering_index().callable_bodies->record(*memo_key,
+                std::make_shared<const HirCallableBodyRecording>(
+                    std::move(*recording)),
+                unit_callable_body_scope_);
         }
     }
 

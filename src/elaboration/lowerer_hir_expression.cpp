@@ -2867,6 +2867,7 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
             span);
         return std::nullopt;
     }
+    guard_design_write();
     const auto process_index = design_.process_count()
         + 1U + generated_processes_.size();
     if (process_index > std::numeric_limits<ProcessId>::max()) {
@@ -10349,6 +10350,15 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_standard_function(
     auto value = lower_hir_expression(source.operands[0], *source_width);
     if (!value) {
         return std::nullopt;
+    }
+    // A std_ulogic port aliased to a SystemVerilog net keeps the net's
+    // four-state storage; its values are the std_ulogic values 'X', '0',
+    // '1' and 'Z', so the operand is that standard-logic value.
+    if (register_domain(*value) == frontend::ValueDomain::Logic4) {
+        const auto widened = allocate_register(
+            register_width(*value), frontend::ValueDomain::Logic9);
+        process_.operations.emplace_back(CopyRegister { widened, *value });
+        value = widened;
     }
     if (profile.kind
         == HirVhdlStandardFunctionKind::numeric_to_integer) {
@@ -22405,10 +22415,21 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 hir_source_span(expression->vhdl->source));
             return std::nullopt;
         }
-        const auto lowered_source = lower_hir_expression(
+        auto lowered_source = lower_hir_expression(
             operand, *source_width);
         if (!lowered_source) {
             return std::nullopt;
+        }
+        // A std_ulogic port aliased to a SystemVerilog net reads its
+        // four-state storage (see lower_hir_vhdl_standard_function).
+        if (register_domain(*lowered_source)
+            == frontend::ValueDomain::Logic4) {
+            const auto widened = allocate_register(
+                register_width(*lowered_source),
+                frontend::ValueDomain::Logic9);
+            process_.operations.emplace_back(
+                runtime::simir::CopyRegister { widened, *lowered_source });
+            lowered_source = widened;
         }
         const auto constant = [&](const frontend::ValueDomain domain,
                                   const runtime::Logic9 state) {

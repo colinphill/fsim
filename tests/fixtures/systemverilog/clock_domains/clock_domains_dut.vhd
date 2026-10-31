@@ -167,7 +167,7 @@ architecture rtl of cd_buffer is
     signal clk_b : bit;
     signal c : unsigned(3 downto 0) := (others => '0');
 begin
-    clk_b <= '1' when clk = '1' else '0';
+    clk_b <= to_bit(clk);
     process (clk_b)
     begin
         if clk_b'event and clk_b = '1' then

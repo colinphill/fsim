@@ -60,6 +60,7 @@ void Lowerer::record_container_object_dependency(
             >= std::numeric_limits<SignalId>::max()) {
             return;
         }
+        guard_design_write();
         const auto id = static_cast<SignalId>(design_.signals_.size());
         const auto name
             = design_.container_object_info_[object].name + "$changed";

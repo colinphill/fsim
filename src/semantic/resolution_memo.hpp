@@ -9,12 +9,14 @@
 #pragma once
 
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/shared_cache_lock.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -25,6 +27,10 @@
 namespace fsim::semantic::detail {
 
 struct ResolutionMemo {
+    /// Held (SharedCacheLock) for each lookup and each insert, never while
+    /// computing a value: lowerers on several threads share the memo.
+    mutable std::mutex mutex;
+
     /// The family memos of the generate iterations derived from this unit
     /// (SpecializedHirUnit::with_hierarchy_identities), by the names of
     /// their generate parameters.

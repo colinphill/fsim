@@ -300,6 +300,7 @@ void Lowerer::load_hir_vhdl_shared_access_heaps()
             }
             const auto& container_type = process_.container_register_types
                 [static_cast<std::size_t>(value)];
+            guard_design_write();
             const auto object = static_cast<ContainerObjectId>(
                 design_.container_objects_.size());
             design_.container_object_info_.push_back(ContainerObjectInfo {

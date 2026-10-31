@@ -16807,7 +16807,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         return false;
     }
     // Every lowerer that records under this instance's path is done.
-    vhdl_lowering_index_.release_instance_callable_bodies(path);
+    vhdl_lowering_index_.callable_bodies->release_instance_bodies(path);
     resolve_compiled_systemverilog_virtual_interface_initializers(
         unit, pending_virtual_interface_initializers);
     for (std::size_t index = defparam_guard.size();
@@ -20377,6 +20377,7 @@ std::optional<SignalId> HierarchyBuilder::compiled_vhdl_package_constant_signal(
     if (cached != vhdl_package_constant_signals_.end()) {
         return cached->second;
     }
+    note_design_write();
     auto& result = vhdl_package_constant_signals_[declaration_id.value()];
     const auto declaration = specialization.find_declaration(declaration_id);
     if (!declaration || declaration->vhdl == nullptr) {
@@ -20425,6 +20426,7 @@ HierarchyBuilder::compiled_systemverilog_package_variable_signal(
     if (cached != systemverilog_package_variable_signals_.end()) {
         return cached->second;
     }
+    note_design_write();
     systemverilog_package_variable_signals_[declaration_id.value()]
         = std::nullopt;
     const auto declaration = specialization.find_declaration(declaration_id);

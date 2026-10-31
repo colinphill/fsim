@@ -1919,6 +1919,30 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
     std::cerr << "fsim-kernel: deopts=" << profile_deopts_
               << " generic_runs=" << profile_generic_runs_
               << " fused_group_runs=" << profile_fused_runs_ << '\n';
+    {
+        // Two-state code: units that have it, runs that took it, members
+        // that turned it off or wait for known registers.
+        std::uint64_t two_state_runs = 0U;
+        std::size_t two_state_members = 0U;
+        std::size_t turned_off = 0U;
+        std::size_t unknown_registers = 0U;
+        for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+            two_state_runs += fast_runs_[index].two_state_runs;
+            if (members_[index].native.two_state) {
+                ++two_state_members;
+                turned_off += members_[index].two_state_off ? 1U : 0U;
+                unknown_registers += members_[index].registers_known ? 0U : 1U;
+            }
+        }
+        std::size_t two_state_partitions = 0U;
+        for (const auto& partition : partitions_) {
+            two_state_partitions += partition.native.two_state ? 1U : 0U;
+        }
+        std::cerr << "fsim-kernel: two-state members=" << two_state_members
+                  << " partitions=" << two_state_partitions << " runs=" << two_state_runs
+                  << " off=" << turned_off << " registers_unknown=" << unknown_registers
+                  << '\n';
+    }
     if (!profile_domain_status_.empty()) {
         report_domain_runs();
     }
@@ -2089,6 +2113,63 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
               << " inputs=" << inputs_.size()
               << " input_changes=" << profile_input_changes_
               << " publishes=" << profile_publishes_ << '\n';
+    if (!profile_partition_pass_ops_.empty()) {
+        // Partition passes run every member from the start; the members
+        // before the earliest woken one had no input change.
+        std::cerr << "fsim-kernel: partition-passes ops=" << profile_partition_pass_ops_[0]
+                  << " before_first_woken=" << profile_partition_pass_ops_[1]
+                  << " unknown_wake=" << profile_partition_pass_ops_[2] << '\n';
+    }
+    {
+        // Stores executed (static counts weighted by runs) to silent and to
+        // notifying slots.
+        std::uint64_t silent = 0U;
+        std::uint64_t notifying = 0U;
+        const auto count_stores = [&](const CompiledBody& body, const std::uint64_t runs) {
+            for (const auto& inst : body.code) {
+                if (inst.op == KOp::store_slot && inst.d < slots_.size()) {
+                    (slots_[inst.d].silent ? silent : notifying) += runs;
+                }
+            }
+        };
+        for (std::uint32_t partition = 0U; partition < profile_partition_counts_.size();
+             ++partition) {
+            count_stores(partitions_[partition].program, profile_partition_counts_[partition]);
+        }
+        for (std::uint32_t member = 0U; member < profile_member_runs_.size(); ++member) {
+            if (members_[member].compiled) {
+                count_stores(*members_[member].compiled, profile_member_runs_[member]);
+            }
+        }
+        std::cerr << "fsim-kernel: stores silent=" << silent << " notifying=" << notifying
+                  << '\n';
+    }
+    {
+        // Executed instruction mix: each template's instructions by kind,
+        // weighted by its runs (static counts, so branches over-count).
+        std::map<int, std::uint64_t> mix;
+        std::uint64_t total = 0U;
+        for (const auto& program : templates_) {
+            const auto found = profile_template_runs_.find(program.get());
+            if (found == profile_template_runs_.end()) {
+                continue;
+            }
+            for (const auto& inst : program->code) {
+                mix[static_cast<int>(inst.op)] += found->second;
+                total += found->second;
+            }
+        }
+        std::vector<std::pair<std::uint64_t, int>> ranked;
+        for (const auto& [op, count] : mix) {
+            ranked.emplace_back(count, op);
+        }
+        std::ranges::sort(ranked, std::greater<> { });
+        std::cerr << "fsim-kernel: op-mix total=" << total;
+        for (std::size_t rank = 0U; rank < ranked.size() && rank < 24U; ++rank) {
+            std::cerr << ' ' << ranked[rank].second << '=' << ranked[rank].first;
+        }
+        std::cerr << '\n';
+    }
     {
         // Run distribution over templates: the code generation each
         // threshold of runs would need.
@@ -3729,6 +3810,9 @@ void Interpreter::Impl::StaticKernel::schedule_target(const ScheduleTarget& targ
             }
             return;
         }
+        if (profile_) {
+            note_partition_wake(partition, target.min_position);
+        }
         if (partition_queued_[partition] == 0U) {
             if (auto* const lane = worker_lane_) {
                 schedule_in_domain(*lane, target.id);
@@ -4108,6 +4192,9 @@ void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
                 && state.position >= scratch().running_position) {
                 // Runs later in the current partition pass.
                 return;
+            }
+            if (profile_) {
+                note_partition_wake(state.partition, state.position);
             }
             if (partition_queued_[state.partition] == 0U) {
                 if (auto* const lane = worker_lane_) {

@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -19,6 +20,56 @@
 namespace fsim::elaboration {
 
 struct HirCallableBodyRecording;
+
+/// Lowered callable bodies by frame key, which a later process replays
+/// instead of lowering the body again (Lowerer::record_hir_callable_body).
+/// The first recording under a key is kept. Lowerers on several threads may
+/// share one store.
+class HirCallableBodyStore final {
+public:
+    [[nodiscard]] std::shared_ptr<const HirCallableBodyRecording> find(
+        const std::string& key) const
+    {
+        const std::lock_guard lock { mutex_ };
+        const auto found = bodies_.find(key);
+        return found == bodies_.end() ? nullptr : found->second;
+    }
+
+    /// Keeps `body` unless `key` already has one. A module function's body
+    /// ("module-function|" keys) is recorded under its instance path: no
+    /// other instance's lowering can look it up, so
+    /// release_instance_bodies drops it once the instance is lowered.
+    void record(const std::string& key,
+        std::shared_ptr<const HirCallableBodyRecording> body,
+        const std::string& instance)
+    {
+        const std::lock_guard lock { mutex_ };
+        if (bodies_.emplace(key, std::move(body)).second
+            && key.starts_with("module-function|")) {
+            instance_bodies_[instance].push_back(key);
+        }
+    }
+
+    void release_instance_bodies(const std::string& instance)
+    {
+        const std::lock_guard lock { mutex_ };
+        const auto found = instance_bodies_.find(instance);
+        if (found == instance_bodies_.end()) {
+            return;
+        }
+        for (const auto& key : found->second) {
+            bodies_.erase(key);
+        }
+        instance_bodies_.erase(found);
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::unordered_map<std::string,
+        std::shared_ptr<const HirCallableBodyRecording>>
+        bodies_;
+    std::unordered_map<std::string, std::vector<std::string>> instance_bodies_;
+};
 
 /// Facts about one revision of the design's VHDL HIR, each derived on first
 /// use and shared by the design's lowerers.
@@ -98,30 +149,11 @@ struct VhdlLoweringIndex {
         std::vector<std::size_t> processes;
     };
     std::optional<SystemVerilogEvents> systemverilog_events_;
-    /// Lowered bodies of package-level VHDL functions, by frame key, which
-    /// a later process replays instead of lowering the body again
-    /// (Lowerer::record_hir_callable_body).
-    std::unordered_map<std::string,
-        std::shared_ptr<const HirCallableBodyRecording>>
-        callable_bodies;
-    /// The keys of the module-function bodies recorded under each instance
-    /// path (Lowerer::set_unit_callable_body_scope); no other instance's
-    /// lowering can look them up, so release_instance_callable_bodies drops
-    /// them once the instance is lowered.
-    std::unordered_map<std::string, std::vector<std::string>>
-        instance_callable_bodies;
-
-    void release_instance_callable_bodies(const std::string& instance)
-    {
-        const auto found = instance_callable_bodies.find(instance);
-        if (found == instance_callable_bodies.end()) {
-            return;
-        }
-        for (const auto& key : found->second) {
-            callable_bodies.erase(key);
-        }
-        instance_callable_bodies.erase(found);
-    }
+    /// Lowered bodies of package-level VHDL functions and module functions,
+    /// shared by every lowerer of the design (HirCallableBodyStore).
+    std::shared_ptr<HirCallableBodyStore> callable_bodies {
+        std::make_shared<HirCallableBodyStore>()
+    };
 
     /// The event-waiting statements and processes of `source`'s current
     /// revision.

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/semantic/compiled_design.hpp"
+#include "fsim/semantic/shared_cache_lock.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -433,6 +434,7 @@ public:
 private:
     [[nodiscard]] const std::shared_ptr<std::shared_ptr<T>>& shared() const
     {
+        SharedCacheLock lock { shared_cache_creation_mutex() };
         if (!slot_) {
             slot_ = std::make_shared<std::shared_ptr<T>>();
         }

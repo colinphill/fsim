@@ -1466,6 +1466,17 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     }
 }
 
+void Interpreter::Impl::StaticKernel::note_partition_wake(const std::uint32_t partition,
+    const std::uint32_t position)
+{
+    if (profile_partition_first_wake_.empty()) {
+        profile_partition_pass_ops_.assign(3U, 0U);
+        profile_partition_first_wake_.assign(partitions_.size(), no_slot);
+    }
+    auto& first = profile_partition_first_wake_[partition];
+    first = first == no_slot ? position : std::min(first, position);
+}
+
 void Interpreter::Impl::StaticKernel::run_partition(const std::uint32_t partition)
 {
     auto& state = partitions_[partition];
@@ -1477,6 +1488,27 @@ void Interpreter::Impl::StaticKernel::run_partition(const std::uint32_t partitio
             profile_partition_operations_.assign(partitions_.size(), 0U);
         }
         ++profile_partition_counts_[partition];
+    }
+    if (profile_) {
+        // Instructions of this pass, and those before the earliest woken
+        // member (FSIM_PROFILE_KERNEL partition-passes).
+        if (profile_partition_pass_ops_.empty()) {
+            profile_partition_pass_ops_.assign(3U, 0U);
+            profile_partition_first_wake_.assign(partitions_.size(), no_slot);
+        }
+        const auto& code = state.program.code;
+        profile_partition_pass_ops_[0] += code.size();
+        const auto first = std::exchange(profile_partition_first_wake_[partition], no_slot);
+        if (first == no_slot) {
+            profile_partition_pass_ops_[2] += code.size();
+        } else {
+            for (std::size_t at = 0U; at < code.size(); ++at) {
+                if (code[at].op == KOp::mark && code[at].d >= first) {
+                    profile_partition_pass_ops_[1] += at;
+                    break;
+                }
+            }
+        }
     }
     scratch().running_partition = partition;
     scratch().running_position = 0U;

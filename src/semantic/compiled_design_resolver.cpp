@@ -3401,20 +3401,25 @@ CompiledDesignResolver::resolve_vhdl_type_identity(
     spelling = vhdl::without_builtin_prefix(spelling);
     // A type name resolves alike in every iteration of a generate body.
     auto* const family = effective_->iteration_family_memo();
-    auto& by_spelling = (family != nullptr ? *family
-                                           : effective_->resolution_memo())
-                            .type_identities[owner_scope->value()];
-    if (const auto found = by_spelling.find(spelling);
-        found != by_spelling.end()) {
-        for (const auto& entry : found->second) {
-            if (std::ranges::equal(entry.binding_frames, binding_frames_)) {
-                return entry.result;
+    auto& memo = family != nullptr ? *family : effective_->resolution_memo();
+    {
+        detail::SharedCacheLock lock { memo.mutex };
+        auto& by_spelling = memo.type_identities[owner_scope->value()];
+        if (const auto found = by_spelling.find(spelling);
+            found != by_spelling.end()) {
+            for (const auto& entry : found->second) {
+                if (std::ranges::equal(
+                        entry.binding_frames, binding_frames_)) {
+                    return entry.result;
+                }
             }
         }
     }
     auto result = compute_vhdl_type_identity(spelling, owner_scope);
     // The computation can resolve other names and rehash the table.
-    auto& entries = by_spelling.try_emplace(std::string { spelling })
+    detail::SharedCacheLock lock { memo.mutex };
+    auto& entries = memo.type_identities[owner_scope->value()]
+                        .try_emplace(std::string { spelling })
                         .first->second;
     if (entries.size()
         < detail::ResolutionMemo::maximum_type_identity_contexts) {
@@ -4021,12 +4026,15 @@ const std::vector<std::string>& iteration_variant_names(
     const SpecializedHirUnit& unit, const ScopeId use_scope,
     ResolutionMemo& family)
 {
-    auto [found, inserted] = family.iteration_variant_names.try_emplace(
-        use_scope.value());
-    auto& names = found->second;
-    if (!inserted) {
-        return names;
+    {
+        detail::SharedCacheLock lock { family.mutex };
+        if (const auto found
+            = family.iteration_variant_names.find(use_scope.value());
+            found != family.iteration_variant_names.end()) {
+            return found->second;
+        }
     }
+    std::vector<std::string> names;
     const auto& design = unit.design();
     const auto& scopes = design.semantics.scopes();
     const auto within = [&](const ScopeId outer, ScopeId inner) {
@@ -4077,7 +4085,11 @@ const std::vector<std::string>& iteration_variant_names(
         owner && owner->vhdl != nullptr) {
         collect(collect, owner->vhdl->generates);
     }
-    return names;
+    // A list once recorded never changes, so callers may keep it.
+    detail::SharedCacheLock lock { family.mutex };
+    return family.iteration_variant_names
+        .try_emplace(use_scope.value(), std::move(names))
+        .first->second;
 }
 
 bool spelling_iteration_variant(const std::string_view text,
@@ -4205,15 +4217,19 @@ CompiledDesignResolver::effective_vhdl_subtype(
             && vhdl_subtype_iteration_independent(input, use_scope, *family)
         ? *family
         : effective_->resolution_memo();
-    if (const auto found = memo.effective_subtypes.find(key);
-        found != memo.effective_subtypes.end()) {
-        for (const auto& entry : found->second) {
-            if (entry.scope == use_scope && entry.input == input) {
-                return entry.result;
+    {
+        detail::SharedCacheLock lock { memo.mutex };
+        if (const auto found = memo.effective_subtypes.find(key);
+            found != memo.effective_subtypes.end()) {
+            for (const auto& entry : found->second) {
+                if (entry.scope == use_scope && entry.input == input) {
+                    return entry.result;
+                }
             }
         }
     }
     auto result = compute_effective_vhdl_subtype(input, use_scope);
+    detail::SharedCacheLock lock { memo.mutex };
     if (memo.effective_subtype_count
         < detail::ResolutionMemo::maximum_effective_subtypes) {
         // The computation can resolve other subtypes and rehash the table.

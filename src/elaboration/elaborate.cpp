@@ -512,6 +512,7 @@ ElaborationResult elaborate_impl(
         }
     }
     hierarchy_phase.reset();
+    ScopedLoweringEntryProfile::report_and_reset();
     {
         const support::ScopedPhaseProfile finalize_phase {
             "elaboration_finalize" };

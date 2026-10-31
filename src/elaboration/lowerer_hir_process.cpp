@@ -4,12 +4,168 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <functional>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <tuple>
+#include <unordered_map>
+#include <vector>
 
 namespace fsim::elaboration {
+namespace {
+
+// Summed over the lowering threads; each thread nests its own entries.
+struct LoweringEntryTotals {
+    std::mutex mutex;
+    std::array<std::size_t, 2> calls { };
+    std::array<double, 2> milliseconds { };
+    // Outermost process entries that added signals, containers, strings,
+    // generated processes, requested package objects, reached a design write
+    // (the parallel stage's serial fallback), and any of them.
+    std::array<std::size_t, 7> allocating { };
+    std::unordered_map<std::uint64_t, double> lowerer_process_ms;
+};
+
+LoweringEntryTotals& lowering_entry_totals() noexcept
+{
+    static LoweringEntryTotals totals;
+    return totals;
+}
+
+thread_local std::size_t lowering_entry_depth { };
+
+std::atomic<std::uint64_t> lowerer_profile_serials { };
+
+thread_local bool design_writes_refused { };
+thread_local std::size_t design_writes { };
+
+bool lowering_entry_profile_enabled() noexcept
+{
+    static const bool enabled = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    return enabled;
+}
+
+} // namespace
+
+DesignWriteRefusalScope::DesignWriteRefusalScope() noexcept
+    : previous_ { design_writes_refused }
+{
+    design_writes_refused = true;
+}
+
+DesignWriteRefusalScope::~DesignWriteRefusalScope()
+{
+    design_writes_refused = previous_;
+}
+
+void note_design_write()
+{
+    ++design_writes;
+    if (design_writes_refused) {
+        throw DesignWriteRefused { };
+    }
+}
+
+std::size_t design_writes_noted() noexcept
+{
+    return design_writes;
+}
+
+std::uint64_t next_lowerer_profile_serial() noexcept
+{
+    return lowerer_profile_serials.fetch_add(1U, std::memory_order_relaxed);
+}
+
+ScopedLoweringEntryProfile::ScopedLoweringEntryProfile(
+    const Kind kind, const Lowerer& lowerer) noexcept
+    : kind_ { kind }
+    , lowerer_ { lowerer }
+{
+    if (!lowering_entry_profile_enabled()) {
+        return;
+    }
+    outermost_ = lowering_entry_depth++ == 0U;
+    if (outermost_) {
+        allocations_ = lowerer_.profile_allocation_counts();
+        start_ = std::chrono::steady_clock::now();
+    }
+}
+
+ScopedLoweringEntryProfile::~ScopedLoweringEntryProfile()
+{
+    if (!lowering_entry_profile_enabled()) {
+        return;
+    }
+    --lowering_entry_depth;
+    if (outermost_) {
+        const auto elapsed = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start_)
+                                 .count();
+        const auto index = static_cast<std::size_t>(kind_);
+        const auto after = lowerer_.profile_allocation_counts();
+        auto& totals = lowering_entry_totals();
+        const std::lock_guard lock { totals.mutex };
+        ++totals.calls[index];
+        totals.milliseconds[index] += elapsed;
+        if (kind_ == Kind::process) {
+            totals.lowerer_process_ms[lowerer_.profile_serial()] += elapsed;
+            bool any { };
+            for (std::size_t kind { }; kind < after.size(); ++kind) {
+                if (after[kind] != allocations_[kind]) {
+                    ++totals.allocating[kind];
+                    any = true;
+                }
+            }
+            totals.allocating[6] += any ? 1U : 0U;
+        }
+    }
+}
+
+void ScopedLoweringEntryProfile::report_and_reset()
+{
+    if (!lowering_entry_profile_enabled()) {
+        return;
+    }
+    auto& totals = lowering_entry_totals();
+    const std::lock_guard lock { totals.mutex };
+    std::cerr << "fsim-profile: hierarchy-lowering calls="
+              << totals.calls[0] + totals.calls[1]
+              << " ms=" << totals.milliseconds[0] + totals.milliseconds[1]
+              << " process_calls=" << totals.calls[0]
+              << " process_ms=" << totals.milliseconds[0]
+              << " actual_calls=" << totals.calls[1]
+              << " actual_ms=" << totals.milliseconds[1]
+              << " process_allocating=" << totals.allocating[6]
+              << " signals=" << totals.allocating[0]
+              << " containers=" << totals.allocating[1]
+              << " strings=" << totals.allocating[2]
+              << " generated=" << totals.allocating[3]
+              << " packages=" << totals.allocating[4]
+              << " design_writes=" << totals.allocating[5] << '\n';
+    std::vector<double> per_lowerer;
+    per_lowerer.reserve(totals.lowerer_process_ms.size());
+    for (const auto& [serial, milliseconds] : totals.lowerer_process_ms) {
+        per_lowerer.push_back(milliseconds);
+    }
+    std::ranges::sort(per_lowerer, std::greater { });
+    std::array<double, 8> workers { };
+    for (const auto milliseconds : per_lowerer) {
+        *std::ranges::min_element(workers) += milliseconds;
+    }
+    std::cerr << "fsim-profile: hierarchy-lowering-chains lowerers="
+              << per_lowerer.size() << " largest_ms="
+              << (per_lowerer.empty() ? 0.0 : per_lowerer.front())
+              << " makespan8_ms=" << *std::ranges::max_element(workers)
+              << '\n';
+    totals.lowerer_process_ms.clear();
+    totals.calls = { };
+    totals.milliseconds = { };
+    totals.allocating = { };
+}
+
 namespace {
 
 void relocate_instruction_targets(
@@ -230,6 +386,7 @@ void Lowerer::initialize_delayed_net_driver(const SignalId signal,
     if (!continuous_assignment || signal >= design_.signals_.size()) {
         return;
     }
+    guard_design_write();
     auto& initial = design_.signals_[signal].initial_value;
     for (auto bit = offset; bit < offset + width && bit < initial.width();
         ++bit) {
@@ -2427,6 +2584,9 @@ std::optional<Process> Lowerer::lower_hir_process(
     const frontend::Language language,
     const std::string_view hierarchy)
 {
+    [[maybe_unused]] const ScopedLoweringEntryProfile entry_profile {
+        ScopedLoweringEntryProfile::Kind::process, *this
+    };
     [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
         *this
     };
@@ -3077,6 +3237,14 @@ bool Lowerer::has_generated_processes() const noexcept
     return !generated_processes_.empty();
 }
 
+std::array<std::size_t, 6> Lowerer::profile_allocation_counts()
+    const noexcept
+{
+    return { design_.signals_.size(), design_.container_objects_.size(),
+        design_.string_objects_.size(), generated_processes_.size(),
+        package_object_requests_, design_writes_noted() };
+}
+
 std::uint32_t Lowerer::next_hir_callable_invocation_identity() const noexcept
 {
     return next_callable_invocation_identity_;
@@ -3131,6 +3299,9 @@ std::optional<Process> Lowerer::lower_hir_concurrent_statement(
     const std::size_t order,
     const std::optional<semantic::ExpressionId> enclosing_vhdl_guard)
 {
+    [[maybe_unused]] const ScopedLoweringEntryProfile entry_profile {
+        ScopedLoweringEntryProfile::Kind::process, *this
+    };
     [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
         *this
     };
@@ -3413,6 +3584,9 @@ std::optional<Process> Lowerer::lower_hir_input_actual(
     std::optional<semantic::vhdl::SubtypeIndication> vhdl_context,
     const std::optional<std::pair<std::uint32_t, std::uint32_t>> actual_slice)
 {
+    [[maybe_unused]] const ScopedLoweringEntryProfile entry_profile {
+        ScopedLoweringEntryProfile::Kind::actual, *this
+    };
     [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
         *this
     };
@@ -3777,6 +3951,9 @@ std::optional<Process> Lowerer::lower_hir_output_actual(
     const std::size_t order,
     const std::optional<std::pair<std::uint32_t, std::uint32_t>> actual_slice)
 {
+    [[maybe_unused]] const ScopedLoweringEntryProfile entry_profile {
+        ScopedLoweringEntryProfile::Kind::actual, *this
+    };
     [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
         *this
     };
@@ -6034,6 +6211,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     process_.driver_regions = collect_driver_regions(
         process_, register_widths_);
     if (!hir_virtual_interface_writes_.empty()) {
+        guard_design_write();
         design_.virtual_interface_write_counts_.insert_or_assign(
             process_.name, std::move(hir_virtual_interface_writes_));
     }

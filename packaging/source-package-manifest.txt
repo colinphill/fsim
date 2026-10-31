@@ -564,6 +564,7 @@ include/fsim/semantic/compiled_design_vhdl_resolution.hpp
 include/fsim/semantic/design_ir.hpp
 include/fsim/semantic/hierarchy_path.hpp
 include/fsim/semantic/model.hpp
+include/fsim/semantic/shared_cache_lock.hpp
 include/fsim/semantic/sva_plan.hpp
 include/fsim/semantic/systemverilog_class_specialization.hpp
 include/fsim/semantic/systemverilog_constant_array.hpp
@@ -2314,6 +2315,10 @@ tests/fixtures/systemverilog/scheduling/strobe_end_of_slot_verilog.v
 tests/fixtures/systemverilog/uvm_core_smoke_probe.sv
 tests/fixtures/systemverilog/uvm_legacy_macro_probe.sv
 tests/fixtures/systemverilog/uvm_phase_tlm_example.sv
+tests/fixtures/systemverilog/vhdl_logic_port/logic_port_dut.vhd
+tests/fixtures/systemverilog/vhdl_logic_port/logic_port_tb.sv
+tests/fixtures/systemverilog/vhdl_logic_port/logic_port_tbv.vhd
+tests/fixtures/systemverilog/vhdl_logic_port/run_vhdl_logic_port.cmake
 tests/fixtures/vhdl/scheduling/README.md
 tests/fixtures/vhdl/scheduling/expected.out
 tests/fixtures/vhdl/scheduling/expected.out.license

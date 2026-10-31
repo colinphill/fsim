@@ -10,6 +10,8 @@
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -379,6 +381,65 @@ struct HirCallableBodyRecording {
     const HirCallableBodyRecording& left,
     const HirCallableBodyRecording& right);
 
+class Lowerer;
+
+// Thrown where lowering on a thread of the parallel lowering stage would
+// write the shared design (objects, generated processes, in-place records,
+// the builder's package object memos): the work item is discarded and
+// lowered again, serially, at its merge point. Not a std::exception, so no
+// `catch (const std::exception&)` on the lowering path takes it.
+struct DesignWriteRefused final { };
+
+// Refuses design writes on this thread for its scope.
+class DesignWriteRefusalScope final {
+public:
+    DesignWriteRefusalScope() noexcept;
+    ~DesignWriteRefusalScope();
+    DesignWriteRefusalScope(const DesignWriteRefusalScope&) = delete;
+    DesignWriteRefusalScope& operator=(const DesignWriteRefusalScope&)
+        = delete;
+
+private:
+    bool previous_;
+};
+
+// Called before every design write lowering makes: counts it on this
+// thread (ScopedLoweringEntryProfile) and throws DesignWriteRefused inside a
+// DesignWriteRefusalScope.
+void note_design_write();
+[[nodiscard]] std::size_t design_writes_noted() noexcept;
+
+// A fresh number for each Lowerer (ScopedLoweringEntryProfile).
+[[nodiscard]] std::uint64_t next_lowerer_profile_serial() noexcept;
+
+// FSIM_PROFILE_PHASES: wall time inside the hierarchy builder's lowering
+// entry points, outermost calls only, by kind (processes and concurrent
+// statements, port actuals), so the hierarchy walk splits into lowering and
+// the rest; how many outermost entries add design signals, containers,
+// strings or generated processes, ask for package objects, or reach a
+// design write (note_design_write); and the process time per Lowerer, whose
+// lowerings run in order (its callable invocation counter), as the
+// makespan of 8 workers given whole Lowerers longest first.
+class ScopedLoweringEntryProfile final {
+public:
+    enum class Kind : unsigned { process, actual };
+
+    ScopedLoweringEntryProfile(Kind kind, const Lowerer& lowerer) noexcept;
+    ~ScopedLoweringEntryProfile();
+    ScopedLoweringEntryProfile(const ScopedLoweringEntryProfile&) = delete;
+    ScopedLoweringEntryProfile& operator=(const ScopedLoweringEntryProfile&) = delete;
+
+    // Prints `fsim-profile: hierarchy-lowering` and resets the totals.
+    static void report_and_reset();
+
+private:
+    Kind kind_;
+    const Lowerer& lowerer_;
+    bool outermost_ { };
+    std::chrono::steady_clock::time_point start_;
+    std::array<std::size_t, 6> allocations_ { };
+};
+
 class Lowerer final {
 public:
     Lowerer(
@@ -468,6 +529,15 @@ public:
     [[nodiscard]] bool hir_concurrent_signal_read_only(
         SignalId signal) const noexcept;
     [[nodiscard]] bool has_generated_processes() const noexcept;
+    /// Design signals, containers and strings, generated processes, package
+    /// object requests and this thread's design writes, so far
+    /// (ScopedLoweringEntryProfile).
+    [[nodiscard]] std::array<std::size_t, 6> profile_allocation_counts()
+        const noexcept;
+    [[nodiscard]] std::uint64_t profile_serial() const noexcept
+    {
+        return profile_serial_;
+    }
     // SystemVerilog hierarchical references (IEEE 1800-2017 23.6-23.8)
     // resolved, or missed, since the last reset. A process that missed one
     // may be lowered again once more of the hierarchy exists; a process
@@ -5206,6 +5276,31 @@ private:
     PackageConstantSignal package_constant_signal_;
     PackageContainerObject package_container_object_;
     PackageStringObject package_string_object_;
+    mutable std::size_t package_object_requests_ { };
+    std::uint64_t profile_serial_ { next_lowerer_profile_serial() };
+
+    static void guard_design_write() { note_design_write(); }
+    // The package object callbacks. A first request for a declaration can
+    // materialize a design object; the builder notes that write.
+    [[nodiscard]] std::optional<SignalId> request_package_constant_signal(
+        const semantic::DeclarationId declaration) const
+    {
+        ++package_object_requests_;
+        return package_constant_signal_(declaration);
+    }
+    [[nodiscard]] std::optional<ContainerObjectId>
+    request_package_container_object(
+        const semantic::DeclarationId declaration) const
+    {
+        ++package_object_requests_;
+        return package_container_object_(declaration);
+    }
+    [[nodiscard]] std::optional<StringObjectId> request_package_string_object(
+        const semantic::DeclarationId declaration) const
+    {
+        ++package_object_requests_;
+        return package_string_object_(declaration);
+    }
     const StringObjectBindings& string_objects_;
     const ReadOnlyStringBindings& read_only_string_objects_;
     const ContainerObjectBindings& container_objects_;
