@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/simir_region_graph.hpp"
+#include "fsim/runtime/simir_shared_body_scan.hpp"
+#include "fsim/support/parallel_for.hpp"
 #include "simir_region_graph_bindings.hpp"
 #include "simir_region_graph_driver_class.hpp"
 #include "simir_region_graph_program_access.hpp"
@@ -9,6 +11,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <functional>
 #include <limits>
@@ -1584,10 +1587,79 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
     // signals they read; processes sharing an operation body share both
     // (sharing requires equal widths and value kinds), so the analysis runs
     // once per body.
-    std::unordered_map<const void*,
-        std::map<std::size_t, std::vector<StaticReadRange>>> read_ranges_by_body;
+    // Debug metadata remains in the program, but contributes no graph
+    // access, dependency, or purity facts; a plain register operation has no
+    // signal, container or fork access and is supported, so it records
+    // nothing (and has no instance field to expand).
+    SharedBodyOperationScan graph_operations { [](const Operation& stored) {
+        return !operation_holds<DebugPoint>(stored)
+            && !plain_register_operation(stored);
+    } };
+    // Each process's node is built on the --jobs threads. What it records
+    // in the shared signal nodes is logged in the order it records it and
+    // applied after, in process order: every node's readers and writers keep
+    // the serial order, and its flags are unions.
+    enum class SignalEffectKind : std::uint8_t {
+        observe,
+        undeclared_write,
+        unproven_ranges,
+        partial_projected,
+        dynamic_fork_writer,
+        reader,
+        writer,
+    };
+    struct SignalEffect {
+        SignalId signal { };
+        SignalEffectKind kind { };
+        RegionObservation observations { };
+        RegionAccess access { };
+    };
+    std::vector<std::vector<SignalEffect>> signal_effects(programs.size());
+    std::vector<std::string> impurities(purity_profile ? programs.size() : 0U);
+    // Static read ranges are inferred once per body, from its first program,
+    // ahead of the processes; a failure is rethrown where that program would
+    // have raised it.
+    std::unordered_map<const void*, std::size_t> body_read_range_slot;
+    std::vector<std::size_t> body_first_program;
     for (std::size_t index = 0; index < programs.size(); ++index) {
+        if (!programs[index].valid()) {
+            continue;
+        }
+        const auto* const body = programs[index].operations().body_identity();
+        if (body != nullptr
+            && body_read_range_slot.emplace(body, body_first_program.size())
+                   .second) {
+            body_first_program.push_back(index);
+        }
+    }
+    std::vector<std::map<std::size_t, std::vector<StaticReadRange>>>
+        body_read_ranges(body_first_program.size());
+    std::vector<std::exception_ptr> body_read_range_failures(
+        body_first_program.size());
+    support::parallel_for(body_first_program.size(),
+        [&](std::size_t, const std::size_t slot) {
+        try {
+            body_read_ranges[slot] = infer_static_read_ranges(
+                programs[body_first_program[slot]], descriptors);
+        } catch (...) {
+            body_read_range_failures[slot] = std::current_exception();
+        }
+    }, 16U);
+    std::vector worker_graph_operations(
+        support::parallel_workers(programs.size()), graph_operations);
+    support::parallel_for(programs.size(),
+        [&](const std::size_t worker, const std::size_t index) {
         const auto& program = programs[index];
+        auto& effects = signal_effects[index];
+        const auto effect = [&](const SignalId signal, const SignalEffectKind kind,
+                                const RegionAccess access = { }) {
+            effects.push_back({ signal, kind, RegionObservation::none, access });
+        };
+        const auto observe_effect = [&](const SignalId signal,
+                                        const RegionObservation observations) {
+            effects.push_back({ signal, SignalEffectKind::observe, observations, { } });
+        };
+        std::vector<SignalId> full_writes;
         std::string first_impurity;
         const auto note_impurity = [&](const bool pure_now, std::string reason) {
             if (purity_profile && !pure_now && first_impurity.empty()) {
@@ -1619,10 +1691,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     return writer.signal == signal;
                 })) {
                 ownership_complete = false;
-                auto& target = graph.signals_[signal];
-                target.writers_unknown = true;
-                target.writes_undeclared = true;
-                target.observations = target.observations | RegionObservation::unknown;
+                effect(signal, SignalEffectKind::undeclared_write);
             }
             if (!has_update_kind) {
                 node.update_kind = kind;
@@ -1646,20 +1715,16 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             const auto& family = graph.signal_alias_families_[family_index];
             std::vector<RegionSignalAliasRange> projected;
             if (!family.project_range(offset, width, projected)) {
-                graph.signals_[signal].observations
-                    = graph.signals_[signal].observations
-                    | RegionObservation::unknown;
+                observe_effect(signal, RegionObservation::unknown);
                 for (const auto& leaf : family.leaves) {
-                    auto& target = graph.signals_[leaf.signal];
-                    target.observations = target.observations
-                        | RegionObservation::unknown;
+                    observe_effect(leaf.signal, RegionObservation::unknown);
                 }
                 node.dependencies_unknown = true;
                 return;
             }
             for (const auto& range : projected) {
-                graph.signals_[range.signal].readers.push_back({
-                    node.process, range.offset, range.width, EdgeKind::any });
+                effect(range.signal, SignalEffectKind::reader,
+                    { node.process, range.offset, range.width, EdgeKind::any });
             }
         };
         const auto observe_alias_family = [&](const SignalId signal,
@@ -1673,11 +1738,9 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 return;
             }
             const auto& family = graph.signal_alias_families_[family_index];
-            graph.signals_[family.proxy].observations
-                = graph.signals_[family.proxy].observations | capability;
+            observe_effect(family.proxy, capability);
             for (const auto& leaf : family.leaves) {
-                graph.signals_[leaf.signal].observations
-                    = graph.signals_[leaf.signal].observations | capability;
+                observe_effect(leaf.signal, capability);
             }
         };
         const auto observe_access = [&](SignalId signal,
@@ -1685,8 +1748,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                                         const std::uint32_t offset,
                                         const std::uint32_t width) {
             require_signal(signal, graph.signals_.size());
-            auto& observed = graph.signals_[signal].observations;
-            observed = observed | capability;
+            observe_effect(signal, capability);
             observe_alias_family(signal, capability);
             node.reads.push_back({ signal, EdgeKind::any, offset, width });
             add_alias_read_access(signal, offset, width);
@@ -1696,18 +1758,19 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             observe_access(signal, capability, 0U, 0U);
         };
         const auto* const body = program.operations().body_identity();
-        const auto& read_ranges = body != nullptr
-            ? [&]() -> const std::map<std::size_t, std::vector<StaticReadRange>>& {
-                  auto found = read_ranges_by_body.find(body);
-                  if (found == read_ranges_by_body.end()) {
-                      found = read_ranges_by_body.emplace(body,
-                          infer_static_read_ranges(program, descriptors)).first;
-                  }
-                  return found->second;
-              }()
-            : read_ranges_by_body.emplace(nullptr,
-                  std::map<std::size_t, std::vector<StaticReadRange>> { }).first->second
-                  = infer_static_read_ranges(program, descriptors);
+        std::map<std::size_t, std::vector<StaticReadRange>> own_read_ranges;
+        const auto& read_ranges = [&]()
+            -> const std::map<std::size_t, std::vector<StaticReadRange>>& {
+            if (body == nullptr) {
+                own_read_ranges = infer_static_read_ranges(program, descriptors);
+                return own_read_ranges;
+            }
+            const auto slot = body_read_range_slot.at(body);
+            if (body_read_range_failures[slot]) {
+                std::rethrow_exception(body_read_range_failures[slot]);
+            }
+            return body_read_ranges[slot];
+        }();
         const auto& operations = program.operations();
         std::size_t current_instruction { };
         const auto observe_read = [&](const ReadSignal& read,
@@ -1740,11 +1803,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     return writer.signal == signal;
                 })) {
                 ownership_complete = false;
-                auto& target = graph.signals_[signal];
-                target.writers_unknown = true;
-                target.writes_undeclared = true;
-                target.observations = target.observations
-                    | RegionObservation::unknown;
+                effect(signal, SignalEffectKind::undeclared_write);
             }
         };
         const auto record_container_write_access = [&](
@@ -1761,22 +1820,13 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 });
             if (!owns_full_signal) {
                 ownership_complete = false;
-                auto& target = graph.signals_[signal];
-                target.writers_unknown = true;
-                target.writes_undeclared = true;
-                target.observations = target.observations
-                    | RegionObservation::unknown;
+                effect(signal, SignalEffectKind::undeclared_write);
             }
-            const bool has_full_access = std::ranges::any_of(
-                graph.signals_[signal].writers,
-                [process = node.process, width](const auto& writer) {
-                    return writer.process == process
-                        && writer.offset == 0U
-                        && (writer.width == 0U || writer.width == width);
-                });
-            if (!has_full_access) {
-                graph.signals_[signal].writers.push_back(
-                    { node.process, 0U, 0U });
+            // Only this process's own full accesses, which this records,
+            // can be among the signal's writers so far.
+            if (std::ranges::find(full_writes, signal) == full_writes.end()) {
+                full_writes.push_back(signal);
+                effect(signal, SignalEffectKind::writer, { node.process, 0U, 0U });
             }
         };
         const auto find_container = [&](ContainerObjectId object) {
@@ -1806,21 +1856,10 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     sensitivity.offset, sensitivity.width);
             }
         }
-        for (std::size_t instruction = 0; instruction < operations.size();
-             ++instruction) {
+        worker_graph_operations[worker].visit(operations,
+            [&](const std::size_t instruction,
+                                               const Operation& operation) {
             current_instruction = instruction;
-            const auto& stored_operation = operations.at(instruction);
-            if (operation_holds<DebugPoint>(stored_operation)) {
-                // Debug metadata remains in the program, but contributes no
-                // graph access, dependency, or purity facts.
-                continue;
-            }
-            if (plain_register_operation(stored_operation)) {
-                // No signal, container or fork access, and supported: nothing
-                // to record (and no instance field to expand).
-                continue;
-            }
-            const auto operation = operations.expanded(instruction);
             bool fork_control_known = true;
             if (const auto* fork = operation_get_if<Fork>(&operation)) {
                 fork_control_known = fork_control_access_is_known(
@@ -1860,7 +1899,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                         || std::is_same_v<T, WriteProjectedWaveformSlice>
                         || std::is_same_v<T, WriteProjectedDynamicSlice>
                         || std::is_same_v<T, WriteProjectedWaveformDynamicSlice>) {
-                        graph.signals_[value.signal].partial_projected_transactions = true;
+                        effect(value.signal, SignalEffectKind::partial_projected);
                     }
                     if constexpr (std::is_same_v<T, WriteProjected>
                         || std::is_same_v<T, WriteProjectedSlice>) {
@@ -1911,7 +1950,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     }, operation));
             }
             node.pure = node.pure && supported;
-        }
+        });
         if (node.pure && ownership_complete && !has_update_kind
             && node.writes.empty()
             && node.scheduling_domain == ProcessSchedulingDomain::systemverilog) {
@@ -1936,7 +1975,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             if (descriptors[read.signal].width == 0U) {
                 node.pure = false;
             }
-            graph.signals_[read.signal].readers.push_back(
+            effect(read.signal, SignalEffectKind::reader,
                 { node.process, read.offset, read.width, read.edge });
         }
         for (const auto& write : node.writes) {
@@ -1961,26 +2000,18 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 std::vector<RegionSignalAliasRange> projected;
                 if (!family.project_range(access.offset, access.width,
                         projected)) {
-                    graph.signals_[write.signal].writers_unknown = true;
-                    graph.signals_[write.signal].writes_undeclared = true;
-                    graph.signals_[write.signal].observations
-                        = graph.signals_[write.signal].observations
-                        | RegionObservation::unknown;
+                    effect(write.signal, SignalEffectKind::undeclared_write);
                     for (const auto& leaf : family.leaves) {
-                        auto& target = graph.signals_[leaf.signal];
-                        target.writers_unknown = true;
-                        target.writes_undeclared = true;
-                        target.observations = target.observations
-                            | RegionObservation::unknown;
+                        effect(leaf.signal, SignalEffectKind::undeclared_write);
                     }
                 } else {
                     for (const auto& range : projected) {
-                        graph.signals_[range.signal].writers.push_back({
-                            node.process, range.offset, range.width });
+                        effect(range.signal, SignalEffectKind::writer,
+                            { node.process, range.offset, range.width });
                     }
                 }
             } else {
-                graph.signals_[write.signal].writers.push_back(access);
+                effect(write.signal, SignalEffectKind::writer, access);
             }
         }
         if (has_dynamic_fork) {
@@ -2000,17 +2031,17 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     if (family.project_range(write.whole ? 0U : write.offset,
                             write.whole ? 0U : write.width, projected)) {
                         for (const auto& range : projected) {
-                            graph.signals_[range.signal]
-                                .dynamic_fork_writers = true;
+                            effect(range.signal,
+                                SignalEffectKind::dynamic_fork_writer);
                         }
                     } else {
                         for (const auto& leaf : family.leaves) {
-                            graph.signals_[leaf.signal]
-                                .dynamic_fork_writers = true;
+                            effect(leaf.signal,
+                                SignalEffectKind::dynamic_fork_writer);
                         }
                     }
                 } else {
-                    graph.signals_[write.signal].dynamic_fork_writers = true;
+                    effect(write.signal, SignalEffectKind::dynamic_fork_writer);
                 }
             }
         }
@@ -2024,17 +2055,52 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 // undeclared one is writes_undeclared); only their ranges
                 // are unproven. Nothing new observes the signals.
                 for (const auto& write : node.writes) {
-                    graph.signals_[write.signal].writers_unknown = true;
+                    effect(write.signal, SignalEffectKind::unproven_ranges);
                 }
             } else {
                 node.operation_write_ranges_exact
                     = operation_write_ranges_exact;
             }
         }
-        if (purity_profile && !first_impurity.empty()) {
-            auto& entry = purity_reasons[first_impurity];
+        if (purity_profile) {
+            impurities[index] = std::move(first_impurity);
+        }
+    });
+    // The effects, in the order the processes made them.
+    for (std::size_t index = 0; index < programs.size(); ++index) {
+        for (const auto& logged : signal_effects[index]) {
+            auto& target = graph.signals_[logged.signal];
+            switch (logged.kind) {
+            case SignalEffectKind::observe:
+                target.observations = target.observations | logged.observations;
+                break;
+            case SignalEffectKind::undeclared_write:
+                target.writers_unknown = true;
+                target.writes_undeclared = true;
+                target.observations = target.observations
+                    | RegionObservation::unknown;
+                break;
+            case SignalEffectKind::unproven_ranges:
+                target.writers_unknown = true;
+                break;
+            case SignalEffectKind::partial_projected:
+                target.partial_projected_transactions = true;
+                break;
+            case SignalEffectKind::dynamic_fork_writer:
+                target.dynamic_fork_writers = true;
+                break;
+            case SignalEffectKind::reader:
+                target.readers.push_back(logged.access);
+                break;
+            case SignalEffectKind::writer:
+                target.writers.push_back(logged.access);
+                break;
+            }
+        }
+        if (purity_profile && !impurities[index].empty()) {
+            auto& entry = purity_reasons[impurities[index]];
             if (entry.first++ == 0U) {
-                entry.second = std::to_string(program.id());
+                entry.second = std::to_string(programs[index].id());
             }
         }
     }

@@ -9331,8 +9331,14 @@ private:
         if (!examining.insert(key).second) {
             return false;
         }
+        // Erased however the examination ends, a refused design write
+        // (DesignWriteRefused) included.
+        const struct Examined {
+            const std::pair<const SpecializationConstants*, std::uint32_t>&
+                key;
+            ~Examined() { examining.erase(key); }
+        } examined { key };
         const auto result = real_valued_impl(expression);
-        examining.erase(key);
         SharedCacheLock lock { constants.mutex };
         constants.real_valued.emplace(expression.value(), result);
         return result;

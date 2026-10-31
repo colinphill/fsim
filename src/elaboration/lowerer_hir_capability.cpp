@@ -24702,6 +24702,64 @@ Lowerer::compute_hir_vhdl_expression_subtype(
                 return argument;
             }
         }
+        // STD_LOGIC_1164's vector conversions and mappings constrain their
+        // result to the argument's length: TO_BITVECTOR, TO_STDLOGICVECTOR,
+        // TO_STDULOGICVECTOR and TO_01 to LENGTH-1 downto 0, TO_X01, TO_X01Z
+        // and TO_UX01 to 1 to LENGTH (IEEE 1076-2019 16.7, the package
+        // body's result variables).
+        const bool logic_package_function = profile
+            && !profile->invalid_numeric_size
+            && (profile->kind == HirVhdlStandardFunctionKind::bit_conversion
+                || profile->kind
+                    == HirVhdlStandardFunctionKind::logic_conversion
+                || profile->kind
+                    == HirVhdlStandardFunctionKind::logic_mapping);
+        // A scalar argument has a scalar result; only an array argument of
+        // known subtype is projected.
+        const auto argument_subtype = logic_package_function
+            ? hir_vhdl_expression_subtype(source.operands.front())
+            : std::nullopt;
+        if (argument_subtype && hir_vhdl_array_type_family(*argument_subtype)) {
+            using Identity = semantic::vhdl::BuiltinTypeIdentity;
+            const auto& name = profile->name;
+            const bool bit_result
+                = profile->kind == HirVhdlStandardFunctionKind::bit_conversion;
+            const bool logic_vector_result
+                = profile->kind
+                    == HirVhdlStandardFunctionKind::logic_conversion
+                && (same_hir_identifier(name, "to_stdlogicvector", true)
+                    || same_hir_identifier(name, "to_std_logic_vector", true)
+                    || same_hir_identifier(name, "to_slv", true));
+            const bool ascending = same_hir_identifier(name, "to_x01", true)
+                || same_hir_identifier(name, "to_x01z", true)
+                || same_hir_identifier(name, "to_ux01", true);
+            semantic::vhdl::SubtypeIndication result;
+            result.type_mark.spelling = bit_result
+                ? "std.standard.bit_vector"
+                : logic_vector_result
+                ? "ieee.std_logic_1164.std_logic_vector"
+                : "ieee.std_logic_1164.std_ulogic_vector";
+            result.type_mark.source = source.source;
+            result.builtin_type = bit_result
+                ? Identity::std_standard_bit_vector
+                : logic_vector_result
+                ? Identity::ieee_std_logic_1164_std_logic_vector
+                : Identity::ieee_std_logic_1164_std_ulogic_vector;
+            result.domain = bit_result ? semantic::vhdl::ValueDomain::bit2
+                                       : semantic::vhdl::ValueDomain::logic9;
+            const auto width = static_cast<std::int64_t>(profile->width);
+            result.executable_width = profile->width;
+            semantic::vhdl::RangeConstraint range;
+            range.kind = semantic::vhdl::RangeKind::array_index;
+            range.left = ascending ? 1 : width - 1;
+            range.right = ascending ? width : 0;
+            range.descending = !ascending;
+            range.null = width == 0;
+            range.direction_from_bounds = false;
+            range.source = source.source;
+            result.constraints.push_back(std::move(range));
+            return result;
+        }
     }
     if (const auto qualified
         = hir_vhdl_qualified_integer_vector_subtype(expression_id)) {

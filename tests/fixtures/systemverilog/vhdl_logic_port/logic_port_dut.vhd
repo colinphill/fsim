@@ -25,6 +25,12 @@ begin
             & " x01=" & std_logic'image(to_x01(clk))
             & " ux01=" & std_logic'image(to_ux01(v(3)))
             & " and=" & std_logic'image(r)
-            & " bv0=" & bit'image(bv(0)) & " bv3=" & bit'image(bv(3));
+            & " bv0=" & bit'image(bv(0)) & " bv3=" & bit'image(bv(3))
+            -- Elements of the functions' results, whose index ranges are
+            -- S'LENGTH-1 downto 0 (TO_BITVECTOR) and 1 to S'LENGTH (TO_X01).
+            & " i0=" & bit'image(to_bitvector(v)(0))
+            & " i3=" & bit'image(to_bitvector(v)(3))
+            & " m1=" & std_logic'image(to_x01(v)(1))
+            & " m4=" & std_logic'image(to_x01(v)(4));
     end process;
 end architecture;

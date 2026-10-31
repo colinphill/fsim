@@ -1233,6 +1233,15 @@ fsim_register_simple_test(
   "fast;support;identity;sha256;positive;negative"
 )
 
+add_executable(fsim_parallel_for_tests support/parallel_for_test.cpp)
+fsim_configure_test(fsim_parallel_for_tests)
+target_link_libraries(fsim_parallel_for_tests PRIVATE fsim_support)
+fsim_register_simple_test(
+  fsim.support.parallel_for
+  fsim_parallel_for_tests
+  "fast;support;positive;negative"
+)
+
 add_executable(fsim_payload_checksum_tests support/payload_checksum_test.cpp)
 fsim_configure_test(fsim_payload_checksum_tests)
 target_link_libraries(fsim_payload_checksum_tests PRIVATE fsim_support)

@@ -3,6 +3,7 @@
 // Native units of the engine v4 static kernel: generated-code entry,
 // runtime helpers, template binding and partitions.
 #include "simir_static_kernel_compiled_internal.hpp"
+#include "fsim/support/parallel_for.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -1529,10 +1530,10 @@ void Interpreter::Impl::StaticKernel::run_partition(const std::uint32_t partitio
     }
 }
 
-void Interpreter::Impl::StaticKernel::forward_partition_stores(
+std::size_t Interpreter::Impl::StaticKernel::forward_partition_stores(
     CompiledBody& program,
     const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset,
-    std::vector<std::uint32_t>& register_of_slot)
+    std::vector<std::uint32_t>& register_of_slot) const
 {
     // A partition runs its members in order, every pass from the start. A
     // load of a whole narrow slot that a branch-free member stored earlier
@@ -1573,6 +1574,7 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
         return slot < slots_.size() && slots_[slot].words == 1U
             && slots_[slot].planes == 2U && slots_[slot].width == width;
     };
+    std::size_t forwarded = 0U;
     const std::vector<Operation> no_operations;
     std::vector<std::uint32_t> use;
     std::optional<std::uint32_t> def;
@@ -1604,7 +1606,7 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
                     found != no_slot && found != inst.d) {
                     inst.op = KOp::copy;
                     inst.x = found;
-                    ++forwarded_loads_;
+                    ++forwarded;
                 }
             }
             break;
@@ -1650,6 +1652,7 @@ void Interpreter::Impl::StaticKernel::forward_partition_stores(
         }
     }
     forget_all();
+    return forwarded;
 }
 
 NodeLevels static_kernel_detail::condensed_levels(
@@ -2371,14 +2374,23 @@ void Interpreter::Impl::StaticKernel::build_partitions(
     for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
         slot_of_offset.emplace(slots_[slot].offset, slot);
     }
-    std::vector<std::uint32_t> register_of_slot;
-    for (std::uint32_t partition = 0U; partition < partitions_.size();
-         ++partition) {
+    // Each partition's program is built on the --jobs threads: it takes
+    // only its own members, and the store-forwarding scratch and count are
+    // per worker and per partition.
+    std::vector<std::vector<std::uint32_t>> register_of_slot(
+        support::parallel_workers(partitions_.size(), 4U));
+    std::vector<std::size_t> forwarded(partitions_.size(), 0U);
+    support::parallel_for(partitions_.size(),
+        [&](const std::size_t worker, const std::size_t partition) {
         auto& state = partitions_[partition];
         state.level = node_level[count + partition];
         auto& program = state.program;
         concatenate_members(program, state.members, true);
-        forward_partition_stores(program, slot_of_offset, register_of_slot);
+        forwarded[partition] = forward_partition_stores(
+            program, slot_of_offset, register_of_slot[worker]);
+    }, 4U);
+    for (const auto loads : forwarded) {
+        forwarded_loads_ += loads;
     }
 
     if (profile_) {

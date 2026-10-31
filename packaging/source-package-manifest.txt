@@ -468,6 +468,7 @@ include/fsim/runtime/simir_process_execution_context.hpp
 include/fsim/runtime/simir_randomize.hpp
 include/fsim/runtime/simir_region_graph.hpp
 include/fsim/runtime/simir_scalar_interpreter.hpp
+include/fsim/runtime/simir_shared_body_scan.hpp
 include/fsim/runtime/simir_shared_vector.hpp
 include/fsim/runtime/simir_signal.hpp
 include/fsim/runtime/simir_signal_queries.hpp
@@ -582,6 +583,7 @@ include/fsim/support/glob_match.hpp
 include/fsim/support/identity128.hpp
 include/fsim/support/index_distance.hpp
 include/fsim/support/native_filesystem.hpp
+include/fsim/support/parallel_for.hpp
 include/fsim/support/path.hpp
 include/fsim/support/payload_checksum.hpp
 include/fsim/support/phase_profile.hpp
@@ -2602,6 +2604,7 @@ tests/support/bounded_bytes_test.cpp
 tests/support/ctype_whitespace_test.cpp
 tests/support/identity128_test.cpp
 tests/support/native_filesystem_test.cpp
+tests/support/parallel_for_test.cpp
 tests/support/payload_checksum_test.cpp
 tests/support/test_helpers.hpp
 tests/systemc/accellera_systemc_corpus_test.cpp

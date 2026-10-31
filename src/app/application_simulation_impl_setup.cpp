@@ -7,6 +7,7 @@
 #include "application_design_artifact_codec_internal.hpp"
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/static_kernel_codegen.hpp"
+#include "fsim/support/parallel_for.hpp"
 #endif
 
 #include <algorithm>
@@ -598,6 +599,14 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
         refuse("access_gate");
     }
     if ((built.cone_fusion || built.kernel_access.admit) && kernel) {
+        // An ahead-of-time build plans and builds the kernel on the --jobs
+        // threads; a simulation that plans its own kernel does so serially.
+#if defined(FSIM_HAS_LLVM)
+        const support::ParallelJobsScope jobs {
+            compiler::StaticKernelAheadOfTimeScope::active()
+                ? compiler::StaticKernelAheadOfTimeScope::jobs()
+                : 1U };
+#endif
         auto plan = [&] {
             const application_detail::ScopedPhaseProfile planning {
                 "static_kernel_plan"

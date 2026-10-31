@@ -613,6 +613,16 @@ public:
     /// True when some instruction of this instance replaces its shared-body
     /// operation, so the body alone does not determine operation kinds.
     [[nodiscard]] bool has_operation_overrides() const noexcept;
+    /// Calls `visit(position)` for each position whose shared-body operation
+    /// an operation override of this instance replaces, ascending (replace()
+    /// keeps the overrides sorted).
+    template <typename Visit>
+    void visit_operation_override_positions(Visit&& visit) const
+    {
+        for (const auto& replaced : operation_overrides()) {
+            visit(static_cast<size_type>(replaced.instruction));
+        }
+    }
     [[nodiscard]] const std::vector<std::pair<SignalId, SignalId>>&
     signal_remap() const noexcept;
 

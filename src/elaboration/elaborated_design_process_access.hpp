@@ -197,6 +197,18 @@ public:
     /// Releases the cached region graph once its last consumer is done; the
     /// next region_graph() call rebuilds the same graph.
     static void drop_region_graph(const ElaboratedDesign& design) noexcept;
+
+    /// The signal and container layout key the cached region graph is
+    /// stored under (everything besides the rows that the graph reads).
+    [[nodiscard]] static std::uint64_t region_graph_key(
+        const ElaboratedDesign& design);
+
+    /// Caches `graph`, built for a design whose rows and layout `design`
+    /// restores (elaborate --aot hands the elaborated design's graph to its
+    /// reload), when `design` is row-backed and its layout key is `key`.
+    static void adopt_region_graph(const ElaboratedDesign& design,
+        std::shared_ptr<const runtime::simir::RegionGraph> graph,
+        std::uint64_t key);
 };
 
 } // namespace fsim::elaboration::detail

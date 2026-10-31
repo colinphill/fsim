@@ -10,6 +10,7 @@
 #include "fsim/elaboration/coverage_hir_points.hpp"
 #include "fsim/frontend/coverage_source_identity.hpp"
 #include "fsim/support/native_filesystem.hpp"
+#include "fsim/support/parallel_for.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
@@ -730,6 +731,8 @@ std::optional<BuiltProject> build_checked_project(
     }
     auto elaborated = [&] {
         ScopedPhaseProfile elaboration_phase { "elaboration" };
+        // Finalize's per-process passes run on the --jobs threads.
+        const support::ParallelJobsScope jobs { config.build.jobs };
         return elaboration::elaborate(
             *checked,
             elaboration_roots,

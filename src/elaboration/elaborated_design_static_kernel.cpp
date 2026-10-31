@@ -12,6 +12,8 @@
 // can observe it except through ordinary reads, which make it a boundary
 // output. Memories are kernel-owned when every accessor is a member.
 #include "fsim/elaboration/elaborator.hpp"
+#include "fsim/runtime/simir_shared_body_scan.hpp"
+#include "fsim/support/parallel_for.hpp"
 #include "elaborated_design_process_access.hpp"
 #include "../runtime/simir_region_graph_bindings.hpp"
 #include "../runtime/simir_region_graph_program_access.hpp"
@@ -21,6 +23,7 @@
 #include <cstdlib>
 #include <cxxabi.h>
 #include <typeinfo>
+#include <chrono>
 #include <iostream>
 #include <map>
 #include <set>
@@ -250,6 +253,24 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     bool host_access_grew = false;
     const auto plan_for = [&](const bool allow_mixed) -> StaticKernelPlan {
     StaticKernelPlan plan;
+    // FSIM_PROFILE_PHASES: `static-kernel-plan-stage NAME_ms=` per phase
+    // (repeated when the plan is computed again).
+    const bool stage_profile = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    auto stage_begin = std::chrono::steady_clock::now();
+    const auto stage = [&](const char* name) {
+        if (!stage_profile) {
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        std::cerr << "fsim-profile: static-kernel-plan-stage " << name << "_ms="
+                  << std::chrono::duration<double, std::milli>(now - stage_begin)
+                         .count()
+                  << " end_s="
+                  << std::to_string(std::chrono::duration<double>(
+                         now.time_since_epoch()).count())
+                  << '\n';
+        stage_begin = now;
+    };
     // Access plan: clients outside the SimIR processes that reach any
     // signal. Their signals stay host signals, which members write through
     // the host commit path, so the clients see the reference values,
@@ -336,6 +357,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
 
     const auto process_count = this->process_count();
     const auto signal_count = signals_.size();
+    stage("access");
     std::vector<ProcessProgramView> views;
     views.reserve(process_count);
     for (std::size_t index = 0U; index < process_count; ++index) {
@@ -357,18 +379,27 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         trivial.disabled_reason = "trivial_no_processes";
         return trivial;
     }
-    for (const auto& view : views) {
-        const auto& operations = view.operations();
-        for (std::size_t op = 0U; op < operations.size(); ++op) {
-            if (operation_holds<VcdControl>(operations[op])) {
-                if (!access_plans) {
-                    return disable("vcd_control");
-                }
-                // $dumpvars scopes are run-time values and a dump records
-                // any signal's changes (IEEE 1800-2023 21.7).
-                observe_all = true;
-            }
+    // Which processes control a dump, on the --jobs threads (one flag per
+    // process).
+    SharedBodyOperationScan vcd_operations { [](const Operation& operation) {
+        return operation_holds<VcdControl>(operation);
+    } };
+    std::vector<std::uint8_t> vcd_control(process_count, 0U);
+    std::vector worker_vcd_operations(
+        support::parallel_workers(process_count), vcd_operations);
+    support::parallel_for(process_count,
+        [&](const std::size_t worker, const std::size_t index) {
+        worker_vcd_operations[worker].visit_stored(views[index].operations(),
+            [&](std::size_t, const Operation&) { vcd_control[index] = 1U; });
+    });
+    if (std::ranges::any_of(vcd_control,
+            [](const std::uint8_t control) { return control != 0U; })) {
+        if (!access_plans) {
+            return disable("vcd_control");
         }
+        // $dumpvars scopes are run-time values and a dump records any
+        // signal's changes (IEEE 1800-2023 21.7).
+        observe_all = true;
     }
     if (std::ranges::any_of(signals_, [](const auto& signal) {
             return signal.initial_value.width()
@@ -376,9 +407,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         })) {
         return disable("signal_width");
     }
+    stage("views");
     const auto graph_owner
         = detail::ElaboratedDesignProcessAccess::region_graph(*this);
     const auto& graph = *graph_owner;
+    stage("region_graph");
     const auto graph_signals = graph.signals();
     const auto graph_processes = graph.processes();
     const char* deferred_refusal = nullptr;
@@ -733,26 +766,66 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
 
+    stage("pre_classify");
     // 1. Classify member candidates.
     std::vector<std::optional<Candidate>> candidates(process_count);
     std::vector<std::vector<ContainerObjectId>> container_uses(process_count);
-    for (std::size_t index = 0U; index < process_count; ++index) {
+    // The container objects a shared body names outside ReadContainerObject
+    // (the one alternative whose object is an instance field), and the
+    // positions of its ReadContainerObject operations.
+    struct BodyContainerUses {
+        std::vector<ContainerObjectId> objects;
+        std::vector<std::uint32_t> reads;
+    };
+    SharedBodyOperationScan wait_operations { [](const Operation& operation) {
+        return operation_holds<WaitSensitivity>(operation);
+    } };
+    // Each process is classified on the --jobs threads: a worker writes only
+    // the process's own candidate, container uses and census reason.
+    const auto classify_workers = support::parallel_workers(process_count);
+    std::vector<std::unordered_map<const void*, BodyContainerUses>>
+        worker_body_container_uses(classify_workers);
+    std::vector worker_wait_operations(classify_workers, wait_operations);
+    support::parallel_for(process_count,
+        [&](const std::size_t worker, const std::size_t index) {
         const auto& view = views[index];
         if (!view.valid()) {
-            continue;
+            return;
         }
         const auto& operations = view.operations();
         const auto count = operations.size();
         // Stored operations (canonical or overridden) answer every question
         // below except instance fields, which only ReadContainerObject's
         // object and signal operands carry; those are expanded or remapped.
-        for (std::size_t op = 0U; op < count; ++op) {
-            const auto& stored = operations[op];
-            if (operation_holds<ReadContainerObject>(stored)) {
+        if (operations.has_operation_overrides()) {
+            for (std::size_t op = 0U; op < count; ++op) {
+                const auto& stored = operations[op];
+                if (operation_holds<ReadContainerObject>(stored)) {
+                    collect_container_objects(
+                        operations.expanded(op), container_uses[index]);
+                } else {
+                    collect_container_objects(stored, container_uses[index]);
+                }
+            }
+        } else {
+            auto [body, inserted]
+                = worker_body_container_uses[worker].try_emplace(operations.body_identity());
+            if (inserted) {
+                for (std::size_t op = 0U; op < count; ++op) {
+                    const auto& stored = operations[op];
+                    if (operation_holds<ReadContainerObject>(stored)) {
+                        body->second.reads.push_back(
+                            static_cast<std::uint32_t>(op));
+                    } else {
+                        collect_container_objects(
+                            stored, body->second.objects);
+                    }
+                }
+            }
+            container_uses[index] = body->second.objects;
+            for (const auto op : body->second.reads) {
                 collect_container_objects(
                     operations.expanded(op), container_uses[index]);
-            } else {
-                collect_container_objects(stored, container_uses[index]);
             }
         }
         std::ranges::sort(container_uses[index]);
@@ -764,7 +837,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             // Debugger plan: no comb/seq/once shape. Every process is
             // classified by the behavioral tiers below (a resumable thread
             // that can stop at any debug point) or stays hosted.
-            continue;
+            return;
         }
         // A host-access object is reached through reference-format
         // registers, which only behavioral members hold.
@@ -773,11 +846,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     return object < host_access_objects.size()
                         && host_access_objects[object] != 0U;
                 })) {
-            continue;
+            return;
         }
         if (const char* flag = flag_rejection(view, vhdl, false)) {
             reject(index, flag);
-            continue;
+            return;
         }
         Candidate member;
         member.process = static_cast<ProcessId>(index);
@@ -785,17 +858,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         const auto& sensitivity = view.static_sensitivity();
         std::optional<std::size_t> wait;
         bool shape_ok = true;
-        for (std::size_t op = 0U; op < count; ++op) {
-            if (operation_holds<WaitSensitivity>(operations[op])) {
+        worker_wait_operations[worker].visit_stored(operations,
+            [&](const std::size_t op, const Operation&) {
                 if (wait) {
                     shape_ok = false;
                 }
                 wait = op;
-            }
-        }
+            });
         if (!shape_ok) {
             reject(index, "shape_waits");
-            continue;
+            return;
         }
         const auto loop_jump = [&](const std::size_t op) {
             if (op >= count) {
@@ -879,7 +951,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
                 if (wait || !halt || !shape_ok) {
                     reject(index, "shape_vhdl_once");
-                    continue;
+                    return;
                 }
                 member.kind = 2U;
                 member.body_begin = 0U;
@@ -903,7 +975,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             return entry.signal >= signal_count;
                         })) {
                     reject(index, "shape_vhdl_sensitivity");
-                    continue;
+                    return;
                 }
                 member.kind = any ? 0U : 1U;
                 member.run_at_start = *wait != 0U;
@@ -916,7 +988,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             const auto* halt = operation_get_if<Halt>(&operations[count - 1U]);
             if (wait || halt == nullptr || halt->program_exit) {
                 reject(index, "shape_once");
-                continue;
+                return;
             }
             member.kind = 2U;
             member.body_begin = 0U;
@@ -925,7 +997,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         } else {
             if (!wait) {
                 reject(index, "shape_no_wait");
-                continue;
+                return;
             }
             const bool any = std::ranges::all_of(sensitivity,
                 [](const Sensitivity& entry) {
@@ -957,7 +1029,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 if (jump == count
                     || (!vhdl && jump != count - 1U && !inline_calls(0U, jump))) {
                     reject(index, "shape_loop");
-                    continue;
+                    return;
                 }
                 member.kind = any ? 0U : 1U;
                 member.body_begin = 1U;
@@ -967,13 +1039,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 structural_b = jump;
             } else {
                 reject(index, "shape_wait");
-                continue;
+                return;
             }
             if (std::ranges::any_of(sensitivity, [&](const Sensitivity& entry) {
                     return entry.signal >= signal_count;
                 })) {
                 reject(index, "shape_sensitivity");
-                continue;
+                return;
             }
             member.sensitivity = sensitivity;
         }
@@ -1054,13 +1126,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                         + operation_type_name(operations.expanded(unsupported_at))
                     : std::string { "operation" };
             }
-            continue;
+            return;
         }
         candidates[index] = std::move(member);
         if (census) {
             rejection[index].clear();
         }
-    }
+    });
+    stage("classify_loop");
     // The container registers of a behavioral member: arrays bound to design
     // memories or protected-type state (ReadContainerObject), used directly
     // (the kernel gives each private register its own storage) and saved by
@@ -1555,6 +1628,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // Behavioral members: SystemVerilog testbench processes that run as
     // resumable kernel threads (plan §3.5). FSIM_STATIC_KERNEL_BEHAVIORAL=0
     // keeps them on the host.
+    stage("classify");
     if (const char* behavioral = std::getenv("FSIM_STATIC_KERNEL_BEHAVIORAL");
         behavioral == nullptr || std::string_view { behavioral } != "0") {
         for (std::size_t index = 0U; index < process_count; ++index) {
@@ -1806,6 +1880,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // operation outside the supported set keeps the process on the host (and,
     // through the vhdl_partial rule, the whole VHDL design).
     // FSIM_STATIC_KERNEL_VHDL_BEHAVIORAL=0 disables this tier.
+    stage("sv_behavioral");
     if (const char* behavioral = std::getenv("FSIM_STATIC_KERNEL_BEHAVIORAL");
         behavioral == nullptr || std::string_view { behavioral } != "0") {
         const char* vhdl_text = std::getenv("FSIM_STATIC_KERNEL_VHDL_BEHAVIORAL");
@@ -1952,6 +2027,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     if (deferred_refusal != nullptr) {
         return disable(deferred_refusal);
     }
+    stage("vhdl_behavioral");
     // A disable naming a block or task by hierarchical name (IEEE 1800-2023
     // 9.6.2) ends, for the first of its candidate names that a process
     // declares, that interval in every activation of the declaring
@@ -1995,24 +2071,72 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         return any;
     };
     {
-        std::vector<std::pair<std::size_t, std::vector<std::string>>> disables;
-        for (std::size_t index = 0U; index < process_count; ++index) {
+        // The disable, handle and synchronization body scans run on the
+        // --jobs threads, each process's findings in its own slot; the
+        // groups are built from them after, in process order.
+        struct GroupUses {
+            std::vector<std::vector<std::string>> disables;
+            bool handle { };
+            bool synchronization { };
+        };
+        SharedBodyOperationScan disable_blocks { [](const Operation& operation) {
+            return operation_holds<DisableBlock>(operation);
+        } };
+        SharedBodyOperationScan handle_operations { [](const Operation& operation) {
+            return operation_holds<ProcessSelf>(operation)
+                || operation_holds<ProcessStatusQuery>(operation)
+                || operation_holds<ProcessCompleted>(operation)
+                || operation_holds<ProcessAwait>(operation)
+                || operation_holds<ProcessKill>(operation)
+                || operation_holds<ProcessSuspend>(operation)
+                || operation_holds<ProcessResume>(operation)
+                || operation_holds<ProcessGetRandState>(operation)
+                || operation_holds<ProcessSetRandState>(operation)
+                || operation_holds<ProcessSrandom>(operation);
+        } };
+        SharedBodyOperationScan synchronization_operations {
+            [](const Operation& operation) {
+                return operation_holds<MailboxCreate>(operation)
+                    || operation_holds<MailboxPut>(operation)
+                    || operation_holds<MailboxGet>(operation)
+                    || operation_holds<MailboxNum>(operation)
+                    || operation_holds<SemaphoreCreate>(operation)
+                    || operation_holds<SemaphoreGet>(operation)
+                    || operation_holds<SemaphorePut>(operation)
+                    || operation_holds<DynamicEvent>(operation);
+            }
+        };
+        std::vector<GroupUses> group_uses(process_count);
+        const auto group_workers = support::parallel_workers(process_count);
+        std::vector worker_disable_blocks(group_workers, disable_blocks);
+        std::vector worker_handle_operations(group_workers, handle_operations);
+        std::vector worker_synchronization_operations(
+            group_workers, synchronization_operations);
+        support::parallel_for(process_count,
+            [&](const std::size_t worker, const std::size_t index) {
             const auto& view = views[index];
             if (!view.valid()) {
-                continue;
+                return;
             }
-            const auto& operations = view.operations();
-            for (std::size_t op = 0U; op < operations.size(); ++op) {
-                if (!operation_holds<DisableBlock>(operations[op])) {
-                    continue;
-                }
-                Operation expanded_scratch;
-                const auto& expanded = operations.expanded_ref(op, expanded_scratch);
+            auto& uses = group_uses[index];
+            worker_disable_blocks[worker].visit(view.operations(),
+                [&](std::size_t, const Operation& expanded) {
                 if (const auto* statement
                     = operation_get_if<DisableBlock>(&expanded);
                     statement != nullptr && !statement->scopes.empty()) {
-                    disables.emplace_back(index, statement->scopes);
+                    uses.disables.push_back(statement->scopes);
                 }
+            });
+            worker_handle_operations[worker].visit_stored(view.operations(),
+                [&](std::size_t, const Operation&) { uses.handle = true; });
+            worker_synchronization_operations[worker].visit_stored(
+                view.operations(),
+                [&](std::size_t, const Operation&) { uses.synchronization = true; });
+        });
+        std::vector<std::pair<std::size_t, std::vector<std::string>>> disables;
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            for (auto& scopes : group_uses[index].disables) {
+                disables.emplace_back(index, std::move(scopes));
             }
         }
         // The processes declaring each named interval, as the reference
@@ -2080,26 +2204,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // on the host.
         std::vector<std::size_t> handle_users;
         for (std::size_t index = 0U; index < process_count; ++index) {
-            const auto& view = views[index];
-            if (!view.valid()) {
-                continue;
-            }
-            const auto& operations = view.operations();
-            for (std::size_t op = 0U; op < operations.size(); ++op) {
-                const auto& operation = operations[op];
-                if (operation_holds<ProcessSelf>(operation)
-                    || operation_holds<ProcessStatusQuery>(operation)
-                    || operation_holds<ProcessCompleted>(operation)
-                    || operation_holds<ProcessAwait>(operation)
-                    || operation_holds<ProcessKill>(operation)
-                    || operation_holds<ProcessSuspend>(operation)
-                    || operation_holds<ProcessResume>(operation)
-                    || operation_holds<ProcessGetRandState>(operation)
-                    || operation_holds<ProcessSetRandState>(operation)
-                    || operation_holds<ProcessSrandom>(operation)) {
-                    handle_users.push_back(index);
-                    break;
-                }
+            if (group_uses[index].handle) {
+                handle_users.push_back(index);
             }
         }
         if (!handle_users.empty()) {
@@ -2111,22 +2217,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // use them are members together, or all stay on the host.
         std::vector<std::size_t> synchronization_users;
         for (std::size_t index = 0U; index < process_count; ++index) {
-            const auto& view = views[index];
-            if (!view.valid()) {
-                continue;
-            }
-            for (const auto& operation : view.operations()) {
-                if (operation_holds<MailboxCreate>(operation)
-                    || operation_holds<MailboxPut>(operation)
-                    || operation_holds<MailboxGet>(operation)
-                    || operation_holds<MailboxNum>(operation)
-                    || operation_holds<SemaphoreCreate>(operation)
-                    || operation_holds<SemaphoreGet>(operation)
-                    || operation_holds<SemaphorePut>(operation)
-                    || operation_holds<DynamicEvent>(operation)) {
-                    synchronization_users.push_back(index);
-                    break;
-                }
+            if (group_uses[index].synchronization) {
+                synchronization_users.push_back(index);
             }
         }
         if (!synchronization_users.empty()) {
@@ -2180,6 +2272,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // keeps only the majority language).
     std::size_t vhdl_candidates = 0U;
     std::size_t sv_candidates = 0U;
+    stage("groups_disable");
     for (const auto& candidate : candidates) {
         if (candidate) {
             ++(candidate->vhdl ? vhdl_candidates : sv_candidates);
@@ -2260,6 +2353,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             });
     };
 
+    stage("groups_language");
     // 2. Alias structure: per-element arrays (leaves plus an optional
     // aggregate proxy) and memories stored as one packed signal are owned
     // as units together with their container object.
@@ -2355,14 +2449,28 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     if (host_signals) {
         std::ranges::fill(host_touched, 1U);
     }
+    stage("alias");
     // A member's delayed, transport or waveform signal assignment keeps its
     // target a host signal, an attribute query its prefix and a force its
     // target: the host holds the projected output waveform of the member's
     // driver, the signal's history and the force (static_kernel_host_signal).
-    for (std::size_t index = 0U; index < process_count; ++index) {
-        if (!candidates[index]) {
-            continue;
+    SharedBodyOperationScan host_signal_operations {
+        [](const Operation& operation) {
+            return static_kernel_host_signal(operation).has_value()
+                || operation_holds<MonitorInstall>(operation);
         }
+    };
+    // Each candidate's touched signals are collected on the --jobs threads
+    // into its own list, then marked in process order.
+    std::vector<std::vector<SignalId>> touched_by_process(process_count);
+    std::vector worker_host_signal_operations(
+        support::parallel_workers(process_count), host_signal_operations);
+    support::parallel_for(process_count,
+        [&](const std::size_t worker, const std::size_t index) {
+        if (!candidates[index]) {
+            return;
+        }
+        auto& touched = touched_by_process[index];
         // The host records a signal's transactions (a thread waits on them
         // through it), and an implicit signal's driver updates its signal
         // as the reference's does, from its SystemVerilog domain (IEEE
@@ -2370,13 +2478,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         for (const auto& entry : candidates[index]->sensitivity) {
             if (entry.edge == EdgeKind::transaction
                 && entry.signal < signal_count) {
-                host_touched[entry.signal] = 1U;
+                touched.push_back(entry.signal);
             }
         }
         if (implicit_signal_driver(views[index])) {
             for (const auto& region : views[index].driver_regions()) {
                 if (region.signal < signal_count) {
-                    host_touched[region.signal] = 1U;
+                    touched.push_back(region.signal);
                 }
             }
         }
@@ -2386,16 +2494,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         for (const auto endpoint : { views[index].switch_source(),
                  views[index].switch_target() }) {
             if (endpoint && *endpoint < signal_count) {
-                host_touched[*endpoint] = 1U;
+                touched.push_back(*endpoint);
             }
         }
-        const auto& operations = views[index].operations();
-        for (std::size_t op = 0U; op < operations.size(); ++op) {
-            Operation expanded_scratch;
-            const auto& operation = operations.expanded_ref(op, expanded_scratch);
+        worker_host_signal_operations[worker].visit(views[index].operations(),
+            [&](std::size_t, const Operation& operation) {
             if (const auto target = static_kernel_host_signal(operation);
                 target && *target < signal_count) {
-                host_touched[*target] = 1U;
+                touched.push_back(*target);
             }
 
             // A member's $monitor or $strobe: the host's monitor watches
@@ -2405,10 +2511,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 for (const auto& value : monitor->values) {
                     if (value.kind == MonitorValueKind::signal
                         && value.signal < signal_count) {
-                        host_touched[value.signal] = 1U;
+                        touched.push_back(value.signal);
                     }
                 }
             }
+        });
+    });
+    for (const auto& touched : touched_by_process) {
+        for (const auto signal : touched) {
+            host_touched[signal] = 1U;
         }
     }
     // A package static initializer runs before the kernel's first
@@ -2486,6 +2597,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             touch_expression(check.timecheck_condition);
         }
     }
+    stage("nonmember_touch");
     for (std::size_t index = 0U; index < process_count; ++index) {
         if (candidates[index]) {
             continue;
@@ -2552,6 +2664,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
         }
     }
+    stage("terminal_paths");
     // Assertion members read the host's sampled state (run_sampled_read):
     // a sampled signal, its sampling clock and its gate are host signals,
     // whose values, histories and events the host keeps (IEEE 1800-2023
@@ -2642,6 +2755,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         bool live { };
     };
     std::vector<DriverWiring> driver_wirings;
+    stage("assertion_switch_regions");
     for (std::size_t index = 0U; index < signals_.size(); ++index) {
         const auto& drivers = signals_[index].vhdl_conversion_drivers;
         std::vector<DriverWiring> wired;
@@ -3065,6 +3179,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // kernel cannot hold the array, 2 when only a hosted accessor keeps it
     // off the kernel (that accessor may become a member once the arrays of
     // the first kind are host-access objects).
+    stage("alias_touch_wirings");
     std::vector<std::uint8_t> access_candidates(object_count, 0U);
     for (bool revalidate = true; revalidate;) {
     revalidate = false;
@@ -3279,6 +3394,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // program runs on the host and the source stays a host signal. A driver
     // wiring also needs its actual owned; otherwise every conversion driver
     // of the actual runs on the host.
+    stage("ownership_fixpoint");
     // An actual's driver wirings are adjacent.
     for (std::size_t begin = 0U; begin < driver_wirings.size();) {
         auto end = begin + 1U;
@@ -3352,6 +3468,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
 
+    stage("driver_groups");
     const bool diagnose = plan_profile;
     if (diagnose) {
         std::map<std::string, std::size_t> reasons;
@@ -3713,6 +3830,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // conversion drivers) run inside the host's update commit
     // (run_vhdl_resolver) and are not scheduled processes, so they stay as
     // they are until the kernel owns that commit (C5b).
+    stage("diagnose_containers");
     for (std::size_t index = 0U; hosted_vhdl_enabled && index < process_count;
          ++index) {
         const auto& view = views[index];
@@ -3845,9 +3963,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // Operations whose only effects are register values and immediate
         // signal and container writes (blocking, or a continuous
         // assignment's update): a lazy run at a read has no later region to
-        // defer a nonblocking update to. Per shared body.
-        std::unordered_map<const void*, bool> effect_free_body;
-        const auto effect_free = [&](const ProcessProgramView& view) {
+        // defer a nonblocking update to. Per shared body, in a memo of the
+        // caller's.
+        using EffectFreeBodies = std::unordered_map<const void*, bool>;
+        const auto effect_free = [&](EffectFreeBodies& effect_free_body,
+                                     const ProcessProgramView& view) {
             // Operation overrides make one body's instances differ.
             const auto* const body = view.operations().has_operation_overrides()
                 ? nullptr : view.operations().body_identity();
@@ -3929,12 +4049,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // kernel-owned signal it reads, with no container access and no
         // effect but its writes. Any other candidate is a root, so what it
         // reads stays computed.
-        const auto lazy_ok = [&](const std::size_t index) {
+        const auto lazy_ok = [&](EffectFreeBodies& effect_free_bodies,
+                                 const std::size_t index) {
             const auto& candidate = candidates[index];
             if (!candidate || candidate->vhdl || !candidate->run_at_start
                 || candidate->kind != static_cast<std::uint8_t>(
                        StaticKernelMemberKind::combinational)
-                || !container_uses[index].empty() || !effect_free(views[index])) {
+                || !container_uses[index].empty()
+                || !effect_free(effect_free_bodies, views[index])) {
                 return false;
             }
             return std::ranges::all_of(graph_processes[index].reads,
@@ -3960,12 +4082,24 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         std::vector<std::uint8_t> sensitive(signal_count, 0U);
         std::vector<std::vector<ProcessId>> triggered(signal_count);
         if (enabled) {
+            // Which processes may be lazy, on the --jobs threads (one flag
+            // per process, one body memo per worker).
+            std::vector<std::uint8_t> may_be_lazy(process_count, 0U);
+            std::vector<EffectFreeBodies> worker_effect_free_bodies(
+                support::parallel_workers(process_count));
+            support::parallel_for(process_count,
+                [&](const std::size_t worker, const std::size_t index) {
+                if (views[index].valid()
+                    && lazy_ok(worker_effect_free_bodies[worker], index)) {
+                    may_be_lazy[index] = 1U;
+                }
+            });
             for (std::size_t index = 0U; index < process_count; ++index) {
                 const auto& candidate = candidates[index];
                 if (!views[index].valid()) {
                     continue;
                 }
-                if (!lazy_ok(index)) {
+                if (may_be_lazy[index] == 0U) {
                     mark_process(index);
                 }
                 if (!candidate) {
@@ -4087,6 +4221,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         }
     }
 
+    stage("hosted_lazy");
     // VHDL delta collapsing, exact subset (owner 2026-10-27). A VHDL member
     // whose any-edge sensitivity covers everything it reads and whose only
     // effects are zero-delay assignments to signals it alone drives computes
@@ -4611,6 +4746,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     }
 
     // 3. Members, specification, host and boundaries.
+    stage("collapse");
     auto spec = std::make_shared<StaticKernelRuntimeSpec>();
     std::vector<std::uint8_t> member(process_count, 0U);
     for (std::size_t index = 0U; index < process_count; ++index) {
@@ -4640,6 +4776,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         plan.collapse_members += collapse[index];
         spec->members.push_back(std::move(runtime_member));
     }
+    stage("spec_member_loop");
     // Live conversions: members the kernel runs in its update phase, never
     // scheduled. The body is the program followed by the formal's write, a
     // wait and the loop jump the kernel appends (StaticKernel), so it has a
@@ -4759,6 +4896,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             return disable("no_members");
         }
     }
+    stage("spec_members");
     for (std::size_t index = 0U; index < process_count; ++index) {
         if (hosted[index] != 0U) {
             StaticKernelMemberSpec hosted_member;
@@ -4920,6 +5058,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             host_sensitivity.push_back({ signal, EdgeKind::any });
         }
     };
+    stage("spec_conversions_commit");
     // A member waiting on a host signal's transactions also needs the host
     // to activate the kernel when the signal is active without changing
     // (IEEE 1076-2019 16.2.4).
@@ -4951,14 +5090,20 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // A member reading a host signal's history ('EVENT, $last_event...)
     // reads the host's, which records an update when the host commits it.
     std::vector<std::uint8_t> history_read(signal_count, 0U);
+    SharedBodyOperationScan history_queries { [](const Operation& operation) {
+        return operation_holds<SignalEvent>(operation)
+            || operation_holds<SignalActive>(operation)
+            || operation_holds<SignalLastValue>(operation)
+            || operation_holds<SignalLastEvent>(operation)
+            || operation_holds<SignalLastActive>(operation)
+            || operation_holds<SignalStrengthText>(operation);
+    } };
     for (std::size_t index = 0U; index < process_count; ++index) {
         if (member[index] == 0U || !views[index].valid()) {
             continue;
         }
-        const auto& operations = views[index].operations();
-        for (std::size_t op = 0U; op < operations.size(); ++op) {
-            Operation expanded_scratch;
-            const auto& operation = operations.expanded_ref(op, expanded_scratch);
+        history_queries.visit(views[index].operations(),
+            [&](std::size_t, const Operation& operation) {
             const auto mark = [&](const auto* query) {
                 if (query != nullptr && query->signal < signal_count) {
                     history_read[query->signal] = 1U;
@@ -4970,7 +5115,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             mark(operation_get_if<SignalLastEvent>(&operation));
             mark(operation_get_if<SignalLastActive>(&operation));
             mark(operation_get_if<SignalStrengthText>(&operation));
-        }
+        });
     }
     for (SignalId signal = 0U; signal < signal_count; ++signal) {
         const auto& node = graph_signals[signal];
@@ -5037,6 +5182,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     if (spec->members.empty()) {
         plan.host_program = synthetic_host(std::move(plan.host_program));
     }
+    stage("member_specs");
     plan.members = spec->members.size();
     plan.owned_signals = spec->owned_signals.size();
     plan.boundary_outputs = spec->boundary_outputs.size();

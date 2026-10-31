@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "fsim/runtime/simir_shared_body_scan.hpp"
+#include "fsim/support/parallel_for.hpp"
 #include "fsim/runtime/logic.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/support/phase_profile.hpp"
@@ -471,26 +473,19 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
         candidate_proxies.insert(family.proxy);
     }
     std::unordered_set<SignalId> projected_write_signals;
+    SharedBodyOperationScan projected_writes { [](const Operation& shared) {
+        return operation_holds<WriteProjected>(shared)
+            || operation_holds<WriteProjectedWaveform>(shared)
+            || operation_holds<WriteProjectedSlice>(shared)
+            || operation_holds<WriteProjectedWaveformSlice>(shared)
+            || operation_holds<WriteProjectedDynamicSlice>(shared)
+            || operation_holds<WriteProjectedWaveformDynamicSlice>(shared);
+    } };
     for (std::size_t process_index = 0U;
         process_index < design_.process_count(); ++process_index) {
         const auto process = design_.process_view(process_index);
-        const auto& process_operations = process.operations();
-        for (std::size_t index = 0U;
-            index < process_operations.size();
-            ++index) {
-            const auto& shared = process_operations[index];
-            const bool is_projected_write
-                = operation_holds<WriteProjected>(shared)
-                || operation_holds<WriteProjectedWaveform>(shared)
-                || operation_holds<WriteProjectedSlice>(shared)
-                || operation_holds<WriteProjectedWaveformSlice>(shared)
-                || operation_holds<WriteProjectedDynamicSlice>(shared)
-                || operation_holds<
-                    WriteProjectedWaveformDynamicSlice>(shared);
-            if (!is_projected_write) {
-                continue;
-            }
-            const auto operation = process_operations.expanded(index);
+        projected_writes.visit(process.operations(),
+            [&](std::size_t, const Operation& operation) {
             visit_operation(
                 [&](const auto& value) {
                     using Type = std::decay_t<decltype(value)>;
@@ -512,7 +507,7 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                     }
                 },
                 operation);
-        }
+        });
     }
     std::erase_if(
         families,
@@ -1354,15 +1349,36 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
         family_has_leaf_write.resize(families.size(), false);
     }
 
-    for (std::size_t process_index = 0U;
-        process_index < design_.process_count(); ++process_index) {
+    // The operations that name a signal or write a container element.
+    SharedBodyOperationScan candidate_operations { [](const Operation& shared) {
+        return visit_operation([](const auto& value) {
+            using Type = std::decay_t<decltype(value)>;
+            if constexpr (requires { value.signal; }) {
+                if constexpr (std::is_same_v<
+                                  std::remove_cvref_t<decltype(value.signal)>,
+                                  SignalId>) {
+                    return true;
+                }
+            }
+            return std::is_same_v<Type, WriteContainerObjectElement>;
+        }, shared);
+    } };
+    // Which processes name a family: scanned on the --jobs threads (the
+    // rewrites below change only the rewritten process's own record).
+    const auto process_count = design_.process_count();
+    std::vector<std::uint8_t> candidate_process(process_count, 0U);
+    std::vector worker_candidate_operations(
+        support::parallel_workers(process_count), candidate_operations);
+    support::parallel_for(process_count,
+        [&](const std::size_t worker, const std::size_t process_index) {
         const auto process_view = design_.process_view(process_index);
         const auto& process_operations = process_view.operations();
         bool has_candidate_operation = false;
-        for (std::size_t index = 0U;
-            index < process_operations.size();
-            ++index) {
-            const auto& operation = process_operations[index];
+        worker_candidate_operations[worker].visit_stored(process_operations,
+            [&](std::size_t, const Operation& operation) {
+            if (has_candidate_operation) {
+                return;
+            }
             visit_operation(
                 [&](const auto& value) {
                     using Type = std::decay_t<decltype(value)>;
@@ -1386,10 +1402,7 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                     }
                 },
                 operation);
-            if (has_candidate_operation) {
-                break;
-            }
-        }
+        });
         if (!has_candidate_operation) {
             has_candidate_operation = std::ranges::any_of(
                 process_view.static_sensitivity(),
@@ -1398,9 +1411,14 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                         && sensitivity.width != 0U;
                 });
         }
-        if (!has_candidate_operation) {
+        candidate_process[process_index] = has_candidate_operation ? 1U : 0U;
+    });
+    for (std::size_t process_index = 0U; process_index < process_count;
+         ++process_index) {
+        if (candidate_process[process_index] == 0U) {
             continue;
         }
+        const auto process_view = design_.process_view(process_index);
 
         auto process = process_view.materialize();
 
@@ -2026,9 +2044,21 @@ void HierarchyBuilder::finish()
     }
     std::optional<support::ScopedPhaseProfile> closing_phase;
     closing_phase.emplace("elaboration_routes_drivers");
-    compose_vhdl_output_routes();
-    validate_process_drivers();
-    initialize_constant_driven_nets();
+    {
+        const support::ScopedPhaseProfile routes_phase {
+            "elaboration_output_routes" };
+        compose_vhdl_output_routes();
+    }
+    {
+        const support::ScopedPhaseProfile drivers_phase {
+            "elaboration_validate_drivers" };
+        validate_process_drivers();
+    }
+    {
+        const support::ScopedPhaseProfile constant_phase {
+            "elaboration_constant_nets" };
+        initialize_constant_driven_nets();
+    }
     closing_phase.reset();
     // A multi-bit VHDL scalar's projected transactions are marked as one
     // value (IEEE 1076-2008 10.5.2.2).
@@ -2100,6 +2130,8 @@ void HierarchyBuilder::finish()
     design_.freeze_hierarchy_paths();
     if (diagnostics_.empty()) {
         try {
+            const support::ScopedPhaseProfile inventory_phase {
+                "elaboration_driver_inventory" };
             design_.finalize_signal_driver_inventory();
         } catch (const std::exception& error) {
             report("FSIM-ELAB-DRIVER-001",
@@ -2441,6 +2473,14 @@ void HierarchyBuilder::validate_process_drivers()
         const auto leaf = process_leaf(process);
         return leaf.starts_with("concurrent_");
     };
+    SharedBodyOperationScan container_writes { [](const Operation& operation) {
+        return operation_holds<WriteContainerObject>(operation)
+            || operation_holds<WriteContainerObjectElement>(operation);
+    } };
+    SharedBodyOperationScan register_constants { [](const Operation& operation) {
+        return operation_holds<LoadConstant>(operation)
+            || operation_holds<CopyRegister>(operation);
+    } };
     std::unordered_set<SignalId> continuous_signals;
     for (std::size_t process_index = 0U;
         process_index < design_.process_count(); ++process_index) {
@@ -2453,7 +2493,8 @@ void HierarchyBuilder::validate_process_drivers()
         for (const auto& region : process.driver_regions()) {
             continuous_signals.insert(region.signal);
         }
-        for (const auto& operation : process.operations()) {
+        container_writes.visit_stored(process.operations(),
+            [&](std::size_t, const Operation& operation) {
             visit_operation(
                 [&](const auto& value) {
                     using OperationType
@@ -2473,16 +2514,23 @@ void HierarchyBuilder::validate_process_drivers()
                     }
                 },
                 operation);
-        }
+        });
     }
-    std::unordered_map<SignalId, std::vector<ProcessDriver>> drivers;
-    std::unordered_map<SignalId, std::vector<ProcessId>> driver_processes;
-    for (std::size_t process_index = 0U;
-        process_index < design_.process_count(); ++process_index) {
+    // Each process's drivers, in signal order, computed on the --jobs
+    // threads from state this pass only reads; they are recorded in process
+    // order below.
+    const auto process_count = design_.process_count();
+    std::vector<std::vector<std::pair<SignalId, ProcessDriver>>>
+        drivers_by_process(process_count);
+    const auto workers = support::parallel_workers(process_count);
+    std::vector worker_container_writes(workers, container_writes);
+    std::vector worker_register_constants(workers, register_constants);
+    support::parallel_for(process_count,
+        [&](const std::size_t worker, const std::size_t process_index) {
         const auto process = design_.process_view(process_index);
         if (process.name().find("$declaration_initializer_")
             != std::string::npos) {
-            continue;
+            return;
         }
         std::map<SignalId, std::vector<DriverRegion>> process_outputs;
         // A write through a virtual interface handle drives the member of
@@ -2509,7 +2557,8 @@ void HierarchyBuilder::validate_process_drivers()
         // 1800-2017 6.5, 11.5.3).
         std::unordered_map<RegisterId, std::optional<PackedLogic4>>
             constant_registers;
-        for (const auto& operation : process.operations()) {
+        worker_register_constants[worker].visit_stored(process.operations(),
+            [&](std::size_t, const Operation& operation) {
             const auto record = [&](const RegisterId destination,
                                     std::optional<PackedLogic4> value) {
                 const auto [entry, inserted] = constant_registers.try_emplace(
@@ -2527,7 +2576,7 @@ void HierarchyBuilder::validate_process_drivers()
                     source != constant_registers.end() ? source->second
                                                        : std::nullopt);
             }
-        }
+        });
         const auto constant_element = [&](const WriteContainerObjectElement&
                                               write)
             -> std::optional<std::uint32_t> {
@@ -2664,7 +2713,8 @@ void HierarchyBuilder::validate_process_drivers()
                     }
                 }
             };
-        for (const auto& operation : process.operations()) {
+        worker_container_writes[worker].visit_stored(process.operations(),
+            [&](std::size_t, const Operation& operation) {
             visit_operation(
                 [&](const auto& value) {
                     using OperationType
@@ -2680,14 +2730,24 @@ void HierarchyBuilder::validate_process_drivers()
                     }
                 },
                 operation);
-        }
+        });
+        auto& recorded = drivers_by_process[process_index];
+        recorded.reserve(process_outputs.size());
         for (auto& [signal, regions] : process_outputs) {
             const bool continuous = is_continuous_process(process);
             const bool event_controlled
                 = !process.static_sensitivity().empty();
-            drivers[signal].push_back(ProcessDriver {
+            recorded.emplace_back(signal, ProcessDriver {
                 std::move(regions), continuous, event_controlled,
                 vhdl_language_standard(process.language_standard()) });
+        }
+    });
+    std::unordered_map<SignalId, std::vector<ProcessDriver>> drivers;
+    std::unordered_map<SignalId, std::vector<ProcessId>> driver_processes;
+    for (std::size_t process_index = 0U; process_index < process_count;
+         ++process_index) {
+        for (auto& [signal, driver] : drivers_by_process[process_index]) {
+            drivers[signal].push_back(std::move(driver));
             driver_processes[signal].push_back(
                 static_cast<ProcessId>(process_index));
         }

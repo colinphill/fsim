@@ -21,6 +21,7 @@
 // use the generic evaluator below, built on the reference value functions.
 #include "simir_static_kernel_state.hpp"
 #include "simir_container_helpers.hpp"
+#include "fsim/support/parallel_for.hpp"
 
 #include <algorithm>
 #include <array>
@@ -709,57 +710,241 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
     }
     const bool keep_names = profile_ || trace_
         || std::getenv("FSIM_KERNEL_DUMP") != nullptr;
-    Operation expand_scratch;
-    for (const auto& member_spec : spec.members) {
-        const ProcessProgramView program = member_spec.process == spec.host
+    // Each member's own state is built on the --jobs threads (phase A); what
+    // members share (indices, slots, inputs, the host's region) is recorded
+    // after, in member order (phase B). A phase-A failure is raised where the
+    // serial loop raised it, after the shared records made before it.
+    struct BuiltMember {
+        Member member;
+        std::exception_ptr failure;
+        // 1: before the conversion check passed, 2: after it.
+        std::uint8_t failure_stage { 1U };
+        bool named_disable { };
+        double expand_seconds { };
+    };
+    const auto member_count = spec.members.size();
+    std::vector<BuiltMember> built_members(member_count);
+    const auto program_of = [&](const StaticKernelMemberSpec& member_spec) {
+        return member_spec.process == spec.host
             ? ProcessProgramView { spec.host_original }
             : impl_.processes.program_view(member_spec.process);
-        Member member;
+    };
+    std::vector<Operation> expand_scratch(
+        support::parallel_workers(member_count, 16U));
+    support::parallel_for(member_count,
+        [&](const std::size_t worker, const std::size_t position) {
+        const auto& member_spec = spec.members[position];
+        const ProcessProgramView program = program_of(member_spec);
+        auto& built = built_members[position];
+        auto& member = built.member;
+        auto& scratch = expand_scratch[worker];
         member.process = member_spec.process;
         member.kind = member_spec.kind;
         member.lazy = member_spec.lazy;
         member.collapse = member_spec.collapse;
         member.first_delta = member_spec.first_delta;
-        if (member.collapse) {
-            // Plain kernel slots; no_slot for anything else, which makes
-            // plan_delta_collapse drop the member, except an input on the
-            // host (a signal nothing writes, which the planner allows).
-            const auto plain_slot = [&](const SignalId signal) {
-                return signal < signal_count && family_of_signal_[signal] == no_slot
-                    ? slot_of_signal_[signal] : no_slot;
-            };
-            for (const auto& sensitivity : member_spec.sensitivity) {
-                const auto slot = plain_slot(sensitivity.signal);
-                if (slot != no_slot || sensitivity.signal >= signal_count
-                    || family_of_signal_[sensitivity.signal] != no_slot) {
-                    member.collapse_inputs.push_back(slot);
+        try {
+            if (member.collapse) {
+                // Plain kernel slots; no_slot for anything else, which makes
+                // plan_delta_collapse drop the member, except an input on the
+                // host (a signal nothing writes, which the planner allows).
+                const auto plain_slot = [&](const SignalId signal) {
+                    return signal < signal_count && family_of_signal_[signal] == no_slot
+                        ? slot_of_signal_[signal] : no_slot;
+                };
+                for (const auto& sensitivity : member_spec.sensitivity) {
+                    const auto slot = plain_slot(sensitivity.signal);
+                    if (slot != no_slot || sensitivity.signal >= signal_count
+                        || family_of_signal_[sensitivity.signal] != no_slot) {
+                        member.collapse_inputs.push_back(slot);
+                    }
+                }
+                for (const auto& region : program.driver_regions()) {
+                    member.collapse_outputs.push_back(plain_slot(region.signal));
                 }
             }
-            for (const auto& region : program.driver_regions()) {
-                member.collapse_outputs.push_back(plain_slot(region.signal));
+            // A lazy member never starts and joins no partition: only
+            // materialize runs it.
+            member.run_at_start = member_spec.run_at_start && !member.lazy;
+            member.start_late = member_spec.start_late;
+            member.after_procedures = program.startup_phase()
+                == ProcessStartupPhase::after_procedures;
+            member.final_block = program.final();
+            member.start_waiting = member.kind == StaticKernelMemberKind::behavioral
+                && member_spec.start_waiting;
+            // A postponed VHDL process resumes in the postponed region list,
+            // the end of the time step (IEEE 1076-2019 11.3, 14.7.5.3).
+            member.phase = process_execution_phase(
+                program.observed(), program.reactive(), program.postponed());
+            member.package_startup = program.startup_phase()
+                == ProcessStartupPhase::package_static_initializer;
+            member.partition_key = member.lazy ? no_slot : member_spec.partition;
+            member.body_begin = member_spec.body_begin;
+            member.prologue_end = member_spec.body_begin;
+            member.body_end = member_spec.body_end;
+            member.exit_alt = member_spec.exit_alt;
+            member.vhdl = vhdl_ && (!mixed_ || member_spec.vhdl);
+            member.vhdl_2019 = member.vhdl && program.language_standard() == "2019";
+            member.fresh = member.vhdl && member_spec.run_at_start;
+            // Registers of another kind than Logic4 (VHDL values, and a
+            // SystemVerilog process's that hold them across a mixed-language
+            // port) take each value in their kind, as the reference's do
+            // (Impl::register_value_kind).
+            if (const auto& kinds = program.register_value_kinds();
+                member.vhdl
+                || std::ranges::any_of(kinds, [](const ValueKind kind) {
+                       return kind != ValueKind::logic4;
+                   })) {
+                member.register_kinds.assign(kinds.begin(), kinds.end());
+                member.register_kinds.resize(program.register_count(),
+                    ValueKind::logic4);
             }
+            const auto& operations = program.operations();
+            const auto expand_started = stage_profile ? std::chrono::steady_clock::now()
+                                                      : std::chrono::steady_clock::time_point { };
+            member.operations().reserve(operations.size());
+            for (std::size_t op = 0U; op < operations.size(); ++op) {
+                // A body operation that needs no instance fields copies once,
+                // straight from the shared body (expanded_ref returns it).
+                const auto& expanded = operations.expanded_ref(op, scratch);
+                if (&expanded == &scratch) {
+                    member.operations().push_back(std::move(scratch));
+                } else {
+                    member.operations().push_back(expanded);
+                }
+            }
+            member.body_identity = operations.body_identity();
+            if (const auto target = member_spec.conversion_target;
+                target != std::numeric_limits<SignalId>::max()) {
+                // A port-association conversion's resolver program (IEEE
+                // 1076-2008 14.7.3.3): each halt ends a pass with the output
+                // register as the formal's effective value
+                // (Interpreter::Impl::run_vhdl_resolver), so it becomes a jump
+                // to the formal's write, followed by a wait and the loop jump: a
+                // combinational member's shape. The host no longer runs it.
+                const auto resolver = impl_.vhdl_resolvers.find(target);
+                if (resolver == impl_.vhdl_resolvers.end()
+                    || resolver->second.process != member.process
+                    || target >= signal_count || slot_of_signal_[target] == no_slot
+                    || member.body_begin != 0U
+                    || member.body_end != member.operations().size() + 1U) {
+                    throw std::invalid_argument(
+                        "static kernel conversion does not fit its signal");
+                }
+                rewrite_conversion(member, target, resolver->second.output);
+                member.conversion = true;
+            }
+            built.failure_stage = 2U;
+            if (!member.vhdl && member.kind == StaticKernelMemberKind::behavioral) {
+                bool fork = false;
+                bool push = false;
+                for (const auto& operation : member.operations()) {
+                    fork = fork || operation_holds<Fork>(operation);
+                    push = push || operation_holds<CallableFramePush>(operation);
+                }
+                member.thread_contexts = fork && push
+                    && static_kernel_fork_holds_suspended_frame(
+                        operations, operations.size());
+                member.isolated_forks = std::ranges::any_of(member.operations(),
+                    [](const Operation& operation) {
+                        const auto* fork = operation_get_if<Fork>(&operation);
+                        return fork != nullptr && fork->isolate_register_frame;
+                    });
+                built.named_disable = std::ranges::any_of(member.operations(),
+                    [](const Operation& operation) {
+                        const auto* disable = operation_get_if<DisableBlock>(&operation);
+                        return disable != nullptr && !disable->scopes.empty();
+                    });
+                member.assertion = (!member.vhdl && member.phase != SchedulerPhase::active)
+                    || std::ranges::any_of(member.operations(),
+                        [](const Operation& operation) {
+                            return static_kernel_assertion_operation(operation);
+                        });
+            }
+            if (stage_profile) {
+                built.expand_seconds = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - expand_started).count();
+            }
+            if (member.body_end > member.operations().size()
+                || member.body_begin > (member.vhdl ? member.operations().size()
+                                                    : member.body_end)) {
+                throw std::invalid_argument("static kernel member body is invalid");
+            }
+            // A SystemVerilog member's calls run expanded in its body, as the
+            // planner admitted them (static_kernel_inline_calls).
+            if (!member.vhdl
+                && (member.kind == StaticKernelMemberKind::combinational
+                    || member.kind == StaticKernelMemberKind::sequential)
+                && std::any_of(member.operations().begin() + member.body_begin,
+                    member.operations().begin() + member.body_end,
+                    [](const Operation& operation) {
+                        return operation_holds<Call>(operation);
+                    })) {
+                const bool wait_first = member.exit_alt == 0U;
+                auto inlined = static_kernel_inline_calls(member.operations(),
+                    wait_first ? 0U : member.body_end,
+                    wait_first ? member.body_end : member.exit_alt);
+                if (!inlined) {
+                    throw std::invalid_argument(
+                        "static kernel member calls cannot be expanded");
+                }
+                member.operations() = std::move(inlined->operations);
+                member.inlined_calls = true;
+                member.body_begin = inlined->body_begin;
+                member.prologue_end = inlined->body_begin;
+                member.body_end = inlined->body_end;
+                member.exit_alt = inlined->exit_alt;
+            }
+            member.registers.assign(program.register_count(), PackedLogic4 { });
+            member.container_registers.assign(
+                program.container_register_count(), no_container);
+            for (const auto& [id, container] : private_containers[position]) {
+                member.container_registers[id] = container;
+            }
+            if (!dynamic_containers[position].empty()) {
+                member.dynamic_containers.assign(
+                    program.container_register_count(), nullptr);
+                for (auto& [id, value] : dynamic_containers[position]) {
+                    member.dynamic_containers[id] = std::move(value);
+                }
+            }
+            if (!copied_containers[position].empty()) {
+                member.copy_storage.assign(
+                    program.container_register_count(), no_container);
+                for (const auto id : copied_containers[position]) {
+                    member.copy_storage[id] = member.container_registers[id];
+                }
+            }
+            for (const auto& operation : member.operations()) {
+                const auto* push = operation_get_if<CallableFramePush>(&operation);
+                if (push != nullptr
+                    && std::ranges::any_of(push->containers,
+                        [&](const ContainerRegisterId id) {
+                            return id < member.container_registers.size()
+                                && member.container_registers[id] != no_container;
+                        })) {
+                    member.private_frame_identities.push_back(push->identity);
+                }
+            }
+            std::ranges::sort(member.private_frame_identities);
+            member.private_frame_identities.erase(
+                std::ranges::unique(member.private_frame_identities).begin(),
+                member.private_frame_identities.end());
+        } catch (...) {
+            built.failure = std::current_exception();
         }
-        // A lazy member never starts and joins no partition: only
-        // materialize runs it.
-        member.run_at_start = member_spec.run_at_start && !member.lazy;
-        member.start_late = member_spec.start_late;
-        member.after_procedures = program.startup_phase()
-            == ProcessStartupPhase::after_procedures;
-        member.final_block = program.final();
-        member.start_waiting = member.kind == StaticKernelMemberKind::behavioral
-            && member_spec.start_waiting;
-        // A postponed VHDL process resumes in the postponed region list,
-        // the end of the time step (IEEE 1076-2019 11.3, 14.7.5.3).
-        member.phase = process_execution_phase(
-            program.observed(), program.reactive(), program.postponed());
+    }, 16U);
+    for (std::size_t position = 0U; position < member_count; ++position) {
+        const auto& member_spec = spec.members[position];
+        const ProcessProgramView program = program_of(member_spec);
+        auto& built = built_members[position];
+        auto& member = built.member;
         if (member.process == spec.host
             && !(vhdl_ && (!mixed_ || member_spec.vhdl))
             && member.phase != SchedulerPhase::active) {
             impl_.static_kernel_region_host = member.process;
             impl_.static_kernel_region_host_phase = member.phase;
         }
-        member.package_startup = program.startup_phase()
-            == ProcessStartupPhase::package_static_initializer;
         if (program.program_owner() && !program.final()) {
             member.program_owner = program.program_owner();
             program_members_[*member.program_owner].push_back(
@@ -781,164 +966,25 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             switch_members_.emplace(member.process,
                 static_cast<std::uint32_t>(members_.size()));
         }
-        member.partition_key = member.lazy ? no_slot : member_spec.partition;
-        member.body_begin = member_spec.body_begin;
-        member.prologue_end = member_spec.body_begin;
-        member.body_end = member_spec.body_end;
-        member.exit_alt = member_spec.exit_alt;
-        member.vhdl = vhdl_ && (!mixed_ || member_spec.vhdl);
-        member.vhdl_2019 = member.vhdl && program.language_standard() == "2019";
-        member.fresh = member.vhdl && member_spec.run_at_start;
-        // Registers of another kind than Logic4 (VHDL values, and a
-        // SystemVerilog process's that hold them across a mixed-language
-        // port) take each value in their kind, as the reference's do
-        // (Impl::register_value_kind).
-        if (const auto& kinds = program.register_value_kinds();
-            member.vhdl
-            || std::ranges::any_of(kinds, [](const ValueKind kind) {
-                   return kind != ValueKind::logic4;
-               })) {
-            member.register_kinds.assign(kinds.begin(), kinds.end());
-            member.register_kinds.resize(program.register_count(),
-                ValueKind::logic4);
+        if (built.failure && built.failure_stage == 1U) {
+            std::rethrow_exception(built.failure);
         }
-        const auto& operations = program.operations();
-        const auto expand_started = stage_profile ? std::chrono::steady_clock::now()
-                                                  : std::chrono::steady_clock::time_point { };
-        member.operations().reserve(operations.size());
-        for (std::size_t op = 0U; op < operations.size(); ++op) {
-            // A body operation that needs no instance fields copies once,
-            // straight from the shared body (expanded_ref returns it).
-            const auto& expanded = operations.expanded_ref(op, expand_scratch);
-            if (&expanded == &expand_scratch) {
-                member.operations().push_back(std::move(expand_scratch));
-            } else {
-                member.operations().push_back(expanded);
-            }
-        }
-        member.body_identity = operations.body_identity();
-        if (const auto target = member_spec.conversion_target;
-            target != std::numeric_limits<SignalId>::max()) {
-            // A port-association conversion's resolver program (IEEE
-            // 1076-2008 14.7.3.3): each halt ends a pass with the output
-            // register as the formal's effective value
-            // (Interpreter::Impl::run_vhdl_resolver), so it becomes a jump
-            // to the formal's write, followed by a wait and the loop jump: a
-            // combinational member's shape. The host no longer runs it.
-            const auto resolver = impl_.vhdl_resolvers.find(target);
-            if (resolver == impl_.vhdl_resolvers.end()
-                || resolver->second.process != member.process
-                || target >= signal_count || slot_of_signal_[target] == no_slot
-                || member.body_begin != 0U
-                || member.body_end != member.operations().size() + 1U) {
-                throw std::invalid_argument(
-                    "static kernel conversion does not fit its signal");
-            }
-            rewrite_conversion(member, target, resolver->second.output);
-            member.conversion = true;
+        if (member.conversion) {
             conversion_members_.push_back(static_cast<std::uint32_t>(members_.size()));
         }
-        if (!member.vhdl && member.kind == StaticKernelMemberKind::behavioral) {
-            bool fork = false;
-            bool push = false;
-            for (const auto& operation : member.operations()) {
-                fork = fork || operation_holds<Fork>(operation);
-                push = push || operation_holds<CallableFramePush>(operation);
-            }
-            member.thread_contexts = fork && push
-                && static_kernel_fork_holds_suspended_frame(
-                    operations, operations.size());
-            member.isolated_forks = std::ranges::any_of(member.operations(),
-                [](const Operation& operation) {
-                    const auto* fork = operation_get_if<Fork>(&operation);
-                    return fork != nullptr && fork->isolate_register_frame;
-                });
-            named_disable_ = named_disable_
-                || std::ranges::any_of(member.operations(),
-                    [](const Operation& operation) {
-                        const auto* disable = operation_get_if<DisableBlock>(&operation);
-                        return disable != nullptr && !disable->scopes.empty();
-                    });
-            member.assertion = (!member.vhdl && member.phase != SchedulerPhase::active)
-                || std::ranges::any_of(member.operations(),
-                    [](const Operation& operation) {
-                        return static_kernel_assertion_operation(operation);
-                    });
-        }
+        named_disable_ = named_disable_ || built.named_disable;
         if (stage_profile) {
-            expand_seconds += std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - expand_started).count();
+            const auto& operations = program.operations();
+            expand_seconds += built.expand_seconds;
             distinct_bodies.insert(operations.body_identity());
             expanded_ops += operations.size();
         }
-        if (member.body_end > member.operations().size()
-            || member.body_begin > (member.vhdl ? member.operations().size()
-                                                : member.body_end)) {
-            throw std::invalid_argument("static kernel member body is invalid");
-        }
-        // A SystemVerilog member's calls run expanded in its body, as the
-        // planner admitted them (static_kernel_inline_calls).
-        if (!member.vhdl
-            && (member.kind == StaticKernelMemberKind::combinational
-                || member.kind == StaticKernelMemberKind::sequential)
-            && std::any_of(member.operations().begin() + member.body_begin,
-                member.operations().begin() + member.body_end,
-                [](const Operation& operation) {
-                    return operation_holds<Call>(operation);
-                })) {
-            const bool wait_first = member.exit_alt == 0U;
-            auto inlined = static_kernel_inline_calls(member.operations(),
-                wait_first ? 0U : member.body_end,
-                wait_first ? member.body_end : member.exit_alt);
-            if (!inlined) {
-                throw std::invalid_argument(
-                    "static kernel member calls cannot be expanded");
-            }
-            member.operations() = std::move(inlined->operations);
-            member.inlined_calls = true;
-            member.body_begin = inlined->body_begin;
-            member.prologue_end = inlined->body_begin;
-            member.body_end = inlined->body_end;
-            member.exit_alt = inlined->exit_alt;
+        if (built.failure) {
+            std::rethrow_exception(built.failure);
         }
         if (keep_names) {
             profile_names_.push_back(program.name());
         }
-        member.registers.assign(program.register_count(), PackedLogic4 { });
-        member.container_registers.assign(
-            program.container_register_count(), no_container);
-        for (const auto& [id, container] : private_containers[members_.size()]) {
-            member.container_registers[id] = container;
-        }
-        if (!dynamic_containers[members_.size()].empty()) {
-            member.dynamic_containers.assign(
-                program.container_register_count(), nullptr);
-            for (auto& [id, value] : dynamic_containers[members_.size()]) {
-                member.dynamic_containers[id] = std::move(value);
-            }
-        }
-        if (!copied_containers[members_.size()].empty()) {
-            member.copy_storage.assign(
-                program.container_register_count(), no_container);
-            for (const auto id : copied_containers[members_.size()]) {
-                member.copy_storage[id] = member.container_registers[id];
-            }
-        }
-        for (const auto& operation : member.operations()) {
-            const auto* push = operation_get_if<CallableFramePush>(&operation);
-            if (push != nullptr
-                && std::ranges::any_of(push->containers,
-                    [&](const ContainerRegisterId id) {
-                        return id < member.container_registers.size()
-                            && member.container_registers[id] != no_container;
-                    })) {
-                member.private_frame_identities.push_back(push->identity);
-            }
-        }
-        std::ranges::sort(member.private_frame_identities);
-        member.private_frame_identities.erase(
-            std::ranges::unique(member.private_frame_identities).begin(),
-            member.private_frame_identities.end());
         const auto index = static_cast<std::uint32_t>(members_.size());
         const bool behavioral
             = member.kind == StaticKernelMemberKind::behavioral;

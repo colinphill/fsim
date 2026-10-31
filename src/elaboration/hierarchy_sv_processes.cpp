@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
 #include "lowerer_internal.hpp"
+#include "fsim/runtime/simir_shared_body_scan.hpp"
+#include "fsim/support/parallel_for.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -1071,11 +1073,29 @@ void HierarchyBuilder::initialize_constant_driven_nets()
     // time-0 change from X must remain an event.
     std::vector<bool> forced(design_.signals_.size());
     std::vector<bool> waited(design_.signals_.size());
-    for (std::size_t index = 0U; index < design_.process_count(); ++index) {
+    SharedBodyOperationScan waits_and_forces { [](const Operation& operation) {
+        return operation_holds<WaitOn>(operation)
+            || operation_holds<ForceSignalSlice>(operation)
+            || operation_holds<ReleaseSignalSlice>(operation);
+    } };
+    // The processes are scanned on the --jobs threads. Each worker lists the
+    // signals it counts, waits on and forces; the counts and flags commute,
+    // so they are applied afterwards in any order.
+    struct Marks {
+        std::vector<SignalId> driven;
+        std::vector<SignalId> waited;
+        std::vector<SignalId> forced;
+    };
+    const auto workers = support::parallel_workers(design_.process_count());
+    std::vector<Marks> marks(workers);
+    std::vector worker_scans(workers, waits_and_forces);
+    support::parallel_for(design_.process_count(),
+        [&](const std::size_t worker, const std::size_t index) {
+        auto& mark = marks[worker];
         const auto view = design_.process_view(index);
         for (const auto& region : view.driver_regions()) {
             if (region.signal < drivers.size()) {
-                ++drivers[region.signal];
+                mark.driven.push_back(region.signal);
             }
         }
         // Only a wait for any change needs the time-0 change; an edge wait
@@ -1083,13 +1103,11 @@ void HierarchyBuilder::initialize_constant_driven_nets()
         for (const auto& sensitivity : view.static_sensitivity()) {
             if (sensitivity.signal < waited.size()
                 && sensitivity.edge == EdgeKind::any) {
-                waited[sensitivity.signal] = true;
+                mark.waited.push_back(sensitivity.signal);
             }
         }
-        const auto& operations = view.operations();
-        for (std::size_t operation = 0U; operation < operations.size();
-            ++operation) {
-            const auto expanded = operations.expanded(operation);
+        worker_scans[worker].visit(view.operations(),
+            [&](std::size_t, const Operation& expanded) {
             if (const auto* wait = operation_get_if<WaitOn>(&expanded)) {
                 for (std::size_t position = 0U;
                     position < wait->signals.size(); ++position) {
@@ -1097,20 +1115,31 @@ void HierarchyBuilder::initialize_constant_driven_nets()
                     const bool any_change = position >= wait->edges.size()
                         || wait->edges[position] == EdgeKind::any;
                     if (signal < waited.size() && any_change) {
-                        waited[signal] = true;
+                        mark.waited.push_back(signal);
                     }
                 }
-                continue;
+                return;
             }
             if (const auto* force
                 = operation_get_if<ForceSignalSlice>(&expanded);
                 force != nullptr && force->signal < forced.size()) {
-                forced[force->signal] = true;
+                mark.forced.push_back(force->signal);
             } else if (const auto* release
                 = operation_get_if<ReleaseSignalSlice>(&expanded);
                 release != nullptr && release->signal < forced.size()) {
-                forced[release->signal] = true;
+                mark.forced.push_back(release->signal);
             }
+        });
+    });
+    for (const auto& mark : marks) {
+        for (const auto signal : mark.driven) {
+            ++drivers[signal];
+        }
+        for (const auto signal : mark.waited) {
+            waited[signal] = true;
+        }
+        for (const auto signal : mark.forced) {
+            forced[signal] = true;
         }
     }
     // A SystemVerilog variable declaration's constant initializer takes

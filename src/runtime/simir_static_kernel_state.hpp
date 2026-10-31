@@ -1052,10 +1052,10 @@ private:
     void execute(CompiledBody& body, std::uint32_t member);
     void execute_body(CompiledBody& body, std::uint32_t member);
     /// build_partitions: forwards slot stores to later loads in a partition
-    /// pass.
-    void forward_partition_stores(CompiledBody& program,
+    /// pass; returns the loads forwarded.
+    [[nodiscard]] std::size_t forward_partition_stores(CompiledBody& program,
         const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset,
-        std::vector<std::uint32_t>& register_of_slot);
+        std::vector<std::uint32_t>& register_of_slot) const;
     std::size_t forwarded_loads_ { };
     /// Returns whether a two-state caller got a result with X or U bits.
     /// execute_generic's in-place path for a narrow field written into a

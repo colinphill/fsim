@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Standard-logic functions (TO_BIT, IS_X, TO_X01, TO_UX01, unary AND,
-# TO_BITVECTOR) on VHDL std_logic in ports driven from SystemVerilog. The
+# TO_BITVECTOR, elements of their results) on VHDL std_logic in ports driven
+# from SystemVerilog. The
 # ports alias four-state nets; the reports must equal those of the same
 # entity driven from VHDL, on the interpreter, the v4 kernel and the
 # reference scheduler.
@@ -68,7 +69,9 @@ run_fsim_step("${case_dir}" vhdl_reference simulate --engine v4)
 
 string(FIND "${vhdl_reference_reports}" "b='1' is_x=false x01='1'" one)
 string(FIND "${vhdl_reference_reports}" "x01='X' ux01='X'" unknown)
-if(one EQUAL -1 OR unknown EQUAL -1)
+# v = "X001": TO_BITVECTOR gives "0001" (3 downto 0), TO_X01 "X001" (1 to 4).
+string(FIND "${vhdl_reference_reports}" "i0='1' i3='0' m1='X' m4='1'" element)
+if(one EQUAL -1 OR unknown EQUAL -1 OR element EQUAL -1)
   message(FATAL_ERROR "the VHDL reference reports are incomplete:\n"
     "${vhdl_reference_reports}\nworkspace: ${workspace}")
 endif()

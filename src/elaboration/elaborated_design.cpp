@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/elaboration/elaborator.hpp"
+#include "fsim/runtime/simir_shared_body_scan.hpp"
+#include "fsim/support/parallel_for.hpp"
 #include "elaborated_design_process_access.hpp"
 #include "../runtime/simir_signal_driver_inventory.hpp"
 #include "../runtime/simir_region_graph_bindings.hpp"
@@ -298,56 +300,83 @@ void ElaboratedDesign::freeze_hierarchy_paths()
     for (const auto& object : vhdl_protected_object_info_) {
         add(object.name);
     }
-    std::vector<std::string> operation_contexts;
-    for (std::size_t process_index = 0;
-        process_index < process_count(); ++process_index) {
+    runtime::simir::SharedBodyOperationScan path_operations {
+        [](const runtime::simir::Operation& operation) {
+            return runtime::simir::operation_holds<runtime::simir::DebugPoint>(
+                       operation)
+                || runtime::simir::operation_holds<
+                    runtime::simir::CoverageControl>(operation)
+                || runtime::simir::operation_holds<
+                    runtime::simir::CoverageAccess>(operation);
+        }
+    };
+    // The processes' paths are collected on the --jobs threads, into one
+    // list per worker (the table below is sorted and unique, so their order
+    // does not matter).
+    struct WorkerPaths {
+        std::vector<std::string_view> paths;
+        std::vector<std::string> operation_contexts;
+    };
+    const auto workers = support::parallel_workers(process_count());
+    std::vector<WorkerPaths> worker_paths(workers);
+    std::vector worker_scans(workers, path_operations);
+    support::parallel_for(process_count(),
+        [&](const std::size_t worker, const std::size_t process_index) {
+        auto& collected = worker_paths[worker];
+        const auto add_path = [&](const std::string_view path) {
+            if (!path.empty()
+                && (collected.paths.empty()
+                    || collected.paths.back().data() != path.data()
+                    || collected.paths.back().size() != path.size())) {
+                collected.paths.push_back(path);
+            }
+        };
+        auto& contexts = collected.operation_contexts;
         const auto process
             = detail::ElaboratedDesignProcessAccess::process_view(
                 *this, process_index);
-        add(process.name());
-        for (std::size_t index = 0;
-            index < process.operations().size(); ++index) {
-            const auto& stored = process.operations()[index];
+        add_path(process.name());
+        worker_scans[worker].visit_stored(process.operations(),
+            [&](const std::size_t index,
+                const runtime::simir::Operation& stored) {
             if (const auto* const point
                 = runtime::simir::operation_get_if<
                     runtime::simir::DebugPoint>(&stored)) {
                 // The scope expanded() would give, without copying the
                 // operation.
                 const auto& operations = process.operations();
-                add(operations.debug_scope(
+                add_path(operations.debug_scope(
                     operations.debug_point(index, *point).scope).str());
-                continue;
-            }
-            if (!runtime::simir::operation_holds<
-                    runtime::simir::CoverageControl>(stored)
-                && !runtime::simir::operation_holds<
-                    runtime::simir::CoverageAccess>(stored)) {
-                continue;
+                return;
             }
             const auto operation = process.operations().expanded(index);
             if (const auto* const control
                 = runtime::simir::operation_get_if<
                     runtime::simir::CoverageControl>(&operation)) {
                 if (!control->instance_context.empty()) {
-                    operation_contexts.push_back(
+                    contexts.push_back(
                         control->instance_context);
                 }
             } else if (const auto* const access
                 = runtime::simir::operation_get_if<
                     runtime::simir::CoverageAccess>(&operation)) {
                 if (!access->instance_context.empty()) {
-                    operation_contexts.push_back(
+                    contexts.push_back(
                         access->instance_context);
                 }
             } else if (const auto* const point
                 = runtime::simir::operation_get_if<
                     runtime::simir::DebugPoint>(&operation)) {
-                add(point->scope.str());
+                add_path(point->scope.str());
             }
+        });
+    });
+    for (const auto& collected : worker_paths) {
+        paths.insert(paths.end(), collected.paths.begin(),
+            collected.paths.end());
+        for (const auto& path : collected.operation_contexts) {
+            add(path);
         }
-    }
-    for (const auto& path : operation_contexts) {
-        add(path);
     }
     for (const auto& specialization : specializations_) {
         add(specialization.instance);
@@ -384,7 +413,7 @@ void ElaboratedDesign::freeze_hierarchy_paths()
         (void)adopt_canonical_paths(*canonical);
         return;
     }
-    std::ranges::sort(paths);
+    support::parallel_sort(paths.begin(), paths.end());
     paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
 
     semantic::HierarchyPathTable::Builder builder;
@@ -2324,11 +2353,9 @@ bool detail::ElaboratedDesignProcessAccess::row_backed(
         || static_cast<bool>(design.process_rows_);
 }
 
-std::shared_ptr<const runtime::simir::RegionGraph>
-detail::ElaboratedDesignProcessAccess::region_graph(
+std::uint64_t detail::ElaboratedDesignProcessAccess::region_graph_key(
     const ElaboratedDesign& design)
 {
-    using namespace runtime::simir;
     // Everything besides the rows that the graph depends on.
     std::uint64_t key = 0xcbf29ce484222325ULL;
     const auto mix = [&](const std::uint64_t value) {
@@ -2337,20 +2364,7 @@ detail::ElaboratedDesignProcessAccess::region_graph(
             key *= 0x100000001b3ULL;
         }
     };
-    std::vector<RegionSignalDescriptor> descriptors;
-    descriptors.reserve(design.signals_.size());
     for (const auto& signal : design.signals_) {
-        if (signal.initial_value.width()
-            > std::numeric_limits<std::uint32_t>::max()) {
-            throw std::length_error {
-                "elaborated signal width exceeds the RegionGraph limit"
-            };
-        }
-        descriptors.push_back({
-            static_cast<std::uint32_t>(signal.initial_value.width()),
-            signal.resolution, signal.value_kind,
-            signal.implicit_driver.has_value(), false,
-            signal.event_variable, RegionObservation::none });
         mix(signal.initial_value.width());
         mix(static_cast<std::uint64_t>(signal.resolution));
         mix(static_cast<std::uint64_t>(signal.value_kind));
@@ -2378,9 +2392,46 @@ detail::ElaboratedDesignProcessAccess::region_graph(
         mix(alias.object);
         mix(alias.signal);
     }
+    return key;
+}
+
+void detail::ElaboratedDesignProcessAccess::adopt_region_graph(
+    const ElaboratedDesign& design,
+    std::shared_ptr<const runtime::simir::RegionGraph> graph,
+    const std::uint64_t key)
+{
+    const auto& rows = design.process_rows_;
+    if (graph && rows && !design.process_builder_
+        && region_graph_key(design) == key) {
+        rows->region_graph = std::move(graph);
+        rows->region_graph_key = key;
+    }
+}
+
+std::shared_ptr<const runtime::simir::RegionGraph>
+detail::ElaboratedDesignProcessAccess::region_graph(
+    const ElaboratedDesign& design)
+{
+    using namespace runtime::simir;
+    const auto key = region_graph_key(design);
     const auto& rows = design.process_rows_;
     if (rows && rows->region_graph && rows->region_graph_key == key) {
         return rows->region_graph;
+    }
+    std::vector<RegionSignalDescriptor> descriptors;
+    descriptors.reserve(design.signals_.size());
+    for (const auto& signal : design.signals_) {
+        if (signal.initial_value.width()
+            > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::length_error {
+                "elaborated signal width exceeds the RegionGraph limit"
+            };
+        }
+        descriptors.push_back({
+            static_cast<std::uint32_t>(signal.initial_value.width()),
+            signal.resolution, signal.value_kind,
+            signal.implicit_driver.has_value(), false,
+            signal.event_variable, RegionObservation::none });
     }
 
     std::vector<ProcessProgramView> programs;

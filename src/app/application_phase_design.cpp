@@ -17,6 +17,7 @@
 #endif
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/native_filesystem.hpp"
+#include "fsim/support/parallel_for.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
@@ -33,6 +34,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <thread>
 #include <sstream>
 #include <unordered_map>
 
@@ -540,6 +542,7 @@ static bool publish_design_artifact_impl(
     BuiltProject* consumable_project)
 {
     application_detail::ScopedPhaseProfile phase { "design_artifact_publish" };
+    const support::ParallelJobsScope jobs { config.build.jobs };
     auto compiled_design = consumable_project != nullptr
         ? semantic::CompiledDesign {
               std::move(consumable_project->semantics),
@@ -548,6 +551,8 @@ static bool publish_design_artifact_impl(
         : semantic::CompiledDesign { project.semantics,
               project.systemverilog_hir, project.vhdl_hir };
     semantic::refresh_compiled_design_metadata(compiled_design);
+    std::optional<application_detail::ScopedPhaseProfile> payload_phase;
+    payload_phase.emplace("artifact_paths_encode");
     auto hierarchy_paths = hierarchy_path_codec::encode_canonical_hierarchy_paths(
         project.design.hierarchy_paths(), project.design_ir.hierarchy_paths());
     if (!hierarchy_paths) {
@@ -558,16 +563,7 @@ static bool publish_design_artifact_impl(
                     hierarchy_paths.error) });
         return false;
     }
-    auto compiled_hir = serialize_elaborated_compiled_hir_bundle(
-        compiled_design, diagnostics);
-    auto design_ir = serialize_design_ir_state(project.design_ir,
-        hierarchy_paths.payload->paths, diagnostics);
-    auto coverage = serialize_systemverilog_coverage_state(
-        project.systemverilog_coverage, compiled_design.systemverilog_hir,
-        compiled_design.semantics, diagnostics);
-    if (!compiled_hir || !design_ir || !coverage) {
-        return false;
-    }
+    payload_phase.reset();
 
     artifact::DesignMetadata metadata;
     metadata.producer = std::string { "fsim " } + std::string { version };
@@ -625,6 +621,7 @@ static bool publish_design_artifact_impl(
             "could not construct the bounded portable UVM bootstrap state");
         return false;
     }
+    payload_phase.emplace("artifact_uvm_classes_encode");
     auto uvm_state = serialize_systemverilog_uvm_state(
         uvm_bootstrap.artifact, diagnostics);
     if (!uvm_state) {
@@ -635,6 +632,7 @@ static bool publish_design_artifact_impl(
     if (!class_specializations) {
         return false;
     }
+    payload_phase.reset();
     for (const auto& binding : config.bindings) {
         metadata.bindings.push_back(
             { binding.instance, binding.target, binding.resolver });
@@ -695,21 +693,65 @@ static bool publish_design_artifact_impl(
     metadata.signal_count = project.design.signals().size();
     metadata.process_count = project.design.process_count();
 
-    auto runtime = [&] {
+    // The compiled-HIR, design-IR and coverage payloads read the compiled
+    // design, the design IR and the path table, none of which the runtime
+    // encode changes: with --jobs, a worker serializes and checksums them
+    // while this thread encodes the runtime state. Each side reports into
+    // its own engine; their diagnostics follow in this order.
+    diagnostic::Engine payload_diagnostics;
+    std::optional<std::string> compiled_hir;
+    std::optional<std::string> design_ir;
+    std::optional<std::string> coverage;
+    std::string compiled_hir_checksum;
+    std::string design_ir_checksum;
+    std::string coverage_checksum;
+    const auto serialize_payloads = [&] {
+        application_detail::ScopedPhaseProfile encode_phase {
+            "artifact_hir_ir_coverage_encode"
+        };
+        compiled_hir = serialize_elaborated_compiled_hir_bundle(
+            compiled_design, payload_diagnostics);
+        design_ir = serialize_design_ir_state(project.design_ir,
+            hierarchy_paths.payload->paths, payload_diagnostics);
+        coverage = serialize_systemverilog_coverage_state(
+            project.systemverilog_coverage, compiled_design.systemverilog_hir,
+            compiled_design.semantics, payload_diagnostics);
+        if (compiled_hir && design_ir && coverage) {
+            compiled_hir_checksum = support::payload_checksum(*compiled_hir);
+            design_ir_checksum = support::payload_checksum(*design_ir);
+            coverage_checksum = support::payload_checksum(*coverage);
+        }
+    };
+    diagnostic::Engine runtime_diagnostics;
+    std::optional<std::string> runtime;
+    {
+        std::optional<std::jthread> payload_worker;
+        if (support::ParallelJobsScope::jobs() > 1U) {
+            payload_worker.emplace(serialize_payloads);
+        } else {
+            serialize_payloads();
+        }
         application_detail::ScopedPhaseProfile encode_phase {
             "runtime_artifact_encode"
         };
-        return consumable_project != nullptr
+        runtime = consumable_project != nullptr
             ? serialize_runtime_state(
                   std::move(consumable_project->design),
-                  hierarchy_paths.payload->paths, diagnostics)
+                  hierarchy_paths.payload->paths, runtime_diagnostics)
             : serialize_runtime_state(project.design,
-                  hierarchy_paths.payload->paths, diagnostics);
-    }();
-    if (!runtime) {
+                  hierarchy_paths.payload->paths, runtime_diagnostics);
+    }
+    for (const auto* engine : { &payload_diagnostics, &runtime_diagnostics }) {
+        for (const auto& diagnostic : engine->diagnostics()) {
+            diagnostics.report(diagnostic);
+        }
+    }
+    if (!compiled_hir || !design_ir || !coverage || !runtime) {
         return false;
     }
+    payload_phase.emplace("artifact_runtime_checksum");
     const auto runtime_checksum = support::payload_checksum(*runtime);
+    payload_phase.reset();
     const auto add_payload = [&](
                                  const std::string_view kind,
                                  const std::filesystem::path& path,
@@ -719,10 +761,12 @@ static bool publish_design_artifact_impl(
     };
     metadata.payloads.push_back(
         { "runtime", "state/runtime.bin", runtime_checksum });
-    add_payload(
-        "compiled-hir", "state/compiled-design.fsimhir", *compiled_hir);
-    add_payload("design-ir", "state/design-ir.bin", *design_ir);
-    add_payload("sv-coverage", "state/sv-coverage.bin", *coverage);
+    metadata.payloads.push_back({ "compiled-hir",
+        "state/compiled-design.fsimhir", std::move(compiled_hir_checksum) });
+    metadata.payloads.push_back(
+        { "design-ir", "state/design-ir.bin", std::move(design_ir_checksum) });
+    metadata.payloads.push_back({ "sv-coverage", "state/sv-coverage.bin",
+        std::move(coverage_checksum) });
     add_payload("sv-uvm", "state/sv-uvm.bin", *uvm_state);
     add_payload("sv-classes", "state/sv-classes.bin", *class_specializations);
     metadata.payloads.push_back({ "hierarchy-paths",
@@ -863,6 +907,7 @@ static bool publish_design_artifact_impl(
         payload->trusted_checksum = uvm_index->checksum;
     }
     metadata.design_digest = artifact::compute_design_digest(metadata);
+    payload_phase.emplace("artifact_write");
     return artifact::publish_design(
         destination, metadata, payloads, diagnostics);
 }
@@ -1522,8 +1567,21 @@ int elaborate_built_workspace(
                 0U });
         }
     }
-    if (!built || !apply_sdf_session_inputs(*built, sdf_request, diagnostics)
-        || !publish_design_artifact(config, std::move(*built),
+    if (!built || !apply_sdf_session_inputs(*built, sdf_request, diagnostics)) {
+        return 1;
+    }
+    // --aot plans its kernel on the reloaded artifact. The region graph
+    // that the driver inventory built over the elaborated design is the
+    // reload's graph too (same rows and layout), so it is handed over
+    // rather than built again.
+    std::shared_ptr<const runtime::simir::RegionGraph> region_graph;
+    std::uint64_t region_graph_key { };
+    if (invocation.aot == std::optional<bool> { true }) {
+        using Access = elaboration::detail::ElaboratedDesignProcessAccess;
+        region_graph = Access::region_graph(built->design);
+        region_graph_key = Access::region_graph_key(built->design);
+    }
+    if (!publish_design_artifact(config, std::move(*built),
             *invocation.artifact_output, diagnostics)) {
         return 1;
     }
@@ -1545,6 +1603,8 @@ int elaborate_built_workspace(
             return 1;
         }
         reloaded->optimization = config.build.optimization;
+        elaboration::detail::ElaboratedDesignProcessAccess::adopt_region_graph(
+            reloaded->design, std::move(region_graph), region_graph_key);
         if (invocation.cache_directory) {
             reloaded->cache_path = *invocation.cache_directory;
         }
