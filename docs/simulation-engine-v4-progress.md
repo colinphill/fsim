@@ -138,6 +138,37 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-31: Phase 7 third gate — Track E E1a, VHDL `to_bit` on SystemVerilog-driven ports (`f92a22a0`, sweeps `v4c60`, `v4c60a`)
+
+Plan: `.local-artifacts/v4-migration/triage/phase7-cycle-based-plan-1030.md`, sections "Track E" and after.
+
+**What landed in `f92a22a0`:**
+- **E1a: serial preparation for parallel template lowering.** Serial results are unchanged; the six D6 cases elaborate byte-identically to the pre-E1a archive.
+  - The shared memo tables take a `SharedCacheLock`. It locks only when `set_shared_caches_concurrent(true)` is set, which nothing sets yet. A lookup and an insert each take the lock, but computing a value never holds it.
+  - Every design write reachable from a lowering entry is marked by `note_design_write()`. Inside a `DesignWriteRefusalScope` the mark throws, so a work item can fall back to serial lowering.
+  - Profile lines under `FSIM_PROFILE_PHASES`: the census of process entries that write the design, and `hierarchy-lowering-chains`, the bound for running whole Lowerers in parallel.
+- **The side finding of the second gate is fixed:** `to_bit` and the other standard-logic functions on a `std_logic` port driven from SystemVerilog. The port register is widened to Logic9. New test `fsim.application.vhdl-logic-port`.
+- **Owner decision:** E1b, the parallel lowering itself, is dropped. The hierarchy walk branches on lowering results, process-ID blocks cannot be predicted before lowering, and hierarchical names bind differently once the walk has moved on, so deferred lowering cannot be byte-identical. Track E continues with the stages after the walk.
+
+**Gate:**
+- ct4: 1092/1092 in all four variants.
+- Normal sweep `v4c60` (frozen `f92a22a0`): 0 losses against `v4c59` in all six suites.
+- AOT sweep `v4c60a`: 0 losses against `v4c59a`.
+- Census tables identical to `v4c59` and `v4c59a`, 0 losses against `b96x1`.
+- vgate: mixed_codec and mixed_throughput identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+**D6 campaign `v4c60-g5`** (3 samples, CPU 9):
+
+| Measure | v4c59 | v4c60 |
+|---|---:|---:|
+| Geomean e2e (× xsim) | 3.76× | 3.67× |
+| Minimum simulate (× xsim) | 3.55× | 3.50× (mixed_codec) |
+
+- fsim e2e is 2–10% slower on every case. xsim is also slower, by 0–4%. fsim's compile phase is up to 21% slower although this gate did not change compile.
+- The elaborate phase is 5–9% slower on the mixed designs. Whether this is variance or the E1a counters was not investigated further (owner: move on).
+- The e2e floor of 3.5× holds.
+
 ### 2026-10-30: Phase 7 second gate — P1 domain report, strict VHDL edges, P3 driver v0 measured and stopped (`9c177cf0`, sweeps `v4c59`, `v4c59a`)
 
 Plan: `.local-artifacts/v4-migration/triage/phase7-cycle-based-plan-1030.md`. The owner decisions of this gate are in its sections after "P0.2 results".
