@@ -53,7 +53,7 @@ namespace {
         // Toggle points belong to the declarations of design units, which
         // may have no process (a VHDL entity is its own library object).
         for (const auto& unit : checked.systemverilog_hir.units()) {
-            if (unit.kind == semantic::sv::UnitKind::module
+            if (elaboration::covered_systemverilog_unit(unit.kind)
                 && unit.source.valid() && unit.source.value() < spans.size()) {
                 required_files.insert(spans[unit.source.value()].file.value());
             }

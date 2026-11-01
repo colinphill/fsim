@@ -24,6 +24,16 @@ struct CoverageHirSource {
     std::vector<frontend::CoverageSourceExclusion> exclusions;
 };
 
+// The SystemVerilog design elements whose instances have code coverage:
+// modules, interfaces and programs (not packages or compilation units).
+[[nodiscard]] constexpr bool covered_systemverilog_unit(
+    const semantic::sv::UnitKind kind) noexcept
+{
+    return kind == semantic::sv::UnitKind::module
+        || kind == semantic::sv::UnitKind::interface
+        || kind == semantic::sv::UnitKind::program;
+}
+
 struct CoverageHirContext {
     std::span<const CoverageHirSource> sources;
     // The project manifest's FSM hints, each for one instance.

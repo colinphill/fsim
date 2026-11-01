@@ -2041,6 +2041,10 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
               << " fast_notify_changes=" << profile_schedule_outcomes_[4]
               << " dispatch_groups=" << dispatch_groups_.size()
               << " collapsed=" << profile_collapsed_runs_
+              << " collapse_phases=" << profile_cones_[0]
+              << " cone_pass_runs=" << profile_cones_[1]
+              << " first_level_runs=" << profile_cones_[2]
+              << " collapse_levels=" << profile_cones_[3]
               << " guards_open=" << profile_guards_[0]
               << " guards_closed=" << profile_guards_[1]
               << " commit_writes=" << profile_commit_writes_[0]
@@ -2938,6 +2942,13 @@ void Interpreter::Impl::StaticKernel::run_collapsed()
     // names, so running it once its inputs' writers (lower levels) have
     // committed gives the value the delta schedule settles to. Each level
     // commits before the next runs; its changes wake only higher levels.
+    if (profile_ && profile_cone_of_.empty()) {
+        profile_cone_census_setup();
+    }
+    bool first_level = true;
+    if (profile_) {
+        ++profile_cones_[0];
+    }
     for (auto level = collapse_low_; collapse_pending_ != 0U; ++level) {
         auto& bucket = collapse_buckets_[level];
         if (bucket.empty()) {
@@ -2959,12 +2970,176 @@ void Interpreter::Impl::StaticKernel::run_collapsed()
         }
         if (profile_) {
             profile_collapsed_runs_ += collapse_batch_.size();
+            for (const auto member : collapse_batch_) {
+                const auto cone = profile_cone_of_[member];
+                if (cone != no_slot && profile_cone_phase_[cone] != profile_cones_[0]) {
+                    profile_cone_phase_[cone] = profile_cones_[0];
+                    profile_cones_[1] += profile_cone_size_[cone];
+                }
+            }
+            if (first_level) {
+                profile_cones_[2] += collapse_batch_.size();
+            }
+            ++profile_cones_[3];
         }
+        first_level = false;
         collapse_batch_.clear();
         commit_writes();
     }
     collapse_low_ = static_cast<std::uint32_t>(collapse_buckets_.size());
     collapse_floor_ = 0U;
+}
+
+void Interpreter::Impl::StaticKernel::profile_cone_census_setup()
+{
+    // Union-find over collapsed members: a member and the collapsed readers
+    // of a slot it drives share a cone, following wires and conversion
+    // members as plan_delta_collapse does (slots joined into classes).
+    const auto find_in = [](std::vector<std::uint32_t>& parent, std::uint32_t node) {
+        while (parent[node] != node) {
+            parent[node] = parent[parent[node]];
+            node = parent[node];
+        }
+        return node;
+    };
+    std::vector<std::uint32_t> slot_parent(slots_.size());
+    for (std::uint32_t index = 0U; index < slot_parent.size(); ++index) {
+        slot_parent[index] = index;
+    }
+    const auto join_slots = [&](const std::uint32_t left, const std::uint32_t right) {
+        if (left < slots_.size() && right < slots_.size()) {
+            slot_parent[find_in(slot_parent, left)] = find_in(slot_parent, right);
+        }
+    };
+    for (const auto& wire : wires_) {
+        join_slots(wire.target, wire.source);
+    }
+    for (std::uint32_t source = 0U; source < slot_conversions_.size(); ++source) {
+        for (const auto member : slot_conversions_[source]) {
+            const auto& write = operation_get<WriteUpdate>(
+                members_[member].operations()[members_[member].body_end - 1U]);
+            join_slots(slot_of_signal_[write.signal], source);
+        }
+    }
+    std::vector<std::uint32_t> parent(members_.size());
+    for (std::uint32_t index = 0U; index < parent.size(); ++index) {
+        parent[index] = index;
+    }
+    // Per slot class, its first collapsed writer; every collapsed writer
+    // and reader of the class joins it.
+    std::vector<std::uint32_t> anchor(slots_.size(), no_slot);
+    const auto join = [&](const std::uint32_t slot, const std::uint32_t member) {
+        auto& first = anchor[find_in(slot_parent, slot)];
+        if (first == no_slot) {
+            first = member;
+        } else {
+            parent[find_in(parent, member)] = find_in(parent, first);
+        }
+    };
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        if (member_schedule_[index].collapse) {
+            for (const auto slot : members_[index].collapse_outputs) {
+                if (slot < slots_.size()) {
+                    join(slot, index);
+                }
+            }
+        }
+    }
+    for (std::uint32_t slot = 0U; slot < slots_.size(); ++slot) {
+        if (anchor[find_in(slot_parent, slot)] == no_slot) {
+            continue;
+        }
+        for_each_wake_reader(slot, [&](const std::uint32_t reader) {
+            if (reader != no_slot && member_schedule_[reader].collapse) {
+                join(slot, reader);
+            }
+        });
+    }
+    const auto find = [&](const std::uint32_t node) { return find_in(parent, node); };
+    profile_cone_of_.assign(members_.size(), no_slot);
+    std::vector<std::uint32_t> cone_of_root(members_.size(), no_slot);
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        if (!member_schedule_[index].collapse) {
+            continue;
+        }
+        auto& cone = cone_of_root[find(index)];
+        if (cone == no_slot) {
+            cone = static_cast<std::uint32_t>(profile_cone_size_.size());
+            profile_cone_size_.push_back(0U);
+        }
+        profile_cone_of_[index] = cone;
+        ++profile_cone_size_[cone];
+    }
+    profile_cone_phase_.assign(profile_cone_size_.size(), 0U);
+    std::uint32_t largest = 0U;
+    std::size_t shared = 0U;
+    std::size_t joined = 0U;
+    for (const auto size : profile_cone_size_) {
+        largest = std::max(largest, size);
+        if (size > 1U) {
+            ++shared;
+            joined += size;
+        }
+    }
+    std::cerr << "fsim-kernel: cones=" << profile_cone_size_.size()
+              << " largest_cone=" << largest << " multi_member_cones=" << shared
+              << " members_in_multi=" << joined << '\n';
+    // Slots the members of multi-member cones drive: internal (every
+    // writer and reader in the cone, nothing else observes it), internal
+    // through wires (likewise for each wire target), or boundary.
+    std::unordered_map<ProcessId, std::uint32_t> member_of_process;
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        member_of_process.emplace(members_[index].process, index);
+    }
+    const auto in_cone = [&](const std::uint32_t member, const std::uint32_t cone) {
+        return member < profile_cone_of_.size() && profile_cone_of_[member] == cone;
+    };
+    const auto unobserved = [&](const std::uint32_t slot) {
+        const auto& state = slots_[slot];
+        return !state.output && state.edges.empty() && state.lazy_writers.empty()
+            && (slot >= slot_waitable_.size() || slot_waitable_[slot] == 0U)
+            && (slot >= slot_conversions_.size() || slot_conversions_[slot].empty());
+    };
+    const auto readers_in = [&](const std::uint32_t slot, const std::uint32_t cone) {
+        bool all = true;
+        for_each_wake_reader(slot, [&](const std::uint32_t reader) {
+            all = all && reader != no_slot && in_cone(reader, cone);
+        });
+        return all;
+    };
+    std::array<std::size_t, 3> kinds { };
+    std::vector<std::uint8_t> seen(slots_.size(), 0U);
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        const auto cone = profile_cone_of_[index];
+        if (cone == no_slot || profile_cone_size_[cone] < 2U) {
+            continue;
+        }
+        for (const auto slot : members_[index].collapse_outputs) {
+            if (slot >= slots_.size() || seen[slot] != 0U) {
+                continue;
+            }
+            seen[slot] = 1U;
+            const bool writers_in = std::ranges::all_of(slots_[slot].writers,
+                [&](const auto& writer) {
+                    const auto found = member_of_process.find(writer.process);
+                    return found != member_of_process.end()
+                        && in_cone(found->second, cone);
+                });
+            bool internal = writers_in && unobserved(slot) && readers_in(slot, cone);
+            bool wired = false;
+            if (internal && slot < slot_wires_.size()) {
+                for (auto wire = slot_wires_[slot].first; wire < slot_wires_[slot].second;
+                     ++wire) {
+                    wired = true;
+                    const auto target = wires_[wire].target;
+                    internal = internal && unobserved(target) && readers_in(target, cone);
+                }
+            }
+            ++kinds[!internal ? 2U : wired ? 1U : 0U];
+        }
+    }
+    std::cerr << "fsim-kernel: cone-slots internal=" << kinds[0]
+              << " internal_wired=" << kinds[1] << " boundary=" << kinds[2] << '\n';
 }
 
 bool Interpreter::Impl::StaticKernel::slot_known(const std::uint32_t slot_index) const
@@ -4659,6 +4834,7 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
     const auto nba_size = writes_.count;
     const auto generic_size = pending_generic_.size();
     const auto arena = arena_;
+    const auto marks = write_marks_;
     // Writes appended by a run, as (slot, offset, Logic9-exact value).
     const auto writes = [&] {
         std::vector<std::tuple<std::uint32_t, std::uint32_t, std::string>> out;
@@ -4721,6 +4897,7 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
     writes_.count = static_cast<std::uint32_t>(nba_size);
     pending_generic_.resize(generic_size);
     arena_ = arena;
+    write_marks_ = marks;
     member.call_stack = stack;
     body.registers = registers;
     body.wide_registers = wide;
@@ -4759,27 +4936,65 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
         replaying_ = false;
     }
     const auto reference_writes = writes();
-    std::string mismatch;
-    if (compiled_writes != reference_writes) {
-        mismatch = "writes";
-        for (std::size_t index = 0U;
-             index < std::max(compiled_writes.size(), reference_writes.size());
-             ++index) {
-            const auto describe = [&](const auto& list) {
-                if (index >= list.size()) {
-                    return std::string { "<none>" };
-                }
-                const auto& [slot, offset, value] = list[index];
-                return impl_.get_signal_cold(slots_[slot].signal).name + "["
-                    + std::to_string(offset) + "]=" + value;
-            };
-            if (index >= compiled_writes.size() || index >= reference_writes.size()
-                || compiled_writes[index] != reference_writes[index]) {
-                mismatch += " #" + std::to_string(index) + " compiled "
-                    + describe(compiled_writes) + " reference "
-                    + describe(reference_writes);
-                break;
+    // What commit_writes makes of a run's writes: the last value queued
+    // for each (slot, bit), since a later assignment in the run replaces
+    // an earlier one.
+    const auto effect = [](const auto& list) {
+        std::map<std::pair<std::uint32_t, std::uint32_t>, char> out;
+        for (const auto& [slot, offset, value] : list) {
+            for (std::size_t index = 0U; index < value.size(); ++index) {
+                out[{ slot,
+                    offset + static_cast<std::uint32_t>(value.size() - 1U - index) }]
+                    = value[index];
             }
+        }
+        return out;
+    };
+    const auto compiled_effect = effect(compiled_writes);
+    const auto reference_effect = effect(reference_writes);
+    std::map<std::uint32_t, std::string> current;
+    // A reference write the compiled body did not queue is one
+    // emit_unchanged_write_skip left out: no write was queued for its slot
+    // this round before the run, and it leaves the field as it is.
+    const auto skipped = [&](const std::uint32_t slot, const std::uint32_t bit,
+                             const char value) {
+        if (slot >= marks.size() || marks[slot] == write_round_) {
+            return false;
+        }
+        auto [entry, inserted] = current.try_emplace(slot);
+        if (inserted) {
+            entry->second = slot_value(slot).promoted_to_logic9().to_msb_string();
+        }
+        const auto& field = entry->second;
+        return bit < field.size() && field[field.size() - 1U - bit] == value;
+    };
+    std::string mismatch;
+    const auto describe = [&](const std::uint32_t slot, const std::uint32_t bit,
+                              const auto& image) {
+        const auto found = image.find({ slot, bit });
+        return impl_.get_signal_cold(slots_[slot].signal).name + " bit "
+            + std::to_string(bit) + "="
+            + (found == image.end() ? std::string { "<none>" }
+                                    : std::string(1U, found->second));
+    };
+    for (const auto& [key, value] : reference_effect) {
+        const auto found = compiled_effect.find(key);
+        if (found == compiled_effect.end() ? !skipped(key.first, key.second, value)
+                                           : found->second != value) {
+            mismatch = "writes: compiled "
+                + describe(key.first, key.second, compiled_effect) + " reference "
+                + describe(key.first, key.second, reference_effect);
+            break;
+        }
+    }
+    for (const auto& [key, value] : compiled_effect) {
+        if (!mismatch.empty()) {
+            break;
+        }
+        if (!reference_effect.contains(key)) {
+            mismatch = "writes: compiled "
+                + describe(key.first, key.second, compiled_effect) + " reference "
+                + describe(key.first, key.second, reference_effect);
         }
     }
     for (std::size_t reg = 0U; reg < member.registers.size() && mismatch.empty();
@@ -4798,28 +5013,30 @@ void Interpreter::Impl::StaticKernel::verify_run(const std::uint32_t member_inde
                 + compiled_registers[reg] + " reference " + reference;
         }
     }
-    if (!mismatch.empty() && verify_mismatches_++ < 20U) {
+    if (!mismatch.empty()) {
+        // A difference is a kernel bug: report it and fail the run.
         std::cerr << "fsim-kernel-verify: t=" << impl_.scheduler.now() << ' '
                   << impl_.processes.program_view(member.process).name() << ' '
                   << mismatch << '\n';
-        if (verify_mismatches_ == 1U) {
-            for (const auto* list : { &compiled_writes, &reference_writes }) {
-                std::cerr << (list == &compiled_writes ? "  compiled:" : "  reference:");
-                for (const auto& [slot, offset, value] : *list) {
-                    std::cerr << ' ' << impl_.get_signal_cold(slots_[slot].signal).name
-                              << '[' << offset << "]=" << value;
-                }
-                std::cerr << '\n';
+        for (const auto* list : { &compiled_writes, &reference_writes }) {
+            std::cerr << (list == &compiled_writes ? "  compiled:" : "  reference:");
+            for (const auto& [slot, offset, value] : *list) {
+                std::cerr << ' ' << impl_.get_signal_cold(slots_[slot].signal).name
+                          << '[' << offset << "]=" << value;
             }
-            for (std::size_t reg = 0U; reg < registers.size(); ++reg) {
-                if (body.register_widths[reg] != 0U && body.register_widths[reg] <= 64U) {
-                    std::cerr << "  start r" << reg << '='
-                              << PackedLogic4::from_aval_bval(body.register_widths[reg],
-                                     registers[reg].a, registers[reg].b).to_msb_string()
-                              << '\n';
-                }
+            std::cerr << '\n';
+        }
+        for (std::size_t reg = 0U; reg < registers.size(); ++reg) {
+            if (body.register_widths[reg] != 0U && body.register_widths[reg] <= 64U) {
+                std::cerr << "  start r" << reg << '='
+                          << PackedLogic4::from_aval_bval(body.register_widths[reg],
+                                 registers[reg].a, registers[reg].b).to_msb_string()
+                          << '\n';
             }
         }
+        throw std::runtime_error("FSIM_KERNEL_VERIFY: compiled member "
+            + std::string { impl_.processes.program_view(member.process).name() }
+            + " differs from the reference evaluator");
     }
     sync_compiled_registers(member_index);
 }

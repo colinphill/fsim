@@ -30,8 +30,9 @@ replacing a valid destination.
 
 ### What is counted
 
-Discovery runs on the compiled HIR of every elaborated SystemVerilog module
-and VHDL architecture. Each elaborated instance has its own counters, and
+Discovery runs on the compiled HIR of every elaborated SystemVerilog module,
+interface and program, and every VHDL architecture. Packages and the
+compilation unit have no instances and are not covered. Each elaborated instance has its own counters, and
 points that a run never reaches, including paths removed by constant
 specialization, stay in the inventory with zero hits. All counting runs as
 SimIR, so the interpreter and the v4 kernel count the same.

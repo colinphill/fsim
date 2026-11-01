@@ -1505,7 +1505,7 @@ void test_systemverilog_metadata(
     auto config = make_systemverilog_metadata_config(directory, source);
     const auto instrumented = build_project(config);
     const auto& discovered = instrumented.design.code_coverage_inventory();
-    assert(discovered && discovered->total_points == 13U);
+    assert(discovered && discovered->total_points == 16U);
     config.coverage.enabled = false;
     auto project = build_project(config);
     std::ifstream source_input(source, std::ios::binary);

@@ -16449,7 +16449,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         root.language);
     specialization.language = source_language;
     lowerer.set_hir_code_coverage_context(coverage_,
-        unit.kind == semantic::sv::UnitKind::module
+        covered_systemverilog_unit(unit.kind)
             && source_language == frontend::Language::SystemVerilog2017,
         &coverage_fsm_drafts_);
     specialization.library = unit.library.empty()

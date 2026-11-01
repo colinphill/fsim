@@ -585,7 +585,7 @@ CoverageHirPointResult discover_hir_module_coverage_points(
     if (!vhdl
         && (specialization.language != frontend::Language::SystemVerilog2017
             || unit->systemverilog == nullptr
-            || unit->systemverilog->kind != semantic::sv::UnitKind::module)) {
+            || !covered_systemverilog_unit(unit->systemverilog->kind))) {
         return result;
     }
 

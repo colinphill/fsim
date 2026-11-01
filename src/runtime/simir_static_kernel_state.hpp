@@ -870,6 +870,22 @@ private:
     /// then runs the conversions the changes queued (run_conversions).
     void commit_writes();
     void run_collapsed();
+    /// FSIM_PROFILE_KERNEL cone census: profile_cone_of_ and its cones.
+    void profile_cone_census_setup();
+    /// The members a change of `slot` wakes (after notify planning: the
+    /// whole-slot targets and the ranged readers); a partition target is
+    /// passed as no_slot.
+    template <typename Visit>
+    void for_each_wake_reader(const std::uint32_t slot, Visit&& visit) const
+    {
+        for (const auto& target : slots_[slot].targets) {
+            visit((target.id & static_kernel_detail::partition_tag) != 0U
+                    ? static_kernel_detail::no_slot : target.id);
+        }
+        for (const auto& reader : slots_[slot].readers) {
+            visit(reader.member);
+        }
+    }
     /// Port-association conversions (IEEE 1076-2008 14.7.3.3), as the
     /// host's update commit runs them (drain_vhdl_resolutions): first in,
     /// first out, each committed before the next runs and each at most once
@@ -2414,7 +2430,6 @@ private:
     /// Diagnostic (FSIM_KERNEL_CHECK_INPUTS): compare every input value and
     /// report changes the host made without a revision bump.
     bool check_inputs_ { };
-    std::uint64_t verify_mismatches_ { };
     std::vector<Slot> slots_;
     /// What a VHDL round's commit needs of each slot, 16 bytes apiece so
     /// four share a cache line (commit_round touches nothing else for a
@@ -3013,6 +3028,16 @@ private:
     /// entry.
     std::array<std::uint64_t, 5> profile_schedule_outcomes_ { };
     std::uint64_t profile_collapsed_runs_ { };
+    /// Cone census (FSIM_PROFILE_KERNEL): collapsed members joined through
+    /// the slots they drive and read, per member its cone (no_slot: not
+    /// collapsed) and per cone its size and the update phase that last ran
+    /// a member of it. Totals: update phases with collapsed runs, the runs
+    /// a whole-cone pass would make (touched cones' sizes), runs in each
+    /// phase's first level, and levels committed.
+    std::vector<std::uint32_t> profile_cone_of_;
+    std::vector<std::uint32_t> profile_cone_size_;
+    std::vector<std::uint64_t> profile_cone_phase_;
+    std::array<std::uint64_t, 4> profile_cones_ { };
     /// Guard group activations decided open and closed.
     std::array<std::uint64_t, 2> profile_guards_ { };
     std::map<std::string, std::uint64_t> profile_generic_ops_;

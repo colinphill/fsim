@@ -4548,12 +4548,13 @@ private:
             // Cold tiering is static, so small cold templates include the
             // most frequently run members: outlining them costs 3-5% run
             // instructions, and it is runtime-neutral only from about 1024
-            // instructions. Off by default.
+            // instructions. At 1024 it saves 2-3% of native codegen time
+            // with no run-time cost (quiet-host A/B, 2026-11-01).
             // FSIM_STATIC_KERNEL_OUTLINE_STORES=N: the smallest outlined
-            // template (0: none).
+            // template (0: none; default 1024).
             static const std::size_t outline_size = [] {
                 const char* text = std::getenv("FSIM_STATIC_KERNEL_OUTLINE_STORES");
-                return text == nullptr ? std::size_t { 0 }
+                return text == nullptr ? std::size_t { 1024 }
                                        : static_cast<std::size_t>(
                                              std::strtoull(text, nullptr, 10));
             }();

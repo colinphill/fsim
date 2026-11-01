@@ -1236,6 +1236,40 @@ end architecture;
     assert_coverage_transparent("vhdl", "assign.vhd", "tb(sim)", true);
 }
 
+// Interface and program instances are covered like modules: their
+// procedural statements, branches and objects count per instance.
+void test_interface_program_coverage()
+{
+    Directory directory;
+    workspace::Store store { directory.path };
+    write_file("ifp.sv", R"(interface bus_if;
+  logic ready = 0;
+  initial #2 ready = 1;
+endinterface
+program stim;
+  logic go = 0;
+  initial begin
+    #1 go = 1;
+    if (go) $display("IFP go");
+    #3 $display("IFP done");
+  end
+endprogram
+module tb;
+  bus_if bus();
+  stim s();
+endmodule
+)");
+    invoke({ "compile", "--quiet", "--code-coverage", "ifp.sv" });
+    invoke({ "elaborate", "--quiet", "--no-aot", "--code-coverage",
+        "--snapshot", "sv", "tb" });
+    assert_statement_branch_coverage("sv", "IFP done",
+        { { 2U, { 1U } }, { 3U, { 1U, 1U } }, { 6U, { 1U } },
+            { 8U, { 1U, 1U } }, { 9U, { 1U, 1U } }, { 10U, { 1U, 1U } } },
+        { { 9U, { 0U, 1U } } });
+    assert_toggle_coverage("sv", { { 2U, { 0U, 1U } }, { 6U, { 0U, 1U } } });
+    assert_coverage_transparent("sv", "ifp.sv", "tb", false);
+}
+
 void test_standard_coverage_types()
 {
     Directory directory;
@@ -1809,6 +1843,8 @@ int main(const int argc, const char* const* argv)
         Case { "fsm-coverage", test_fsm_coverage },
         Case { "concurrent-assignment-coverage",
             test_concurrent_assignment_coverage },
+        Case { "interface-program-coverage",
+            test_interface_program_coverage },
         Case { "standard-coverage-types", test_standard_coverage_types },
         Case { "fsm-hint-diagnostics", test_fsm_hint_diagnostics },
         Case { "coverage-controls-callable", test_coverage_controls_and_callable_boundary },

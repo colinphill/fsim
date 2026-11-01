@@ -246,7 +246,7 @@ void HierarchyBuilder::append_toggle_coverage_monitors()
         };
         if (specialization.language == frontend::Language::SystemVerilog2017
             && unit->systemverilog != nullptr
-            && unit->systemverilog->kind == semantic::sv::UnitKind::module) {
+            && covered_systemverilog_unit(unit->systemverilog->kind)) {
             for (const auto id : unit->systemverilog->declarations) {
                 const auto found = compiled_->find_declaration(id);
                 if (!found || found->systemverilog == nullptr) {

@@ -564,7 +564,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         generated_lowerer.set_ancestor_systemverilog_specializations(
             &materialization.type_owner_contexts);
         generated_lowerer.set_hir_code_coverage_context(
-            coverage_, unit.kind == semantic::sv::UnitKind::module
+            coverage_, covered_systemverilog_unit(unit.kind)
                 && source_language == frontend::Language::SystemVerilog2017,
             &coverage_fsm_drafts_);
         generated_lowerer.set_systemverilog_interface_handles(
