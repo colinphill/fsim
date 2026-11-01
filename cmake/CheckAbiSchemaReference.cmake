@@ -88,7 +88,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "`SCV::scv`"
     "| SystemC | ABI 4 |"
     "project schema 3"
-    "format 9, portable schema 16, compiled-HIR bundle 3"
+    "format 10, portable schema 16, compiled-HIR bundle 3"
     "format 8/schema 15"
     "format 16, runtime ABI 1"
     "fsim-code-coverage-foundation-v3"

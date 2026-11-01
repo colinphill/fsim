@@ -927,6 +927,30 @@ std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
         anchor = find_protected_storage(
             container_objects_, object, "@protected");
     }
+    if (!anchor && object.find('.') != std::string_view::npos) {
+        // An object named through a package instance (`inst.obj`) is that
+        // instance's own object (IEEE 1076-2008 4.9, 6.5.7.2), bound by the
+        // instance declaration: every instance of a template shares the
+        // template's declaration source.
+        semantic::vhdl::Name object_name;
+        object_name.spelling = std::string { object };
+        object_name.canonical = object_name.spelling;
+        const auto owners = hir_resolver().resolve_vhdl_package_members(
+            object_name, scope);
+        const auto* member = owners.candidates.size() == 1U
+                && owners.candidates.front().package_instance
+            ? find_vhdl_declaration(
+                  *specialized_hir_unit_, owners.candidates.front().member)
+            : nullptr;
+        if (member != nullptr) {
+            const auto found = container_objects_.find(vhdl_package_object_key(
+                *owners.candidates.front().package_instance,
+                member->name + ".@protected"));
+            if (found != container_objects_.end()) {
+                anchor = found->second;
+            }
+        }
+    }
     if (!anchor) {
         // A shared variable of a package body is visible only to that
         // body's subprograms, which run in their callers' units: find the

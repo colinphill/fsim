@@ -15,7 +15,7 @@ fsim v3 distinguishes public native ABIs from persisted development artifacts:
   and append-only. A consumer validates the required prefix before using it.
 - Portable and native artifact readers are exact-current readers. They do not
   migrate, downgrade, infer omitted legacy fields, or dual-write old formats.
-  The workspace library catalog accepts only SQLite schema 2.
+  The workspace library catalog accepts only SQLite schema 3.
 - Portable payloads are independent of the producer host when all declared
   language, standard, compatibility, schema, and content identities match.
 - Native payloads and caches require the exact producer identity. They are
@@ -148,12 +148,12 @@ type information.
 | Family | Current identity | Top-level content |
 | --- | --- | --- |
 | `fsim.toml` (retained SDK reader) | project schema 3 | low-level project configuration; public CLI commands use the current-directory workspace and do not read this file |
-| `.fsimobj` | `FSIMOBJ\0`, format 9, portable schema 16, compiled-HIR bundle 3 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and optional source payloads |
-| `.fsimdesign` | `FSIMDES\0`, format 16, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, class-specialization, SDF, trace, SystemC, and SCV state. Each payload checksum is `xxh64:` and sixteen lowercase hex digits (XXH64, seed 0; the integrity check simulate repeats at load) or lowercase SHA-256 hex |
+| `.fsimobj` | one SQLite container (kind `fsim-object`) holding format 10, portable schema 16, compiled-HIR bundle 3 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and source paths (relative to the object's directory) with content digests and coverage facts, never source text |
+| `.fsimdesign` | one SQLite container (kind `fsim-design`) holding format 16, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, class-specialization, SDF, trace, SystemC, and SCV state. Each payload checksum is `xxh64:` and sixteen lowercase hex digits (XXH64, seed 0; the integrity check simulate repeats at load) or lowercase SHA-256 hex |
 | `.fsimlib` | one SQLite container (kind `fsim-library`) holding canonical TOML format 8, portable schema 16, compiled-HIR bundle 3 | logical-library metadata, compiled semantic/SV/VHDL HIR, source paths with content digests and coverage facts (never source text), and optional exact native accelerators |
-| Workspace library catalog | SQLite schema 2 | artifact and dependency indexes with VHDL identifier-form columns |
-| `.fsimscobj` | `FSIMSCO\0`, format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
-| `.fsimscplugin` | format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
+| Workspace library catalog | SQLite schema 3 | artifact and dependency indexes with VHDL identifier-form columns |
+| `.fsimscobj` | one SQLite container (kind `fsim-systemc-object`) holding format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
+| `.fsimscplugin` | one SQLite container (kind `fsim-systemc-plugin`) holding format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
 | Object caches | one SQLite database per cache (`static-kernel.sqlite3`, `compiled-hir.sqlite3` in the cache directory), application id `FSIM`, cache schema 1: one row per entry with its key, `xxh64:<16 hex>` payload checksum, size, last use and payload; a database of another cache schema is rebuilt; LLVM key schema `fsim-llvm-native-object-v169`; ordinary payload compiled-HIR bundle 3 | native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB payload ceiling; every load verifies the checksum and a corrupt entry is a miss |
 
 `UnitIndexEntry` is a public C++ metadata record. Appending the two
@@ -168,7 +168,7 @@ change. `.fsimlib` format 7/schema 16 writes `name_form` and
 Earlier identities (`.fsimobj` format 8/schema 15, `.fsimlib` format 6/schema
 15, catalog schema 1) are rejected like any other stale identity. The
 compiled-HIR schema remains 3 because the HIR already carries the identifier
-form. SQLite schema 2 stores both forms as checked integer values.
+form. SQLite schema 3 stores both forms as checked integer values.
 
 All numeric binary fields are canonical little-endian. Every artifact is one
 SQLite file (application id `0x4653494D`, container schema 1) whose `meta`

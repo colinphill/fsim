@@ -396,7 +396,8 @@ compiled_object_unit_entries(const semantic::CompiledDesign& design,
 std::optional<CompilationWorkspace> load_workspace_objects(
     const std::span<const WorkspaceObjectSelection> objects,
     diagnostic::Engine& diagnostics,
-    const bool validate_uvm_surface)
+    const bool validate_uvm_surface,
+    const std::filesystem::path& base_directory)
 {
     const auto ordered = ordered_workspace_objects(objects, diagnostics);
     if (!ordered) {
@@ -448,7 +449,7 @@ std::optional<CompilationWorkspace> load_workspace_objects(
             continue;
         }
         const std::array paths { selection.path };
-        auto input = load_object_workspace(paths, diagnostics, false);
+        auto input = load_object_workspace(paths, diagnostics, false, base_directory);
         if (!input) {
             return std::nullopt;
         }

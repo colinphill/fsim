@@ -1498,7 +1498,9 @@ void run_artifact_worker_determinism_test(
             checkout,
             directory / (std::string { label } + "-object-cache"));
         object_config.build.jobs = jobs;
-        const auto object = directory
+        // Artifacts name their sources relative to themselves, so they sit
+        // in the checkout: one layout gives one artifact wherever it is.
+        const auto object = checkout
             / (std::string { label } + ".fsimobj");
         fsim::diagnostic::Engine object_diagnostics;
         assert(fsim::app::compile_artifact(
@@ -1511,7 +1513,7 @@ void run_artifact_worker_determinism_test(
         design_config.source_sets.clear();
         design_config.build.cache_path = directory
             / (std::string { label } + "-design-cache");
-        const auto design = directory
+        const auto design = checkout
             / (std::string { label } + ".fsimdesign");
         const std::array objects { object };
         fsim::diagnostic::Engine design_diagnostics;
@@ -1532,7 +1534,7 @@ void run_artifact_worker_determinism_test(
             checkout,
             directory / (std::string { label } + "-library-cache"),
             jobs);
-        const auto library = directory
+        const auto library = checkout
             / (std::string { label } + ".fsimlib");
         fsim::diagnostic::Engine library_diagnostics;
         assert(fsim::app::export_library(
@@ -1575,9 +1577,13 @@ void run_artifact_worker_determinism_test(
             / ("relocated-checkout-" + std::to_string(relocation));
         const auto label = "relocation-" + std::to_string(relocation);
         const auto snapshot = capture(checkout, label, 4U);
+        const auto parts = std::string { snapshot.cache == relocation_reference->cache ? "" : " cache" }
+            + (snapshot.object == relocation_reference->object ? "" : " object")
+            + (snapshot.library == relocation_reference->library ? "" : " library")
+            + (snapshot.design == relocation_reference->design ? "" : " design");
         require_determinism_snapshot(
             snapshot == *relocation_reference,
-            label + " at 4 workers vs worker-count-checkout worker-4");
+            label + " at 4 workers vs worker-count-checkout worker-4:" + parts);
     }
 }
 

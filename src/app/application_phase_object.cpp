@@ -21,13 +21,35 @@ std::filesystem::path object_source_root(
   return std::filesystem::path{"objects"} / metadata.compilation_digest;
 }
 
+// An object records its sources and include roots relative to its own
+// directory. They are named relative to the consumer's base directory (the
+// workspace for the CLI, else the current directory), or absolutely where no
+// relative path exists, so objects from libraries compiled in other
+// workspaces name the same files alike.
+std::filesystem::path consumer_path(const std::filesystem::path& object,
+    const std::filesystem::path& recorded, const std::filesystem::path& base) {
+  const auto absolute =
+      (std::filesystem::absolute(object).parent_path() / recorded).lexically_normal();
+  std::error_code error;
+  const auto root = base.empty() ? std::filesystem::current_path(error)
+                                 : std::filesystem::absolute(base, error);
+  if (!error) {
+    auto relative = absolute.lexically_relative(root.lexically_normal());
+    if (!relative.empty()) {
+      return relative;
+    }
+  }
+  return absolute;
+}
+
 }  // namespace
 
 std::optional<application_detail::CompilationWorkspace>
 application_detail::load_object_workspace(
     const std::span<const std::filesystem::path> objects,
     diagnostic::Engine& diagnostics,
-    const bool validate_uvm_surface) {
+    const bool validate_uvm_surface,
+    const std::filesystem::path& base_directory) {
   if (objects.empty()) {
     diagnostics.error(
         "FSIM-ART-0005", "elaboration requires at least one .fsimobj input");
@@ -179,9 +201,10 @@ application_detail::load_object_workspace(
     source_mappings.reserve(metadata->sources.size());
     for (std::size_t index = 0; index < metadata->sources.size(); ++index) {
       const auto& indexed = metadata->sources[index];
-      auto logical = support::path_from_utf8(indexed.logical_name);
+      auto logical = consumer_path(object,
+          support::path_from_utf8(indexed.logical_name), base_directory);
       auto [existing, inserted] = known_sources.emplace(
-          indexed.logical_name, indexed.checksum);
+          support::path_to_utf8(logical), indexed.checksum);
       if (!inserted && existing->second != indexed.checksum) {
         logical = (object_source_root(*metadata) / logical).lexically_normal();
         std::tie(existing, inserted) = known_sources.emplace(
@@ -198,7 +221,8 @@ application_detail::load_object_workspace(
       }
     }
     for (const auto& include : metadata->include_roots) {
-      provenance.source_settings.include_directories.push_back(include);
+      provenance.source_settings.include_directories.push_back(
+          consumer_path(object, include, base_directory));
     }
 
     auto compiled_bytes = artifact::read_object_payload(

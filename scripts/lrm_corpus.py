@@ -2917,30 +2917,27 @@ def simulation_lines(output: str) -> list[str]:
 
 
 def ivtest_source_location_lines(case_id: str, lines: list[str]) -> list[str]:
-    """Map only known __FILE__ transport paths in the two location probes."""
+    """Map only known __FILE__ paths in the two location probes."""
     # IEEE 1800-2017 22.13 permits implementation-dependent path formatting.
-    # These gold files use Icarus's ./ivltests paths; fsim opens archived
-    # sources. Keep every filename, line number, label and other output exact.
+    # These gold files use Icarus's ./ivltests paths; fsim names the source
+    # relative to the case workspace. Keep every filename, line number, label
+    # and other output exact.
     files = {
-        "br_gh782a": {"br_gh782a.v": "sources/roots/root",
-                       "br_gh782a.vi": "includes/roots"},
-        "br_gh782b": {"br_gh782b.v": "sources/roots/root"},
-        "fileline": {"fileline.v": "sources/roots/root"},
-    }.get(case_id, {})
+        "br_gh782a": {"br_gh782a.v", "br_gh782a.vi"},
+        "br_gh782b": {"br_gh782b.v"},
+        "fileline": {"fileline.v"},
+    }.get(case_id, set())
+    path = r"(?:[^ ]*/)?ivltests/([^/ ]+)"
     result = []
     for line in lines:
-        bare = re.fullmatch(
-            r"objects/[0-9a-f]{64}/(sources/roots/root)/[0-9]{8}/([^/ ]+)",
-            line)
-        if bare and files.get(bare[2]) == bare[1]:
-            result.append(f"./ivltests/{bare[2]}")
+        bare = re.fullmatch(path, line)
+        if bare and bare[1] in files:
+            result.append(f"./ivltests/{bare[1]}")
             continue
         match = re.fullmatch(
-            r"(File|Included file) objects/[0-9a-f]{64}/"
-            r"(sources/roots/root|includes/roots)/[0-9]{8}/"
-            r"([^/ ]+) line ([0-9]+)", line)
-        if match and files.get(match[3]) == match[2]:
-            line = f"{match[1]} ./ivltests/{match[3]} line {match[4]}"
+            r"(File|Included file) " + path + r" line ([0-9]+)", line)
+        if match and match[2] in files:
+            line = f"{match[1]} ./ivltests/{match[2]} line {match[3]}"
         result.append(line)
     return result
 

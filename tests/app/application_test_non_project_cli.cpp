@@ -1488,10 +1488,15 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
+    // A design names its sources relative to the elaborating directory: run
+    // where the objects were built, as the object build above does.
+    const auto elaborate_directory = std::filesystem::current_path();
+    std::filesystem::current_path(directory);
     assert(run_fixture_command(static_cast<int>(production_elaborate_arguments.size()),
                production_elaborate_arguments.data(), production_services,
                output, error)
         == 0);
+    std::filesystem::current_path(elaborate_directory);
     assert(error.str().empty());
     assert(output.str().find("elaborated 1 root(s)") != std::string::npos);
     diagnostic::Engine design_metadata_diagnostics;
@@ -1691,6 +1696,12 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(loaded_design->design_ir.valid(loaded_design->semantics));
     assert(loaded_design->artifact_identity == published_design_metadata->design_digest);
     const auto loaded_provenance = app::verilog_scope_provenance(*loaded_design);
+    if (provenance_signature(loaded_provenance) != object_provenance_signature) {
+        for (const auto& item : provenance_signature(loaded_provenance))
+            std::cerr << "loaded provenance: " << item << '\n';
+        for (const auto& item : object_provenance_signature)
+            std::cerr << "object provenance: " << item << '\n';
+    }
     assert(provenance_signature(loaded_provenance) == object_provenance_signature);
     app::Simulation standalone_simulation { std::move(*loaded_design), 1000,
         app::SimulationEngine::interpreter };

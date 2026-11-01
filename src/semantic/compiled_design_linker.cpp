@@ -1294,6 +1294,208 @@ void relocate_hir(vhdl::Hir& hir, const Relocation& relocation)
     relocate(hir.mutable_instances(), relocation);
 }
 
+// Objects compiled from one source each carry its file, expansion and span
+// records. Linking keeps one record per file (name and digest), expansion and
+// span, so a position in a shared source has one ID in the linked design.
+struct LinkedSourceIndex {
+    std::map<std::pair<std::string, std::string>, std::uint32_t> files;
+    std::map<std::pair<std::uint32_t, std::string>, std::uint32_t> expansions;
+    std::map<std::tuple<std::uint32_t, std::string, SourcePosition,
+                 SourcePosition, std::uint32_t>,
+        std::uint32_t>
+        spans;
+};
+
+struct SourceMerge {
+    std::uint32_t file_base { };
+    std::uint32_t expansion_base { };
+    std::uint32_t span_base { };
+    std::vector<std::uint32_t> file;
+    std::vector<std::uint32_t> expansion;
+    std::vector<std::uint32_t> span;
+};
+
+std::uint32_t optional_index(const std::optional<ExpansionId>& id)
+{
+    return id && id->valid() ? id->value() : kRemovedId;
+}
+
+template <typename Value>
+void merge_sources(Value& value, const SourceMerge& merge);
+
+template <typename Tag>
+void merge_sources(Id<Tag>& id, const SourceMerge& merge)
+{
+    const auto remap = [&](const std::uint32_t base,
+                           const std::vector<std::uint32_t>& mapping) {
+        if (id.valid() && id.value() >= base
+            && id.value() - base < mapping.size()) {
+            id = Id<Tag>::from_index(mapping[id.value() - base]);
+        }
+    };
+    if constexpr (std::same_as<Tag, SourceFileTag>) {
+        remap(merge.file_base, merge.file);
+    } else if constexpr (std::same_as<Tag, ExpansionTag>) {
+        remap(merge.expansion_base, merge.expansion);
+    } else if constexpr (std::same_as<Tag, SourceSpanTag>) {
+        remap(merge.span_base, merge.span);
+    }
+}
+
+template <typename Value>
+void merge_sources(Value& value, const SourceMerge& merge)
+{
+    using Type = std::remove_cvref_t<Value>;
+    if constexpr (std::is_arithmetic_v<Type> || std::is_enum_v<Type>
+        || std::same_as<Type, std::string>
+        || std::same_as<Type, std::filesystem::path>) {
+        return;
+    } else if constexpr (IsVector<Type>::value) {
+        for (auto& item : value) {
+            merge_sources(item, merge);
+        }
+    } else if constexpr (IsOptional<Type>::value) {
+        if (value) {
+            merge_sources(*value, merge);
+        }
+    } else if constexpr (IsPair<Type>::value) {
+        merge_sources(value.first, merge);
+        merge_sources(value.second, merge);
+    } else if constexpr (std::is_aggregate_v<Type>) {
+        boost::pfr::for_each_field(
+            value, [&](auto& field) { merge_sources(field, merge); });
+    }
+}
+
+void index_linked_sources(
+    const ModelRecords& records, LinkedSourceIndex& index)
+{
+    for (const auto& file : records.source_files) {
+        index.files.try_emplace(
+            { file.physical_name, file.content_digest }, file.id.value());
+    }
+    for (const auto& expansion : records.expansions) {
+        index.expansions.try_emplace(
+            { optional_index(expansion.parent), expansion.description },
+            expansion.id.value());
+    }
+    for (const auto& span : records.source_spans) {
+        index.spans.try_emplace({ span.file.value(), span.logical_name,
+                                    span.begin, span.end,
+                                    optional_index(span.expansion) },
+            span.id.value());
+    }
+}
+
+template <typename Records>
+bool records_numbered_from(const Records& records, const std::uint32_t base)
+{
+    for (std::size_t index = 0; index < records.size(); ++index) {
+        if (records[index].id.value() != base + index) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Maps the relocated input's source records onto equal records already
+// linked and numbers the others after them. Every source ID in `records`,
+// both HIRs and `references` is rewritten; merged records are dropped.
+void merge_linked_sources(const Relocation& relocation,
+    LinkedSourceIndex& index, ModelRecords& records, sv::Hir& systemverilog,
+    vhdl::Hir& vhdl, std::vector<CompiledReference>& references)
+{
+    if (!records_numbered_from(records.source_files, relocation.source_file)
+        || !records_numbered_from(records.expansions, relocation.expansion)
+        || !records_numbered_from(
+            records.source_spans, relocation.source_span)) {
+        return;
+    }
+    SourceMerge merge { relocation.source_file, relocation.expansion,
+        relocation.source_span, { }, { }, { } };
+    std::vector<bool> keep_file;
+    std::vector<bool> keep_expansion;
+    std::vector<bool> keep_span;
+    // Numbers one record: an equal linked record's ID, or the next new one.
+    const auto assign = [](auto& map, auto key, std::uint32_t& next,
+                            std::vector<std::uint32_t>& mapping,
+                            std::vector<bool>& keep) {
+        const auto [found, inserted] = map.try_emplace(std::move(key), next);
+        mapping.push_back(found->second);
+        keep.push_back(inserted);
+        if (inserted) {
+            ++next;
+        }
+    };
+    std::uint32_t next = relocation.source_file;
+    for (const auto& file : records.source_files) {
+        assign(index.files,
+            std::pair { file.physical_name, file.content_digest }, next,
+            merge.file, keep_file);
+    }
+    const auto mapped = [](const std::uint32_t value, const std::uint32_t base,
+                            const std::vector<std::uint32_t>& mapping) {
+        return value != kRemovedId && value >= base
+                && value - base < mapping.size()
+            ? mapping[value - base]
+            : value;
+    };
+    next = relocation.expansion;
+    for (const auto& expansion : records.expansions) {
+        const auto parent = optional_index(expansion.parent);
+        // A parent numbered after its child keeps the child apart.
+        if (parent != kRemovedId && parent >= relocation.expansion
+            && parent - relocation.expansion >= merge.expansion.size()) {
+            merge.expansion.push_back(next++);
+            keep_expansion.push_back(true);
+            continue;
+        }
+        assign(index.expansions,
+            std::pair { mapped(parent, relocation.expansion, merge.expansion),
+                expansion.description },
+            next, merge.expansion, keep_expansion);
+    }
+    next = relocation.source_span;
+    for (const auto& span : records.source_spans) {
+        assign(index.spans,
+            std::tuple { mapped(span.file.value(), relocation.source_file,
+                             merge.file),
+                span.logical_name, span.begin, span.end,
+                mapped(optional_index(span.expansion), relocation.expansion,
+                    merge.expansion) },
+            next, merge.span, keep_span);
+    }
+    merge_sources(records, merge);
+    merge_sources(systemverilog.mutable_units(), merge);
+    merge_sources(systemverilog.mutable_declarations(), merge);
+    merge_sources(systemverilog.mutable_types(), merge);
+    merge_sources(systemverilog.mutable_expressions(), merge);
+    merge_sources(systemverilog.mutable_statements(), merge);
+    merge_sources(systemverilog.mutable_processes(), merge);
+    merge_sources(systemverilog.mutable_classes(), merge);
+    merge_sources(systemverilog.mutable_instances(), merge);
+    merge_sources(systemverilog.mutable_udps(), merge);
+    merge_sources(systemverilog.mutable_dpi_declarations(), merge);
+    merge_sources(systemverilog.mutable_covergroup_instances(), merge);
+    merge_sources(vhdl.mutable_units(), merge);
+    merge_sources(vhdl.mutable_declarations(), merge);
+    merge_sources(vhdl.mutable_types(), merge);
+    merge_sources(vhdl.mutable_overload_sets(), merge);
+    merge_sources(vhdl.mutable_expressions(), merge);
+    merge_sources(vhdl.mutable_statements(), merge);
+    merge_sources(vhdl.mutable_processes(), merge);
+    merge_sources(vhdl.mutable_instances(), merge);
+    merge_sources(references, merge);
+    const auto drop_merged = [](auto& items, const std::vector<bool>& keep) {
+        std::size_t position = 0;
+        std::erase_if(items,
+            [&](const auto&) { return !keep[position++]; });
+    };
+    drop_merged(records.source_files, keep_file);
+    drop_merged(records.expansions, keep_expansion);
+    drop_merged(records.source_spans, keep_span);
+}
+
 std::string reference_name(const std::string_view text)
 {
     const auto separator = text.find_last_of(".:");
@@ -3742,6 +3944,8 @@ CompiledLinkResult link_compiled_designs(
         });
     CompiledDesign output = std::move(inputs.front());
     auto records = output.semantics.records();
+    LinkedSourceIndex source_index;
+    index_linked_sources(records, source_index);
     UnitDefinitions units;
     std::set<std::string> classes;
     std::set<UdpKey> udps;
@@ -3765,11 +3969,17 @@ CompiledLinkResult link_compiled_designs(
         relocate(input_records, relocation);
         relocate_hir(input.systemverilog_hir, relocation);
         relocate_hir(input.vhdl_hir, relocation);
+        std::vector<CompiledReference> references;
         for (auto reference : input.references()) {
             if (!reference.systemverilog_package_member) {
                 continue;
             }
             relocate(reference, relocation);
+            references.push_back(std::move(reference));
+        }
+        merge_linked_sources(relocation, source_index, input_records,
+            input.systemverilog_hir, input.vhdl_hir, references);
+        for (auto& reference : references) {
             output.mutable_references().push_back(std::move(reference));
         }
         append_records(records, std::move(input_records));

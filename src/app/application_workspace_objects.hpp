@@ -35,7 +35,8 @@ compiled_object_unit_entries(const semantic::CompiledDesign&,
 [[nodiscard]] std::optional<CompilationWorkspace> load_workspace_objects(
     std::span<const WorkspaceObjectSelection> objects,
     diagnostic::Engine& diagnostics,
-    bool validate_uvm_surface = true);
+    bool validate_uvm_surface = true,
+    const std::filesystem::path& base_directory = { });
 
 [[nodiscard]] std::optional<BuiltProject> build_workspace_objects(
     const project::Config& config,

@@ -1093,7 +1093,8 @@ std::optional<BuiltProject> build_objects(
         checked = std::move(empty);
     } else {
         ScopedPhaseProfile decode_phase { "object_decode" };
-        checked = load_object_workspace(objects, diagnostics);
+        checked = load_object_workspace(
+            objects, diagnostics, true, config.base_directory);
     }
     return build_checked_project(
         config, std::move(checked), systemc_plugins, diagnostics);
@@ -1112,7 +1113,8 @@ std::optional<BuiltProject> application_detail::build_workspace_objects(
     }
     auto workspace = [&] {
         ScopedPhaseProfile decode_phase { "object_decode" };
-        return load_workspace_objects(objects, diagnostics);
+        return load_workspace_objects(
+            objects, diagnostics, true, config.base_directory);
     }();
     return build_checked_project(config, std::move(workspace),
         systemc_plugins, diagnostics);

@@ -664,7 +664,8 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
     if (diagnostics.has_error()) {
         return 1;
     }
-    auto imported = load_workspace_objects(objects, diagnostics, false);
+    auto imported = load_workspace_objects(
+        objects, diagnostics, false, config.base_directory);
     if (!imported) {
         return 1;
     }

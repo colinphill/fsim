@@ -691,7 +691,8 @@ namespace {
                 selected.active_units.push_back(owned.unit);
                 select_package_body(location(index).name, owned.unit);
             }
-            const auto design = load_workspace_objects(std::array { selected }, diagnostics_, false);
+            const auto design = load_workspace_objects(
+                std::array { selected }, diagnostics_, false, config_.base_directory);
             if (!design) {
                 return false;
             }

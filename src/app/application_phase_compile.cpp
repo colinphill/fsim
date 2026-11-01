@@ -71,15 +71,15 @@ artifact::ObjectSourceCoverage source_coverage(
 // workspace; a source outside it is reached with "..".
 std::optional<std::filesystem::path> source_reference(
     const std::filesystem::path& path,
-    const std::filesystem::path& workspace,
+    const std::filesystem::path& base,
     diagnostic::Engine& diagnostics) {
-  const auto root = std::filesystem::absolute(workspace).lexically_normal();
+  const auto root = std::filesystem::absolute(base).lexically_normal();
   const auto absolute = (path.is_absolute() ? path : root / path).lexically_normal();
   auto relative = absolute.lexically_relative(root);
   if (relative.empty() || relative == ".") {
     diagnostics.error(
         "FSIM-ART-0004",
-        "compilation source has no path relative to the workspace: "
+        "compilation source has no path relative to its object: "
             + support::path_to_utf8(path));
     return std::nullopt;
   }
@@ -123,8 +123,18 @@ bool publish_workspace_object(
   metadata.defines = source_set.defines;
   metadata.vhdl_package_dependencies =
       application_detail::vhdl_package_dependencies(checked);
+  // Sources and include roots are recorded relative to the object's own
+  // directory, so any workspace that maps this library finds the same files.
+  const auto workspace_root =
+      std::filesystem::absolute(config.base_directory).lexically_normal();
+  const auto object_directory =
+      std::filesystem::absolute(destination).lexically_normal().parent_path();
+  const auto object_reference = [&](const std::filesystem::path& path) {
+    return source_reference(path.is_absolute() ? path : workspace_root / path,
+        object_directory, diagnostics);
+  };
   for (const auto& include : source_set.include_directories) {
-    auto reference = source_reference(include, config.base_directory, diagnostics);
+    auto reference = object_reference(include);
     if (!reference) {
       return false;
     }
@@ -154,7 +164,7 @@ bool publish_workspace_object(
     }
   }
   for (const auto& path : ordered_paths) {
-    auto logical = source_reference(path, config.base_directory, diagnostics);
+    auto logical = object_reference(path);
     if (!logical) {
       return false;
     }

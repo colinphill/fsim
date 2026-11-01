@@ -432,6 +432,45 @@ void test_external_library_mapping_and_current_directory()
     assert_output(invoke({ "simulate" }), "WORKSPACE_MAPPED");
 }
 
+// A library compiled in one workspace and a consumer in another include one
+// header, reached by the consumer through an absolute include directory: both
+// name the same file, so the consumer compiles and elaborates.
+void test_mapped_library_shares_a_header()
+{
+    Directory directory;
+    const auto shared = directory.path / "shared";
+    const auto producer = directory.path / "producer";
+    const auto consumer = directory.path / "consumer";
+    fs::create_directories(shared);
+    fs::create_directories(producer);
+    fs::create_directories(consumer);
+    write_file(shared / "defs.svh", "`define SHARED_VALUE 7\n");
+    const auto include = fsim::support::path_to_utf8(shared);
+    fs::current_path(producer);
+    write_file("support_pkg.sv", R"(`include "defs.svh"
+package support_pkg;
+  localparam int value = `SHARED_VALUE;
+endpackage
+)");
+    invoke({ "compile", "--library", "support", "--quiet", "-I", include, "support_pkg.sv" });
+    workspace::Store producer_store { producer };
+    const auto external = catalog(producer_store, "support").location.directory;
+
+    fs::current_path(consumer);
+    invoke({ "library", "map", "support",
+        fsim::support::path_to_utf8(fs::relative(external, consumer)) });
+    write_file("consumer_top.sv", R"(`include "defs.svh"
+module consumer_top;
+  initial $display("SHARED=%0d/%0d", support_pkg::value, `SHARED_VALUE);
+endmodule
+)");
+    invoke({ "compile", "--quiet", "--search-library", "support", "-I", include,
+        "consumer_top.sv" });
+    invoke({ "elaborate", "--no-aot", "--trace-lifecycle", "disabled",
+        "--search-library", "support", "consumer_top" });
+    assert_output(simulate(), "SHARED=7/7");
+}
+
 void test_language_qualification_and_multiple_roots()
 {
     Directory directory;
@@ -1883,6 +1922,7 @@ int main(const int argc, const char* const* argv)
         Case { "edited-shared-header",
             test_edited_shared_header_with_one_consumer_recompiled },
         Case { "mapped-library", test_external_library_mapping_and_current_directory },
+        Case { "mapped-library-header", test_mapped_library_shares_a_header },
         Case { "language-tops", test_language_qualification_and_multiple_roots },
         Case { "procedural-coverage", test_module_procedural_coverage },
         Case { "loop-update-coverage", test_procedural_loop_update_coverage },

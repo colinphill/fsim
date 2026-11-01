@@ -43,11 +43,11 @@ endmodule
 
 class IvtestSourceLocationTests(unittest.TestCase):
     def test_known_source_and_include_paths_keep_line_numbers(self):
-        root = "objects/" + "a" * 64
+        root = "../../../sources/iverilog/ivtest/ivltests"
         actual = [
-            f"File {root}/sources/roots/root/00000000/br_gh782a.v line 4",
-            f"Included file {root}/includes/roots/00000001/br_gh782a.vi line 1",
-            f"File {root}/sources/roots/root/00000000/br_gh782a.v line 6",
+            f"File {root}/br_gh782a.v line 4",
+            f"Included file {root}/br_gh782a.vi line 1",
+            f"File {root}/br_gh782a.v line 6",
         ]
         expected = ["File ./ivltests/br_gh782a.v line 4",
                     "Included file ./ivltests/br_gh782a.vi line 1",
@@ -56,14 +56,21 @@ class IvtestSourceLocationTests(unittest.TestCase):
         self.assertEqual(normalize("br_gh782a", actual), expected)
         for broken in [actual[0].replace("line 4", "line 5"),
                        actual[0].replace("br_gh782a.v", "wrong.v"),
-                       actual[0].replace("sources/roots/root", "includes/roots"),
+                       actual[0].replace("ivltests/", "other/"),
                        actual[0].replace("File ", "Included file ")]:
             with self.subTest(broken=broken):
                 self.assertNotEqual(normalize("br_gh782a", [broken]), expected[:1])
 
+    def test_bare_file_name_maps_only_listed_files(self):
+        normalize = lrm_corpus.ivtest_source_location_lines
+        self.assertEqual(normalize("fileline", ["../x/ivltests/fileline.v"]),
+                         ["./ivltests/fileline.v"])
+        self.assertEqual(normalize("fileline", ["../x/ivltests/other.v"]),
+                         ["../x/ivltests/other.v"])
+
     def test_timescale_and_unrelated_output_remain_exact(self):
-        root = "objects/" + "b" * 64
-        actual = [f"File {root}/sources/roots/root/00000000/br_gh782b.v line 10",
+        root = "../../../sources/iverilog/ivtest/ivltests"
+        actual = [f"File {root}/br_gh782b.v line 10",
                   "Time scale of (t1) is 1s / 100ms"]
         normalize = lrm_corpus.ivtest_source_location_lines
         self.assertEqual(normalize("br_gh782b", actual),

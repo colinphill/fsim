@@ -667,7 +667,8 @@ compiled_cache_source_mappings(
 [[nodiscard]] std::optional<CompilationWorkspace> load_object_workspace(
     std::span<const std::filesystem::path> objects,
     diagnostic::Engine& diagnostics,
-    bool validate_uvm_surface = true);
+    bool validate_uvm_surface = true,
+    const std::filesystem::path& base_directory = { });
 
 bool same_source_path(
     const std::filesystem::path& left,

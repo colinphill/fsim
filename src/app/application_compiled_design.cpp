@@ -47,6 +47,16 @@ std::string normalized_source_name(const std::string_view name)
     return source_path_key(support::path_from_utf8(name));
 }
 
+// One file reached under two spellings (a library's recorded path and a
+// consumer's include path) is one source, so identities use absolute paths.
+SourceIdentity source_identity(const semantic::SourceFile& file)
+{
+    const auto path = support::path_from_utf8(file.physical_name);
+    std::error_code error;
+    auto absolute = std::filesystem::absolute(path, error);
+    return { source_path_key(error ? path : absolute), file.content_digest };
+}
+
 std::optional<SourceMappingIndex> prepare_source_mappings(
     const std::span<const library::SourceNameMapping> mappings,
     diagnostic::Engine& diagnostics)
@@ -838,8 +848,7 @@ ProjectedSemanticSourceRecords project_semantic_source_names(
     auto& source_identities = projected_semantics.source_identities;
     source_identities.reserve(records.source_files.size());
     for (const auto& file : records.source_files) {
-        source_identities.push_back({
-            normalized_source_name(file.physical_name), file.content_digest });
+        source_identities.push_back(source_identity(file));
     }
 
     std::vector<std::string_view> source_names;
@@ -1313,10 +1322,7 @@ bool relocate_compiled_design_sources(
     std::vector<SourceIdentity> source_identities;
     source_identities.reserve(records.source_files.size());
     for (const auto& file : records.source_files) {
-        source_identities.push_back({
-            normalized_source_name(file.physical_name),
-            file.content_digest
-        });
+        source_identities.push_back(source_identity(file));
     }
     bool valid = true;
     for (auto& file : records.source_files) {
