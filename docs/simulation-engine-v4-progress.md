@@ -138,6 +138,60 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-01: Cone code generator stopped; D9, outline default, verify hardening (`0c4721eb`, sweeps `v4c64`, `v4c64a`)
+
+**Cone code generator (owner approved the plan 11-01; owner stopped it 11-01).** Details: `.local-artifacts/v4-migration/triage/cone-codegen-plan-1101.md`.
+- **K1**, silent-slot dead-store elimination, measured at the owner's request:
+  - The prototype was made exact. Hidden readers were native `load_slot`s in sequential members, because `slot.readers` is the wake list, not the read set.
+  - A dropped instruction must be a cleared `KInst {}`. Otherwise templates split (192 → 689) and the run is 2.9× slower.
+  - original_throughput run phase: 860.8 → 850.8 ms median (−1.2%, inside the spread). Owner: set aside. Prototype removed.
+- **K0**, fused VHDL cones:
+  - The corrected census found 415 cones; 169 multi-member cones hold 5,391 members.
+  - An exact C++ prototype fused 121 cones (2,703 members): mixed_codec run phase 1445.7 → 1479.0 ms (+2.3%). Fusion removes little scheduling, and the direct-apply path costs as much as the commits it replaces.
+  - No-go against the 5% bar. Owner: stop the project, keep the census.
+
+**What landed:**
+- **D9:** SV interfaces and programs are covered like modules (statement, branch, condition, toggle, FSM).
+- **Outline default:** `FSIM_STATIC_KERNEL_OUTLINE_STORES` defaults to 1024 (cold codegen measured in the P0.3 follow-up).
+- **Verify hardening:** `FSIM_KERNEL_VERIFY` compares the commit-equivalent per-bit effect of the compiled and reference write lists, honouring same-value skips.
+  - The 199 false mismatch lines of the old comparison are gone.
+  - A real mismatch now fails the run instead of printing a line.
+- **Cone census:** under `FSIM_PROFILE_KERNEL` the kernel prints `cones=`, `cone-slots` and per-phase `cone_pass_runs=`/`first_level_runs=`/`collapse_levels=`. This is a diagnostic only.
+
+**Gate:**
+- ct4: 1078/1078 in all four variants; no `fsim-kernel-verify:` lines under verify.
+- Normal sweep `v4c64` (frozen `0c4721eb`): 0 losses against `v4c63`.
+- AOT sweep `v4c64a`: 0 losses against `v4c63a`.
+- Census tables identical to `v4c63` and `v4c63a`.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+| Suite | v4c63 passed / in scope | v4c64 passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2638 / 2638 | 2638 / 2638 | 273 |
+| nvc | 1259 / 1259 | 1259 / 1259 | 223 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
+**D6 campaign `v4c64`** (3 samples, CPU 9), summarized from the per-phase medians as for v4c63:
+
+| Measure | v4c63 | v4c64 |
+|---|---:|---:|
+| Geomean e2e (× xsim) | 3.84× | 3.88× |
+| Minimum simulate (× xsim) | 3.63× (mixed_codec) | 3.60× (mixed_codec) |
+| mixed_codec simulate, fsim / xsim | 1.75 s / 6.35 s | 1.77 s / 6.38 s |
+| original_throughput simulate | 6.51× | 6.55× |
+
+Neutral, as expected: the census is printed only under `FSIM_PROFILE_KERNEL`, and the outline default is the value measured in P0.3. The exit floors (e2e ≥ 3.5×, every simulate ≥ 3×) hold.
+
+**Next:** the SQLite artifact project (owner plan 11-01).
+- Each artifact becomes one SQLite file; each cache becomes one database.
+- Library objects are named by design unit.
+- Artifacts keep no source text.
+- Plan: `~/.claude/plans/playful-kindling-teacup.md`.
+
 ### 2026-11-01: Full code coverage for SystemVerilog and VHDL (`f644872f`, sweeps `v4c63`, `v4c63a`)
 
 Plan: `.local-artifacts/v4-migration/triage/coverage-full-plan-1031.md`. Owner requirement 10-31: full condition, toggle and FSM coverage in both languages, counted on the v4 kernel.
