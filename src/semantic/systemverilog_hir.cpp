@@ -275,7 +275,9 @@ bool top_level_hir_collections_well_formed(
     std::set<DpiIdentity> dpi_identities;
     std::set<std::string> export_linkages;
     std::set<std::uint32_t> dpi_origins;
-    std::set<std::uint32_t> dpi_profile_sources;
+    // One source position may declare an import in several compilation
+    // units (a shared file or header); within one scope it is one profile.
+    std::set<std::pair<ScopeId, std::uint32_t>> dpi_profile_sources;
     for (const auto& declaration : view.dpi_declarations) {
         const auto* owner = systemverilog_owner(
             semantics, declaration.owner_scope);
@@ -291,7 +293,7 @@ bool top_level_hir_collections_well_formed(
             || !valid_record_origin(
                 semantics, declaration.source, declaration.origin)
             || !valid_source(semantics, declaration.profile_source)
-            || !dpi_profile_sources.insert(
+            || !dpi_profile_sources.emplace(declaration.owner_scope,
                 declaration.profile_source.value()).second
             || !dpi_origins.insert(declaration.origin.value()).second
             || !dpi_identities.emplace(declaration.owner_kind,

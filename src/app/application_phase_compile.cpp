@@ -67,8 +67,9 @@ artifact::ObjectSourceCoverage source_coverage(
   return { contents.size(), controls.error, std::move(controls.exclusions) };
 }
 
-// Objects reference sources by their path relative to the compiling
-// workspace; a source outside it is reached with "..".
+// Objects reference sources by their path relative to the source root (the
+// compiling workspace or --base-directory); a source outside it is reached
+// with "..". Where the object is saved does not change its bytes.
 std::optional<std::filesystem::path> source_reference(
     const std::filesystem::path& path,
     const std::filesystem::path& base,
@@ -79,7 +80,7 @@ std::optional<std::filesystem::path> source_reference(
   if (relative.empty() || relative == ".") {
     diagnostics.error(
         "FSIM-ART-0004",
-        "compilation source has no path relative to its object: "
+        "compilation source has no path relative to the source root: "
             + support::path_to_utf8(path));
     return std::nullopt;
   }
@@ -123,15 +124,8 @@ bool publish_workspace_object(
   metadata.defines = source_set.defines;
   metadata.vhdl_package_dependencies =
       application_detail::vhdl_package_dependencies(checked);
-  // Sources and include roots are recorded relative to the object's own
-  // directory, so any workspace that maps this library finds the same files.
-  const auto workspace_root =
-      std::filesystem::absolute(config.base_directory).lexically_normal();
-  const auto object_directory =
-      std::filesystem::absolute(destination).lexically_normal().parent_path();
   const auto object_reference = [&](const std::filesystem::path& path) {
-    return source_reference(path.is_absolute() ? path : workspace_root / path,
-        object_directory, diagnostics);
+    return source_reference(path, config.base_directory, diagnostics);
   };
   for (const auto& include : source_set.include_directories) {
     auto reference = object_reference(include);

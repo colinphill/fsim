@@ -1205,7 +1205,9 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(loaded->semantics.valid());
     std::cerr << "non-project cli: relocated objects loaded\n";
     project::Config object_config;
-    object_config.base_directory = directory;
+    // The objects name their sources relative to the directory the CLI
+    // compiled in; a consumer resolves them against the same root.
+    object_config.base_directory = std::filesystem::current_path();
     object_config.project.name = "non-project-object-build";
     object_config.project.tops.push_back({ "sv:work.tb", "primary" });
     object_config.project.time_resolution = "1ns";
@@ -1488,15 +1490,10 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     };
     output.str({ });
     error.str({ });
-    // A design names its sources relative to the elaborating directory: run
-    // where the objects were built, as the object build above does.
-    const auto elaborate_directory = std::filesystem::current_path();
-    std::filesystem::current_path(directory);
     assert(run_fixture_command(static_cast<int>(production_elaborate_arguments.size()),
                production_elaborate_arguments.data(), production_services,
                output, error)
         == 0);
-    std::filesystem::current_path(elaborate_directory);
     assert(error.str().empty());
     assert(output.str().find("elaborated 1 root(s)") != std::string::npos);
     diagnostic::Engine design_metadata_diagnostics;

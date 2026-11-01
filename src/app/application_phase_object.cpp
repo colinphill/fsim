@@ -21,20 +21,36 @@ std::filesystem::path object_source_root(
   return std::filesystem::path{"objects"} / metadata.compilation_digest;
 }
 
-// An object records its sources and include roots relative to its own
-// directory. They are named relative to the consumer's base directory (the
-// workspace for the CLI, else the current directory), or absolutely where no
-// relative path exists, so objects from libraries compiled in other
-// workspaces name the same files alike.
-std::filesystem::path consumer_path(const std::filesystem::path& object,
-    const std::filesystem::path& recorded, const std::filesystem::path& base) {
-  const auto absolute =
-      (std::filesystem::absolute(object).parent_path() / recorded).lexically_normal();
+// An object records its sources and include roots relative to the source
+// root it was compiled in. An object in a workspace library
+// (<root>/.fsim/libraries/<library>/) has that workspace as its root, so a
+// mapped library finds its own sources; any other object has the consumer's
+// base directory (the current directory when none is given). Sources are
+// named relative to the consumer's base directory, or absolutely where no
+// relative path exists, so objects of different workspaces name one file
+// alike.
+std::filesystem::path source_root(
+    const std::filesystem::path& object, const std::filesystem::path& base) {
+  const auto library = std::filesystem::absolute(object).lexically_normal().parent_path();
+  const auto libraries = library.parent_path();
+  if (libraries.filename() == "libraries"
+      && libraries.parent_path().filename() == ".fsim") {
+    return libraries.parent_path().parent_path();
+  }
   std::error_code error;
-  const auto root = base.empty() ? std::filesystem::current_path(error)
-                                 : std::filesystem::absolute(base, error);
+  auto root = base.empty() ? std::filesystem::current_path(error)
+                           : std::filesystem::absolute(base, error);
+  return error ? std::filesystem::path { } : root.lexically_normal();
+}
+
+std::filesystem::path consumer_path(const std::filesystem::path& root,
+    const std::filesystem::path& recorded, const std::filesystem::path& base) {
+  const auto absolute = (root / recorded).lexically_normal();
+  std::error_code error;
+  const auto consumer = base.empty() ? std::filesystem::current_path(error)
+                                     : std::filesystem::absolute(base, error);
   if (!error) {
-    auto relative = absolute.lexically_relative(root.lexically_normal());
+    auto relative = absolute.lexically_relative(consumer.lexically_normal());
     if (!relative.empty()) {
       return relative;
     }
@@ -71,6 +87,7 @@ application_detail::load_object_workspace(
   std::size_t decoded_bundle_count { };
   uvm_identity.add("uvm-provenance-schema", "fsim-uvm-object-v1");
   for (const auto& object : objects) {
+    const auto recorded_root = source_root(object, base_directory);
     auto metadata = artifact::load_object_metadata(object, diagnostics);
     if (!metadata.has_value()) {
       return std::nullopt;
@@ -201,7 +218,7 @@ application_detail::load_object_workspace(
     source_mappings.reserve(metadata->sources.size());
     for (std::size_t index = 0; index < metadata->sources.size(); ++index) {
       const auto& indexed = metadata->sources[index];
-      auto logical = consumer_path(object,
+      auto logical = consumer_path(recorded_root,
           support::path_from_utf8(indexed.logical_name), base_directory);
       auto [existing, inserted] = known_sources.emplace(
           support::path_to_utf8(logical), indexed.checksum);
@@ -222,7 +239,7 @@ application_detail::load_object_workspace(
     }
     for (const auto& include : metadata->include_roots) {
       provenance.source_settings.include_directories.push_back(
-          consumer_path(object, include, base_directory));
+          consumer_path(recorded_root, include, base_directory));
     }
 
     auto compiled_bytes = artifact::read_object_payload(

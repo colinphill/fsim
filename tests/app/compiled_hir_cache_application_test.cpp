@@ -1498,9 +1498,9 @@ void run_artifact_worker_determinism_test(
             checkout,
             directory / (std::string { label } + "-object-cache"));
         object_config.build.jobs = jobs;
-        // Artifacts name their sources relative to themselves, so they sit
-        // in the checkout: one layout gives one artifact wherever it is.
-        const auto object = checkout
+        // Artifacts sit outside the checkout: they name sources relative to
+        // the source root, so where they are saved does not change them.
+        const auto object = directory
             / (std::string { label } + ".fsimobj");
         fsim::diagnostic::Engine object_diagnostics;
         assert(fsim::app::compile_artifact(
@@ -1513,7 +1513,7 @@ void run_artifact_worker_determinism_test(
         design_config.source_sets.clear();
         design_config.build.cache_path = directory
             / (std::string { label } + "-design-cache");
-        const auto design = checkout
+        const auto design = directory
             / (std::string { label } + ".fsimdesign");
         const std::array objects { object };
         fsim::diagnostic::Engine design_diagnostics;
@@ -1534,7 +1534,7 @@ void run_artifact_worker_determinism_test(
             checkout,
             directory / (std::string { label } + "-library-cache"),
             jobs);
-        const auto library = checkout
+        const auto library = directory
             / (std::string { label } + ".fsimlib");
         fsim::diagnostic::Engine library_diagnostics;
         assert(fsim::app::export_library(
