@@ -138,6 +138,59 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-01: Full code coverage for SystemVerilog and VHDL (`f644872f`, sweeps `v4c63`, `v4c63a`)
+
+Plan: `.local-artifacts/v4-migration/triage/coverage-full-plan-1031.md`. Owner requirement 10-31: full condition, toggle and FSM coverage in both languages, counted on the v4 kernel.
+
+**What landed** (one commit, C0–C5 and C4b):
+- Discovery runs on the compiled HIR of every elaborated SV module and VHDL architecture; every count is a SimIR operation, so the interpreter and v4 count the same.
+- VHDL statement and branch coverage; case arms in both languages; `fsim simulate --coverage-output`.
+- Condition and expression points (expression rows are the short-circuit paths, D2).
+- Toggle coverage with a new op `CodeCoverageToggle`; memories are reason rows (D5).
+- FSM coverage: enumeration and hinted machines (SV pragmas, VHDL attributes, manifest hints), transitions counted on state change (D3), an informational other-transition row (D8).
+- Concurrent and continuous assignments (D7).
+- `$coverage_get`, `$coverage_get_max`, `$coverage_control` for SV_COV_TOGGLE and SV_COV_FSM_STATE.
+- The AST-only coverage components and their tests are deleted (D6, 53 files, owner-confirmed list). Their codes FSIM-COV-015..025 and 027..030 are retired.
+- Under `FSIM_KERNEL_VERIFY` the replay of a compiled member no longer counts coverage a second time.
+
+**Checks added at the side agents' request:**
+- Each covered test design is compiled again without coverage and must print the same output on both engines.
+- A project-file `[[coverage.fsm]]` hint drives FSM coverage end to end.
+
+**Gate:**
+- ct4: 1078/1078 in all four variants. The count is 15 lower than at v4c62 because the D6 tests were deleted. The first ct4 run found 7 failures (8 under verify), all fixed before the commit: the manifest freeze check, the vpi point count, and the verify double count.
+- Normal sweep `v4c63` (frozen `f644872f`): 0 losses against `v4c62n`; against `b96x1` 9 newly passing and the two known nvc strict-LRM exclusions.
+- AOT sweep `v4c63a`: 0 losses against `v4c62na`.
+- Census tables identical to `v4c62n` and `v4c62na`.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+| Suite | v4c62n passed / in scope | v4c63 passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2638 / 2638 | 2638 / 2638 | 273 |
+| nvc | 1259 / 1259 | 1259 / 1259 | 223 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
+**D6 campaign `v4c63-g5`** (3 samples, CPU 9). Both runs were summarized from the per-phase medians in the same way:
+
+| Measure | v4c62 | v4c63 |
+|---|---:|---:|
+| Geomean e2e (× xsim) | 3.80× | 3.84× |
+| Minimum simulate (× xsim) | 3.65× (mixed_codec) | 3.63× (mixed_codec) |
+| mixed_codec simulate, fsim / xsim | 1.80 s / 6.57 s | 1.75 s / 6.35 s |
+| original_throughput simulate | 6.53× | 6.51× |
+
+Neutral: designs without coverage take no coverage path. Ratios move by ±1% with xsim's own run-to-run spread.
+
+**Lead (not a regression; v4c62 shows it too):** under `FSIM_KERNEL_VERIFY` a compiled VHDL concurrent assignment skips a driver write whose value is unchanged, and the reference makes it. Outputs agree. This matters only for designs that read `'transaction` or `'active`.
+
+**Next:**
+- D9 (owner 11-01): cover SV interfaces and programs like modules. Implemented and passing targeted tests; it lands with the next gate.
+- Cone code generator: measure the P0 bound and bring the plan to the owner. Nothing is built before the owner answers.
+
 ### 2026-10-31: Phase 7 closed — fifth gate: R1 set aside, R2 setup changes, R3 measured (`e36a69e1`, sweeps `v4c62n`, `v4c62na`)
 
 Plan: `.local-artifacts/v4-migration/triage/phase7-cycle-based-plan-1030.md`, sections "R1 first measurements" to the end.
