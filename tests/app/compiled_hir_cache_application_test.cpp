@@ -9,7 +9,9 @@
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/support/sqlite_database.hpp"
 
+#include "../support/container_test_support.hpp"
 #include "../../src/app/application_internal.hpp"
 #include "../../src/app/application_compiled_hir_cache_revision.hpp"
 #include "../../src/app/application_design_artifact_codec_internal.hpp"
@@ -156,6 +158,11 @@ void copy_artifact_tree(
     const std::filesystem::path& source,
     const std::filesystem::path& destination)
 {
+    // Objects and libraries are single container files.
+    if (std::filesystem::is_regular_file(source)) {
+        std::filesystem::copy_file(source, destination);
+        return;
+    }
     std::filesystem::create_directories(destination);
     for (const auto& entry :
         std::filesystem::recursive_directory_iterator { source }) {
@@ -227,19 +234,21 @@ void make_corrupt_object_copy(
     auto metadata = fsim::artifact::load_object_metadata(
         destination, diagnostics);
     assert(metadata && !diagnostics.has_error());
-    const auto payload_path = destination / metadata->compiled_hir_artifact;
-    auto payload = read_file(payload_path);
+    const auto payload_name
+        = fsim::support::path_to_utf8(metadata->compiled_hir_artifact);
+    auto payload = fsim::test::read_container_payload(destination, payload_name);
     mutate_compiled_hir_payload(payload, corruption);
-    write_file(payload_path, payload);
     if (corruption == CompiledHirCorruption::checksum_mismatch) {
+        fsim::test::rewrite_container_payloads(destination, { { payload_name, payload } });
         return;
     }
     metadata->compiled_hir_checksum = payload_checksum(payload);
     metadata->compilation_digest
         = fsim::artifact::compute_object_compilation_digest(*metadata);
-    write_file(
-        destination / fsim::artifact::kObjectMetadataFilename,
-        fsim::artifact::serialize_object_metadata(*metadata));
+    fsim::test::rewrite_container_payloads(destination,
+        { { payload_name, payload },
+            { std::string { fsim::artifact::kObjectMetadataFilename },
+                fsim::artifact::serialize_object_metadata(*metadata) } });
 }
 
 void make_corrupt_library_copy(
@@ -252,17 +261,19 @@ void make_corrupt_library_copy(
     auto metadata = fsim::library::load_metadata(
         destination, "work", diagnostics);
     assert(metadata && !diagnostics.has_error());
-    const auto payload_path = destination / metadata->compiled_hir_artifact;
-    auto payload = read_file(payload_path);
+    const auto payload_name
+        = fsim::support::path_to_utf8(metadata->compiled_hir_artifact);
+    auto payload = fsim::test::read_container_payload(destination, payload_name);
     mutate_compiled_hir_payload(payload, corruption);
-    write_file(payload_path, payload);
     if (corruption == CompiledHirCorruption::checksum_mismatch) {
+        fsim::test::rewrite_container_payloads(destination, { { payload_name, payload } });
         return;
     }
     metadata->compiled_hir_checksum = payload_checksum(payload);
-    write_file(
-        destination / fsim::library::kMetadataFilename,
-        fsim::library::serialize_metadata(*metadata));
+    fsim::test::rewrite_container_payloads(destination,
+        { { payload_name, payload },
+            { std::string { fsim::library::kMetadataFilename },
+                fsim::library::serialize_metadata(*metadata) } });
 }
 
 void store_u32(
@@ -285,6 +296,17 @@ void store_u64(
     }
 }
 
+// A payload of an artifact: a member of an object container file, or a file
+// inside a library tree.
+std::string artifact_payload(
+    const std::filesystem::path& artifact, const std::filesystem::path& name)
+{
+    if (std::filesystem::is_regular_file(artifact))
+        return fsim::test::read_container_payload(
+            artifact, fsim::support::path_to_utf8(name));
+    return read_file(artifact / name);
+}
+
 using ArtifactSnapshot
     = std::vector<std::pair<std::string, std::string>>;
 
@@ -292,6 +314,8 @@ ArtifactSnapshot capture_artifact(
     const std::filesystem::path& directory)
 {
     ArtifactSnapshot snapshot;
+    if (std::filesystem::is_regular_file(directory))
+        return fsim::test::container_contents(directory);
     for (const auto& entry : std::filesystem::recursive_directory_iterator { directory }) {
         if (!entry.is_regular_file()) {
             continue;
@@ -585,10 +609,10 @@ void assert_included_header_auxiliary_bundle(
 }
 
 void assert_compiled_hir_bundle(
-    const std::filesystem::path& path,
+    const std::filesystem::path& artifact, const std::filesystem::path& name,
     const std::string_view description)
 {
-    const auto bytes = read_file(path);
+    const auto bytes = artifact_payload(artifact, name);
     assert(bytes.starts_with("FSIMCHIR"));
     fsim::diagnostic::Engine diagnostics;
     const auto decoded = fsim::app::deserialize_compiled_hir_bundle(
@@ -606,20 +630,22 @@ void assert_compiled_hir_only_unit_index(
 }
 
 void assert_compiled_hir_only_unit_payloads(
-    const std::filesystem::path& directory)
+    const std::filesystem::path& artifact)
 {
+    // Objects and libraries are containers: check their payload names.
+    std::string error;
+    const auto kind = fsim::artifact::ContainerReader::read_kind(artifact, error);
+    assert(kind);
+    auto reader = fsim::artifact::ContainerReader::open(artifact, *kind, error);
+    assert(reader);
+    const auto entries = reader->entries(error);
+    assert(entries);
     std::size_t compiled_hir_payloads { };
-    for (const auto& entry : std::filesystem::recursive_directory_iterator { directory }) {
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-        const auto extension = entry.path().extension();
-        assert(extension != ".fsimir");
-        assert(extension != ".fsimudp");
-        assert(extension != ".fsimclass");
-        if (extension == ".fsimhir") {
-            ++compiled_hir_payloads;
-        }
+    for (const auto& entry : *entries) {
+        const auto extension = std::filesystem::path { entry.name }.extension();
+        assert(extension != ".fsimir" && extension != ".fsimudp"
+            && extension != ".fsimclass");
+        compiled_hir_payloads += extension == ".fsimhir" ? 1U : 0U;
     }
     assert(compiled_hir_payloads == 1U);
 }
@@ -642,11 +668,11 @@ void assert_parser_independent_object(
     assert_compiled_hir_only_unit_index(metadata->units);
     assert_compiled_hir_only_unit_payloads(directory);
     assert_compiled_hir_bundle(
-        directory / metadata->compiled_hir_artifact,
+        directory, metadata->compiled_hir_artifact,
         "compiled-HIR object payload");
     if (expect_included_auxiliary) {
         assert_included_header_auxiliary_bundle(
-            read_file(directory / metadata->compiled_hir_artifact),
+            artifact_payload(directory, metadata->compiled_hir_artifact),
             "included-header object payload");
     }
 }
@@ -670,11 +696,11 @@ void assert_parser_independent_library(
     assert_compiled_hir_only_unit_index(metadata->units);
     assert_compiled_hir_only_unit_payloads(directory);
     assert_compiled_hir_bundle(
-        directory / metadata->compiled_hir_artifact,
+        directory, metadata->compiled_hir_artifact,
         "compiled-HIR mapped-library payload");
     if (expect_included_auxiliary) {
         assert_included_header_auxiliary_bundle(
-            read_file(directory / metadata->compiled_hir_artifact),
+            artifact_payload(directory, metadata->compiled_hir_artifact),
             "included-header mapped-library payload");
     }
 }
@@ -857,11 +883,30 @@ void test_repeated_shared_header_cache_key_relocation(
         != source_key);
 }
 
+// Appends a byte to an entry's stored payload, which its checksum then
+// rejects.
+void corrupt_cache_entry(
+    const std::filesystem::path& database, const std::string_view key)
+{
+    fsim::support::sqlite::Database cache { "corrupted test cache" };
+    fsim::support::sqlite::Database::Limits limits;
+    limits.value_bytes = std::int64_t { 512 } * 1024 * 1024;
+    std::string error;
+    assert(cache.open(database,
+        fsim::support::sqlite::Database::OpenMode::read_write_existing, limits,
+        error));
+    fsim::support::sqlite::Statement update { cache,
+        "UPDATE entries SET data = data || x'78', size = size + 1 WHERE key = ?1",
+        error };
+    assert(update && update.bind_text(1, key, error) && update.finish(error));
+    assert(cache.changes() == 1);
+}
+
 std::vector<std::byte> raw_cache_payload(
     const fsim::project::Config& config,
     const std::string_view key)
 {
-    fsim::compiler::ObjectCache cache { config.build.cache_path };
+    fsim::compiler::ObjectCache cache { config.build.cache_path / "compiled-hir.sqlite3" };
     std::error_code error;
     auto payload = cache.load(key, error);
     assert(payload && !error);
@@ -2467,8 +2512,8 @@ void run_decoded_feature_object_library_test(
     fsim::diagnostic::Engine systemverilog_decode_diagnostics;
     const auto systemverilog_compiled
         = fsim::app::deserialize_compiled_hir_bundle(
-            read_file(systemverilog_object
-                / systemverilog_metadata->compiled_hir_artifact),
+            artifact_payload(systemverilog_object,
+                systemverilog_metadata->compiled_hir_artifact),
             "SystemVerilog feature object",
             systemverilog_decode_diagnostics);
     assert(systemverilog_compiled
@@ -2494,7 +2539,7 @@ void run_decoded_feature_object_library_test(
     assert(vhdl_metadata && !vhdl_metadata_diagnostics.has_error());
     fsim::diagnostic::Engine vhdl_decode_diagnostics;
     const auto vhdl_compiled = fsim::app::deserialize_compiled_hir_bundle(
-        read_file(vhdl_object / vhdl_metadata->compiled_hir_artifact),
+        artifact_payload(vhdl_object, vhdl_metadata->compiled_hir_artifact),
         "VHDL feature object", vhdl_decode_diagnostics);
     assert(vhdl_compiled && !vhdl_decode_diagnostics.has_error());
     assert_vhdl_feature_corpus(*vhdl_compiled);
@@ -2511,7 +2556,7 @@ void run_decoded_feature_object_library_test(
     fsim::diagnostic::Engine library_decode_diagnostics;
     const auto library_compiled
         = fsim::app::deserialize_compiled_hir_bundle(
-            read_file(library / library_metadata->compiled_hir_artifact),
+            artifact_payload(library, library_metadata->compiled_hir_artifact),
             "SystemVerilog feature library", library_decode_diagnostics);
     assert(library_compiled && !library_decode_diagnostics.has_error());
     assert_systemverilog_feature_corpus(*library_compiled);
@@ -2953,7 +2998,7 @@ end architecture;
                                    const std::string_view description) {
         fsim::diagnostic::Engine diagnostics;
         auto decoded = fsim::app::deserialize_compiled_hir_bundle(
-            read_file(object / metadata.compiled_hir_artifact),
+            artifact_payload(object, metadata.compiled_hir_artifact),
             std::string { description }, diagnostics);
         assert(decoded && decoded->valid() && !diagnostics.has_error());
         return std::move(*decoded);
@@ -3360,7 +3405,7 @@ int main()
     assert(warm->design.roots() == cold_roots);
     assert_decoded_design_ir_origins(*warm);
 
-    fsim::compiler::ObjectCache storage { direct.build.cache_path };
+    fsim::compiler::ObjectCache storage { direct.build.cache_path / "compiled-hir.sqlite3" };
     std::error_code cache_error;
 
     const auto relocated_directory = temporary.path / "relocated";
@@ -3416,12 +3461,7 @@ endmodule
     assert(has_diagnostic(old_receipt_diagnostics, "FSIM-CACHE-0002"));
     assert(cache_payload(direct, cold_key) == cold_payload);
 
-    {
-        std::ofstream output(
-            storage.path_for(cold_key), std::ios::binary | std::ios::app);
-        output.put('x');
-        assert(output.good());
-    }
+    corrupt_cache_entry(storage.path(), cold_key);
     fsim::diagnostic::Engine outer_corrupt_diagnostics;
     auto outer_repaired = fsim::app::build_project(
         direct, outer_corrupt_diagnostics);

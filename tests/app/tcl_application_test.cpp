@@ -219,8 +219,8 @@ if {[dict get $owner path] ne "older_verilog" ||
     [dict get $owner language] ne "verilog" ||
     [dict get $owner standard] ne "verilog-2001-noconfig" ||
     [dict get $owner compatibility_profile] ne "none" ||
-    ![regexp {^objects/[0-9a-f]{64}/sources/roots/root/00000000/older-verilog\.v$} \
-        [dict get $owner source_path]] ||
+    ![regexp {^(\.\./)*([^/]+/)*older-verilog\.v$} [dict get $owner source_path]] ||
+    [string match *sources/roots* [dict get $owner source_path]] ||
     [dict get $owner source_line] != 1 ||
     [dict get $owner source_column] != 1} {
   error "bad public provenance: $owner"

@@ -35,19 +35,7 @@ constexpr std::array<std::pair<std::string_view, const char*>, 5> kSchema { {
         "primary_name_form INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(owner, ordinal))" },
 } };
 
-void database_error(Database& database, std::string& error)
-{
-    error = "workspace library catalog: ";
-    error += database.handle ? sqlite3_errmsg(database.handle) : "cannot open SQLite database";
-}
-
 } // namespace
-
-Database::~Database()
-{
-    if (handle)
-        sqlite3_close(handle);
-}
 
 bool Database::open(const LibraryLocation& location, const OpenMode mode, std::string& error)
 {
@@ -65,33 +53,19 @@ bool Database::open(const LibraryLocation& location, const OpenMode mode, std::s
             return false;
         }
     }
-    int flags = SQLITE_OPEN_READONLY;
+    auto open_mode = support::sqlite::Database::OpenMode::read_only;
     if (mode == OpenMode::read_write_existing)
-        flags = SQLITE_OPEN_READWRITE;
+        open_mode = support::sqlite::Database::OpenMode::read_write_existing;
     else if (mode == OpenMode::read_write_create)
-        flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
-    // SQLite's Windows VFS only widens drive paths and leaves '/' in place.
-    if (sqlite3_open_v2(support::native_fs::utf8_for_native_io(path).c_str(), &handle,
-            flags | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_NOFOLLOW, nullptr) != SQLITE_OK) {
-        database_error(*this, error);
-        return false;
-    }
-    sqlite3_limit(handle, SQLITE_LIMIT_LENGTH, static_cast<int>(kMaximumTextBytes));
-    sqlite3_limit(handle, SQLITE_LIMIT_SQL_LENGTH, 65536);
-    sqlite3_limit(handle, SQLITE_LIMIT_COLUMN, 32);
-    sqlite3_limit(handle, SQLITE_LIMIT_ATTACHED, 0);
-    sqlite3_db_config(handle, SQLITE_DBCONFIG_DEFENSIVE, 1, nullptr);
-    sqlite3_busy_timeout(handle, 30000);
-    return execute("PRAGMA trusted_schema=OFF", error)
+        open_mode = support::sqlite::Database::OpenMode::read_write_create;
+    return connection.open(path, open_mode,
+               { static_cast<std::int64_t>(kMaximumTextBytes), 65536, 32 }, error)
         && execute("PRAGMA foreign_keys=ON", error);
 }
 
 bool Database::execute(const char* sql, std::string& error)
 {
-    if (sqlite3_exec(handle, sql, nullptr, nullptr, nullptr) == SQLITE_OK)
-        return true;
-    database_error(*this, error);
-    return false;
+    return connection.execute(sql, error);
 }
 
 bool Database::initialize_schema(std::string& error)
@@ -111,8 +85,8 @@ bool Database::validate_schema(std::string& error)
     if (!query)
         return false;
     std::size_t count = 0U;
-    int status;
-    while ((status = query.step(error)) == SQLITE_ROW) {
+    support::sqlite::Step status;
+    while ((status = query.step(error)) == support::sqlite::Step::row) {
         const auto type = query.text(0, error);
         const auto name = query.text(1, error);
         const auto sql = query.text(2, error);
@@ -126,7 +100,7 @@ bool Database::validate_schema(std::string& error)
             return false;
         }
     }
-    if (status != SQLITE_DONE || count != kSchema.size()) {
+    if (status != support::sqlite::Step::done || count != kSchema.size()) {
         if (error.empty())
             error = "workspace library catalog schema is incomplete";
         return false;
@@ -136,22 +110,13 @@ bool Database::validate_schema(std::string& error)
 
 Statement::Statement(Database& database, const char* sql, std::string& error)
     : database_(database)
+    , statement_(database.connection, sql, error)
 {
-    if (sqlite3_prepare_v2(database.handle, sql, -1, &statement_, nullptr) != SQLITE_OK)
-        database_error(database_, error);
 }
 
-Statement::~Statement()
+support::sqlite::Step Statement::step(std::string& error)
 {
-    sqlite3_finalize(statement_);
-}
-
-int Statement::step(std::string& error)
-{
-    const int status = sqlite3_step(statement_);
-    if (status != SQLITE_ROW && status != SQLITE_DONE)
-        database_error(database_, error);
-    return status;
+    return statement_.step(error);
 }
 
 bool Statement::bind(const int index, const std::string_view value, std::string& error)
@@ -161,38 +126,29 @@ bool Statement::bind(const int index, const std::string_view value, std::string&
         error = "workspace catalog field is invalid or exceeds its size limit";
         return false;
     }
-    if (sqlite3_bind_text(statement_, index, value.empty() ? "" : value.data(),
-            static_cast<int>(value.size()), SQLITE_TRANSIENT) != SQLITE_OK) {
-        database_error(database_, error);
-        return false;
-    }
-    return true;
+    return statement_.bind_text(index, value, error);
 }
 
 bool Statement::bind(const int index, const int value, std::string& error)
 {
-    if (sqlite3_bind_int(statement_, index, value) == SQLITE_OK)
-        return true;
-    database_error(database_, error);
-    return false;
+    return statement_.bind_integer(index, value, error);
 }
 
 bool Statement::finish(std::string& error)
 {
-    return step(error) == SQLITE_DONE;
+    return statement_.finish(error);
 }
 
 std::optional<std::string> Statement::text(const int index, std::string& error)
 {
-    const auto size = static_cast<std::size_t>(sqlite3_column_bytes(statement_, index));
-    if (sqlite3_column_type(statement_, index) != SQLITE_TEXT
-        || size > kMaximumTextBytes || size > 128U * 1024U * 1024U - database_.decoded_bytes) {
+    const auto view = statement_.text(index, error);
+    if (!view || view->size() > kMaximumTextBytes
+        || view->size() > 128U * 1024U * 1024U - database_.decoded_bytes) {
         error = "workspace library catalog contains invalid or excessive text";
         return std::nullopt;
     }
-    database_.decoded_bytes += size;
-    const auto* data = reinterpret_cast<const char*>(sqlite3_column_text(statement_, index));
-    std::string value { data, size };
+    database_.decoded_bytes += view->size();
+    std::string value { *view };
     if (value.find('\0') != std::string::npos) {
         error = "workspace library catalog text contains a null byte";
         return std::nullopt;
@@ -202,14 +158,13 @@ std::optional<std::string> Statement::text(const int index, std::string& error)
 
 std::optional<int> Statement::integer(const int index, std::string& error)
 {
-    const auto value = sqlite3_column_int64(statement_, index);
-    if (sqlite3_column_type(statement_, index) != SQLITE_INTEGER
-        || value < std::numeric_limits<int>::min()
-        || value > std::numeric_limits<int>::max()) {
+    const auto value = statement_.integer(index, error);
+    if (!value || *value < std::numeric_limits<int>::min()
+        || *value > std::numeric_limits<int>::max()) {
         error = "workspace library catalog integer is invalid";
         return std::nullopt;
     }
-    return static_cast<int>(value);
+    return static_cast<int>(*value);
 }
 
 std::optional<library::UnitIndexEntry> read_unit(

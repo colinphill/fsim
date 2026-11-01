@@ -3,6 +3,7 @@
 
 #include "fsim/app/trace_archive.hpp"
 #include "fsim/artifact/coverage_identity.hpp"
+#include "fsim/artifact/object.hpp"
 #include "fsim/cli/driver.hpp"
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/frontend/design.hpp"
@@ -94,6 +95,10 @@ struct CheckedSource {
     std::string compilation_unit_digest;
     /// Optional consumer-local backing file for a relocatable logical path.
     std::filesystem::path backing_path;
+    /// Coverage facts recorded with a compiled object. When present, code
+    /// coverage takes the source's identity and controls from them and never
+    /// reads the source.
+    std::optional<artifact::ObjectSourceCoverage> coverage;
     frontend::StandardRevision standard_revision {
         frontend::StandardRevision::SystemVerilog2017
     };
@@ -218,6 +223,8 @@ struct BuiltProject {
     project::Optimization optimization { project::Optimization::o2 };
     /// Dense specialization-ID-indexed provenance keys for native modules.
     std::vector<std::string> specialization_cache_keys;
+    /// Linked .fsimscplugin artifacts, or the shared library of a plug-in
+    /// built from a mapped library's sources.
     std::vector<std::filesystem::path> systemc_plugins;
     std::shared_ptr<systemc::HierarchyRegistry> systemc_hierarchy;
     std::vector<std::uint64_t> systemc_roots;

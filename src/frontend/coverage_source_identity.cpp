@@ -115,7 +115,8 @@ namespace {
 CodeCoverageSourceIdentityResult make_code_coverage_source_identity(
     const std::filesystem::path& checkout_root,
     const std::filesystem::path& source_path,
-    const std::span<const std::byte> contents,
+    const std::size_t content_bytes,
+    const support::Sha256::Digest& content_digest,
     const CodeCoverageSourceIdentityLimits limits) noexcept
 {
     if (checkout_root.empty()) {
@@ -124,7 +125,7 @@ CodeCoverageSourceIdentityResult make_code_coverage_source_identity(
     if (source_path.empty()) {
         return { { }, CodeCoverageSourceIdentityError::SourcePathRequired };
     }
-    if (contents.size() > limits.maximum_content_bytes) {
+    if (content_bytes > limits.maximum_content_bytes) {
         return { { }, CodeCoverageSourceIdentityError::ContentLimit };
     }
 
@@ -154,16 +155,26 @@ CodeCoverageSourceIdentityResult make_code_coverage_source_identity(
             return { { }, CodeCoverageSourceIdentityError::InvalidPathEncoding };
         }
 
-        auto content_digest = support::Sha256::digest(contents);
-        auto digest
-            = composite_digest(logical_path, contents.size(), content_digest);
+        auto digest = composite_digest(logical_path, content_bytes, content_digest);
         return { CodeCoverageSourceIdentity { std::move(logical_path),
-                     contents.size(), std::move(content_digest),
-                     std::move(digest) },
+                     content_bytes, content_digest, std::move(digest) },
             CodeCoverageSourceIdentityError::None };
     } catch (...) {
         return { { }, CodeCoverageSourceIdentityError::InvalidPathEncoding };
     }
+}
+
+CodeCoverageSourceIdentityResult make_code_coverage_source_identity(
+    const std::filesystem::path& checkout_root,
+    const std::filesystem::path& source_path,
+    const std::span<const std::byte> contents,
+    const CodeCoverageSourceIdentityLimits limits) noexcept
+{
+    if (contents.size() > limits.maximum_content_bytes) {
+        return { { }, CodeCoverageSourceIdentityError::ContentLimit };
+    }
+    return make_code_coverage_source_identity(checkout_root, source_path,
+        contents.size(), support::Sha256::digest(contents), limits);
 }
 
 std::string code_coverage_source_content_hex(

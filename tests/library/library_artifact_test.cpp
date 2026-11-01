@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/library/artifact.hpp"
+#include "fsim/artifact/container.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
@@ -45,8 +46,8 @@ fsim::library::Metadata example_metadata()
         std::string(64, 'f') } };
     metadata.dependencies = { "ieee_models", "common" };
     metadata.sources = {
-        { "sources/00000000/stage.sv", "sources/00000000/stage.sv",
-            std::string(64, 'c'), "systemverilog", "2017", "none" }
+        { "rtl/stage.sv", { }, std::string(64, 'c'), "systemverilog", "2017",
+            "none" }
     };
     metadata.units = {
         { "systemverilog", "module", "stage", { }, { },
@@ -90,13 +91,13 @@ bool has_identity_diagnostic(
 
 int main()
 {
-    static_assert(fsim::library::kFormatVersion == 7);
+    static_assert(fsim::library::kFormatVersion == 8);
     static_assert(fsim::library::kPortableSchemaVersion == 16);
     static_assert(fsim::library::kCompiledHirSchemaVersion == 3);
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
     assert(serialized.starts_with(
-        "format = 7\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
+        "format = 8\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
     assert(serialized.find("compiled_hir_schema = 3")
         != std::string::npos);
     assert(serialized.find("trace_archive = \"\"") != std::string::npos);
@@ -144,8 +145,8 @@ int main()
         }));
 
     auto legacy_text = serialized;
-    legacy_text.replace(legacy_text.find("format = 7"),
-        std::string { "format = 7" }.size(), "format = 6");
+    legacy_text.replace(legacy_text.find("format = 8"),
+        std::string { "format = 8" }.size(), "format = 7");
     legacy_text.replace(legacy_text.find("portable_schema = 16"),
         std::string { "portable_schema = 16" }.size(),
         "portable_schema = 15");
@@ -164,14 +165,14 @@ int main()
     }
     fsim::diagnostic::Engine legacy_parse_diagnostics;
     assert(!fsim::library::parse_metadata(
-        legacy_text, "legacy-v6.fsimlib", legacy_parse_diagnostics));
+        legacy_text, "legacy-v7.fsimlib", legacy_parse_diagnostics));
     assert(has_identity_diagnostic(legacy_parse_diagnostics, ".fsimlib",
-        "format 6", "format 7", ".fsimlib"));
+        "format 7", "format 8", ".fsimlib"));
     for (const auto [format, schema] : {
-             std::pair { 7U, 15U }, std::pair { 6U, 16U } }) {
+             std::pair { 8U, 15U }, std::pair { 7U, 16U } }) {
         auto mismatched_text = serialized;
-        mismatched_text.replace(mismatched_text.find("format = 7"),
-            std::string { "format = 7" }.size(),
+        mismatched_text.replace(mismatched_text.find("format = 8"),
+            std::string { "format = 8" }.size(),
             "format = " + std::to_string(format));
         mismatched_text.replace(mismatched_text.find("portable_schema = 16"),
             std::string { "portable_schema = 16" }.size(),
@@ -242,26 +243,53 @@ int main()
                     != std::string::npos;
         }));
 
+    // A library is one container file; its metadata record is one payload.
     const auto directory = workspace() / "vendor.fsimlib";
-    std::filesystem::create_directories(directory);
     {
-        std::ofstream output(
-            directory / fsim::library::kMetadataFilename, std::ios::binary);
-        output << serialized;
-        assert(output.good());
+        std::string error;
+        auto writer = fsim::artifact::ContainerWriter::create(directory,
+            fsim::library::kLibraryArtifactKind,
+            fsim::artifact::ContainerPages::bulk, error);
+        assert(writer);
+        assert(writer->put(std::string { fsim::library::kMetadataFilename },
+            serialized, error));
+        assert(writer->publish(error));
     }
     fsim::diagnostic::Engine load_diagnostics;
     const auto loaded = fsim::library::load_metadata(
         directory, "vendor", load_diagnostics);
     assert(loaded == parsed);
     assert(!load_diagnostics.has_error());
-    // Metadata loading is deliberately lazy: neither indexed payload exists.
-    assert(!std::filesystem::exists(directory / "units"));
+    // Metadata loading is deliberately lazy: no indexed payload exists.
+    {
+        auto failure = fsim::library::PayloadReadFailure::none;
+        std::string error;
+        assert(!fsim::library::read_payload(directory,
+            expected.compiled_hir_artifact, expected.compiled_hir_checksum,
+            std::nullopt, failure, error));
+        assert(failure == fsim::library::PayloadReadFailure::open);
+    }
+
+    const auto legacy_directory = directory.parent_path() / "legacy.fsimlib";
+    std::filesystem::create_directories(legacy_directory);
+    {
+        std::ofstream output(
+            legacy_directory / fsim::library::kMetadataFilename, std::ios::binary);
+        output << serialized;
+        assert(output.good());
+    }
+    fsim::diagnostic::Engine legacy_directory_diagnostics;
+    assert(!fsim::library::load_metadata(
+        legacy_directory, "vendor", legacy_directory_diagnostics));
+    assert(std::ranges::any_of(legacy_directory_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.message.find("written by an older fsim")
+                != std::string::npos;
+        }));
 
     const auto published = directory.parent_path() / "published.fsimlib";
     auto published_metadata = expected;
     const std::vector<fsim::library::PortablePayload> payloads {
-        { "sources/00000000/stage.sv", "module stage; endmodule\n" },
         { "native/llvm/fixture.fobj", "native object fixture" },
         { "compiled/design.fsimhir", "compiled HIR fixture" },
         { "auxiliary/timing.fsimsdf", "portable SDF annotation fixture" }
@@ -276,15 +304,13 @@ int main()
         unit.checksum = fsim::support::Sha256::hex(
             fsim::support::Sha256::digest(payload->bytes));
     }
-    published_metadata.sources.front().checksum = fsim::support::Sha256::hex(
-        fsim::support::Sha256::digest(payloads[0].bytes));
     published_metadata.native_artifacts.front().checksum = fsim::support::Sha256::hex(
-        fsim::support::Sha256::digest(payloads[1].bytes));
+        fsim::support::Sha256::digest(payloads[0].bytes));
     published_metadata.compiled_hir_checksum = fsim::support::Sha256::hex(
-        fsim::support::Sha256::digest(payloads[2].bytes));
+        fsim::support::Sha256::digest(payloads[1].bytes));
     published_metadata.auxiliary_artifacts.front().checksum
         = fsim::support::Sha256::hex(
-            fsim::support::Sha256::digest(payloads[3].bytes));
+            fsim::support::Sha256::digest(payloads[2].bytes));
     auto stale_publication_metadata = published_metadata;
     stale_publication_metadata.format = fsim::library::kFormatVersion - 1U;
     stale_publication_metadata.portable_schema
@@ -296,64 +322,79 @@ int main()
         stale_publication_diagnostics));
     assert(has_identity_diagnostic(
         stale_publication_diagnostics, ".fsimlib publication",
-        "format 6 and portable-unit schema 15 and compiled-HIR schema 3",
-        "format 7 and portable-unit schema 16 and compiled-HIR schema 3",
+        "format 7 and portable-unit schema 15 and compiled-HIR schema 3",
+        "format 8 and portable-unit schema 16 and compiled-HIR schema 3",
         ".fsimlib"));
     assert(!std::filesystem::exists(stale_publication));
     fsim::diagnostic::Engine publish_diagnostics;
     assert(fsim::library::publish(
         published, published_metadata, payloads, publish_diagnostics));
     assert(!publish_diagnostics.has_error());
-    assert(std::filesystem::is_regular_file(
-        published / fsim::library::kMetadataFilename));
-    assert(std::ranges::none_of(
-        std::filesystem::recursive_directory_iterator { published },
-        [](const auto& entry) {
-            return entry.path().extension() == ".fsimudp"
-                || entry.path().extension() == ".fsimir";
-        }));
+    assert(std::filesystem::is_regular_file(published));
+    const auto published_payloads = [](const std::filesystem::path& path) {
+        std::string error;
+        auto reader = fsim::artifact::ContainerReader::open(
+            path, fsim::library::kLibraryArtifactKind, error);
+        assert(reader);
+        auto entries = reader->entries(error);
+        assert(entries);
+        std::vector<std::string> names;
+        for (const auto& entry : *entries) {
+            names.push_back(entry.name);
+        }
+        return names;
+    };
+    // Sources are recorded by path and digest; no payload holds their text.
+    const auto published_names = published_payloads(published);
+    assert(std::ranges::none_of(published_names, [](const auto& name) {
+        return name.starts_with("sources/") || name.ends_with(".fsimudp")
+            || name.ends_with(".fsimir");
+    }));
+    assert(std::ranges::find(published_names,
+               std::string { fsim::library::kMetadataFilename })
+        != published_names.end());
     fsim::diagnostic::Engine published_load_diagnostics;
     assert(fsim::library::load_metadata(
                published, "vendor", published_load_diagnostics)
         == std::optional { published_metadata });
 
     auto source_hidden_metadata = published_metadata;
-    source_hidden_metadata.sources.front().artifact.clear();
     source_hidden_metadata.sources.front().checksum.clear();
-    auto source_hidden_payloads = payloads;
-    source_hidden_payloads.erase(source_hidden_payloads.begin());
     const auto source_hidden = directory.parent_path() / "source-hidden.fsimlib";
     fsim::diagnostic::Engine source_hidden_diagnostics;
     assert(fsim::library::publish(
-        source_hidden, source_hidden_metadata, source_hidden_payloads,
+        source_hidden, source_hidden_metadata, payloads,
         source_hidden_diagnostics));
     assert(!source_hidden_diagnostics.has_error());
-    assert(!std::filesystem::exists(source_hidden / "sources"));
-    assert(std::filesystem::is_regular_file(
-        source_hidden / source_hidden_metadata.native_artifacts.front().artifact));
-    assert(std::filesystem::is_regular_file(
-        source_hidden / source_hidden_metadata.compiled_hir_artifact));
-    assert(std::filesystem::is_regular_file(
-        source_hidden
-        / source_hidden_metadata.auxiliary_artifacts.front().artifact));
+    assert(published_payloads(source_hidden).size() == payloads.size() + 1U);
     fsim::diagnostic::Engine source_hidden_load_diagnostics;
     assert(fsim::library::load_metadata(
                source_hidden, "vendor", source_hidden_load_diagnostics)
         == std::optional { source_hidden_metadata });
     assert(!source_hidden_load_diagnostics.has_error());
+
+    // Publishing again replaces the file, as recompiling replaces an object.
     fsim::diagnostic::Engine overwrite_diagnostics;
-    assert(!fsim::library::publish(
-        published, published_metadata, payloads, overwrite_diagnostics));
-    fsim::diagnostic::Engine rollback_diagnostics;
+    assert(fsim::library::publish(
+        published, source_hidden_metadata, payloads, overwrite_diagnostics));
+    fsim::diagnostic::Engine replaced_diagnostics;
     assert(fsim::library::load_metadata(
-               published, "vendor", rollback_diagnostics)
-        == std::optional { published_metadata });
+               published, "vendor", replaced_diagnostics)
+        == std::optional { source_hidden_metadata });
     {
-        std::ifstream input(published / payloads.front().path, std::ios::binary);
-        assert((std::string {
-                    std::istreambuf_iterator<char> { input },
-                    std::istreambuf_iterator<char> { } }
-            == payloads.front().bytes));
+        auto failure = fsim::library::PayloadReadFailure::none;
+        std::string error;
+        assert(fsim::library::read_payload(published, payloads.front().path,
+                   published_metadata.native_artifacts.front().checksum,
+                   std::nullopt, failure, error)
+            == std::optional { payloads.front().bytes });
+        assert(!fsim::library::read_payload(published, payloads.front().path,
+            std::string(64, '0'), std::nullopt, failure, error));
+        assert(failure == fsim::library::PayloadReadFailure::checksum);
+        assert(!fsim::library::read_payload(published, payloads.front().path,
+            published_metadata.native_artifacts.front().checksum,
+            payloads.front().bytes.size() - 1U, failure, error));
+        assert(failure == fsim::library::PayloadReadFailure::budget);
     }
 
     auto bad_payloads = payloads;
@@ -392,6 +433,7 @@ int main()
                 != std::string::npos;
         }));
 
+    // A source with a payload path is an older layout that copied the text.
     auto duplicate_path_metadata = expected;
     duplicate_path_metadata.sources.front().artifact
         = duplicate_path_metadata.compiled_hir_artifact;
@@ -408,28 +450,28 @@ int main()
 
     auto incompatible_text = serialized;
     incompatible_text.replace(
-        incompatible_text.find("format = 7"),
-        std::string { "format = 7" }.size(), "format = 99");
+        incompatible_text.find("format = 8"),
+        std::string { "format = 8" }.size(), "format = 99");
     fsim::diagnostic::Engine schema_diagnostics;
     assert(!fsim::library::parse_metadata(
         incompatible_text, "future.toml", schema_diagnostics));
     assert(has_identity_diagnostic(
-        schema_diagnostics, ".fsimlib", "format 99", "format 7",
+        schema_diagnostics, ".fsimlib", "format 99", "format 8",
         ".fsimlib"));
 
     for (std::uint32_t format = 0;
         format < fsim::library::kFormatVersion; ++format) {
         auto stale_text = serialized;
         stale_text.replace(
-            stale_text.find("format = 7"),
-            std::string { "format = 7" }.size(),
+            stale_text.find("format = 8"),
+            std::string { "format = 8" }.size(),
             "format = " + std::to_string(format));
         fsim::diagnostic::Engine stale_schema_diagnostics;
         assert(!fsim::library::parse_metadata(
             stale_text, "stale.toml", stale_schema_diagnostics));
         assert(has_identity_diagnostic(
             stale_schema_diagnostics, ".fsimlib",
-            "format " + std::to_string(format), "format 7", ".fsimlib"));
+            "format " + std::to_string(format), "format 8", ".fsimlib"));
     }
 
     for (std::uint32_t schema = 0;

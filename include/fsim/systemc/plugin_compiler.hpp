@@ -48,6 +48,10 @@ struct PluginCompilePlan {
     // This is suitable for exact admission of a precompiled plug-in whose
     // payload is separately content-addressed.
     std::string host_fingerprint;
+    // The cache database that keeps built libraries across processes. A
+    // library is built in, or restored to, a private directory of this
+    // process, which is removed when it exits.
+    std::filesystem::path cache_database;
     std::filesystem::path library_path;
     std::filesystem::path build_path;
     // GCC-like toolchains use one compile/link command. MSVC-compatible

@@ -1352,6 +1352,15 @@ fsim_register_simple_test(
   "fast;application;cli;coverage;database;merge;partial;report;text;lcov;threshold;ci;atomic;positive;negative"
 )
 
+add_executable(fsim_artifact_container_tests artifact/container_test.cpp)
+fsim_configure_test(fsim_artifact_container_tests)
+target_link_libraries(fsim_artifact_container_tests PRIVATE fsim_library)
+fsim_register_simple_test(
+  fsim.artifact.container
+  fsim_artifact_container_tests
+  "fast;artifact"
+)
+
 add_executable(fsim_object_artifact_tests artifact/object_artifact_test.cpp)
 fsim_configure_test(fsim_object_artifact_tests)
 target_link_libraries(fsim_object_artifact_tests PRIVATE fsim_library)

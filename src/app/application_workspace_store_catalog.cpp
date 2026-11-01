@@ -11,7 +11,9 @@ namespace fsim::app::workspace::detail {
 namespace {
 
 // The `metadata.version` of a catalog with the current table schema.
-constexpr int kCatalogSchemaVersion = 2;
+// Version 3 names each artifact file after its primary unit beside the
+// catalog; version 2 kept read-only `artifacts/r<hex>` trees.
+constexpr int kCatalogSchemaVersion = 3;
 
 class PendingCatalog final {
 public:
@@ -41,18 +43,24 @@ bool read_identity(Database& database, const LibraryLocation& location,
     std::string& error)
 {
     Statement query { database, "SELECT version, library FROM metadata", error };
-    if (!query || query.step(error) != SQLITE_ROW) {
+    if (!query || query.step(error) != support::sqlite::Step::row) {
         if (error.empty())
             error = "workspace library catalog has no identity metadata";
         return false;
     }
     const auto version = query.integer(0, error);
     const auto name = query.text(1, error);
+    if (version && *version < kCatalogSchemaVersion) {
+        error = "workspace library '" + location.name + "' was compiled by an older fsim (catalog "
+            "version " + std::to_string(*version) + "); "
+            + legacy_removal_advice(location.directory) + ", and compile again";
+        return false;
+    }
     if (version != kCatalogSchemaVersion || name != location.name) {
         error = "workspace library catalog version or logical library name does not match";
         return false;
     }
-    if (query.step(error) != SQLITE_DONE) {
+    if (query.step(error) != support::sqlite::Step::done) {
         error = "workspace library catalog has duplicate metadata";
         return false;
     }
@@ -82,8 +90,8 @@ bool read_artifacts(Database& database, LibraryCatalog& catalog,
         "SELECT id, kind, path, fingerprint FROM artifacts ORDER BY id", error };
     if (!query)
         return false;
-    int status;
-    while ((status = query.step(error)) == SQLITE_ROW) {
+    support::sqlite::Step status;
+    while ((status = query.step(error)) == support::sqlite::Step::row) {
         auto id = query.text(0, error);
         const auto kind = query.integer(1, error);
         auto path = query.text(2, error);
@@ -108,7 +116,7 @@ bool read_artifacts(Database& database, LibraryCatalog& catalog,
         }
         catalog.artifacts.push_back(std::move(record));
     }
-    return status == SQLITE_DONE;
+    return status == support::sqlite::Step::done;
 }
 
 bool read_sources(Database& database, LibraryCatalog& catalog,
@@ -117,15 +125,15 @@ bool read_sources(Database& database, LibraryCatalog& catalog,
     Statement query { database, "SELECT owner, source FROM sources ORDER BY owner, source", error };
     if (!query)
         return false;
-    int status;
-    while ((status = query.step(error)) == SQLITE_ROW) {
+    support::sqlite::Step status;
+    while ((status = query.step(error)) == support::sqlite::Step::row) {
         auto* record = owner_record(query, catalog, records, count, error);
         auto source = query.text(1, error);
         if (!record || !source)
             return false;
         record->sources.push_back(std::move(*source));
     }
-    return status == SQLITE_DONE;
+    return status == support::sqlite::Step::done;
 }
 
 bool read_units(Database& database, LibraryCatalog& catalog,
@@ -140,8 +148,8 @@ bool read_units(Database& database, LibraryCatalog& catalog,
         error };
     if (!query)
         return false;
-    int status;
-    while ((status = query.step(error)) == SQLITE_ROW) {
+    support::sqlite::Step status;
+    while ((status = query.step(error)) == support::sqlite::Step::row) {
         auto* record = owner_record(query, catalog, records, count, error);
         const auto identity = query.text(1, error);
         auto unit = read_unit(query, 2, error);
@@ -154,7 +162,7 @@ bool read_units(Database& database, LibraryCatalog& catalog,
         }
         record->units.push_back({ std::move(*unit), std::move(*source) });
     }
-    return status == SQLITE_DONE;
+    return status == support::sqlite::Step::done;
 }
 
 bool read_dependencies(Database& database, LibraryCatalog& catalog,
@@ -169,8 +177,8 @@ bool read_dependencies(Database& database, LibraryCatalog& catalog,
         error };
     if (!query)
         return false;
-    int status;
-    while ((status = query.step(error)) == SQLITE_ROW) {
+    support::sqlite::Step status;
+    while ((status = query.step(error)) == support::sqlite::Step::row) {
         auto* record = owner_record(query, catalog, records, count, error);
         const auto ordinal = query.integer(1, error);
         auto library = query.text(2, error);
@@ -185,7 +193,7 @@ bool read_dependencies(Database& database, LibraryCatalog& catalog,
         record->dependencies.push_back(
             { std::move(*library), std::move(*unit), std::move(*fingerprint) });
     }
-    return status == SQLITE_DONE;
+    return status == support::sqlite::Step::done;
 }
 
 bool insert_record(Database& database, const ArtifactRecord& record, std::string& error)
@@ -298,8 +306,9 @@ bool save_catalog(const LibraryCatalog& catalog, std::string& error)
     } else {
         if (!database.initialize_schema(error))
             return false;
-        Statement identity { database, "INSERT INTO metadata VALUES(2, ?)", error };
-        if (!identity || !identity.bind(1, catalog.location.name, error) || !identity.finish(error))
+        Statement identity { database, "INSERT INTO metadata VALUES(?, ?)", error };
+        if (!identity || !identity.bind(1, kCatalogSchemaVersion, error)
+            || !identity.bind(2, catalog.location.name, error) || !identity.finish(error))
             return false;
     }
     if (!database.execute("DELETE FROM artifacts", error))

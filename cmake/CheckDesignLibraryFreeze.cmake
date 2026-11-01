@@ -86,21 +86,21 @@ function(fsim_require_design_library_tokens path)
 endfunction()
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_HEADER}"
-  "kDesignFormatVersion = 15"
+  "kDesignFormatVersion = 16"
   "kDesignMetadataFilename = \"fsim-design.bin\""
   "std::string scv_compatibility"
   "Producer paths are deliberately")
 fsim_require_design_library_tokens("${FSIM_LIBRARY_HEADER}"
-  "kFormatVersion = 7"
+  "kFormatVersion = 8"
   "kPortableSchemaVersion = 16"
   "kCompiledHirSchemaVersion = 3"
   "std::filesystem::path compiled_hir_artifact"
   "std::string compiled_hir_checksum"
   "struct AuxiliaryArtifact"
   "std::vector<AuxiliaryArtifact> auxiliary_artifacts"
-  "Empty when an exporter intentionally omits source text"
+  "Always empty in a library: sources are referenced by location"
   "enough producer identity to make admission an exact"
-  "Opens only fsim-library.toml")
+  "Opens only the metadata record")
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_CODEC}"
   "'F', 'S', 'I', 'M', 'D', 'E', 'S', '\\0'"
@@ -121,7 +121,7 @@ fsim_require_design_library_tokens("${FSIM_LIBRARY_CODEC}"
   "\".fsimlib\""
   "portable-unit schema"
   "compiled-HIR schema"
-  "either no payload or a contained"
+  "no payload, and at most a lowercase"
   "kind-specific compatibility fields"
   "load_metadata("
   "portable payload set does not cover every indexed unit")
@@ -145,7 +145,7 @@ fsim_require_design_library_tokens("${FSIM_LIBRARY_ADMISSION}"
   "library::load_metadata(")
 
 fsim_require_design_library_tokens("${FSIM_DESIGN_TEST}"
-  "kDesignFormatVersion == 15U"
+  "kDesignFormatVersion == 16U"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
   "runtime_abi_version == 1U"
@@ -163,7 +163,7 @@ fsim_require_design_library_tokens("${FSIM_DESIGN_TEST}"
   "oversized-root"
   "rejected-plugin")
 fsim_require_design_library_tokens("${FSIM_LIBRARY_TEST}"
-  "kFormatVersion == 7"
+  "kFormatVersion == 8"
   "kPortableSchemaVersion == 16"
   "kCompiledHirSchemaVersion == 3"
   "invalid-auxiliary.fsimlib"

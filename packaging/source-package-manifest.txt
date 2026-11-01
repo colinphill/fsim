@@ -335,6 +335,7 @@ include/fsim/app/sdf_vital_target_plan.hpp
 include/fsim/app/sdf_vital_timing_checks.hpp
 include/fsim/app/trace_api.hpp
 include/fsim/app/trace_archive.hpp
+include/fsim/artifact/container.hpp
 include/fsim/artifact/coverage_database.hpp
 include/fsim/artifact/coverage_database_codec.hpp
 include/fsim/artifact/coverage_database_merge.hpp
@@ -567,6 +568,7 @@ include/fsim/support/payload_checksum.hpp
 include/fsim/support/phase_profile.hpp
 include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
+include/fsim/support/sqlite_database.hpp
 include/fsim/support/teardown.hpp
 include/fsim/support/uvm_identity.hpp
 include/fsim/support/vhdl_fixed_bounds.hpp
@@ -837,6 +839,7 @@ src/app/tcl_references.hpp
 src/app/tcl_transcript.cpp
 src/app/tcl_transcript.hpp
 src/app/tcl_workspace_commands.cpp
+src/artifact/container.cpp
 src/artifact/coverage_database.cpp
 src/artifact/coverage_database_codec.cpp
 src/artifact/coverage_database_merge.cpp
@@ -855,7 +858,6 @@ src/artifact/coverage_report_render_text.cpp
 src/artifact/design.cpp
 src/artifact/object.cpp
 src/artifact/path_validation.hpp
-src/artifact/tree_permissions.hpp
 src/cli/driver.cpp
 src/compiler/object_cache.cpp
 src/compiler/static_kernel_codegen.cpp
@@ -1331,6 +1333,7 @@ src/support/allocation_hooks.def
 src/support/environment.cpp
 src/support/payload_checksum.cpp
 src/support/sha256.cpp
+src/support/sqlite_database.cpp
 src/support/teardown.cpp
 src/systemc/accellera_compatibility.cpp
 src/systemc/accellera_runtime.cpp
@@ -1602,6 +1605,7 @@ tests/app/workspace_store_test.cpp
 tests/app/workspace_sv_packages_test.cpp
 tests/app/workspace_systemc_test.cpp
 tests/app/workspace_vhdl_packages_test.cpp
+tests/artifact/container_test.cpp
 tests/artifact/coverage_database_codec_test.cpp
 tests/artifact/coverage_database_merge_test.cpp
 tests/artifact/coverage_database_model_test.cpp
@@ -2551,6 +2555,7 @@ tests/semantic/hierarchy_path_test.cpp
 tests/semantic/semantic_model_test.cpp
 tests/semantic/systemverilog_class_specialization_test.cpp
 tests/support/bounded_bytes_test.cpp
+tests/support/container_test_support.hpp
 tests/support/ctype_whitespace_test.cpp
 tests/support/identity128_test.cpp
 tests/support/native_filesystem_test.cpp

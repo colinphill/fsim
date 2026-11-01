@@ -706,6 +706,92 @@ void test_manifest_fsm_hint(const TemporaryDirectory& directory,
     }
 }
 
+// An exported library holds no source text, only each source's path,
+// digest and coverage facts, so covering code imported from it needs no
+// source file: the producer's source is gone when the consumer elaborates.
+void test_mapped_library_coverage(const TemporaryDirectory& directory)
+{
+    const auto producer_root = directory.path / "library-producer";
+    const auto consumer_root = directory.path / "library-consumer";
+    std::filesystem::create_directories(producer_root);
+    std::filesystem::create_directories(consumer_root);
+    const auto leaf = producer_root / "leaf.sv";
+    write_text(leaf, R"(module leaf(input logic a);
+  always @(a) begin
+    // fsim coverage off metric=branch reason="library waiver"
+    if (a) $display("LEAF_ONE"); else $display("LEAF_ZERO");
+    // fsim coverage on metric=branch
+  end
+endmodule
+)");
+    fsim::project::Config producer;
+    producer.base_directory = producer_root;
+    producer.project.name = "coverage-library-producer";
+    producer.project.top = "sv:vendor.leaf";
+    producer.build.cache_path = producer_root / "cache";
+    producer.coverage.enabled = true;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "vendor";
+    sources.files = { leaf };
+    producer.source_sets.push_back(std::move(sources));
+    const auto library = directory.path / "coverage-vendor.fsimlib";
+    fsim::diagnostic::Engine export_diagnostics;
+    const auto exported = fsim::app::export_library(
+        producer, "vendor", library, export_diagnostics);
+    if (!exported) {
+        fsim::diagnostic::print_text(std::cerr, export_diagnostics);
+    }
+    assert(exported);
+    std::filesystem::remove(leaf);
+
+    write_text(consumer_root / "tb.sv", R"(module tb;
+  logic a = 0;
+  leaf u(.a(a));
+  initial begin #1 a = 1; #1 a = 0; end
+endmodule
+)");
+    fsim::project::Config consumer;
+    consumer.base_directory = consumer_root;
+    consumer.project.name = "coverage-library-consumer";
+    consumer.project.top = "sv:work.tb";
+    consumer.project.time_resolution = "1ns";
+    consumer.build.cache_path = consumer_root / "cache";
+    consumer.coverage.enabled = true;
+    consumer.library_mappings.push_back({ "vendor", library });
+    consumer.elaboration.search_libraries = { "vendor" };
+    fsim::project::SourceSet consumer_sources;
+    consumer_sources.language = fsim::project::Language::system_verilog;
+    consumer_sources.standard = "2017";
+    consumer_sources.files = { consumer_root / "tb.sv" };
+    consumer.source_sets.push_back(std::move(consumer_sources));
+    fsim::diagnostic::Engine build_diagnostics;
+    const auto built = fsim::app::build_project(consumer, build_diagnostics);
+    if (!built) {
+        fsim::diagnostic::print_text(std::cerr, build_diagnostics);
+    }
+    assert(built && built->code_coverage_enabled);
+    const auto& inventory = built->design.code_coverage_inventory();
+    assert(inventory);
+    const auto leaf_source = std::ranges::find_if(inventory->sources,
+        [](const auto& source) { return source.source_name.ends_with("leaf.sv"); });
+    assert(leaf_source != inventory->sources.end());
+    // The library's exclusion pragma came from its recorded coverage facts.
+    const auto leaf_index = static_cast<std::size_t>(
+        leaf_source - inventory->sources.begin());
+    bool waived = false;
+    for (const auto& instance : inventory->instances) {
+        for (const auto& exclusion : instance.exclusions) {
+            waived = waived
+                || (exclusion.source_index == leaf_index
+                    && exclusion.metric == fsim::runtime::CodeCoverageMetric::Branch
+                    && exclusion.reason == "library waiver");
+        }
+    }
+    assert(waived);
+}
+
 int main()
 {
     TemporaryDirectory directory;
@@ -714,6 +800,7 @@ int main()
     test_manifest_surface(directory);
     test_cli_override(directory);
     test_disabled_build_has_no_runtime_state(directory);
+    test_mapped_library_coverage(directory);
     write_text(directory.path / "coverage_control.sv", R"(
 module top;
   int start_status, stop_status, reset_status, check_status;

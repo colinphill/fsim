@@ -4,6 +4,8 @@
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/object.hpp"
+#include "fsim/support/path.hpp"
+#include "../support/container_test_support.hpp"
 
 #include "fsim/runtime/vcd_writer.hpp"
 
@@ -924,11 +926,17 @@ endmodule
             return entry.kind != "primitive"
                 || (entry.artifact.empty() && entry.checksum.empty());
         }));
-    assert(std::ranges::none_of(
-        std::filesystem::recursive_directory_iterator { object },
-        [](const auto& entry) {
-            return entry.path().extension() == ".fsimudp";
+    {
+        // No per-UDP payload: the object holds only its metadata and HIR.
+        std::string error;
+        auto reader = fsim::artifact::ContainerReader::open(
+            object, fsim::artifact::kObjectArtifactKind, error);
+        assert(reader);
+        const auto entries = reader->entries(error);
+        assert(entries && std::ranges::none_of(*entries, [](const auto& entry) {
+            return std::filesystem::path { entry.name }.extension() == ".fsimudp";
         }));
+    }
 
     const auto duplicate_source = directory / "udp-duplicate.v";
     const auto duplicate_object = directory / "udp-duplicate.fsimobj";
@@ -993,17 +1001,12 @@ endprimitive
     const auto corrupt_metadata = fsim::artifact::load_object_metadata(
         hidden_object, corrupt_metadata_diagnostics);
     assert(corrupt_metadata && !corrupt_metadata_diagnostics.has_error());
-    const auto corrupt_payload
-        = hidden_object / corrupt_metadata->compiled_hir_artifact;
-    std::filesystem::permissions(
-        corrupt_payload,
-        std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
     {
-        std::ofstream output(
-            corrupt_payload, std::ios::binary | std::ios::app);
-        output.put('x');
-        assert(output.good());
+        const auto payload_name
+            = fsim::support::path_to_utf8(corrupt_metadata->compiled_hir_artifact);
+        auto payload = fsim::test::read_container_payload(hidden_object, payload_name);
+        payload.push_back('x');
+        fsim::test::rewrite_container_payloads(hidden_object, { { payload_name, payload } });
     }
     const std::array corrupt_objects { hidden_object };
     fsim::diagnostic::Engine corrupt_object_diagnostics;
@@ -1164,9 +1167,8 @@ endprimitive
                 || (entry.artifact.empty() && entry.checksum.empty());
         }));
     assert(std::ranges::none_of(
-        std::filesystem::recursive_directory_iterator { library },
-        [](const auto& entry) {
-            return entry.path().extension() == ".fsimudp";
+        fsim::test::container_contents(library), [](const auto& entry) {
+            return std::filesystem::path { entry.first }.extension() == ".fsimudp";
         }));
 
     const auto consumer_source = directory / "udp-consumer.v";
@@ -1217,18 +1219,8 @@ endmodule
         mapped_run.status == fsim::runtime::RunStatus::stopped
         && mapped_run.time == 8);
 
-    const auto corrupt_library_payload
-        = library / library_metadata->compiled_hir_artifact;
-    std::filesystem::permissions(
-        corrupt_library_payload,
-        std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream output(
-            corrupt_library_payload, std::ios::binary | std::ios::app);
-        output.put('x');
-        assert(output.good());
-    }
+    fsim::test::append_container_payload(library,
+        fsim::support::path_to_utf8(library_metadata->compiled_hir_artifact), "x");
     auto corrupt_consumer_config = consumer_config;
     corrupt_consumer_config.build.cache_path
         = directory / "udp-corrupt-library-cache";

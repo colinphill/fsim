@@ -2,10 +2,10 @@
 #pragma once
 #include "fsim/systemc/plugin_compiler.hpp"
 
-#include "fsim/compiler/cache_support.hpp"
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/support/environment.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/systemc/incremental.hpp"
 #include "fsim/systemc_abi.h"
 #include "fsim/version.hpp"
 
@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -47,7 +48,6 @@ namespace fsim::systemc::plugin_detail {
 
 constexpr std::size_t kMaximumCompilerOutput = 1024U * 1024U;
 
-extern std::atomic_uint64_t checksum_temporary_counter;
 extern std::atomic_uint64_t uncached_plan_counter;
 extern std::atomic_uint64_t dependency_scan_counter;
 #if defined(_WIN32)
@@ -218,17 +218,14 @@ struct IncludeScan {
     std::string& result,
     std::error_code& error);
 
-[[nodiscard]] bool valid_cached_artifact(
-    const PluginCompilePlan& plan,
-    std::error_code& error);
+// Serializes the threads of this process that build or restore one cache
+// entry; other processes may build the same entry, and the last store wins.
+[[nodiscard]] std::unique_lock<std::mutex> lock_cache_entry(const std::string& key);
 
-[[nodiscard]] bool prepare_artifact_build(
-    const PluginCompilePlan& plan,
-    diagnostic::Engine& diagnostics);
-
-[[nodiscard]] bool publish_artifact(
-    const PluginCompilePlan& plan,
-    diagnostic::Engine& diagnostics);
+// The private directory, one per process, that portable plug-ins are built
+// in and restored to.
+[[nodiscard]] std::optional<std::filesystem::path> plugin_build_directory(
+    std::string& error);
 
 #if defined(_WIN32)
 

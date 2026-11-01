@@ -146,6 +146,20 @@ std::size_t longest_path(const fs::path& root)
     return longest;
 }
 
+int deepest_entry(const fs::path& root)
+{
+    int deepest = 0;
+    std::error_code error;
+    auto iterator = native_fs::recursive_directory_iterator(root, error);
+    const fs::recursive_directory_iterator end;
+    while (!error && iterator != end) {
+        deepest = std::max(deepest, iterator.depth());
+        iterator.increment(error);
+    }
+    assert(!error);
+    return deepest;
+}
+
 } // namespace
 
 int main()
@@ -241,9 +255,10 @@ close $f
         != std::string::npos);
 #endif
 
-    // The workspace state itself must have gone beyond MAX_PATH, or this test
-    // proves nothing about long paths.
-    assert(longest_path(workspace.root / ".fsim") > kMaxPath);
+    // The sources and outputs must have gone beyond MAX_PATH, or this test
+    // proves nothing about long paths. Workspace state never copies them:
+    // it stays a few files at most two directories below .fsim.
+    assert(deepest_entry(workspace.root / ".fsim") <= 2);
     assert(longest_path(workspace.root) > kMaxPath);
     std::cout << "workspace long-path tests passed\n";
     return 0;

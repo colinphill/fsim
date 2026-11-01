@@ -13,9 +13,11 @@
 
 namespace fsim::library {
 
-inline constexpr std::uint32_t kFormatVersion = 7;
+inline constexpr std::uint32_t kFormatVersion = 8;
 inline constexpr std::uint32_t kPortableSchemaVersion = 16;
 inline constexpr std::uint32_t kCompiledHirSchemaVersion = 3;
+inline constexpr std::string_view kLibraryArtifactKind = "fsim-library";
+// The metadata record, one payload of the .fsimlib container.
 inline constexpr std::string_view kMetadataFilename = "fsim-library.toml";
 
 // Portable metadata cannot reconstruct whether a normalized VHDL designator
@@ -70,9 +72,11 @@ struct UnitIndexEntry {
 
 struct SourceIndexEntry {
   std::string logical_name;
-  // Empty when an exporter intentionally omits source text while retaining
-  // locations. Otherwise this is a contained path beneath the artifact.
+  // Always empty in a library: sources are referenced by location and
+  // content digest, never stored. Objects use it for the same location-only
+  // records.
   std::filesystem::path artifact;
+  // Lowercase SHA-256 of the source content, or empty.
   std::string checksum;
   std::string language;
   std::string standard;
@@ -169,17 +173,28 @@ struct PortablePayload {
     std::string source_name,
     diagnostic::Engine& diagnostics);
 
-// Opens only fsim-library.toml in directory and validates that its logical
-// library matches expected_library. Unit payloads remain lazy.
+// Opens only the metadata record of the .fsimlib container at `path` and
+// validates that its logical library matches expected_library. Unit payloads
+// remain lazy.
 [[nodiscard]] std::optional<Metadata> load_metadata(
-    const std::filesystem::path& directory,
+    const std::filesystem::path& path,
     std::string_view expected_library,
     diagnostic::Engine& diagnostics);
 
-// Publishes a fully checksummed library through a sibling staging directory
-// and a single directory rename. Existing destinations are never overwritten.
-// The installed tree is made read-only after every payload and the canonical
-// metadata file have been durably closed.
+enum class PayloadReadFailure : std::uint8_t { none, open, read, budget, checksum };
+
+// One payload of the .fsimlib container at `library`, verified against
+// `expected_checksum`. Payloads above `maximum_bytes` are refused unread.
+[[nodiscard]] std::optional<std::string> read_payload(
+    const std::filesystem::path& library,
+    const std::filesystem::path& payload,
+    std::string_view expected_checksum,
+    std::optional<std::uint64_t> maximum_bytes,
+    PayloadReadFailure& failure,
+    std::string& error);
+
+// Publishes a fully checksummed library as one container file, written
+// privately and renamed over `destination`, which it replaces.
 [[nodiscard]] bool publish(
     const std::filesystem::path& destination,
     const Metadata& metadata,

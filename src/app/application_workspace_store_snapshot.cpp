@@ -1,26 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_workspace_store_internal.hpp"
 
+#include "fsim/compiler/cache_support.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 namespace fsim::app::workspace {
 namespace {
 
-constexpr std::string_view kSnapshotHeader = "FSIM-SNAPSHOT 1\n";
-
-bool snapshot_revision(const std::string_view name)
-{
-    if (name.size() != 44U || name.front() != 'r' || !name.ends_with(".fsimdesign"))
-        return false;
-    for (const char character : name.substr(1U, 32U)) {
-        if (!(character >= '0' && character <= '9')
-            && !(character >= 'a' && character <= 'f'))
-            return false;
-    }
-    return true;
-}
-
+// Each snapshot is one file, `snapshots/<name>.fsimdesign`. An elaboration
+// publishes a hidden pending file beside it and commit renames that file
+// over the snapshot, so a reader sees the old or the new design, never a
+// partial one, and the last commit wins.
 std::optional<std::filesystem::path> snapshot_directory(
     const Store& store, const std::string_view name, const bool create,
     std::string& error)
@@ -29,25 +20,30 @@ std::optional<std::filesystem::path> snapshot_directory(
         error = "invalid snapshot name: " + std::string { name };
         return std::nullopt;
     }
-    const auto directory = store.managed_directory() / "snapshots" / name;
+    const auto directory = store.managed_directory() / "snapshots";
     if (create
         && (!detail::ensure_directory(store.managed_directory(), error)
-            || !detail::ensure_directory(store.managed_directory() / "snapshots", error)
-            || !detail::ensure_directory(directory, error)
-            || !detail::ensure_directory(directory / "revisions", error)))
+            || !detail::ensure_directory(directory, error)))
         return std::nullopt;
     if (!detail::safe_descendant(store.root(),
-            std::filesystem::path { ".fsim/snapshots" } / name, error))
+            std::filesystem::path { ".fsim/snapshots" } / (std::string { name } + ".fsimdesign"),
+            error))
         return std::nullopt;
+    std::error_code code;
+    if (support::native_fs::is_directory(directory / name, code)) {
+        error = "snapshot '" + std::string { name }
+            + "' was written by an older fsim; " + detail::legacy_removal_advice(directory / name)
+            + ", and elaborate it again";
+        return std::nullopt;
+    }
     return directory;
 }
 
 } // namespace
 
 struct SnapshotTransaction::Impl {
-    std::filesystem::path directory;
-    std::filesystem::path artifact;
-    std::unique_ptr<compiler::detail::CacheDirectoryLock> lock;
+    std::filesystem::path pending;
+    std::filesystem::path snapshot;
     bool committed { false };
 };
 
@@ -58,13 +54,15 @@ SnapshotTransaction::SnapshotTransaction(std::unique_ptr<Impl> impl)
 
 SnapshotTransaction::~SnapshotTransaction()
 {
-    if (!impl_->committed)
-        detail::remove_revision(impl_->artifact);
+    if (impl_->committed)
+        return;
+    std::error_code code;
+    support::native_fs::remove(impl_->pending, code);
 }
 
 const std::filesystem::path& SnapshotTransaction::artifact_path() const
 {
-    return impl_->artifact;
+    return impl_->pending;
 }
 
 bool SnapshotTransaction::commit(std::string& error)
@@ -74,21 +72,16 @@ bool SnapshotTransaction::commit(std::string& error)
         error = "snapshot transaction has already committed";
         return false;
     }
-    const auto relative = std::filesystem::path { "revisions" } / impl_->artifact.filename();
     std::error_code code;
-    if (!detail::safe_descendant(impl_->directory, relative, error)
-        || !support::native_fs::is_directory(impl_->artifact, code) || code) {
-        if (error.empty())
-            error = "snapshot artifact was not published before commit";
+    if (!support::native_fs::is_regular_file(impl_->pending, code) || code) {
+        error = "snapshot artifact was not published before commit";
         return false;
     }
-    const auto revision = support::path_to_utf8(impl_->artifact.filename());
-    if (!detail::safe_descendant(impl_->directory, "snapshot.index", error)
-        || !detail::replace_text(impl_->directory / "snapshot.index",
-            std::string { kSnapshotHeader } + revision + '\n', error))
+    if (!compiler::detail::atomic_replace_file(impl_->pending, impl_->snapshot, code)) {
+        error = "cannot install snapshot: " + code.message();
         return false;
+    }
     impl_->committed = true;
-    detail::collect_revisions(impl_->directory / "revisions", { revision });
     return true;
 }
 
@@ -100,13 +93,11 @@ std::unique_ptr<SnapshotTransaction> Store::begin_snapshot(
     if (!directory)
         return nullptr;
     auto impl = std::make_unique<SnapshotTransaction::Impl>();
-    impl->directory = *directory;
-    impl->lock = detail::lock_directory(*directory / ".writer-lock", error);
-    if (!impl->lock)
-        return nullptr;
-    impl->artifact = *directory / "revisions" / (detail::new_revision() + ".fsimdesign");
+    impl->snapshot = *directory / (std::string { name } + ".fsimdesign");
+    impl->pending = *directory
+        / (".pending-" + detail::new_revision() + "-" + std::string { name } + ".fsimdesign");
     std::error_code code;
-    if (support::native_fs::exists(impl->artifact, code) || code) {
+    if (support::native_fs::exists(impl->pending, code) || code) {
         error = "generated snapshot artifact path is unavailable";
         return nullptr;
     }
@@ -120,30 +111,13 @@ std::optional<SnapshotRecord> Store::read_snapshot(
     const auto directory = snapshot_directory(*this, name, false, error);
     if (!directory)
         return std::nullopt;
-    if (!detail::safe_descendant(*directory, "snapshot.index", error))
-        return std::nullopt;
-    const auto text = detail::read_text(*directory / "snapshot.index", 256U, error);
-    if (!text)
-        return std::nullopt;
-    if (!text->starts_with(kSnapshotHeader) || text->back() != '\n') {
-        error = "snapshot index has an unsupported format";
-        return std::nullopt;
-    }
-    const auto revision = std::string_view { *text }.substr(
-        kSnapshotHeader.size(), text->size() - kSnapshotHeader.size() - 1U);
-    const auto relative = std::filesystem::path { "revisions" }
-        / support::path_from_utf8(revision);
-    if (!snapshot_revision(revision) || !detail::safe_descendant(*directory, relative, error)) {
-        if (error.empty())
-            error = "snapshot index contains an unsafe artifact path";
-        return std::nullopt;
-    }
+    const auto path = *directory / (std::string { name } + ".fsimdesign");
     std::error_code code;
-    if (!support::native_fs::is_directory(*directory / relative, code) || code) {
+    if (!support::native_fs::is_regular_file(path, code) || code) {
         error = "snapshot artifact does not exist";
         return std::nullopt;
     }
-    return SnapshotRecord { std::string { name }, *directory / relative };
+    return SnapshotRecord { std::string { name }, path };
 }
 
 } // namespace fsim::app::workspace

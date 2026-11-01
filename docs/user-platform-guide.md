@@ -114,8 +114,9 @@ measurements require the pinned LLVM-MinGW hosted lanes.
 
 The workspace is exactly the current working directory. Local libraries use
 `.fsim/libraries/<name>`, mappings use `.fsim/libraries.toml`, snapshots use
-`.fsim/snapshots/<name>`, and derived caches default to `.fsim/cache`. A mapped
-library directory owns its own `library.sqlite3` catalog and managed artifacts.
+`.fsim/snapshots/<name>.fsimdesign`, and derived caches default to `.fsim/cache`
+(one SQLite file per cache). A mapped library directory owns its own
+`library.sqlite3` catalog and managed artifact files.
 Catalogs and snapshots are persistent state; caches can be regenerated.
 
 Use this recovery order:
@@ -125,7 +126,7 @@ Use this recovery order:
 2. If a cache key still fails, stop processes that can own that cache or a
    loaded native plugin. Confirm the diagnostic identifies a path inside the
    intended workspace's cache.
-3. Move only the failing cache entry, or that workspace's `.fsim/cache`, aside.
+3. Move the failing cache file, or that workspace's `.fsim/cache`, aside.
    Preserve `.fsim/libraries`, `.fsim/snapshots`, and mapped directories.
 4. Repeat the failed phase. For a rejected library object, recompile its source
    with the current build and recompile stale consumers. Re-elaborate to replace
@@ -142,11 +143,9 @@ Use `library unmap NAME` when only the mapping should be removed.
 state. `FSIM-SC-I001` through `FSIM-SC-I003` identify invalid incremental
 metadata or publication. `FSIM-SC-I004` is the translation-unit compile and
 dependency-scan boundary; its message distinguishes an invalid compiler/input
-from a cache-lock directory or acquisition failure. When it names
-`systemc/incremental/locks`, preserve that exact path, verify that its parent is
-writable and present, stop possible owners, and retry. Current fsim creates the
-lock parent before acquisition, so repeated "path not found" is a product or
-filesystem failure worth reporting, not a reason to weaken locking.
+from a cache database failure. Concurrent fsim processes share a cache file
+through SQLite locking; a "database is locked" failure that persists after
+other fsim processes end is worth reporting.
 
 ## Windows paths and loaded files
 

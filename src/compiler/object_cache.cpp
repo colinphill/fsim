@@ -2,7 +2,9 @@
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/cache_support.hpp"
 #include "fsim/support/native_filesystem.hpp"
+#include "fsim/support/path.hpp"
 #include "fsim/support/payload_checksum.hpp"
+#include "fsim/support/sqlite_database.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,7 +19,6 @@
 #include <limits>
 #include <mutex>
 #include <new>
-#include <sstream>
 #include <thread>
 #include <unordered_set>
 
@@ -36,19 +37,13 @@
 namespace fsim::compiler {
 namespace {
 
-// V2 frames the payload with its integrity checksum, "xxh64:" and sixteen
-// hex digits. Older envelopes do not load; they miss and are rebuilt.
-constexpr std::string_view kMagic = "FSIM-OBJECT-CACHE-V2\n";
-constexpr std::size_t kChecksumBytes = 22U;
 constexpr std::uintmax_t kMaximumCacheEntryBytes =
     256U * 1024U * 1024U;
-constexpr std::uintmax_t kCacheEnvelopeBytes
-    = kMagic.size() + kChecksumBytes + 1U;
+// The database's application id is fsim's ("FSIM"); user_version is the
+// schema of the entries table. A database of another schema is rebuilt.
+constexpr std::int64_t kApplicationId = 0x4653494D;
+constexpr std::int64_t kCacheSchema = 1;
 
-std::string_view payload_text(const std::span<const std::byte> payload) noexcept {
-    return {reinterpret_cast<const char*>(payload.data()), payload.size()};
-}
-std::atomic_uint64_t temp_counter{};
 std::atomic_uint64_t lock_counter{};
 
 void hash_size(support::Sha256& hasher, const std::size_t size) noexcept {
@@ -91,83 +86,9 @@ std::optional<std::vector<std::byte>> read_all(
     return result;
 }
 
-/// read_all into uninitialized storage (no zero fill of the payload).
-std::optional<std::pair<std::unique_ptr<char[]>, std::size_t>> read_all_uninitialized(
-    const std::filesystem::path& path,
-    std::error_code& error,
-    const std::uintmax_t maximum_size) {
-    error.clear();
-    const auto size = support::native_fs::file_size(path, error);
-    if (error) {
-        return std::nullopt;
-    }
-    if (size > maximum_size
-        || size > static_cast<std::uintmax_t>(std::numeric_limits<std::size_t>::max())
-        || size > static_cast<std::uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
-        error = std::make_error_code(std::errc::file_too_large);
-        return std::nullopt;
-    }
-
-    auto stream = support::native_fs::open_ifstream(path, std::ios::binary);
-    if (!stream) {
-        error = std::make_error_code(std::errc::io_error);
-        return std::nullopt;
-    }
-    const auto count = static_cast<std::size_t>(size);
-    auto buffer = std::make_unique_for_overwrite<char[]>(count);
-    stream.read(buffer.get(), static_cast<std::streamsize>(count));
-    if (!stream && count != 0U) {
-        error = std::make_error_code(std::errc::io_error);
-        return std::nullopt;
-    }
-    return std::pair{std::move(buffer), count};
-}
-
-[[nodiscard]] bool cache_entry_filename(
-    const std::filesystem::path& path,
-    std::string& key) {
-    const auto filename = path.filename().string();
-    constexpr std::string_view suffix = ".fobj";
-    if (!filename.ends_with(suffix)) {
-        return false;
-    }
-    key = filename.substr(0, filename.size() - suffix.size());
-    return valid_cache_key(key)
-        && path.parent_path().filename().string() == key.substr(0, 2);
-}
-
-[[nodiscard]] bool cache_temporary_filename(
-    const std::filesystem::path& path,
-    std::string& key) {
-    const auto filename = path.filename().string();
-    constexpr std::string_view marker = ".fobj.tmp.";
-    if (filename.size() <= 64 + marker.size()
-        || std::string_view{filename}.substr(64, marker.size()) != marker) {
-        return false;
-    }
-    key = filename.substr(0, 64);
-    return valid_cache_key(key)
-        && path.parent_path().filename().string() == key.substr(0, 2);
-}
-
-[[nodiscard]] bool elapsed_at_least(
-    const std::filesystem::file_time_type stamp,
-    const std::chrono::seconds age) {
-    if (age <= std::chrono::seconds::zero()) {
-        return true;
-    }
-    const auto now = std::filesystem::file_time_type::clock::now();
-    return stamp <= now && now - stamp >= age;
-}
-
-void add_saturating(
-    std::uintmax_t& total,
-    const std::uintmax_t value) noexcept {
-    if (value > std::numeric_limits<std::uintmax_t>::max() - total) {
-        total = std::numeric_limits<std::uintmax_t>::max();
-    } else {
-        total += value;
-    }
+[[nodiscard]] std::int64_t now_seconds() noexcept {
+    return std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 } // namespace
@@ -213,32 +134,6 @@ void unregister_active_lock(const std::string& token) noexcept {
     return static_cast<std::uint64_t>(GetCurrentProcessId());
 #else
     return static_cast<std::uint64_t>(::getpid());
-#endif
-}
-
-[[nodiscard]] bool process_is_alive(const std::uint64_t process_id) noexcept {
-    if (process_id == 0
-        || process_id > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())) {
-        return false;
-    }
-#if defined(_WIN32)
-    const HANDLE process =
-        OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
-                    static_cast<DWORD>(process_id));
-    if (process == nullptr) {
-        // Access denial is conservative: a process that cannot be inspected
-        // must be treated as alive.
-        return GetLastError() != ERROR_INVALID_PARAMETER;
-    }
-    const auto state = WaitForSingleObject(process, 0);
-    CloseHandle(process);
-    return state == WAIT_TIMEOUT;
-#else
-    const auto native_id = static_cast<pid_t>(process_id);
-    if (::kill(native_id, 0) == 0) {
-        return true;
-    }
-    return errno == EPERM;
 #endif
 }
 
@@ -388,6 +283,32 @@ struct LockOwner {
 }
 
 } // namespace
+
+bool process_is_alive(const std::uint64_t process_id) noexcept {
+    if (process_id == 0
+        || process_id > static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return false;
+    }
+#if defined(_WIN32)
+    const HANDLE process =
+        OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                    static_cast<DWORD>(process_id));
+    if (process == nullptr) {
+        // Access denial is conservative: a process that cannot be inspected
+        // must be treated as alive.
+        return GetLastError() != ERROR_INVALID_PARAMETER;
+    }
+    const auto state = WaitForSingleObject(process, 0);
+    CloseHandle(process);
+    return state == WAIT_TIMEOUT;
+#else
+    const auto native_id = static_cast<pid_t>(process_id);
+    if (::kill(native_id, 0) == 0) {
+        return true;
+    }
+    return errno == EPERM;
+#endif
+}
 
 CacheDirectoryLock::CacheDirectoryLock(
     std::filesystem::path path,
@@ -543,17 +464,137 @@ std::string CacheKeyBuilder::finish() {
     return support::Sha256::hex(hasher_.finish());
 }
 
-ObjectCache::ObjectCache(std::filesystem::path root) : root_(std::move(root)) {}
+struct ObjectCache::Connection {
+    std::filesystem::path path;
+    std::mutex mutex;
+    support::sqlite::Database database;
+    bool open{};
+};
 
-const std::filesystem::path& ObjectCache::root() const noexcept {
-    return root_;
+namespace {
+
+// Ends a transaction that was not committed.
+class Transaction final {
+public:
+    Transaction(support::sqlite::Database& database, const char* begin, std::string& error)
+        : database_(database), active_(database.execute(begin, error)) {}
+    Transaction(const Transaction&) = delete;
+    Transaction& operator=(const Transaction&) = delete;
+    ~Transaction() {
+        if (active_) {
+            std::string ignored;
+            static_cast<void>(database_.execute("ROLLBACK", ignored));
+        }
+    }
+    [[nodiscard]] bool active() const noexcept { return active_; }
+    [[nodiscard]] bool commit(std::string& error) {
+        active_ = false;
+        return database_.execute("COMMIT", error);
+    }
+
+private:
+    support::sqlite::Database& database_;
+    bool active_{};
+};
+
+[[nodiscard]] bool create_schema(support::sqlite::Database& database, std::string& error) {
+    Transaction transaction{database, "BEGIN IMMEDIATE", error};
+    if (!transaction.active()) {
+        return false;
+    }
+    // Another process may have created it since this one looked.
+    const auto id = database.pragma_integer("PRAGMA application_id", error);
+    const auto schema = database.pragma_integer("PRAGMA user_version", error);
+    if (!id || !schema) {
+        return false;
+    }
+    if (*id == kApplicationId && *schema == kCacheSchema) {
+        return transaction.commit(error);
+    }
+    if (*id != 0 && *id != kApplicationId) {
+        error = database.context() + ": the file is not an fsim cache";
+        return false;
+    }
+    const auto statements = std::string{
+        "DROP TABLE IF EXISTS entries;"
+        "CREATE TABLE entries(key TEXT PRIMARY KEY NOT NULL, checksum TEXT NOT NULL,"
+        " size INTEGER NOT NULL, last_used INTEGER NOT NULL, data BLOB NOT NULL);"
+        "CREATE INDEX entries_by_use ON entries(last_used);"
+        "PRAGMA application_id = "} + std::to_string(kApplicationId)
+        + ";PRAGMA user_version = " + std::to_string(kCacheSchema) + ";";
+    return database.execute(statements.c_str(), error) && transaction.commit(error);
 }
 
-std::filesystem::path ObjectCache::path_for(const std::string_view key) const {
-    if (!valid_cache_key(key)) {
-        return {};
+} // namespace
+
+bool ObjectCache::open_connection(const bool create, std::error_code& error) const {
+    auto& connection = *connection_;
+    if (connection.open) {
+        return true;
     }
-    return root_ / std::string{key.substr(0, 2)} / (std::string{key} + ".fobj");
+    std::error_code status;
+    if (!create && !support::native_fs::exists(connection.path, status)) {
+        error = status ? status : std::make_error_code(std::errc::no_such_file_or_directory);
+        return false;
+    }
+    if (create && !connection.path.parent_path().empty()) {
+        support::native_fs::create_directories(connection.path.parent_path(), status);
+        // Racing first-time creators may report an existing directory.
+        if (status && !support::native_fs::is_directory(connection.path.parent_path(), status)) {
+            error = status ? status : std::make_error_code(std::errc::not_a_directory);
+            return false;
+        }
+    }
+    support::sqlite::Database database{
+        "object cache " + support::path_to_utf8(connection.path)};
+    support::sqlite::Database::Limits limits;
+    // A row is its payload plus a key, checksum and two integers.
+    limits.value_bytes = static_cast<std::int64_t>(kMaximumCacheEntryBytes) + 4096;
+    std::string message;
+    const auto mode = create ? support::sqlite::Database::OpenMode::read_write_create
+                             : support::sqlite::Database::OpenMode::read_write_existing;
+    if (!database.open(connection.path, mode, limits, message)) {
+        error = std::make_error_code(std::errc::io_error);
+        return false;
+    }
+    const auto id = database.pragma_integer("PRAGMA application_id", message);
+    const auto schema = database.pragma_integer("PRAGMA user_version", message);
+    if (!id || !schema) {
+        error = std::make_error_code(std::errc::illegal_byte_sequence);
+        return false;
+    }
+    if (*id != kApplicationId || *schema != kCacheSchema) {
+        // A new file: incremental vacuum lets prune give space back. It
+        // only takes effect before the first table exists.
+        if (*id == 0 && *schema == 0
+            && !database.execute("PRAGMA auto_vacuum = INCREMENTAL", message)) {
+            error = std::make_error_code(std::errc::io_error);
+            return false;
+        }
+        if (!create_schema(database, message)) {
+            error = std::make_error_code(*id != 0 && *id != kApplicationId
+                    ? std::errc::illegal_byte_sequence
+                    : std::errc::io_error);
+            return false;
+        }
+    }
+    // Losing the newest entries to a power failure only costs a rebuild.
+    if (!database.execute("PRAGMA synchronous = OFF", message)) {
+        error = std::make_error_code(std::errc::io_error);
+        return false;
+    }
+    connection.database = std::move(database);
+    connection.open = true;
+    return true;
+}
+
+ObjectCache::ObjectCache(std::filesystem::path database)
+    : connection_(std::make_shared<Connection>()) {
+    connection_->path = std::move(database);
+}
+
+const std::filesystem::path& ObjectCache::path() const noexcept {
+    return connection_->path;
 }
 
 std::optional<std::vector<std::byte>> ObjectCache::load(
@@ -569,37 +610,82 @@ std::optional<std::vector<std::byte>> ObjectCache::load(
 std::optional<ObjectCachePayload> ObjectCache::load_payload(
     const std::string_view key, std::error_code& error) const {
     error.clear();
-    const auto path = path_for(key);
-    if (path.empty()) {
+    if (!valid_cache_key(key)) {
         error = std::make_error_code(std::errc::invalid_argument);
         return std::nullopt;
     }
-    auto encoded = read_all_uninitialized(path, error, kMaximumCacheEntryBytes);
-    if (!encoded) {
+    const std::scoped_lock lock{connection_->mutex};
+    if (!open_connection(false, error)) {
         return std::nullopt;
     }
-
-    const std::string_view raw{encoded->first.get(), encoded->second};
-    const auto header_size = static_cast<std::size_t>(kCacheEnvelopeBytes);
-    if (raw.size() < header_size || !raw.starts_with(kMagic)
-        || raw[header_size - 1U] != '\n') {
+    auto& database = connection_->database;
+    std::string message;
+    std::unique_ptr<char[]> buffer;
+    std::size_t size{};
+    std::string checksum;
+    {
+        // One read transaction, so the row and its blob are one version.
+        Transaction transaction{database, "BEGIN", message};
+        if (!transaction.active()) {
+            error = std::make_error_code(std::errc::io_error);
+            return std::nullopt;
+        }
+        std::int64_t row{};
+        {
+            support::sqlite::Statement query{database,
+                "SELECT rowid, checksum, size FROM entries WHERE key = ?1", message};
+            if (!query || !query.bind_text(1, key, message)) {
+                error = std::make_error_code(std::errc::io_error);
+                return std::nullopt;
+            }
+            const auto step = query.step(message);
+            if (step != support::sqlite::Step::row) {
+                error = std::make_error_code(step == support::sqlite::Step::done
+                        ? std::errc::no_such_file_or_directory
+                        : std::errc::io_error);
+                return std::nullopt;
+            }
+            const auto stored_row = query.integer(0, message);
+            const auto stored_checksum = query.text(1, message);
+            const auto stored_size = query.integer(2, message);
+            if (!stored_row || !stored_checksum || !stored_size || *stored_size < 0) {
+                error = std::make_error_code(std::errc::illegal_byte_sequence);
+                return std::nullopt;
+            }
+            // The entry ceiling is checked before allocation.
+            if (static_cast<std::uint64_t>(*stored_size) > kMaximumCacheEntryBytes) {
+                error = std::make_error_code(std::errc::file_too_large);
+                return std::nullopt;
+            }
+            row = *stored_row;
+            checksum = *stored_checksum;
+            size = static_cast<std::size_t>(*stored_size);
+        }
+        buffer = std::make_unique_for_overwrite<char[]>(size);
+        if (!database.read_blob("entries", "data", row, {buffer.get(), size}, message)) {
+            error = std::make_error_code(std::errc::illegal_byte_sequence);
+            return std::nullopt;
+        }
+        if (!transaction.commit(message)) {
+            error = std::make_error_code(std::errc::io_error);
+            return std::nullopt;
+        }
+    }
+    // Entries are only ever written with an xxh64 checksum.
+    if (!checksum.starts_with("xxh64:") || !support::payload_checksum_spelling(checksum)
+        || !support::payload_checksum_matches({buffer.get(), size}, checksum)) {
         error = std::make_error_code(std::errc::illegal_byte_sequence);
         return std::nullopt;
     }
-
-    const auto expected = raw.substr(kMagic.size(), kChecksumBytes);
-    if (!support::payload_checksum_spelling(expected)
-        || !support::payload_checksum_matches(raw.substr(header_size), expected)) {
-        error = std::make_error_code(std::errc::illegal_byte_sequence);
-        return std::nullopt;
+    // A hit refreshes LRU recency. Failing to record it (a read-only
+    // cache) never turns a valid hit into a failure.
+    support::sqlite::Statement touch{database,
+        "UPDATE entries SET last_used = ?2 WHERE key = ?1 AND last_used < ?2", message};
+    if (touch && touch.bind_text(1, key, message)
+        && touch.bind_integer(2, now_seconds(), message)) {
+        static_cast<void>(touch.finish(message));
     }
-    // Successful reads refresh LRU recency. Failure to update metadata must
-    // never turn a valid cache hit into a compilation failure.
-    std::error_code ignored;
-    support::native_fs::last_write_time(
-        path, std::filesystem::file_time_type::clock::now(), ignored);
-    return ObjectCachePayload{
-        std::move(encoded->first), header_size, encoded->second - header_size};
+    return ObjectCachePayload{std::move(buffer), size};
 }
 
 std::shared_ptr<const std::string_view> ObjectCachePayload::share() && {
@@ -618,8 +704,7 @@ bool ObjectCache::store(
     const std::span<const std::byte> payload,
     std::error_code& error) const {
     error.clear();
-    const auto path = path_for(key);
-    if (path.empty()) {
+    if (!valid_cache_key(key)) {
         error = std::make_error_code(std::errc::invalid_argument);
         return false;
     }
@@ -627,54 +712,26 @@ bool ObjectCache::store(
         error = std::make_error_code(std::errc::file_too_large);
         return false;
     }
-    support::native_fs::create_directories(path.parent_path(), error);
-    if (error) {
-        // Concurrent first-time publishers can race while creating the same
-        // shard on Windows. Some filesystem implementations retain an
-        // already-exists error even though another publisher completed the
-        // directory. Accept only the exact postcondition we require.
-        std::error_code status_error;
-        if (!support::native_fs::is_directory(path.parent_path(), status_error)) {
-            return false;
-        }
-        error.clear();
-    }
-
-    detail::CacheDirectoryLock lock{path.string() + ".lock", error};
-    if (!lock.held()) {
+    const std::scoped_lock lock{connection_->mutex};
+    if (!open_connection(true, error)) {
         return false;
     }
-
-    const auto suffix = temp_counter.fetch_add(1, std::memory_order_relaxed);
-    const auto temporary = path.string() + ".tmp." + std::to_string(suffix);
-    {
-        auto stream = support::native_fs::open_ofstream(
-            temporary, std::ios::binary | std::ios::trunc);
-        if (!stream) {
-            error = std::make_error_code(std::errc::io_error);
-            return false;
-        }
-        const auto checksum = support::payload_checksum(payload_text(payload));
-        stream.write(kMagic.data(), static_cast<std::streamsize>(kMagic.size()));
-        stream.write(checksum.data(), static_cast<std::streamsize>(checksum.size()));
-        stream.put('\n');
-        stream.write(
-            reinterpret_cast<const char*>(payload.data()),
-            static_cast<std::streamsize>(payload.size()));
-        stream.flush();
-        if (!stream) {
-            error = std::make_error_code(std::errc::io_error);
-        }
-    }
-    if (error) {
-        std::error_code ignored;
-        support::native_fs::remove(temporary, ignored);
-        return false;
-    }
-
-    if (!detail::atomic_replace_file(temporary, path, error)) {
-        std::error_code ignored;
-        support::native_fs::remove(temporary, ignored);
+    // One statement, so a concurrent reader sees the old entry or the new.
+    std::string message;
+    const std::string_view bytes{
+        reinterpret_cast<const char*>(payload.data()), payload.size()};
+    support::sqlite::Statement upsert{connection_->database,
+        "INSERT INTO entries(key, checksum, size, last_used, data)"
+        " VALUES(?1, ?2, ?3, ?4, ?5) ON CONFLICT(key) DO UPDATE SET"
+        " checksum = excluded.checksum, size = excluded.size,"
+        " last_used = excluded.last_used, data = excluded.data",
+        message};
+    if (!upsert || !upsert.bind_text(1, key, message)
+        || !upsert.bind_text(2, support::payload_checksum(bytes), message)
+        || !upsert.bind_integer(3, static_cast<std::int64_t>(payload.size()), message)
+        || !upsert.bind_integer(4, now_seconds(), message)
+        || !upsert.bind_blob(5, bytes, message) || !upsert.finish(message)) {
+        error = std::make_error_code(std::errc::io_error);
         return false;
     }
     return true;
@@ -682,7 +739,7 @@ bool ObjectCache::store(
 
 std::uintmax_t maximum_object_cache_payload_bytes() noexcept
 {
-    return kMaximumCacheEntryBytes - kCacheEnvelopeBytes;
+    return kMaximumCacheEntryBytes;
 }
 
 bool object_cache_payload_fits(const std::uintmax_t payload_bytes) noexcept
@@ -692,12 +749,25 @@ bool object_cache_payload_fits(const std::uintmax_t payload_bytes) noexcept
 
 bool ObjectCache::erase(const std::string_view key, std::error_code& error) const {
     error.clear();
-    const auto path = path_for(key);
-    if (path.empty()) {
+    if (!valid_cache_key(key)) {
         error = std::make_error_code(std::errc::invalid_argument);
         return false;
     }
-    return support::native_fs::remove(path, error);
+    const std::scoped_lock lock{connection_->mutex};
+    if (!open_connection(false, error)) {
+        if (error == std::errc::no_such_file_or_directory) {
+            error.clear();
+        }
+        return false;
+    }
+    std::string message;
+    support::sqlite::Statement remove{
+        connection_->database, "DELETE FROM entries WHERE key = ?1", message};
+    if (!remove || !remove.bind_text(1, key, message) || !remove.finish(message)) {
+        error = std::make_error_code(std::errc::io_error);
+        return false;
+    }
+    return connection_->database.changes() != 0;
 }
 
 bool ObjectCache::prune(
@@ -706,228 +776,102 @@ bool ObjectCache::prune(
     std::error_code& error) const {
     result = {};
     error.clear();
-    if ((options.maximum_age
-         && *options.maximum_age < std::chrono::seconds::zero())
-        || options.temporary_file_grace < std::chrono::seconds::zero()) {
+    if (options.maximum_age && *options.maximum_age < std::chrono::seconds::zero()) {
         error = std::make_error_code(std::errc::invalid_argument);
         return false;
     }
-    if (!support::native_fs::exists(root_, error)) {
-        if (!error) {
+    const std::scoped_lock lock{connection_->mutex};
+    if (!open_connection(false, error)) {
+        if (error == std::errc::no_such_file_or_directory) {
+            error.clear();
             return true;
         }
         return false;
     }
-    if (!support::native_fs::is_directory(root_, error)) {
-        if (!error) {
-            error = std::make_error_code(std::errc::not_a_directory);
-        }
+    auto& database = connection_->database;
+    std::string message;
+    const auto failed = [&] {
+        error = std::make_error_code(std::errc::io_error);
         return false;
-    }
-
-    struct Entry {
-        std::filesystem::path path;
-        std::filesystem::file_time_type stamp;
-        std::uintmax_t size{};
-        bool removed{};
-        bool attempted{};
     };
-    std::vector<Entry> entries;
-    std::vector<std::filesystem::path> shards;
-
-    auto shard_iterator = support::native_fs::directory_iterator(
-        root_, std::filesystem::directory_options::skip_permission_denied, error);
-    if (error) {
-        return false;
-    }
-    const std::filesystem::directory_iterator end;
-    for (; shard_iterator != end; shard_iterator.increment(error)) {
-        if (error) {
-            return false;
+    {
+        Transaction transaction{database, "BEGIN IMMEDIATE", message};
+        if (!transaction.active()) {
+            return failed();
         }
-        std::error_code status_error;
-        const auto status = shard_iterator->symlink_status(status_error);
-        if (status_error || !support::native_fs::is_directory(status)
-            || support::native_fs::is_symlink(status)) {
-            continue;
+        struct Entry {
+            std::string key;
+            std::uint64_t size{};
+            std::int64_t last_used{};
+        };
+        std::vector<Entry> entries;
+        {
+            support::sqlite::Statement query{database,
+                "SELECT key, size, last_used FROM entries ORDER BY last_used, key", message};
+            if (!query) {
+                return failed();
+            }
+            while (true) {
+                const auto step = query.step(message);
+                if (step == support::sqlite::Step::done) {
+                    break;
+                }
+                const auto key = step == support::sqlite::Step::row
+                    ? query.text(0, message) : std::nullopt;
+                const auto size = key ? query.integer(1, message) : std::nullopt;
+                const auto last_used = size ? query.integer(2, message) : std::nullopt;
+                if (!last_used || *size < 0) {
+                    return failed();
+                }
+                entries.push_back({std::string{*key},
+                    static_cast<std::uint64_t>(*size), *last_used});
+                ++result.scanned_entries;
+                result.bytes_before += static_cast<std::uint64_t>(*size);
+            }
         }
-        const auto shard = shard_iterator->path();
-        const auto shard_name = shard.filename().string();
-        if (shard_name.size() != 2
-            || !std::all_of(
-                shard_name.begin(), shard_name.end(), [](const char value) {
-                    return (value >= '0' && value <= '9')
-                        || (value >= 'a' && value <= 'f');
-                })) {
-            continue;
+        result.remaining_entries = result.scanned_entries;
+        result.remaining_bytes = result.bytes_before;
+        support::sqlite::Statement remove{
+            database, "DELETE FROM entries WHERE key = ?1", message};
+        if (!remove) {
+            return failed();
         }
-        shards.push_back(shard);
-
-        auto file_iterator = support::native_fs::directory_iterator(
-            shard, std::filesystem::directory_options::skip_permission_denied, error);
-        if (error) {
-            return false;
-        }
-        for (; file_iterator != end; file_iterator.increment(error)) {
-            if (error) {
+        const auto remove_entry = [&](const Entry& entry) {
+            if (!remove.reset(message) || !remove.bind_text(1, entry.key, message)
+                || !remove.finish(message)) {
                 return false;
             }
-            const auto path = file_iterator->path();
-            const auto file_status = file_iterator->symlink_status(status_error);
-            if (status_error || !support::native_fs::is_regular_file(file_status)) {
-                continue;
-            }
-            std::string key;
-            if (cache_entry_filename(path, key)) {
-                const auto size = file_iterator->file_size(status_error);
-                if (status_error) {
-                    ++result.failed_removals;
-                    continue;
-                }
-                const auto stamp = file_iterator->last_write_time(status_error);
-                if (status_error) {
-                    ++result.failed_removals;
-                    continue;
-                }
-                entries.push_back({path, stamp, size, false, false});
-                ++result.scanned_entries;
-                add_saturating(result.bytes_before, size);
-                continue;
-            }
-            if (!options.remove_stale_temporary_files
-                || !cache_temporary_filename(path, key)) {
-                continue;
-            }
-            const auto stamp = file_iterator->last_write_time(status_error);
-            if (status_error
-                || !elapsed_at_least(stamp, options.temporary_file_grace)) {
-                if (status_error) {
-                    ++result.failed_removals;
-                }
-                continue;
-            }
-            const auto destination = path_for(key);
-            std::error_code lock_error;
-            detail::CacheDirectoryLock lock{
-                destination.string() + ".lock",
-                lock_error,
-                std::chrono::milliseconds{0}};
-            if (!lock.held()) {
-                if (lock_error == std::errc::timed_out) {
-                    ++result.skipped_locked_entries;
-                } else {
-                    ++result.failed_removals;
-                }
-                continue;
-            }
-            std::error_code remove_error;
-            if (support::native_fs::remove(path, remove_error)) {
-                ++result.removed_temporary_files;
-            } else if (remove_error) {
-                ++result.failed_removals;
-            }
-        }
-        if (error) {
-            return false;
-        }
-    }
-    if (error) {
-        return false;
-    }
-
-    std::sort(entries.begin(), entries.end(), [](const Entry& left, const Entry& right) {
-        if (left.stamp != right.stamp) {
-            return left.stamp < right.stamp;
-        }
-        return left.path.generic_string() < right.path.generic_string();
-    });
-
-    std::uint64_t remaining_entries = result.scanned_entries;
-    std::uintmax_t remaining_bytes = result.bytes_before;
-    const auto remove_entry = [&](Entry& entry) {
-        entry.attempted = true;
-        std::error_code lock_error;
-        detail::CacheDirectoryLock lock{
-            entry.path.string() + ".lock",
-            lock_error,
-            std::chrono::milliseconds{0}};
-        if (!lock.held()) {
-            if (lock_error == std::errc::timed_out) {
-                ++result.skipped_locked_entries;
-            } else {
-                ++result.failed_removals;
-            }
-            return false;
-        }
-        std::error_code size_error;
-        const auto current_size =
-            support::native_fs::file_size(entry.path, size_error);
-        if (size_error == std::errc::no_such_file_or_directory) {
-            entry.removed = true;
-            if (remaining_entries != 0) {
-                --remaining_entries;
-            }
-            if (entry.size <= remaining_bytes) {
-                remaining_bytes -= entry.size;
-            } else {
-                remaining_bytes = 0;
-            }
+            ++result.removed_entries;
+            result.bytes_removed += entry.size;
+            --result.remaining_entries;
+            result.remaining_bytes -= entry.size;
             return true;
-        }
-        if (size_error) {
-            ++result.failed_removals;
-            return false;
-        }
-        std::error_code remove_error;
-        if (!support::native_fs::remove(entry.path, remove_error)) {
-            if (remove_error) {
-                ++result.failed_removals;
+        };
+        const auto over_limit = [&] {
+            return (options.maximum_entries
+                       && result.remaining_entries > *options.maximum_entries)
+                || (options.maximum_bytes
+                    && result.remaining_bytes > *options.maximum_bytes);
+        };
+        const auto cutoff = now_seconds()
+            - (options.maximum_age ? options.maximum_age->count() : 0);
+        // Oldest first: aged entries, then whatever the limits still need.
+        for (const auto& entry : entries) {
+            if (!(options.maximum_age && entry.last_used <= cutoff) && !over_limit()) {
+                break;
             }
-            return false;
-        }
-        entry.removed = true;
-        ++result.removed_entries;
-        add_saturating(result.bytes_removed, current_size);
-        if (remaining_entries != 0) {
-            --remaining_entries;
-        }
-        if (current_size <= remaining_bytes) {
-            remaining_bytes -= current_size;
-        } else {
-            remaining_bytes = 0;
-        }
-        return true;
-    };
-
-    if (options.maximum_age) {
-        for (auto& entry : entries) {
-            if (elapsed_at_least(entry.stamp, *options.maximum_age)) {
-                (void)remove_entry(entry);
+            if (!remove_entry(entry)) {
+                return failed();
             }
         }
-    }
-    const auto over_limit = [&] {
-        return (options.maximum_entries
-                && remaining_entries > *options.maximum_entries)
-            || (options.maximum_bytes
-                && remaining_bytes > *options.maximum_bytes);
-    };
-    for (auto& entry : entries) {
-        if (!over_limit()) {
-            break;
-        }
-        if (!entry.removed && !entry.attempted) {
-            (void)remove_entry(entry);
+        if (!transaction.commit(message)) {
+            return failed();
         }
     }
-
-    result.remaining_entries = remaining_entries;
-    result.remaining_bytes = remaining_bytes;
-    for (const auto& shard : shards) {
-        std::error_code remove_error;
-        (void)support::native_fs::remove(shard, remove_error);
+    // Free pages go back to the file system; failing to do so loses nothing.
+    if (result.removed_entries != 0) {
+        static_cast<void>(database.execute("PRAGMA incremental_vacuum", message));
     }
-    error.clear();
     return true;
 }
 

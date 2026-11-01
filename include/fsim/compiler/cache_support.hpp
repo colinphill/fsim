@@ -2,6 +2,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -33,6 +34,10 @@ private:
     std::string token_;
     bool held_{};
 };
+
+// Whether a process with this id exists. A process that cannot be
+// inspected counts as alive.
+[[nodiscard]] bool process_is_alive(std::uint64_t process_id) noexcept;
 
 // Replaces destination with source as one filesystem namespace operation.
 // Both paths must be on the same volume. On success source no longer exists.

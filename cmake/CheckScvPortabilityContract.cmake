@@ -28,11 +28,11 @@ fsim_scv_require_tokens(
   "exceeds the 4096-byte limit")
 fsim_scv_require_tokens(
   "include/fsim/library/artifact.hpp"
-  "kFormatVersion = 7"
+  "kFormatVersion = 8"
   "std::string scv_compatibility")
 fsim_scv_require_tokens(
   "include/fsim/artifact/design.hpp"
-  "kDesignFormatVersion = 15"
+  "kDesignFormatVersion = 16"
   "struct DesignSystemCPlugin"
   "std::string scv_compatibility")
 fsim_scv_require_tokens(

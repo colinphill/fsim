@@ -17,7 +17,7 @@ endfunction()
 set(FSIM_CONTRACT
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/cache_corruption_isolation_contract.tsv")
 set(FSIM_EXPECTED_DIGEST
-  "f45a174f2b0c26128848e363bfb982bc533cb0a6126c9290956233dfce745d30")
+  "e5eb39f78d06a26c1f2c0175ee723f48c4c33a77e76c7943e440d109392300a1")
 fsim_normalized_text_sha256("${FSIM_CONTRACT}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
@@ -84,10 +84,12 @@ endfunction()
 
 fsim_require_cache_tokens(src/compiler/object_cache.cpp
   "kMaximumCacheEntryBytes" "std::errc::file_too_large"
-  "MoveFileExW" "support::native_fs::rename" ".lock" ".tmp.")
+  "payload_checksum_matches" "BEGIN IMMEDIATE" "ON CONFLICT(key)"
+  "PRAGMA incremental_vacuum" "the file is not an fsim cache")
 fsim_require_cache_tokens(tests/compiler/cache_test.cpp
   "illegal_byte_sequence" "maximum_cache_entry_bytes"
-  "std::launch::async" "read_only" "uppercase_key")
+  "std::launch::async" "read_only" "uppercase_key" "foreign_database"
+  "older_database" "objects.sqlite3")
 fsim_require_cache_tokens(CMakeLists.txt
   "FSIM_BUILD_CONFIGURATION=\"$<CONFIG>\"")
 fsim_require_cache_tokens(src/compiler/static_kernel_codegen.cpp

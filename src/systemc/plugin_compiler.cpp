@@ -7,6 +7,8 @@
 #include "fsim/systemc/scv.hpp"
 
 #include <algorithm>
+#include <cstring>
+#include <iterator>
 #include <mutex>
 
 namespace fsim::systemc {
@@ -486,12 +488,19 @@ std::optional<PluginCompilePlan> plan_plugin_compile(
     }
     const auto key = key_builder.finish();
 
-    const auto artifact_directory = cache_directory / "systemc" / "artifacts" / key.substr(0, 2) / key;
+    std::string directory_error;
+    const auto build_directory = plugin_build_directory(directory_error);
+    if (!build_directory) {
+        report_error(diagnostics, "FSIM-SC-C005", std::move(directory_error));
+        return std::nullopt;
+    }
+    const auto artifact_directory = *build_directory / key;
     PluginCompilePlan plan;
     plan.toolchain = toolchain;
     plan.cacheable = cacheable;
     plan.cache_key = key;
     plan.host_fingerprint = host_fingerprint;
+    plan.cache_database = cache_directory / "systemc.sqlite3";
     plan.library_path = artifact_directory / shared_library_filename();
     plan.build_path = artifact_directory
         / (std::filesystem::path { shared_library_filename() }.stem().string() + ".build"
@@ -525,55 +534,67 @@ PluginCompileResult compile_plugin(
     result.host_fingerprint = plan->host_fingerprint;
     result.library_path = plan->library_path;
 
+    const auto entry = lock_cache_entry(plan->cache_key);
     std::error_code error;
-    if (plan->cacheable && valid_cached_artifact(*plan, error)) {
-        result.success = true;
-        result.cache_hit = true;
-        result.compiler_exit_code = 0;
-        return result;
+    const compiler::ObjectCache cache { plan->cache_database };
+    std::optional<std::vector<std::byte>> cached;
+    if (plan->cacheable) {
+        // Every load verifies the entry's checksum; a bad entry is a miss.
+        cached = cache.load(plan->cache_key, error);
+        error.clear();
     }
-
-    const auto cache_root = plan->library_path.parent_path().parent_path().parent_path().parent_path();
-    const auto lock_directory = cache_root / "locks";
-    support::native_fs::create_directories(lock_directory, error);
-    if (error) {
-        report_error(
-            diagnostics,
-            "FSIM-SC-C005",
-            "cannot create SystemC plug-in cache lock directory: " + error.message(),
-            lock_directory);
-        return result;
+    // A library this process built or restored may already be loaded from
+    // its private path, so an intact copy is reused and never rewritten.
+    if (cached && support::native_fs::is_regular_file(plan->library_path, error)
+        && !error) {
+        auto input = support::native_fs::open_ifstream(plan->library_path, std::ios::binary);
+        const std::vector<char> existing {
+            std::istreambuf_iterator<char> { input }, std::istreambuf_iterator<char> { } };
+        if (input.good() || input.eof()) {
+            if (existing.size() == cached->size()
+                && std::memcmp(existing.data(), cached->data(), existing.size()) == 0) {
+                result.success = true;
+                result.cache_hit = true;
+                result.compiler_exit_code = 0;
+                return result;
+            }
+        }
     }
-    compiler::detail::CacheDirectoryLock lock {
-        lock_directory / (plan->cache_key + ".lock"), error
-    };
-    if (!lock.held()) {
-        report_error(
-            diagnostics,
-            "FSIM-SC-C006",
-            "cannot acquire SystemC plug-in cache lock: " + error.message(),
-            lock_directory);
-        return result;
-    }
-
-    if (plan->cacheable && valid_cached_artifact(*plan, error)) {
-        result.success = true;
-        result.cache_hit = true;
-        result.compiler_exit_code = 0;
-        return result;
-    }
-
+    error.clear();
     support::native_fs::create_directories(plan->library_path.parent_path(), error);
     if (error) {
         report_error(
             diagnostics,
             "FSIM-SC-C005",
-            "cannot create SystemC plug-in cache directory: " + error.message(),
+            "cannot create SystemC plug-in build directory: " + error.message(),
             plan->library_path.parent_path());
         return result;
     }
-    if (!prepare_artifact_build(*plan, diagnostics)) {
-        return result;
+    // Leftovers of an earlier failed build in this process.
+    for (const auto& stale : plan->intermediate_paths) {
+        support::native_fs::remove(stale, error);
+    }
+    support::native_fs::remove(plan->build_path, error);
+    error.clear();
+
+    // Restore a missing or damaged private copy from the cache.
+    if (cached) {
+        auto output = support::native_fs::open_ofstream(
+            plan->build_path, std::ios::binary | std::ios::trunc);
+        output.write(reinterpret_cast<const char*>(cached->data()),
+            static_cast<std::streamsize>(cached->size()));
+        output.close();
+        if (output) {
+            support::native_fs::rename(plan->build_path, plan->library_path, error);
+            if (!error) {
+                result.success = true;
+                result.cache_hit = true;
+                result.compiler_exit_code = 0;
+                return result;
+            }
+        }
+        support::native_fs::remove(plan->build_path, error);
+        error.clear();
     }
 
     if (plan->commands.empty() || plan->commands.front().argv.empty()
@@ -674,7 +695,24 @@ PluginCompileResult compile_plugin(
             return result;
         }
     }
-    if (!publish_artifact(*plan, diagnostics)) {
+    if (plan->cacheable) {
+        auto input = support::native_fs::open_ifstream(plan->build_path, std::ios::binary);
+        const std::string bytes { std::istreambuf_iterator<char> { input },
+            std::istreambuf_iterator<char> { } };
+        // Failing to cache only costs a later rebuild.
+        if (input.good() || input.eof()) {
+            std::error_code ignored;
+            static_cast<void>(cache.store(plan->cache_key,
+                std::as_bytes(std::span { bytes.data(), bytes.size() }), ignored));
+        }
+    }
+    support::native_fs::rename(plan->build_path, plan->library_path, error);
+    if (error) {
+        report_error(
+            diagnostics,
+            "FSIM-SC-C008",
+            "cannot publish compiled SystemC plug-in: " + error.message(),
+            plan->library_path);
         return result;
     }
     for (const auto& intermediate : plan->intermediate_paths) {

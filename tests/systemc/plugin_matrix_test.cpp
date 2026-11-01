@@ -153,16 +153,18 @@ int main() {
     assert(fsim::platform::DynamicLibrary::is_loaded(cold.library_path));
     assert(!fsim::platform::DynamicLibrary::is_loaded(edited.library_path));
 
+    // A damaged private copy is restored from the cache database.
     replace_text(edited.library_path, "corrupt matrix image\n");
     const auto repaired = fsim::systemc::compile_plugin(request, diagnostics);
-    assert(repaired.success && !repaired.cache_hit);
+    assert(repaired.success && repaired.cache_hit);
     assert(repaired.cache_key == edited.cache_key);
+    assert(filesystem::file_size(repaired.library_path)
+        != std::string_view{"corrupt matrix image\n"}.size());
 
-    const auto metadata = filesystem::path{
-        repaired.library_path.string() + ".metadata"};
-    assert(filesystem::remove(repaired.library_path, error));
+    // With neither the copy nor the cache, one concurrent caller builds.
+    filesystem::remove(repaired.library_path, error);
     assert(!error);
-    assert(filesystem::remove(metadata, error));
+    filesystem::remove(request.cache_directory / "systemc.sqlite3", error);
     assert(!error);
     std::array<std::future<fsim::systemc::PluginCompileResult>, 3> builds;
     for (auto& build : builds) {

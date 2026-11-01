@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/artifact/container.hpp"
 #include "fsim/artifact/coverage_identity.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/library/artifact.hpp"
@@ -17,7 +18,9 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kDesignFormatVersion = 15;
+inline constexpr std::uint32_t kDesignFormatVersion = 16;
+inline constexpr std::string_view kDesignArtifactKind = "fsim-design";
+// The design metadata record, one payload of the .fsimdesign container.
 inline constexpr std::string_view kDesignMetadataFilename = "fsim-design.bin";
 
 struct DesignRoot {
@@ -98,17 +101,6 @@ struct DesignPayload {
   friend bool operator==(const DesignPayload&, const DesignPayload&) = default;
 };
 
-/// A payload produced directly in the artifact staging tree. The checksum is
-/// established before publication and verified again from the generated file,
-/// so large payloads need not be retained in memory. The staging path may
-/// exceed MAX_PATH on Windows, so write through support::native_fs.
-struct GeneratedDesignPayload {
-  std::filesystem::path path;
-  std::string checksum;
-  std::function<bool(
-      const std::filesystem::path&, diagnostic::Engine&)> write;
-};
-
 struct DesignSystemCPlugin {
   std::string logical_library;
   std::string input_digest;
@@ -168,20 +160,22 @@ struct DesignMetadata {
     std::string_view bytes,
     std::string source_name,
     diagnostic::Engine& diagnostics);
+// A .fsimdesign is one container file: the metadata record plus one
+// payload per DesignPayload, named by its `artifact` path.
+[[nodiscard]] std::optional<ContainerReader> open_design(
+    const std::filesystem::path& path,
+    diagnostic::Engine& diagnostics);
 [[nodiscard]] std::optional<DesignMetadata> load_design_metadata(
-    const std::filesystem::path& directory,
+    ContainerReader& design,
+    diagnostic::Engine& diagnostics);
+[[nodiscard]] std::optional<DesignMetadata> load_design_metadata(
+    const std::filesystem::path& path,
     diagnostic::Engine& diagnostics);
 
 [[nodiscard]] bool publish_design(
     const std::filesystem::path& destination,
     const DesignMetadata& metadata,
     const std::vector<library::PortablePayload>& payloads,
-    diagnostic::Engine& diagnostics);
-[[nodiscard]] bool publish_design(
-    const std::filesystem::path& destination,
-    const DesignMetadata& metadata,
-    const std::vector<library::PortablePayload>& payloads,
-    std::span<const GeneratedDesignPayload> generated_payloads,
     diagnostic::Engine& diagnostics);
 
 }  // namespace fsim::artifact

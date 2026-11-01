@@ -792,12 +792,12 @@ kernel services rather than arbitrary foreign hierarchy shortcuts.
 
 `fsim library map LIBRARY DIRECTORY` records an external managed library in
 `.fsim/libraries.toml`; normal commands read its unit catalog when resolving
-sources and tops. The retained low-level SDK also supports read-only,
-relocatable `.fsimlib` directories through `Config::library_mappings`.
+sources and tops. The retained low-level SDK also supports relocatable
+`.fsimlib` files through `Config::library_mappings`.
 For those SDK artifacts, a mapping is metadata-only until a qualified
 top, explicit binding, visible VHDL library reference, or complete unqualified
-search scope actually queries it. The loader then verifies canonical
-`fsim-library.toml` metadata, declared dependency order, every selected payload
+search scope actually queries it. The loader then verifies the canonical
+`fsim-library.toml` metadata payload, declared dependency order, every selected payload
 checksum, and each indexed unit identity before committing restored units.
 Dependencies are logical names with explicit mappings; fsim never searches
 neighboring host directories. The compiled semantic, VHDL, and SystemVerilog
@@ -805,14 +805,14 @@ HIR bundle restores directly into the candidate index without invoking a
 preprocessor or parser. UDP and class declarations remain records in that one
 checksummed bundle and receive the same identity, source-relocation,
 duplicate-input, and transactional publication checks as ordinary units.
-Bundled logical source
-names and optional source text
-remain artifact-relative, so diagnostics, debugger breakpoints, VCD, and cache
-identity survive moving the complete directory.
+A library records each source by location and content digest only; it never
+holds source text. Logical source names stay artifact-relative, so
+diagnostics, debugger breakpoints, VCD, and cache identity survive moving the
+file.
 
-The retained `app::export_library` SDK API publishes through a sibling staging
-tree and one directory rename, refuses replacement, and removes partial
-staging state after failure. The final tree is read-only. All design caches,
+The retained `app::export_library` SDK API writes one temporary SQLite file
+beside the destination and renames it into place, refuses replacement, and
+removes the temporary file after failure. All design caches,
 recompiled SystemC images, LLVM objects, trace output, and debugger state live
 under the consumer cache instead. Optional host-native variants are
 accelerators only. A SystemC image requires exact runtime/SystemC ABI,
@@ -829,11 +829,16 @@ does not. Format-1 SystemC publication rejects producer-only include paths,
 definitions, compiler/linker options, and external libraries rather than
 publishing a bundled-source fallback that cannot reproduce the producer build.
 
-Workspace execution stores managed library catalogs under
-`.fsim/libraries/<name>` and snapshots under `.fsim/snapshots/<name>`. Compilation
-assigns each HDL primary unit a generated `.fsimobj` artifact while retaining
-its required compilation context in the compiled-HIR bundle. The library
-catalog maps source ownership and named units to the active artifact revision.
+Workspace execution stores each managed library under `.fsim/libraries/<name>`
+(its `library.sqlite3` catalog beside one `.fsimobj` file per object) and each
+snapshot as `.fsim/snapshots/<name>.fsimdesign`. Every artifact is one SQLite
+file holding its payloads as checksummed blobs; none is read-only, and none
+holds source text. Compilation gives each HDL primary unit its own object,
+named after the unit (`<entity>-<architecture>`, `<package>-body`), while
+retaining its required compilation context in the compiled-HIR bundle. SV
+compilation units that share `$unit` state merge into one object named after
+their first unit. The library catalog maps source ownership and named units
+to the active object file.
 Replacing a source removes its previous unit ownership only after the complete
 compilation transaction succeeds. Previously compiled packages can supply the
 semantic environment for subsequent compilation without reopening their sources.
@@ -862,9 +867,14 @@ by stable hierarchy path, and reconnects ports, events, signals, processes,
 exports, lifecycle callbacks, debugger objects, and trace signals to the owning
 Accellera context and fsim boundary adapters. SystemC snapshots therefore
 require compatible host/compiler/runtime identities; HDL state remains portable.
+A native object or plug-in held in an artifact is copied into a private
+directory under the system temporary directory (`fsim-systemc-<pid>-<n>`) for
+linking or `dlopen`; the directory is removed at exit, and a later fsim run
+removes directories whose process no longer exists. One process maps each
+plug-in image from one copy.
 
-Low-level artifact publishers install immutable trees through a sibling staging
-rename. Workspace transactions select fresh physical paths and replace catalog
+Low-level artifact publishers write a temporary file beside the destination
+and rename it into place. Workspace transactions select the physical paths and replace catalog
 references, allowing repeated compilation, linking, and elaboration without user
 artifact management. Loaded native images remain mapped for Accellera type
 information safety; deferred cleanup handles DLLs still locked on Windows.

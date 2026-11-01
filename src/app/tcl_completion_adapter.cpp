@@ -934,10 +934,12 @@ namespace {
         const fs::directory_iterator end;
         std::size_t count = 0U;
         while (!code && iterator != end && count < kMaximumSnapshots) {
-            const auto name = fsim::support::path_to_utf8(iterator->path().filename());
+            // Snapshots are `<name>.fsimdesign` files; pending ones are hidden.
+            const auto file = iterator->path();
+            const auto name = fsim::support::path_to_utf8(file.stem());
             const auto status = iterator->symlink_status(code);
-            if (!code && fsim::support::native_fs::is_directory(status)
-                && !fsim::support::native_fs::is_symlink(status)) {
+            if (!code && fsim::support::native_fs::is_regular_file(status)
+                && file.extension() == ".fsimdesign" && !name.starts_with('.')) {
                 const auto snapshot = store.read_snapshot(name, error);
                 if (snapshot) {
                     append_item(

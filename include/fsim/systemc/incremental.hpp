@@ -17,8 +17,13 @@
 
 namespace fsim::systemc {
 
+// A .fsimscobj or .fsimscplugin is one artifact container holding a
+// "metadata" payload (this format) and its native payload, named by the
+// metadata.
 inline constexpr std::uint32_t kIncrementalObjectFormatVersion = 2;
 inline constexpr std::uint32_t kIncrementalPluginFormatVersion = 2;
+inline constexpr std::string_view kIncrementalObjectKind = "fsim-systemc-object";
+inline constexpr std::string_view kIncrementalPluginKind = "fsim-systemc-plugin";
 inline constexpr std::string_view kIncrementalObjectMetadataFilename =
     "fsim-systemc-object.bin";
 inline constexpr std::string_view kIncrementalPluginMetadataFilename =
@@ -153,15 +158,47 @@ deserialize_incremental_plugin_metadata(
     std::string source_name,
     diagnostic::Engine& diagnostics);
 
+// Both verify the native payload against the metadata's checksum.
 [[nodiscard]] std::optional<IncrementalObjectMetadata>
 load_incremental_object_metadata(
-    const std::filesystem::path& directory,
+    const std::filesystem::path& artifact,
     diagnostic::Engine& diagnostics);
 
 [[nodiscard]] std::optional<IncrementalPluginMetadata>
 load_incremental_plugin_metadata(
-    const std::filesystem::path& directory,
+    const std::filesystem::path& artifact,
     diagnostic::Engine& diagnostics);
+
+// The verified native payload: object code or the shared library.
+[[nodiscard]] std::optional<std::string> load_incremental_object_native(
+    const std::filesystem::path& artifact,
+    const IncrementalObjectMetadata& metadata,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] std::optional<std::string> load_incremental_plugin_native(
+    const std::filesystem::path& artifact,
+    const IncrementalPluginMetadata& metadata,
+    diagnostic::Engine& diagnostics);
+
+// Writes one artifact container holding the metadata and its native
+// payload. An existing destination is refused, never replaced.
+[[nodiscard]] bool publish_incremental_object(
+    const std::filesystem::path& destination,
+    const IncrementalObjectMetadata& metadata,
+    std::string_view payload,
+    diagnostic::Engine& diagnostics);
+
+[[nodiscard]] bool publish_incremental_plugin(
+    const std::filesystem::path& destination,
+    const IncrementalPluginMetadata& metadata,
+    std::string_view payload,
+    diagnostic::Engine& diagnostics);
+
+// A new private directory under the system temporary directory, for native
+// code that must be linked or loaded from a file. All of them are removed
+// when the process exits.
+[[nodiscard]] std::optional<std::filesystem::path> private_native_directory(
+    std::string& error);
 
 [[nodiscard]] bool compile_incremental_object(
     const IncrementalCompileRequest& request,
@@ -181,10 +218,10 @@ load_incremental_plugin_metadata(
     const std::filesystem::path& cache_directory,
     diagnostic::Engine& diagnostics);
 
-// Opens the checksummed native payload and verifies that the runtime factory
-// inventory still exactly matches the artifact metadata.
+// Loads the checksummed shared library from a private copy and verifies
+// that the runtime factory inventory still exactly matches the metadata.
 [[nodiscard]] std::shared_ptr<HierarchyRegistry> load_incremental_plugin(
-    const std::filesystem::path& directory,
+    const std::filesystem::path& artifact,
     diagnostic::Engine& diagnostics,
     std::string_view expected_compiler_fingerprint = {});
 

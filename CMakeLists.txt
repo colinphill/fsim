@@ -541,8 +541,11 @@ function(fsim_copy_library_beside library first_consumer)
 endfunction()
 
 # Support, diagnostics, platform, project, object cache, and CLI parsing.
+# fsim_base owns the one SQLite copy; other code uses its wrapper.
+fsim_add_sqlite()
 add_library(
   fsim_base ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
+  src/artifact/container.cpp
   src/cli/driver.cpp
   src/compiler/object_cache.cpp
   src/diagnostic/artifact_identity.cpp
@@ -555,11 +558,12 @@ add_library(
   src/support/environment.cpp
   src/support/payload_checksum.cpp
   src/support/sha256.cpp
+  src/support/sqlite_database.cpp
   src/support/teardown.cpp
 )
 add_library(fsim::base ALIAS fsim_base)
 fsim_configure_subsystem_library(fsim_base)
-target_link_libraries(fsim_base PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(fsim_base PRIVATE ${CMAKE_DL_LIBS} fsim_sqlite)
 if(WIN32 AND FSIM_SUBSYSTEM_LIBRARY_TYPE STREQUAL "SHARED")
   # Windows binds operator new per module, so fsim_base supplies the one the
   # fsim DLLs use, which tests and profilers can redirect.
@@ -1245,7 +1249,6 @@ if(FSIM_WITH_LLVM)
 endif()
 
 if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
-  fsim_add_sqlite()
   # The application is four layers: HIR lowering and artifact codecs;
   # simulation, tracing, coverage and SDF; sessions, phases and workspaces;
   # and the Tcl console with the CLI composition root.
@@ -1479,7 +1482,6 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
   target_link_libraries(
     fsim_application
     PUBLIC fsim_simulation
-    PRIVATE fsim_sqlite
   )
   if(FSIM_WITH_LLVM)
     # FSIM_HAS_LLVM changes the layout of types every application layer

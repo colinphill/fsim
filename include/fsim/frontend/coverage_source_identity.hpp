@@ -60,6 +60,15 @@ make_code_coverage_source_identity(const std::filesystem::path& checkout_root,
     std::span<const std::byte> contents,
     CodeCoverageSourceIdentityLimits limits = { }) noexcept;
 
+// The same identity from the content's size and SHA-256 digest, for sources
+// known only through a compiled object.
+[[nodiscard]] CodeCoverageSourceIdentityResult
+make_code_coverage_source_identity(const std::filesystem::path& checkout_root,
+    const std::filesystem::path& source_path,
+    std::size_t content_bytes,
+    const support::Sha256::Digest& content_digest,
+    CodeCoverageSourceIdentityLimits limits = { }) noexcept;
+
 [[nodiscard]] std::string code_coverage_source_content_hex(
     const CodeCoverageSourceIdentity& identity);
 

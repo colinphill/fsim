@@ -3,7 +3,7 @@
 
 #include "../diagnostic/artifact_identity.hpp"
 #include "path_validation.hpp"
-#include "tree_permissions.hpp"
+#include "fsim/artifact/container.hpp"
 #include "fsim/support/bounded_bytes.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
@@ -34,7 +34,8 @@ constexpr std::array<char, 8> kMagic{'F', 'S', 'I', 'M', 'D', 'E', 'S', '\0'};
 constexpr std::string_view kSchemaCode = "FSIM-ART-0010";
 constexpr std::string_view kValueCode = "FSIM-ART-0011";
 constexpr std::string_view kIoCode = "FSIM-ART-0012";
-std::atomic_uint64_t staging_sequence{};
+// The metadata record holds indexes and provenance, never state payloads.
+constexpr std::uint64_t kMaximumDesignMetadataBytes = 1ULL << 30U;
 
 void report(
     diagnostic::Engine& diagnostics,
@@ -749,102 +750,6 @@ bool validate(
   return !diagnostics.has_error();
 }
 
-std::filesystem::path staging_path(const std::filesystem::path& destination) {
-  return detail::staging_path(destination, staging_sequence);
-}
-
-void make_writable(const std::filesystem::path& root) noexcept {
-  std::error_code error;
-  for (auto iterator =
-           support::native_fs::recursive_directory_iterator(root, error),
-       end = std::filesystem::recursive_directory_iterator{};
-       !error && iterator != end; iterator.increment(error)) {
-    support::native_fs::permissions(
-        iterator->path(), std::filesystem::perms::owner_all,
-        std::filesystem::perm_options::add, error);
-    error.clear();
-  }
-  support::native_fs::permissions(
-      root, std::filesystem::perms::owner_all,
-      std::filesystem::perm_options::add, error);
-}
-
-class Cleanup {
- public:
-  explicit Cleanup(std::filesystem::path path) : path_(std::move(path)) {}
-  ~Cleanup() {
-    if (!path_.empty()) {
-      make_writable(path_);
-      std::error_code error;
-      support::native_fs::remove_all(path_, error);
-    }
-  }
-  void release() noexcept { path_.clear(); }
-
- private:
-  std::filesystem::path path_;
-};
-
-bool write_file(
-    const std::filesystem::path& path,
-    const std::string_view bytes,
-    diagnostic::Engine& diagnostics) {
-  std::error_code error;
-  support::native_fs::create_directories(path.parent_path(), error);
-  auto output = support::native_fs::open_ofstream(path, std::ios::binary | std::ios::trunc);
-  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  if (error || !output) {
-    report(
-        diagnostics, kIoCode,
-        "cannot write design payload"
-            + (error ? ": " + error.message() : std::string{}),
-        support::path_to_utf8(path));
-    return false;
-  }
-  return true;
-}
-
-std::optional<bool> file_checksum_matches(
-    const std::filesystem::path& path,
-    const std::string_view expected,
-    diagnostic::Engine& diagnostics) {
-  auto input = support::native_fs::open_ifstream(path, std::ios::binary);
-  if (!input) {
-    report(diagnostics, kIoCode, "cannot read generated design payload",
-        support::path_to_utf8(path));
-    return std::nullopt;
-  }
-  support::PayloadChecksumVerifier checksum{expected};
-  std::array<char, 64 * 1024> buffer{};
-  while (input) {
-    input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    const auto count = input.gcount();
-    if (count > 0) {
-      checksum.update(std::string_view{
-          buffer.data(), static_cast<std::size_t>(count)});
-    }
-  }
-  if (!input.eof()) {
-    report(diagnostics, kIoCode, "cannot read generated design payload",
-        support::path_to_utf8(path));
-    return std::nullopt;
-  }
-  return checksum.matches();
-}
-
-bool make_read_only(
-    const std::filesystem::path& root,
-    diagnostic::Engine& diagnostics) {
-  const auto error = detail::set_tree_read_only_permissions(root);
-  if (error) {
-    report(
-        diagnostics, kIoCode,
-        "cannot make staged design read-only: " + error.message(),
-        support::path_to_utf8(root));
-  }
-  return !error;
-}
-
 }  // namespace
 
 std::string compute_design_digest(const DesignMetadata& metadata) {
@@ -1213,43 +1118,68 @@ std::optional<DesignMetadata> deserialize_design_metadata(
 }
 
 std::optional<DesignMetadata> load_design_metadata(
-    const std::filesystem::path& directory,
+    ContainerReader& design,
     diagnostic::Engine& diagnostics) {
-  const auto path = directory / kDesignMetadataFilename;
-  auto input = support::native_fs::open_ifstream(path, std::ios::binary);
-  if (!input) {
+  std::string failure;
+  auto bytes = design.read(
+      kDesignMetadataFilename, kMaximumDesignMetadataBytes, failure);
+  if (!bytes) {
     report(
-        diagnostics, kIoCode, "cannot open .fsimdesign metadata",
-        support::path_to_utf8(path));
-    return std::nullopt;
-  }
-  std::ostringstream contents;
-  contents << input.rdbuf();
-  if (!input.good() && !input.eof()) {
-    report(
-        diagnostics, kIoCode, "cannot read .fsimdesign metadata",
-        support::path_to_utf8(path));
+        diagnostics, kIoCode, "cannot read .fsimdesign metadata: "
+            + (failure.empty() ? "it is missing" : failure),
+        support::path_to_utf8(design.path()));
     return std::nullopt;
   }
   return deserialize_design_metadata(
-      contents.str(), support::path_to_utf8(path), diagnostics);
+      *bytes, support::path_to_utf8(design.path()), diagnostics);
+}
+
+std::optional<ContainerReader> open_design(
+    const std::filesystem::path& path,
+    diagnostic::Engine& diagnostics) {
+  std::error_code code;
+  if (support::native_fs::exists(path, code)
+      && support::native_fs::is_directory(path, code)) {
+    report(
+        diagnostics, kSchemaCode,
+        "this .fsimdesign is a directory written by an older fsim; "
+        "elaborate the design again",
+        support::path_to_utf8(path));
+    return std::nullopt;
+  }
+  std::string failure;
+  auto design = ContainerReader::open(path, kDesignArtifactKind, failure);
+  if (!design) {
+    report(diagnostics, kIoCode, "cannot open .fsimdesign: " + failure,
+        support::path_to_utf8(path));
+  }
+  return design;
+}
+
+std::optional<DesignMetadata> load_design_metadata(
+    const std::filesystem::path& path,
+    diagnostic::Engine& diagnostics) {
+  auto design = open_design(path, diagnostics);
+  return design ? load_design_metadata(*design, diagnostics) : std::nullopt;
 }
 
 bool publish_design(
     const std::filesystem::path& destination,
     const DesignMetadata& metadata,
     const std::vector<library::PortablePayload>& payloads,
-    const std::span<const GeneratedDesignPayload> generated_payloads,
     diagnostic::Engine& diagnostics) {
   if (destination.empty()) {
     report(diagnostics, kIoCode, "design output path must not be empty");
     return false;
   }
+  // A file is replaced; a directory is an older fsim's design layout.
   std::error_code exists_error;
-  if (support::native_fs::exists(destination, exists_error) || exists_error) {
+  const bool exists = support::native_fs::exists(destination, exists_error);
+  if (exists_error
+      || (exists && support::native_fs::is_directory(destination, exists_error))) {
     report(
         diagnostics, kIoCode,
-        "design output already exists or cannot be inspected",
+        "design output is a directory or cannot be inspected",
         support::path_to_utf8(destination));
     return false;
   }
@@ -1311,19 +1241,6 @@ bool publish_design(
       return false;
     }
   }
-  for (const auto& payload : generated_payloads) {
-    const auto path = support::path_to_utf8(payload.path);
-    const auto found = expected.find(path);
-    if (!safe_relative_path(payload.path) || found == expected.end()
-        || !supplied.insert(path).second || !payload.write
-        || found->second != payload.checksum) {
-      report(
-          diagnostics, kIoCode,
-          "generated design payload is unsafe, duplicate, unindexed, or has "
-          "a checksum mismatch: " + path);
-      return false;
-    }
-  }
   if (supplied.size() != expected.size()) {
     report(diagnostics, kIoCode, "design payload set is incomplete");
     return false;
@@ -1338,68 +1255,31 @@ bool publish_design(
         "cannot create design output parent: " + parent_error.message());
     return false;
   }
-  const auto staging = staging_path(destination);
-  Cleanup cleanup{staging};
-  std::error_code stage_error;
-  if (!support::native_fs::create_directory(staging, stage_error) || stage_error) {
-    report(
-        diagnostics, kIoCode,
-        "cannot create design staging directory: " + stage_error.message());
-    return false;
+  std::string failure;
+  auto writer = ContainerWriter::create(
+      parent / destination.filename(), kDesignArtifactKind,
+      ContainerPages::bulk, failure);
+  std::string roots;
+  for (const auto& root : metadata.roots) {
+    roots += roots.empty() ? "" : " ";
+    roots += root.target;
   }
+  bool written = writer.has_value()
+      && writer->meta("format", std::to_string(kDesignFormatVersion), failure)
+      && writer->meta("producer", metadata.producer, failure)
+      && writer->meta("roots", roots, failure);
   for (const auto& payload : payloads) {
-    if (!write_file(staging / payload.path, payload.bytes, diagnostics)) {
-      return false;
-    }
+    written = written
+        && writer->put(support::path_to_utf8(payload.path), payload.bytes, failure);
   }
-  for (const auto& payload : generated_payloads) {
-    const auto path = staging / payload.path;
-    std::error_code directory_error;
-    support::native_fs::create_directories(path.parent_path(), directory_error);
-    if (directory_error || !payload.write(path, diagnostics)) {
-      if (directory_error) {
-        report(diagnostics, kIoCode,
-            "cannot create generated design payload directory: "
-                + directory_error.message(),
-            support::path_to_utf8(path.parent_path()));
-      }
-      return false;
-    }
-    const auto checksum = file_checksum_matches(path, payload.checksum, diagnostics);
-    if (!checksum || !*checksum) {
-      if (checksum) {
-        report(diagnostics, kIoCode,
-            "generated design payload checksum mismatch",
-            support::path_to_utf8(path));
-      }
-      return false;
-    }
-  }
-  if (!write_file(staging / kDesignMetadataFilename, canonical, diagnostics)
-      || !make_read_only(staging, diagnostics)) {
+  written = written && writer->put(kDesignMetadataFilename, canonical, failure);
+  if (!written || !writer->publish(failure)) {
+    report(diagnostics, kIoCode, "cannot publish design artifact: " + failure,
+        support::path_to_utf8(destination));
     return false;
   }
-  std::error_code install_error;
-  support::native_fs::install_staged_directory(
-      staging, destination, install_error);
-  if (install_error) {
-    report(
-        diagnostics, kIoCode,
-        "cannot atomically install design artifact: " + install_error.message());
-    return false;
-  }
-  cleanup.release();
   return true;
 }
 
-bool publish_design(
-    const std::filesystem::path& destination,
-    const DesignMetadata& metadata,
-    const std::vector<library::PortablePayload>& payloads,
-    diagnostic::Engine& diagnostics) {
-  return publish_design(
-      destination, metadata, payloads,
-      std::span<const GeneratedDesignPayload>{}, diagnostics);
-}
 
 }  // namespace fsim::artifact

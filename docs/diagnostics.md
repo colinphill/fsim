@@ -29,10 +29,9 @@ metadata rather than a token; CRLF and CR line endings retain the same logical
 line accounting as LF while physical byte offsets remain source-accurate.
 
 The severity column is the severity assigned by the current emitter. All
-entries are errors unless explicitly marked as warnings. The four strings
-`FSIM-OBJECT-CACHE-V2`, `FSIM-CACHE-LOCK-V1`, `FSIM-DESIGN-CACHE-V1`, and
-`FSIM-DESIGN-CACHE-V3` are persistent-format markers, not diagnostics, and
-are therefore excluded.
+entries are errors unless explicitly marked as warnings. The three strings
+`FSIM-CACHE-LOCK-V1`, `FSIM-DESIGN-CACHE-V1`, and `FSIM-DESIGN-CACHE-V3` are
+persistent-format markers, not diagnostics, and are therefore excluded.
 
 The governed VPI boundary reports ABI, object, iterator, value, callback,
 control, system-callable, I/O, plug-in, and checkpoint failures through the
@@ -3089,8 +3088,7 @@ one stable diagnostic from the five-code FST reader family.
 | `FSIM-SC-C002` | error | A SystemC source set contains no C++ sources. |
 | `FSIM-SC-C003` | error | A SystemC source or dependency is missing, unreadable, invalid, or cannot be hashed/scanned. |
 | `FSIM-SC-C004` | error | A compiler option conflicts with fsim's shared-library build contract. |
-| `FSIM-SC-C005` | error | A SystemC plug-in cache/lock/staging directory cannot be created, inspected, or cleaned safely. |
-| `FSIM-SC-C006` | error | The per-key SystemC plug-in cache lock cannot be acquired. |
+| `FSIM-SC-C005` | error | A SystemC plug-in build directory cannot be created, inspected, or cleaned safely. |
 | `FSIM-SC-C007` | error | The host compiler is unavailable, failed to start or complete, exited unsuccessfully, or produced no shared library. |
 | `FSIM-SC-C008` | error | A compiled plug-in or its versioned key/size/checksum commit record cannot be hashed, written, or atomically published. |
 | `FSIM-SC-C009` | error | A compiled SystemC plug-in failed image load, entry-point, ABI, initialization, or transactional registration validation. |
@@ -3100,7 +3098,7 @@ one stable diagnostic from the five-code FST reader family.
 | `FSIM-SC-C013` | error | A tracked plug-in input or compiler identity changed during compilation; the unpublished output was discarded. |
 | `FSIM-SC-I001` | error | Incremental SystemC object or plug-in metadata has an unsupported, truncated, or trailing schema/producer encoding; mismatches name found/required format, ABI, SCV, and producer identities and direct regeneration. |
 | `FSIM-SC-I002` | error | Incremental SystemC metadata has invalid ABI, toolchain, path, checksum, dependency, option, factory, schema, or digest values. |
-| `FSIM-SC-I003` | error | Incremental SystemC artifact payload loading or transactional read-only publication failed, including checksum, overwrite, staging, or permission errors. |
+| `FSIM-SC-I003` | error | Incremental SystemC artifact payload loading or publication failed, including container, checksum, overwrite, and private-copy errors. |
 | `FSIM-SC-I004` | error | One SystemC translation-unit compile or dependency scan is invalid, unavailable, mutated, unsafe, unsuccessful, or produced no object. |
 | `FSIM-SC-I005` | error | Ordered SystemC object linking or native plug-in loading found duplicate/incompatible inputs, unsafe settings, invalid exports/entry points, a stale producer identity, ABI failure, or no published factories; producer diagnostics name found/required compiler, target, fingerprint, and version before native image open. |
 | `FSIM-SC-I006` | error | Explicit SystemC plug-in inputs contain the same logical library more than once. |

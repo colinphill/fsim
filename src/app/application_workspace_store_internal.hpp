@@ -19,12 +19,22 @@ constexpr std::size_t kMaximumTextBytes = 1024U * 1024U;
     const std::filesystem::path&, std::string& error);
 [[nodiscard]] bool safe_descendant(const std::filesystem::path& root,
     const std::filesystem::path& relative, std::string& error);
+[[nodiscard]] std::string_view artifact_extension(ArtifactKind);
+// The file name stem a committed artifact is given before collisions.
+[[nodiscard]] std::string artifact_name(const ArtifactRecord&);
+[[nodiscard]] bool valid_artifact_id(std::string_view);
 [[nodiscard]] bool managed_artifact_path(const ArtifactRecord&);
+// Removes the library's artifact files, and the pending or temporary files
+// of interrupted writers, that `retained` does not name. Callers hold the
+// library's writer lock.
+void collect_artifacts(const std::filesystem::path& library,
+    const std::set<std::string>& retained) noexcept;
 [[nodiscard]] bool valid_record(const ArtifactRecord&, std::string& error);
 [[nodiscard]] std::string new_revision();
-void remove_revision(const std::filesystem::path&) noexcept;
-void collect_revisions(const std::filesystem::path& root,
-    const std::set<std::string>& retained) noexcept;
+// How to delete state an older fsim left read-only at `path`, in this
+// platform's commands. fsim never deletes it itself.
+[[nodiscard]] std::string legacy_removal_advice(const std::filesystem::path& path);
+void remove_artifact(const std::filesystem::path&) noexcept;
 [[nodiscard]] bool replace_text(const std::filesystem::path& destination,
     std::string_view text, std::string& error);
 [[nodiscard]] std::optional<std::string> read_text(

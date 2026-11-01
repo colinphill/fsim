@@ -13,12 +13,24 @@ workspace/
     libraries/
       work/
         library.sqlite3
-        ... fsim-managed compilation artifacts ...
+        counter.fsimobj
+        counter-rtl.fsimobj
+        util_pkg-body.fsimobj
     snapshots/
-      default/
-      regression/
+      default.fsimdesign
+      regression.fsimdesign
     cache/
+      compiled-hir.sqlite3
+      static-kernel.sqlite3
+      systemc.sqlite3
 ```
+
+Every artifact and cache is a single SQLite file. Objects are named after
+their primary unit (`<entity>-<architecture>` for an architecture,
+`<package>-body` for a package body). No file is read-only, so deleting the
+`.fsim` directory removes all workspace state, and deleting `.fsim/cache` only
+causes regeneration. Artifacts record the locations and content digests of their
+sources, never the source text.
 
 `work` is the default compilation library. Other local libraries use
 `.fsim/libraries/<name>`. Each library's SQLite catalog records the source
@@ -160,8 +172,10 @@ fsim simulate --snapshot mixed
 Compilation tracks each C++ translation unit independently. Linking uses the
 current objects in the target library and records the resulting plugin's
 exported factories in the catalog. After recompiling a translation unit, link
-that library again before elaboration. Publication uses fresh native image
-paths so a previous snapshot can retain a loaded plugin on Windows.
+that library again before elaboration. SystemC objects and plug-ins are stored
+as single artifact files; linking and loading use private copies under the
+system temporary directory that are removed when fsim exits (or, after a crash,
+by the next fsim run).
 
 ## Progress, debugging, and simulation controls
 

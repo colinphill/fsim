@@ -308,11 +308,30 @@ bool merge_trace_archive(CompilationWorkspace& result,
     return true;
 }
 
+// Every object names its sources, includes too, by path and content digest.
+// Two objects naming one path with different contents were compiled from
+// different versions of that file (a header edited and only some of its
+// includers recompiled); like a changed package, that refuses the design.
 bool append_selected_sources(CompilationWorkspace& result,
     CompilationWorkspace& input, const semantic::CompiledDesign& selected,
+    const std::filesystem::path& object,
+    std::map<std::string, std::pair<std::string, std::filesystem::path>>& source_versions,
     std::map<std::string, std::string>& known_sources,
     diagnostic::Engine& diagnostics)
 {
+    for (const auto& source : input.hdl_sources) {
+        const auto [found, inserted] = source_versions.emplace(
+            source_path_key(source.path), std::pair { source.content_digest, object });
+        if (!inserted && found->second.first != source.content_digest) {
+            diagnostics.error("FSIM-WS-002",
+                "objects '" + support::path_to_utf8(found->second.second.filename())
+                    + "' and '" + support::path_to_utf8(object.filename())
+                    + "' were compiled from different contents of '"
+                    + support::path_to_utf8(source.path)
+                    + "'; recompile the sources that use it");
+            return false;
+        }
+    }
     std::set<std::string> selected_paths;
     for (const auto& source : selected.semantics.source_files()) {
         selected_paths.insert(source_path_key(
@@ -323,15 +342,7 @@ bool append_selected_sources(CompilationWorkspace& result,
         if (!selected_paths.contains(key)) {
             continue;
         }
-        const auto [found, inserted] = known_sources.emplace(
-            key, source.content_digest);
-        if (!inserted && found->second != source.content_digest) {
-            diagnostics.error(std::string { workspace_object_diagnostic },
-                "managed object source identity collides with different content: "
-                    + support::path_to_utf8(source.path));
-            return false;
-        }
-        if (inserted) {
+        if (known_sources.emplace(key, source.content_digest).second) {
             result.hdl_sources.push_back(std::move(source));
         }
     }
@@ -394,6 +405,7 @@ std::optional<CompilationWorkspace> load_workspace_objects(
     CompilationWorkspace result;
     std::vector<semantic::CompiledDesign> bundles;
     std::set<std::string> known_units;
+    std::map<std::string, std::pair<std::string, std::filesystem::path>> source_versions;
     std::map<std::string, std::string> known_sources;
     CompilerEnvironment environment;
     // The provider has the largest compiler package set; every other set
@@ -464,7 +476,7 @@ std::optional<CompilationWorkspace> load_workspace_objects(
         }
         if (!merge_trace_archive(result, *input, diagnostics)
             || !append_selected_sources(result, *input, *projected.design,
-                known_sources, diagnostics)) {
+                selection.path, source_versions, known_sources, diagnostics)) {
             return std::nullopt;
         }
         const auto release = input->systemverilog_uvm_provenance.release;

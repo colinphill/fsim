@@ -2,6 +2,7 @@
 #include "application_test_support.hpp"
 #include "application_workflow_test_support.hpp"
 #include "governed_process_limits.hpp"
+#include "../support/container_test_support.hpp"
 
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
@@ -25,23 +26,6 @@
 #include <vector>
 
 namespace fsim::test {
-namespace {
-
-    std::string read_artifact_payload(const std::filesystem::path& path)
-    {
-        std::ifstream input(path, std::ios::binary);
-        assert(input);
-        const std::string bytes {
-            std::istreambuf_iterator<char> { input },
-            std::istreambuf_iterator<char> { }
-        };
-        assert(input.good() || input.eof());
-        // The fixture relocates the artifact later. Returning only the bytes
-        // closes this handle before Windows checks the parent directory rename.
-        return bytes;
-    }
-
-} // namespace
 
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
@@ -57,6 +41,11 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
+        // Objects and designs are single container files.
+        if (std::filesystem::is_regular_file(source_root)) {
+            std::filesystem::copy_file(source_root, destination);
+            return;
+        }
         std::filesystem::create_directories(destination);
         for (const auto& entry :
             std::filesystem::recursive_directory_iterator(source_root)) {
@@ -439,18 +428,9 @@ end architecture;
     const auto stale_vhdl_object =
         directory / "artifact-vhdl-stale.fsimobj";
     copy_artifact_tree(vhdl_object, stale_vhdl_object);
-    const auto stale_vhdl_metadata_path = stale_vhdl_object
-        / artifact::kObjectMetadataFilename;
-    std::filesystem::permissions(
-        stale_vhdl_metadata_path, std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream stale_output(
-            stale_vhdl_metadata_path, std::ios::binary | std::ios::trunc);
-        stale_output << artifact::serialize_object_metadata(
-            changed_vhdl_dependency);
-        assert(stale_output.good());
-    }
+    test::rewrite_container_payloads(stale_vhdl_object,
+        { { std::string { artifact::kObjectMetadataFilename },
+            artifact::serialize_object_metadata(changed_vhdl_dependency) } });
     const std::array stale_vhdl_inputs { stale_vhdl_object };
     diagnostic::Engine stale_vhdl_diagnostics;
     assert(!app::load_objects(stale_vhdl_inputs, stale_vhdl_diagnostics));
@@ -473,9 +453,9 @@ end architecture;
         [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ART-0001"
                 && diagnostic.message
-                == "unsupported .fsimobj identity: found format 10, "
+                == "unsupported .fsimobj identity: found format 11, "
                    "portable-unit schema 16, and compiled-HIR schema 3; "
-                   "required format 9, portable-unit schema 16, and "
+                   "required format 10, portable-unit schema 16, and "
                    "compiled-HIR schema 3; regenerate .fsimobj with this "
                    "fsim build";
         }));
@@ -585,15 +565,15 @@ end architecture;
         &artifact::DesignPayload::kind);
     assert(hierarchy_paths_payload != design_metadata->payloads.end());
     assert(hierarchy_paths_payload->artifact == "state/hierarchy-paths.bin");
-    const auto hierarchy_paths_bytes = read_artifact_payload(
-        design / hierarchy_paths_payload->artifact);
+    const auto hierarchy_paths_bytes = fsim::test::read_container_payload(
+        design, support::path_to_utf8(hierarchy_paths_payload->artifact));
     assert(hierarchy_paths_bytes.starts_with("FSIMHPT1"));
     const auto design_ir_payload = std::ranges::find(
         design_metadata->payloads, std::string { "design-ir" },
         &artifact::DesignPayload::kind);
     assert(design_ir_payload != design_metadata->payloads.end());
-    const auto design_ir_bytes = read_artifact_payload(
-        design / design_ir_payload->artifact);
+    const auto design_ir_bytes = fsim::test::read_container_payload(
+        design, support::path_to_utf8(design_ir_payload->artifact));
     assert(design_ir_bytes.starts_with("FSIMDIR1"));
     auto stale_design_ir_bytes = design_ir_bytes;
     stale_design_ir_bytes[8] = static_cast<char>(
@@ -637,8 +617,8 @@ end architecture;
                 || payload.kind == "sv-constraint-hir"
                 || payload.kind == "vhdl-hir";
         }));
-    const auto compiled_hir_bytes = read_artifact_payload(
-        design / compiled_hir_payload->artifact);
+    const auto compiled_hir_bytes = fsim::test::read_container_payload(
+        design, support::path_to_utf8(compiled_hir_payload->artifact));
     assert(compiled_hir_bytes.starts_with("FSIMCHIR"));
     diagnostic::Engine compiled_hir_diagnostics;
     const auto compiled_hir = app::deserialize_compiled_hir_bundle(
@@ -776,18 +756,8 @@ end architecture;
     const auto stale_design =
         directory / "artifact-vhdl-stale.fsimdesign";
     copy_artifact_tree(design, stale_design);
-    const auto stale_design_metadata_path = stale_design
-        / artifact::kDesignMetadataFilename;
-    std::filesystem::permissions(
-        stale_design_metadata_path, std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream stale_output(
-            stale_design_metadata_path, std::ios::binary | std::ios::trunc);
-        stale_output << artifact::serialize_design_metadata(
-            changed_design_dependency);
-        assert(stale_output.good());
-    }
+    fsim::test::rewrite_container_payloads(stale_design, { { std::string { artifact::kDesignMetadataFilename },
+        artifact::serialize_design_metadata(changed_design_dependency) } });
     diagnostic::Engine stale_design_diagnostics;
     assert(!app::load_design_artifact(stale_design, stale_design_diagnostics));
     assert(std::ranges::any_of(
@@ -801,19 +771,8 @@ end architecture;
     const auto missing_verilog_design =
         directory / "artifact-verilog-provenance-missing.fsimdesign";
     copy_artifact_tree(design, missing_verilog_design);
-    const auto missing_verilog_metadata_path = missing_verilog_design
-        / artifact::kDesignMetadataFilename;
-    std::filesystem::permissions(
-        missing_verilog_metadata_path, std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream missing_output(
-            missing_verilog_metadata_path,
-            std::ios::binary | std::ios::trunc);
-        missing_output << artifact::serialize_design_metadata(
-            missing_verilog_provenance);
-        assert(missing_output.good());
-    }
+    fsim::test::rewrite_container_payloads(missing_verilog_design, { { std::string { artifact::kDesignMetadataFilename },
+        artifact::serialize_design_metadata(missing_verilog_provenance) } });
     diagnostic::Engine missing_verilog_diagnostics;
     assert(!app::load_design_artifact(
         missing_verilog_design, missing_verilog_diagnostics));
@@ -833,20 +792,8 @@ end architecture;
     const auto missing_hierarchy_paths_design =
         directory / "artifact-hierarchy-paths-missing.fsimdesign";
     copy_artifact_tree(design, missing_hierarchy_paths_design);
-    const auto missing_hierarchy_paths_metadata_path =
-        missing_hierarchy_paths_design / artifact::kDesignMetadataFilename;
-    std::filesystem::permissions(
-        missing_hierarchy_paths_metadata_path,
-        std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream missing_output(
-            missing_hierarchy_paths_metadata_path,
-            std::ios::binary | std::ios::trunc);
-        missing_output << artifact::serialize_design_metadata(
-            missing_hierarchy_paths);
-        assert(missing_output.good());
-    }
+    fsim::test::rewrite_container_payloads(missing_hierarchy_paths_design, { { std::string { artifact::kDesignMetadataFilename },
+        artifact::serialize_design_metadata(missing_hierarchy_paths) } });
     diagnostic::Engine missing_hierarchy_paths_diagnostics;
     assert(!app::load_design_artifact(
         missing_hierarchy_paths_design, missing_hierarchy_paths_diagnostics));
@@ -1504,26 +1451,8 @@ end architecture;
             return diagnostic.code == "FSIM-UVM-STATE-001";
         }));
     const auto corrupt_uvm_design = directory / "artifact-corrupt-uvm.fsimdesign";
-    std::filesystem::create_directories(corrupt_uvm_design);
-    for (const auto& entry :
-        std::filesystem::recursive_directory_iterator(active_design)) {
-        const auto destination = corrupt_uvm_design
-            / entry.path().lexically_relative(active_design);
-        if (entry.is_directory()) {
-            std::filesystem::create_directories(destination);
-        } else if (entry.is_regular_file()) {
-            std::filesystem::copy_file(entry.path(), destination);
-            std::filesystem::permissions(
-                destination, std::filesystem::perms::owner_write,
-                std::filesystem::perm_options::add);
-        }
-    }
-    {
-        std::ofstream corrupt(
-            corrupt_uvm_design / "state" / "sv-uvm.bin",
-            std::ios::binary | std::ios::app);
-        corrupt.put('\0');
-    }
+    std::filesystem::copy_file(active_design, corrupt_uvm_design);
+    fsim::test::append_container_payload(corrupt_uvm_design, "state/sv-uvm.bin", std::string(1U, '\0'));
     diagnostic::Engine corrupt_uvm_diagnostics;
     assert(!app::load_design_artifact(
         corrupt_uvm_design, corrupt_uvm_diagnostics));
@@ -1531,27 +1460,8 @@ end architecture;
     std::filesystem::remove_all(corrupt_uvm_design);
     const auto corrupt_compiled_hir_design
         = directory / "artifact-corrupt-compiled-hir.fsimdesign";
-    std::filesystem::create_directories(corrupt_compiled_hir_design);
-    for (const auto& entry :
-        std::filesystem::recursive_directory_iterator(active_design)) {
-        const auto destination = corrupt_compiled_hir_design
-            / entry.path().lexically_relative(active_design);
-        if (entry.is_directory()) {
-            std::filesystem::create_directories(destination);
-        } else if (entry.is_regular_file()) {
-            std::filesystem::copy_file(entry.path(), destination);
-            std::filesystem::permissions(
-                destination, std::filesystem::perms::owner_write,
-                std::filesystem::perm_options::add);
-        }
-    }
-    {
-        std::ofstream corrupt(
-            corrupt_compiled_hir_design
-                / "state" / "compiled-design.fsimhir",
-            std::ios::binary | std::ios::app);
-        corrupt.put('\0');
-    }
+    std::filesystem::copy_file(active_design, corrupt_compiled_hir_design);
+    fsim::test::append_container_payload(corrupt_compiled_hir_design, "state/compiled-design.fsimhir", std::string(1U, '\0'));
     diagnostic::Engine corrupt_compiled_hir_diagnostics;
     assert(!app::load_design_artifact(
         corrupt_compiled_hir_design, corrupt_compiled_hir_diagnostics));

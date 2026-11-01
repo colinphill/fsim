@@ -237,6 +237,28 @@ std::string Sha256::hex(const Digest& digest) {
     return result;
 }
 
+std::optional<Sha256::Digest> Sha256::from_hex(const std::string_view text) noexcept
+{
+    if (text.size() != 64U)
+        return std::nullopt;
+    const auto nibble = [](const char character) -> int {
+        if (character >= '0' && character <= '9')
+            return character - '0';
+        if (character >= 'a' && character <= 'f')
+            return character - 'a' + 10;
+        return -1;
+    };
+    Digest digest {};
+    for (std::size_t index = 0U; index < digest.size(); ++index) {
+        const auto high = nibble(text[2U * index]);
+        const auto low = nibble(text[2U * index + 1U]);
+        if (high < 0 || low < 0)
+            return std::nullopt;
+        digest[index] = static_cast<std::uint8_t>((high << 4) | low);
+    }
+    return digest;
+}
+
 void Sha256::transform(const std::byte* block) noexcept {
 #if defined(FSIM_SHA256_X86_INTRINSICS)
     if (supports_sha256_instructions()) {

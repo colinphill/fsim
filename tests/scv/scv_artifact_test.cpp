@@ -23,21 +23,6 @@ std::string checksum(const std::string_view bytes)
     return fsim::support::Sha256::hex(fsim::support::Sha256::digest(bytes));
 }
 
-void make_writable(const std::filesystem::path& root)
-{
-    std::error_code error;
-    for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
-        !error && iterator != end; iterator.increment(error)) {
-        std::filesystem::permissions(
-            iterator->path(), std::filesystem::perms::owner_all,
-            std::filesystem::perm_options::add, error);
-        error.clear();
-    }
-    std::filesystem::permissions(
-        root, std::filesystem::perms::owner_all,
-        std::filesystem::perm_options::add, error);
-}
-
 bool has_code(
     const fsim::diagnostic::Engine& diagnostics,
     const std::string_view code)
@@ -109,16 +94,13 @@ int main()
     const auto relocated_metadata = fsim::library::load_metadata(
         relocated, "scv_models", relocation_diagnostics);
     assert(relocated_metadata == metadata && !relocation_diagnostics.has_error());
-    std::string relocated_bytes;
-    {
-        std::ifstream relocated_payload(
-            relocated / metadata.native_artifacts.front().artifact,
-            std::ios::binary);
-        relocated_bytes.assign(
-            std::istreambuf_iterator<char> { relocated_payload },
-            std::istreambuf_iterator<char> { });
-    }
-    assert(relocated_bytes == native_bytes);
+    auto read_failure = fsim::library::PayloadReadFailure::none;
+    std::string read_error;
+    const auto relocated_bytes = fsim::library::read_payload(relocated,
+        metadata.native_artifacts.front().artifact,
+        metadata.native_artifacts.front().checksum, std::nullopt, read_failure,
+        read_error);
+    assert(relocated_bytes == std::optional { native_bytes });
 
     auto stale_identity = relocated_metadata->native_artifacts.front()
                               .scv_compatibility;
@@ -163,6 +145,5 @@ int main()
     assert(corrupt_diagnostics.has_error());
     assert(!std::filesystem::exists(rejected));
 
-    make_writable(relocated);
     std::filesystem::remove_all(root);
 }

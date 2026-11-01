@@ -30,6 +30,11 @@ void ApplicationTestFixture::test_verilog_artifact_matrix(
     const auto copy_artifact_tree = [](
         const std::filesystem::path& source_root,
         const std::filesystem::path& destination) {
+        // Objects and designs are single container files.
+        if (std::filesystem::is_regular_file(source_root)) {
+            std::filesystem::copy_file(source_root, destination);
+            return;
+        }
         std::filesystem::create_directories(destination);
         for (const auto& entry :
             std::filesystem::recursive_directory_iterator(source_root)) {

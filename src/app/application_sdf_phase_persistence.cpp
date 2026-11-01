@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/sdf_phase_persistence.hpp"
 
+#include "fsim/artifact/container.hpp"
 #include "fsim/support/native_filesystem.hpp"
+#include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
+#include <cstring>
 #include <fstream>
 #include <ranges>
 
@@ -98,7 +101,7 @@ bool append_sdf_phase_payloads(const BuiltProject& project,
     return true;
 }
 
-bool restore_sdf_phase_artifacts(const std::filesystem::path& directory,
+bool restore_sdf_phase_artifacts(artifact::ContainerReader& design,
     const artifact::DesignMetadata& metadata, BuiltProject& project,
     diagnostic::Engine& diagnostics, const SdfPortableArchiveLimits limits)
 {
@@ -111,25 +114,24 @@ bool restore_sdf_phase_artifacts(const std::filesystem::path& directory,
                 ".fsimdesign is missing its indexed SDF phase payload");
             return false;
         }
-        auto input = support::native_fs::open_ifstream(
-            directory / index->artifact, std::ios::binary);
-        std::vector<std::byte> bytes;
-        char value { };
-        while (input.get(value)) {
-            if (bytes.size() >= limits.max_bytes) {
-                diagnostics.error("FSIM-SDF-PORTABLE-004",
-                    ".fsimdesign SDF phase payload exceeds its byte limit");
-                return false;
-            }
-            bytes.push_back(std::byte { static_cast<unsigned char>(value) });
+        std::string error;
+        const auto entry = design.entry(support::path_to_utf8(index->artifact), error);
+        if (entry && entry->size > limits.max_bytes) {
+            diagnostics.error("FSIM-SDF-PORTABLE-004",
+                ".fsimdesign SDF phase payload exceeds its byte limit");
+            return false;
         }
-        const auto actual_checksum = support::Sha256::hex(
-            support::Sha256::digest(std::span { bytes }));
-        if (!input.eof() || actual_checksum != index->checksum) {
+        const auto stored = entry
+            ? design.read(entry->name, entry->size, error) : std::optional<std::string> { };
+        const auto actual_checksum = stored
+            ? support::Sha256::hex(support::Sha256::digest(*stored)) : std::string { };
+        if (!stored || actual_checksum != index->checksum) {
             diagnostics.error("FSIM-SDF-PORTABLE-002",
                 ".fsimdesign SDF phase payload is unreadable or corrupt");
             return false;
         }
+        std::vector<std::byte> bytes(stored->size());
+        std::memcpy(bytes.data(), stored->data(), stored->size());
         auto decoded = decode_sdf_portable_archive(bytes, annotation, limits);
         if (!decoded.ok()) {
             for (const auto& diagnostic : decoded.diagnostics)

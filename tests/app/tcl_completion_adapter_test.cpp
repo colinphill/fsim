@@ -118,13 +118,14 @@ void create_library_fixture(const fs::path& root, const std::string_view name)
 
 void write_snapshot_fixture(const fs::path& root)
 {
-    constexpr std::string_view revision = "r0123456789abcdef0123456789abcdef.fsimdesign";
-    const auto directory = root / ".fsim" / "snapshots" / "smoke";
-    fs::create_directories(directory / "revisions" / revision);
-    std::ofstream index { directory / "snapshot.index", std::ios::binary };
-    index << "FSIM-SNAPSHOT 1\n"
-          << revision << '\n';
-    if (!index) {
+    // Completion lists `<name>.fsimdesign` files; their content is not read.
+    const auto directory = root / ".fsim" / "snapshots";
+    fs::create_directories(directory);
+    std::ofstream snapshot { directory / "smoke.fsimdesign", std::ios::binary };
+    snapshot << "snapshot";
+    std::ofstream pending { directory / ".pending-r0-hidden.fsimdesign", std::ios::binary };
+    pending << "pending";
+    if (!snapshot || !pending) {
         throw std::runtime_error { "cannot write snapshot fixture" };
     }
 }

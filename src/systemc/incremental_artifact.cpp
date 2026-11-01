@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/incremental.hpp"
 
-#include "../artifact/tree_permissions.hpp"
+#include "fsim/artifact/container.hpp"
+#include "fsim/compiler/cache_support.hpp"
 #include "../diagnostic/artifact_identity.hpp"
 #include "fsim/support/bounded_bytes.hpp"
 #include "fsim/support/native_filesystem.hpp"
@@ -18,11 +19,19 @@
 #include <cctype>
 #include <fstream>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <span>
 #include <stdexcept>
 #include <system_error>
 #include <unordered_set>
+#include <vector>
+
+#if defined(_WIN32)
+#  include <process.h>
+#else
+#  include <unistd.h>
+#endif
 
 namespace fsim::systemc {
 namespace {
@@ -34,7 +43,6 @@ constexpr std::array<char, 8> kPluginMagic{
 constexpr std::string_view kSchemaCode = "FSIM-SC-I001";
 constexpr std::string_view kValueCode = "FSIM-SC-I002";
 constexpr std::string_view kIoCode = "FSIM-SC-I003";
-std::atomic_uint64_t staging_sequence{};
 
 void report(
     diagnostic::Engine& diagnostics,
@@ -497,106 +505,180 @@ bool validate_plugin(
     return !diagnostics.has_error();
 }
 
-std::optional<std::string> read_file(
-    const std::filesystem::path& path,
-    diagnostic::Engine& diagnostics,
-    const std::string_view description) {
-  auto input = support::native_fs::open_ifstream(path, std::ios::binary);
-  if (!input) {
-    report(
-        diagnostics, kIoCode,
-        "cannot open " + std::string{description}, support::path_to_utf8(path));
-    return std::nullopt;
-  }
-  std::ostringstream bytes;
-  bytes << input.rdbuf();
-  if (!input.good() && !input.eof()) {
-    report(
-        diagnostics, kIoCode,
-        "cannot read " + std::string{description}, support::path_to_utf8(path));
-    return std::nullopt;
-  }
-  return std::move(bytes).str();
+constexpr std::string_view kMetadataPayload = "metadata";
+// The largest native payload an artifact holds.
+constexpr std::uint64_t kMaximumNativeBytes = 4ULL * 1024U * 1024U * 1024U;
+
+std::uint64_t process_id() noexcept {
+#if defined(_WIN32)
+  return static_cast<std::uint64_t>(_getpid());
+#else
+  return static_cast<std::uint64_t>(::getpid());
+#endif
 }
 
-std::filesystem::path staging_path(const std::filesystem::path& destination) {
-  const auto serial = staging_sequence.fetch_add(1, std::memory_order_relaxed);
-  const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
-  return destination.parent_path()
-      / (".staging-" + std::to_string(tick) + "-"
-         + std::to_string(serial));
+constexpr std::string_view kPrivateDirectoryPrefix = "fsim-systemc-";
+
+// The process id in `fsim-systemc-<pid>-<tick>`, or nothing for any other
+// name.
+std::optional<std::uint64_t> private_directory_owner(const std::string_view name) {
+  if (!name.starts_with(kPrivateDirectoryPrefix)) {
+    return std::nullopt;
+  }
+  const auto rest = name.substr(kPrivateDirectoryPrefix.size());
+  const auto separator = rest.find('-');
+  if (separator == std::string_view::npos || separator == 0U || separator > 10U
+      || separator + 1U == rest.size()) {
+    return std::nullopt;
+  }
+  const auto digits = [](const std::string_view text) {
+    return std::ranges::all_of(
+        text, [](const char value) { return value >= '0' && value <= '9'; });
+  };
+  if (!digits(rest.substr(0U, separator)) || !digits(rest.substr(separator + 1U))) {
+    return std::nullopt;
+  }
+  return std::stoull(std::string{rest.substr(0U, separator)});
 }
 
-class Cleanup {
+// Removes the private directories of fsim processes that ended without
+// running their exit cleanup (a crash or a kill). A directory whose process
+// still exists, or cannot be inspected, is kept.
+void remove_abandoned_private_directories(const std::filesystem::path& temporary) noexcept {
+  std::error_code code;
+  auto iterator = support::native_fs::directory_iterator(temporary, code);
+  const std::filesystem::directory_iterator end;
+  std::vector<std::filesystem::path> abandoned;
+  while (!code && iterator != end) {
+    const auto status = iterator->symlink_status(code);
+    if (!code && support::native_fs::is_directory(status)) {
+      const auto owner =
+          private_directory_owner(support::path_to_utf8(iterator->path().filename()));
+      if (owner && *owner != process_id() && !compiler::detail::process_is_alive(*owner)) {
+        abandoned.push_back(iterator->path());
+      }
+    }
+    code.clear();
+    iterator.increment(code);
+  }
+  for (const auto& directory : abandoned) {
+    support::native_fs::remove_all(directory, code);
+  }
+}
+
+class PrivateDirectories final {
  public:
-  explicit Cleanup(std::filesystem::path path) : path_(std::move(path)) {}
-  ~Cleanup() {
-    if (path_.empty()) {
+  static PrivateDirectories& instance() {
+    static PrivateDirectories directories;
+    return directories;
+  }
+
+  PrivateDirectories(const PrivateDirectories&) = delete;
+  PrivateDirectories& operator=(const PrivateDirectories&) = delete;
+
+  ~PrivateDirectories() {
+    if (root_.empty()) {
       return;
     }
+    // A library still loaded on Windows keeps its file; the rest go.
     std::error_code error;
-    for (auto iterator =
-             support::native_fs::recursive_directory_iterator(path_, error),
-         end = std::filesystem::recursive_directory_iterator{};
-         !error && iterator != end; iterator.increment(error)) {
-      support::native_fs::permissions(
-          iterator->path(), std::filesystem::perms::owner_all,
-          std::filesystem::perm_options::add, error);
-      error.clear();
-    }
-    support::native_fs::permissions(
-        path_, std::filesystem::perms::owner_all,
-        std::filesystem::perm_options::add, error);
-    error.clear();
-    support::native_fs::remove_all(path_, error);
+    support::native_fs::remove_all(root_, error);
   }
-  void release() noexcept { path_.clear(); }
+
+  std::optional<std::filesystem::path> next(std::string& error) {
+    const std::scoped_lock lock{mutex_};
+    std::error_code code;
+    if (root_.empty()) {
+      const auto temporary = std::filesystem::temp_directory_path(code);
+      if (!code) {
+        remove_abandoned_private_directories(temporary);
+      }
+      const auto name = std::string{kPrivateDirectoryPrefix} + std::to_string(process_id()) + "-"
+          + std::to_string(
+              std::chrono::steady_clock::now().time_since_epoch().count());
+      if (code || !support::native_fs::create_directory(temporary / name, code)
+          || code) {
+        error = "cannot create a private directory for SystemC native code"
+            + (code ? ": " + code.message() : std::string{});
+        return std::nullopt;
+      }
+      root_ = temporary / name;
+    }
+    const auto directory = root_ / std::to_string(sequence_++);
+    if (!support::native_fs::create_directory(directory, code) || code) {
+      error = "cannot create a private directory for SystemC native code"
+          + (code ? ": " + code.message() : std::string{});
+      return std::nullopt;
+    }
+    return directory;
+  }
 
  private:
-  std::filesystem::path path_;
+  PrivateDirectories() = default;
+
+  std::mutex mutex_;
+  std::filesystem::path root_;
+  std::uint64_t sequence_{};
 };
 
-bool write_file(
+std::optional<artifact::ContainerReader> open_artifact(
     const std::filesystem::path& path,
-    const std::string_view bytes,
+    const std::string_view kind,
     diagnostic::Engine& diagnostics) {
-  std::error_code error;
-  support::native_fs::create_directories(path.parent_path(), error);
-  if (error) {
-    report(
-        diagnostics, kIoCode,
-        "cannot create native artifact payload directory: " + error.message(),
-        support::path_to_utf8(path));
-    return false;
+  std::string error;
+  auto reader = artifact::ContainerReader::open(path, kind, error);
+  if (!reader) {
+    report(diagnostics, kIoCode, std::move(error), support::path_to_utf8(path));
   }
-  auto output = support::native_fs::open_ofstream(path, std::ios::binary | std::ios::trunc);
-  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  if (!output) {
-    report(
-        diagnostics, kIoCode, "cannot write native artifact payload",
-        support::path_to_utf8(path));
-    return false;
-  }
-  return true;
+  return reader;
 }
 
-bool make_read_only(
-    const std::filesystem::path& root,
+// A payload checked against its container checksum and the SHA-256
+// identity its metadata names.
+std::optional<std::string> read_native(
+    artifact::ContainerReader& reader,
+    const std::filesystem::path& name,
+    const std::string_view sha256,
+    const std::string_view description,
     diagnostic::Engine& diagnostics) {
-  const auto error = artifact::detail::set_tree_read_only_permissions(root);
-  if (error) {
+  std::string error;
+  auto bytes = reader.read(name.generic_string(), kMaximumNativeBytes, error);
+  if (!bytes) {
     report(
         diagnostics, kIoCode,
-        "cannot make native artifact read-only: " + error.message(),
-        support::path_to_utf8(root));
-    return false;
+        "cannot read " + std::string{description}
+            + (error.empty() ? std::string{": payload is missing"} : ": " + error),
+        support::path_to_utf8(reader.path()));
+    return std::nullopt;
   }
-  return true;
+  if (support::Sha256::hex(support::Sha256::digest(*bytes)) != sha256) {
+    report(
+        diagnostics, kIoCode, std::string{description} + ": native payload checksum mismatch",
+        support::path_to_utf8(reader.path()));
+    return std::nullopt;
+  }
+  return bytes;
+}
+
+std::optional<std::string> read_metadata(
+    artifact::ContainerReader& reader,
+    const std::string_view description,
+    diagnostic::Engine& diagnostics) {
+  std::string error;
+  auto bytes = reader.read(kMetadataPayload, 64U * 1024U * 1024U, error);
+  if (!bytes) {
+    report(
+        diagnostics, kIoCode,
+        "cannot read " + std::string{description}
+            + (error.empty() ? std::string{": payload is missing"} : ": " + error),
+        support::path_to_utf8(reader.path()));
+  }
+  return bytes;
 }
 
 bool publish(
     const std::filesystem::path& destination,
-    const std::filesystem::path& metadata_name,
+    const std::string_view kind,
     const std::string_view metadata,
     const std::filesystem::path& payload_name,
     const std::string_view payload,
@@ -605,8 +687,8 @@ bool publish(
     report(diagnostics, kIoCode, "native artifact output must not be empty");
     return false;
   }
-  std::error_code error;
-  if (support::native_fs::exists(destination, error) || error) {
+  std::error_code code;
+  if (support::native_fs::exists(destination, code) || code) {
     report(
         diagnostics, kIoCode,
         "native artifact output already exists or cannot be inspected",
@@ -615,31 +697,25 @@ bool publish(
   }
   const auto parent = destination.parent_path().empty()
       ? std::filesystem::path{"."} : destination.parent_path();
-  support::native_fs::create_directories(parent, error);
-  if (error) {
+  support::native_fs::create_directories(parent, code);
+  if (code) {
     report(
         diagnostics, kIoCode,
-        "cannot create native artifact parent: " + error.message(),
+        "cannot create native artifact parent: " + code.message(),
         support::path_to_utf8(parent));
     return false;
   }
-  const auto staging = staging_path(destination);
-  Cleanup cleanup{staging};
-  if (!support::native_fs::create_directory(staging, error) || error
-      || !write_file(staging / payload_name, payload, diagnostics)
-      || !write_file(staging / metadata_name, metadata, diagnostics)
-      || !make_read_only(staging, diagnostics)) {
-    return false;
-  }
-  support::native_fs::install_staged_directory(staging, destination, error);
-  if (error) {
+  std::string error;
+  auto writer = artifact::ContainerWriter::create(
+      destination, kind, artifact::ContainerPages::bulk, error);
+  if (!writer || !writer->put(kMetadataPayload, metadata, error)
+      || !writer->put(payload_name.generic_string(), payload, error)
+      || !writer->publish(error)) {
     report(
-        diagnostics, kIoCode,
-        "cannot atomically install native artifact: " + error.message(),
+        diagnostics, kIoCode, "cannot write native artifact: " + error,
         support::path_to_utf8(destination));
     return false;
   }
-  cleanup.release();
   return true;
 }
 
@@ -917,61 +993,67 @@ deserialize_incremental_plugin_metadata(
 }
 
 std::optional<IncrementalObjectMetadata> load_incremental_object_metadata(
-    const std::filesystem::path& directory,
+    const std::filesystem::path& path,
     diagnostic::Engine& diagnostics) {
-  const auto path = directory / kIncrementalObjectMetadataFilename;
-  auto bytes = read_file(path, diagnostics, ".fsimscobj metadata");
-  if (!bytes) {
-    return std::nullopt;
-  }
-  auto metadata = deserialize_incremental_object_metadata(
-      *bytes, support::path_to_utf8(path), diagnostics);
-  if (!metadata) {
-    return std::nullopt;
-  }
-  auto payload = read_file(
-      directory / metadata->object, diagnostics, ".fsimscobj native payload");
-  if (!payload
-      || support::Sha256::hex(support::Sha256::digest(*payload))
-          != metadata->object_checksum) {
-    if (payload) {
-      report(
-          diagnostics, kIoCode, ".fsimscobj native payload checksum mismatch",
-          support::path_to_utf8(directory / metadata->object));
-    }
+  auto reader = open_artifact(path, kIncrementalObjectKind, diagnostics);
+  const auto bytes = reader
+      ? read_metadata(*reader, ".fsimscobj metadata", diagnostics)
+      : std::nullopt;
+  auto metadata = bytes
+      ? deserialize_incremental_object_metadata(
+          *bytes, support::path_to_utf8(path), diagnostics)
+      : std::nullopt;
+  if (!metadata
+      || !read_native(*reader, metadata->object, metadata->object_checksum,
+          ".fsimscobj native payload", diagnostics)) {
     return std::nullopt;
   }
   return metadata;
 }
 
 std::optional<IncrementalPluginMetadata> load_incremental_plugin_metadata(
-    const std::filesystem::path& directory,
+    const std::filesystem::path& path,
     diagnostic::Engine& diagnostics) {
-  const auto path = directory / kIncrementalPluginMetadataFilename;
-  auto bytes = read_file(path, diagnostics, ".fsimscplugin metadata");
-  if (!bytes) {
-    return std::nullopt;
-  }
-  auto metadata = deserialize_incremental_plugin_metadata(
-      *bytes, support::path_to_utf8(path), diagnostics);
-  if (!metadata) {
-    return std::nullopt;
-  }
-  auto payload = read_file(
-      directory / metadata->library, diagnostics,
-      ".fsimscplugin native payload");
-  if (!payload
-      || support::Sha256::hex(support::Sha256::digest(*payload))
-          != metadata->library_checksum) {
-    if (payload) {
-        report(
-            diagnostics, kIoCode,
-            ".fsimscplugin native payload checksum mismatch",
-            support::path_to_utf8(directory / metadata->library));
-    }
+  auto reader = open_artifact(path, kIncrementalPluginKind, diagnostics);
+  const auto bytes = reader
+      ? read_metadata(*reader, ".fsimscplugin metadata", diagnostics)
+      : std::nullopt;
+  auto metadata = bytes
+      ? deserialize_incremental_plugin_metadata(
+          *bytes, support::path_to_utf8(path), diagnostics)
+      : std::nullopt;
+  if (!metadata
+      || !read_native(*reader, metadata->library, metadata->library_checksum,
+          ".fsimscplugin native payload", diagnostics)) {
     return std::nullopt;
   }
   return metadata;
+}
+
+std::optional<std::string> load_incremental_object_native(
+    const std::filesystem::path& path,
+    const IncrementalObjectMetadata& metadata,
+    diagnostic::Engine& diagnostics) {
+  auto reader = open_artifact(path, kIncrementalObjectKind, diagnostics);
+  return reader
+      ? read_native(*reader, metadata.object, metadata.object_checksum,
+          ".fsimscobj native payload", diagnostics)
+      : std::nullopt;
+}
+
+std::optional<std::string> load_incremental_plugin_native(
+    const std::filesystem::path& path,
+    const IncrementalPluginMetadata& metadata,
+    diagnostic::Engine& diagnostics) {
+  auto reader = open_artifact(path, kIncrementalPluginKind, diagnostics);
+  return reader
+      ? read_native(*reader, metadata.library, metadata.library_checksum,
+          ".fsimscplugin native payload", diagnostics)
+      : std::nullopt;
+}
+
+std::optional<std::filesystem::path> private_native_directory(std::string& error) {
+  return PrivateDirectories::instance().next(error);
 }
 
 bool publish_incremental_object(
@@ -998,8 +1080,8 @@ bool publish_incremental_object(
         return false;
     }
     return publish(
-        destination, kIncrementalObjectMetadataFilename, bytes,
-        metadata.object, payload, diagnostics);
+        destination, kIncrementalObjectKind, bytes, metadata.object, payload,
+        diagnostics);
 }
 
 bool publish_incremental_plugin(
@@ -1026,8 +1108,8 @@ bool publish_incremental_plugin(
         return false;
     }
     return publish(
-        destination, kIncrementalPluginMetadataFilename, bytes,
-        metadata.library, payload, diagnostics);
+        destination, kIncrementalPluginKind, bytes, metadata.library, payload,
+        diagnostics);
 }
 
 } // namespace fsim::systemc

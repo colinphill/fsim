@@ -12,6 +12,7 @@
 #include <sstream>
 #include <vector>
 
+#include "../support/container_test_support.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/runtime/fst_change_encoder.hpp"
 #include "fsim/runtime/fst_compression.hpp"
@@ -58,23 +59,10 @@ void store_u64(std::string& bytes, const std::size_t offset,
     }
 }
 
-void make_tree_writable(const std::filesystem::path& root) {
-  std::error_code error;
-  for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
-       !error && iterator != end; iterator.increment(error)) {
-    std::filesystem::permissions(iterator->path(),
-                                 std::filesystem::perms::owner_all,
-                                 std::filesystem::perm_options::add, error);
-    error.clear();
-  }
-  std::filesystem::permissions(root, std::filesystem::perms::owner_all,
-                               std::filesystem::perm_options::add, error);
-}
-
 }  // namespace
 
 int main() {
-    static_assert(fsim::artifact::kDesignFormatVersion == 15U);
+    static_assert(fsim::artifact::kDesignFormatVersion == 16U);
     static_assert(fsim::runtime_abi_version == 1U);
     std::string trace_source(257U, '0');
     constexpr char trace_symbols[] = { '0', '1', 'X', 'Z' };
@@ -646,7 +634,7 @@ int main() {
                                                   const auto& diagnostics,
                                                   const std::string& found) {
       const auto expected = "unsupported .fsimdesign identity: found " + found
-          + "; required format 15 and runtime ABI 1; regenerate .fsimdesign "
+          + "; required format 16 and runtime ABI 1; regenerate .fsimdesign "
             "with this fsim build";
       return std::ranges::any_of(
           diagnostics.diagnostics(), [&](const auto& diagnostic) {
@@ -683,7 +671,7 @@ int main() {
   assert(!fsim::artifact::deserialize_design_metadata(
       future_header, "future-format-design", future_header_diagnostics));
   assert(has_design_identity_diagnostic(
-      future_header_diagnostics, "format 16 and runtime ABI 1"));
+      future_header_diagnostics, "format 17 and runtime ABI 1"));
 
   auto corrupt_magic = encoded;
   corrupt_magic[0] = 'X';
@@ -713,7 +701,7 @@ int main() {
       incompatible_runtime, "incompatible-runtime-abi",
       incompatible_runtime_diagnostics));
   assert(has_design_identity_diagnostic(
-      incompatible_runtime_diagnostics, "format 15 and runtime ABI 2"));
+      incompatible_runtime_diagnostics, "format 16 and runtime ABI 2"));
 
   auto oversized_root = encoded;
   store_u64(oversized_root, 16U, std::numeric_limits<std::uint64_t>::max());
@@ -782,7 +770,7 @@ int main() {
       stale_publication_directory, stale_publication_metadata, payloads,
       stale_publication_diagnostics));
   assert(has_design_identity_diagnostic(
-      stale_publication_diagnostics, "format 14 and runtime ABI 1"));
+      stale_publication_diagnostics, "format 15 and runtime ABI 1"));
   assert(!std::filesystem::exists(stale_publication_directory));
   fsim::diagnostic::Engine publish_diagnostics;
   assert(fsim::artifact::publish_design(directory, metadata, payloads,
@@ -792,92 +780,79 @@ int main() {
   assert(fsim::artifact::load_design_metadata(directory, load_diagnostics) ==
          metadata);
   assert(!load_diagnostics.has_error());
+  // A design is one owner-writable container file.
+  assert(std::filesystem::is_regular_file(directory));
   assert((std::filesystem::status(directory).permissions() &
-          std::filesystem::perms::owner_write) == std::filesystem::perms::none);
-#if !defined(_WIN32)
-  // POSIX mode bits deny publication-tree mutation. Windows maps those bits
-  // to file attributes, not directory ACLs, so creation remains permitted.
-  std::ofstream denied(directory / "write-attempt", std::ios::binary);
-  assert(!denied);
-#endif
+          std::filesystem::perms::owner_write) != std::filesystem::perms::none);
+  {
+    std::string kind_error;
+    assert(fsim::artifact::ContainerReader::read_kind(directory, kind_error)
+        == std::string{fsim::artifact::kDesignArtifactKind});
+  }
 
+  // Publishing again replaces the file atomically.
   fsim::diagnostic::Engine overwrite_diagnostics;
-  assert(!fsim::artifact::publish_design(directory, metadata, payloads,
-                                         overwrite_diagnostics));
+  assert(fsim::artifact::publish_design(directory, metadata, payloads,
+                                        overwrite_diagnostics));
   fsim::diagnostic::Engine rollback_diagnostics;
   assert(fsim::artifact::load_design_metadata(
              directory, rollback_diagnostics) == metadata);
   {
-    std::ifstream input(directory / metadata.payloads.front().artifact,
-                        std::ios::binary);
-    assert((std::string{std::istreambuf_iterator<char>{input},
-                        std::istreambuf_iterator<char>{}} == state_bytes));
+    assert(fsim::test::read_container_payload(directory,
+        fsim::support::path_to_utf8(metadata.payloads.front().artifact))
+        == state_bytes);
   }
   {
-    std::ifstream input(directory / metadata.payloads[3].artifact,
-                        std::ios::binary);
-    const std::string persisted{std::istreambuf_iterator<char>{input},
-                                std::istreambuf_iterator<char>{}};
+    const auto persisted = fsim::test::read_container_payload(
+        directory, fsim::support::path_to_utf8(metadata.payloads[3].artifact));
     fsim::diagnostic::Engine persisted_diagnostics;
     assert(fsim::systemc::deserialize_systemc_kernel_value(
                std::as_bytes(std::span{persisted}), {},
                persisted_diagnostics) == crossing_value);
   }
   {
-    std::ifstream input(directory / metadata.payloads[4].artifact,
-                        std::ios::binary);
-    const std::string persisted{std::istreambuf_iterator<char>{input},
-                                std::istreambuf_iterator<char>{}};
+    const auto persisted = fsim::test::read_container_payload(
+        directory, fsim::support::path_to_utf8(metadata.payloads[4].artifact));
     fsim::diagnostic::Engine persisted_diagnostics;
     assert(fsim::systemc::deserialize_systemc_kernel_tlm1_transaction(
                std::as_bytes(std::span{persisted}), {},
                persisted_diagnostics) == crossing_transaction);
   }
   {
-    std::ifstream input(directory / metadata.payloads[5].artifact,
-                        std::ios::binary);
-    const std::string persisted{std::istreambuf_iterator<char>{input},
-                                std::istreambuf_iterator<char>{}};
+    const auto persisted = fsim::test::read_container_payload(
+        directory, fsim::support::path_to_utf8(metadata.payloads[5].artifact));
     fsim::diagnostic::Engine persisted_diagnostics;
     assert(fsim::systemc::deserialize_systemc_kernel_tlm2_transaction(
                std::as_bytes(std::span{persisted}), {},
                persisted_diagnostics) == tlm2_transaction);
   }
   {
-    std::ifstream input(directory / metadata.payloads[6].artifact,
-                        std::ios::binary);
-    const std::string persisted{std::istreambuf_iterator<char>{input},
-                                std::istreambuf_iterator<char>{}};
+    const auto persisted = fsim::test::read_container_payload(
+        directory, fsim::support::path_to_utf8(metadata.payloads[6].artifact));
     fsim::diagnostic::Engine persisted_diagnostics;
     assert(fsim::systemc::deserialize_systemc_kernel_channel_inventory(
                std::as_bytes(std::span{persisted}), {},
                persisted_diagnostics) == channel_inventory.snapshot());
   }
   {
-    std::ifstream input(directory / metadata.payloads[7].artifact,
-                        std::ios::binary);
-    const std::string persisted{std::istreambuf_iterator<char>{input},
-                                std::istreambuf_iterator<char>{}};
+    const auto persisted = fsim::test::read_container_payload(
+        directory, fsim::support::path_to_utf8(metadata.payloads[7].artifact));
     fsim::diagnostic::Engine persisted_diagnostics;
     assert(fsim::systemc::deserialize_systemc_kernel_binding_inventory(
                std::as_bytes(std::span{persisted}), {},
                persisted_diagnostics) == binding_inventory.snapshot());
   }
   {
-    std::ifstream input(directory / metadata.payloads[8].artifact,
-                        std::ios::binary);
-    const std::string persisted{std::istreambuf_iterator<char>{input},
-                                std::istreambuf_iterator<char>{}};
+    const auto persisted = fsim::test::read_container_payload(
+        directory, fsim::support::path_to_utf8(metadata.payloads[8].artifact));
     fsim::diagnostic::Engine persisted_diagnostics;
     assert(fsim::systemc::deserialize_systemc_kernel_observation_batch(
                std::as_bytes(std::span{persisted}), {},
                persisted_diagnostics) == systemc_observations);
   }
   {
-    std::ifstream input(directory / metadata.payloads[9].artifact,
-                        std::ios::binary);
-    const std::string persisted{std::istreambuf_iterator<char>{input},
-                                std::istreambuf_iterator<char>{}};
+    const auto persisted = fsim::test::read_container_payload(
+        directory, fsim::support::path_to_utf8(metadata.payloads[9].artifact));
     const auto trace = fsim::runtime::read_fst(persisted);
     assert(trace.ok());
     assert(trace.trace->values.size() == 3U);
@@ -895,41 +870,6 @@ int main() {
   assert(!fsim::artifact::publish_design(mismatch_directory, metadata, mismatch,
                                          mismatch_diagnostics));
   assert(!std::filesystem::exists(mismatch_directory));
-
-  const auto generated_directory = directory.parent_path()
-      / (directory.filename().string() + "-generated");
-  const std::vector<fsim::library::PortablePayload> retained_payloads {
-      payloads.begin() + 1, payloads.end()
-  };
-  const std::vector<fsim::artifact::GeneratedDesignPayload>
-      generated_payloads { {
-          metadata.payloads.front().artifact,
-          metadata.payloads.front().checksum,
-          [&](const std::filesystem::path& path,
-              fsim::diagnostic::Engine&) {
-            auto output = fsim::support::native_fs::open_ofstream(
-                path, std::ios::binary | std::ios::trunc);
-            output.write(state_bytes.data(),
-                static_cast<std::streamsize>(state_bytes.size()));
-            return static_cast<bool>(output);
-          } } };
-  fsim::diagnostic::Engine generated_diagnostics;
-  assert(fsim::artifact::publish_design(generated_directory, metadata,
-      retained_payloads, generated_payloads, generated_diagnostics));
-  assert(!generated_diagnostics.has_error());
-  {
-    std::ifstream input(
-        generated_directory / metadata.payloads.front().artifact,
-        std::ios::binary);
-    assert((std::string { std::istreambuf_iterator<char> { input },
-                std::istreambuf_iterator<char> { } }
-        == state_bytes));
-  }
-  make_tree_writable(generated_directory);
-  std::error_code generated_cleanup_error;
-  std::filesystem::remove_all(
-      generated_directory, generated_cleanup_error);
-  assert(!generated_cleanup_error);
 
   const auto long_root = directory.parent_path()
       / (directory.filename().string() + "-extended");
@@ -950,29 +890,22 @@ int main() {
 #endif
   fsim::diagnostic::Engine long_publish_diagnostics;
   assert(fsim::artifact::publish_design(long_directory, metadata,
-      retained_payloads, generated_payloads, long_publish_diagnostics));
+      payloads, long_publish_diagnostics));
   assert(!long_publish_diagnostics.has_error());
   fsim::diagnostic::Engine long_load_diagnostics;
   assert(fsim::artifact::load_design_metadata(
       long_directory, long_load_diagnostics) == metadata);
   assert(!long_load_diagnostics.has_error());
-  {
-    std::ifstream input(fsim::support::path_for_native_io(
-        long_directory / metadata.payloads.front().artifact),
-        std::ios::binary);
-    assert((std::string{std::istreambuf_iterator<char>{input},
-                std::istreambuf_iterator<char>{}}
-        == state_bytes));
-  }
+  assert(fsim::test::read_container_payload(long_directory,
+      fsim::support::path_to_utf8(metadata.payloads.front().artifact))
+      == state_bytes);
   const auto long_io_root = fsim::support::path_for_native_io(long_root);
-  make_tree_writable(long_io_root);
   std::error_code long_cleanup_error;
   std::filesystem::remove_all(long_io_root, long_cleanup_error);
   assert(!long_cleanup_error);
 
-  make_tree_writable(directory);
   std::error_code cleanup_error;
-  std::filesystem::remove_all(directory, cleanup_error);
+  std::filesystem::remove(directory, cleanup_error);
   assert(!cleanup_error);
   return 0;
 }

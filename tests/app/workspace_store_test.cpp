@@ -90,13 +90,12 @@ workspace::ArtifactRecord artifact(workspace::LibraryTransaction& transaction,
     record->sources = std::move(sources);
     record->units = std::move(units);
     record->fingerprint = record->id;
+    // Until commit names it, a record is published to a hidden pending file
+    // beside the catalog. Every artifact kind is one file.
     const auto path = transaction.artifact_path(*record);
-    assert(!fs::exists(path));
-    fs::create_directory(path);
-    std::ofstream { path / "payload" } << "payload";
-    fs::permissions(path / "payload", fs::perms::owner_read, fs::perm_options::replace);
-    fs::permissions(path, fs::perms::owner_read | fs::perms::owner_exec,
-        fs::perm_options::replace);
+    assert(!fs::exists(path) && path.parent_path() == transaction.catalog().location.directory);
+    assert(fsim::support::path_to_utf8(path.filename()).starts_with(".pending-"));
+    std::ofstream { path } << "payload";
     return std::move(*record);
 }
 
@@ -227,7 +226,7 @@ int leave_hot_journal(const fs::path& database_path)
         return 10;
     }
     const int updated = sqlite3_exec(database,
-        "BEGIN IMMEDIATE; UPDATE metadata SET version=99 WHERE version=2",
+        "BEGIN IMMEDIATE; UPDATE metadata SET version=99 WHERE version=3",
         nullptr, nullptr, nullptr);
     if (updated != SQLITE_OK || sqlite3_changes(database) != 1
         || sqlite3_db_cacheflush(database) != SQLITE_OK) {
@@ -341,8 +340,11 @@ void test_source_replacement_and_group_selection()
     auto grouped = artifact(*transaction, { "a.sv", "b.sv" },
         { { unit("old_a"), "a.sv" }, { unit("keep_b"), "b.sv" } });
     const auto grouped_id = grouped.id;
+    assert(transaction->commit(grouped, error));
+    // An object holding several units (a SystemVerilog compilation unit with
+    // shared `$unit` state) is named after its first source; it keeps its id.
     const auto grouped_path = transaction->artifact_path(grouped);
-    assert(transaction->commit(std::move(grouped), error));
+    assert(grouped_path.filename() == "a-unit.fsimobj" && fs::is_regular_file(grouped_path));
     transaction.reset();
 
     transaction = store.begin_library("work", error);
@@ -358,7 +360,17 @@ void test_source_replacement_and_group_selection()
     assert(retained != catalog->artifacts.end());
     assert(retained->sources == std::vector<std::string> { "b.sv" });
     assert(retained->units.size() == 1U && retained->units.front().unit.name == "keep_b");
-    assert(fs::is_directory(grouped_path));
+    assert(fs::is_regular_file(grouped_path) && retained->path == "a-unit.fsimobj");
+    for (const auto* name : { "new_a.fsimobj", "new_a2.fsimobj" }) {
+        assert(fs::is_regular_file(catalog->location.directory / name));
+        assert(std::ranges::any_of(catalog->artifacts,
+            [&](const auto& record) { return record.path == name; }));
+    }
+    // Nothing else is left beside the catalog: no pending files, no trees.
+    for (const auto& entry : fs::directory_iterator { catalog->location.directory }) {
+        const auto name = fsim::support::path_to_utf8(entry.path().filename());
+        assert(name == "library.sqlite3" || name == ".writer-lock" || name.ends_with(".fsimobj"));
+    }
     const auto imported = std::ranges::find(catalog->artifacts, first.id,
         &workspace::ArtifactRecord::id);
     assert(imported->dependencies.front().fingerprint == "import-fingerprint");
@@ -370,8 +382,28 @@ void test_source_replacement_and_group_selection()
     catalog = store.read_library("work", error);
     assert(catalog && catalog->artifacts.size() == 1U);
     assert(catalog->artifacts.front().id == grouped_id);
-    assert(!fs::exists(catalog->location.directory / first.path));
-    assert(!fs::exists(catalog->location.directory / second.path));
+    assert(!fs::exists(catalog->location.directory / "new_a.fsimobj"));
+    assert(!fs::exists(catalog->location.directory / "new_a2.fsimobj"));
+
+    // A unit gets its own name; one that differs only in case from a kept
+    // name gets a suffix; a recompiled unit replaces its file in place.
+    transaction = store.begin_library("work", error);
+    auto lower = artifact(*transaction, { "lower.sv" }, { { unit("keep"), "lower.sv" } });
+    assert(transaction->commit(lower, error));
+    assert(transaction->artifact_path(lower).filename() == "keep.fsimobj");
+    transaction.reset();
+    transaction = store.begin_library("work", error);
+    auto upper = artifact(*transaction, { "upper.sv" }, { { unit("KEEP"), "upper.sv" } });
+    assert(transaction->commit(upper, error));
+    assert(transaction->artifact_path(upper).filename() == "KEEP~2.fsimobj");
+    transaction.reset();
+    transaction = store.begin_library("work", error);
+    auto again = artifact(*transaction, { "upper.sv" }, { { unit("KEEP"), "upper.sv" } });
+    assert(transaction->commit(again, error));
+    assert(transaction->artifact_path(again).filename() == "KEEP~2.fsimobj");
+    transaction.reset();
+    catalog = store.read_library("work", error);
+    assert(catalog && catalog->artifacts.size() == 3U);
 }
 
 void test_vhdl_identifier_form_round_trip_and_v1_rejection()
@@ -546,13 +578,20 @@ void test_mapping_and_corrupt_metadata()
     const auto modified = fs::last_write_time(database);
     assert(!consumer.read_library("work", error));
     assert(fs::last_write_time(database) == modified);
-    execute_sql(database, "UPDATE metadata SET version=2; CREATE TABLE foreign_data(value TEXT)");
+    execute_sql(database, "UPDATE metadata SET version=3; CREATE TABLE foreign_data(value TEXT)");
     assert(!consumer.read_library("work", error));
     assert(error.find("schema") != std::string::npos);
     execute_sql(database, "DROP TABLE foreign_data");
-    execute_sql(database, "UPDATE metadata SET version=2; UPDATE artifacts SET path='../outside'");
+    execute_sql(database, "UPDATE metadata SET version=3; UPDATE artifacts SET path='../outside'");
     assert(!consumer.read_library("work", error));
     assert(error.find("unsafe") != std::string::npos);
+    execute_sql(database, "UPDATE artifacts SET path='nested/top.fsimobj'");
+    assert(!consumer.read_library("work", error));
+    assert(error.find("unsafe") != std::string::npos);
+    // A catalog of the read-only tree layout asks for recompilation.
+    execute_sql(database, "UPDATE metadata SET version=2");
+    assert(!consumer.read_library("work", error));
+    assert(error.find("older fsim") != std::string::npos);
     assert(!consumer.delete_library("work", error));
 }
 
@@ -597,34 +636,40 @@ void test_snapshot_replacement_and_workspace_boundary()
     TemporaryWorkspace temporary;
     workspace::Store store { temporary.root };
     std::string error;
+    // A snapshot is one file; each elaboration publishes a hidden pending
+    // file that commit renames over it.
+    const auto snapshot_path = temporary.root / ".fsim/snapshots/default.fsimdesign";
     auto transaction = store.begin_snapshot("default", error);
     assert(transaction && !fs::exists(transaction->artifact_path()));
-    const auto first_path = transaction->artifact_path();
-    fs::create_directory(first_path);
-    std::ofstream { first_path / "runtime.bin" } << "first";
+    const auto first_pending = transaction->artifact_path();
+    assert(first_pending.parent_path() == snapshot_path.parent_path());
+    assert(fs::path { first_pending }.filename().string().starts_with(".pending-"));
+    std::ofstream { first_pending } << "first";
     assert(transaction->commit(error));
     transaction.reset();
+    assert(!fs::exists(first_pending));
     auto snapshot = store.read_snapshot("default", error);
-    assert(snapshot && snapshot->path == first_path);
+    assert(snapshot && snapshot->path == snapshot_path);
     transaction = store.begin_snapshot("default", error);
     const auto failed_path = transaction->artifact_path();
-    fs::create_directory(failed_path);
+    std::ofstream { failed_path } << "failed";
     transaction.reset();
     assert(!fs::exists(failed_path));
-    assert(store.read_snapshot("default", error)->path == first_path);
+    assert(read_bytes(snapshot_path) == "first");
     transaction = store.begin_snapshot("default", error);
     const auto second_path = transaction->artifact_path();
-    fs::create_directory(second_path);
+    assert(second_path != first_pending);
+    std::ofstream { second_path } << "second";
     assert(transaction->commit(error));
     transaction.reset();
-    assert(second_path != first_path && !fs::exists(first_path));
-    assert(store.read_snapshot("default", error)->path == second_path);
+    assert(store.read_snapshot("default", error)->path == snapshot_path);
+    assert(read_bytes(snapshot_path) == "second");
     auto library = store.begin_library("work", error);
     auto record = artifact(*library, { "top.sv" }, { { unit("top"), "top.sv" } });
     assert(library->commit(std::move(record), error));
     library.reset();
     assert(store.delete_library("work", error));
-    assert(store.read_snapshot("default", error)->path == second_path);
+    assert(store.read_snapshot("default", error)->path == snapshot_path);
     assert(!store.begin_snapshot("../escape", error));
     assert(!store.begin_library("../escape", error));
     assert(!store.begin_library("CON", error));
@@ -633,9 +678,11 @@ void test_snapshot_replacement_and_workspace_boundary()
     workspace::Store nested { temporary.root / "nested" };
     assert(!nested.read_snapshot("default", error));
     assert(nested.library_locations(error)->empty());
-    std::ofstream { temporary.root / ".fsim/snapshots/default/snapshot.index" }
-        << "FSIM-SNAPSHOT 1\n../../escape\n";
+    // A directory where a snapshot file belongs is an older fsim's layout.
+    fs::remove(temporary.root / ".fsim/snapshots/default.fsimdesign");
+    fs::create_directory(temporary.root / ".fsim/snapshots/default");
     assert(!store.read_snapshot("default", error));
+    assert(error.find("older fsim") != std::string::npos);
 }
 
 void test_serialized_writers_and_symlinks()
@@ -660,13 +707,13 @@ void test_serialized_writers_and_symlinks()
 
     const auto outside = temporary.root / "outside";
     fs::create_directory(outside);
-    const auto artifacts = temporary.root / ".fsim/libraries/work/artifacts";
+    const auto linked = temporary.root / ".fsim/libraries/linked";
     std::error_code code;
-    fs::create_directory_symlink(outside, artifacts, code);
+    fs::create_directory_symlink(outside, linked, code);
     if (!code) {
-        auto transaction = store.begin_library("work", error);
-        assert(transaction);
-        assert(!transaction->allocate_artifact(workspace::ArtifactKind::Hdl, error));
+        auto transaction = store.begin_library("linked", error);
+        assert(!transaction || !transaction->allocate_artifact(workspace::ArtifactKind::Hdl, error));
+        transaction.reset();
         assert(fs::is_empty(outside));
     }
 }

@@ -2,13 +2,11 @@
 #include "fsim/app/sdf_portable_archive.hpp"
 
 #include "fsim/support/bounded_bytes.hpp"
-#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
 #include <array>
-#include <fstream>
 #include <limits>
 #include <ranges>
 #include <stdexcept>
@@ -594,7 +592,7 @@ artifact::DesignPayload make_sdf_design_payload(
 }
 
 SdfPortableArchiveDecodeResult load_sdf_library_archive(
-    const std::filesystem::path& library_directory,
+    const std::filesystem::path& library_path,
     const library::Metadata& metadata,
     const artifact::DesignSdfAnnotation& expected_annotation,
     const SdfPortableArchiveLimits limits)
@@ -612,28 +610,24 @@ SdfPortableArchiveDecodeResult load_sdf_library_archive(
             "mapped library does not contain a compatible SDF annotation");
         return result;
     }
-    auto input = support::native_fs::open_ifstream(
-        library_directory / unit->artifact, std::ios::binary);
-    if (!input) {
-        diagnose(result.diagnostics, "FSIM-SDF-PORTABLE-003",
-            "mapped library SDF annotation payload cannot be opened");
-        return result;
-    }
-    std::vector<std::byte> bytes;
-    char character { };
-    while (input.get(character)) {
-        if (bytes.size() >= limits.max_bytes) {
+    auto failure = library::PayloadReadFailure::none;
+    std::string error;
+    const auto payload = library::read_payload(library_path, unit->artifact,
+        unit->checksum, limits.max_bytes, failure, error);
+    if (!payload) {
+        if (failure == library::PayloadReadFailure::budget) {
             diagnose(result.diagnostics, "FSIM-SDF-PORTABLE-004",
                 "mapped library SDF annotation payload exceeds its byte limit");
-            return result;
+        } else {
+            diagnose(result.diagnostics, "FSIM-SDF-PORTABLE-003",
+                failure == library::PayloadReadFailure::checksum
+                    ? "mapped library SDF annotation payload checksum is invalid"
+                    : "mapped library SDF annotation payload cannot be opened");
         }
-        bytes.push_back(std::byte { static_cast<unsigned char>(character) });
-    }
-    if (!input.eof() || checksum(bytes) != unit->checksum) {
-        diagnose(result.diagnostics, "FSIM-SDF-PORTABLE-003",
-            "mapped library SDF annotation payload checksum is invalid");
         return result;
     }
+    const auto* data = reinterpret_cast<const std::byte*>(payload->data());
+    const std::vector<std::byte> bytes(data, data + payload->size());
     return decode_sdf_portable_archive(bytes, expected_annotation, limits);
 }
 

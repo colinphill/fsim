@@ -330,7 +330,8 @@ int main()
     catalog = read_catalog(store, "vendor");
     assert((factory_names(catalog) == std::vector<std::string> { "renamed", "second" }));
     const auto replacement = records_of_kind(catalog, workspace::ArtifactKind::SystemCPlugin).front();
-    assert(first_plugin.id != replacement.id && first_plugin.path != replacement.path);
+    // The replacement plug-in is a new record that takes over the file name.
+    assert(first_plugin.id != replacement.id && first_plugin.path == replacement.path);
     const auto snapshot = publish_snapshots(store);
 
     auto broken_link_config = config;

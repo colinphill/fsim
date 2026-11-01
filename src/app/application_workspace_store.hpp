@@ -126,7 +126,8 @@ public:
     SnapshotTransaction(const SnapshotTransaction&) = delete;
     SnapshotTransaction& operator=(const SnapshotTransaction&) = delete;
 
-    // This fresh directory does not exist yet, as required by publishers.
+    // A hidden pending file that does not exist yet; commit renames it
+    // over the snapshot.
     [[nodiscard]] const std::filesystem::path& artifact_path() const;
     [[nodiscard]] bool commit(std::string& error);
 

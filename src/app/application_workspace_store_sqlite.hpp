@@ -3,7 +3,7 @@
 
 #include "application_workspace_store_internal.hpp"
 
-#include <sqlite3.h>
+#include "fsim/support/sqlite_database.hpp"
 
 #include <array>
 
@@ -17,21 +17,19 @@ public:
         read_write_create,
     };
 
-    ~Database();
     [[nodiscard]] bool open(const LibraryLocation&, OpenMode, std::string& error);
     [[nodiscard]] bool execute(const char*, std::string& error);
     [[nodiscard]] bool validate_schema(std::string& error);
     [[nodiscard]] bool initialize_schema(std::string& error);
-    sqlite3* handle { nullptr };
+    support::sqlite::Database connection { "workspace library catalog" };
     std::size_t decoded_bytes { 0U };
 };
 
 class Statement final {
 public:
     Statement(Database&, const char* sql, std::string& error);
-    ~Statement();
-    explicit operator bool() const { return statement_; }
-    [[nodiscard]] int step(std::string& error);
+    explicit operator bool() const { return static_cast<bool>(statement_); }
+    [[nodiscard]] support::sqlite::Step step(std::string& error);
     [[nodiscard]] bool bind(int, std::string_view, std::string& error);
     [[nodiscard]] bool bind(int, int, std::string& error);
     [[nodiscard]] bool finish(std::string& error);
@@ -40,7 +38,7 @@ public:
 
 private:
     Database& database_;
-    sqlite3_stmt* statement_ { nullptr };
+    support::sqlite::Statement statement_;
 };
 
 [[nodiscard]] std::optional<library::UnitIndexEntry> read_unit(

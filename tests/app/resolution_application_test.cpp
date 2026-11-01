@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "../support/container_test_support.hpp"
 #include "change_mismatch_report.hpp"
 #include "fsim/app/application.hpp"
 #include "fsim/app/artifact_phase.hpp"
@@ -1271,27 +1272,13 @@ endmodule
 #endif
 
     const auto corrupt_design = directory / "strength-corrupt.fsimdesign";
-    std::filesystem::create_directories(corrupt_design);
-    for (const auto& entry :
-        std::filesystem::recursive_directory_iterator(design)) {
-        const auto relative = std::filesystem::relative(entry.path(), design);
-        if (entry.is_directory()) {
-            std::filesystem::create_directories(corrupt_design / relative);
-        } else {
-            std::filesystem::copy_file(entry.path(), corrupt_design / relative);
-        }
-    }
-    const auto corrupt_runtime = corrupt_design / "state" / "runtime.bin";
-    std::filesystem::permissions(
-        corrupt_runtime,
-        std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream output(
-            corrupt_runtime, std::ios::binary | std::ios::app);
-        output.put('x');
-        assert(output.good());
-    }
+    // A runtime payload that disagrees with the design index is refused.
+    std::filesystem::copy_file(design, corrupt_design);
+    auto corrupt_runtime = fsim::test::read_container_payload(
+        corrupt_design, "state/runtime.bin");
+    corrupt_runtime.push_back('x');
+    fsim::test::rewrite_container_payloads(
+        corrupt_design, { { "state/runtime.bin", corrupt_runtime } });
     fsim::diagnostic::Engine corrupt_diagnostics;
     assert(!fsim::app::load_design_artifact(
         corrupt_design, corrupt_diagnostics));

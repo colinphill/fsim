@@ -63,7 +63,7 @@ fsim_require_tokens(
   "relocated outputs"
   "relocated-consumer-cache"
   "relocated-consumer-files"
-  "bytes.find(producer_prefix) == std::string::npos")
+  "bytes.compare(found - 2U, 2U, \"..\") == 0")
 
 fsim_require_tokens(
   tests/app/application_test_artifact_verilog.cpp

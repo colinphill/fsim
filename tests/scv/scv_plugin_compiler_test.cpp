@@ -68,23 +68,6 @@ void check_shared_identity(const std::filesystem::path& path)
     assert(identity() == fsim_scv_compatibility_identity());
 }
 
-#if !defined(_WIN32)
-void make_writable(const std::filesystem::path& root)
-{
-    std::error_code error;
-    for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
-        !error && iterator != end; iterator.increment(error)) {
-        std::filesystem::permissions(
-            iterator->path(), std::filesystem::perms::owner_all,
-            std::filesystem::perm_options::add, error);
-        error.clear();
-    }
-    std::filesystem::permissions(
-        root, std::filesystem::perms::owner_all,
-        std::filesystem::perm_options::add, error);
-}
-#endif
-
 } // namespace
 
 int main()
@@ -177,12 +160,16 @@ int main()
         link_cold.artifact, diagnostics);
     assert(incremental_registry);
     assert(incremental_registry->has_factory("scv_producer"));
-    check_shared_identity(link_cold.artifact / metadata->library);
+    const auto native = fsim::systemc::load_incremental_plugin_native(
+        link_cold.artifact, *metadata, diagnostics);
+    assert(native);
+    const auto native_copy = root / metadata->library.filename();
+    write_file(native_copy, *native);
+    check_shared_identity(native_copy);
 
 #if !defined(_WIN32)
     incremental_registry.reset();
     source_registry.reset();
-    make_writable(root);
     std::error_code error;
     std::filesystem::remove_all(root, error);
     assert(!error);

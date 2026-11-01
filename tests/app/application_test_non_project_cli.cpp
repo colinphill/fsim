@@ -17,6 +17,7 @@
 #include "../../src/elaboration/elaborated_design_process_access.hpp"
 #include "application_test_support.hpp"
 #include "application_workflow_test_support.hpp"
+#include "../support/container_test_support.hpp"
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/app/sdf_phase_persistence.hpp"
@@ -135,6 +136,9 @@ namespace {
     std::string read_binary_file(const std::filesystem::path& path)
     {
         std::ifstream input(path, std::ios::binary);
+        if (!input) {
+            std::cerr << "cannot read " << support::path_to_utf8(path) << '\n';
+        }
         assert(input);
         const std::string result { std::istreambuf_iterator<char> { input },
             std::istreambuf_iterator<char> { } };
@@ -216,20 +220,11 @@ namespace {
         const std::filesystem::path& directory,
         artifact::ObjectMetadata& metadata)
     {
+        // Objects reference their sources without carrying them; the only
+        // payload besides the metadata is the compiled HIR.
         std::vector<library::PortablePayload> result;
-        for (const auto& source : metadata.sources) {
-            result.push_back(
-                { source.artifact, read_binary_file(directory / source.artifact) });
-        }
-        for (const auto& unit : metadata.units) {
-            if (unit.artifact.empty()) {
-                continue;
-            }
-            result.push_back(
-                { unit.artifact, read_binary_file(directory / unit.artifact) });
-        }
-        const auto compiled_bytes = read_binary_file(
-            directory / metadata.compiled_hir_artifact);
+        const auto compiled_bytes = test::read_container_payload(
+            directory, support::path_to_utf8(metadata.compiled_hir_artifact));
         diagnostic::Engine decode_diagnostics;
         const auto compiled = app::deserialize_compiled_hir_bundle(
             compiled_bytes, "projected-object-input", decode_diagnostics);
@@ -280,6 +275,11 @@ namespace {
     void copy_tree(const std::filesystem::path& source,
         const std::filesystem::path& destination)
     {
+        if (std::filesystem::is_regular_file(source)) {
+            std::filesystem::create_directories(destination.parent_path());
+            std::filesystem::copy_file(source, destination);
+            return;
+        }
         std::filesystem::create_directories(destination);
         for (const auto& entry :
             std::filesystem::recursive_directory_iterator(source)) {
@@ -294,8 +294,9 @@ namespace {
 
     void make_tree_writable(const std::filesystem::path& root)
     {
-        for (const auto& entry :
-            std::filesystem::recursive_directory_iterator(root)) {
+        for (const auto& entry : std::filesystem::is_directory(root)
+                 ? std::filesystem::recursive_directory_iterator(root)
+                 : std::filesystem::recursive_directory_iterator { }) {
             std::filesystem::permissions(entry.path(),
                 std::filesystem::perms::owner_all,
                 std::filesystem::perm_options::add);
@@ -306,8 +307,9 @@ namespace {
 
     void make_tree_read_only(const std::filesystem::path& root)
     {
-        for (const auto& entry :
-            std::filesystem::recursive_directory_iterator(root)) {
+        for (const auto& entry : std::filesystem::is_directory(root)
+                 ? std::filesystem::recursive_directory_iterator(root)
+                 : std::filesystem::recursive_directory_iterator { }) {
             const auto permissions = entry.is_directory()
                 ? std::filesystem::perms::owner_read
                     | std::filesystem::perms::owner_exec
@@ -984,15 +986,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
         stale_scv_identity[stdlib + 8U] == 'x' ? 'y' : 'x';
     stale_scv_metadata.design_digest =
         artifact::compute_design_digest(stale_scv_metadata);
-    {
-        const auto bytes = artifact::serialize_design_metadata(stale_scv_metadata);
-        std::ofstream design_metadata_output(
-            stale_scv_design / artifact::kDesignMetadataFilename,
-            std::ios::binary | std::ios::trunc);
-        design_metadata_output.write(
-            bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        assert(design_metadata_output);
-    }
+    fsim::test::rewrite_container_payloads(stale_scv_design, { { std::string { artifact::kDesignMetadataFilename },
+        artifact::serialize_design_metadata(stale_scv_metadata) } });
     diagnostic::Engine stale_scv_diagnostics;
     assert(!app::load_design_artifact(
         stale_scv_design, stale_scv_diagnostics));
@@ -1008,48 +1003,34 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     make_tree_writable(stale_systemc_design);
     auto stale_design_metadata = *systemc_design_metadata;
     auto& stale_design_plugin = stale_design_metadata.systemc_plugins.front();
-    const auto stale_plugin_directory = stale_systemc_design / stale_design_plugin.directory;
+    const auto stale_metadata_artifact = support::path_to_utf8(stale_design_plugin.directory
+        / systemc::kIncrementalPluginMetadataFilename);
     diagnostic::Engine stale_plugin_metadata_diagnostics;
-    auto stale_plugin_metadata = systemc::load_incremental_plugin_metadata(
-        stale_plugin_directory, stale_plugin_metadata_diagnostics);
+    auto stale_plugin_metadata = systemc::deserialize_incremental_plugin_metadata(
+        fsim::test::read_container_payload(stale_systemc_design, stale_metadata_artifact),
+        stale_metadata_artifact, stale_plugin_metadata_diagnostics);
     assert(stale_plugin_metadata);
     assert(!stale_plugin_metadata_diagnostics.has_error());
     stale_plugin_metadata->compiler_fingerprint = std::string(64, 'c');
     stale_plugin_metadata->input_digest = systemc::compute_incremental_plugin_input_digest(*stale_plugin_metadata);
     stale_plugin_metadata->link_digest = systemc::compute_incremental_plugin_digest(*stale_plugin_metadata);
     const auto stale_plugin_metadata_bytes = systemc::serialize_incremental_plugin_metadata(*stale_plugin_metadata);
-    {
-        std::ofstream plugin_metadata_output(
-            stale_plugin_directory / systemc::kIncrementalPluginMetadataFilename,
-            std::ios::binary | std::ios::trunc);
-        plugin_metadata_output.write(
-            stale_plugin_metadata_bytes.data(),
-            static_cast<std::streamsize>(stale_plugin_metadata_bytes.size()));
-        assert(plugin_metadata_output);
-    }
     stale_design_plugin.compiler_fingerprint = stale_plugin_metadata->compiler_fingerprint;
     stale_design_plugin.input_digest = stale_plugin_metadata->input_digest;
     stale_design_plugin.link_digest = stale_plugin_metadata->link_digest;
     stale_design_plugin.metadata_checksum = support::Sha256::hex(
         support::Sha256::digest(stale_plugin_metadata_bytes));
-    const auto stale_metadata_artifact = stale_design_plugin.directory
-        / systemc::kIncrementalPluginMetadataFilename;
     const auto stale_metadata_payload = std::ranges::find_if(
         stale_design_metadata.payloads, [&](const auto& payload) {
-            return payload.artifact == stale_metadata_artifact;
+            return support::path_to_utf8(payload.artifact) == stale_metadata_artifact;
         });
     assert(stale_metadata_payload != stale_design_metadata.payloads.end());
     stale_metadata_payload->checksum = stale_design_plugin.metadata_checksum;
     stale_design_metadata.design_digest = artifact::compute_design_digest(stale_design_metadata);
-    {
-        const auto bytes = artifact::serialize_design_metadata(stale_design_metadata);
-        std::ofstream design_metadata_output(
-            stale_systemc_design / artifact::kDesignMetadataFilename,
-            std::ios::binary | std::ios::trunc);
-        design_metadata_output.write(
-            bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        assert(design_metadata_output);
-    }
+    fsim::test::rewrite_container_payloads(stale_systemc_design, {
+        { std::string { artifact::kDesignMetadataFilename },
+            artifact::serialize_design_metadata(stale_design_metadata) },
+        { stale_metadata_artifact, stale_plugin_metadata_bytes } });
     diagnostic::Engine stale_systemc_design_diagnostics;
     assert(!app::load_design_artifact(
         stale_systemc_design, stale_systemc_design_diagnostics));
@@ -1067,8 +1048,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
 
     const auto hidden_systemc_source = directory / "incremental.cpp.producer-hidden";
     const auto hidden_systemc_object = directory / "incremental.fsimscobj.producer-hidden";
-    const auto systemc_plugin_metadata = systemc_plugin / systemc::kIncrementalPluginMetadataFilename;
-    const auto hidden_systemc_plugin_metadata = systemc_plugin / (std::string { systemc::kIncrementalPluginMetadataFilename } + ".producer-hidden");
+    const auto hidden_systemc_plugin = directory / "incremental.fsimscplugin.producer-hidden";
     const auto rename_producer = [&](const std::filesystem::path& producer_path,
                                      const std::filesystem::path& destination,
                                      const std::string_view label) {
@@ -1099,15 +1079,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     rename_producer(incremental_systemc_source, hidden_systemc_source,
         "source rename");
     rename_producer(systemc_object, hidden_systemc_object, "object rename");
-    // Windows locks a loaded DLL against renaming its containing artifact.
-    // Hiding the required metadata makes the producer artifact unusable while
-    // leaving the loaded native image at its stable path. Publication makes
-    // both the artifact and its contents read-only, so restore write access only
-    // to the directory and metadata file being renamed.
-    make_writable(systemc_plugin, "artifact permissions");
-    make_writable(systemc_plugin_metadata, "metadata permissions");
-    rename_producer(systemc_plugin_metadata, hidden_systemc_plugin_metadata,
-        "metadata rename");
+    // A loaded plug-in runs from a private copy, so its artifact can move.
+    rename_producer(systemc_plugin, hidden_systemc_plugin, "plug-in rename");
     std::cerr << "non-project producer hiding: loading embedded design\n";
     diagnostic::Engine systemc_design_load_diagnostics;
     auto loaded_systemc_design = app::load_design_artifact(
@@ -1195,14 +1168,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     assert(std::ranges::all_of(metadata->units, [](const auto& indexed) {
         return indexed.artifact.empty() && indexed.checksum.empty();
     }));
-    std::ifstream bundle_input(
-        object / metadata->compiled_hir_artifact, std::ios::binary);
-    assert(bundle_input);
-    const std::string bundle_bytes {
-        std::istreambuf_iterator<char> { bundle_input },
-        std::istreambuf_iterator<char> { } };
-    assert(!bundle_input.bad());
-    bundle_input.close();
+    const auto bundle_bytes = test::read_container_payload(
+        object, support::path_to_utf8(metadata->compiled_hir_artifact));
     diagnostic::Engine bundle_diagnostics;
     const auto bundle = app::deserialize_compiled_hir_bundle(
         bundle_bytes, support::path_to_utf8(metadata->compiled_hir_artifact),
@@ -1672,16 +1639,11 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
         [](const auto& payload) { return payload.kind.starts_with("sdf:"); });
     assert(sdf_payload != sdf_metadata->payloads.end());
     {
-        std::fstream corrupt_output(
-            corrupt_sdf_design / sdf_payload->artifact,
-            std::ios::binary | std::ios::in | std::ios::out);
-        assert(corrupt_output);
-        char value { };
-        corrupt_output.read(&value, 1);
-        value = static_cast<char>(value ^ 1);
-        corrupt_output.seekp(0);
-        corrupt_output.write(&value, 1);
-        assert(corrupt_output.good());
+        const auto name = support::path_to_utf8(sdf_payload->artifact);
+        auto bytes = fsim::test::read_container_payload(corrupt_sdf_design, name);
+        assert(!bytes.empty());
+        bytes[0] = static_cast<char>(bytes[0] ^ 1);
+        fsim::test::rewrite_container_payloads(corrupt_sdf_design, { { name, bytes } });
     }
     diagnostic::Engine corrupt_sdf_diagnostics;
     assert(
@@ -1690,7 +1652,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     const auto partial_sdf_design = directory / "partial-sdf.fsimdesign";
     copy_tree(relocated_sdf_design, partial_sdf_design);
     make_tree_writable(partial_sdf_design);
-    assert(std::filesystem::remove(partial_sdf_design / sdf_payload->artifact));
+    fsim::test::remove_container_payload(
+        partial_sdf_design, support::path_to_utf8(sdf_payload->artifact));
     diagnostic::Engine partial_sdf_diagnostics;
     assert(
         !app::load_design_artifact(partial_sdf_design, partial_sdf_diagnostics));
@@ -1701,13 +1664,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     auto stale_sdf_metadata = *sdf_metadata;
     stale_sdf_metadata.sdf_annotations.front().design_digest = std::string(64, '0');
     stale_sdf_metadata.design_digest = artifact::compute_design_digest(stale_sdf_metadata);
-    {
-        std::ofstream stale_output(
-            stale_sdf_design / artifact::kDesignMetadataFilename,
-            std::ios::binary | std::ios::trunc);
-        stale_output << artifact::serialize_design_metadata(stale_sdf_metadata);
-        assert(stale_output.good());
-    }
+    fsim::test::rewrite_container_payloads(stale_sdf_design, { { std::string { artifact::kDesignMetadataFilename },
+        artifact::serialize_design_metadata(stale_sdf_metadata) } });
     diagnostic::Engine stale_sdf_diagnostics;
     assert(!app::load_design_artifact(stale_sdf_design, stale_sdf_diagnostics));
     assert(std::ranges::any_of(
@@ -1947,14 +1905,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     auto alternate_metadata = *published_design_metadata;
     ++alternate_metadata.seed;
     alternate_metadata.design_digest = artifact::compute_design_digest(alternate_metadata);
-    {
-        std::ofstream alternate_output(
-            alternate_design / artifact::kDesignMetadataFilename,
-            std::ios::binary | std::ios::trunc);
-        const auto alternate_bytes = artifact::serialize_design_metadata(alternate_metadata);
-        alternate_output.write(alternate_bytes.data(), static_cast<std::streamsize>(alternate_bytes.size()));
-        assert(alternate_output);
-    }
+    fsim::test::rewrite_container_payloads(alternate_design, { { std::string { artifact::kDesignMetadataFilename },
+        artifact::serialize_design_metadata(alternate_metadata) } });
     diagnostic::Engine alternate_design_diagnostics;
     auto alternate_loaded = app::load_design_artifact(alternate_design, alternate_design_diagnostics);
     assert(alternate_loaded && !alternate_design_diagnostics.has_error());
@@ -1974,14 +1926,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     corrupt_trace_metadata.trace_archive.back()
         = corrupt_trace_metadata.trace_archive.back() == '0' ? '1' : '0';
     corrupt_trace_metadata.design_digest = artifact::compute_design_digest(corrupt_trace_metadata);
-    {
-        std::ofstream corrupt_trace_output(
-            corrupt_trace_design / artifact::kDesignMetadataFilename,
-            std::ios::binary | std::ios::trunc);
-        corrupt_trace_output
-            << artifact::serialize_design_metadata(corrupt_trace_metadata);
-        assert(corrupt_trace_output.good());
-    }
+    fsim::test::rewrite_container_payloads(corrupt_trace_design, { { std::string { artifact::kDesignMetadataFilename },
+        artifact::serialize_design_metadata(corrupt_trace_metadata) } });
     diagnostic::Engine corrupt_trace_diagnostics;
     assert(!app::load_design_artifact(
         corrupt_trace_design, corrupt_trace_diagnostics));
@@ -1993,11 +1939,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     const auto corrupt_design = directory / "corrupt.fsimdesign";
     copy_tree(design, corrupt_design);
     make_tree_writable(corrupt_design);
-    {
-        std::ofstream corrupt_runtime(corrupt_design / "state/runtime.bin",
-            std::ios::binary | std::ios::app);
-        corrupt_runtime.put('x');
-    }
+    fsim::test::append_container_payload(corrupt_design, "state/runtime.bin", "x");
     diagnostic::Engine corrupt_design_diagnostics;
     assert(
         !app::load_design_artifact(corrupt_design, corrupt_design_diagnostics));
@@ -2006,8 +1948,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     const auto oversized_design = directory / "oversized.fsimdesign";
     copy_tree(design, oversized_design);
     make_tree_writable(oversized_design);
-    std::filesystem::resize_file(
-        oversized_design / "state/compiled-design.fsimhir",
+    fsim::test::forge_container_payload_size(oversized_design, "state/compiled-design.fsimhir",
         app::kCompiledHirDecodeBudgetBytes + 1U);
     diagnostic::Engine oversized_design_diagnostics;
     assert(!app::load_design_artifact(
@@ -2025,8 +1966,7 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     const auto oversized_design_ir = directory / "oversized-design-ir.fsimdesign";
     copy_tree(design, oversized_design_ir);
     make_tree_writable(oversized_design_ir);
-    std::filesystem::resize_file(
-        oversized_design_ir / "state/design-ir.bin",
+    fsim::test::forge_container_payload_size(oversized_design_ir, "state/design-ir.bin",
         app::kCompiledHirDecodeBudgetBytes + 1U);
     diagnostic::Engine oversized_design_ir_diagnostics;
     assert(!app::load_design_artifact(
@@ -2043,8 +1983,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     const auto partial_design = directory / "partial.fsimdesign";
     copy_tree(design, partial_design);
     make_tree_writable(partial_design);
-    assert(std::filesystem::remove(
-        partial_design / "state/compiled-design.fsimhir"));
+    fsim::test::remove_container_payload(
+        partial_design, "state/compiled-design.fsimhir");
     diagnostic::Engine partial_design_diagnostics;
     assert(
         !app::load_design_artifact(partial_design, partial_design_diagnostics));
@@ -2056,16 +1996,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     auto incompatible_metadata = *published_design_metadata;
     ++incompatible_metadata.runtime_abi;
     incompatible_metadata.design_digest = artifact::compute_design_digest(incompatible_metadata);
-    {
-        std::ofstream incompatible_output(
-            incompatible_design / artifact::kDesignMetadataFilename,
-            std::ios::binary | std::ios::trunc);
-        const auto incompatible_bytes = artifact::serialize_design_metadata(incompatible_metadata);
-        incompatible_output.write(
-            incompatible_bytes.data(),
-            static_cast<std::streamsize>(incompatible_bytes.size()));
-        assert(incompatible_output);
-    }
+    fsim::test::rewrite_container_payloads(incompatible_design, { { std::string { artifact::kDesignMetadataFilename },
+        artifact::serialize_design_metadata(incompatible_metadata) } });
     diagnostic::Engine incompatible_design_diagnostics;
     assert(!app::load_design_artifact(incompatible_design,
         incompatible_design_diagnostics));
@@ -2086,13 +2018,14 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     std::filesystem::create_directories(relocated_file_root);
     copy_tree(design, relocated_read_only_design);
     const auto producer_prefix = support::path_to_utf8(directory);
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(
-             relocated_read_only_design)) {
-        if (!entry.is_regular_file()) {
-            continue;
+    {
+        // Sources are referenced relative to the producer's base directory
+        // ("../tmp/..."); no absolute producer path is stored.
+        const auto bytes = read_binary_file(relocated_read_only_design);
+        for (auto found = bytes.find(producer_prefix); found != std::string::npos;
+             found = bytes.find(producer_prefix, found + 1U)) {
+            assert(found >= 2U && bytes.compare(found - 2U, 2U, "..") == 0);
         }
-        const auto bytes = read_binary_file(entry.path());
-        assert(bytes.find(producer_prefix) == std::string::npos);
     }
     make_tree_read_only(relocated_read_only_root);
     const auto relocated_read_only_design_text
@@ -2135,10 +2068,9 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     std::filesystem::rename(hidden_extra_source, extra_source);
 
     const auto oversized_object = directory / "oversized.fsimobj";
-    copy_tree(object, oversized_object);
-    make_tree_writable(oversized_object);
-    std::filesystem::resize_file(
-        oversized_object / metadata->compiled_hir_artifact,
+    std::filesystem::copy_file(object, oversized_object);
+    test::forge_container_payload_size(oversized_object,
+        support::path_to_utf8(metadata->compiled_hir_artifact),
         app::kCompiledHirDecodeBudgetBytes + 1U);
     diagnostic::Engine oversized_object_diagnostics;
     const std::vector oversized_inputs { oversized_object };
@@ -2155,25 +2087,12 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     std::filesystem::remove_all(oversized_object);
 
     const auto corrupt_object = directory / "corrupt.fsimobj";
-    std::filesystem::create_directory(corrupt_object);
-    for (const auto& entry :
-        std::filesystem::recursive_directory_iterator(object)) {
-        const auto relative = std::filesystem::relative(entry.path(), object);
-        if (entry.is_directory()) {
-            std::filesystem::create_directories(corrupt_object / relative);
-        } else {
-            std::filesystem::copy_file(entry.path(), corrupt_object / relative);
-        }
-    }
-    const auto corrupt_unit
-        = corrupt_object / metadata->compiled_hir_artifact;
-    std::filesystem::permissions(corrupt_unit,
-        std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
+    std::filesystem::copy_file(object, corrupt_object);
     {
-        std::ofstream corrupt_output(corrupt_unit,
-            std::ios::binary | std::ios::app);
-        corrupt_output.put('x');
+        const auto payload_name = support::path_to_utf8(metadata->compiled_hir_artifact);
+        auto payload = test::read_container_payload(corrupt_object, payload_name);
+        payload.push_back('x');
+        test::rewrite_container_payloads(corrupt_object, { { payload_name, payload } });
     }
     diagnostic::Engine corrupt_diagnostics;
     const std::vector corrupt_inputs { corrupt_object };
@@ -2650,13 +2569,18 @@ module isolated; endmodule
 
     output.str({ });
     error.str({ });
-    // The low-level publisher requires a fresh directory. Workspace recompiles
-    // publish a new revision and replace the catalog entry transactionally.
+    // Compiling to an existing object replaces it: the new file is written
+    // privately and renamed over the old one.
     assert(run_fixture_command(static_cast<int>(fixture_compile_arguments.size()),
                fixture_compile_arguments.data(), production_services, output,
                error)
-        == 1);
-    assert(error.str().find("already exists") != std::string::npos);
+        == 0);
+    diagnostic::Engine replaced_diagnostics;
+    const auto replaced = artifact::load_object_metadata(object, replaced_diagnostics);
+    assert(replaced && !replaced_diagnostics.has_error());
+    assert(std::ranges::any_of(replaced->units, [](const auto& indexed) {
+        return indexed.name == "tb";
+    }));
 }
 
 } // namespace fsim::test

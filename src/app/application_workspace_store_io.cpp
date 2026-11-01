@@ -40,20 +40,6 @@ bool safe_payload_path(const std::filesystem::path& path)
     return true;
 }
 
-bool managed_revision_filename(const std::string_view name)
-{
-    if (name.size() < 34U || name.front() != 'r')
-        return false;
-    for (const char character : name.substr(1U, 32U)) {
-        if (!(character >= '0' && character <= '9')
-            && !(character >= 'a' && character <= 'f'))
-            return false;
-    }
-    const auto extension = name.substr(33U);
-    return extension == ".fsimobj" || extension == ".fsimscobj"
-        || extension == ".fsimscplugin" || extension == ".fsimdesign";
-}
-
 } // namespace
 
 bool valid_name(const std::string_view name)
@@ -174,30 +160,143 @@ bool safe_descendant(const std::filesystem::path& root,
     return true;
 }
 
+std::string_view artifact_extension(const ArtifactKind kind)
+{
+    switch (kind) {
+    case ArtifactKind::Hdl:
+        return ".fsimobj";
+    case ArtifactKind::SystemCObject:
+        return ".fsimscobj";
+    case ArtifactKind::SystemCPlugin:
+        return ".fsimscplugin";
+    }
+    return { };
+}
+
+// A file name stem from an identifier: [A-Za-z0-9_] stay, every other byte
+// is %XX. '-' joins the parts of a secondary unit's name and '~' a collision
+// counter; neither occurs in an HDL identifier.
+std::string artifact_stem(const std::string_view name)
+{
+    static constexpr char digits[] = "0123456789ABCDEF";
+    std::string result;
+    for (const char character : name) {
+        const auto byte = static_cast<unsigned char>(character);
+        if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z')
+            || (byte >= '0' && byte <= '9') || byte == '_') {
+            result += character;
+        } else {
+            result += '%';
+            result += digits[byte >> 4U];
+            result += digits[byte & 15U];
+        }
+    }
+    return result;
+}
+
+std::string artifact_name(const ArtifactRecord& record)
+{
+    std::string name;
+    if (record.kind == ArtifactKind::SystemCPlugin) {
+        name = "systemc";
+    } else if (record.kind == ArtifactKind::SystemCObject) {
+        name = record.sources.empty()
+            ? "systemc"
+            : artifact_stem(support::path_to_utf8(
+                  support::path_from_utf8(record.sources.front()).stem()));
+    } else if (std::ranges::count_if(record.units, [](const auto& owned) {
+                   return owned.unit.kind != "class";
+               }) != 1 && !record.sources.empty()) {
+        // A SystemVerilog compilation unit: the object that keeps shared
+        // `$unit` state with every unit compiled beside it, or only `$unit`
+        // classes. It is named after its first source file; "-" never occurs
+        // in a unit name.
+        name = artifact_stem(support::path_to_utf8(
+                   support::path_from_utf8(record.sources.front()).stem()))
+            + "-unit";
+    } else {
+        // Named after its primary design unit: the unit that is not a class
+        // (classes belong to the unit that declares them).
+        const auto unit = std::ranges::find_if(record.units, [](const auto& owned) {
+            return owned.unit.kind != "class";
+        });
+        const auto& entry = unit != record.units.end() ? unit->unit
+            : record.units.empty() ? library::UnitIndexEntry { } : record.units.front().unit;
+        if (entry.kind == "architecture")
+            name = artifact_stem(entry.primary_name) + "-" + artifact_stem(entry.name);
+        else if (entry.kind == "package_body"
+            || (entry.kind == "package" && !entry.primary_name.empty()))
+            name = artifact_stem(entry.primary_name.empty() ? entry.name : entry.primary_name)
+                + "-body";
+        else
+            name = artifact_stem(entry.name);
+    }
+    if (name.empty())
+        name = "object";
+    if (name.size() > 160U)
+        name.resize(160U);
+    // Windows reserves device names whatever their extension.
+    std::string lower { name };
+    std::ranges::transform(lower, lower.begin(), folded);
+    const auto device = lower == "con" || lower == "prn" || lower == "aux" || lower == "nul"
+        || (lower.size() == 4U && (lower.starts_with("com") || lower.starts_with("lpt"))
+            && lower.back() >= '1' && lower.back() <= '9');
+    return device ? "_" + name : name;
+}
+
+bool valid_artifact_id(const std::string_view id)
+{
+    return !id.empty() && id.size() <= 200U && id.front() != '.'
+        && std::ranges::all_of(id, [](const char value) {
+               return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z')
+                   || (value >= '0' && value <= '9') || value == '_' || value == '%'
+                   || value == '~' || value == '-';
+           });
+}
+
 bool managed_artifact_path(const ArtifactRecord& record)
 {
-    if (record.id.size() != 33U || record.id.front() != 'r')
-        return false;
-    if (!std::ranges::all_of(record.id.substr(1), [](const char value) {
-            return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f');
-        }))
-        return false;
-    std::string extension;
-    switch (record.kind) {
-    case ArtifactKind::Hdl:
-        extension = ".fsimobj";
-        break;
-    case ArtifactKind::SystemCObject:
-        extension = ".fsimscobj";
-        break;
-    case ArtifactKind::SystemCPlugin:
-        extension = ".fsimscplugin";
-        break;
-    default:
-        return false;
+    // One file name beside the catalog: a valid stem and the kind's
+    // extension.
+    const auto extension = artifact_extension(record.kind);
+    const auto name = support::path_to_utf8(record.path);
+    return !extension.empty() && valid_artifact_id(record.id)
+        && record.path == record.path.filename() && name.size() > extension.size()
+        && name.ends_with(extension)
+        && valid_artifact_id(std::string_view { name }.substr(0U, name.size() - extension.size()));
+}
+
+bool managed_artifact_filename(const std::string_view name)
+{
+    // Pending and temporary files of an interrupted writer start with '.'.
+    if (name.starts_with(".pending-") || (name.starts_with('.') && name.find(".tmp-") != std::string_view::npos))
+        return true;
+    for (const std::string_view extension : { ".fsimobj", ".fsimscobj", ".fsimscplugin" }) {
+        if (name.size() > extension.size() && name.ends_with(extension)
+            && valid_artifact_id(name.substr(0U, name.size() - extension.size())))
+            return true;
     }
-    return record.path == std::filesystem::path { "artifacts" }
-        / (record.id + extension);
+    return false;
+}
+
+void collect_artifacts(const std::filesystem::path& root,
+    const std::set<std::string>& retained) noexcept
+{
+    std::error_code code;
+    const auto status = support::native_fs::symlink_status(root, code);
+    if (code || !support::native_fs::is_directory(status))
+        return;
+    std::vector<std::filesystem::path> unused;
+    auto iterator = support::native_fs::directory_iterator(root, code);
+    const std::filesystem::directory_iterator end;
+    while (!code && iterator != end) {
+        const auto filename = support::path_to_utf8(iterator->path().filename());
+        if (managed_artifact_filename(filename) && !retained.contains(filename))
+            unused.push_back(iterator->path());
+        iterator.increment(code);
+    }
+    for (const auto& path : unused)
+        remove_artifact(path);
 }
 
 bool valid_record(const ArtifactRecord& record, std::string& error)
@@ -243,6 +342,17 @@ bool valid_record(const ArtifactRecord& record, std::string& error)
     return true;
 }
 
+std::string legacy_removal_advice(const std::filesystem::path& path)
+{
+    const auto text = support::path_to_utf8(path);
+#ifdef _WIN32
+    return "clear its read-only attributes (attrib -R \"" + text + "\\*\" /S /D), then delete \""
+        + text + "\"";
+#else
+    return "make it writable (chmod -R u+w '" + text + "'), then delete it";
+#endif
+}
+
 std::string new_revision()
 {
     static std::atomic_uint64_t sequence { 0U };
@@ -262,50 +372,12 @@ std::string new_revision()
     return output.str();
 }
 
-void remove_revision(const std::filesystem::path& path) noexcept
+void remove_artifact(const std::filesystem::path& path) noexcept
 {
+    // A library still loaded on Windows keeps its file until a later
+    // collection; failure here never invalidates the committed catalog.
     std::error_code code;
-    const auto status = support::native_fs::symlink_status(path, code);
-    if (code)
-        return;
-    if (support::native_fs::is_symlink(status)) {
-        support::native_fs::remove(path, code);
-        return;
-    }
-    support::native_fs::permissions(path, std::filesystem::perms::owner_all,
-        std::filesystem::perm_options::add, code);
-    auto iterator = support::native_fs::recursive_directory_iterator(path, code);
-    const std::filesystem::recursive_directory_iterator end;
-    while (!code && iterator != end) {
-        const auto entry_status = iterator->symlink_status(code);
-        if (!code && !support::native_fs::is_symlink(entry_status))
-            support::native_fs::permissions(iterator->path(),
-                std::filesystem::perms::owner_all,
-                std::filesystem::perm_options::add, code);
-        if (!code)
-            iterator.increment(code);
-    }
-    code.clear();
-    // Loaded DLLs may remain locked on Windows. A later successful publication
-    // retries collection; failure here never invalidates the committed catalog.
-    support::native_fs::remove_all(path, code);
-}
-
-void collect_revisions(const std::filesystem::path& root,
-    const std::set<std::string>& retained) noexcept
-{
-    std::error_code code;
-    const auto status = support::native_fs::symlink_status(root, code);
-    if (code || !support::native_fs::is_directory(status))
-        return;
-    auto iterator = support::native_fs::directory_iterator(root, code);
-    const std::filesystem::directory_iterator end;
-    while (!code && iterator != end) {
-        const auto filename = support::path_to_utf8(iterator->path().filename());
-        if (managed_revision_filename(filename) && !retained.contains(filename))
-            remove_revision(iterator->path());
-        iterator.increment(code);
-    }
+    support::native_fs::remove(path, code);
 }
 
 bool replace_text(const std::filesystem::path& destination,

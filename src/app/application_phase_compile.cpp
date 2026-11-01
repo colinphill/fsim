@@ -25,16 +25,6 @@
 namespace fsim::app::application_detail {
 namespace {
 
-std::string indexed_path(
-    const std::string_view directory,
-    const std::size_t index,
-    const std::string_view suffix) {
-  std::ostringstream output;
-  output << directory << '/' << std::setw(8) << std::setfill('0') << index
-         << suffix;
-  return output.str();
-}
-
 std::optional<std::string> read_checked_source(
     const std::filesystem::path& path,
     const std::string_view digest,
@@ -67,21 +57,34 @@ std::optional<std::string> read_checked_source(
   return bytes;
 }
 
-std::optional<std::filesystem::path> relative_to(
+}  // namespace
+
+artifact::ObjectSourceCoverage source_coverage(
+    const std::string_view contents, const std::string_view language) {
+  auto controls = frontend::parse_coverage_source_controls(contents,
+      language == "vhdl" ? frontend::Language::Vhdl2008
+                         : frontend::Language::SystemVerilog2017);
+  return { contents.size(), controls.error, std::move(controls.exclusions) };
+}
+
+// Objects reference sources by their path relative to the compiling
+// workspace; a source outside it is reached with "..".
+std::optional<std::filesystem::path> source_reference(
     const std::filesystem::path& path,
-    const std::filesystem::path& root) {
-  const auto relative = path.lexically_normal().lexically_relative(
-      root.lexically_normal());
-  if (relative.empty() || relative.is_absolute()
-      || std::ranges::any_of(relative, [](const auto& component) {
-           return component == "..";
-         })) {
+    const std::filesystem::path& workspace,
+    diagnostic::Engine& diagnostics) {
+  const auto root = std::filesystem::absolute(workspace).lexically_normal();
+  const auto absolute = (path.is_absolute() ? path : root / path).lexically_normal();
+  auto relative = absolute.lexically_relative(root);
+  if (relative.empty() || relative == ".") {
+    diagnostics.error(
+        "FSIM-ART-0004",
+        "compilation source has no path relative to the workspace: "
+            + support::path_to_utf8(path));
     return std::nullopt;
   }
   return relative;
 }
-
-}  // namespace
 
 bool publish_workspace_object(
     const project::Config& config,
@@ -120,10 +123,15 @@ bool publish_workspace_object(
   metadata.defines = source_set.defines;
   metadata.vhdl_package_dependencies =
       application_detail::vhdl_package_dependencies(checked);
-  for (std::size_t index = 0;
-       index < source_set.include_directories.size(); ++index) {
-    metadata.include_roots.push_back(
-        std::filesystem::path{"includes"} / indexed_path("roots", index, ""));
+  for (const auto& include : source_set.include_directories) {
+    auto reference = source_reference(include, config.base_directory, diagnostics);
+    if (!reference) {
+      return false;
+    }
+    if (std::ranges::find(metadata.include_roots, *reference)
+        == metadata.include_roots.end()) {
+      metadata.include_roots.push_back(std::move(*reference));
+    }
   }
 
   std::vector<library::PortablePayload> payloads;
@@ -145,48 +153,25 @@ bool publish_workspace_object(
       add_source(dependency.path, dependency.content_digest);
     }
   }
-  std::set<std::filesystem::path> root_sources;
-  for (const auto& source : source_set.files) {
-    root_sources.insert(source.lexically_normal());
-  }
-  std::size_t root_index = 0;
-  std::size_t dependency_index = 0;
   for (const auto& path : ordered_paths) {
-    std::filesystem::path logical;
-    if (root_sources.contains(path)) {
-      logical = std::filesystem::path{"sources"} / "roots"
-          / indexed_path("root", root_index++, "") / path.filename();
-    } else {
-      for (std::size_t include_index = 0;
-           include_index < source_set.include_directories.size();
-           ++include_index) {
-        if (const auto relative = relative_to(
-                path, source_set.include_directories[include_index])) {
-          logical = metadata.include_roots[include_index] / *relative;
-          break;
-        }
-      }
-      if (logical.empty()) {
-        logical = std::filesystem::path{"sources"} / "dependencies"
-            / indexed_path("dependency", dependency_index++, "")
-            / path.filename();
-      }
+    auto logical = source_reference(path, config.base_directory, diagnostics);
+    if (!logical) {
+      return false;
     }
+    // The text is read once to confirm it is what was compiled and to take
+    // its coverage facts; only its path and digest are stored.
     auto contents = read_checked_source(
         path, expected_digests.at(path), diagnostics);
     if (!contents.has_value()) {
       return false;
     }
-    // A source's checksum is also its content identity (CheckedSource
-    // content_digest), so it stays SHA-256 like the project's own digests.
-    const auto checksum = support::Sha256::hex(
-        support::Sha256::digest(*contents));
+    const auto logical_name = support::path_to_utf8(*logical);
     metadata.sources.push_back({
-        support::path_to_utf8(logical), logical, checksum, metadata.language,
+        logical_name, { }, expected_digests.at(path), metadata.language,
         metadata.standard, metadata.compatibility_profile});
-    source_mappings.push_back({support::path_to_utf8(path),
-                               support::path_to_utf8(logical)});
-    payloads.push_back({logical, std::move(*contents)});
+    metadata.source_coverage.push_back(
+        source_coverage(*contents, metadata.language));
+    source_mappings.push_back({support::path_to_utf8(path), logical_name});
   }
   auto provenance_mappings = compiled_cache_source_mappings(
       checked, config.base_directory, diagnostics);

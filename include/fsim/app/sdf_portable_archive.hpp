@@ -116,7 +116,7 @@ struct SdfPortableArchiveDecodeResult {
     std::span<const std::byte> bytes);
 
 [[nodiscard]] SdfPortableArchiveDecodeResult load_sdf_library_archive(
-    const std::filesystem::path& library_directory,
+    const std::filesystem::path& library_path,
     const library::Metadata& metadata,
     const artifact::DesignSdfAnnotation& expected_annotation,
     SdfPortableArchiveLimits limits = { });

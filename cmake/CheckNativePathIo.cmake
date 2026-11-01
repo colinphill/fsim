@@ -41,8 +41,13 @@ set(FSIM_REVIEWED_NATIVE_CALLS
   "src/runtime/tf_containment.cpp|fopen|1"
   # The NUL device for compiler standard input.
   "src/systemc/plugin_compiler_process.cpp|CreateFileW|1"
-  # SQLite catalog handles, not file streams.
-  "src/app/application_workspace_store_catalog.cpp|open|2")
+  # SQLite catalog and container handles, not file streams.
+  "src/app/application_workspace_store_catalog.cpp|open|2"
+  "src/app/application_workspace_store_sqlite.cpp|open|1"
+  "src/artifact/container.cpp|open|2"
+  "src/compiler/object_cache.cpp|open|1"
+  # SQLite opens files through its own VFS from a UTF-8 path.
+  "src/support/sqlite_database.cpp|sqlite3_open_v2|1")
 if(DEFINED FSIM_NATIVE_PATH_IO_TEST_REVIEWED)
   set(FSIM_REVIEWED_NATIVE_CALLS "${FSIM_NATIVE_PATH_IO_TEST_REVIEWED}")
 endif()

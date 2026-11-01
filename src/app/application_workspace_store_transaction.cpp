@@ -5,6 +5,8 @@
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
+#include <map>
+#include <system_error>
 
 namespace fsim::app::workspace {
 namespace detail {
@@ -134,9 +136,40 @@ bool merge_records(LibraryCatalog& catalog,
 struct LibraryTransaction::Impl {
     LibraryCatalog catalog;
     std::unique_ptr<compiler::detail::CacheDirectoryLock> lock;
+    // Allocated records keep their revision id; until commit names them
+    // after their primary unit, publishers write to the hidden pending
+    // file in `path`.
     std::vector<ArtifactRecord> allocated;
     bool committed { false };
 };
+
+namespace {
+
+std::string folded_filename(const std::filesystem::path& path)
+{
+    auto name = support::path_to_utf8(path);
+    std::ranges::transform(name, name.begin(), [](const unsigned char value) {
+        return value >= 'A' && value <= 'Z' ? static_cast<char>(value + 'a' - 'A')
+                                          : static_cast<char>(value);
+    });
+    return name;
+}
+
+bool install_pending(const std::filesystem::path& pending,
+    const std::filesystem::path& destination, std::string& error)
+{
+    std::error_code code;
+    if (!compiler::detail::atomic_replace_file(pending, destination, code) && !code)
+        code = std::make_error_code(std::errc::io_error);
+    if (code) {
+        error = "cannot install workspace artifact '" + support::path_to_utf8(destination.filename())
+            + "': " + code.message();
+        return false;
+    }
+    return true;
+}
+
+} // namespace
 
 LibraryTransaction::LibraryTransaction(std::unique_ptr<Impl> impl)
     : impl_(std::move(impl))
@@ -145,14 +178,10 @@ LibraryTransaction::LibraryTransaction(std::unique_ptr<Impl> impl)
 
 LibraryTransaction::~LibraryTransaction()
 {
-    for (const auto& allocated : impl_->allocated) {
-        const bool retained = impl_->committed
-            && std::ranges::any_of(impl_->catalog.artifacts, [&](const auto& record) {
-                return record.id == allocated.id;
-            });
-        if (!retained)
-            detail::remove_revision(impl_->catalog.location.directory / allocated.path);
-    }
+    if (impl_->committed)
+        return;
+    for (const auto& record : impl_->allocated)
+        detail::remove_artifact(impl_->catalog.location.directory / record.path);
 }
 
 const LibraryCatalog& LibraryTransaction::catalog() const
@@ -168,30 +197,20 @@ std::optional<ArtifactRecord> LibraryTransaction::allocate_artifact(
         error = "workspace transaction has already committed";
         return std::nullopt;
     }
-    const auto directory = impl_->catalog.location.directory / "artifacts";
-    if (!detail::ensure_directory(directory, error))
+    const auto extension = detail::artifact_extension(kind);
+    if (extension.empty()) {
+        error = "invalid workspace artifact kind";
+        return std::nullopt;
+    }
+    if (!detail::ensure_directory(impl_->catalog.location.directory, error))
         return std::nullopt;
     ArtifactRecord record;
     record.id = detail::new_revision();
     record.kind = kind;
-    std::string extension;
-    switch (kind) {
-    case ArtifactKind::Hdl:
-        extension = ".fsimobj";
-        break;
-    case ArtifactKind::SystemCObject:
-        extension = ".fsimscobj";
-        break;
-    case ArtifactKind::SystemCPlugin:
-        extension = ".fsimscplugin";
-        break;
-    default:
-        error = "invalid workspace artifact kind";
-        return std::nullopt;
-    }
-    record.path = std::filesystem::path { "artifacts" } / (record.id + extension);
+    record.path = ".pending-" + record.id + std::string { extension };
     std::error_code code;
-    if (support::native_fs::exists(artifact_path(record), code) || code) {
+    if (support::native_fs::exists(impl_->catalog.location.directory / record.path, code)
+        || code) {
         error = "generated workspace artifact path is unavailable";
         return std::nullopt;
     }
@@ -201,6 +220,14 @@ std::optional<ArtifactRecord> LibraryTransaction::allocate_artifact(
 
 std::filesystem::path LibraryTransaction::artifact_path(const ArtifactRecord& record) const
 {
+    // After commit the record is named; callers may still hold the copy
+    // they allocated.
+    if (impl_->committed) {
+        const auto named = std::ranges::find(impl_->catalog.artifacts, record.id,
+            &ArtifactRecord::id);
+        if (named != impl_->catalog.artifacts.end())
+            return impl_->catalog.location.directory / named->path;
+    }
     return impl_->catalog.location.directory / record.path;
 }
 
@@ -224,29 +251,59 @@ bool LibraryTransaction::commit(std::vector<ArtifactRecord> records,
         error = "workspace transaction has already committed";
         return false;
     }
-    for (const auto& record : records) {
+    const auto& directory = impl_->catalog.location.directory;
+    std::map<std::string, std::filesystem::path> pending;
+    for (auto& record : records) {
         const bool allocated = std::ranges::any_of(impl_->allocated, [&](const auto& candidate) {
             return candidate.id == record.id && candidate.path == record.path
                 && candidate.kind == record.kind;
         });
         std::error_code code;
-        if (!allocated || !detail::safe_descendant(impl_->catalog.location.directory, record.path, error)
-            || !support::native_fs::is_directory(artifact_path(record), code) || code) {
-            if (error.empty())
-                error = "workspace artifact was not allocated and published by this transaction";
+        if (!allocated || !support::native_fs::exists(directory / record.path, code) || code
+            || !pending.emplace(record.id, directory / record.path).second) {
+            error = "workspace artifact was not allocated and published by this transaction";
             return false;
         }
+        // A placeholder name until the merged catalog is known.
+        record.path = record.id + std::string { detail::artifact_extension(record.kind) };
     }
     auto replacement = impl_->catalog;
-    if (!detail::merge_records(replacement, records, replaced_sources, error)
-        || !detail::save_catalog(replacement, error))
+    if (!detail::merge_records(replacement, records, replaced_sources, error))
+        return false;
+    // Name each new artifact after its primary unit, avoiding (without regard
+    // to case) every name the catalog keeps. A recompiled unit takes the
+    // name of the record it replaces.
+    std::set<std::string> used;
+    for (const auto& record : replacement.artifacts) {
+        if (!pending.contains(record.id))
+            used.insert(folded_filename(record.path));
+    }
+    std::vector<std::pair<std::filesystem::path, std::filesystem::path>> installs;
+    for (auto& record : replacement.artifacts) {
+        const auto source = pending.find(record.id);
+        if (source == pending.end())
+            continue;
+        const auto base = detail::artifact_name(record);
+        const auto extension = std::string { detail::artifact_extension(record.kind) };
+        auto name = base;
+        for (std::size_t counter = 2U; used.contains(folded_filename(name + extension)); ++counter)
+            name = base + "~" + std::to_string(counter);
+        used.insert(folded_filename(name + extension));
+        record.path = name + extension;
+        installs.emplace_back(source->second, directory / record.path);
+    }
+    if (!detail::save_catalog(replacement, error))
         return false;
     impl_->catalog = std::move(replacement);
     impl_->committed = true;
+    for (const auto& [published, destination] : installs) {
+        if (!install_pending(published, destination, error))
+            return false;
+    }
     std::set<std::string> retained;
     for (const auto& record : impl_->catalog.artifacts)
         retained.insert(support::path_to_utf8(record.path.filename()));
-    detail::collect_revisions(impl_->catalog.location.directory / "artifacts", retained);
+    detail::collect_artifacts(impl_->catalog.location.directory, retained);
     return true;
 }
 
@@ -297,7 +354,7 @@ bool Store::delete_artifact(const std::string_view name,
     std::set<std::string> retained;
     for (const auto& record : catalog->artifacts)
         retained.insert(support::path_to_utf8(record.path.filename()));
-    detail::collect_revisions(location->directory / "artifacts", retained);
+    detail::collect_artifacts(location->directory, retained);
     return true;
 }
 
@@ -328,10 +385,8 @@ bool Store::delete_library(const std::string_view name, std::string& error) cons
         if (!detail::write_mappings(*this, *mappings, error))
             return false;
     }
-    detail::collect_revisions(location->directory / "artifacts", { });
+    detail::collect_artifacts(location->directory, { });
     std::error_code code;
-    support::native_fs::remove(location->directory / "artifacts", code);
-    code.clear();
     support::native_fs::remove(location->directory / "library.sqlite3", code);
     if (code) {
         error = "cannot delete workspace library catalog: " + code.message();

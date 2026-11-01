@@ -2,6 +2,7 @@
 #include "application_internal.hpp"
 
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/artifact/object.hpp"
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/library/source_mapping.hpp"
@@ -25,6 +26,8 @@
 
 namespace fsim::app {
 namespace {
+
+    constexpr std::string_view kSourceCoveragePayload = "coverage/sources.bin";
 
     std::string indexed_path(
         const std::string_view directory,
@@ -314,7 +317,7 @@ bool export_library(
             source_paths.insert(root);
         }
     }
-    std::size_t source_index = 0;
+    std::vector<artifact::ObjectSourceCoverage> source_coverage;
     for (const auto& path : source_paths) {
         std::string digest;
         for (const auto& source : checked->hdl_sources) {
@@ -335,20 +338,32 @@ bool export_library(
         if (digest.empty()) {
             continue;
         }
-        auto contents = read_checked_source(path, digest, diagnostics);
+        // The text is read to confirm it is what was compiled and to take its
+        // coverage facts; the library records its path and digest, never it.
+        const auto contents = read_checked_source(path, digest, diagnostics);
         if (!contents.has_value()) {
             return false;
         }
-        const auto filename = path.filename().empty()
-            ? std::string { "source" }
-            : support::path_to_utf8(path.filename());
-        const auto artifact = indexed_path(
-            "sources", source_index++, "/" + filename);
+        const auto logical = application_detail::source_reference(
+            path, config.base_directory, diagnostics);
+        if (!logical) {
+            return false;
+        }
+        const auto logical_name = support::path_to_utf8(*logical);
         metadata.sources.push_back(
-            { artifact, artifact, digest, source_languages[path],
+            { logical_name, { }, digest, source_languages[path],
                 source_standards[path], source_compatibility_profiles[path] });
-        source_mappings.push_back({ support::path_to_utf8(path), artifact });
-        payloads.push_back({ artifact, std::move(*contents) });
+        source_mappings.push_back({ support::path_to_utf8(path), logical_name });
+        source_coverage.push_back(source_languages[path] == "systemc"
+                ? artifact::ObjectSourceCoverage { }
+                : application_detail::source_coverage(*contents, source_languages[path]));
+    }
+    if (!source_coverage.empty()) {
+        auto bytes = artifact::serialize_source_coverage(source_coverage);
+        metadata.auxiliary_artifacts.push_back({ "source-coverage", "sources",
+            kSourceCoveragePayload, support::payload_checksum(bytes), "1",
+            std::string { artifact::kSourceCoverageMagic } });
+        payloads.push_back({ kSourceCoveragePayload, std::move(bytes) });
     }
 
     std::vector<std::string> persisted_libraries {

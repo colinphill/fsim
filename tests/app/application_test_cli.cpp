@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
 #include "application_workflow_test_support.hpp"
+#include "../support/container_test_support.hpp"
 
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/artifact/container.hpp"
+#include "fsim/artifact/object.hpp"
 #include "fsim/cli/driver.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/support/path.hpp"
@@ -28,25 +31,21 @@ namespace fsim::test {
 
 namespace {
 
+    // A library is one container file; a copy is writable like any file.
     void clone_library_writable(
         const std::filesystem::path& source,
         const std::filesystem::path& destination)
     {
-        std::filesystem::create_directories(destination);
-        for (const auto& entry :
-            std::filesystem::recursive_directory_iterator(source)) {
-            const auto relative = std::filesystem::relative(entry.path(), source);
-            const auto target = destination / relative;
-            if (entry.is_directory()) {
-                std::filesystem::create_directories(target);
-            } else if (entry.is_regular_file()) {
-                std::filesystem::create_directories(target.parent_path());
-                std::filesystem::copy_file(entry.path(), target);
-                std::filesystem::permissions(
-                    target, std::filesystem::perms::owner_write,
-                    std::filesystem::perm_options::add);
-            }
-        }
+        std::filesystem::copy_file(source, destination);
+    }
+
+    void rewrite_library_metadata(
+        const std::filesystem::path& library,
+        const fsim::library::Metadata& metadata)
+    {
+        rewrite_container_payloads(library,
+            { { std::string { fsim::library::kMetadataFilename },
+                fsim::library::serialize_metadata(metadata) } });
     }
 
     void execute_debugger_checks(fsim::app::DebuggerControl& debugger)
@@ -130,17 +129,33 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
         exported_metadata->units, [](const auto& unit) {
             return unit.artifact.empty() && unit.checksum.empty();
         }));
+    // Sources are referenced by path and digest; their coverage facts are
+    // kept, one per source, so coverage never rereads them.
+    assert(std::ranges::all_of(
+        exported_metadata->sources, [](const auto& source_entry) {
+            return source_entry.artifact.empty() && source_entry.checksum.size() == 64U;
+        }));
     {
-        const auto bundle_path
-            = exported_library / exported_metadata->compiled_hir_artifact;
-        std::ifstream input(bundle_path, std::ios::binary);
-        const std::string bytes {
-            std::istreambuf_iterator<char> { input },
-            std::istreambuf_iterator<char> { }
-        };
+        const auto coverage = std::ranges::find(exported_metadata->auxiliary_artifacts,
+            std::string { "source-coverage" }, &fsim::library::AuxiliaryArtifact::kind);
+        assert(coverage != exported_metadata->auxiliary_artifacts.end());
+        fsim::diagnostic::Engine coverage_diagnostics;
+        const auto facts = fsim::artifact::deserialize_source_coverage(
+            read_container_payload(exported_library,
+                support::path_to_utf8(coverage->artifact)),
+            exported_library.string(), coverage_diagnostics);
+        assert(facts && facts->size() == exported_metadata->sources.size());
+        assert(std::ranges::any_of(*facts,
+            [](const auto& item) { return item.content_bytes > 0U; }));
+        assert(std::ranges::none_of(container_contents(exported_library),
+            [](const auto& entry) { return entry.first.starts_with("sources/"); }));
+    }
+    {
+        const auto bytes = read_container_payload(exported_library,
+            support::path_to_utf8(exported_metadata->compiled_hir_artifact));
         fsim::diagnostic::Engine restored_diagnostics;
         const auto restored = fsim::app::deserialize_compiled_hir_bundle(
-            bytes, bundle_path.string(), restored_diagnostics);
+            bytes, exported_library.string(), restored_diagnostics);
         assert(restored && restored->valid());
         assert(std::ranges::any_of(
             restored->systemverilog_hir.units(), [](const auto& unit) {
@@ -157,8 +172,8 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     mapped_direct_config.library_mappings.push_back({ "work", exported_library });
     const auto oversized_library = directory / "work-oversized.fsimlib";
     clone_library_writable(exported_library, oversized_library);
-    std::filesystem::resize_file(
-        oversized_library / exported_metadata->compiled_hir_artifact,
+    forge_container_payload_size(oversized_library,
+        support::path_to_utf8(exported_metadata->compiled_hir_artifact),
         fsim::app::kCompiledHirDecodeBudgetBytes + 1U);
     auto oversized_mapping_config = mapped_direct_config;
     oversized_mapping_config.build.cache_path
@@ -262,9 +277,10 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     assert(
         mapped_systemc->mapped_libraries.front().native_kind
         == "systemc_plugin");
-    assert(
-        mapped_systemc->systemc_plugins.front().parent_path().parent_path()
-        == exported_systemc_library / "native");
+    // The native plug-in is loaded from a private copy of its payload.
+    assert(std::filesystem::is_regular_file(mapped_systemc->systemc_plugins.front()));
+    assert(mapped_systemc->systemc_plugins.front().filename()
+        == systemc_metadata->native_artifacts.front().artifact.filename());
     const auto stale_scv_library =
         directory / "models-systemc-stale-scv.fsimlib";
     clone_library_writable(exported_systemc_library, stale_scv_library);
@@ -275,16 +291,7 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
     assert(scv_compiler != std::string::npos);
     stale_scv_identity[scv_compiler + 10U] =
         stale_scv_identity[scv_compiler + 10U] == 'x' ? 'y' : 'x';
-    const auto stale_scv_metadata_path =
-        stale_scv_library / fsim::library::kMetadataFilename;
-    std::filesystem::permissions(
-        stale_scv_metadata_path, std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream output(stale_scv_metadata_path, std::ios::binary);
-        output << fsim::library::serialize_metadata(stale_scv_metadata);
-        assert(output.good());
-    }
+    rewrite_library_metadata(stale_scv_library, stale_scv_metadata);
     auto stale_scv_config = mapped_systemc_config;
     stale_scv_config.project.name = "mapped-systemc-stale-scv";
     stale_scv_config.build.cache_path = directory / "mapped-systemc-stale-cache";
@@ -311,18 +318,8 @@ void ApplicationTestFixture::test_preprocessing_debug_and_cli()
         exported_systemc_library, incompatible_systemc_library);
     auto incompatible_systemc_metadata = *systemc_metadata;
     incompatible_systemc_metadata.native_artifacts.front().compiler_fingerprint = std::string(64, 'd');
-    const auto incompatible_systemc_metadata_path = incompatible_systemc_library / fsim::library::kMetadataFilename;
-    std::filesystem::permissions(
-        incompatible_systemc_metadata_path,
-        std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream output(
-            incompatible_systemc_metadata_path, std::ios::binary);
-        output << fsim::library::serialize_metadata(
-            incompatible_systemc_metadata);
-        assert(output.good());
-    }
+    rewrite_library_metadata(
+        incompatible_systemc_library, incompatible_systemc_metadata);
     auto incompatible_systemc_config = mapped_systemc_config;
     incompatible_systemc_config.project.name = "mapped-systemc-incompatible";
     incompatible_systemc_config.build.cache_path = directory / "mapped-systemc-incompatible-cache";
@@ -564,16 +561,9 @@ endmodule
     const auto corrupt_metadata = fsim::library::load_metadata(
         corrupt_library, "vendor", corrupt_metadata_diagnostics);
     assert(corrupt_metadata && !corrupt_metadata->units.empty());
-    const auto corrupt_payload
-        = corrupt_library / corrupt_metadata->compiled_hir_artifact;
-    std::filesystem::permissions(
-        corrupt_payload, std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream output(corrupt_payload, std::ios::binary | std::ios::app);
-        output.put('\0');
-        assert(output.good());
-    }
+    append_container_payload(corrupt_library,
+        support::path_to_utf8(corrupt_metadata->compiled_hir_artifact),
+        std::string(1U, '\0'));
     auto corrupt_use_config = vhdl_consumer_config;
     corrupt_use_config.library_mappings.front().path = corrupt_library;
     fsim::diagnostic::Engine corrupt_use_diagnostics;
@@ -601,13 +591,7 @@ endmodule
         wrong_index_library, "vendor", wrong_index_metadata_diagnostics);
     assert(wrong_index_metadata && !wrong_index_metadata->units.empty());
     wrong_index_metadata->units.front().kind = "interface";
-    {
-        std::ofstream output(
-            wrong_index_library / fsim::library::kMetadataFilename,
-            std::ios::binary);
-        output << fsim::library::serialize_metadata(*wrong_index_metadata);
-        assert(output.good());
-    }
+    rewrite_library_metadata(wrong_index_library, *wrong_index_metadata);
     auto wrong_index_config = vhdl_consumer_config;
     wrong_index_config.library_mappings.front().path = wrong_index_library;
     fsim::diagnostic::Engine wrong_index_diagnostics;
@@ -625,7 +609,6 @@ endmodule
                                                const std::string& library_name,
                                                const std::vector<std::string>& dependencies) {
         const auto artifact = directory / (library_name + ".fsimlib");
-        std::filesystem::create_directories(artifact);
         fsim::library::Metadata metadata;
         metadata.library = library_name;
         metadata.producer = "dependency-test";
@@ -636,10 +619,14 @@ endmodule
         metadata.dependencies = dependencies;
         metadata.units = { { "systemverilog", "module", "dummy", { }, { },
             { }, { }, "2017", "none" } };
-        std::ofstream output(
-            artifact / fsim::library::kMetadataFilename, std::ios::binary);
-        output << fsim::library::serialize_metadata(metadata);
-        assert(output.good());
+        std::string error;
+        auto writer = fsim::artifact::ContainerWriter::create(artifact,
+            fsim::library::kLibraryArtifactKind,
+            fsim::artifact::ContainerPages::bulk, error);
+        assert(writer);
+        assert(writer->put(std::string { fsim::library::kMetadataFilename },
+            fsim::library::serialize_metadata(metadata), error));
+        assert(writer->publish(error));
         return artifact;
     };
     const auto missing_dependency_library = write_dependency_artifact(
@@ -687,16 +674,7 @@ endmodule
         dependent_vendor, "vendor", dependent_metadata_diagnostics);
     assert(dependent_metadata);
     dependent_metadata->dependencies = { "work" };
-    const auto dependent_metadata_path = dependent_vendor / fsim::library::kMetadataFilename;
-    std::filesystem::permissions(
-        dependent_metadata_path, std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    {
-        std::ofstream output(
-            dependent_metadata_path, std::ios::binary | std::ios::trunc);
-        output << fsim::library::serialize_metadata(*dependent_metadata);
-        assert(output.good());
-    }
+    rewrite_library_metadata(dependent_vendor, *dependent_metadata);
     auto positive_dependency_config = mapped_top_config;
     positive_dependency_config.library_mappings = {
         { "vendor", dependent_vendor }, { "work", exported_library }
@@ -721,19 +699,11 @@ endmodule
         using Entry = std::tuple<
             std::string, std::uintmax_t, std::filesystem::perms,
             std::filesystem::file_time_type>;
-        std::vector<Entry> result;
-        for (const auto& entry :
-            std::filesystem::recursive_directory_iterator(root)) {
-            const auto relative = std::filesystem::relative(entry.path(), root).generic_string();
-            const auto size = entry.is_regular_file()
-                ? entry.file_size()
-                : std::uintmax_t { };
-            result.emplace_back(
-                relative, size, entry.status().permissions(),
-                entry.last_write_time());
-        }
-        std::ranges::sort(result);
-        return result;
+        // A library is one file: reading it must leave it untouched.
+        const std::filesystem::directory_entry entry { root };
+        return std::vector<Entry> { { root.filename().generic_string(),
+            entry.file_size(), entry.status().permissions(),
+            entry.last_write_time() } };
     };
     const auto original_snapshot = artifact_snapshot(relocation_original);
     fsim::diagnostic::Engine relocation_first_diagnostics;
@@ -745,7 +715,10 @@ endmodule
     assert(std::ranges::any_of(
         relocation_first->semantics.source_files(),
         [](const auto& source_file) {
-            return source_file.physical_name.starts_with("sources/");
+            // Sources keep the path they were exported from.
+            return !source_file.physical_name.empty()
+                && !source_file.physical_name.starts_with("sources/")
+                && !std::filesystem::path { source_file.physical_name }.is_absolute();
         }));
     assert(artifact_snapshot(relocation_original) == original_snapshot);
 
@@ -763,12 +736,6 @@ endmodule
     assert(relocation_second->cache_hit);
     assert(artifact_snapshot(relocation_moved) == moved_snapshot);
     assert(std::filesystem::is_directory(relocation_config.build.cache_path));
-    {
-        std::ofstream forbidden_write(
-            relocation_moved / fsim::library::kMetadataFilename,
-            std::ios::binary | std::ios::app);
-        assert(!forbidden_write);
-    }
 
     std::ostringstream mapped_debug_output;
     std::ostringstream mapped_debug_error;
@@ -780,14 +747,14 @@ endmodule
         mapped_debug_simulation, mapped_debug_output, mapped_debug_error
     };
     mapped_debugger.execute(
-        { "break", "source", "sources/00000000/tb.sv:14" });
+        { "break", "source", "tb.sv:14" });
     mapped_debugger.execute({ "continue" });
     assert(mapped_debug_error.str().empty());
     assert(mapped_debug_output.str().find(
-               "breakpoint 1 set at sources/00000000/tb.sv:14")
+               "breakpoint 1 set at tb.sv:14")
         != std::string::npos);
     assert(mapped_debug_output.str().find(
-               "hit breakpoint 1: sources/00000000/tb.sv:14:")
+               "hit breakpoint 1: tb.sv:14:")
         != std::string::npos);
 
     const auto mapped_parameter_source = directory / "mapped_parameter.sv";

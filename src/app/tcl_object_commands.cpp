@@ -1376,23 +1376,20 @@ namespace {
                 }
                 const auto bundle_path = *artifact_path
                     / metadata->compiled_hir_artifact;
-                auto payload = application_detail::read_binary_payload(
-                    bundle_path, kCompiledHirDecodeBudgetBytes);
-                if (!payload.bytes) {
-                    error = payload.budget_exceeded
-                        ? "compiled definition archive exceeds the decode byte budget"
-                        : "cannot read compiled definition archive '"
-                            + support::path_to_utf8(bundle_path) + "'";
-                    return std::nullopt;
-                }
-                if (!support::payload_checksum_matches(
-                        *payload.bytes, metadata->compiled_hir_checksum)) {
-                    error = "compiled definition archive checksum does not match "
-                            "its object metadata";
+                const auto payload = artifact::read_object_payload(
+                    *artifact_path, metadata->compiled_hir_artifact,
+                    metadata->compiled_hir_checksum,
+                    kCompiledHirDecodeBudgetBytes, archive_diagnostics);
+                if (!payload) {
+                    const auto& failures = archive_diagnostics.diagnostics();
+                    error = failures.empty()
+                        ? "cannot read compiled definition archive '"
+                            + support::path_to_utf8(bundle_path) + "'"
+                        : failures.back().message;
                     return std::nullopt;
                 }
                 auto compiled = deserialize_compiled_hir_bundle(
-                    *payload.bytes, support::path_to_utf8(bundle_path),
+                    *payload, support::path_to_utf8(bundle_path),
                     archive_diagnostics);
                 if (!compiled) {
                     const auto& failures = archive_diagnostics.diagnostics();

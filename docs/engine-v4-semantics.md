@@ -70,7 +70,7 @@ legacy JIT was removed, so the loop compares the reference evaluator with v4.
 
   | `--engine` | Runs | Native code |
   |---|---|---|
-  | `v4` (default), `compiled` | the static kernel, reference evaluator for non-members | LLVM kernel templates (cache `static-kernel/`) |
+  | `v4` (default), `compiled` | the static kernel, reference evaluator for non-members | LLVM kernel templates (cache `static-kernel.sqlite3`) |
   | `interpreter` | reference evaluator only | none (unless `FSIM_STATIC_KERNEL=1`) |
   | `debug` | reference evaluator with debugger hooks | none |
 - **Basis.** Plan §5 (interpreter kept as oracle), §6 (side by side), Phase 5;

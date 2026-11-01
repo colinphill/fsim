@@ -18,7 +18,7 @@ set(FSIM_CONTRACT
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/abi_schema_reference_contract.tsv")
 set(FSIM_REFERENCE "${FSIM_SOURCE_DIR}/docs/abi-schema-reference.md")
 set(FSIM_EXPECTED_DIGEST
-  "781056fde609e425cc7c1a7632544b84d32ebacc6561678273157c12ad6d9c57")
+  "711f90f4e8732d9d7b873fe6e473196f192667406de80db27068f49243ca0834")
 fsim_normalized_text_sha256("${FSIM_CONTRACT}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
@@ -90,9 +90,9 @@ foreach(FSIM_TOKEN IN ITEMS
     "project schema 3"
     "format 9, portable schema 16, compiled-HIR bundle 3"
     "format 8/schema 15"
-    "format 15, runtime ABI 1"
+    "format 16, runtime ABI 1"
     "fsim-code-coverage-foundation-v3"
-    "format 7, portable schema 16, compiled-HIR bundle 3"
+    "format 8, portable schema 16, compiled-HIR bundle 3"
     "format 2, runtime ABI 1, SystemC ABI 4"
     "runtime 91"
     "C++ SDK consumers must"
@@ -100,7 +100,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "DesignIR 5"
     "FSIMHPT1"
     "state/hierarchy-paths.bin"
-    "FSIM-OBJECT-CACHE-V2"
+    "cache schema 1"
     "There is no supported in-place migration command"
     "intentionally provides no fallback reader")
   string(FIND "${FSIM_REFERENCE_TEXT}" "${FSIM_TOKEN}" FSIM_OFFSET)

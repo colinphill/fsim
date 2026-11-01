@@ -293,19 +293,9 @@ void reverse_catalog_revision_ids(const std::filesystem::path& root,
         update(second, first);
         update(temporary, second);
     }
-    for (const auto& id : { first, second }) {
-        execute("UPDATE artifacts SET path='artifacts/" + id
-            + ".fsimobj' WHERE id='" + id + "'");
-    }
+    // Each row keeps its unit-named file; only the ids trade places.
     execute("COMMIT");
     assert(sqlite3_close(handle) == SQLITE_OK);
-
-    const auto artifacts = database.parent_path() / "artifacts";
-    const auto temporary = artifacts / "revision-swap-temporary.fsimobj";
-    std::filesystem::rename(artifacts / (first + ".fsimobj"), temporary);
-    std::filesystem::rename(artifacts / (second + ".fsimobj"),
-        artifacts / (first + ".fsimobj"));
-    std::filesystem::rename(temporary, artifacts / (second + ".fsimobj"));
 }
 
 void check_revision_order_independence(const std::filesystem::path& root)

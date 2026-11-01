@@ -14,11 +14,13 @@
 #include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -52,23 +54,23 @@ void write_file(const std::filesystem::path& path, const std::string_view text)
     assert(output);
 }
 
-void copy_read_only_object_tree(const std::filesystem::path& source,
-    const std::filesystem::path& destination)
+// Objects are single files; a fixture edits one by publishing it again with
+// the same compiled-HIR payload.
+void republish_object(const std::filesystem::path& object,
+    const fsim::artifact::ObjectMetadata& metadata)
 {
-    assert(std::filesystem::is_directory(source));
-    assert(!std::filesystem::exists(destination));
-    std::filesystem::create_directory(destination);
-    for (const auto& entry : std::filesystem::recursive_directory_iterator { source }) {
-        const auto relative = entry.path().lexically_relative(source);
-        const auto target = destination / relative;
-        const auto status = entry.symlink_status();
-        if (std::filesystem::is_directory(status)) {
-            std::filesystem::create_directory(target);
-        } else {
-            assert(std::filesystem::is_regular_file(status));
-            std::filesystem::copy_file(entry.path(), target);
-        }
-    }
+    fsim::diagnostic::Engine diagnostics;
+    const auto original = fsim::artifact::load_object_metadata(object, diagnostics);
+    assert(original);
+    auto compiled = fsim::artifact::read_object_payload(object,
+        original->compiled_hir_artifact, original->compiled_hir_checksum,
+        std::uint64_t { 1 } << 32U, diagnostics);
+    assert(compiled);
+    const std::vector<fsim::library::PortablePayload> payloads {
+        { metadata.compiled_hir_artifact, std::move(*compiled) }
+    };
+    assert(fsim::artifact::publish_object(object, metadata, payloads, diagnostics));
+    assert(!diagnostics.has_error());
 }
 
 detail::WorkspaceObjectSelection compile(const std::filesystem::path& root,
@@ -160,7 +162,6 @@ std::optional<detail::CompilationWorkspace> check_vhdl_with_imported(
 }
 
 struct CatalogFixture {
-    std::unique_ptr<workspace::LibraryTransaction> transaction;
     workspace::LibraryCatalog catalog;
 };
 
@@ -172,13 +173,12 @@ CatalogFixture make_catalog(
     std::string error;
     auto transaction = store.begin_library("work", error);
     assert(transaction && error.empty());
-    CatalogFixture result;
-    result.catalog = transaction->catalog();
+    std::vector<workspace::ArtifactRecord> records;
     for (std::size_t index = 0; index < objects.size(); ++index) {
         auto record = transaction->allocate_artifact(
             workspace::ArtifactKind::Hdl, error);
         assert(record && error.empty());
-        copy_read_only_object_tree(objects[index].path,
+        std::filesystem::copy_file(objects[index].path,
             transaction->artifact_path(*record));
         fsim::diagnostic::Engine diagnostics;
         const auto metadata = fsim::artifact::load_object_metadata(
@@ -190,10 +190,14 @@ CatalogFixture make_catalog(
         for (const auto& unit : metadata->units) {
             record->units.push_back({ unit, source_key });
         }
-        result.catalog.artifacts.push_back(std::move(*record));
+        records.push_back(std::move(*record));
     }
-    result.transaction = std::move(transaction);
-    return result;
+    // Committed records are named; selection reads their unit-named files.
+    assert(transaction->commit(std::move(records), error));
+    transaction.reset();
+    auto catalog = store.read_library("work", error);
+    assert(catalog && error.empty());
+    return { std::move(*catalog) };
 }
 
 detail::WorkspaceObjectSelection select(
@@ -353,11 +357,7 @@ void attach_trace_archive(const detail::WorkspaceObjectSelection& object,
     metadata->trace_archive = fsim::app::trace_archive_hex(encoded.archive);
     metadata->compilation_digest
         = fsim::artifact::compute_object_compilation_digest(*metadata);
-    const auto path = object.path / fsim::artifact::kObjectMetadataFilename;
-    std::filesystem::permissions(path,
-        std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    write_file(path, fsim::artifact::serialize_object_metadata(*metadata));
+    republish_object(object.path, *metadata);
 }
 
 void check_trace_replay_class_and_representative(
@@ -411,10 +411,7 @@ void mark_uvm_release(const detail::WorkspaceObjectSelection& object)
         fsim::project::SystemVerilogUvmRelease::uvm_1_2);
     metadata->compilation_digest
         = fsim::artifact::compute_object_compilation_digest(*metadata);
-    const auto path = object.path / fsim::artifact::kObjectMetadataFilename;
-    std::filesystem::permissions(path, std::filesystem::perms::owner_write,
-        std::filesystem::perm_options::add);
-    write_file(path, fsim::artifact::serialize_object_metadata(*metadata));
+    republish_object(object.path, *metadata);
 }
 
 void check_split_uvm_environment(const std::filesystem::path& root)
@@ -671,6 +668,9 @@ entity \ctx\ is end entity;
     fsim::diagnostic::Engine selector_diagnostics;
     const auto selected = detail::select_workspace_design(
         selector_config, store, catalogs, selector_diagnostics);
+    if (!selected || selector_diagnostics.has_error()) {
+        fsim::diagnostic::print_text(std::cerr, selector_diagnostics);
+    }
     assert(selected && !selector_diagnostics.has_error());
     assert(selected->objects.size() == 1U);
     assert(selected->objects.front().active_units.size() == 1U);

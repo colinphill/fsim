@@ -3,6 +3,7 @@
 
 #include "fsim/app/application.hpp"
 #include "fsim/app/sdf_portable_archive.hpp"
+#include "fsim/artifact/container.hpp"
 
 namespace fsim::app {
 
@@ -36,7 +37,7 @@ sdf_phase_artifacts(const BuiltProject& project) noexcept;
     diagnostic::Engine& diagnostics);
 
 [[nodiscard]] bool restore_sdf_phase_artifacts(
-    const std::filesystem::path& directory,
+    artifact::ContainerReader& design,
     const artifact::DesignMetadata& metadata, BuiltProject& project,
     diagnostic::Engine& diagnostics,
     SdfPortableArchiveLimits limits = { });

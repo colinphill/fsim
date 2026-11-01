@@ -696,29 +696,11 @@ end architecture;
     const auto relocated_directory = directory.path / "relocated";
     std::filesystem::create_directories(relocated_directory);
     const auto relocated = relocated_directory / artifact.filename();
-    std::filesystem::create_directories(relocated / "state");
-    std::filesystem::copy_file(
-        artifact / "fsim-design.bin", relocated / "fsim-design.bin");
-    for (const std::string_view payload : {
-             "runtime.bin", "compiled-design.fsimhir", "design-ir.bin",
-             "sv-coverage.bin", "sv-uvm.bin", "sv-classes.bin",
-             "hierarchy-paths.bin"}) {
-      std::filesystem::copy_file(
-          artifact / "state" / payload,
-          relocated / "state" / payload);
-    }
-    constexpr auto read_only_directory =
-        std::filesystem::perms::owner_read
-        | std::filesystem::perms::owner_exec
-        | std::filesystem::perms::group_read
-        | std::filesystem::perms::group_exec
-        | std::filesystem::perms::others_read
-        | std::filesystem::perms::others_exec;
-    std::filesystem::permissions(
-        relocated / "state", read_only_directory,
-        std::filesystem::perm_options::replace);
-    std::filesystem::permissions(
-        relocated, read_only_directory,
+    // A design is one file; it loads read-only from a new location.
+    std::filesystem::copy_file(artifact, relocated);
+    std::filesystem::permissions(relocated,
+        std::filesystem::perms::owner_read | std::filesystem::perms::group_read
+            | std::filesystem::perms::others_read,
         std::filesystem::perm_options::replace);
     std::filesystem::remove(memory_load);
     auto loaded = fsim::app::load_design_artifact(relocated, diagnostics);

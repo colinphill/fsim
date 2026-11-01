@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -23,6 +24,8 @@ public:
     [[nodiscard]] static Digest digest(std::span<const std::byte> bytes) noexcept;
     [[nodiscard]] static Digest digest(std::string_view text) noexcept;
     [[nodiscard]] static std::string hex(const Digest& digest);
+    // The digest spelled by 64 lowercase hex digits, as hex() writes it.
+    [[nodiscard]] static std::optional<Digest> from_hex(std::string_view text) noexcept;
 
 private:
     void transform(const std::byte* block) noexcept;

@@ -601,8 +601,8 @@ int main()
             // Code built ahead of time, then loaded instead of compiled.
             const auto cache = root / "cache";
             const auto built = run(root / "aot", engine, true, cache, true);
-            require(std::filesystem::exists(cache / "static-kernel")
-                    && !std::filesystem::is_empty(cache / "static-kernel"),
+            require(std::filesystem::exists(cache / "static-kernel.sqlite3")
+                    && !std::filesystem::is_empty(cache / "static-kernel.sqlite3"),
                 "an ahead-of-time build must store the kernel's code");
             const auto loaded = run(root / "loaded", engine, true, cache, false);
             for (const auto* capture : { &built, &loaded }) {

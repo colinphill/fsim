@@ -81,6 +81,10 @@ namespace {
             return std::nullopt;
         }
         const auto& files = checked.semantics.source_files();
+        // Objects compiled from one file each carry its source entry; their
+        // points share one coverage source (a path names one content, since
+        // differing contents load under their compilation digests).
+        std::set<std::string_view> covered_names;
         for (const auto index : required_files) {
             if (index >= files.size()) {
                 diagnostics.error("FSIM-COV-008",
@@ -88,14 +92,49 @@ namespace {
                 return std::nullopt;
             }
             const auto& file = files[index];
+            if (!covered_names.insert(file.physical_name).second) {
+                continue;
+            }
             const auto logical = support::path_from_utf8(file.physical_name);
             auto backing = logical;
+            const CheckedSource* recorded = nullptr;
             for (const auto& source : checked.hdl_sources) {
-                if (same_source_path(source.path, logical)
-                    && !source.backing_path.empty()) {
-                    backing = source.backing_path;
+                if (same_source_path(source.path, logical)) {
+                    if (source.coverage) {
+                        recorded = &source;
+                    } else if (!source.backing_path.empty()) {
+                        backing = source.backing_path;
+                    }
                     break;
                 }
+            }
+            if (recorded != nullptr) {
+                // A compiled object recorded the source's coverage facts, so
+                // the source itself is not read (it need not exist).
+                const auto& facts = *recorded->coverage;
+                const auto digest = support::Sha256::from_hex(file.content_digest);
+                // A source outside the workspace is reached with ".."; its
+                // coverage identity names each climbed level "_parent_".
+                std::filesystem::path identity_path;
+                for (const auto& component : logical) {
+                    identity_path /= component == ".." ? std::filesystem::path { "_parent_" }
+                                                       : component;
+                }
+                auto identity = digest
+                    ? frontend::make_code_coverage_source_identity(
+                          root, identity_path, facts.content_bytes, *digest)
+                    : frontend::CodeCoverageSourceIdentityResult { };
+                if (!identity.ok()
+                    || facts.control_error != frontend::CoverageSourceControlError::None) {
+                    diagnostics.error(identity.ok() ? "FSIM-COV-041" : "FSIM-COV-008",
+                        "invalid code-coverage source identity or control in '"
+                            + file.physical_name + "'");
+                    return std::nullopt;
+                }
+                result.push_back({
+                    { file.physical_name, std::move(*identity.identity) },
+                    facts.exclusions });
+                continue;
             }
             if (!backing.is_absolute()) {
                 backing = root / backing;
@@ -445,8 +484,7 @@ std::optional<BuiltProject> build_checked_project(
         if (!systemc_hierarchy) {
             systemc_hierarchy = registry;
         }
-        systemc_plugins.push_back(
-            linked.artifact / plugin_metadata->library);
+        systemc_plugins.push_back(linked.artifact);
     }
     for (const auto& artifact : incremental_plugins) {
         auto plugin_metadata = systemc::load_incremental_plugin_metadata(
@@ -472,7 +510,7 @@ std::optional<BuiltProject> build_checked_project(
         if (!systemc_hierarchy) {
             systemc_hierarchy = registry;
         }
-        systemc_plugins.push_back(artifact / plugin_metadata->library);
+        systemc_plugins.push_back(artifact);
     }
     for (const auto& mapped : checked->mapped_libraries) {
         if (mapped.systemc_plugin.empty() && mapped.systemc_sources.empty()) {
@@ -566,7 +604,7 @@ std::optional<BuiltProject> build_checked_project(
             { mapping.logical_name, mapping.producer_name });
     }
 
-    compiler::ObjectCache cache(config.build.cache_path);
+    compiler::ObjectCache cache(config.build.cache_path / "compiled-hir.sqlite3");
     std::error_code cache_error;
     const auto existing = cache.load(key, cache_error);
     bool hit = false;
@@ -577,7 +615,7 @@ std::optional<BuiltProject> build_checked_project(
             *existing, key, cache_failure);
         auto cached = bundle
             ? deserialize_compiled_hir_bundle(
-                  *bundle, cache.path_for(key).string(), cache_diagnostics)
+                  *bundle, support::path_to_utf8(cache.path()), cache_diagnostics)
             : std::nullopt;
         if (cached
             && !relocate_compiled_design_sources(

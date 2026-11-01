@@ -5,6 +5,7 @@
 #include "plugin_compiler_internal.hpp"
 #include "producer_fingerprint.hpp"
 
+#include "fsim/compiler/object_cache.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
@@ -25,18 +26,6 @@
 #include <unordered_set>
 
 namespace fsim::systemc {
-
-bool publish_incremental_object(
-    const std::filesystem::path& destination,
-    const IncrementalObjectMetadata& metadata,
-    std::string_view payload,
-    diagnostic::Engine& diagnostics);
-
-bool publish_incremental_plugin(
-    const std::filesystem::path& destination,
-    const IncrementalPluginMetadata& metadata,
-    std::string_view payload,
-    diagnostic::Engine& diagnostics);
 
 namespace {
     using namespace plugin_detail;
@@ -839,47 +828,6 @@ namespace {
         return compute_incremental_plugin_input_digest(plugin);
     }
 
-    std::filesystem::path cache_artifact_path(
-        const std::filesystem::path& root,
-        const std::string_view kind,
-        const std::string_view digest,
-        const std::string_view extension)
-    {
-        return root / "systemc" / "incremental" / kind
-            / std::string { digest.substr(0, 2) }
-        / (std::string { digest } + std::string { extension });
-    }
-
-    std::unique_ptr<compiler::detail::CacheDirectoryLock> lock_cache_key(
-        const std::filesystem::path& root,
-        const std::string& digest,
-        diagnostic::Engine& diagnostics)
-    {
-        const auto directory = root / "systemc" / "incremental" / "locks";
-        std::error_code error;
-        support::native_fs::create_directories(directory, error);
-        if (error) {
-            report(
-                diagnostics, kCompileCode,
-                "cannot create incremental SystemC cache lock directory: "
-                    + error.message(),
-                directory);
-            return { };
-        }
-        constexpr std::size_t lock_digest_characters = 32U;
-        const auto lock_digest = digest.substr(0, lock_digest_characters);
-        auto lock = std::make_unique<compiler::detail::CacheDirectoryLock>(
-            directory / (lock_digest + ".lock"), error);
-        if (!lock->held()) {
-            report(
-                diagnostics, kCompileCode,
-                "cannot acquire incremental SystemC cache lock: " + error.message(),
-                directory);
-            return { };
-        }
-        return lock;
-    }
-
 } // namespace
 
 bool compile_incremental_object(
@@ -1027,7 +975,7 @@ bool link_incremental_plugin(
         return false;
     }
     std::vector<IncrementalObjectMetadata> metadata;
-    std::vector<std::filesystem::path> payloads;
+    std::vector<std::filesystem::path> artifacts;
     std::unordered_set<std::string> paths;
     std::unordered_set<std::string> digests;
     for (const auto& input : request.objects) {
@@ -1048,7 +996,7 @@ bool link_incremental_plugin(
                 "duplicate SystemC object compilation identity", directory);
             return false;
         }
-        payloads.push_back(directory / object->object);
+        artifacts.push_back(directory);
         metadata.push_back(std::move(*object));
     }
     const auto& first = metadata.front();
@@ -1168,6 +1116,27 @@ bool link_incremental_plugin(
         return false;
     }
     ScratchCleanup cleanup { scratch };
+    // The linker reads object code from files.
+    std::vector<std::filesystem::path> payloads;
+    for (std::size_t index = 0; index < artifacts.size(); ++index) {
+        const auto bytes = load_incremental_object_native(
+            artifacts[index], metadata[index], diagnostics);
+        if (!bytes) {
+            return false;
+        }
+        payloads.push_back(
+            scratch / ("input-" + std::to_string(index) + "-" + object_filename()));
+        auto output = support::native_fs::open_ofstream(
+            payloads.back(), std::ios::binary | std::ios::trunc);
+        output.write(bytes->data(), static_cast<std::streamsize>(bytes->size()));
+        output.close();
+        if (!output) {
+            report(
+                diagnostics, kLinkCode, "cannot write SystemC link input",
+                payloads.back());
+            return false;
+        }
+    }
     const auto output = scratch / plugin_filename();
     std::vector<std::string> argv;
     argv.push_back(path_argument(resolved));
@@ -1324,14 +1293,47 @@ std::shared_ptr<HierarchyRegistry> load_incremental_plugin(
             directory);
         return { };
     }
+    // The library loads from a file, so a private copy is written for it.
+    // SystemC keeps process-global registries, so one image is mapped once:
+    // every load of the same library checksum in a process reuses its copy.
+    static std::mutex copies_mutex;
+    static std::unordered_map<std::string, std::filesystem::path> copies;
     std::string error;
-    auto registry = HierarchyRegistry::load(
-        directory / metadata->library, error, true);
+    std::filesystem::path library;
+    {
+        const std::scoped_lock lock { copies_mutex };
+        if (const auto found = copies.find(metadata->library_checksum);
+            found != copies.end()) {
+            library = found->second;
+        } else {
+            const auto bytes = load_incremental_plugin_native(
+                directory, *metadata, diagnostics);
+            if (!bytes) {
+                return { };
+            }
+            const auto copy_directory = private_native_directory(error);
+            if (!copy_directory) {
+                report(diagnostics, kLinkCode, std::move(error), directory);
+                return { };
+            }
+            library = *copy_directory / metadata->library.filename();
+            auto output = support::native_fs::open_ofstream(
+                library, std::ios::binary | std::ios::trunc);
+            output.write(bytes->data(), static_cast<std::streamsize>(bytes->size()));
+            output.close();
+            if (!output) {
+                report(diagnostics, kLinkCode, "cannot write SystemC plug-in copy", library);
+                return { };
+            }
+            copies.emplace(metadata->library_checksum, library);
+        }
+    }
+    auto registry = HierarchyRegistry::load(library, error, true);
     if (!registry) {
         report(
             diagnostics, kLinkCode,
             "SystemC plug-in failed runtime ABI validation: " + error,
-            directory / metadata->library);
+            directory);
         return { };
     }
     if (!matching_inventory(*registry, metadata->factories, diagnostics)) {
@@ -1340,48 +1342,129 @@ std::shared_ptr<HierarchyRegistry> load_incremental_plugin(
     return std::shared_ptr<HierarchyRegistry> { std::move(registry) };
 }
 
+namespace {
+
+    // Entries hold whole artifact files, keyed by kind and input digest.
+    std::string cache_key(const std::string_view kind, const std::string_view digest)
+    {
+        compiler::CacheKeyBuilder key;
+        key.add("kind", kind);
+        key.add("input", digest);
+        return key.finish();
+    }
+
+    // Cached artifacts are copied, once per process, into one private
+    // directory for the steps after them.
+    std::optional<std::filesystem::path> cached_artifact_directory(std::string& error)
+    {
+        static std::mutex mutex;
+        static std::optional<std::filesystem::path> directory;
+        const std::scoped_lock lock { mutex };
+        if (!directory) {
+            directory = private_native_directory(error);
+        }
+        return directory;
+    }
+
+    template <typename Metadata, typename Load>
+    bool restore_cached(const compiler::ObjectCache& cache, const std::string& key,
+        const std::filesystem::path& artifact, const std::string& digest, Load load)
+    {
+        std::error_code error;
+        if (support::native_fs::exists(artifact, error)) {
+            diagnostic::Engine ignored;
+            const std::optional<Metadata> metadata = load(artifact, ignored);
+            if (metadata && metadata->input_digest == digest) {
+                return true;
+            }
+            support::native_fs::remove(artifact, error);
+        }
+        const auto bytes = cache.load(key, error);
+        if (!bytes) {
+            return false;
+        }
+        {
+            auto output = support::native_fs::open_ofstream(
+                artifact, std::ios::binary | std::ios::trunc);
+            output.write(reinterpret_cast<const char*>(bytes->data()),
+                static_cast<std::streamsize>(bytes->size()));
+            output.close();
+            if (!output) {
+                return false;
+            }
+        }
+        // An unusable entry is a miss and is rebuilt.
+        diagnostic::Engine ignored;
+        const std::optional<Metadata> metadata = load(artifact, ignored);
+        if (metadata && metadata->input_digest == digest) {
+            return true;
+        }
+        support::native_fs::remove(artifact, error);
+        return false;
+    }
+
+    void store_cached(const compiler::ObjectCache& cache, const std::string& key,
+        const std::filesystem::path& artifact)
+    {
+        diagnostic::Engine ignored;
+        auto bytes = read_binary(artifact, ignored, "SystemC artifact", kCompileCode);
+        if (!bytes) {
+            return;
+        }
+        // Failing to cache only costs a later rebuild.
+        std::error_code error;
+        static_cast<void>(cache.store(
+            key, std::as_bytes(std::span { bytes->data(), bytes->size() }), error));
+    }
+
+    template <typename Request, typename Metadata, typename Load, typename Build>
+    IncrementalPhaseResult cached_phase(Request request,
+        const std::filesystem::path& cache_directory, const std::string_view kind,
+        const std::string_view extension, std::optional<std::string> digest,
+        diagnostic::Engine& diagnostics, Load load, Build build)
+    {
+        IncrementalPhaseResult result;
+        if (!digest) {
+            return result;
+        }
+        result.input_digest = *digest;
+        const auto base = working_directory(request.working_directory, diagnostics);
+        const compiler::ObjectCache cache {
+            absolute_from(cache_directory, base) / "systemc.sqlite3"
+        };
+        std::string error;
+        const auto directory = cached_artifact_directory(error);
+        if (!directory) {
+            report(diagnostics, kCompileCode, std::move(error));
+            return result;
+        }
+        result.artifact = *directory / (*digest + std::string { extension });
+        const auto key = cache_key(kind, *digest);
+        if (restore_cached<Metadata>(cache, key, result.artifact, *digest, load)) {
+            result.success = true;
+            result.cache_hit = true;
+            return result;
+        }
+        request.output = result.artifact;
+        result.success = build(request, diagnostics);
+        if (result.success) {
+            store_cached(cache, key, result.artifact);
+        }
+        return result;
+    }
+
+} // namespace
+
 IncrementalPhaseResult compile_incremental_object_cached(
     IncrementalCompileRequest request,
     const std::filesystem::path& cache_directory,
     diagnostic::Engine& diagnostics)
 {
-    IncrementalPhaseResult result;
     auto digest = planned_object_input_digest(request, diagnostics);
-    if (!digest) {
-        return result;
-    }
-    result.input_digest = *digest;
-    const auto base = working_directory(request.working_directory, diagnostics);
-    const auto root = absolute_from(cache_directory, base);
-    result.artifact = cache_artifact_path(
-        root, "objects", *digest, ".fsimscobj");
-    std::error_code error;
-    if (support::native_fs::exists(result.artifact, error)) {
-        auto metadata = load_incremental_object_metadata(
-            result.artifact, diagnostics);
-        if (metadata && metadata->input_digest == *digest) {
-            result.success = true;
-            result.cache_hit = true;
-        }
-        return result;
-    }
-    auto lock = lock_cache_key(root, *digest, diagnostics);
-    if (!lock) {
-        return result;
-    }
-    error.clear();
-    if (support::native_fs::exists(result.artifact, error)) {
-        auto metadata = load_incremental_object_metadata(
-            result.artifact, diagnostics);
-        if (metadata && metadata->input_digest == *digest) {
-            result.success = true;
-            result.cache_hit = true;
-        }
-        return result;
-    }
-    request.output = result.artifact;
-    result.success = compile_incremental_object(request, diagnostics);
-    return result;
+    return cached_phase<IncrementalCompileRequest, IncrementalObjectMetadata>(
+        std::move(request), cache_directory, kIncrementalObjectKind, ".fsimscobj",
+        std::move(digest), diagnostics, load_incremental_object_metadata,
+        compile_incremental_object);
 }
 
 IncrementalPhaseResult link_incremental_plugin_cached(
@@ -1389,43 +1472,11 @@ IncrementalPhaseResult link_incremental_plugin_cached(
     const std::filesystem::path& cache_directory,
     diagnostic::Engine& diagnostics)
 {
-    IncrementalPhaseResult result;
     auto digest = planned_plugin_input_digest(request, diagnostics);
-    if (!digest) {
-        return result;
-    }
-    result.input_digest = *digest;
-    const auto base = working_directory(request.working_directory, diagnostics);
-    const auto root = absolute_from(cache_directory, base);
-    result.artifact = cache_artifact_path(
-        root, "plugins", *digest, ".fsimscplugin");
-    std::error_code error;
-    if (support::native_fs::exists(result.artifact, error)) {
-        auto metadata = load_incremental_plugin_metadata(
-            result.artifact, diagnostics);
-        if (metadata && metadata->input_digest == *digest) {
-            result.success = true;
-            result.cache_hit = true;
-        }
-        return result;
-    }
-    auto lock = lock_cache_key(root, *digest, diagnostics);
-    if (!lock) {
-        return result;
-    }
-    error.clear();
-    if (support::native_fs::exists(result.artifact, error)) {
-        auto metadata = load_incremental_plugin_metadata(
-            result.artifact, diagnostics);
-        if (metadata && metadata->input_digest == *digest) {
-            result.success = true;
-            result.cache_hit = true;
-        }
-        return result;
-    }
-    request.output = result.artifact;
-    result.success = link_incremental_plugin(request, diagnostics);
-    return result;
+    return cached_phase<IncrementalLinkRequest, IncrementalPluginMetadata>(
+        std::move(request), cache_directory, kIncrementalPluginKind, ".fsimscplugin",
+        std::move(digest), diagnostics, load_incremental_plugin_metadata,
+        link_incremental_plugin);
 }
 
 } // namespace fsim::systemc

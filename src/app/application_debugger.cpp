@@ -10,39 +10,16 @@ namespace fsim::app {
 
 namespace {
 
-  std::filesystem::path systemc_plugin_metadata_directory(
-      const std::filesystem::path& plugin)
-  {
-    std::error_code error;
-    auto directory = plugin;
-    if (!support::native_fs::is_directory(directory, error)) {
-      directory = directory.parent_path();
-    }
-    while (!directory.empty()) {
-      error.clear();
-      if (support::native_fs::exists(
-              directory / systemc::kIncrementalPluginMetadataFilename, error)
-          && !error) {
-        return directory;
-      }
-      const auto parent = directory.parent_path();
-      if (parent == directory) {
-        break;
-      }
-      directory = parent;
-    }
-    return { };
-  }
-
   std::vector<SystemCPluginProvenance> systemc_plugin_provenance(
       const BuiltProject& project)
   {
+    // Linked plug-ins carry provenance; a mapped library's shared library
+    // does not.
     std::vector<std::filesystem::path> directories;
     directories.reserve(project.systemc_plugins.size());
     for (const auto& plugin : project.systemc_plugins) {
-      auto directory = systemc_plugin_metadata_directory(plugin);
-      if (!directory.empty()) {
-        directories.push_back(std::move(directory));
+      if (plugin.extension() == ".fsimscplugin") {
+        directories.push_back(plugin);
       }
     }
     std::ranges::sort(directories);

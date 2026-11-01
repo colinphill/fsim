@@ -736,10 +736,6 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
                 return false;
             }
             record->units.push_back({ unit, owner->second });
-            if (invocation.verbosity == cli::Verbosity::verbose) {
-                output << "  " << unit.kind << ' ' << sources.library << '.' << unit.name
-                       << " -> " << record->id << '\n';
-            }
         }
         records.push_back(std::move(*record));
         return true;
@@ -765,9 +761,29 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
         });
     }
     const auto count = records.size();
+    std::vector<library::UnitIndexEntry> published_units;
+    for (const auto& record : records) {
+        for (const auto& owned : record.units)
+            published_units.push_back(owned.unit);
+    }
     if (!transaction->commit(std::move(records), replaced_sources, error)) {
         workspace_error(diagnostics, std::move(error));
         return 1;
+    }
+    if (invocation.verbosity == cli::Verbosity::verbose) {
+        // Artifacts are named when the transaction commits.
+        for (const auto& unit : published_units) {
+            const auto identity = workspace::unit_identity(unit);
+            for (const auto& artifact : transaction->catalog().artifacts) {
+                if (std::ranges::any_of(artifact.units, [&](const auto& owned) {
+                        return workspace::unit_identity(owned.unit) == identity;
+                    })) {
+                    output << "  " << unit.kind << ' ' << sources.library << '.' << unit.name
+                           << " -> " << support::path_to_utf8(artifact.path) << '\n';
+                    break;
+                }
+            }
+        }
     }
     if (invocation.verbosity != cli::Verbosity::quiet) {
         output << "compiled " << count << " object(s) into library '" << sources.library << "'\n";

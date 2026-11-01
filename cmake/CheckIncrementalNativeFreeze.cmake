@@ -52,7 +52,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "f2d1b2316d4bf168ccf9f6f259ee8477a6d9a1d06548e3a99624bdaccdb51e7d")
+  "2d648918e8e85bd884de720047c405b4396f6d66097dca82b5b936be3ad48771")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "incremental native contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -111,7 +111,7 @@ fsim_require_incremental_native_tokens("${FSIM_CODEC}"
 fsim_require_incremental_native_tokens("${FSIM_COMPILER}"
   "plugin_producer_fingerprint(settings, base, diagnostics)"
   "SystemC source or dependency changed during compilation"
-  "systemc\" / \"incremental\" / kind"
+  "\"systemc.sqlite3\""
   "SystemC link inputs have incompatible toolchain identities"
   "\"SystemC plug-in compiler producer\""
   "unsupported_artifact_identity("
@@ -176,8 +176,8 @@ fsim_require_incremental_native_tokens("${FSIM_SCV_TEST}"
   "link_warm.success && link_warm.cache_hit")
 fsim_require_incremental_native_tokens("${FSIM_CACHE_TEST}"
   "cache.store(key, replacement, error)"
-  "skipped_locked_entries == 1"
-  "removed_temporary_files == 1")
+  "foreign_database"
+  "older_database")
 fsim_require_incremental_native_tokens("${FSIM_TEST_BUILD}"
   "NAME fsim.incremental-native-cache-freeze"
   "CheckIncrementalNativeFreeze.cmake")

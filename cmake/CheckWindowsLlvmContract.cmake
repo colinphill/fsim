@@ -86,9 +86,9 @@ if(FSIM_INDEX EQUAL -1)
 endif()
 string(FIND
   "${FSIM_SCV_PLUGIN_TEST_CONTENTS}"
-  "#if !defined(_WIN32)\nvoid make_writable" FSIM_INDEX)
+  "#if !defined(_WIN32)\n    incremental_registry.reset();" FSIM_INDEX)
 if(FSIM_INDEX EQUAL -1)
-  message(FATAL_ERROR "SCV plugin cleanup helper lost its Windows guard")
+  message(FATAL_ERROR "SCV plugin cleanup lost its Windows guard")
 endif()
 string(FIND "${FSIM_PKG_CONFIG_CONSUMER_CONTENTS}"
   "if(FSIM_HOST_WINDOWS)\n  file(READ" FSIM_INDEX)
@@ -96,9 +96,9 @@ if(FSIM_INDEX EQUAL -1)
   message(FATAL_ERROR "Windows pkg-config consumer lost metadata-first policy")
 endif()
 string(FIND "${FSIM_SCV_ARTIFACT_TEST_CONTENTS}"
-  "relocated_bytes.assign(" FSIM_INDEX)
+  "fsim::library::read_payload(relocated," FSIM_INDEX)
 if(FSIM_INDEX EQUAL -1)
-  message(FATAL_ERROR "SCV artifact reader lost its scoped Windows lifetime")
+  message(FATAL_ERROR "SCV artifact reader lost its container payload read")
 endif()
 foreach(FSIM_PACKAGE_ROOT IN ITEMS
     FSIM_SOURCE_DIR FSIM_WORK_DIR FSIM_BINARY_DIR)

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/incremental.hpp"
 
+#include "fsim/artifact/container.hpp"
+
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
@@ -8,6 +10,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -15,6 +18,14 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -28,35 +39,48 @@ void write_file(
     assert(output.good());
 }
 
-void make_writable(const std::filesystem::path& root)
+// Rewrites one payload of an artifact container, keeping the others.
+void rewrite_payload(
+    const std::filesystem::path& artifact,
+    const std::string_view name,
+    const std::string& bytes)
 {
-    std::error_code error;
-    for (std::filesystem::recursive_directory_iterator iterator(root, error), end;
-        !error && iterator != end; iterator.increment(error)) {
-        std::filesystem::permissions(
-            iterator->path(), std::filesystem::perms::owner_all,
-            std::filesystem::perm_options::add, error);
-        error.clear();
-    }
-    std::filesystem::permissions(
-        root, std::filesystem::perms::owner_all,
-        std::filesystem::perm_options::add, error);
-}
-
-void copy_tree(
-    const std::filesystem::path& source,
-    const std::filesystem::path& destination)
-{
-    std::filesystem::create_directories(destination);
-    for (const auto& entry :
-        std::filesystem::recursive_directory_iterator(source)) {
-        const auto relative = std::filesystem::relative(entry.path(), source);
-        if (entry.is_directory()) {
-            std::filesystem::create_directories(destination / relative);
-        } else {
-            std::filesystem::copy_file(entry.path(), destination / relative);
+    std::string error;
+    std::string kind;
+    std::vector<std::pair<std::string, std::string>> payloads;
+    {
+        auto reader = fsim::artifact::ContainerReader::open(artifact, { }, error);
+        assert(reader);
+        kind = reader->meta("kind", error).value();
+        const auto entries = reader->entries(error);
+        assert(entries);
+        for (const auto& entry : *entries) {
+            payloads.emplace_back(entry.name, entry.name == name
+                    ? bytes
+                    : reader->read(entry.name, entry.size, error).value());
         }
     }
+    assert(std::ranges::any_of(payloads, [&](const auto& payload) {
+        return payload.first == name;
+    }));
+    auto writer = fsim::artifact::ContainerWriter::create(
+        artifact, kind, fsim::artifact::ContainerPages::bulk, error);
+    assert(writer);
+    for (const auto& [payload, contents] : payloads) {
+        const bool stored = writer->put(payload, contents, error);
+        assert(stored);
+    }
+    const bool published = writer->publish(error);
+    assert(published);
+}
+
+std::string read_payload(
+    const std::filesystem::path& artifact, const std::string_view name)
+{
+    std::string error;
+    auto reader = fsim::artifact::ContainerReader::open(artifact, { }, error);
+    assert(reader);
+    return reader->read(name, std::uint64_t { 1 } << 32U, error).value();
 }
 
 void store_u32(
@@ -269,6 +293,39 @@ void test_incremental_wire_fixtures()
 
 } // namespace
 
+std::uint64_t test_process_id()
+{
+#if defined(_WIN32)
+    return static_cast<std::uint64_t>(_getpid());
+#else
+    return static_cast<std::uint64_t>(::getpid());
+#endif
+}
+
+// The first private directory of a process removes those left by fsim
+// processes that no longer exist, and keeps live ones and unrelated names.
+void test_abandoned_private_directories()
+{
+    const auto temporary = std::filesystem::temp_directory_path();
+    // Above every platform's process id limit, so never a live process.
+    const auto abandoned = temporary / "fsim-systemc-2147483646-1";
+    const auto live = temporary
+        / ("fsim-systemc-" + std::to_string(test_process_id()) + "-1");
+    const auto unrelated = temporary / "fsim-systemc-2147483646-x";
+    for (const auto& directory : { abandoned, live, unrelated }) {
+        std::filesystem::create_directories(directory / "nested");
+        write_file(directory / "nested" / "library.so", "native");
+    }
+    std::string error;
+    const auto directory = fsim::systemc::private_native_directory(error);
+    assert(directory.has_value() && error.empty());
+    assert(!std::filesystem::exists(abandoned));
+    assert(std::filesystem::exists(live / "nested" / "library.so"));
+    assert(std::filesystem::exists(unrelated / "nested" / "library.so"));
+    std::filesystem::remove_all(live);
+    std::filesystem::remove_all(unrelated);
+}
+
 int main(const int argc, char** argv)
 {
     static_assert(fsim::systemc::kIncrementalObjectFormatVersion == 2U);
@@ -278,6 +335,7 @@ int main(const int argc, char** argv)
         return run_clang_cl_fake_compiler(argc, argv);
     }
     test_incremental_wire_fixtures();
+    test_abandoned_private_directories();
     const auto unique = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());
     const auto root = std::filesystem::temp_directory_path()
@@ -321,13 +379,18 @@ int main(const int argc, char** argv)
     assert(first_compiled);
     assert(!diagnostics.has_error());
 
-#if !defined(_WIN32)
-    // POSIX mode bits make the published native artifact tree read-only.
+    // The published artifact is one ordinary, writable container file.
+    assert(std::filesystem::is_regular_file(first_request.output));
     assert(
         (std::filesystem::status(first_request.output).permissions()
             & std::filesystem::perms::owner_write)
-        == std::filesystem::perms::none);
-#endif
+        != std::filesystem::perms::none);
+    {
+        std::string kind_error;
+        assert(fsim::artifact::ContainerReader::read_kind(
+                   first_request.output, kind_error)
+            == fsim::systemc::kIncrementalObjectKind);
+    }
 
 #if !defined(_WIN32)
     // Exercise clang-cl's Make dependency-file route on every host with a
@@ -499,8 +562,7 @@ int main(const int argc, char** argv)
         trailing_object_metadata_diagnostics));
 
     const auto incompatible_scv_object = root / "incompatible-scv.fsimscobj";
-    copy_tree(first_request.output, incompatible_scv_object);
-    make_writable(incompatible_scv_object);
+    std::filesystem::copy_file(first_request.output, incompatible_scv_object);
     auto incompatible_scv_metadata = *first_metadata;
     const auto scv_version = incompatible_scv_metadata.scv_compatibility.find("|scv=2.0.1|");
     assert(scv_version != std::string::npos);
@@ -511,9 +573,7 @@ int main(const int argc, char** argv)
     incompatible_scv_metadata.compilation_digest =
         fsim::systemc::compute_incremental_object_digest(
             incompatible_scv_metadata);
-    write_file(
-        incompatible_scv_object
-            / fsim::systemc::kIncrementalObjectMetadataFilename,
+    rewrite_payload(incompatible_scv_object, "metadata",
         fsim::systemc::serialize_incremental_object_metadata(
             incompatible_scv_metadata));
     fsim::diagnostic::Engine incompatible_scv_diagnostics;
@@ -536,14 +596,9 @@ int main(const int argc, char** argv)
     assert(!std::filesystem::exists(missing_request.output));
 
     const auto corrupt_object = root / "corrupt.fsimscobj";
-    copy_tree(first_request.output, corrupt_object);
-    make_writable(corrupt_object);
-    {
-        std::ofstream corrupt(
-            corrupt_object / first_metadata->object,
-            std::ios::binary | std::ios::app);
-        corrupt.put('x');
-    }
+    std::filesystem::copy_file(first_request.output, corrupt_object);
+    rewrite_payload(corrupt_object, first_metadata->object.generic_string(),
+        read_payload(corrupt_object, first_metadata->object.generic_string()) + "x");
     fsim::diagnostic::Engine corrupt_object_diagnostics;
     assert(!fsim::systemc::load_incremental_object_metadata(
         corrupt_object, corrupt_object_diagnostics));
@@ -561,8 +616,7 @@ int main(const int argc, char** argv)
     assert(cached_second.success && !cached_second.cache_hit);
 
     const auto incompatible_object = root / "incompatible.fsimscobj";
-    copy_tree(second_request.output, incompatible_object);
-    make_writable(incompatible_object);
+    std::filesystem::copy_file(second_request.output, incompatible_object);
     fsim::diagnostic::Engine incompatible_metadata_diagnostics;
     auto incompatible_metadata = fsim::systemc::load_incremental_object_metadata(
         incompatible_object, incompatible_metadata_diagnostics);
@@ -571,9 +625,7 @@ int main(const int argc, char** argv)
     incompatible_metadata->input_digest = fsim::systemc::compute_incremental_object_input_digest(
         *incompatible_metadata);
     incompatible_metadata->compilation_digest = fsim::systemc::compute_incremental_object_digest(*incompatible_metadata);
-    write_file(
-        incompatible_object
-            / fsim::systemc::kIncrementalObjectMetadataFilename,
+    rewrite_payload(incompatible_object, "metadata",
         fsim::systemc::serialize_incremental_object_metadata(
             *incompatible_metadata));
 
@@ -732,8 +784,7 @@ int main(const int argc, char** argv)
     assert(registry->has_factory("second"));
 
     const auto stale_plugin = root / "stale.fsimscplugin";
-    copy_tree(link_request.output, stale_plugin);
-    make_writable(stale_plugin);
+    std::filesystem::copy_file(link_request.output, stale_plugin);
     fsim::diagnostic::Engine stale_metadata_diagnostics;
     auto stale_metadata = fsim::systemc::load_incremental_plugin_metadata(
         stale_plugin, stale_metadata_diagnostics);
@@ -741,8 +792,7 @@ int main(const int argc, char** argv)
     stale_metadata->compiler_fingerprint = std::string(64, 'b');
     stale_metadata->input_digest = fsim::systemc::compute_incremental_plugin_input_digest(*stale_metadata);
     stale_metadata->link_digest = fsim::systemc::compute_incremental_plugin_digest(*stale_metadata);
-    write_file(
-        stale_plugin / fsim::systemc::kIncrementalPluginMetadataFilename,
+    rewrite_payload(stale_plugin, "metadata",
         fsim::systemc::serialize_incremental_plugin_metadata(*stale_metadata));
     fsim::diagnostic::Engine stale_plugin_diagnostics;
     assert(!fsim::systemc::load_incremental_plugin(
@@ -750,8 +800,7 @@ int main(const int argc, char** argv)
     assert(stale_plugin_diagnostics.has_error());
 
     const auto stale_target_plugin = root / "stale-target.fsimscplugin";
-    copy_tree(link_request.output, stale_target_plugin);
-    make_writable(stale_target_plugin);
+    std::filesystem::copy_file(link_request.output, stale_target_plugin);
     fsim::diagnostic::Engine stale_target_metadata_diagnostics;
     auto stale_target_metadata = fsim::systemc::load_incremental_plugin_metadata(
         stale_target_plugin, stale_target_metadata_diagnostics);
@@ -759,18 +808,15 @@ int main(const int argc, char** argv)
         && !stale_target_metadata_diagnostics.has_error());
     stale_target_metadata->target += "-stale";
     const std::string invalid_native = "not-a-native-shared-library";
-    write_file(
-        stale_target_plugin / stale_target_metadata->library,
-        invalid_native);
+    rewrite_payload(stale_target_plugin,
+        stale_target_metadata->library.generic_string(), invalid_native);
     stale_target_metadata->library_checksum = fsim::support::Sha256::hex(
         fsim::support::Sha256::digest(invalid_native));
     stale_target_metadata->input_digest = fsim::systemc::compute_incremental_plugin_input_digest(
         *stale_target_metadata);
     stale_target_metadata->link_digest = fsim::systemc::compute_incremental_plugin_digest(
         *stale_target_metadata);
-    write_file(
-        stale_target_plugin
-            / fsim::systemc::kIncrementalPluginMetadataFilename,
+    rewrite_payload(stale_target_plugin, "metadata",
         fsim::systemc::serialize_incremental_plugin_metadata(
             *stale_target_metadata));
     fsim::diagnostic::Engine stale_target_diagnostics;
@@ -793,14 +839,9 @@ int main(const int argc, char** argv)
     assert(!std::filesystem::exists(incompatible_link.output));
 
     const auto corrupt_plugin = root / "corrupt.fsimscplugin";
-    copy_tree(link_request.output, corrupt_plugin);
-    make_writable(corrupt_plugin);
-    {
-        std::ofstream corrupt(
-            corrupt_plugin / plugin_metadata->library,
-            std::ios::binary | std::ios::app);
-        corrupt.put('x');
-    }
+    std::filesystem::copy_file(link_request.output, corrupt_plugin);
+    rewrite_payload(corrupt_plugin, plugin_metadata->library.generic_string(),
+        read_payload(corrupt_plugin, plugin_metadata->library.generic_string()) + "x");
     fsim::diagnostic::Engine corrupt_plugin_diagnostics;
     assert(!fsim::systemc::load_incremental_plugin_metadata(
         corrupt_plugin, corrupt_plugin_diagnostics));
@@ -908,7 +949,6 @@ int main(const int argc, char** argv)
 
     registry.reset();
     handwritten_registry.reset();
-    make_writable(root);
     std::error_code cleanup_error;
     std::filesystem::remove_all(root, cleanup_error);
 #if !defined(_WIN32)

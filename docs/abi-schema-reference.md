@@ -149,12 +149,12 @@ type information.
 | --- | --- | --- |
 | `fsim.toml` (retained SDK reader) | project schema 3 | low-level project configuration; public CLI commands use the current-directory workspace and do not read this file |
 | `.fsimobj` | `FSIMOBJ\0`, format 9, portable schema 16, compiled-HIR bundle 3 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and optional source payloads |
-| `.fsimdesign` | `FSIMDES\0`, format 15, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, class-specialization, SDF, trace, SystemC, and SCV state. Each payload checksum is `xxh64:` and sixteen lowercase hex digits (XXH64, seed 0; the integrity check simulate repeats at load) or lowercase SHA-256 hex |
-| `.fsimlib` | canonical TOML format 7, portable schema 16, compiled-HIR bundle 3 | logical-library metadata, compiled semantic/SV/VHDL HIR, optional sources, and optional exact native accelerators |
+| `.fsimdesign` | `FSIMDES\0`, format 16, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, class-specialization, SDF, trace, SystemC, and SCV state. Each payload checksum is `xxh64:` and sixteen lowercase hex digits (XXH64, seed 0; the integrity check simulate repeats at load) or lowercase SHA-256 hex |
+| `.fsimlib` | one SQLite container (kind `fsim-library`) holding canonical TOML format 8, portable schema 16, compiled-HIR bundle 3 | logical-library metadata, compiled semantic/SV/VHDL HIR, source paths with content digests and coverage facts (never source text), and optional exact native accelerators |
 | Workspace library catalog | SQLite schema 2 | artifact and dependency indexes with VHDL identifier-form columns |
 | `.fsimscobj` | `FSIMSCO\0`, format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
-| Object cache envelope | `FSIM-OBJECT-CACHE-V2` (`xxh64:<16 hex>` payload checksum; older envelopes miss and are rebuilt); LLVM key schema `fsim-llvm-native-object-v169`; ordinary payload compiled-HIR bundle 3 | checksum-framed payload used by native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB read/write ceiling |
+| Object caches | one SQLite database per cache (`static-kernel.sqlite3`, `compiled-hir.sqlite3` in the cache directory), application id `FSIM`, cache schema 1: one row per entry with its key, `xxh64:<16 hex>` payload checksum, size, last use and payload; a database of another cache schema is rebuilt; LLVM key schema `fsim-llvm-native-object-v169`; ordinary payload compiled-HIR bundle 3 | native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB payload ceiling; every load verifies the checksum and a corrupt entry is a miss |
 
 `UnitIndexEntry` is a public C++ metadata record. Appending the two
 `VhdlIdentifierForm` members changes its object layout. The public C++
@@ -170,13 +170,16 @@ Earlier identities (`.fsimobj` format 8/schema 15, `.fsimlib` format 6/schema
 compiled-HIR schema remains 3 because the HIR already carries the identifier
 form. SQLite schema 2 stores both forms as checked integer values.
 
-All numeric binary fields are canonical little-endian. Artifact payload paths
-are relative, normalized, contained, and unique within their artifact. Trees
-publish through an atomic sibling stage and become read-only. These low-level
-publishers require a fresh destination. The workspace layer generates the
-physical destinations and atomically replaces the active library or snapshot
+All numeric binary fields are canonical little-endian. Every artifact is one
+SQLite file (application id `0x4653494D`, container schema 1) whose `meta`
+table names its kind and whose `payloads` table holds each payload as
+checksummed chunks. Payload names are relative, normalized, contained, and
+unique within their artifact. An artifact is written to a temporary file beside
+its destination and renamed into place; it is never made read-only. These
+low-level publishers require a fresh destination. The workspace layer names
+the physical files and atomically replaces the active library or snapshot
 catalog entry when compilation, linking, or elaboration succeeds. CLI users
-select libraries and snapshot names; they do not name these artifact directories.
+select libraries and snapshot names; they do not name these artifact files.
 
 Objects, designs, design-cache records, and LLVM native-object keys retain the
 schema-3 code-coverage configuration and model identity. Disabled coverage uses

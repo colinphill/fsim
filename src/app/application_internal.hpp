@@ -676,6 +676,23 @@ bool same_source_path(
 [[nodiscard]] std::string source_path_key(
     const std::filesystem::path& path);
 
+// The coverage facts of one HDL source's text: its size and the exclusion
+// pragmas it declares. Artifacts store them so coverage never rereads it.
+[[nodiscard]] artifact::ObjectSourceCoverage source_coverage(
+    std::string_view contents, std::string_view language);
+
+// A fresh private directory for a SystemC plug-in carried inside an
+// artifact; every such directory is removed when the process exits.
+[[nodiscard]] std::optional<std::filesystem::path> embedded_plugin_directory(
+    std::string& error);
+
+// The path an artifact records for a source: relative to `workspace`,
+// reaching outside it with "..". Artifacts never hold the source text.
+[[nodiscard]] std::optional<std::filesystem::path> source_reference(
+    const std::filesystem::path& path,
+    const std::filesystem::path& workspace,
+    diagnostic::Engine& diagnostics);
+
 std::string compilation_unit_digest(
     const std::vector<frontend::PreprocessedRoot>& roots,
     const std::vector<frontend::PreprocessedDependency>& inputs,

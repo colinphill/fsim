@@ -121,9 +121,11 @@ fsim_require_restart_tokens(tests/app/workspace_store_test.cpp
   "test_mapping_and_corrupt_metadata"
   "test_snapshot_replacement_and_workspace_boundary"
   "test_serialized_writers_and_symlinks")
-fsim_require_restart_tokens(src/app/application_workspace_store_sqlite.cpp
+fsim_require_restart_tokens(src/support/sqlite_database.cpp
   "SQLITE_OPEN_READONLY" "SQLITE_DBCONFIG_DEFENSIVE"
-  "PRAGMA trusted_schema=OFF" "PRAGMA foreign_keys=ON"
+  "PRAGMA trusted_schema=OFF")
+fsim_require_restart_tokens(src/app/application_workspace_store_sqlite.cpp
+  "PRAGMA foreign_keys=ON"
   "workspace library catalog has an unsupported schema")
 fsim_require_restart_tokens(docs/workspace-mode.md
   ".fsim/libraries/<name>" "library.sqlite3" ".fsim/libraries.toml"

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/systemc/plugin_compiler.hpp"
 #include "fsim/support/environment.hpp"
+#include "fsim/support/sqlite_database.hpp"
 
 #include <algorithm>
 #include <array>
@@ -50,6 +51,25 @@ void write_source(
 #endif
     stream << "int " << symbol << "() { return " << value << "; }\n";
     assert(stream);
+}
+
+// Runs one statement on the plug-in cache with ?1 bound to `key`.
+void update_cache(
+    const std::filesystem::path& database,
+    const std::string& sql,
+    const std::string& key) {
+    fsim::support::sqlite::Database connection{"plug-in cache test"};
+    fsim::support::sqlite::Database::Limits limits;
+    limits.value_bytes = std::int64_t{512} * 1024 * 1024;
+    std::string error;
+    const bool opened = connection.open(database,
+        fsim::support::sqlite::Database::OpenMode::read_write_existing, limits, error);
+    assert(opened);
+    fsim::support::sqlite::Statement statement{connection, sql.c_str(), error};
+    const bool done = statement && statement.bind_text(1, key, error)
+        && statement.finish(error);
+    assert(done);
+    assert(connection.changes() == 1);
 }
 
 void write_text(const std::filesystem::path& path, const std::string& text) {
@@ -556,18 +576,6 @@ int main(const int argc, char** argv) {
                         ? "/D" : "-D"}
             + "FSIM_LITERAL_ARGUMENT=hello world;$HOME*"));
 
-    // Exercise recovery of a stale per-key lock before the first compile.
-    const auto stale_lock =
-        request.cache_directory / "systemc" / "locks"
-        / (first_plan->cache_key + ".lock");
-    filesystem::create_directories(stale_lock, error);
-    assert(!error);
-    filesystem::last_write_time(
-        stale_lock,
-        filesystem::file_time_type::clock::now() - std::chrono::hours{1},
-        error);
-    assert(!error);
-
     const auto first = fsim::systemc::compile_plugin(request, diagnostics);
     assert(first.success);
     assert(!first.cache_hit);
@@ -606,77 +614,49 @@ int main(const int argc, char** argv) {
     }
 #endif
 
-    const auto artifact_metadata =
-        filesystem::path{first.library_path.string() + ".metadata"};
-    assert(filesystem::is_regular_file(artifact_metadata));
+    // Built libraries are rows of one cache database beside nothing else.
+    const auto plugin_cache = request.cache_directory / "systemc.sqlite3";
+    assert(filesystem::is_regular_file(plugin_cache));
+    for (const auto& entry : filesystem::directory_iterator{request.cache_directory}) {
+        assert(entry.path().filename() == "systemc.sqlite3");
+    }
 
-    // Missing, truncated, corrupt, and incompatible committed pairs are
-    // deterministic misses. The per-key writer repairs each one and the next
-    // lookup must be a checksum-validated hit.
-    write_text(first.library_path, "truncated shared library\n");
-    const auto repaired_library =
-        fsim::systemc::compile_plugin(request, diagnostics);
-    assert(repaired_library.success && !repaired_library.cache_hit);
-    const auto repaired_library_warm =
-        fsim::systemc::compile_plugin(request, diagnostics);
-    assert(repaired_library_warm.success && repaired_library_warm.cache_hit);
+    // A library restored in this process is reused from its private path;
+    // once that copy is gone, the next lookup reads the database. Corrupt,
+    // truncated and missing entries are misses that the next build repairs,
+    // after which the entry restores again.
+    const auto expect_repair = [&](const std::string& damage) {
+        filesystem::remove(first.library_path, error);
+        assert(!error);
+        update_cache(plugin_cache, damage, first.cache_key);
+        const auto repaired = fsim::systemc::compile_plugin(request, diagnostics);
+        assert(repaired.success && !repaired.cache_hit);
+        filesystem::remove(first.library_path, error);
+        assert(!error);
+        const auto restored = fsim::systemc::compile_plugin(request, diagnostics);
+        assert(restored.success && restored.cache_hit);
+        assert(filesystem::file_size(restored.library_path)
+            == filesystem::file_size(second.library_path));
+    };
+    expect_repair("UPDATE entries SET data = x'00' || data WHERE key = ?1");
+    expect_repair("UPDATE entries SET data = x'7f454c46' WHERE key = ?1");
+    expect_repair("UPDATE entries SET checksum = 'xxh64:0000000000000000' WHERE key = ?1");
+    expect_repair("DELETE FROM entries WHERE key = ?1");
 
-    assert(filesystem::remove(artifact_metadata, error));
-    assert(!error);
-    const auto repaired_missing_metadata =
-        fsim::systemc::compile_plugin(request, diagnostics);
-    assert(repaired_missing_metadata.success);
-    assert(!repaired_missing_metadata.cache_hit);
-
-    write_text(artifact_metadata, "fsim-systemc-artifact-v1\ntruncated\n");
-    const auto repaired_truncated_metadata =
-        fsim::systemc::compile_plugin(request, diagnostics);
-    assert(repaired_truncated_metadata.success);
-    assert(!repaired_truncated_metadata.cache_hit);
-
-    write_text(
-        artifact_metadata,
-        "fsim-systemc-artifact-v999\n"
-        + first.cache_key + "\n1\n"
-        + std::string(64, '0') + "\n");
-    const auto repaired_incompatible_metadata =
-        fsim::systemc::compile_plugin(request, diagnostics);
-    assert(repaired_incompatible_metadata.success);
-    assert(!repaired_incompatible_metadata.cache_hit);
-
-    assert(filesystem::remove(first.library_path, error));
-    assert(!error);
-    const auto repaired_missing_library =
-        fsim::systemc::compile_plugin(request, diagnostics);
-    assert(repaired_missing_library.success);
-    assert(!repaired_missing_library.cache_hit);
-
-    const auto stale_metadata_temporary = filesystem::path{
-        artifact_metadata.string() + ".tmp.abandoned"};
-    const auto legacy_checksum =
-        filesystem::path{first.library_path.string() + ".sha256"};
-    const auto stale_legacy_temporary = filesystem::path{
-        legacy_checksum.string() + ".tmp.abandoned"};
+    // A stale build output of an earlier failed build is replaced.
+    filesystem::remove(first.library_path, error);
+    update_cache(plugin_cache, "DELETE FROM entries WHERE key = ?1", first.cache_key);
     write_text(first_plan->build_path, "stale compiler output\n");
-    write_text(stale_metadata_temporary, "stale metadata\n");
-    write_text(legacy_checksum, std::string(64, '0') + "\n");
-    write_text(stale_legacy_temporary, "stale checksum\n");
-    write_text(artifact_metadata, "corrupt metadata\n");
     const auto recovered_staging =
         fsim::systemc::compile_plugin(request, diagnostics);
     assert(recovered_staging.success && !recovered_staging.cache_hit);
     assert(!filesystem::exists(first_plan->build_path));
-    assert(!filesystem::exists(stale_metadata_temporary));
-    assert(!filesystem::exists(legacy_checksum));
-    assert(!filesystem::exists(stale_legacy_temporary));
 
-    // Concurrent callers may all fingerprint independently, but exactly one
-    // writer publishes the missing key and every waiter consumes that complete
-    // committed pair.
-    assert(filesystem::remove(first.library_path, error));
+    // Concurrent callers in one process wait while exactly one of them
+    // builds the missing entry, then reuse it.
+    filesystem::remove(first.library_path, error);
     assert(!error);
-    assert(filesystem::remove(artifact_metadata, error));
-    assert(!error);
+    update_cache(plugin_cache, "DELETE FROM entries WHERE key = ?1", first.cache_key);
     std::array<std::future<fsim::systemc::PluginCompileResult>, 3>
         concurrent_compiles;
     for (auto& future : concurrent_compiles) {

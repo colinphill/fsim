@@ -3,48 +3,89 @@
 
 #include "../diagnostic/artifact_identity.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/artifact/object.hpp"
 #include "fsim/library/artifact.hpp"
 #include "fsim/library/source_mapping.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/payload_checksum.hpp"
 #include "fsim/support/sha256.hpp"
 #include "fsim/systemc_abi.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
+#include <sstream>
 
 namespace fsim::app::application_detail {
 namespace {
 
     std::optional<std::string> read_payload(
-        const std::filesystem::path& path,
+        const std::filesystem::path& library_path,
+        const std::filesystem::path& payload,
         const std::string_view expected_checksum,
         diagnostic::Engine& diagnostics,
         const std::optional<std::uintmax_t> maximum_bytes = std::nullopt)
     {
-        auto payload = read_binary_payload(path, maximum_bytes);
-        if (!payload.bytes) {
-            const auto budget = payload.budget_exceeded
-                ? " exceeds the compiled-HIR decode byte budget: "
-                : ": ";
-            diagnostics.error(
-                "FSIM-LIB-0008",
-                (payload.failure == BinaryPayloadReadFailure::open
-                        ? "cannot open mapped library payload"
-                        : "cannot read mapped library payload")
-                    + std::string { budget } + support::path_to_utf8(path));
+        auto failure = library::PayloadReadFailure::none;
+        std::string error;
+        auto bytes = library::read_payload(library_path, payload, expected_checksum,
+            maximum_bytes, failure, error);
+        if (bytes)
+            return bytes;
+        const auto name = support::path_to_utf8(library_path) + ":"
+            + support::path_to_utf8(payload);
+        switch (failure) {
+        case library::PayloadReadFailure::checksum:
+            diagnostics.error("FSIM-LIB-0008",
+                "mapped library payload checksum mismatch: " + name);
+            break;
+        case library::PayloadReadFailure::budget:
+            diagnostics.error("FSIM-LIB-0008",
+                "cannot read mapped library payload exceeds the compiled-HIR "
+                "decode byte budget: " + name);
+            break;
+        default:
+            diagnostics.error("FSIM-LIB-0008",
+                (failure == library::PayloadReadFailure::open
+                        ? "cannot open mapped library payload: "
+                        : "cannot read mapped library payload: ")
+                    + name + (error.empty() ? std::string { } : " (" + error + ")"));
+            break;
+        }
+        return std::nullopt;
+    }
+
+    // A library records SystemC sources by path and digest only; the portable
+    // fallback compiles them from where the importing project finds them,
+    // once their content is proven to be what was exported.
+    std::optional<std::filesystem::path> exported_systemc_source(
+        const project::Config& config,
+        const std::filesystem::path& library_path,
+        const library::SourceIndexEntry& source,
+        diagnostic::Engine& diagnostics)
+    {
+        const auto logical = support::path_from_utf8(source.logical_name);
+        const auto path = (logical.is_absolute() ? logical : config.base_directory / logical)
+            .lexically_normal();
+        auto input = support::native_fs::open_ifstream(path, std::ios::binary);
+        std::ostringstream contents;
+        if (input)
+            contents << input.rdbuf();
+        if (!input || (!input.good() && !input.eof())
+            || support::Sha256::hex(support::Sha256::digest(contents.str()))
+                != source.checksum) {
+            diagnostics.error("FSIM-LIB-0008",
+                "SystemC source '" + source.logical_name + "' of library "
+                    + support::path_to_utf8(library_path)
+                    + (input ? " differs from the exported content at "
+                             : " is not found at ")
+                    + support::path_to_utf8(path)
+                    + "; re-export the library with a native SystemC plug-in for this host");
             return std::nullopt;
         }
-        if (!support::payload_checksum_matches(
-                *payload.bytes, expected_checksum)) {
-            diagnostics.error(
-                "FSIM-LIB-0008",
-                "mapped library payload checksum mismatch: "
-                    + support::path_to_utf8(path));
-            return std::nullopt;
-        }
-        return std::move(payload.bytes);
+        return path;
     }
 
     bool body_has_instances(const frontend::GenerateBody& body);
@@ -196,7 +237,7 @@ namespace {
 
     bool admit_systemc_artifact(
         const project::Config& config,
-        const std::filesystem::path& directory,
+        const std::filesystem::path& library_path,
         const library::NativeArtifact& native,
         CheckedProject::MappedLibrary& provenance,
         diagnostic::Engine& diagnostics)
@@ -250,11 +291,32 @@ namespace {
                     ".fsimlib native payload"));
             return false;
         }
-        if (!read_payload(
-                directory / native.artifact, native.checksum, diagnostics)) {
+        const auto bytes = read_payload(
+            library_path, native.artifact, native.checksum, diagnostics);
+        if (!bytes) {
             return false;
         }
-        provenance.systemc_plugin = directory / native.artifact;
+        // The plug-in is loaded from a file, so it is written to a private
+        // directory that is removed when the process exits.
+        std::string error;
+        const auto directory = embedded_plugin_directory(error);
+        const auto plugin = directory
+            ? *directory / native.artifact.filename()
+            : std::filesystem::path { };
+        if (directory) {
+            auto output = support::native_fs::open_ofstream(
+                plugin, std::ios::binary | std::ios::trunc);
+            output.write(bytes->data(), static_cast<std::streamsize>(bytes->size()));
+            output.close();
+            if (!output)
+                error = "cannot write " + support::path_to_utf8(plugin);
+        }
+        if (!error.empty()) {
+            diagnostics.error("FSIM-LIB-0008",
+                "cannot extract mapped SystemC native plug-in: " + error);
+            return false;
+        }
+        provenance.systemc_plugin = plugin;
         record_native_acceptance(
             provenance, "systemc_plugin", native.compiler_fingerprint);
         return true;
@@ -557,17 +619,32 @@ bool load_required_mapped_libraries(
                 }
             }
         }
-        for (const auto& source_entry : metadata->sources) {
-            if (source_entry.artifact.empty()) {
-                continue;
-            }
-            auto source_bytes = read_payload(
-                mapping->second->path / source_entry.artifact,
-                source_entry.checksum,
-                diagnostics);
-            if (!source_bytes.has_value()) {
+        // Coverage facts recorded at export stand in for the source text.
+        std::optional<std::vector<artifact::ObjectSourceCoverage>> source_coverage;
+        const auto coverage_record = std::ranges::find_if(
+            metadata->auxiliary_artifacts, [](const auto& item) {
+                return item.kind == "source-coverage" && item.name == "sources";
+            });
+        if (coverage_record != metadata->auxiliary_artifacts.end()) {
+            const auto bytes = read_payload(mapping->second->path,
+                coverage_record->artifact, coverage_record->checksum, diagnostics);
+            if (!bytes) {
                 return false;
             }
+            source_coverage = artifact::deserialize_source_coverage(*bytes,
+                support::path_to_utf8(mapping->second->path), diagnostics);
+            if (!source_coverage) {
+                return false;
+            }
+            if (source_coverage->size() != metadata->sources.size()) {
+                diagnostics.error("FSIM-LIB-0008",
+                    "mapped library source coverage facts do not match its source index: "
+                        + support::path_to_utf8(mapping->second->path));
+                return false;
+            }
+        }
+        std::vector<const library::SourceIndexEntry*> systemc_entries;
+        for (const auto& source_entry : metadata->sources) {
             const auto logical_path = support::path_from_utf8(source_entry.logical_name);
             auto* source_settings = source_settings_for(
                 source_entry.language, source_entry.standard,
@@ -575,24 +652,28 @@ bool load_required_mapped_libraries(
             if (source_settings == nullptr) {
                 return false;
             }
+            // Sources are recorded by location and digest; the library holds
+            // no text, so an HDL source has no backing file of its own.
             CheckedSource checked_source {
                 logical_path, source_entry.language, source_entry.standard,
-                source_entry.checksum, { }, source_entry.checksum,
-                mapping->second->path / source_entry.artifact
+                source_entry.checksum, { }, source_entry.checksum, { }, { }
             };
             checked_source.standard_revision = frontend_standard_revision(
                 source_settings->language, source_settings->standard);
+            if (source_coverage && source_entry.language != "systemc") {
+                checked_source.coverage = (*source_coverage)[static_cast<std::size_t>(
+                    &source_entry - metadata->sources.data())];
+            }
             if (source_entry.language == "systemc") {
-                provenance.systemc_sources.push_back(
-                    mapping->second->path / source_entry.artifact);
                 checked.systemc_sources.push_back(std::move(checked_source));
+                systemc_entries.push_back(&source_entry);
             } else {
                 checked.hdl_sources.push_back(std::move(checked_source));
             }
             source_settings->files.push_back(logical_path);
         }
         auto compiled_bytes = read_payload(
-            mapping->second->path / metadata->compiled_hir_artifact,
+            mapping->second->path, metadata->compiled_hir_artifact,
             metadata->compiled_hir_checksum,
             diagnostics, kCompiledHirDecodeBudgetBytes);
         if (!compiled_bytes) {
@@ -812,6 +893,16 @@ bool load_required_mapped_libraries(
                         diagnostics)) {
                     return false;
                 }
+            }
+        }
+        if (provenance.systemc_plugin.empty()) {
+            for (const auto* source : systemc_entries) {
+                auto path = exported_systemc_source(
+                    config, mapping->second->path, *source, diagnostics);
+                if (!path) {
+                    return false;
+                }
+                provenance.systemc_sources.push_back(std::move(*path));
             }
         }
         checked.mapped_libraries.push_back(std::move(provenance));

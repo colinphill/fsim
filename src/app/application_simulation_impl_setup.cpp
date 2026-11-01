@@ -445,7 +445,7 @@ PersistedPlanSlot persisted_plan_slot(const BuiltProject& built,
                 || std::string_view { enabled } == kind))) {
         return slot;
     }
-    slot.cache.emplace(built.cache_path / "static-kernel");
+    slot.cache.emplace(built.cache_path / "static-kernel.sqlite3");
     compiler::CacheKeyBuilder key;
     key.add("planner", elaboration::detail::static_kernel_plan_identity());
     if (kind == "specializations") {
@@ -709,7 +709,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                 plan.spec->codegen = compiler::make_static_kernel_codegen({
                     built.cache_path.empty()
                         ? std::filesystem::path { }
-                        : built.cache_path / "static-kernel",
+                        : built.cache_path / "static-kernel.sqlite3",
                     compiler::StaticKernelAheadOfTimeScope::active(),
                     compiler::StaticKernelAheadOfTimeScope::jobs(),
                 });

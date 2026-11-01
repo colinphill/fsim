@@ -3200,6 +3200,11 @@ void ApplicationTestFixture::test_class_simulation_integration()
     const auto relocated_design = relocated_root / design.filename();
     const auto relocated_library = relocated_root / library.filename();
     const auto relocate_directory = [](const auto& origin, const auto& target) {
+        // Designs are single container files; libraries are still trees.
+        if (std::filesystem::is_regular_file(origin)) {
+            std::filesystem::copy_file(origin, target);
+            return;
+        }
         std::filesystem::create_directories(target);
         for (const auto& entry :
             std::filesystem::recursive_directory_iterator(origin)) {

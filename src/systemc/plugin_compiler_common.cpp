@@ -5,10 +5,11 @@
 
 #include <charconv>
 #include <chrono>
+#include <map>
+#include <memory>
 
 namespace fsim::systemc::plugin_detail {
 
-std::atomic_uint64_t checksum_temporary_counter { };
 std::atomic_uint64_t uncached_plan_counter { };
 std::atomic_uint64_t dependency_scan_counter { };
 #if defined(_WIN32)
@@ -1230,235 +1231,32 @@ void add_compiler_environment_to_key(
     return true;
 }
 
-namespace {
-
-    constexpr std::string_view kArtifactMetadataMagic = "fsim-systemc-artifact-v1";
-
-    [[nodiscard]] std::filesystem::path artifact_metadata_path(
-        const std::filesystem::path& library)
-    {
-        return library.string() + ".metadata";
-    }
-
-    [[nodiscard]] bool lowercase_sha256(const std::string_view value) noexcept
-    {
-        return value.size() == 64
-            && std::all_of(value.begin(), value.end(), [](const char character) {
-                   return (character >= '0' && character <= '9')
-                       || (character >= 'a' && character <= 'f');
-               });
-    }
-
-    [[nodiscard]] bool remove_stale_file(
-        const std::filesystem::path& path,
-        diagnostic::Engine& diagnostics)
-    {
-        std::error_code error;
-        const bool exists = support::native_fs::exists(path, error);
-        if (!error && (!exists || support::native_fs::remove(path, error))) {
-            return true;
-        }
-        report_error(
-            diagnostics,
-            "FSIM-SC-C005",
-            "cannot remove stale SystemC plug-in build input: " + error.message(),
-            path);
-        return false;
-    }
-
-} // namespace
-
-[[nodiscard]] bool valid_cached_artifact(
-    const PluginCompilePlan& plan,
-    std::error_code& error)
+std::unique_lock<std::mutex> lock_cache_entry(const std::string& key)
 {
-    error.clear();
-    if (!support::native_fs::is_regular_file(plan.library_path, error)) {
-        error.clear();
-        return false;
+    static std::mutex registry;
+    static std::map<std::string, std::shared_ptr<std::mutex>> entries;
+    std::shared_ptr<std::mutex> entry;
+    {
+        const std::scoped_lock lock { registry };
+        auto& slot = entries[key];
+        if (!slot) {
+            slot = std::make_shared<std::mutex>();
+        }
+        entry = slot;
     }
-    const auto size = support::native_fs::file_size(plan.library_path, error);
-    if (error || size == 0) {
-        error.clear();
-        return false;
-    }
-
-    auto metadata_stream = support::native_fs::open_ifstream(
-        artifact_metadata_path(plan.library_path), std::ios::binary);
-    if (!metadata_stream) {
-        error.clear();
-        return false;
-    }
-    std::string magic;
-    std::string key;
-    std::string encoded_size;
-    std::string expected_checksum;
-    std::string trailing;
-    if (!std::getline(metadata_stream, magic)
-        || !std::getline(metadata_stream, key)
-        || !std::getline(metadata_stream, encoded_size)
-        || !std::getline(metadata_stream, expected_checksum)
-        || std::getline(metadata_stream, trailing)
-        || magic != kArtifactMetadataMagic
-        || key != plan.cache_key
-        || !lowercase_sha256(expected_checksum)) {
-        error.clear();
-        return false;
-    }
-
-    std::uintmax_t expected_size { };
-    const auto parsed = std::from_chars(
-        encoded_size.data(),
-        encoded_size.data() + encoded_size.size(),
-        expected_size);
-    if (parsed.ec != std::errc { }
-        || parsed.ptr != encoded_size.data() + encoded_size.size()
-        || expected_size == 0 || expected_size != size) {
-        error.clear();
-        return false;
-    }
-
-    std::string actual;
-    if (!hash_file(plan.library_path, actual, error)) {
-        return false;
-    }
-    return actual == expected_checksum;
+    // The map keeps every entry's mutex alive for the process.
+    return std::unique_lock { *entry };
 }
 
-[[nodiscard]] bool prepare_artifact_build(
-    const PluginCompilePlan& plan,
-    diagnostic::Engine& diagnostics)
+std::optional<std::filesystem::path> plugin_build_directory(std::string& error)
 {
-    if (!remove_stale_file(plan.build_path, diagnostics)) {
-        return false;
+    static std::mutex mutex;
+    static std::optional<std::filesystem::path> directory;
+    const std::scoped_lock lock { mutex };
+    if (!directory) {
+        directory = private_native_directory(error);
     }
-    for (const auto& intermediate : plan.intermediate_paths) {
-        if (!remove_stale_file(intermediate, diagnostics)) {
-            return false;
-        }
-    }
-
-    std::error_code error;
-    const auto directory = plan.library_path.parent_path();
-    auto iterator = support::native_fs::directory_iterator(
-        directory,
-        std::filesystem::directory_options::skip_permission_denied,
-        error
-    );
-    if (error) {
-        report_error(
-            diagnostics,
-            "FSIM-SC-C005",
-            "cannot inspect SystemC plug-in staging directory: " + error.message(),
-            directory);
-        return false;
-    }
-    const auto metadata_prefix = artifact_metadata_path(plan.library_path).filename().string() + ".tmp.";
-    const auto legacy_prefix = plan.library_path.filename().string() + ".sha256.tmp.";
-    const std::filesystem::directory_iterator end;
-    for (; iterator != end; iterator.increment(error)) {
-        if (error) {
-            break;
-        }
-        const auto filename = iterator->path().filename().string();
-        if (!filename.starts_with(metadata_prefix)
-            && !filename.starts_with(legacy_prefix)) {
-            continue;
-        }
-        if (!remove_stale_file(
-                support::native_fs::ordinary_entry_path(
-                    directory, iterator->path()),
-                diagnostics)) {
-            return false;
-        }
-    }
-    if (error) {
-        report_error(
-            diagnostics,
-            "FSIM-SC-C005",
-            "cannot inspect SystemC plug-in staging directory: " + error.message(),
-            directory);
-        return false;
-    }
-    return true;
-}
-
-[[nodiscard]] bool publish_artifact(
-    const PluginCompilePlan& plan,
-    diagnostic::Engine& diagnostics)
-{
-    std::error_code error;
-    std::string checksum;
-    if (!hash_file(plan.build_path, checksum, error)) {
-        report_error(
-            diagnostics,
-            "FSIM-SC-C008",
-            "cannot checksum compiled SystemC plug-in: " + error.message(),
-            plan.build_path);
-        return false;
-    }
-
-    const auto artifact_size = support::native_fs::file_size(plan.build_path, error);
-    if (error || artifact_size == 0) {
-        report_error(
-            diagnostics,
-            "FSIM-SC-C008",
-            "cannot size compiled SystemC plug-in: " + error.message(),
-            plan.build_path);
-        return false;
-    }
-
-    const auto metadata_path = artifact_metadata_path(plan.library_path);
-    const auto suffix = checksum_temporary_counter.fetch_add(1, std::memory_order_relaxed);
-    const auto temporary_metadata = std::filesystem::path {
-        metadata_path.string() + ".tmp."
-        + std::to_string(dependency_process_id()) + "-"
-        + std::to_string(suffix)
-    };
-    {
-        auto stream = support::native_fs::open_ofstream(
-            temporary_metadata, std::ios::binary | std::ios::trunc);
-        stream << kArtifactMetadataMagic << '\n'
-               << plan.cache_key << '\n'
-               << artifact_size << '\n'
-               << checksum << '\n';
-        stream.flush();
-        if (!stream) {
-            report_error(
-                diagnostics,
-                "FSIM-SC-C008",
-                "cannot write SystemC plug-in metadata",
-                temporary_metadata);
-            support::native_fs::remove(temporary_metadata, error);
-            return false;
-        }
-    }
-
-    if (!compiler::detail::atomic_replace_file(
-            plan.build_path, plan.library_path, error)) {
-        report_error(
-            diagnostics,
-            "FSIM-SC-C008",
-            "cannot publish compiled SystemC plug-in: " + error.message(),
-            plan.library_path);
-        support::native_fs::remove(temporary_metadata, error);
-        return false;
-    }
-
-    if (!compiler::detail::atomic_replace_file(
-            temporary_metadata, metadata_path, error)) {
-        report_error(
-            diagnostics,
-            "FSIM-SC-C008",
-            "cannot commit SystemC plug-in metadata: " + error.message(),
-            metadata_path);
-        std::error_code ignored;
-        support::native_fs::remove(temporary_metadata, ignored);
-        support::native_fs::remove(plan.library_path, ignored);
-        return false;
-    }
-    support::native_fs::remove(plan.library_path.string() + ".sha256", error);
-    return true;
+    return directory;
 }
 
 } // namespace fsim::systemc::plugin_detail

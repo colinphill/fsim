@@ -137,13 +137,13 @@ fsim_require_schema_tokens(include/fsim/runtime/svdpi_bridge.h
 fsim_require_schema_tokens(include/fsim/runtime/acc_handle_bridge.h
   "FSIM_ACC_STANDARD_QUERY_ABI_VERSION 3u")
 fsim_require_schema_tokens(include/fsim/artifact/object.hpp
-  "kObjectFormatVersion = 9")
+  "kObjectFormatVersion = 10")
 fsim_require_schema_tokens(include/fsim/library/artifact.hpp
-  "kFormatVersion = 7"
+  "kFormatVersion = 8"
   "kPortableSchemaVersion = 16"
   "kCompiledHirSchemaVersion = 3")
 fsim_require_schema_tokens(include/fsim/artifact/design.hpp
-  "kDesignFormatVersion = 15")
+  "kDesignFormatVersion = 16")
 fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
   "kRuntimeStateSchema = 91"
   "kSemanticStateSchema = 4"

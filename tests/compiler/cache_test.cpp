@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/cache_support.hpp"
+#include "fsim/support/sqlite_database.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include <array>
@@ -21,6 +22,47 @@
 #  endif
 #  include <windows.h>
 #endif
+
+namespace {
+
+// Runs SQL against a cache database; ?1 binds `key` when it is not empty.
+void execute(
+    const std::filesystem::path& database,
+    const std::string& sql,
+    const std::string_view key,
+    const bool create = false) {
+    fsim::support::sqlite::Database connection{"cache test"};
+    std::string error;
+    const bool opened = connection.open(database,
+        create ? fsim::support::sqlite::Database::OpenMode::read_write_create
+               : fsim::support::sqlite::Database::OpenMode::read_write_existing,
+        {}, error);
+    assert(opened);
+    if (key.empty()) {
+        const bool executed = connection.execute(sql.c_str(), error);
+        assert(executed);
+        return;
+    }
+    fsim::support::sqlite::Statement statement{connection, sql.c_str(), error};
+    const bool done = statement && statement.bind_text(1, key, error)
+        && statement.finish(error);
+    assert(done);
+    assert(connection.changes() == 1);
+}
+
+void age_entry(
+    const std::filesystem::path& database,
+    const std::string_view key,
+    const std::chrono::seconds age) {
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch());
+    execute(database,
+        "UPDATE entries SET last_used = " + std::to_string((now - age).count())
+            + " WHERE key = ?1",
+        key);
+}
+
+} // namespace
 
 int main() {
     using fsim::compiler::CacheKeyBuilder;
@@ -89,14 +131,22 @@ int main() {
     std::filesystem::remove_all(root, error);
     error.clear();
 
-    ObjectCache cache{root};
+    const auto database = root / "objects.sqlite3";
+    ObjectCache cache{database};
     const std::array payload{
         std::byte{0xde}, std::byte{0xad}, std::byte{0xbe}, std::byte{0xef}};
 
-    // A process that died before publishing lock ownership must not wedge the
-    // cache forever. Marker-less locks are only reclaimed after a grace age.
-    const auto stale_lock =
-        std::filesystem::path{cache.path_for(key).string() + ".lock"};
+    // A load from an absent database is a miss and creates nothing.
+    assert(!cache.load(key, error));
+    assert(error == std::errc::no_such_file_or_directory);
+    assert(!std::filesystem::exists(database));
+    std::filesystem::create_directories(root, error);
+    assert(!error);
+
+    // A process that died before publishing lock ownership must not wedge a
+    // directory lock forever. Marker-less locks are only reclaimed after a
+    // grace age.
+    const auto stale_lock = root / "stale.lock";
     std::filesystem::create_directories(stale_lock, error);
     assert(!error);
     std::filesystem::last_write_time(
@@ -104,9 +154,13 @@ int main() {
         std::filesystem::file_time_type::clock::now() - std::chrono::hours{1},
         error);
     assert(!error);
-
-    assert(cache.store(key, payload, error));
-    assert(!error);
+    {
+        std::error_code lock_error;
+        fsim::compiler::detail::CacheDirectoryLock reclaimed{
+            stale_lock, lock_error, std::chrono::milliseconds{200}};
+        assert(reclaimed.held());
+        assert(!lock_error);
+    }
     assert(!std::filesystem::exists(stale_lock));
 
     // Age alone never permits stealing a lock whose recorded local process is
@@ -136,8 +190,8 @@ int main() {
 
 #if defined(_WIN32)
     // A Windows scanner can retain a non-delete-sharing handle after the lock
-    // owner has finished. The stale owner record must not make a later cache
-    // operation in this same process wait forever.
+    // owner has finished. The stale owner record must not make a later lock
+    // in this same process wait forever.
     const auto stranded_lock_path = root / "stranded.lock";
     HANDLE retained_owner = INVALID_HANDLE_VALUE;
     {
@@ -165,13 +219,14 @@ int main() {
     assert(!std::filesystem::exists(stranded_lock_path));
 #endif
 
+    assert(cache.store(key, payload, error));
+    assert(!error);
     const auto loaded = cache.load(key, error);
     assert(loaded);
     assert(!error);
     assert(std::equal(loaded->begin(), loaded->end(), payload.begin(), payload.end()));
 
-    // Publishing an updated payload replaces the cache file atomically even
-    // when a destination already exists.
+    // Storing again replaces the entry.
     const std::array replacement{
         std::byte{0xca}, std::byte{0xfe}, std::byte{0xba}, std::byte{0xbe}};
     assert(cache.store(key, replacement, error));
@@ -180,36 +235,35 @@ int main() {
     assert(std::equal(
         replaced->begin(), replaced->end(), replacement.begin(), replacement.end()));
 
+    constexpr std::uintmax_t maximum_cache_entry_bytes =
+        256U * 1024U * 1024U;
     const auto maximum_payload
         = fsim::compiler::maximum_object_cache_payload_bytes();
+    assert(maximum_payload == maximum_cache_entry_bytes);
     assert(fsim::compiler::object_cache_payload_fits(maximum_payload));
     assert(!fsim::compiler::object_cache_payload_fits(
         maximum_payload + 1U));
 
     // Corrupt and truncated entries are isolated as cache misses with a stable
     // data-integrity error. A subsequent publisher can replace either entry.
-    {
-        std::fstream corrupt(cache.path_for(key), std::ios::binary | std::ios::in | std::ios::out);
-        assert(corrupt);
-        corrupt.seekp(-1, std::ios::end);
-        corrupt.put('\0');
-    }
+    execute(database, "UPDATE entries SET data = x'cafeba00' WHERE key = ?1", key);
     assert(!cache.load(key, error));
     assert(error == std::errc::illegal_byte_sequence);
     assert(cache.store(key, replacement, error));
-    std::filesystem::resize_file(cache.path_for(key), 4, error);
-    assert(!error);
+    execute(database, "UPDATE entries SET data = x'cafe' WHERE key = ?1", key);
     assert(!cache.load(key, error));
     assert(error == std::errc::illegal_byte_sequence);
+    assert(cache.store(key, replacement, error));
+    execute(database, "UPDATE entries SET checksum = 'xxh64:0' WHERE key = ?1", key);
+    assert(!cache.load(key, error));
+    assert(error == std::errc::illegal_byte_sequence);
+    assert(cache.store(key, replacement, error));
 
-    // Cache artifacts have a governed input ceiling, checked before allocation.
-    // resize_file creates a sparse file on supported filesystems, keeping this
-    // regression cheap while covering hostile oversized inputs.
-    constexpr std::uintmax_t maximum_cache_entry_bytes =
-        256U * 1024U * 1024U;
-    std::filesystem::resize_file(
-        cache.path_for(key), maximum_cache_entry_bytes + 1U, error);
-    assert(!error);
+    // Entries have a governed size ceiling, checked before allocation.
+    execute(database,
+        "UPDATE entries SET size = " + std::to_string(maximum_cache_entry_bytes + 1U)
+            + " WHERE key = ?1",
+        key);
     assert(!cache.load(key, error));
     assert(error == std::errc::file_too_large);
     assert(cache.store(key, replacement, error));
@@ -217,34 +271,40 @@ int main() {
     // Valid cache hits require no write access. Restore owner write permission
     // before exercising replacement and cleanup on both POSIX and Windows.
     std::filesystem::permissions(
-        cache.path_for(key),
+        database,
         std::filesystem::perms::owner_write
             | std::filesystem::perms::group_write
             | std::filesystem::perms::others_write,
         std::filesystem::perm_options::remove,
         error);
     assert(!error);
-    const auto read_only = cache.load(key, error);
-    assert(read_only);
-    assert(!error);
-    assert(std::equal(
-        read_only->begin(), read_only->end(), replacement.begin(), replacement.end()));
+    {
+        const ObjectCache read_only_cache{database};
+        const auto read_only = read_only_cache.load(key, error);
+        assert(read_only);
+        assert(!error);
+        assert(std::equal(
+            read_only->begin(), read_only->end(), replacement.begin(), replacement.end()));
+    }
     std::filesystem::permissions(
-        cache.path_for(key),
+        database,
         std::filesystem::perms::owner_write,
         std::filesystem::perm_options::add,
         error);
     assert(!error);
 
-    // Concurrent writers serialize through the destination lock, publish a
-    // complete entry atomically, and leave neither locks nor temporaries behind.
+    // Concurrent writers, through one cache and through separate connections
+    // to the same file, serialize in SQLite and leave a complete entry and
+    // no side files behind.
     std::vector<std::future<std::pair<bool, std::error_code>>> publishers;
-    for (int writer = 0; writer < 4; ++writer) {
+    for (int writer = 0; writer < 8; ++writer) {
         publishers.emplace_back(std::async(
             std::launch::async,
-            [&cache, &key, &replacement] {
+            [&cache, &database, &key, &replacement, writer] {
                 std::error_code publisher_error;
-                const auto stored = cache.store(key, replacement, publisher_error);
+                const ObjectCache separate{database};
+                const auto& target = writer % 2 == 0 ? cache : separate;
+                const auto stored = target.store(key, replacement, publisher_error);
                 return std::make_pair(stored, publisher_error);
             }));
     }
@@ -260,31 +320,34 @@ int main() {
         concurrently_published->end(),
         replacement.begin(),
         replacement.end()));
-    for (const auto& entry : std::filesystem::recursive_directory_iterator{root}) {
-        const auto filename = entry.path().filename().string();
-        assert(!filename.ends_with(".lock"));
-        assert(filename.find(".fobj.tmp.") == std::string::npos);
+    for (const auto& entry : std::filesystem::directory_iterator{root}) {
+        assert(entry.path().filename() == "objects.sqlite3");
     }
 
-    // Canonical keys are lowercase hexadecimal; case variants and malformed
-    // path components cannot alias the same cache entry on Windows.
+    // Canonical keys are lowercase hexadecimal; case variants cannot alias
+    // the same cache entry.
     auto uppercase_key = key;
     uppercase_key.front() = static_cast<char>(
         uppercase_key.front() >= 'a' && uppercase_key.front() <= 'f'
             ? uppercase_key.front() - ('a' - 'A')
             : 'G');
-    assert(cache.path_for(uppercase_key).empty());
     assert(!cache.load(uppercase_key, error));
+    assert(error == std::errc::invalid_argument);
+    assert(!cache.store(uppercase_key, payload, error));
     assert(error == std::errc::invalid_argument);
 
     assert(cache.erase(key, error));
+    assert(!cache.erase(key, error));
+    assert(!error);
+    assert(!cache.load(key, error));
+    assert(error == std::errc::no_such_file_or_directory);
 
     const auto make_key = [](const std::string_view identity) {
         CacheKeyBuilder builder;
         return builder.add("identity", identity).finish();
     };
-    const auto eviction_root = root / "eviction";
-    ObjectCache eviction_cache{eviction_root};
+    const auto eviction_database = root / "eviction.sqlite3";
+    ObjectCache eviction_cache{eviction_database};
     const auto key_a = make_key("entry-a");
     const auto key_b = make_key("entry-b");
     const auto key_c = make_key("entry-c");
@@ -293,19 +356,14 @@ int main() {
     assert(eviction_cache.store(key_b, payload, error));
     assert(eviction_cache.store(key_c, payload, error));
     assert(eviction_cache.store(key_d, replacement, error));
-    const auto file_now = std::filesystem::file_time_type::clock::now();
-    std::filesystem::last_write_time(
-        eviction_cache.path_for(key_a), file_now - std::chrono::hours{4}, error);
-    assert(!error);
-    std::filesystem::last_write_time(
-        eviction_cache.path_for(key_b), file_now - std::chrono::hours{3}, error);
-    assert(!error);
-    std::filesystem::last_write_time(
-        eviction_cache.path_for(key_c), file_now - std::chrono::hours{2}, error);
-    assert(!error);
-    std::filesystem::last_write_time(
-        eviction_cache.path_for(key_d), file_now - std::chrono::hours{1}, error);
-    assert(!error);
+    age_entry(eviction_database, key_a, std::chrono::hours{4});
+    age_entry(eviction_database, key_b, std::chrono::hours{3});
+    age_entry(eviction_database, key_c, std::chrono::hours{2});
+    age_entry(eviction_database, key_d, std::chrono::hours{1});
+    const auto present = [&](const std::string& entry) {
+        std::error_code ignored;
+        return eviction_cache.load(entry, ignored).has_value();
+    };
 
     // A successful hit refreshes LRU recency, so count pruning preserves A and
     // D while evicting the older untouched B and C entries.
@@ -318,19 +376,16 @@ int main() {
     assert(prune.scanned_entries == 4);
     assert(prune.removed_entries == 2);
     assert(prune.remaining_entries == 2);
-    assert(std::filesystem::exists(eviction_cache.path_for(key_a)));
-    assert(!std::filesystem::exists(eviction_cache.path_for(key_b)));
-    assert(!std::filesystem::exists(eviction_cache.path_for(key_c)));
-    assert(std::filesystem::exists(eviction_cache.path_for(key_d)));
+    assert(!present(key_b));
+    assert(!present(key_c));
+    assert(present(key_a));
+    assert(present(key_d));
 
-    // A byte limit accounts for encoded on-disk entry sizes, not only payload
-    // bytes, and removes oldest entries until both active limits are met.
-    const auto a_size =
-        std::filesystem::file_size(eviction_cache.path_for(key_a), error);
-    assert(!error);
+    // A byte limit removes oldest entries until it is met.
     fsim::compiler::ObjectCachePruneOptions byte_limit;
-    byte_limit.maximum_bytes = a_size - 1;
+    byte_limit.maximum_bytes = payload.size() - 1U;
     assert(eviction_cache.prune(byte_limit, prune, error));
+    assert(prune.bytes_before == 2U * payload.size());
     assert(prune.removed_entries == 2);
     assert(prune.remaining_entries == 0);
     assert(prune.remaining_bytes == 0);
@@ -340,106 +395,75 @@ int main() {
     const auto key_f = make_key("entry-f");
     assert(eviction_cache.store(key_e, payload, error));
     assert(eviction_cache.store(key_f, payload, error));
-    std::filesystem::last_write_time(
-        eviction_cache.path_for(key_e), file_now - std::chrono::hours{2}, error);
-    assert(!error);
-    std::filesystem::last_write_time(
-        eviction_cache.path_for(key_f), file_now, error);
-    assert(!error);
+    age_entry(eviction_database, key_e, std::chrono::hours{2});
     fsim::compiler::ObjectCachePruneOptions age_limit;
     age_limit.maximum_age = std::chrono::hours{1};
     assert(eviction_cache.prune(age_limit, prune, error));
     assert(prune.removed_entries == 1);
-    assert(!std::filesystem::exists(eviction_cache.path_for(key_e)));
-    assert(std::filesystem::exists(eviction_cache.path_for(key_f)));
+    assert(!present(key_e));
+    assert(present(key_f));
 
-    // Pruning never steals a live writer lock. Once released, the same policy
-    // can remove the entry.
-    const auto locked_path =
-        std::filesystem::path{
-            eviction_cache.path_for(key_f).string() + ".lock"};
-    {
-        std::error_code lock_error;
-        fsim::compiler::detail::CacheDirectoryLock live{
-            locked_path, lock_error, std::chrono::milliseconds{20}};
-        assert(live.held());
-        fsim::compiler::ObjectCachePruneOptions remove_all;
-        remove_all.maximum_entries = 0;
-        assert(eviction_cache.prune(remove_all, prune, error));
-        assert(prune.removed_entries == 0);
-        assert(prune.skipped_locked_entries == 1);
-        assert(prune.remaining_entries == 1);
-    }
     fsim::compiler::ObjectCachePruneOptions remove_all;
     remove_all.maximum_entries = 0;
     assert(eviction_cache.prune(remove_all, prune, error));
     assert(prune.removed_entries == 1);
     assert(prune.remaining_entries == 0);
 
-    // Stale publisher temporaries are reclaimed under the destination lock,
-    // while fresh temporaries and unrelated files are preserved.
-    const auto key_g = make_key("entry-g");
-    const auto g_path = eviction_cache.path_for(key_g);
-    std::filesystem::create_directories(g_path.parent_path(), error);
-    assert(!error);
-    const auto stale_temporary =
-        std::filesystem::path{g_path.string() + ".tmp.1"};
-    const auto fresh_temporary =
-        std::filesystem::path{g_path.string() + ".tmp.2"};
-    {
-        std::ofstream stale(stale_temporary, std::ios::binary);
-        std::ofstream fresh(fresh_temporary, std::ios::binary);
-        stale << "stale";
-        fresh << "fresh";
-    }
-    std::filesystem::last_write_time(
-        stale_temporary, file_now - std::chrono::hours{2}, error);
-    assert(!error);
-    std::filesystem::last_write_time(
-        fresh_temporary, file_now, error);
-    assert(!error);
-    const auto unrelated = g_path.parent_path() / "keep.txt";
-    {
-        std::ofstream keep(unrelated, std::ios::binary);
-        keep << "keep";
-    }
-    fsim::compiler::ObjectCachePruneOptions temporary_cleanup;
-    temporary_cleanup.temporary_file_grace = std::chrono::hours{1};
-    assert(eviction_cache.prune(temporary_cleanup, prune, error));
-    assert(prune.removed_temporary_files == 1);
-    assert(!std::filesystem::exists(stale_temporary));
-    assert(std::filesystem::exists(fresh_temporary));
-    assert(std::filesystem::exists(unrelated));
-
-    // Empty canonical shard directories are removed, while malformed cache
-    // content is never interpreted as an object entry.
-    const auto isolated_root = root / "isolated";
-    ObjectCache isolated{isolated_root};
-    const std::string isolated_key =
-        "aa00000000000000000000000000000000000000000000000000000000000000";
-    assert(isolated.store(isolated_key, payload, error));
-    const auto isolated_shard = isolated.path_for(isolated_key).parent_path();
-    assert(isolated.prune(remove_all, prune, error));
-    assert(!std::filesystem::exists(isolated_shard));
-    std::filesystem::create_directories(isolated_root / "zz", error);
-    assert(!error);
-    {
-        std::ofstream malformed(isolated_root / "zz" / "not-an-entry.fobj");
-        malformed << "keep";
-    }
-    assert(isolated.prune(remove_all, prune, error));
-    assert(std::filesystem::exists(
-        isolated_root / "zz" / "not-an-entry.fobj"));
+    // Pruning gives the freed pages back to the file system.
+    const std::vector<std::byte> large(8U * 1024U * 1024U, std::byte{0x5a});
+    assert(eviction_cache.store(make_key("entry-large"), large, error));
+    const auto stored_size = std::filesystem::file_size(eviction_database, error);
+    assert(!error && stored_size > large.size());
+    assert(eviction_cache.prune(remove_all, prune, error));
+    assert(prune.removed_entries == 1);
+    assert(std::filesystem::file_size(eviction_database, error) < large.size() / 4U);
 
     fsim::compiler::ObjectCachePruneOptions invalid;
     invalid.maximum_age = std::chrono::seconds{-1};
-    assert(!isolated.prune(invalid, prune, error));
+    assert(!eviction_cache.prune(invalid, prune, error));
     assert(error == std::errc::invalid_argument);
 
-    ObjectCache absent{root / "absent"};
+    const auto absent_database = root / "absent.sqlite3";
+    ObjectCache absent{absent_database};
     fsim::compiler::ObjectCachePruneOptions no_limits;
     assert(absent.prune(no_limits, prune, error));
+    assert(!error);
     assert(prune == fsim::compiler::ObjectCachePruneResult{});
+    assert(!std::filesystem::exists(absent_database));
+
+    // A file that is not an fsim cache is never written to.
+    const auto foreign_text = root / "foreign.txt";
+    {
+        std::ofstream foreign(foreign_text, std::ios::binary);
+        foreign << "not a database";
+    }
+    assert(!ObjectCache{foreign_text}.store(key, payload, error));
+    assert(error);
+    {
+        std::ifstream foreign(foreign_text, std::ios::binary);
+        std::string text;
+        std::getline(foreign, text);
+        assert(text == "not a database");
+    }
+    const auto foreign_database = root / "foreign.sqlite3";
+    execute(foreign_database,
+        "PRAGMA application_id = 7; CREATE TABLE kept(value INTEGER)", { }, true);
+    assert(!ObjectCache{foreign_database}.store(key, payload, error));
+    assert(error == std::errc::illegal_byte_sequence);
+    execute(foreign_database, "SELECT value FROM kept", { });
+
+    // A cache of another schema version is rebuilt.
+    const auto older_database = root / "older.sqlite3";
+    execute(older_database,
+        "PRAGMA application_id = 1179863373; PRAGMA user_version = 99;"
+        " CREATE TABLE entries(key TEXT)",
+        { }, true);
+    {
+        const ObjectCache older{older_database};
+        assert(older.store(key, payload, error));
+        const auto rebuilt = older.load(key, error);
+        assert(rebuilt && !error);
+    }
 
     // A v268 namespace entry cannot satisfy the current native-object key.
     CacheKeyBuilder legacy_native;
@@ -454,7 +478,7 @@ int main() {
         .add("process-identity", "legacy-namespace-fixture")
         .finish();
     assert(legacy_native_key != current_native_key);
-    ObjectCache native_namespace{root / "native-namespace"};
+    ObjectCache native_namespace{root / "native-namespace.sqlite3"};
     assert(native_namespace.store(legacy_native_key, payload, error));
     assert(!error);
     assert(!native_namespace.load(current_native_key, error));

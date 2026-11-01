@@ -3,6 +3,7 @@
 
 #include "fsim/artifact/coverage_identity.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/frontend/coverage_source_control.hpp"
 #include "fsim/library/artifact.hpp"
 
 #include <cstdint>
@@ -14,11 +15,27 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kObjectFormatVersion = 9;
+inline constexpr std::uint32_t kObjectFormatVersion = 10;
+inline constexpr std::string_view kObjectArtifactKind = "fsim-object";
 inline constexpr std::string_view kObjectMetadataFilename = "fsim-object.bin";
 
-// One explicitly scripted HDL compilation unit. Paths stored here are
-// artifact-relative logical identities; no producer-absolute path is durable.
+// Coverage facts of one indexed source, taken at compile time so that an
+// elaboration with code coverage never needs the source text.
+struct ObjectSourceCoverage {
+  std::uint64_t content_bytes{};
+  frontend::CoverageSourceControlError control_error{
+      frontend::CoverageSourceControlError::None};
+  std::vector<frontend::CoverageSourceExclusion> exclusions;
+
+  friend bool operator==(
+      const ObjectSourceCoverage&, const ObjectSourceCoverage&) = default;
+};
+
+// One explicitly scripted HDL compilation unit, stored as one SQLite
+// container (artifact::ContainerWriter). Sources are referenced, never
+// copied: each logical name is the source's path relative to the compiling
+// workspace (it may climb out with ".."), and its checksum is the SHA-256 of
+// the compiled content. No producer-absolute path is durable.
 struct ObjectMetadata {
   std::uint32_t format{kObjectFormatVersion};
   std::uint32_t portable_schema{library::kPortableSchemaVersion};
@@ -39,6 +56,8 @@ struct ObjectMetadata {
   std::vector<std::filesystem::path> include_roots;
   std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
   std::vector<library::SourceIndexEntry> sources;
+  // Parallel to `sources`.
+  std::vector<ObjectSourceCoverage> source_coverage;
   std::vector<library::UnitIndexEntry> units;
 
   friend bool operator==(const ObjectMetadata&, const ObjectMetadata&) = default;
@@ -47,6 +66,18 @@ struct ObjectMetadata {
 // Recomputes the path-independent digest of the explicit compilation inputs
 // and complete portable unit index. Consumers reject metadata whose stored
 // digest does not match this value.
+// The coverage facts of a source list as one self-contained payload, for
+// exported libraries, which keep them beside their location-only sources.
+inline constexpr std::string_view kSourceCoverageMagic = "fsim-source-coverage-v1";
+
+[[nodiscard]] std::string serialize_source_coverage(
+    const std::vector<ObjectSourceCoverage>& coverage);
+
+[[nodiscard]] std::optional<std::vector<ObjectSourceCoverage>> deserialize_source_coverage(
+    std::string_view bytes,
+    const std::string& source_name,
+    diagnostic::Engine& diagnostics);
+
 [[nodiscard]] std::string compute_object_compilation_digest(
     const ObjectMetadata& metadata);
 
@@ -64,11 +95,19 @@ struct ObjectMetadata {
     diagnostic::Engine& diagnostics);
 
 [[nodiscard]] std::optional<ObjectMetadata> load_object_metadata(
-    const std::filesystem::path& directory,
+    const std::filesystem::path& object,
     diagnostic::Engine& diagnostics);
 
-// Publishes through a sibling staging directory and one rename. The complete
-// installed .fsimobj tree is read-only and existing destinations are refused.
+// One payload of a published object, verified against `expected_checksum`.
+[[nodiscard]] std::optional<std::string> read_object_payload(
+    const std::filesystem::path& object,
+    const std::filesystem::path& payload,
+    std::string_view expected_checksum,
+    std::uint64_t maximum_bytes,
+    diagnostic::Engine& diagnostics);
+
+// Publishes the object file through a private temporary file and one
+// rename, replacing an existing object of the same name.
 [[nodiscard]] bool publish_object(
     const std::filesystem::path& destination,
     const ObjectMetadata& metadata,

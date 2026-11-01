@@ -3,7 +3,7 @@
 
 #include "../diagnostic/artifact_identity.hpp"
 #include "path_validation.hpp"
-#include "tree_permissions.hpp"
+#include "fsim/artifact/container.hpp"
 #include "fsim/support/bounded_bytes.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
@@ -33,7 +33,30 @@ constexpr std::array<char, 8> kMagic{'F', 'S', 'I', 'M', 'O', 'B', 'J', '\0'};
 constexpr std::string_view kSchemaCode = "FSIM-ART-0001";
 constexpr std::string_view kValueCode = "FSIM-ART-0002";
 constexpr std::string_view kIoCode = "FSIM-ART-0003";
-std::atomic_uint64_t staging_sequence{};
+constexpr std::uint64_t kMaximumMetadataBytes = 256U * 1024U * 1024U;
+
+// A referenced source: a relative path that may climb out of the compiling
+// workspace with "..", but is never absolute and has no empty or "."
+// components.
+bool source_reference_path(const std::filesystem::path& path) {
+  if (path.empty() || path.is_absolute() || path.has_root_name()
+      || path.has_root_directory() || path.lexically_normal() != path) {
+    return false;
+  }
+  return std::ranges::none_of(path, [](const auto& component) {
+    return component.empty() || component == ".";
+  });
+}
+
+bool valid_coverage_metric(const frontend::CoverageSourceMetric metric) {
+  return static_cast<std::uint8_t>(metric)
+      <= static_cast<std::uint8_t>(frontend::CoverageSourceMetric::PslProperty);
+}
+
+bool valid_control_error(const frontend::CoverageSourceControlError value) {
+  return static_cast<std::uint8_t>(value) <= static_cast<std::uint8_t>(
+      frontend::CoverageSourceControlError::ConflictingAllMetric);
+}
 
 bool valid_identifier_form(const library::VhdlIdentifierForm form) {
   return form == library::VhdlIdentifierForm::unknown
@@ -222,9 +245,75 @@ class Reader {
   support::BoundedByteReader reader_;
 };
 
+void write_source_coverage(
+    Writer& writer, const std::vector<ObjectSourceCoverage>& coverage) {
+  writer.sequence(coverage, [&](const auto& item) {
+    writer.u64(item.content_bytes);
+    writer.u32(static_cast<std::uint32_t>(item.control_error));
+    writer.sequence(item.exclusions, [&](const auto& exclusion) {
+      writer.u32(static_cast<std::uint32_t>(exclusion.metric));
+      writer.u64(exclusion.begin_offset);
+      writer.u64(exclusion.end_offset);
+      writer.string(exclusion.reason);
+      writer.u64(exclusion.off_line);
+      writer.u64(exclusion.on_line);
+    });
+  });
+}
+
+std::optional<std::vector<ObjectSourceCoverage>> read_source_coverage(
+    Reader& canonical, const std::string& source_name,
+    diagnostic::Engine& diagnostics) {
+  std::vector<ObjectSourceCoverage> coverage;
+  const auto coverage_count = canonical.count();
+  if (!coverage_count.has_value()) {
+    error(diagnostics, kSchemaCode, "invalid object source coverage count", source_name);
+    return std::nullopt;
+  }
+  for (std::size_t index = 0; index < *coverage_count; ++index) {
+    ObjectSourceCoverage item;
+    const auto content_bytes = canonical.u64();
+    const auto control_error = canonical.u32();
+    const auto exclusion_count = canonical.count();
+    if (!content_bytes || !control_error || !exclusion_count || *control_error > 255U) {
+      error(diagnostics, kSchemaCode, "truncated object source coverage facts", source_name);
+      return std::nullopt;
+    }
+    item.content_bytes = *content_bytes;
+    item.control_error
+        = static_cast<frontend::CoverageSourceControlError>(*control_error);
+    for (std::size_t exclusion_index = 0; exclusion_index < *exclusion_count;
+         ++exclusion_index) {
+      frontend::CoverageSourceExclusion exclusion;
+      const auto metric = canonical.u32();
+      const auto begin_offset = canonical.u64();
+      const auto end_offset = canonical.u64();
+      auto reason = canonical.string();
+      const auto off_line = canonical.u64();
+      const auto on_line = canonical.u64();
+      if (!metric || *metric > 255U || !begin_offset || !end_offset || !reason
+          || !off_line || !on_line
+          || *begin_offset > std::numeric_limits<std::size_t>::max()
+          || *end_offset > std::numeric_limits<std::size_t>::max()) {
+        error(diagnostics, kSchemaCode, "truncated object coverage exclusion", source_name);
+        return std::nullopt;
+      }
+      exclusion.metric = static_cast<frontend::CoverageSourceMetric>(*metric);
+      exclusion.begin_offset = static_cast<std::size_t>(*begin_offset);
+      exclusion.end_offset = static_cast<std::size_t>(*end_offset);
+      exclusion.reason = std::move(*reason);
+      exclusion.off_line = *off_line;
+      exclusion.on_line = *on_line;
+      item.exclusions.push_back(std::move(exclusion));
+    }
+    coverage.push_back(std::move(item));
+  }
+  return coverage;
+}
+
 std::string compilation_digest(const ObjectMetadata& metadata) {
   Writer writer;
-  writer.string("fsim-object-compilation-v9-compiled-hir");
+  writer.string("fsim-object-compilation-v10-compiled-hir");
   writer.u32(metadata.compiled_hir_schema);
   writer.path(metadata.compiled_hir_artifact);
   writer.string(metadata.compiled_hir_checksum);
@@ -332,7 +421,7 @@ bool validate_metadata(
   std::unordered_set<std::string> include_roots;
   for (const auto& include : metadata.include_roots) {
     const auto spelling = support::path_to_utf8(include);
-    if (!safe_relative_path(include) || !include_roots.insert(spelling).second) {
+    if (!source_reference_path(include) || !include_roots.insert(spelling).second) {
       error(
           diagnostics, kValueCode,
           "object include roots must be unique contained paths", source);
@@ -366,20 +455,35 @@ bool validate_metadata(
         source);
   }
   for (const auto& item : metadata.sources) {
-    const auto path = support::path_to_utf8(item.artifact);
-    if (item.logical_name.empty() || !safe_relative_path(item.logical_name)
+    if (item.logical_name.empty()
+        || !source_reference_path(support::path_from_utf8(item.logical_name))
         || !logical_sources.insert(item.logical_name).second
-        || !safe_relative_path(item.artifact)
-        || !support::payload_checksum_spelling(item.checksum)
+        || !item.artifact.empty()
+        || !checksum_spelling(item.checksum)
         || item.language != metadata.language
         || item.standard != metadata.standard
-        || item.compatibility_profile != metadata.compatibility_profile
-        || !payload_paths.insert(path).second) {
+        || item.compatibility_profile != metadata.compatibility_profile) {
       error(
           diagnostics, kValueCode,
-          "object sources require unique relative logical/payload paths, "
-          "matching language, standard, compatibility profile, and lowercase "
-          "SHA-256 checksums", source);
+          "object sources require unique relative source references, no "
+          "source text, matching language, standard, compatibility profile, "
+          "and lowercase SHA-256 content digests", source);
+    }
+  }
+  if (metadata.source_coverage.size() != metadata.sources.size()) {
+    error(
+        diagnostics, kValueCode,
+        "object source coverage facts must match the source index", source);
+  }
+  for (const auto& item : metadata.source_coverage) {
+    if (!valid_control_error(item.control_error)
+        || !std::ranges::all_of(item.exclusions, [](const auto& exclusion) {
+             return valid_coverage_metric(exclusion.metric)
+                 && exclusion.begin_offset <= exclusion.end_offset;
+           })) {
+      error(
+          diagnostics, kValueCode,
+          "object source coverage facts are invalid", source);
     }
   }
   for (const auto& unit : metadata.units) {
@@ -415,77 +519,6 @@ bool validate_metadata(
         source);
   }
   return !diagnostics.has_error();
-}
-
-std::filesystem::path staging_path(const std::filesystem::path& destination) {
-  return detail::staging_path(destination, staging_sequence);
-}
-
-class StagingCleanup {
- public:
-  explicit StagingCleanup(std::filesystem::path path) : path_(std::move(path)) {}
-  ~StagingCleanup() {
-    if (!path_.empty()) {
-      std::error_code error;
-      for (auto iterator =
-               support::native_fs::recursive_directory_iterator(path_, error),
-           end = std::filesystem::recursive_directory_iterator{};
-           !error && iterator != end;
-           iterator.increment(error)) {
-        support::native_fs::permissions(
-            iterator->path(), std::filesystem::perms::owner_all,
-            std::filesystem::perm_options::add, error);
-        error.clear();
-      }
-      support::native_fs::permissions(
-          path_, std::filesystem::perms::owner_all,
-          std::filesystem::perm_options::add, error);
-      error.clear();
-      support::native_fs::remove_all(path_, error);
-    }
-  }
-  void release() noexcept { path_.clear(); }
-
- private:
-  std::filesystem::path path_;
-};
-
-bool write_file(
-    const std::filesystem::path& path,
-    const std::string_view bytes,
-    diagnostic::Engine& diagnostics) {
-  std::error_code error;
-  support::native_fs::create_directories(path.parent_path(), error);
-  if (error) {
-    fsim::artifact::error(
-        diagnostics, kIoCode,
-        "cannot create object payload directory: " + error.message(),
-        support::path_to_utf8(path));
-    return false;
-  }
-  auto output = support::native_fs::open_ofstream(path, std::ios::binary | std::ios::trunc);
-  output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-  if (!output) {
-    fsim::artifact::error(
-        diagnostics, kIoCode, "cannot write object payload",
-        support::path_to_utf8(path));
-    return false;
-  }
-  return true;
-}
-
-bool make_tree_read_only(
-    const std::filesystem::path& root,
-    diagnostic::Engine& diagnostics) {
-  const auto error = detail::set_tree_read_only_permissions(root);
-  if (error) {
-    fsim::artifact::error(
-        diagnostics, kIoCode,
-        "cannot make staged object artifact read-only: " + error.message(),
-        support::path_to_utf8(root));
-    return false;
-  }
-  return true;
 }
 
 }  // namespace
@@ -543,6 +576,7 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
     writer.string(item.standard);
     writer.string(item.compatibility_profile);
   });
+  write_source_coverage(writer, metadata.source_coverage);
   writer.sequence(metadata.units, [&](const auto& item) {
     writer.string(item.language);
     writer.string(item.kind);
@@ -707,6 +741,11 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
     item.artifact = std::move(*artifact);
     metadata.sources.push_back(std::move(item));
   }
+  auto coverage = read_source_coverage(canonical, source_name, diagnostics);
+  if (!coverage) {
+    return std::nullopt;
+  }
+  metadata.source_coverage = std::move(*coverage);
   const auto unit_count = canonical.count();
   if (!unit_count.has_value()) {
     error(diagnostics, kSchemaCode, "invalid object unit count", source_name);
@@ -753,26 +792,54 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
 }
 
 std::optional<ObjectMetadata> load_object_metadata(
-    const std::filesystem::path& directory,
+    const std::filesystem::path& object,
     diagnostic::Engine& diagnostics) {
-  const auto path = directory / kObjectMetadataFilename;
-  auto input = support::native_fs::open_ifstream(path, std::ios::binary);
-  if (!input) {
-    error(
-        diagnostics, kIoCode, "cannot open .fsimobj metadata",
-        support::path_to_utf8(path));
-    return std::nullopt;
-  }
-  std::ostringstream contents;
-  contents << input.rdbuf();
-  if (!input.good() && !input.eof()) {
-    error(
-        diagnostics, kIoCode, "cannot read .fsimobj metadata",
-        support::path_to_utf8(path));
+  std::string failure;
+  auto reader = ContainerReader::open(object, kObjectArtifactKind, failure);
+  auto bytes = reader
+      ? reader->read(kObjectMetadataFilename, kMaximumMetadataBytes, failure)
+      : std::nullopt;
+  if (!bytes) {
+    error(diagnostics, kIoCode, "cannot read .fsimobj metadata: " + failure,
+        support::path_to_utf8(object));
     return std::nullopt;
   }
   return deserialize_object_metadata(
-      contents.str(), support::path_to_utf8(path), diagnostics);
+      *bytes, support::path_to_utf8(object), diagnostics);
+}
+
+std::optional<std::string> read_object_payload(
+    const std::filesystem::path& object,
+    const std::filesystem::path& payload,
+    const std::string_view expected_checksum,
+    const std::uint64_t maximum_bytes,
+    diagnostic::Engine& diagnostics) {
+  std::string failure;
+  const auto name = support::path_to_utf8(payload);
+  auto reader = ContainerReader::open(object, kObjectArtifactKind, failure);
+  const auto entry = reader ? reader->entry(name, failure) : std::nullopt;
+  if (entry && entry->size > maximum_bytes) {
+    error(diagnostics, "FSIM-ART-0005",
+        ".fsimobj payload " + name + " exceeds the "
+            + (payload.extension() == ".fsimhir" ? "compiled-HIR " : "")
+            + "decode byte budget", support::path_to_utf8(object));
+    return std::nullopt;
+  }
+  auto bytes = entry ? reader->read(name, maximum_bytes, failure) : std::nullopt;
+  if (!bytes && failure.empty()) {
+    failure = "payload '" + name + "' is missing";
+  }
+  if (!bytes) {
+    error(diagnostics, "FSIM-ART-0005", "cannot read .fsimobj payload: " + failure,
+        support::path_to_utf8(object));
+    return std::nullopt;
+  }
+  if (!support::payload_checksum_matches(*bytes, expected_checksum)) {
+    error(diagnostics, "FSIM-ART-0005", ".fsimobj payload checksum mismatch: "
+        + support::path_to_utf8(payload), support::path_to_utf8(object));
+    return std::nullopt;
+  }
+  return bytes;
 }
 
 bool publish_object(
@@ -782,14 +849,6 @@ bool publish_object(
     diagnostic::Engine& diagnostics) {
   if (destination.empty()) {
     error(diagnostics, kIoCode, "object output path must not be empty");
-    return false;
-  }
-  std::error_code exists_error;
-  if (support::native_fs::exists(destination, exists_error) || exists_error) {
-    error(
-        diagnostics, kIoCode,
-        "object output already exists or cannot be inspected",
-        support::path_to_utf8(destination));
     return false;
   }
   if (metadata.format != kObjectFormatVersion
@@ -828,9 +887,6 @@ bool publish_object(
     return false;
   }
   std::unordered_map<std::string, std::string> expected;
-  for (const auto& source : metadata.sources) {
-    expected.emplace(support::path_to_utf8(source.artifact), source.checksum);
-  }
   for (const auto& unit : metadata.units) {
     if (unit.artifact.empty()) {
       continue;
@@ -868,37 +924,69 @@ bool publish_object(
         "cannot create object output parent: " + parent_error.message());
     return false;
   }
-  const auto staging = staging_path(destination);
-  StagingCleanup cleanup{staging};
-  std::error_code stage_error;
-  if (!support::native_fs::create_directory(staging, stage_error) || stage_error) {
-    error(
-        diagnostics, kIoCode,
-        "cannot create object staging directory: " + stage_error.message());
+  std::string failure;
+  auto writer = ContainerWriter::create(
+      parent / destination.filename(), kObjectArtifactKind,
+      artifact::ContainerPages::compact, failure);
+  bool written = writer.has_value()
+      && writer->meta("format", std::to_string(kObjectFormatVersion), failure)
+      && writer->meta("library", metadata.library, failure)
+      && writer->meta("language", metadata.language, failure)
+      && writer->put(kObjectMetadataFilename, canonical, failure);
+  std::string units;
+  for (const auto& unit : metadata.units) {
+    units += units.empty() ? "" : " ";
+    units += unit.architecture.empty() ? unit.name : unit.name + "(" + unit.architecture + ")";
+  }
+  written = written && writer->meta("units", units, failure);
+  for (const auto& payload : payloads) {
+    written = written
+        && writer->put(support::path_to_utf8(payload.path), payload.bytes, failure);
+  }
+  if (!written || !writer->publish(failure)) {
+    error(diagnostics, kIoCode, "cannot publish object artifact: " + failure,
+        support::path_to_utf8(destination));
     return false;
   }
-  for (const auto& payload : payloads) {
-    if (!write_file(staging / payload.path, payload.bytes, diagnostics)) {
-      return false;
+  return true;
+}
+
+std::string serialize_source_coverage(
+    const std::vector<ObjectSourceCoverage>& coverage) {
+  Writer writer;
+  writer.string(kSourceCoverageMagic);
+  write_source_coverage(writer, coverage);
+  return std::move(writer).take();
+}
+
+std::optional<std::vector<ObjectSourceCoverage>> deserialize_source_coverage(
+    const std::string_view bytes,
+    const std::string& source_name,
+    diagnostic::Engine& diagnostics) {
+  Reader canonical{bytes};
+  if (canonical.string() != std::optional<std::string>{std::string{kSourceCoverageMagic}}) {
+    error(diagnostics, kSchemaCode, "invalid source coverage payload header", source_name);
+    return std::nullopt;
+  }
+  auto coverage = read_source_coverage(canonical, source_name, diagnostics);
+  if (!coverage) {
+    return std::nullopt;
+  }
+  if (canonical.remaining() != 0U) {
+    error(diagnostics, kSchemaCode, "trailing bytes after source coverage facts", source_name);
+    return std::nullopt;
+  }
+  for (const auto& item : *coverage) {
+    if (!valid_control_error(item.control_error)
+        || !std::ranges::all_of(item.exclusions, [](const auto& exclusion) {
+             return valid_coverage_metric(exclusion.metric)
+                 && exclusion.begin_offset <= exclusion.end_offset;
+           })) {
+      error(diagnostics, kValueCode, "source coverage facts are invalid", source_name);
+      return std::nullopt;
     }
   }
-  if (!write_file(
-          staging / kObjectMetadataFilename, canonical, diagnostics)
-      || !make_tree_read_only(staging, diagnostics)) {
-    return false;
-  }
-  std::error_code install_error;
-  support::native_fs::install_staged_directory(
-      staging, destination, install_error);
-  if (install_error) {
-    error(
-        diagnostics, kIoCode,
-        "cannot atomically install object artifact: "
-            + install_error.message());
-    return false;
-  }
-  cleanup.release();
-  return true;
+  return coverage;
 }
 
 }  // namespace fsim::artifact

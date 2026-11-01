@@ -234,8 +234,10 @@ void test_managed_objects_default_and_named_snapshots()
     assert_output(alpha, "WORKSPACE_ALPHA");
     assert(alpha.output.find("WORKSPACE_BETA") == std::string::npos);
     elaborate({ "alpha" });
+    // Elaborating again replaces the snapshot file in place.
     const auto replacement = snapshot(store).path;
-    assert(replacement != first);
+    assert(replacement == first);
+    assert(replacement.filename() == "default.fsimdesign");
     elaborate({ "beta" }, "alternate");
     assert(snapshot(store).path == replacement);
     const auto alternate_path = snapshot(store, "alternate").path;
@@ -346,6 +348,42 @@ endmodule
     const auto deleted = elaborate({ "package_top" }, "default", false);
     assert(deleted.error.find("FSIM-WS-002") != std::string::npos);
     assert_output(simulate(), "WORKSPACE_VALUE=29");
+}
+
+// Objects record where their sources were, not the text. A header edited
+// after two files that include it were compiled, with only one of them
+// compiled again, leaves the objects naming one path with two contents; like
+// a changed package, that refuses the design until the other is recompiled.
+void test_edited_shared_header_with_one_consumer_recompiled()
+{
+    Directory directory;
+    workspace::Store store { directory.path };
+    write_file("defs.svh", "`define SHARED_VALUE 1\n");
+    write_file("first.sv", R"(`include "defs.svh"
+module shared_top;
+  second inner();
+  initial $display("FIRST_VALUE=%0d", `SHARED_VALUE);
+endmodule
+)");
+    write_file("second.sv", R"(`include "defs.svh"
+module second;
+  initial $display("SECOND_VALUE=%0d", `SHARED_VALUE);
+endmodule
+)");
+    invoke({ "compile", "--quiet", "first.sv", "second.sv" });
+    elaborate({ "shared_top" });
+    const auto previous = snapshot(store).path;
+    write_file("defs.svh", "`define SHARED_VALUE 2\n");
+    invoke({ "compile", "--quiet", "first.sv" });
+    const auto stale = elaborate({ "shared_top" }, "default", false);
+    assert(stale.error.find("FSIM-WS-002") != std::string::npos);
+    assert(stale.error.find("defs.svh") != std::string::npos);
+    assert(snapshot(store).path == previous);
+    invoke({ "compile", "--quiet", "second.sv" });
+    elaborate({ "shared_top" });
+    const auto run = simulate();
+    assert_output(run, "FIRST_VALUE=2");
+    assert_output(run, "SECOND_VALUE=2");
 }
 
 void test_external_library_mapping_and_current_directory()
@@ -655,6 +693,9 @@ std::string simulation_output(const std::string& snapshot,
     const auto run = invoke({ "simulate", "--snapshot", snapshot, "--engine",
         engine, "--trace-lifecycle", "disabled" });
     auto text = run.output + run.error;
+    // A source kept apart under its object's compilation digest prints as
+    // objects/<digest>/<path>, with either separator on Windows.
+    std::ranges::replace(text, '\\', '/');
     for (auto at = text.find("objects/"); at != std::string::npos;
          at = text.find("objects/", at)) {
         const auto end = text.find('/', at + 8U);
@@ -689,8 +730,15 @@ void assert_coverage_transparent(const std::string& snapshot,
     compile.push_back(source.filename().string());
     invoke(compile);
     invoke({ "elaborate", "--quiet", "--no-aot", "--snapshot", "plain", top });
-    for (const auto* engine : { "interpreter", "v4" })
-        assert(simulation_output("plain", engine) == covered[engine]);
+    for (const auto* engine : { "interpreter", "v4" }) {
+        const auto plain = simulation_output("plain", engine);
+        if (plain != covered[engine]) {
+            std::cerr << "coverage changed the " << engine << " output of " << top
+                      << "\n--- covered\n" << covered[engine] << "--- plain\n"
+                      << plain << "---\n";
+        }
+        assert(plain == covered[engine]);
+    }
 }
 
 // Simulates `snapshot` on both engines, which must agree, and checks the
@@ -1832,6 +1880,8 @@ int main(const int argc, const char* const* argv)
         Case { "managed-snapshots", test_managed_objects_default_and_named_snapshots },
         Case { "recompile-rollback", test_recompilation_removes_old_names_and_rolls_back_errors },
         Case { "compiled-packages", test_compiled_packages_and_stale_consumers },
+        Case { "edited-shared-header",
+            test_edited_shared_header_with_one_consumer_recompiled },
         Case { "mapped-library", test_external_library_mapping_and_current_directory },
         Case { "language-tops", test_language_qualification_and_multiple_roots },
         Case { "procedural-coverage", test_module_procedural_coverage },

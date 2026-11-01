@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/compiler/object_cache.hpp"
+#include "fsim/support/sqlite_database.hpp"
 
 #include <algorithm>
 #include <array>
@@ -7,8 +8,6 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -16,22 +15,29 @@
 
 namespace {
 
-std::string read_bytes(const std::filesystem::path& path)
+using fsim::support::sqlite::Database;
+using fsim::support::sqlite::Statement;
+using fsim::support::sqlite::Step;
+
+Database open(const std::filesystem::path& path)
 {
-    std::ifstream stream { path, std::ios::binary };
-    assert(stream);
-    return { std::istreambuf_iterator<char> { stream },
-        std::istreambuf_iterator<char> { } };
+    Database database { "cache wire fixture" };
+    std::string error;
+    const bool opened = database.open(
+        path, Database::OpenMode::read_write_existing, { }, error);
+    assert(opened);
+    return database;
 }
 
-void write_bytes(const std::filesystem::path& path,
-    const std::string_view bytes)
+void execute(const std::filesystem::path& path, const std::string& sql,
+    const std::string_view key)
 {
-    std::ofstream stream { path, std::ios::binary | std::ios::trunc };
-    assert(stream);
-    stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    stream.close();
-    assert(stream);
+    auto database = open(path);
+    std::string error;
+    Statement statement { database, sql.c_str(), error };
+    const bool done = statement && statement.bind_text(1, key, error)
+        && statement.finish(error);
+    assert(done);
 }
 
 } // namespace
@@ -42,7 +48,8 @@ int main()
                            .time_since_epoch().count();
     const auto root = std::filesystem::temp_directory_path()
         / ("fsim-cache-wire-fixture-" + std::to_string(nonce));
-    const fsim::compiler::ObjectCache cache { root };
+    const auto path = root / "fixture.sqlite3";
+    const fsim::compiler::ObjectCache cache { path };
     fsim::compiler::CacheKeyBuilder builder;
     const auto key = builder.add("codec-fixture", "v1").finish();
     const std::array payload {
@@ -51,38 +58,42 @@ int main()
     std::error_code error;
     assert(cache.store(key, payload, error) && !error);
 
-    // Freeze the complete V2 envelope, including byte order, checksum text,
-    // delimiter, and payload, before migrating persistence primitives.
-    constexpr std::string_view expected =
-        "FSIM-OBJECT-CACHE-V2\n"
-        "xxh64:44bc2cf5ad770999\n"
-        "abc";
-    const auto path = cache.path_for(key);
-    assert(read_bytes(path) == expected);
+    // Freeze the stored form: fsim's application id, cache schema 1, and
+    // one row per entry with the payload's xxh64 checksum and size.
+    {
+        auto database = open(path);
+        std::string message;
+        assert(database.pragma_integer("PRAGMA application_id", message)
+            == 0x4653494D);
+        assert(database.pragma_integer("PRAGMA user_version", message) == 1);
+        Statement query { database,
+            "SELECT key, checksum, size, data FROM entries", message };
+        assert(query && query.step(message) == Step::row);
+        assert(query.text(0, message) == key);
+        assert(query.text(1, message) == "xxh64:44bc2cf5ad770999");
+        assert(query.integer(2, message) == 3);
+        assert(query.blob(3, message) == "abc");
+        assert(query.step(message) == Step::done);
+    }
     const auto loaded = cache.load(key, error);
     assert(loaded && std::ranges::equal(*loaded, payload) && !error);
 
-    const auto reject = [&](const std::string_view bytes) {
-        write_bytes(path, bytes);
+    const auto reject = [&](const std::string& assignment) {
+        execute(path, "UPDATE entries SET " + assignment + " WHERE key = ?1", key);
         assert(!cache.load(key, error));
         assert(error == std::errc::illegal_byte_sequence);
+        assert(cache.store(key, payload, error) && !error);
     };
-    reject({ });
-    reject(expected.substr(0U, 20U));
-    reject(expected.substr(0U, expected.size() - 1U));
-    auto corrupt = std::string { expected };
-    corrupt[21U] = '0';
-    reject(corrupt);
-    reject(std::string { expected } + "x");
+    reject("data = x''");
+    reject("data = x'6162'");
+    reject("data = x'61626364'");
+    reject("data = x'616263', size = 4");
+    reject("checksum = 'xxh64:44bc2cf5ad770990'");
+    // A SHA-256 checksum, as V1 envelopes framed them, does not verify.
+    reject("checksum = "
+           "'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'");
+    reject("checksum = 'xxh64:44BC2CF5AD770999'");
 
-    // V1 entries, framed with SHA-256 hex, miss.
-    reject(
-        "FSIM-OBJECT-CACHE-V1\n"
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n"
-        "abc");
-    reject("FSIM-OBJECT-CACHE-V1\nxxh64:44bc2cf5ad770999\nabc");
-
-    write_bytes(path, expected);
     assert(cache.load(key, error) && !error);
     std::filesystem::remove_all(root, error);
 }

@@ -58,18 +58,10 @@ void test_mapped_library_api(const std::filesystem::path& directory) {
       / fsim::support::path_from_utf8("relocated mapped packages \xc2\xb5");
   const auto artifact = relocated_root / "vendor library.fsimlib";
   std::filesystem::create_directories(relocated_root);
-  std::filesystem::permissions(
-      producer_artifact, std::filesystem::perms::owner_write,
-      std::filesystem::perm_options::add);
   std::filesystem::rename(producer_artifact, artifact);
   std::filesystem::rename(
       source, directory / "api_mapped_library.sv.producer-hidden");
-  for (const auto& entry :
-      std::filesystem::recursive_directory_iterator(artifact)) {
-      std::filesystem::permissions(
-          entry.path(), std::filesystem::perms::owner_write,
-          std::filesystem::perm_options::remove);
-  }
+  // A consumer only reads the library, so a read-only copy must load.
   std::filesystem::permissions(
       artifact, std::filesystem::perms::owner_write,
       std::filesystem::perm_options::remove);
@@ -129,12 +121,6 @@ void test_mapped_library_api(const std::filesystem::path& directory) {
       fsim_session_get_mapped_library_info(session, 0, &info)
       == FSIM_STATUS_INCOMPATIBLE_ABI);
   assert(fsim_session_destroy(session) == FSIM_STATUS_OK);
-  for (const auto& entry :
-      std::filesystem::recursive_directory_iterator(artifact)) {
-      std::filesystem::permissions(
-          entry.path(), std::filesystem::perms::owner_write,
-          std::filesystem::perm_options::add);
-  }
   std::filesystem::permissions(
       artifact, std::filesystem::perms::owner_write,
       std::filesystem::perm_options::add);

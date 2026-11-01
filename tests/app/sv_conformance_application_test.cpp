@@ -1257,18 +1257,7 @@ endmodule
     const auto relocated_root = root / "relocated";
     std::filesystem::create_directories(relocated_root);
     const auto relocated = relocated_root / design.filename();
-    std::filesystem::create_directories(relocated);
-    for (const auto& entry :
-        std::filesystem::recursive_directory_iterator(design)) {
-        const auto target = relocated
-            / entry.path().lexically_relative(design);
-        if (entry.is_directory()) {
-            std::filesystem::create_directories(target);
-        } else if (entry.is_regular_file()) {
-            std::filesystem::create_directories(target.parent_path());
-            std::filesystem::copy_file(entry.path(), target);
-        }
-    }
+    std::filesystem::copy_file(design, relocated);
     design = relocated;
     const auto relocated_capture = run_artifact(
         fsim::app::SimulationEngine::compiled);

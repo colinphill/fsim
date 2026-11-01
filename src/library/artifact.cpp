@@ -2,14 +2,13 @@
 #include "fsim/library/artifact.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
+#include "fsim/artifact/container.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/payload_checksum.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <charconv>
-#include <chrono>
 #include <cctype>
 #include <fstream>
 #include <limits>
@@ -25,6 +24,8 @@ constexpr std::string_view kSchemaCode = "FSIM-LIB-0002";
 constexpr std::string_view kValueCode = "FSIM-LIB-0003";
 constexpr std::string_view kIoCode = "FSIM-LIB-0004";
 constexpr std::string_view kPublishCode = "FSIM-LIB-0005";
+// The metadata record indexes payloads; it never holds unit state.
+constexpr std::uint64_t kMaximumMetadataBytes = 1ULL << 30U;
 
 enum class Section {
   root,
@@ -203,125 +204,6 @@ bool library_name(const std::string_view value) {
       });
 }
 
-std::filesystem::path staging_path(
-    const std::filesystem::path& destination) {
-  static std::atomic_uint64_t sequence{};
-  const auto nonce = static_cast<std::uint64_t>(
-      std::chrono::high_resolution_clock::now().time_since_epoch().count());
-  return destination.parent_path()
-      / (destination.filename().string() + ".staging-"
-         + std::to_string(nonce) + "-"
-         + std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)));
-}
-
-class StagingCleanup final {
- public:
-  explicit StagingCleanup(std::filesystem::path path)
-      : path_(std::move(path)) {}
-
-  ~StagingCleanup() {
-    if (!active_) {
-      return;
-    }
-    std::error_code ignored;
-    support::native_fs::remove_all(path_, ignored);
-  }
-
-  void release() noexcept { active_ = false; }
-
- private:
-  std::filesystem::path path_;
-  bool active_{true};
-};
-
-bool write_file(
-    const std::filesystem::path& path,
-    const std::string_view contents,
-    diagnostic::Engine& diagnostics) {
-  std::error_code directory_error;
-  support::native_fs::create_directories(path.parent_path(), directory_error);
-  if (directory_error) {
-    diagnostics.error(
-        std::string{kPublishCode},
-        "cannot create library artifact directory '"
-            + fsim::support::path_to_utf8(path.parent_path())
-            + "': " + directory_error.message());
-    return false;
-  }
-  auto output = support::native_fs::open_ofstream(path, std::ios::binary | std::ios::trunc);
-  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-  output.close();
-  if (!output) {
-    diagnostics.error(
-        std::string{kPublishCode},
-        "cannot write library artifact file '"
-            + fsim::support::path_to_utf8(path) + "'");
-    return false;
-  }
-  return true;
-}
-
-bool make_tree_read_only(
-    const std::filesystem::path& root,
-    diagnostic::Engine& diagnostics) {
-  std::error_code iteration_error;
-  for (auto iterator = support::native_fs::recursive_directory_iterator(
-           root, iteration_error),
-       end = std::filesystem::recursive_directory_iterator{};
-       !iteration_error && iterator != end;
-       iterator.increment(iteration_error)) {
-    std::error_code permission_error;
-    const auto permissions = iterator->is_directory()
-        ? std::filesystem::perms::owner_read
-              | std::filesystem::perms::owner_exec
-              | std::filesystem::perms::group_read
-              | std::filesystem::perms::group_exec
-              | std::filesystem::perms::others_read
-              | std::filesystem::perms::others_exec
-        : std::filesystem::perms::owner_read
-              | std::filesystem::perms::group_read
-              | std::filesystem::perms::others_read;
-    support::native_fs::permissions(
-        iterator->path(), permissions,
-        std::filesystem::perm_options::replace, permission_error);
-    if (permission_error) {
-      diagnostics.error(
-          std::string{kPublishCode},
-          "cannot make library artifact read-only: "
-              + fsim::support::path_to_utf8(
-                  fsim::support::path_from_native_io(iterator->path()))
-              + ": " + permission_error.message());
-      return false;
-    }
-  }
-  if (iteration_error) {
-    diagnostics.error(
-        std::string{kPublishCode},
-        "cannot enumerate staged library artifact: "
-            + iteration_error.message());
-    return false;
-  }
-  std::error_code root_error;
-  support::native_fs::permissions(
-      root,
-      std::filesystem::perms::owner_read
-          | std::filesystem::perms::owner_exec
-          | std::filesystem::perms::group_read
-          | std::filesystem::perms::group_exec
-          | std::filesystem::perms::others_read
-          | std::filesystem::perms::others_exec,
-      std::filesystem::perm_options::replace,
-      root_error);
-  if (root_error) {
-    diagnostics.error(
-        std::string{kPublishCode},
-        "cannot make staged library directory read-only: "
-            + root_error.message());
-    return false;
-  }
-  return true;
-}
-
 }  // namespace
 
 std::string serialize_metadata(const Metadata& metadata) {
@@ -369,11 +251,13 @@ std::string serialize_metadata(const Metadata& metadata) {
              << "compatibility_profile = \""
              << escape(source.compatibility_profile) << "\"\n";
     }
+    // A payload path is written only so that validation can reject it.
     if (!source.artifact.empty()) {
       output << "artifact = \""
-             << escape(fsim::support::path_to_utf8(source.artifact))
-             << "\"\n"
-             << "checksum = \"" << escape(source.checksum) << "\"\n";
+             << escape(fsim::support::path_to_utf8(source.artifact)) << "\"\n";
+    }
+    if (!source.checksum.empty()) {
+      output << "checksum = \"" << escape(source.checksum) << "\"\n";
     }
   }
   for (const auto& unit : metadata.units) {
@@ -868,10 +752,11 @@ std::optional<Metadata> parse_metadata(
         fsim::support::path_to_utf8(metadata.compiled_hir_artifact));
   }
   for (const auto& source_entry : metadata.sources) {
-    const bool no_text = source_entry.artifact.empty()
-        && source_entry.checksum.empty();
-    const bool with_text = safe_relative_path(source_entry.artifact)
-        && support::payload_checksum_spelling(source_entry.checksum);
+    // Sources are referenced by path and content digest only; a library
+    // never carries source text.
+    const bool location_only = source_entry.artifact.empty()
+        && (source_entry.checksum.empty()
+            || checksum_spelling(source_entry.checksum));
     const bool known_language = source_entry.language.empty()
         || source_entry.language == "vhdl"
         || source_entry.language == "verilog"
@@ -884,22 +769,18 @@ std::optional<Metadata> parse_metadata(
                 return standard.language == source_entry.language
                     && standard.revision == source_entry.standard;
               });
-    const bool unique_payload = source_entry.artifact.empty()
-        || payload_paths.insert(
-            fsim::support::path_to_utf8(source_entry.artifact)).second;
     if (source_entry.logical_name.empty()
         || !source_names.insert(source_entry.logical_name).second
-        || (!no_text && !with_text) || !known_language || !known_standard
+        || !location_only || !known_language || !known_standard
         || (source_entry.language != "systemc"
             && (source_entry.compatibility_profile.empty()
                 || (source_entry.language == "vhdl"
-                    && source_entry.compatibility_profile == "none")))
-        || !unique_payload) {
+                    && source_entry.compatibility_profile == "none")))) {
       error(
           diagnostics, kValueCode,
           "every [[source]] requires a unique logical_name, matching standard "
-          "and compatibility profile, and either no payload or a contained "
-          "artifact with lowercase SHA-256 checksum",
+          "and compatibility profile, no payload, and at most a lowercase "
+          "SHA-256 content digest",
           source_name, document_line);
     }
   }
@@ -998,29 +879,31 @@ std::optional<Metadata> parse_metadata(
 }
 
 std::optional<Metadata> load_metadata(
-    const std::filesystem::path& directory,
+    const std::filesystem::path& path,
     const std::string_view expected_library,
     diagnostic::Engine& diagnostics) {
-  const auto path = directory / kMetadataFilename;
-  auto input = support::native_fs::open_ifstream(path, std::ios::binary);
-  if (!input) {
+  std::error_code code;
+  if (support::native_fs::exists(path, code)
+      && support::native_fs::is_directory(path, code)) {
     diagnostics.error(
-        std::string{kIoCode},
-        "cannot open mapped library metadata: "
-            + fsim::support::path_to_utf8(path));
+        std::string{kSchemaCode},
+        "mapped library " + fsim::support::path_to_utf8(path)
+            + " is a directory written by an older fsim; export it again");
     return std::nullopt;
   }
-  std::ostringstream contents;
-  contents << input.rdbuf();
-  if (!input.good() && !input.eof()) {
+  std::string failure;
+  auto library = artifact::ContainerReader::open(path, kLibraryArtifactKind, failure);
+  auto contents = library
+      ? library->read(kMetadataFilename, kMaximumMetadataBytes, failure)
+      : std::nullopt;
+  if (!contents) {
     diagnostics.error(
         std::string{kIoCode},
-        "cannot read mapped library metadata: "
-            + fsim::support::path_to_utf8(path));
+        "cannot read mapped library metadata: " + failure);
     return std::nullopt;
   }
   auto metadata = parse_metadata(
-      contents.str(), fsim::support::path_to_utf8(path), diagnostics);
+      *contents, fsim::support::path_to_utf8(path), diagnostics);
   if (metadata.has_value() && metadata->library != expected_library) {
     diagnostics.error(
         std::string{kValueCode},
@@ -1029,6 +912,42 @@ std::optional<Metadata> load_metadata(
     return std::nullopt;
   }
   return metadata;
+}
+
+std::optional<std::string> read_payload(
+    const std::filesystem::path& library,
+    const std::filesystem::path& payload,
+    const std::string_view expected_checksum,
+    const std::optional<std::uint64_t> maximum_bytes,
+    PayloadReadFailure& failure,
+    std::string& error) {
+  failure = PayloadReadFailure::none;
+  const auto name = fsim::support::path_to_utf8(payload);
+  auto reader = artifact::ContainerReader::open(library, kLibraryArtifactKind, error);
+  const auto entry = reader ? reader->entry(name, error) : std::nullopt;
+  if (!entry) {
+    failure = PayloadReadFailure::open;
+    if (error.empty())
+      error = "payload '" + name + "' is missing";
+    return std::nullopt;
+  }
+  if (maximum_bytes && entry->size > *maximum_bytes) {
+    failure = PayloadReadFailure::budget;
+    return std::nullopt;
+  }
+  auto bytes = reader->read(name, entry->size, error);
+  if (!bytes) {
+    failure = PayloadReadFailure::read;
+    return std::nullopt;
+  }
+  // The container verified its own checksum; an index spelled the same way
+  // needs no second pass.
+  if (entry->checksum != expected_checksum
+      && !support::payload_checksum_matches(*bytes, expected_checksum)) {
+    failure = PayloadReadFailure::checksum;
+    return std::nullopt;
+  }
+  return bytes;
 }
 
 bool publish(
@@ -1042,11 +961,14 @@ bool publish(
         "library export destination must not be empty");
     return false;
   }
+  // A file is replaced; a directory is an older fsim's library layout.
   std::error_code exists_error;
-  if (support::native_fs::exists(destination, exists_error) || exists_error) {
+  const bool exists = support::native_fs::exists(destination, exists_error);
+  if (exists_error
+      || (exists && support::native_fs::is_directory(destination, exists_error))) {
     diagnostics.error(
         std::string{kPublishCode},
-        "library export destination already exists or cannot be inspected: "
+        "library export destination is a directory or cannot be inspected: "
             + fsim::support::path_to_utf8(destination));
     return false;
   }
@@ -1098,14 +1020,6 @@ bool publish(
     expected.insert(path);
     expected_checksums.emplace(path, unit.checksum);
   }
-  for (const auto& source_entry : metadata.sources) {
-    if (source_entry.artifact.empty()) {
-      continue;
-    }
-    const auto path = fsim::support::path_to_utf8(source_entry.artifact);
-    expected.insert(path);
-    expected_checksums.emplace(path, source_entry.checksum);
-  }
   for (const auto& auxiliary : metadata.auxiliary_artifacts) {
     const auto path = fsim::support::path_to_utf8(auxiliary.artifact);
     expected.insert(path);
@@ -1156,38 +1070,25 @@ bool publish(
             + parent_error.message());
     return false;
   }
-  const auto staging = staging_path(destination);
-  StagingCleanup cleanup(staging);
-  std::error_code stage_error;
-  if (!support::native_fs::create_directory(staging, stage_error)
-      || stage_error) {
-    diagnostics.error(
-        std::string{kPublishCode},
-        "cannot create library staging directory: "
-            + stage_error.message());
-    return false;
-  }
+  std::string failure;
+  auto writer = artifact::ContainerWriter::create(
+      parent / destination.filename(), kLibraryArtifactKind,
+      artifact::ContainerPages::bulk, failure);
+  bool written = writer.has_value()
+      && writer->meta("format", std::to_string(kFormatVersion), failure)
+      && writer->meta("library", metadata.library, failure)
+      && writer->meta("producer", metadata.producer, failure);
   for (const auto& payload : payloads) {
-    if (!write_file(staging / payload.path, payload.bytes, diagnostics)) {
-      return false;
-    }
+    written = written
+        && writer->put(fsim::support::path_to_utf8(payload.path), payload.bytes, failure);
   }
-  if (!write_file(
-          staging / kMetadataFilename, canonical, diagnostics)
-      || !make_tree_read_only(staging, diagnostics)) {
-    return false;
-  }
-  std::error_code install_error;
-  support::native_fs::install_staged_directory(
-      staging, destination, install_error);
-  if (install_error) {
+  written = written && writer->put(kMetadataFilename, canonical, failure);
+  if (!written || !writer->publish(failure)) {
     diagnostics.error(
         std::string{kPublishCode},
-        "cannot atomically install library artifact: "
-            + install_error.message());
+        "cannot publish library artifact: " + failure);
     return false;
   }
-  cleanup.release();
   return true;
 }
 

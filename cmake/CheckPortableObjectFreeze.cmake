@@ -84,14 +84,14 @@ function(fsim_require_portable_object_tokens path)
 endfunction()
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
-  "kObjectFormatVersion = 9"
+  "kObjectFormatVersion = 10"
   "kObjectMetadataFilename = \"fsim-object.bin\""
   "portable_schema{library::kPortableSchemaVersion}"
   "compiled_hir_schema{library::kCompiledHirSchemaVersion}"
   "std::filesystem::path compiled_hir_artifact"
   "std::string compiled_hir_checksum"
   "Canonical little-endian metadata codec"
-  "installed .fsimobj tree is read-only")
+  "through a private temporary file and one")
 fsim_require_portable_object_tokens("${FSIM_LIBRARY_HEADER}"
   "kPortableSchemaVersion = 16"
   "kCompiledHirSchemaVersion = 3")
@@ -105,7 +105,7 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_CODEC}"
   "writer.u32(kObjectFormatVersion)"
   "writer.u32(library::kPortableSchemaVersion)"
   "writer.u32(library::kCompiledHirSchemaVersion)"
-  "fsim-object-compilation-v9-compiled-hir"
+  "fsim-object-compilation-v10-compiled-hir"
   "unsupported_artifact_identity("
   "\".fsimobj\""
   "portable-unit schema"
@@ -113,7 +113,6 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_CODEC}"
   "truncated .fsimobj compiled-HIR index"
   "trailing object metadata bytes"
   "object compilation digest does not match"
-  "object output already exists or cannot be inspected"
   "cannot serialize .fsimobj metadata with unsupported identity")
 fsim_require_portable_object_tokens("${FSIM_BUNDLE_CODEC}"
   "serialize_compiled_hir_bundle("
@@ -128,7 +127,7 @@ fsim_require_portable_object_tokens("${FSIM_BUNDLE_CODEC}"
   "compiled HIR bundle is structurally invalid")
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
-  "kObjectFormatVersion == 9U"
+  "kObjectFormatVersion == 10U"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
   "kPortableSchemaVersion == 16U"

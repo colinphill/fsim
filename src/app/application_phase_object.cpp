@@ -16,34 +16,6 @@
 namespace fsim::app {
 namespace {
 
-std::optional<std::string> read_object_payload(
-    const std::filesystem::path& path,
-    const std::string_view expected_checksum,
-    diagnostic::Engine& diagnostics,
-    const std::optional<std::uintmax_t> maximum_bytes = std::nullopt) {
-  auto payload = application_detail::read_binary_payload(path, maximum_bytes);
-  if (!payload.bytes) {
-    const auto budget = payload.budget_exceeded
-        ? " exceeds the compiled-HIR decode byte budget: "
-        : ": ";
-    diagnostics.error(
-        "FSIM-ART-0005",
-        (payload.failure == application_detail::BinaryPayloadReadFailure::open
-                ? "cannot open .fsimobj payload"
-                : "cannot read .fsimobj payload")
-            + std::string { budget } + support::path_to_utf8(path));
-    return std::nullopt;
-  }
-  if (!support::payload_checksum_matches(*payload.bytes, expected_checksum)) {
-    diagnostics.error(
-        "FSIM-ART-0005",
-        ".fsimobj payload checksum mismatch: "
-            + support::path_to_utf8(path));
-    return std::nullopt;
-  }
-  return std::move(payload.bytes);
-}
-
 std::filesystem::path object_source_root(
     const artifact::ObjectMetadata& metadata) {
   return std::filesystem::path{"objects"} / metadata.compilation_digest;
@@ -200,51 +172,45 @@ application_detail::load_object_workspace(
     provenance.source_settings.uvm_release = *object_release;
     provenance.source_settings.defines = metadata->defines;
 
-    const auto source_root = object_source_root(*metadata);
+    // Sources keep the workspace-relative path they were compiled from. Two
+    // objects compiled from different contents of one path (a file edited
+    // between compilations) keep apart under their compilation digests.
     std::vector<library::SourceNameMapping> source_mappings;
     source_mappings.reserve(metadata->sources.size());
-    for (const auto& indexed : metadata->sources) {
-      auto bytes = read_object_payload(
-          object / indexed.artifact, indexed.checksum, diagnostics);
-      if (!bytes.has_value()) {
-        return std::nullopt;
-      }
-      const auto logical =
-          (source_root / support::path_from_utf8(indexed.logical_name))
-              .lexically_normal();
-      const auto logical_name = support::path_to_utf8(logical);
-      const auto [existing, inserted] =
-          known_sources.emplace(logical_name, indexed.checksum);
+    for (std::size_t index = 0; index < metadata->sources.size(); ++index) {
+      const auto& indexed = metadata->sources[index];
+      auto logical = support::path_from_utf8(indexed.logical_name);
+      auto [existing, inserted] = known_sources.emplace(
+          indexed.logical_name, indexed.checksum);
       if (!inserted && existing->second != indexed.checksum) {
-        diagnostics.error(
-            "FSIM-ART-0005",
-            "object source identity collides with different content: "
-                + logical_name);
-        return std::nullopt;
+        logical = (object_source_root(*metadata) / logical).lexically_normal();
+        std::tie(existing, inserted) = known_sources.emplace(
+            support::path_to_utf8(logical), indexed.checksum);
       }
+      const auto logical_name = support::path_to_utf8(logical);
       source_mappings.push_back({indexed.logical_name, logical_name});
       provenance.source_settings.files.push_back(logical);
       if (inserted) {
-          checked.hdl_sources.push_back({ logical, metadata->language, metadata->standard,
-              indexed.checksum, { }, metadata->compilation_digest,
-              object / indexed.artifact });
+          CheckedSource source { logical, metadata->language, metadata->standard,
+              indexed.checksum, { }, metadata->compilation_digest, { },
+              metadata->source_coverage[index] };
+          checked.hdl_sources.push_back(std::move(source));
       }
     }
     for (const auto& include : metadata->include_roots) {
-      provenance.source_settings.include_directories.push_back(
-          (source_root / include).lexically_normal());
+      provenance.source_settings.include_directories.push_back(include);
     }
 
-    auto compiled_bytes = read_object_payload(
-        object / metadata->compiled_hir_artifact,
-        metadata->compiled_hir_checksum,
-        diagnostics, kCompiledHirDecodeBudgetBytes);
+    auto compiled_bytes = artifact::read_object_payload(
+        object, metadata->compiled_hir_artifact,
+        metadata->compiled_hir_checksum, kCompiledHirDecodeBudgetBytes,
+        diagnostics);
     if (!compiled_bytes) {
       return std::nullopt;
     }
     auto compiled_bundle = deserialize_compiled_hir_bundle(
         *compiled_bytes,
-        support::path_to_utf8(object / metadata->compiled_hir_artifact),
+        support::path_to_utf8(object),
         diagnostics);
     if (!compiled_bundle
         || !application_detail::relocate_compiled_design_sources(
@@ -267,8 +233,7 @@ application_detail::load_object_workspace(
           diagnostics.error(
               "FSIM-ART-0005",
               ".fsimobj UDP identity does not match its metadata index: "
-                  + support::path_to_utf8(
-                      object / metadata->compiled_hir_artifact));
+                  + support::path_to_utf8(object));
           return std::nullopt;
         }
         const auto key = compiled_udp_key(*declaration);
@@ -344,8 +309,7 @@ application_detail::load_object_workspace(
         diagnostics.error(
             "FSIM-ART-0005",
             ".fsimobj UDP identity does not match its metadata index: "
-                + support::path_to_utf8(
-                    object / metadata->compiled_hir_artifact));
+                + support::path_to_utf8(object));
         return std::nullopt;
       }
     }

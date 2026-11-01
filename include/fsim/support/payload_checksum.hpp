@@ -34,6 +34,8 @@ private:
 /// "xxh64:" followed by sixteen lowercase hex digits. The checksum detects
 /// corruption; content identities (source digests, cache keys) stay SHA-256.
 [[nodiscard]] std::string payload_checksum(std::string_view bytes);
+/// The same spelling for bytes hashed incrementally.
+[[nodiscard]] std::string payload_checksum(const Xxh64& state);
 
 /// A recorded payload checksum is either xxh64-tagged or SHA-256 hex.
 [[nodiscard]] bool payload_checksum_spelling(std::string_view checksum) noexcept;

@@ -10,6 +10,7 @@
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/app/sdf_phase_persistence.hpp"
+#include "fsim/artifact/container.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
 #if defined(FSIM_HAS_LLVM)
@@ -26,6 +27,7 @@
 #include "fsim/version.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <array>
@@ -52,94 +54,84 @@ namespace {
                 != semantic::UnitKind::systemverilog_compilation_unit;
     }
 
+    // A payload of the .fsimdesign container, verified against both the
+    // container's checksum and the design index.
     std::optional<std::string> read_design_payload(
-        const std::filesystem::path& path,
+        artifact::ContainerReader& design,
+        const std::filesystem::path& artifact,
         const std::string_view checksum,
         diagnostic::Engine& diagnostics,
-        const std::optional<std::uintmax_t> maximum_bytes = std::nullopt,
+        const std::optional<std::uint64_t> maximum_bytes = std::nullopt,
         const std::string_view budget_label
             = "compiled-HIR decode byte budget")
     {
-        auto payload = application_detail::read_binary_payload(
-            path, maximum_bytes);
-        if (!payload.bytes) {
-            std::string action;
-            switch (payload.failure) {
-            case application_detail::BinaryPayloadReadFailure::open:
-                action = "open";
-                break;
-            case application_detail::BinaryPayloadReadFailure::size:
-                action = "size";
-                break;
-            case application_detail::BinaryPayloadReadFailure::read:
-                action = "read";
-                break;
-            case application_detail::BinaryPayloadReadFailure::none:
-                action = "read";
-                break;
-            }
-            diagnostics.error(
-                "FSIM-ART-0014",
-                "cannot " + action + " .fsimdesign payload"
-                    + (payload.budget_exceeded
-                            ? " exceeding the " + std::string { budget_label }
-                                + ": "
-                            : ": ")
-                    + support::path_to_utf8(path));
+        const auto name = support::path_to_utf8(artifact);
+        std::string error;
+        const auto entry = design.entry(name, error);
+        if (!entry) {
+            diagnostics.error("FSIM-ART-0014",
+                "cannot read .fsimdesign payload: " + name
+                    + (error.empty() ? " is missing" : ": " + error));
             return std::nullopt;
         }
-        if (!support::payload_checksum_matches(*payload.bytes, checksum)) {
-            diagnostics.error(
-                "FSIM-ART-0014",
-                ".fsimdesign payload checksum mismatch: "
-                    + support::path_to_utf8(path));
+        if (maximum_bytes && entry->size > *maximum_bytes) {
+            diagnostics.error("FSIM-ART-0014",
+                "cannot size .fsimdesign payload exceeding the "
+                    + std::string { budget_label } + ": " + name);
             return std::nullopt;
         }
-        return std::move(payload.bytes);
+        auto bytes = design.read(name, entry->size, error);
+        if (!bytes) {
+            diagnostics.error("FSIM-ART-0014",
+                "cannot read .fsimdesign payload: " + name + ": " + error);
+            return std::nullopt;
+        }
+        // The container verified its own checksum; an index spelled the same
+        // way needs no second pass.
+        if (entry->checksum != checksum
+            && !support::payload_checksum_matches(*bytes, checksum)) {
+            diagnostics.error("FSIM-ART-0014",
+                ".fsimdesign payload checksum mismatch: " + name);
+            return std::nullopt;
+        }
+        return bytes;
     }
 
+    // Verifies a payload that is decoded incrementally; returns its size.
     std::optional<std::uint64_t> verify_design_payload(
-        const std::filesystem::path& path,
+        artifact::ContainerReader& design,
+        const std::filesystem::path& artifact,
         const std::string_view checksum,
         diagnostic::Engine& diagnostics)
     {
-        auto input = support::native_fs::open_ifstream(path, std::ios::binary);
-        std::error_code size_error;
-        const auto file_size = support::native_fs::file_size(path, size_error);
-        if (!input || size_error
-            || file_size > static_cast<std::uintmax_t>(
+        const auto name = support::path_to_utf8(artifact);
+        std::string error;
+        const auto entry = design.entry(name, error);
+        if (!entry
+            || entry->size > static_cast<std::uint64_t>(
                 std::numeric_limits<std::streamsize>::max())) {
             diagnostics.error("FSIM-ART-0014",
-                "cannot open or size .fsimdesign payload: "
-                    + support::path_to_utf8(path));
+                "cannot open or size .fsimdesign payload: " + name
+                    + (error.empty() ? std::string { } : ": " + error));
             return std::nullopt;
         }
+        const bool same_index = entry->checksum == checksum;
         support::PayloadChecksumVerifier digest { checksum };
-        std::array<char, 64 * 1024> buffer { };
-        std::uint64_t total { };
-        while (input) {
-            input.read(buffer.data(),
-                static_cast<std::streamsize>(buffer.size()));
-            const auto count = input.gcount();
-            if (count > 0) {
-                digest.update(std::string_view { buffer.data(),
-                    static_cast<std::size_t>(count) });
-                total += static_cast<std::uint64_t>(count);
-            }
-        }
-        if (!input.eof() || total != file_size) {
+        if (!design.read_chunks(name, [&](const std::string_view chunk) {
+                if (!same_index)
+                    digest.update(chunk);
+                return true;
+            }, error)) {
             diagnostics.error("FSIM-ART-0014",
-                "cannot read .fsimdesign payload: "
-                    + support::path_to_utf8(path));
+                "cannot read .fsimdesign payload: " + name + ": " + error);
             return std::nullopt;
         }
-        if (!digest.matches()) {
+        if (!same_index && !digest.matches()) {
             diagnostics.error("FSIM-ART-0014",
-                ".fsimdesign payload checksum mismatch: "
-                    + support::path_to_utf8(path));
+                ".fsimdesign payload checksum mismatch: " + name);
             return std::nullopt;
         }
-        return static_cast<std::uint64_t>(file_size);
+        return entry->size;
     }
 
     std::string selected_root_identity(
@@ -191,7 +183,52 @@ namespace {
         std::vector<std::uint64_t> roots;
     };
 
+    // An embedded plug-in is written out as a .fsimscplugin in a private
+    // directory that is removed when the process exits; the snapshot itself
+    // stays one file.
+    std::optional<std::filesystem::path> extract_embedded_plugin(
+        artifact::ContainerReader& design,
+        const artifact::DesignMetadata& metadata,
+        const artifact::DesignSystemCPlugin& record,
+        diagnostic::Engine& diagnostics)
+    {
+        std::array<std::optional<std::string>, 2> bytes;
+        for (std::size_t part = 0; part < bytes.size(); ++part) {
+            const auto* index = payload_by_kind(metadata,
+                (part == 0 ? "systemc-plugin-metadata:" : "systemc-plugin-native:")
+                    + record.logical_library);
+            if (index != nullptr) {
+                bytes[part] = read_design_payload(
+                    design, index->artifact, index->checksum, diagnostics);
+            }
+            if (!bytes[part]) {
+                if (!diagnostics.has_error()) {
+                    diagnostics.error("FSIM-ART-0014",
+                        ".fsimdesign is missing an embedded SystemC plug-in payload");
+                }
+                return std::nullopt;
+            }
+        }
+        auto plugin = systemc::deserialize_incremental_plugin_metadata(
+            *bytes[0], "embedded " + record.logical_library, diagnostics);
+        if (!plugin) {
+            return std::nullopt;
+        }
+        std::string error;
+        const auto directory = systemc::private_native_directory(error);
+        if (!directory) {
+            diagnostics.error("FSIM-ART-0014", std::move(error));
+            return std::nullopt;
+        }
+        const auto path = *directory / (record.logical_library + ".fsimscplugin");
+        if (!systemc::publish_incremental_plugin(path, *plugin, *bytes[1], diagnostics)) {
+            return std::nullopt;
+        }
+        return path;
+    }
+
     std::optional<RehydratedSystemC> rehydrate_systemc(
+        artifact::ContainerReader& design,
         const std::filesystem::path& directory,
         const artifact::DesignMetadata& metadata,
         elaboration::ElaboratedDesign& runtime,
@@ -220,7 +257,9 @@ namespace {
         project::SystemCSection host_settings;
         diagnostic::Engine fingerprint_diagnostics;
         const auto current_fingerprint = systemc::plugin_producer_fingerprint(
-            host_settings, directory, fingerprint_diagnostics);
+            host_settings, directory.parent_path().empty()
+                ? std::filesystem::path { "." } : directory.parent_path(),
+            fingerprint_diagnostics);
         if (!current_fingerprint) {
             diagnostics.error(
                 "FSIM-ART-0014",
@@ -237,9 +276,14 @@ namespace {
                     "embedded .fsimdesign SystemC plug-in", diagnostics)) {
                 return std::nullopt;
             }
-            const auto plugin_directory = directory / record.directory;
+            const auto extracted = extract_embedded_plugin(
+                design, metadata, record, diagnostics);
+            if (!extracted) {
+                return std::nullopt;
+            }
+            const auto& plugin_artifact = *extracted;
             auto plugin_metadata = systemc::load_incremental_plugin_metadata(
-                plugin_directory, diagnostics);
+                plugin_artifact, diagnostics);
             if (!plugin_metadata) {
                 return std::nullopt;
             }
@@ -275,7 +319,7 @@ namespace {
                 return std::nullopt;
             }
             auto registry = systemc::load_incremental_plugin(
-                plugin_directory, diagnostics, *current_fingerprint);
+                plugin_artifact, diagnostics, *current_fingerprint);
             if (!registry
                 || !by_library.emplace(record.logical_library, registry).second) {
                 if (!diagnostics.has_error()) {
@@ -286,8 +330,7 @@ namespace {
                 }
                 return std::nullopt;
             }
-            result.native_plugins.push_back(
-                plugin_directory / plugin_metadata->library);
+            result.native_plugins.push_back(plugin_artifact);
             result.registries.push_back(std::move(registry));
         }
 
@@ -785,10 +828,9 @@ static bool publish_design_artifact_impl(
     }
     std::set<std::string> plugin_libraries;
     for (std::size_t index = 0; index < project.systemc_plugins.size(); ++index) {
-        const auto native = project.systemc_plugins[index];
-        const auto artifact_directory = native.parent_path().parent_path();
+        const auto& plugin_artifact = project.systemc_plugins[index];
         auto plugin = systemc::load_incremental_plugin_metadata(
-            artifact_directory, diagnostics);
+            plugin_artifact, diagnostics);
         if (!plugin) {
             diagnostics.error(
                 "FSIM-ART-0014",
@@ -809,9 +851,8 @@ static bool publish_design_artifact_impl(
         const auto embedded = std::filesystem::path { "systemc" } / "plugins"
             / ("plugin-" + std::to_string(index));
         const auto metadata_bytes = systemc::serialize_incremental_plugin_metadata(*plugin);
-        auto native_bytes = read_design_payload(
-            artifact_directory / plugin->library,
-            plugin->library_checksum, diagnostics);
+        auto native_bytes = systemc::load_incremental_plugin_native(
+            plugin_artifact, *plugin, diagnostics);
         if (!native_bytes) {
             return false;
         }
@@ -937,7 +978,10 @@ std::optional<BuiltProject> load_design_artifact(
     diagnostic::Engine& diagnostics)
 {
     application_detail::ScopedPhaseProfile phase { "design_artifact_load" };
-    auto metadata = artifact::load_design_metadata(directory, diagnostics);
+    auto design = artifact::open_design(directory, diagnostics);
+    auto metadata = design
+        ? artifact::load_design_metadata(*design, diagnostics)
+        : std::nullopt;
     if (!metadata) {
         return std::nullopt;
     }
@@ -990,8 +1034,8 @@ std::optional<BuiltProject> load_design_artifact(
             "FSIM-ART-0014", ".fsimdesign is missing a required state payload");
         return std::nullopt;
     }
-    auto hierarchy_path_bytes = read_design_payload(
-        directory / hierarchy_paths_index->artifact,
+    auto hierarchy_path_bytes = read_design_payload(*design,
+        hierarchy_paths_index->artifact,
         hierarchy_paths_index->checksum, diagnostics,
         hierarchy_path_codec::Limits { }.maximum_payload_bytes,
         "hierarchy-path decode byte budget");
@@ -1010,19 +1054,20 @@ std::optional<BuiltProject> load_design_artifact(
         }
         return std::nullopt;
     }
-    const auto runtime_path = directory / runtime_index->artifact;
-    const auto runtime_size = verify_design_payload(
-        runtime_path, runtime_index->checksum, diagnostics);
+    const auto runtime_size = verify_design_payload(*design,
+        runtime_index->artifact, runtime_index->checksum, diagnostics);
     if (!runtime_size) {
         return std::nullopt;
     }
-    auto runtime_input = support::native_fs::open_ifstream(runtime_path, std::ios::binary);
-    if (!runtime_input) {
+    std::string runtime_error;
+    const auto runtime_chunks = design->open_chunks(
+        support::path_to_utf8(runtime_index->artifact), runtime_error);
+    if (!runtime_chunks) {
         diagnostics.error("FSIM-ART-0014",
-            "cannot open .fsimdesign payload: "
-                + support::path_to_utf8(runtime_path));
+            "cannot open .fsimdesign payload: " + runtime_error);
         return std::nullopt;
     }
+    std::istream runtime_input { runtime_chunks.get() };
     // The restored design resolves its paths in the canonical table
     // directly when the table holds them all; otherwise it is remapped.
     bool canonical_paths_adopted = false;
@@ -1047,8 +1092,8 @@ std::optional<BuiltProject> load_design_artifact(
         return std::nullopt;
     }
 
-    auto compiled_hir_bytes = read_design_payload(
-        directory / compiled_hir_index->artifact,
+    auto compiled_hir_bytes = read_design_payload(*design,
+        compiled_hir_index->artifact,
         compiled_hir_index->checksum,
         diagnostics, kCompiledHirDecodeBudgetBytes);
     auto compiled_hir = compiled_hir_bytes
@@ -1067,8 +1112,8 @@ std::optional<BuiltProject> load_design_artifact(
         vhdl_hir.emplace(std::move(compiled_hir->vhdl_hir));
     }
 
-    auto design_ir_bytes = read_design_payload(
-        directory / design_ir_index->artifact, design_ir_index->checksum,
+    auto design_ir_bytes = read_design_payload(*design,
+        design_ir_index->artifact, design_ir_index->checksum,
         diagnostics, kCompiledHirDecodeBudgetBytes,
         "DesignIR decode byte budget");
     auto design_ir = design_ir_bytes
@@ -1078,8 +1123,8 @@ std::optional<BuiltProject> load_design_artifact(
         : std::optional<semantic::design::DesignIr> { };
     design_ir_bytes.reset();
 
-    auto coverage_bytes = read_design_payload(
-        directory / coverage_index->artifact, coverage_index->checksum,
+    auto coverage_bytes = read_design_payload(*design,
+        coverage_index->artifact, coverage_index->checksum,
         diagnostics);
     auto coverage = coverage_bytes && constraint_hir && semantics
         ? deserialize_systemverilog_coverage_state(*coverage_bytes,
@@ -1088,16 +1133,16 @@ std::optional<BuiltProject> load_design_artifact(
         : std::optional<runtime::SystemVerilogCoverageState> { };
     coverage_bytes.reset();
 
-    auto uvm_bytes = read_design_payload(
-        directory / uvm_index->artifact, uvm_index->checksum, diagnostics);
+    auto uvm_bytes = read_design_payload(*design,
+        uvm_index->artifact, uvm_index->checksum, diagnostics);
     auto uvm_state = uvm_bytes
         ? deserialize_systemverilog_uvm_state(*uvm_bytes,
               support::path_to_utf8(uvm_index->artifact), diagnostics)
         : std::optional<fsim::runtime::SystemVerilogUvmCheckpointArtifact> { };
     uvm_bytes.reset();
     // Kept until the verify-mode comparison below.
-    auto classes_bytes = read_design_payload(
-        directory / classes_index->artifact, classes_index->checksum,
+    auto classes_bytes = read_design_payload(*design,
+        classes_index->artifact, classes_index->checksum,
         diagnostics);
     auto class_specializations = classes_bytes
         ? deserialize_systemverilog_class_specializations(*classes_bytes,
@@ -1120,7 +1165,7 @@ std::optional<BuiltProject> load_design_artifact(
         return std::nullopt;
     }
     auto live_systemc = rehydrate_systemc(
-        directory, *metadata, *runtime, *design_ir, diagnostics);
+        *design, directory, *metadata, *runtime, *design_ir, diagnostics);
     if (!live_systemc) {
         return std::nullopt;
     }
@@ -1363,7 +1408,7 @@ std::optional<BuiltProject> load_design_artifact(
         std::move(verilog_unit_revisions),
         std::move(verilog_unit_compatibility_profiles), { }, { }
     };
-    if (!restore_sdf_phase_artifacts(directory, *metadata, built, diagnostics))
+    if (!restore_sdf_phase_artifacts(*design, *metadata, built, diagnostics))
         return std::nullopt;
     built.trace_archive = std::move(trace_archive);
     built.trusted_artifact = trusted;
@@ -1406,24 +1451,27 @@ std::optional<ArtifactInspection> inspect_artifact(
     const std::filesystem::path& directory,
     diagnostic::Engine& diagnostics)
 {
-    const auto object_metadata = support::native_fs::exists(
-        directory / artifact::kObjectMetadataFilename);
-    const auto design_metadata = support::native_fs::exists(
-        directory / artifact::kDesignMetadataFilename);
-    const auto systemc_object_metadata = support::native_fs::exists(
-        directory / systemc::kIncrementalObjectMetadataFilename);
-    const auto systemc_plugin_metadata = support::native_fs::exists(
-        directory / systemc::kIncrementalPluginMetadataFilename);
-    const auto metadata_count = static_cast<unsigned>(object_metadata)
-        + static_cast<unsigned>(design_metadata)
-        + static_cast<unsigned>(systemc_object_metadata)
-        + static_cast<unsigned>(systemc_plugin_metadata);
-    if (metadata_count != 1) {
+    // Every artifact is one container file, inspected by its kind.
+    std::error_code code;
+    if (!support::native_fs::is_regular_file(directory, code)) {
         diagnostics.error(
             "FSIM-ART-0014",
-            "artifact inspection requires exactly one .fsimobj, .fsimscobj, "
-            ".fsimscplugin, or .fsimdesign metadata record: "
+            "artifact inspection requires one .fsimobj, .fsimscobj, "
+            ".fsimscplugin, or .fsimdesign file: "
                 + support::path_to_utf8(directory));
+        return std::nullopt;
+    }
+    std::string error;
+    const auto kind = artifact::ContainerReader::read_kind(directory, error);
+    const bool object_metadata = kind == artifact::kObjectArtifactKind;
+    const bool design_metadata = kind == artifact::kDesignArtifactKind;
+    const bool systemc_object_metadata = kind == systemc::kIncrementalObjectKind;
+    const bool systemc_plugin_metadata = kind == systemc::kIncrementalPluginKind;
+    if (!object_metadata && !design_metadata && !systemc_object_metadata
+        && !systemc_plugin_metadata) {
+        diagnostics.error("FSIM-ART-0014",
+            "artifact inspection requires an fsim artifact: "
+                + (kind ? "'" + *kind + "' artifacts are not inspected" : error));
         return std::nullopt;
     }
     ArtifactInspection result;
@@ -1751,6 +1799,11 @@ int handle_simulate_stdio(
 {
     return handle_simulate_impl(invocation, config, diagnostics, output,
         SimulationOutputSink::builtin_stdout);
+}
+
+std::optional<std::filesystem::path> embedded_plugin_directory(std::string& error)
+{
+    return systemc::private_native_directory(error);
 }
 
 } // namespace fsim::app::application_detail

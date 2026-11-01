@@ -169,6 +169,11 @@ std::string payload_checksum(const std::string_view bytes)
     return std::string { xxh64_tag } + hex64(Xxh64::digest(bytes));
 }
 
+std::string payload_checksum(const Xxh64& state)
+{
+    return std::string { xxh64_tag } + hex64(state.finish());
+}
+
 bool payload_checksum_spelling(const std::string_view checksum) noexcept
 {
     if (checksum.starts_with(xxh64_tag)) {
