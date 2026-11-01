@@ -136,11 +136,10 @@ void test_process_validation_and_resources()
             && process.operations.size() == 3U,
         "validation must not mutate unrelated process state");
 
-    auto duplicate = process;
-    duplicate.operations.push_back(Operation { hit(owners[0]) });
-    require(validate_code_coverage_hits(duplicate, owners, 9U).error
-            == CodeCoverageHitError::DuplicateHit,
-        "one process must not publish duplicate instrumentation for a point");
+    auto repeated = process;
+    repeated.operations.push_back(Operation { hit(owners[0]) });
+    require(validate_code_coverage_hits(repeated, owners, 9U).ok(),
+        "a point may be counted at several sites of one process");
     require(validate_code_coverage_hits(
                 process, owners, 9U, { 1U, 3U }).error
             == CodeCoverageHitError::ResourceLimit,

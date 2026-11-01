@@ -410,6 +410,14 @@ int run_built_project(
         if (trace && !finish_trace(*trace, diagnostics)) {
             return 1;
         }
+        if (config.run.coverage_output) {
+            if (const auto failure = simulation.save_code_coverage_database(
+                    *config.run.coverage_output)) {
+                diagnostics.error("FSIM-COV-008",
+                    "cannot save the coverage database: " + *failure);
+                return 1;
+            }
+        }
         if (vhpi_service) {
             vhpi_service->finish();
             if (sink == SimulationOutputSink::builtin_stdout) {

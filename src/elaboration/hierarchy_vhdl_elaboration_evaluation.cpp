@@ -72,6 +72,8 @@ bool elaboration_program_memoizable(const runtime::simir::Process& process)
                 return operation_get_if<ReadContainerObject>(&operation)
                     != nullptr
                     || operation_get_if<CodeCoverageHit>(&operation) != nullptr
+                    || operation_get_if<CodeCoverageToggle>(&operation)
+                        != nullptr
                     || operation_get_if<CoverageControl>(&operation) != nullptr
                     || operation_get_if<CoverageAccess>(&operation) != nullptr;
             })) {

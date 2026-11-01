@@ -62,15 +62,15 @@ namespace {
     std::vector<CodeCoverageMetricResult> metrics_from(
         const std::vector<Point>& points, Status status)
     {
-        std::array<CodeCoverageMetricResult, 2U> metrics {
-            CodeCoverageMetricResult { CodeCoverageMetric::Statement },
-            CodeCoverageMetricResult { CodeCoverageMetric::Branch },
-        };
+        std::array<CodeCoverageMetricResult, kCodeCoverageMetricCount>
+            metrics { };
+        for (std::size_t index = 0U; index < metrics.size(); ++index) {
+            metrics[index].metric
+                = static_cast<CodeCoverageMetric>(index + 1U);
+        }
         for (const auto& point : points) {
-            const auto index = point.metric == CodeCoverageMetric::Statement
-                ? 0U
-                : 1U;
-            add_status(metrics[index], status(point));
+            add_status(metrics[static_cast<std::size_t>(point.metric) - 1U],
+                status(point));
         }
         std::vector<CodeCoverageMetricResult> result;
         result.reserve(metrics.size());

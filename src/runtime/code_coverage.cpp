@@ -28,10 +28,10 @@ CodeCoverageValidationResult validate_code_coverage(
         return reject(CodeCoverageModelError::ResultCountMismatch);
     }
 
-    std::array<std::uint64_t, 2U> totals { };
-    std::array<std::uint64_t, 2U> covered { };
-    std::array<std::uint64_t, 2U> uncovered { };
-    std::array<std::uint64_t, 2U> excluded { };
+    std::array<std::uint64_t, kCodeCoverageMetricCount> totals { };
+    std::array<std::uint64_t, kCodeCoverageMetricCount> covered { };
+    std::array<std::uint64_t, kCodeCoverageMetricCount> uncovered { };
+    std::array<std::uint64_t, kCodeCoverageMetricCount> excluded { };
     for (std::size_t index = 0U; index < run.points.size(); ++index) {
         const auto& point = run.points[index];
         const auto& point_result = result.points[index];
@@ -61,7 +61,7 @@ CodeCoverageValidationResult validate_code_coverage(
         }
 
         const auto metric_index
-            = point.metric == CodeCoverageMetric::Statement ? 0U : 1U;
+            = static_cast<std::size_t>(point.metric) - 1U;
         ++totals[metric_index];
         if (point_result.status == CodeCoverageStatus::Covered) {
             ++covered[metric_index];
@@ -72,7 +72,7 @@ CodeCoverageValidationResult validate_code_coverage(
         }
     }
 
-    std::array<bool, 3U> metric_seen { };
+    std::array<bool, kCodeCoverageMetricCount> metric_seen { };
     for (std::size_t index = 0U; index < result.metrics.size(); ++index) {
         const auto& metric = result.metrics[index];
         const auto name = code_coverage_metric_name(metric.metric);

@@ -4,6 +4,7 @@
 #include "fsim/runtime/code_coverage.hpp"
 #include "fsim/runtime/simir.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -31,7 +32,6 @@ enum class CodeCoverageHitError : std::uint8_t {
     PointOwnershipMismatch,
     DuplicatePointOwnership,
     NoncanonicalPointOwnership,
-    DuplicateHit,
 };
 
 struct CodeCoverageHitValidationResult {
@@ -106,5 +106,50 @@ private:
     std::span<const ::fsim::runtime::CodeCoveragePoint> owners,
     std::size_t counter_count,
     CodeCoverageHitLimits limits = { }) noexcept;
+
+/// One bit of a toggle sample: 0, 1, or unknown (2). A STD_ULOGIC bit
+/// reads through TO_X01, so L is 0 and H is 1.
+[[nodiscard]] inline std::uint8_t code_coverage_toggle_bit(
+    const PackedLogic4& value, const std::size_t index)
+{
+    if (value.is_logic9()) {
+        switch (value.get_logic9(index)) {
+        case Logic9::zero:
+        case Logic9::l:
+            return 0U;
+        case Logic9::one:
+        case Logic9::h:
+            return 1U;
+        default:
+            return 2U;
+        }
+    }
+    const auto bit = value.get(index);
+    return bit == Logic4::zero ? 0U : bit == Logic4::one ? 1U : 2U;
+}
+
+/// Calls `record(counter)` for each bit that went from a known 0 to a known
+/// 1 (its rise counter) or from a known 1 to a known 0 (its fall counter).
+/// A transition to or from an unknown value counts in neither direction.
+template <typename Record>
+void record_code_coverage_toggles(const PackedLogic4& previous,
+    const PackedLogic4& current, const CodeCoverageToggle& toggle,
+    Record&& record)
+{
+    if (previous == current) {
+        return;
+    }
+    const auto width = std::min({ previous.width(), current.width(),
+        toggle.counters.size() / 2U });
+    for (std::size_t bit = 0U; bit < width; ++bit) {
+        const auto before = code_coverage_toggle_bit(previous, bit);
+        const auto after = code_coverage_toggle_bit(current, bit);
+        if (before == 0U && after == 1U) {
+            record(toggle.counters[2U * bit]);
+        } else if (before == 1U && after == 0U) {
+            record(toggle.counters[2U * bit + 1U]);
+        }
+    }
+}
 
 } // namespace fsim::runtime::simir

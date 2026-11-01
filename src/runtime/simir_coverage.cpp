@@ -14,8 +14,7 @@ namespace {
 [[nodiscard]] bool executable_metric(
     const ::fsim::runtime::CodeCoverageMetric metric) noexcept
 {
-    return metric == ::fsim::runtime::CodeCoverageMetric::Statement
-        || metric == ::fsim::runtime::CodeCoverageMetric::Branch;
+    return ::fsim::runtime::is_code_coverage_point_metric(metric);
 }
 
 [[nodiscard]] CodeCoverageHitValidationResult error(
@@ -487,43 +486,32 @@ CodeCoverageHitValidationResult validate_code_coverage_hits(
         }
     }
 
-    try {
-        std::vector<std::uint8_t> seen(owners.size(), 0U);
-        for (std::size_t instruction = 0U;
-             instruction < process.operations.size(); ++instruction) {
-            const auto* canonical = operation_get_if<CodeCoverageHit>(
-                &process.operations[instruction]);
-            if (canonical == nullptr) {
-                continue;
-            }
-            auto hit = *canonical;
-            hit.counter = process.operations.code_coverage_counter(
-                instruction, hit.counter);
-            if (owners.empty()
-                || hit.counter.value < first_counter
-                || static_cast<std::uint64_t>(hit.counter.value)
-                    >= first_counter + owners.size()) {
-                return error(
-                    CodeCoverageHitError::CounterOutOfRange, instruction);
-            }
-            const auto owner_index = static_cast<std::size_t>(
-                hit.counter.value - first_counter);
-            const auto validation = validate_code_coverage_hit(
-                hit, owners[owner_index], counter_count);
-            if (!validation.ok()) {
-                return error(validation.error, instruction, owner_index);
-            }
-            if (seen[owner_index] != 0U) {
-                return error(
-                    CodeCoverageHitError::DuplicateHit,
-                    instruction, owner_index);
-            }
-            seen[owner_index] = 1U;
+    // A point may be counted at several sites: a condition operand is
+    // evaluated on more than one short-circuit path.
+    for (std::size_t instruction = 0U;
+         instruction < process.operations.size(); ++instruction) {
+        const auto* canonical = operation_get_if<CodeCoverageHit>(
+            &process.operations[instruction]);
+        if (canonical == nullptr) {
+            continue;
         }
-    } catch (const std::bad_alloc&) {
-        return error(CodeCoverageHitError::ResourceLimit);
-    } catch (const std::length_error&) {
-        return error(CodeCoverageHitError::ResourceLimit);
+        auto hit = *canonical;
+        hit.counter = process.operations.code_coverage_counter(
+            instruction, hit.counter);
+        if (owners.empty()
+            || hit.counter.value < first_counter
+            || static_cast<std::uint64_t>(hit.counter.value)
+                >= first_counter + owners.size()) {
+            return error(
+                CodeCoverageHitError::CounterOutOfRange, instruction);
+        }
+        const auto owner_index = static_cast<std::size_t>(
+            hit.counter.value - first_counter);
+        const auto validation = validate_code_coverage_hit(
+            hit, owners[owner_index], counter_count);
+        if (!validation.ok()) {
+            return error(validation.error, instruction, owner_index);
+        }
     }
     return { };
 }

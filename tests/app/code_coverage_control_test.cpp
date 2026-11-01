@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/artifact/coverage_database_codec.hpp"
 #include "fsim/cli/driver.hpp"
 #include "fsim/elaboration/coverage_inventory.hpp"
 #include "fsim/frontend/coverage_point_identity.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -194,6 +196,29 @@ void test_disabled_build_has_no_runtime_state(
     assert(enabled && !enabled_diagnostics.has_error());
     assert(enabled->code_coverage_enabled);
 
+    // A manifest exclusion keeps the points it selects counted, reported
+    // as excluded for its reason.
+    config.coverage.exclusions.push_back({ .source = std::nullopt,
+        .hierarchy = "top", .object = std::nullopt, .metric = "statement",
+        .reason = "waived by plan" });
+    fsim::diagnostic::Engine waived_diagnostics;
+    const auto waived = fsim::app::build_project(config, waived_diagnostics);
+    assert(waived && !waived_diagnostics.has_error());
+    const auto& inventory = waived->design.code_coverage_inventory();
+    assert(inventory);
+    std::size_t statements { };
+    for (const auto& instance : inventory->instances) {
+        for (const auto& point : instance.points) {
+            if (point.point.metric
+                == fsim::runtime::CodeCoverageMetric::Statement) {
+                assert(point.exclusion_reason == "waived by plan");
+                ++statements;
+            }
+        }
+    }
+    assert(statements != 0U);
+    config.coverage.exclusions.clear();
+
     config.coverage.exclusions.push_back({ .source = std::nullopt,
         .hierarchy = std::nullopt, .object = std::nullopt,
         .metric = "unknown", .reason = "must fail before elaboration" });
@@ -354,7 +379,7 @@ void test_standard_coverage_selection(
         drafts.push_back({ specialization.id,
             { { *point_identity.identity,
                 fsim::runtime::CodeCoverageMetric::Statement,
-                0U, { 1U, 2U }, 1U } } });
+                0U, { 1U, 2U }, 1U, { } } }, { } });
     }
     assert(built->design
             .attach_code_coverage_inventory(inventory_sources, drafts)
@@ -583,6 +608,104 @@ void test_coverage_control_negative_profiles(
 
 } // namespace
 
+// FSM points of one saved database, as (family, sorted hits).
+std::vector<std::pair<int, std::vector<std::uint64_t>>> fsm_hits(
+    const std::filesystem::path& path)
+{
+    const auto database = fsim::artifact::read_coverage_database(path);
+    assert(database.ok());
+    std::vector<std::pair<int, std::vector<std::uint64_t>>> result {
+        { static_cast<int>(
+              fsim::artifact::CoverageDatabaseMetricFamily::FsmState),
+            { } },
+        { static_cast<int>(
+              fsim::artifact::CoverageDatabaseMetricFamily::FsmTransition),
+            { } }
+    };
+    for (const auto& metric : database.contents->metrics) {
+        if (metric.scope
+            != fsim::artifact::CoverageDatabaseMetricScope::Instance) {
+            continue;
+        }
+        for (auto& [family, hits] : result) {
+            if (static_cast<int>(metric.family) == family) {
+                hits.push_back(metric.hits);
+            }
+        }
+    }
+    for (auto& [family, hits] : result) {
+        (void)family;
+        std::ranges::sort(hits);
+    }
+    return result;
+}
+
+// A manifest [[coverage.fsm]] hint is the only evidence that a vector with
+// named-constant case choices is a state machine; a hint for another
+// instance leaves it uncovered. Both engines count the same.
+void test_manifest_fsm_hint(const TemporaryDirectory& directory,
+    const bool vhdl, const std::string_view instance)
+{
+    std::vector<std::pair<int, std::vector<std::uint64_t>>> reference;
+    for (const auto engine : { fsim::app::SimulationEngine::interpreter,
+             fsim::app::SimulationEngine::v4 }) {
+        fsim::project::Config config;
+        config.base_directory = directory.path;
+        config.project.name = "coverage-manifest-fsm";
+        config.project.top = vhdl ? "vhdl:work.mtb(sim)" : "sv:work.mtb";
+        config.project.time_resolution = "1ns";
+        config.build.cache_path = directory.path
+            / (vhdl ? "manifest-fsm-vhdl-cache" : "manifest-fsm-sv-cache");
+        config.coverage.enabled = true;
+        config.coverage.fsm_hints.push_back({ std::string { instance },
+            "state", std::nullopt,
+            std::vector<std::string> { vhdl ? "idle" : "IDLE",
+                vhdl ? "run" : "RUN", vhdl ? "done" : "DONE" } });
+        fsim::project::SourceSet sources;
+        sources.language = vhdl ? fsim::project::Language::vhdl
+                                : fsim::project::Language::system_verilog;
+        sources.standard = vhdl ? "2008" : "2017";
+        sources.library = "work";
+        sources.files = { directory.path
+            / (vhdl ? "manifest_fsm.vhd" : "manifest_fsm.sv") };
+        config.source_sets.push_back(std::move(sources));
+
+        fsim::diagnostic::Engine diagnostics;
+        auto built = fsim::app::build_project(config, diagnostics);
+        if (!built) {
+            for (const auto& diagnostic : diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": " << diagnostic.message
+                          << '\n';
+            }
+        }
+        assert(built && !diagnostics.has_error());
+        fsim::app::Simulation simulation { std::move(*built), 1000U, engine };
+        const auto result = simulation.run();
+        assert(result.status == fsim::runtime::RunStatus::completed
+            || result.status == fsim::runtime::RunStatus::stopped);
+        const auto path = directory.path / "manifest-fsm.fsimcov";
+        assert(!simulation.save_code_coverage_database(path));
+        const auto hits = fsm_hits(path);
+        if (reference.empty()) {
+            reference = hits;
+        }
+        assert(hits == reference);
+    }
+    if (instance == "mtb.u") {
+        // IDLE -> RUN -> DONE -> IDLE -> RUN over four edges, entered from
+        // the initial IDLE.
+        assert(reference[0].second.size() == 3U
+            && std::ranges::all_of(reference[0].second,
+                [](const auto hits) { return hits != 0U; }));
+        assert(reference[1].second.size() >= 3U
+            && std::ranges::count_if(reference[1].second,
+                   [](const auto hits) { return hits != 0U; })
+                == 3);
+    } else {
+        assert(reference[0].second.empty() && reference[1].second.empty());
+    }
+}
+
 int main()
 {
     TemporaryDirectory directory;
@@ -622,12 +745,12 @@ module top;
     start_status = $coverage_control(`SV_COV_START, `SV_COV_STATEMENT, `SV_COV_MODULE, "top");
     reset_status = $coverage_control(`SV_COV_RESET, `SV_COV_STATEMENT, `SV_COV_MODULE, "top");
     check_status = $coverage_control(`SV_COV_CHECK, `SV_COV_STATEMENT, `SV_COV_MODULE, "top");
-    unsupported_status = $coverage_control(`SV_COV_CHECK, `SV_COV_TOGGLE, `SV_COV_MODULE, "top");
+    unsupported_status = $coverage_control(`SV_COV_CHECK, `SV_COV_ASSERTION, `SV_COV_MODULE, "top");
     invalid_status = $coverage_control(99, `SV_COV_STATEMENT, `SV_COV_MODULE, "top");
     unknown_status = $coverage_control(32'bx, `SV_COV_STATEMENT, `SV_COV_MODULE, "top");
     coverage_current = $coverage_get(`SV_COV_STATEMENT, `SV_COV_MODULE, "top");
     coverage_maximum = $coverage_get_max(`SV_COV_STATEMENT, `SV_COV_MODULE, "top");
-    unsupported_get = $coverage_get(`SV_COV_TOGGLE, `SV_COV_MODULE, "top");
+    unsupported_get = $coverage_get(`SV_COV_ASSERTION, `SV_COV_MODULE, "top");
     coverage_merge = $coverage_merge(
         `SV_COV_STATEMENT, "standard.fsimcov");
     coverage_save = $coverage_save(
@@ -656,4 +779,68 @@ endmodule
     test_counter_control_semantics();
     test_coverage_access_semantics();
     test_coverage_control_negative_profiles(directory);
+    write_text(directory.path / "manifest_fsm.sv", R"(
+module ctl(input logic clk);
+  localparam logic [1:0] IDLE = 2'd0, RUN = 2'd1, DONE = 2'd2;
+  logic [1:0] state = IDLE;
+  always @(posedge clk)
+    case (state)
+      IDLE: state <= RUN;
+      RUN: state <= DONE;
+      DONE: state <= IDLE;
+      default: state <= IDLE;
+    endcase
+endmodule
+module mtb;
+  logic clk = 0;
+  ctl u (.clk(clk));
+  initial begin
+    repeat (4) begin #5 clk = 1; #5 clk = 0; end
+    $finish;
+  end
+endmodule
+)");
+    write_text(directory.path / "manifest_fsm.vhd", R"(library ieee;
+use ieee.std_logic_1164.all;
+entity ctl is
+  port (clk : in std_logic);
+end entity;
+architecture rtl of ctl is
+  constant IDLE : std_logic_vector(1 downto 0) := "00";
+  constant RUN : std_logic_vector(1 downto 0) := "01";
+  constant DONE : std_logic_vector(1 downto 0) := "10";
+  signal state : std_logic_vector(1 downto 0) := IDLE;
+begin
+  process (clk) begin
+    if rising_edge(clk) then
+      case state is
+        when IDLE => state <= RUN;
+        when RUN => state <= DONE;
+        when DONE => state <= IDLE;
+        when others => state <= IDLE;
+      end case;
+    end if;
+  end process;
+end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+entity mtb is
+end entity;
+architecture sim of mtb is
+  signal clk : std_logic := '0';
+begin
+  u : entity work.ctl port map (clk => clk);
+  process begin
+    for i in 1 to 4 loop
+      wait for 5 ns; clk <= '1';
+      wait for 5 ns; clk <= '0';
+    end loop;
+    wait;
+  end process;
+end architecture;
+)");
+    for (const bool vhdl : { false, true }) {
+        test_manifest_fsm_hint(directory, vhdl, "mtb.u");
+        test_manifest_fsm_hint(directory, vhdl, "mtb.other");
+    }
 }

@@ -1391,6 +1391,23 @@ namespace systemverilog_hir_detail {
         output.library = input.library;
         output.name = input.name;
         output.port_slots = input.systemverilog_port_slots;
+        for (const auto& pragma : input.systemverilog_fsm_pragmas) {
+            auto& item = output.fsm_pragmas.emplace_back();
+            for (const auto& specification : pragma.specifications) {
+                using Kind = frontend::SystemVerilogFsmPragmaKind;
+                auto& field = specification.kind == Kind::CurrentState
+                    ? item.current_state
+                    : specification.kind == Kind::NextState
+                    ? item.next_state
+                    : item.legal_states;
+                if (field || !specification.value
+                    || !specification.value->decoded_string) {
+                    item.well_formed = false;
+                    continue;
+                }
+                field = *specification.value->decoded_string;
+            }
+        }
         output.source = common.source;
         output.origin = common.origin;
         output.compilation_unit_identity = input.compilation_unit_identity;

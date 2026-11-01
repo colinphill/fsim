@@ -615,7 +615,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, runtime::CodeCoverageMetric>) {
             return value >= runtime::CodeCoverageMetric::Statement
-                && value <= runtime::CodeCoverageMetric::Line;
+                && value <= runtime::CodeCoverageMetric::FsmTransition;
         } else if constexpr (
             std::same_as<T,
                 runtime::simir::CoverageDatabaseControlKind>) {

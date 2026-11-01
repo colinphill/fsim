@@ -1424,6 +1424,7 @@ Statement VhdlParser::parse_vhdl_selected_assignment(
     const bool concurrent) {
   Statement statement;
   statement.kind = StatementKind::Case;
+  statement.vhdl_selected_assignment = true;
   statement.condition = parse_expression();
   expect_keyword("select", true, "FSIM-VHDL-PARSE-116");
   if (match(TokenKind::Question)) {

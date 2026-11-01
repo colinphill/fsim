@@ -939,6 +939,11 @@ public:
     /// arbitrary-width hits, callbacks, trace events, and derived reports.
     [[nodiscard]] const runtime::SystemVerilogCoverageState&
     systemverilog_coverage() const noexcept;
+    /// Atomically write this run's code-coverage database, merged with any
+    /// coverage history the run loaded, to `path`. Returns the failure
+    /// reason, or nothing once written.
+    [[nodiscard]] std::optional<std::string> save_code_coverage_database(
+        const std::filesystem::path& path);
     [[nodiscard]] const std::vector<runtime::VhdlPslAttemptSnapshot>&
     vhdl_psl_attempts() const noexcept;
     [[nodiscard]] std::vector<ConcurrentAssertionCoverage>

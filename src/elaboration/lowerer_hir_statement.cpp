@@ -3781,7 +3781,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
     const auto span = hir_source_span(source);
     const auto emit_coverage_hit = [&](const frontend::SourceSpan& hit_span,
                                      const runtime::CodeCoverageMetric metric,
-                                     const frontend::CodeCoverageConstructKind kind) {
+                                     const frontend::CodeCoverageConstructKind kind,
+                                     const std::uint64_t ordinal = 0U) {
         if (coverage_hir_context_ == nullptr
             || !coverage_hir_process_active_ || active_hir_callable_) {
             return true;
@@ -3798,9 +3799,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 hit_span);
             return false;
         }
-        const auto source_metric = metric == runtime::CodeCoverageMetric::Branch
-            ? frontend::CoverageSourceMetric::Branch
-            : frontend::CoverageSourceMetric::Statement;
+        const auto source_metric
+            = static_cast<frontend::CoverageSourceMetric>(metric);
         if (frontend::coverage_source_exclusion_at(
                 found->exclusions, source_metric,
                 hit_span.begin.offset) != nullptr) {
@@ -3810,8 +3810,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             hit_span.begin.offset, hit_span.end.offset };
         const auto identity = frontend::make_code_coverage_point_identity(
             found->inventory.identity,
-            frontend::CodeCoverageLanguage::SystemVerilog,
-            kind, offsets);
+            statement->vhdl != nullptr
+                ? frontend::CodeCoverageLanguage::Vhdl
+                : frontend::CodeCoverageLanguage::SystemVerilog,
+            kind, offsets, ordinal);
         if (!identity.ok()) {
             report("FSIM-COV-008",
                 "covered HIR statement has an invalid source span",
@@ -3823,15 +3825,17 @@ bool Lowerer::lower_hir_statement_unsuspended(
             runtime::CodeCoverageCounterId { 0U } });
         return true;
     };
-    const bool parsed_coverage_statement = statement->systemverilog != nullptr
-        && coverage_hir_context_ != nullptr
+    const auto statement_origin = statement->systemverilog != nullptr
+        ? statement->systemverilog->origin
+        : statement->vhdl->origin;
+    const bool parsed_coverage_statement = coverage_hir_context_ != nullptr
         && coverage_hir_process_active_
         && !active_hir_callable_
-        && statement->systemverilog->origin.valid()
-        && statement->systemverilog->origin.value()
+        && statement_origin.valid()
+        && statement_origin.value()
             < specialized_hir_unit_->design().semantics.origins().size()
         && specialized_hir_unit_->design().semantics.origins()[
-               statement->systemverilog->origin.value()].kind
+               statement_origin.value()].kind
             == semantic::OriginKind::parsed;
     const auto emit_coverage_arm = [&](
         const std::span<const semantic::StatementId> body,
@@ -3839,23 +3843,70 @@ bool Lowerer::lower_hir_statement_unsuspended(
         if (!parsed_coverage_statement) {
             return true;
         }
+        // A conditional assignment chain continues in its else part; the
+        // last part supplies the chain's false or implicit outcome.
+        if (!true_arm && !body.empty() && statement->vhdl != nullptr
+            && statement->vhdl->conditional_assignment) {
+            const auto next = specialized_hir_unit_->find_statement(
+                body.front());
+            if (next && next->vhdl != nullptr
+                && next->vhdl->kind == semantic::vhdl::StatementKind::conditional
+                && next->vhdl->conditional_assignment) {
+                return true;
+            }
+        }
         auto arm = span;
         auto kind = true_arm
             ? frontend::CodeCoverageConstructKind::BranchTrueArm
             : frontend::CodeCoverageConstructKind::BranchImplicitArm;
+        // The parts of a conditional assignment are generated statements
+        // without their own source; its outcomes are named by the
+        // condition and by the final value.
+        if (statement->vhdl != nullptr
+            && statement->vhdl->conditional_assignment && !body.empty()) {
+            const auto part = specialized_hir_unit_->find_statement(
+                body.front());
+            const auto expression = true_arm
+                ? condition
+                : part && part->vhdl != nullptr
+                ? (part->vhdl->waveform.empty()
+                          ? part->vhdl->value
+                          : std::optional {
+                                part->vhdl->waveform.front().value })
+                : std::nullopt;
+            const auto found = expression
+                ? specialized_hir_unit_->find_expression(*expression)
+                : std::nullopt;
+            if (!found || found->vhdl == nullptr
+                || !found->vhdl->source.valid()) {
+                report("FSIM-COV-008",
+                    "covered conditional assignment has no HIR source span",
+                    span);
+                return false;
+            }
+            return emit_coverage_hit(hir_source_span(found->vhdl->source),
+                runtime::CodeCoverageMetric::Branch,
+                true_arm ? frontend::CodeCoverageConstructKind::BranchTrueArm
+                         : frontend::CodeCoverageConstructKind::BranchFalseArm);
+        }
         if (!body.empty()) {
             const auto first = specialized_hir_unit_->find_statement(
                 body.front());
             const auto last = specialized_hir_unit_->find_statement(
                 body.back());
-            if (!first || !last || first->systemverilog == nullptr
-                || last->systemverilog == nullptr) {
+            if (!first || !last
+                || (first->systemverilog == nullptr && first->vhdl == nullptr)
+                || (last->systemverilog == nullptr && last->vhdl == nullptr)) {
                 report("FSIM-COV-008",
                     "covered conditional arm has no HIR source span", span);
                 return false;
             }
-            arm = hir_source_span(first->systemverilog->source);
-            arm.end = hir_source_span(last->systemverilog->source).end;
+            arm = hir_source_span(first->systemverilog != nullptr
+                    ? first->systemverilog->source
+                    : first->vhdl->source);
+            arm.end = hir_source_span(last->systemverilog != nullptr
+                    ? last->systemverilog->source
+                    : last->vhdl->source).end;
             if (!true_arm) {
                 kind = frontend::CodeCoverageConstructKind::BranchFalseArm;
             }
@@ -3866,6 +3917,31 @@ bool Lowerer::lower_hir_statement_unsuspended(
         }
         return emit_coverage_hit(
             arm, runtime::CodeCoverageMetric::Branch, kind);
+    };
+    // A case item is a branch outcome; an SV case without a default item
+    // also has the outcome where no item matches. A VHDL case statement
+    // covers every choice (IEEE 1076-2019 10.9), so it has none.
+    const auto emit_coverage_case_arm = [&](
+        const semantic::SourceSpanId arm_source, const bool is_default) {
+        if (!parsed_coverage_statement) {
+            return true;
+        }
+        if (!arm_source.valid()) {
+            report("FSIM-COV-008",
+                "covered case item has no HIR source span", span);
+            return false;
+        }
+        return emit_coverage_hit(hir_source_span(arm_source),
+            runtime::CodeCoverageMetric::Branch,
+            is_default ? frontend::CodeCoverageConstructKind::BranchDefaultArm
+                       : frontend::CodeCoverageConstructKind::BranchCaseArm);
+    };
+    const auto emit_coverage_case_no_match = [&] {
+        if (!parsed_coverage_statement || statement->systemverilog == nullptr) {
+            return true;
+        }
+        return emit_coverage_hit(span, runtime::CodeCoverageMetric::Branch,
+            frontend::CodeCoverageConstructKind::BranchImplicitArm);
     };
     std::string statement_scope;
     if (statement->vhdl != nullptr) {
@@ -3906,8 +3982,12 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                    : DebugPointKind::statement,
             span);
         if (parsed_coverage_statement
-            && statement->systemverilog->kind
-                != semantic::sv::StatementKind::null_statement) {
+            && !coverage_hir_conditional_assignment_chain_
+            && (statement->systemverilog != nullptr
+                    ? statement->systemverilog->kind
+                        != semantic::sv::StatementKind::null_statement
+                    : statement->vhdl->kind
+                        != semantic::vhdl::StatementKind::null_statement)) {
             if (!emit_coverage_hit(span,
                     runtime::CodeCoverageMetric::Statement,
                     frontend::CodeCoverageConstructKind::Statement)) {
@@ -4223,6 +4303,205 @@ bool Lowerer::lower_hir_statement_unsuspended(
         process_.operations.emplace_back(LogicalNot { truth, zero });
         return truth;
     };
+    // Re-evaluates a decision's operands along its short-circuit paths,
+    // counting each operand outcome and each path. An unknown operand ends
+    // the walk without a count. Discovery names the same points.
+    const auto emit_coverage_decision = [&](
+        const semantic::ExpressionId decision) {
+        if (!parsed_coverage_statement) {
+            return true;
+        }
+        const auto& design = specialized_hir_unit_->design();
+        const auto tree = coverage_condition_tree(decision,
+            [&](const semantic::ExpressionId id) {
+                return design.find_expression(id);
+            },
+            [&](const semantic::DeclarationId id) {
+                return design.find_declaration(id);
+            });
+        if (!tree) {
+            return true;
+        }
+        const auto rows = coverage_expression_rows(*tree);
+        if (rows.empty()) {
+            return true;
+        }
+        const auto expression_span = [&](const semantic::ExpressionId id) {
+            const auto found = design.find_expression(id);
+            return hir_source_span(found->systemverilog != nullptr
+                    ? found->systemverilog->source
+                    : found->vhdl->source);
+        };
+        // The paths form a trie: each prefix of operand outcomes decides
+        // the next operand evaluated.
+        struct PathNode {
+            std::optional<std::uint32_t> atom;
+            std::array<std::size_t, 2U> next { };
+            std::optional<std::size_t> row;
+        };
+        std::vector<PathNode> nodes(1U);
+        for (std::size_t row = 0U; row < rows.size(); ++row) {
+            std::size_t node { };
+            for (const auto& step : rows[row].steps) {
+                nodes[node].atom = step.atom;
+                const auto branch = static_cast<std::size_t>(step.value);
+                if (nodes[node].next[branch] == 0U) {
+                    nodes[node].next[branch] = nodes.size();
+                    nodes.emplace_back();
+                }
+                node = nodes[node].next[branch];
+            }
+            nodes[node].row = row;
+        }
+        std::vector<InstructionIndex> exits;
+        std::vector<std::pair<InstructionIndex, Branch>> unknown_exits;
+        const auto emit = [&](const auto& self, const std::size_t index)
+            -> bool {
+            const auto& node = nodes[index];
+            if (node.row) {
+                if (!emit_coverage_hit(expression_span(decision),
+                        runtime::CodeCoverageMetric::Expression,
+                        frontend::CodeCoverageConstructKind::ExpressionRow,
+                        *node.row + 1U)) {
+                    return false;
+                }
+                exits.push_back(static_cast<InstructionIndex>(
+                    process_.operations.size()));
+                process_.operations.emplace_back(Jump { 0U });
+                return true;
+            }
+            const auto atom = tree->atoms[*node.atom];
+            const auto value = lower_condition(atom);
+            if (!value) {
+                return false;
+            }
+            // One, zero, or unknown: an unknown value is neither one nor
+            // zero after inversion.
+            const auto test_true = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Jump { 0U });
+            const auto invert = static_cast<InstructionIndex>(
+                process_.operations.size());
+            const auto inverted = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(LogicalNot { inverted, *value });
+            const auto test_false = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Jump { 0U });
+            const std::array kinds {
+                frontend::CodeCoverageConstructKind::ConditionFalse,
+                frontend::CodeCoverageConstructKind::ConditionTrue,
+            };
+            std::array<InstructionIndex, 2U> starts { };
+            for (const std::size_t outcome : { 1U, 0U }) {
+                starts[outcome] = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                if (!emit_coverage_hit(expression_span(atom),
+                        runtime::CodeCoverageMetric::Condition,
+                        kinds[outcome])
+                    || !self(self, node.next[outcome])) {
+                    return false;
+                }
+            }
+            process_.operations[test_true] = Branch {
+                *value, starts[1U], invert, UnknownBranchPolicy::when_false };
+            unknown_exits.emplace_back(test_false, Branch {
+                inverted, starts[0U], 0U, UnknownBranchPolicy::when_false });
+            return true;
+        };
+        if (!emit(emit, 0U)) {
+            return false;
+        }
+        const auto end = static_cast<InstructionIndex>(
+            process_.operations.size());
+        for (const auto exit : exits) {
+            process_.operations[exit] = Jump { end };
+        }
+        for (auto [exit, branch] : unknown_exits) {
+            branch.when_false = end;
+            process_.operations[exit] = branch;
+        }
+        return true;
+    };
+    // Counts the outcome of each conditional operator a continuous
+    // assignment's value evaluates: its condition is evaluated again, and an
+    // unknown condition counts in neither outcome. Discovery names the same
+    // points.
+    const auto emit_coverage_ternaries = [&](const auto& self,
+                                             const semantic::ExpressionId id,
+                                             const std::size_t depth)
+        -> bool {
+        const auto& design = specialized_hir_unit_->design();
+        const auto ternary = depth < 64U
+            ? coverage_ternary(id,
+                  [&](const semantic::ExpressionId expression) {
+                      return design.find_expression(expression);
+                  },
+                  [&](const semantic::DeclarationId declaration) {
+                      return design.find_declaration(declaration);
+                  })
+            : std::nullopt;
+        if (!ternary) {
+            return true;
+        }
+        const auto value = lower_condition(ternary->condition);
+        if (!value) {
+            return false;
+        }
+        const auto test_true = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Jump { 0U });
+        const auto invert = static_cast<InstructionIndex>(
+            process_.operations.size());
+        const auto inverted = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LogicalNot { inverted, *value });
+        const auto test_false = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Jump { 0U });
+        const auto outcome = [&](const semantic::ExpressionId operand,
+                                 const frontend::CodeCoverageConstructKind kind) {
+            const auto found = design.find_expression(operand);
+            return found && found->systemverilog != nullptr
+                && emit_coverage_hit(
+                    hir_source_span(found->systemverilog->source),
+                    runtime::CodeCoverageMetric::Branch, kind)
+                && self(self, operand, depth + 1U);
+        };
+        const auto start_true = static_cast<InstructionIndex>(
+            process_.operations.size());
+        if (!outcome(ternary->when_true,
+                frontend::CodeCoverageConstructKind::BranchTrueArm)) {
+            return false;
+        }
+        const auto true_exit = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Jump { 0U });
+        const auto start_false = static_cast<InstructionIndex>(
+            process_.operations.size());
+        if (!outcome(ternary->when_false,
+                frontend::CodeCoverageConstructKind::BranchFalseArm)) {
+            return false;
+        }
+        const auto end = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations[test_true] = Branch {
+            *value, start_true, invert, UnknownBranchPolicy::when_false };
+        process_.operations[test_false] = Branch {
+            inverted, start_false, end, UnknownBranchPolicy::when_false };
+        process_.operations[true_exit] = Jump { end };
+        return true;
+    };
+    if (parsed_coverage_statement && statement->systemverilog != nullptr
+        && statement->systemverilog->kind
+            == semantic::sv::StatementKind::assignment
+        && statement->systemverilog->assignment_kind
+            == semantic::sv::AssignmentKind::continuous
+        && statement->systemverilog->value
+        && !emit_coverage_ternaries(emit_coverage_ternaries,
+            *statement->systemverilog->value, 0U)) {
+        return false;
+    }
     const auto lower_event_wait = [&](const std::span<const semantic::sv::Sensitivity> sensitivities,
                                       const std::optional<semantic::ExpressionId> wildcard_expression,
                                       const std::span<const semantic::StatementId> wildcard_statements
@@ -12344,41 +12623,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     span);
                 return true;
             }
-            const auto enumeration_root = [&](const auto& self,
-                                              const semantic::vhdl::SubtypeIndication& subtype,
-                                              std::unordered_set<std::uint32_t>& visiting)
-                -> std::optional<semantic::TypeId> {
-                if (!subtype.type_mark.target.valid()
-                    || !visiting.insert(
-                        subtype.type_mark.target.value()).second) {
-                    return std::nullopt;
-                }
-                const auto type = specialized_hir_unit_->find_type(
-                    subtype.type_mark.target);
-                if (!type || type->vhdl == nullptr) {
-                    return std::nullopt;
-                }
-                if (type->vhdl->form
-                    == semantic::vhdl::TypeForm::enumeration) {
-                    return type->vhdl->id;
-                }
-                if (type->vhdl->form
-                        != semantic::vhdl::TypeForm::subtype
-                    && type->vhdl->form
-                        != semantic::vhdl::TypeForm::alias) {
-                    return std::nullopt;
-                }
-                return self(self, type->vhdl->base, visiting);
-            };
-            const auto enum_root = [&](const semantic::vhdl::SubtypeIndication& subtype) {
-                std::unordered_set<std::uint32_t> visiting;
-                return enumeration_root(
-                    enumeration_root, subtype, visiting);
-            };
-            const auto target_enumeration = enum_root(*target_subtype);
+            const auto target_enumeration = hir_vhdl_enumeration_root(*target_subtype);
             vhdl_enumeration_target = target_enumeration.has_value();
             const auto value_enumeration = value_subtype
-                ? enum_root(*value_subtype)
+                ? hir_vhdl_enumeration_root(*value_subtype)
                 : std::nullopt;
             const auto contextual_literal = [&] {
                 if (!target_enumeration || !value_expression
@@ -14291,6 +14539,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                    : std::span { else_statements });
             }
         }
+        if (!emit_coverage_decision(*condition)) {
+            return false;
+        }
         const auto lowered = lower_condition(*condition);
         if (!lowered) {
             return false;
@@ -14622,7 +14873,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 process_.operations.emplace_back(Branch {
                     *matched, branch + 1U, 0U,
                     UnknownBranchPolicy::when_false });
-                if (!lower_hir_statements(alternative.statements)) {
+                if (!emit_coverage_case_arm(alternative.source, false)
+                    || !lower_hir_statements(alternative.statements)) {
                     return false;
                 }
                 end_jumps.push_back(static_cast<InstructionIndex>(
@@ -14636,7 +14888,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 };
             }
             if (fallback != nullptr
-                && !lower_hir_statements(fallback->statements)) {
+                ? !emit_coverage_case_arm(fallback->source, true)
+                    || !lower_hir_statements(fallback->statements)
+                : !emit_coverage_case_no_match()) {
                 return false;
             }
             for (const auto jump : end_jumps) {
@@ -14774,33 +15028,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 && hir_vhdl_predefined_character_subtype(
                     *selector_character_element_subtype,
                     selector_character_array_scope));
-        const auto enumeration_root = [&](
-                                          const semantic::vhdl::SubtypeIndication& subtype)
-            -> std::optional<semantic::TypeId> {
-            auto type_id = subtype.type_mark.target;
-            std::unordered_set<std::uint32_t> visited;
-            while (type_id.valid() && visited.insert(type_id.value()).second) {
-                const auto type = specialized_hir_unit_->find_type(type_id);
-                if (!type || type->vhdl == nullptr) {
-                    return std::nullopt;
-                }
-                const auto& definition = *type->vhdl;
-                if (!definition.enumeration_literals.empty()) {
-                    return definition.id;
-                }
-                if (definition.form != semantic::vhdl::TypeForm::subtype
-                    && definition.form != semantic::vhdl::TypeForm::alias) {
-                    return std::nullopt;
-                }
-                type_id = definition.base.type_mark.target;
-            }
-            return std::nullopt;
-        };
         const auto selector_loop_enumeration
             = hir_vhdl_loop_parameter_enumeration(*condition);
         auto selector_enumeration = selector_loop_enumeration;
         if (!selector_enumeration && selector_subtype) {
-            selector_enumeration = enumeration_root(*selector_subtype);
+            selector_enumeration = hir_vhdl_enumeration_root(*selector_subtype);
+        }
+        if (parsed_coverage_statement) {
+            std::vector<HirCoverageFsmArm> fsm_arms;
+            fsm_arms.reserve(alternatives.size());
+            for (const auto& alternative : alternatives) {
+                fsm_arms.push_back({ alternative.choices,
+                    alternative.statements, alternative.is_default });
+            }
+            record_hir_coverage_fsm(*condition, fsm_arms);
         }
         if (!systemverilog) {
             struct ChoiceInterval {
@@ -16403,7 +16644,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                     = choice_subtype.has_value();
                                 const auto choice_enumeration
                                     = choice_subtype
-                                    ? enumeration_root(*choice_subtype)
+                                    ? hir_vhdl_enumeration_root(*choice_subtype)
                                     : std::nullopt;
                                 const auto ordinal
                                     = hir_resolver()
@@ -17639,7 +17880,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 bool loop_enumeration_choice { };
                 if (choice_subtype) {
                     const auto choice_enumeration
-                        = enumeration_root(*choice_subtype);
+                        = hir_vhdl_enumeration_root(*choice_subtype);
                     loop_enumeration_choice = choice_enumeration
                         && *choice_enumeration
                             == *selector_loop_enumeration;
@@ -17898,6 +18139,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             HirDebugScopeGuard guard {
                 local_scope_, std::move(alternative_scope)
             };
+            if (!emit_coverage_case_arm(
+                    alternative.source, alternative.is_default)) {
+                return false;
+            }
             const auto lowered = lower_hir_statements(
                 alternative.statements);
             if (!lowered) {
@@ -17955,7 +18200,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 };
             }
             if (default_alternative != nullptr
-                && !lower_alternative_body(*default_alternative)) {
+                    ? !lower_alternative_body(*default_alternative)
+                    : !emit_coverage_case_no_match()) {
                 return false;
             }
             const auto end = static_cast<InstructionIndex>(
@@ -18086,7 +18332,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
             };
         }
         if (default_alternative != nullptr
-            && !lower_alternative_body(*default_alternative)) {
+                ? !lower_alternative_body(*default_alternative)
+                : !emit_coverage_case_no_match()) {
             return false;
         }
         const auto end = static_cast<InstructionIndex>(
@@ -18664,6 +18911,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     }
                     const auto loop_start = static_cast<InstructionIndex>(
                         process_.operations.size());
+                    if (!emit_coverage_decision(*loop_statement.condition)) {
+                        restore_scope();
+                        return false;
+                    }
                     const auto active = lower_condition(
                         *loop_statement.condition);
                     if (!active) {
@@ -18755,6 +19006,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     = static_cast<InstructionIndex>(
                         process_.operations.size());
                 patch_hir_jumps(control.continue_jumps, condition_start);
+                if (!emit_coverage_decision(*condition)) {
+                    restore_scope();
+                    return false;
+                }
                 const auto active = lower_condition(*condition);
                 if (!active) {
                     restore_scope();
@@ -18773,6 +19028,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 patch_hir_jumps(control.break_jumps, end);
                 restore_scope();
                 return true;
+            }
+            if (!emit_coverage_decision(*condition)) {
+                restore_scope();
+                return false;
             }
             const auto active = lower_condition(*condition);
             if (!active) {
@@ -24565,10 +24824,25 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 input.source, input.force_driving_value);
     case semantic::vhdl::StatementKind::procedure_call:
         return lower_hir_vhdl_procedure_call(statement_id);
-    case semantic::vhdl::StatementKind::conditional:
-        return lower_if();
-    case semantic::vhdl::StatementKind::selection:
-        return lower_case(input.alternatives);
+    case semantic::vhdl::StatementKind::conditional: {
+        const auto chain = std::exchange(
+            coverage_hir_conditional_assignment_chain_,
+            coverage_hir_conditional_assignment_chain_
+                || input.conditional_assignment);
+        const bool lowered = lower_if();
+        coverage_hir_conditional_assignment_chain_ = chain;
+        return lowered;
+    }
+    case semantic::vhdl::StatementKind::selection: {
+        // A selected assignment's alternatives are parts of one statement.
+        const auto chain = std::exchange(
+            coverage_hir_conditional_assignment_chain_,
+            coverage_hir_conditional_assignment_chain_
+                || input.selected_assignment);
+        const bool lowered = lower_case(input.alternatives);
+        coverage_hir_conditional_assignment_chain_ = chain;
+        return lowered;
+    }
     case semantic::vhdl::StatementKind::loop:
         return lower_loop(input.loop_label);
     case semantic::vhdl::StatementKind::exit_loop:
@@ -27456,6 +27730,30 @@ std::optional<bool> Lowerer::lower_hir_vhdl_string_element_write(
         true,
     });
     return true;
+}
+
+std::optional<semantic::TypeId> Lowerer::hir_vhdl_enumeration_root(
+    const semantic::vhdl::SubtypeIndication& subtype) const
+{
+    auto type_id = subtype.type_mark.target;
+    std::unordered_set<std::uint32_t> visited;
+    while (type_id.valid() && visited.insert(type_id.value()).second) {
+        const auto type = specialized_hir_unit_->find_type(type_id);
+        if (!type || type->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        const auto& definition = *type->vhdl;
+        if (definition.form == semantic::vhdl::TypeForm::enumeration
+            || !definition.enumeration_literals.empty()) {
+            return definition.id;
+        }
+        if (definition.form != semantic::vhdl::TypeForm::subtype
+            && definition.form != semantic::vhdl::TypeForm::alias) {
+            return std::nullopt;
+        }
+        type_id = definition.base.type_mark.target;
+    }
+    return std::nullopt;
 }
 
 } // namespace fsim::elaboration

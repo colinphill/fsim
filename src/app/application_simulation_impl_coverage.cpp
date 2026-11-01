@@ -4,6 +4,28 @@
 #include "fsim/support/identity128.hpp"
 
 namespace fsim::app {
+namespace {
+
+    // The code coverage metric that a standard coverage type selects.
+    // Assertion coverage has no code coverage counters.
+    [[nodiscard]] std::optional<runtime::CodeCoverageMetric>
+    standard_code_coverage_metric(
+        const runtime::simir::SystemVerilogCoverageType type) noexcept
+    {
+        using Type = runtime::simir::SystemVerilogCoverageType;
+        if (type == Type::statement) {
+            return runtime::CodeCoverageMetric::Statement;
+        }
+        if (type == Type::fsm_state) {
+            return runtime::CodeCoverageMetric::FsmState;
+        }
+        if (type == Type::toggle) {
+            return runtime::CodeCoverageMetric::Toggle;
+        }
+        return std::nullopt;
+    }
+
+} // namespace
 
 [[nodiscard]] artifact::CoverageDatabaseIdentity
 Simulation::Impl::coverage_identity_from_digest(
@@ -117,10 +139,8 @@ Simulation::Impl::fallback_standard_coverage_database()
                 || !emitted_counters.insert(counter.value).second) {
                 continue;
             }
-            const auto family = hit->metric
-                    == runtime::CodeCoverageMetric::Statement
-                ? artifact::CoverageDatabaseMetricFamily::Statement
-                : artifact::CoverageDatabaseMetricFamily::Branch;
+            const auto family = static_cast<
+                artifact::CoverageDatabaseMetricFamily>(hit->metric);
             contents.metrics.push_back({
                 artifact::CoverageDatabaseNamespace::Code,
                 family,
@@ -181,6 +201,12 @@ Simulation::Impl::current_standard_coverage_database()
             coverage_hash_u64(fingerprint,
                 static_cast<std::uint64_t>(point.point.metric));
         }
+        for (const auto& exclusion : instance.exclusions) {
+            coverage_hash_u64(fingerprint, exclusion.id.high);
+            coverage_hash_u64(fingerprint, exclusion.id.low);
+            coverage_hash_u64(
+                fingerprint, static_cast<std::uint64_t>(exclusion.metric));
+        }
     }
     contents.fingerprint.digest = coverage_digest(fingerprint.finish());
 
@@ -206,13 +232,14 @@ Simulation::Impl::current_standard_coverage_database()
                 || point.point.counter.value >= counters.size()) {
                 return std::nullopt;
             }
-            const auto family = point.point.metric
-                    == runtime::CodeCoverageMetric::Statement
-                ? artifact::CoverageDatabaseMetricFamily::Statement
-                : point.point.metric
-                    == runtime::CodeCoverageMetric::Branch
-                ? artifact::CoverageDatabaseMetricFamily::Branch
-                : artifact::CoverageDatabaseMetricFamily::Line;
+            const auto family = static_cast<
+                artifact::CoverageDatabaseMetricFamily>(point.point.metric);
+            const auto hits = counters[point.point.counter.value];
+            const auto overflow = interpreter->code_coverage_counter_overflowed(
+                point.point.counter);
+            // An informational point keeps its hits as excluded hits, so
+            // it never counts toward totals.
+            const bool excluded = !point.exclusion_reason.empty();
             contents.metrics.push_back({
                 artifact::CoverageDatabaseNamespace::Code,
                 family,
@@ -221,12 +248,39 @@ Simulation::Impl::current_standard_coverage_database()
                 contents.sources[point.source_index].identity,
                 instance_identity,
                 run_identity,
-                counters[point.point.counter.value],
-                0U,
-                interpreter->code_coverage_counter_overflowed(
-                    point.point.counter),
-                false,
+                excluded ? 0U : hits,
+                excluded ? hits : 0U,
+                !excluded && overflow,
+                excluded && overflow,
                 point.line,
+            });
+            if (excluded) {
+                contents.exclusions.push_back({
+                    artifact::CoverageDatabaseNamespace::Code,
+                    family,
+                    artifact::CoverageDatabaseMetricScope::Instance,
+                    { point.point.id.high, point.point.id.low },
+                    contents.sources[point.source_index].identity,
+                    instance_identity,
+                    point.exclusion_reason,
+                    point.line,
+                });
+            }
+        }
+        for (const auto& exclusion : instance.exclusions) {
+            if (exclusion.source_index >= contents.sources.size()) {
+                return std::nullopt;
+            }
+            contents.exclusions.push_back({
+                artifact::CoverageDatabaseNamespace::Code,
+                static_cast<artifact::CoverageDatabaseMetricFamily>(
+                    exclusion.metric),
+                artifact::CoverageDatabaseMetricScope::Instance,
+                { exclusion.id.high, exclusion.id.low },
+                contents.sources[exclusion.source_index].identity,
+                instance_identity,
+                exclusion.reason,
+                exclusion.line,
             });
         }
     }
@@ -269,7 +323,8 @@ Simulation::Impl::select_standard_coverage(
     const std::int32_t scope_value,
     std::string selector,
     const std::string_view instance_context,
-    const bool selector_is_instance) const
+    const bool selector_is_instance,
+    const runtime::CodeCoverageMetric metric) const
 {
     using Scope = runtime::simir::SystemVerilogCoverageScope;
     const auto scope = static_cast<Scope>(scope_value);
@@ -354,9 +409,11 @@ Simulation::Impl::select_standard_coverage(
                 continue;
             }
             std::size_t before = result.counters.size();
+            // An informational point is reported excluded, so it is not
+            // selected.
             for (const auto& point : instance.points) {
-                if (point.point.metric
-                    == runtime::CodeCoverageMetric::Statement) {
+                if (point.point.metric == metric
+                    && point.exclusion_reason.empty()) {
                     result.counters.push_back(point.point.counter);
                 }
             }
@@ -395,9 +452,7 @@ Simulation::Impl::select_standard_coverage(
                 const auto* hit = runtime::simir::operation_get_if<
                     runtime::simir::CodeCoverageHit>(
                     &process.operations()[instruction]);
-                if (hit == nullptr
-                    || hit->metric
-                        != runtime::CodeCoverageMetric::Statement) {
+                if (hit == nullptr || hit->metric != metric) {
                     continue;
                 }
                 result.counters.push_back(
@@ -422,18 +477,23 @@ Simulation::Impl::select_standard_coverage(
 [[nodiscard]] std::int32_t Simulation::Impl::query_standard_coverage(
     const artifact::CoverageDatabaseContents& contents,
     const bool maximum,
-    const std::set<artifact::CoverageDatabaseIdentity>* identities) noexcept
+    const std::set<artifact::CoverageDatabaseIdentity>* identities,
+    const artifact::CoverageDatabaseMetricFamily family) noexcept
 {
     using Key = std::tuple<artifact::CoverageDatabaseIdentity,
         artifact::CoverageDatabaseIdentity,
         artifact::CoverageDatabaseIdentity>;
+    std::set<Key> excluded;
+    for (const auto& exclusion : contents.exclusions) {
+        excluded.insert({ exclusion.source_identity,
+            exclusion.instance_identity, exclusion.point_identity });
+    }
     std::set<Key> bins;
     std::set<Key> covered;
     for (const auto& metric : contents.metrics) {
         if (metric.name_space
                 != artifact::CoverageDatabaseNamespace::Code
-            || metric.family
-                != artifact::CoverageDatabaseMetricFamily::Statement) {
+            || metric.family != family) {
             continue;
         }
         if (identities != nullptr
@@ -442,6 +502,9 @@ Simulation::Impl::select_standard_coverage(
         }
         const Key key { metric.source_identity,
             metric.instance_identity, metric.bin_identity };
+        if (excluded.contains(key)) {
+            continue;
+        }
         bins.insert(key);
         if (metric.hits != 0U) {
             covered.insert(key);
@@ -470,7 +533,8 @@ Simulation::Impl::select_standard_coverage(
             && type != Type::statement && type != Type::toggle) {
             return status(Status::error);
         }
-        if (type != Type::statement) {
+        const auto metric = standard_code_coverage_metric(type);
+        if (!metric) {
             return status(Status::no_coverage);
         }
         if (event.kind == Access::get || event.kind == Access::get_max) {
@@ -479,7 +543,7 @@ Simulation::Impl::select_standard_coverage(
             }
             const auto selection = select_standard_coverage(
                 *event.scope, event.selector, event.instance_context,
-                event.selector_is_instance);
+                event.selector_is_instance, *metric);
             if (!selection) {
                 return status(Status::error);
             }
@@ -509,7 +573,9 @@ Simulation::Impl::select_standard_coverage(
                       *contents, event.kind == Access::get_max,
                       selection->identities.empty()
                           ? nullptr
-                          : &selection->identities)
+                          : &selection->identities,
+                      static_cast<artifact::CoverageDatabaseMetricFamily>(
+                          *metric))
                 : status(Status::no_coverage);
         }
         if (event.filename.empty()) {
@@ -572,12 +638,13 @@ Simulation::Impl::select_standard_coverage(
             && type != Type::statement && type != Type::toggle) {
             return status(Status::error);
         }
-        if (type != Type::statement) {
+        const auto metric = standard_code_coverage_metric(type);
+        if (!metric) {
             return status(Status::no_coverage);
         }
         const auto selection = select_standard_coverage(
             event.scope, event.selector, event.instance_context,
-            event.selector_is_instance);
+            event.selector_is_instance, *metric);
         if (!selection) {
             return status(Status::error);
         }
@@ -867,4 +934,21 @@ void Simulation::Impl::configure_standard_vpi_coverage()
         }
     }
 }
+std::optional<std::string> Simulation::save_code_coverage_database(
+    const std::filesystem::path& path)
+{
+    if (!impl_->built.code_coverage_enabled) {
+        return "the snapshot was elaborated without --code-coverage";
+    }
+    auto contents = impl_->aggregate_standard_coverage_database();
+    if (!contents) {
+        return "the coverage counters do not match the design inventory";
+    }
+    if (!artifact::write_coverage_database_atomically(
+            path, std::move(*contents)).ok()) {
+        return "cannot write '" + support::path_to_utf8(path) + "'";
+    }
+    return std::nullopt;
+}
+
 } // namespace fsim::app

@@ -418,8 +418,9 @@ template <typename Operations>
                 // Real, shortreal and time arithmetic, comparisons and
                 // conversions (6.12, 11.3.1) on the operation step.
                 || std::is_same_v<T, SystemVerilogScalarBinary>
-                // A code coverage counter bump (host data, no registers).
+                // Code coverage counter bumps (host data).
                 || std::is_same_v<T, CodeCoverageHit>
+                || std::is_same_v<T, CodeCoverageToggle>
                 || std::is_same_v<T, LoadConstant>
                 || std::is_same_v<T, CopyRegister>
                 || std::is_same_v<T, Binary>
@@ -1089,8 +1090,9 @@ template <typename OperationAt, typename Types, typename NineValued = std::nullp
             return std::is_same_v<T, DebugPoint>
                 // REAL arithmetic, comparisons and conversions (5.2.5, 9.2).
                 || std::is_same_v<T, SystemVerilogScalarBinary>
-                // A code coverage counter bump (host data, no registers).
+                // Code coverage counter bumps (host data).
                 || std::is_same_v<T, CodeCoverageHit>
+                || std::is_same_v<T, CodeCoverageToggle>
                 || std::is_same_v<T, LoadConstant>
                 || std::is_same_v<T, CopyRegister>
                 || std::is_same_v<T, Binary>

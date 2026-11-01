@@ -565,7 +565,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             &materialization.type_owner_contexts);
         generated_lowerer.set_hir_code_coverage_context(
             coverage_, unit.kind == semantic::sv::UnitKind::module
-                && source_language == frontend::Language::SystemVerilog2017);
+                && source_language == frontend::Language::SystemVerilog2017,
+            &coverage_fsm_drafts_);
         generated_lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_, &systemverilog_interface_types_,
             &systemverilog_instance_specializations_,
@@ -1191,7 +1192,11 @@ void HierarchyBuilder::initialize_constant_driven_nets()
                     signal.initial_value = constant->second;
                 }
                 break;
-            } else if (!operation_get_if<DebugPoint>(&expanded)) {
+            } else if (!operation_get_if<DebugPoint>(&expanded)
+                && !operation_get_if<runtime::simir::CodeCoverageHit>(
+                    &expanded)) {
+                // A coverage count does not change what the initializer
+                // writes.
                 break;
             }
         }

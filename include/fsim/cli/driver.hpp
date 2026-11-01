@@ -134,6 +134,7 @@ struct Invocation {
   std::optional<project::TraceCompression> trace_compression;
   std::optional<std::size_t> trace_report_limit;
   std::optional<bool> trace_enabled;
+  std::optional<std::filesystem::path> coverage_output;
   std::optional<std::uint64_t> seed;
   bool random_seed{false};
   std::optional<std::uint32_t> jobs;

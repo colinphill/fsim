@@ -72,7 +72,7 @@ CoverageInventoryPointDraft point(
         owned_source.identity, CodeCoverageLanguage::SystemVerilog,
         construct, span);
     assert(identity.ok());
-    return { *identity.identity, metric, 0U, span, line };
+    return { *identity.identity, metric, 0U, span, line, { } };
 }
 
 struct Corpus {
@@ -103,9 +103,9 @@ Corpus corpus()
     // Deliberately reverse both instance and point order. The builder owns
     // deterministic normalization and global counter assignment.
     result.drafts = {
-        { 2U, { branch, statement } },
-        { 0U, { } },
-        { 1U, { branch, statement } },
+        { 2U, { branch, statement }, { } },
+        { 0U, { }, { } },
+        { 1U, { branch, statement }, { } },
     };
     return result;
 }
@@ -159,7 +159,7 @@ void test_builder_and_validation()
         const std::array owners { CoverageInventoryOwner {
             0U, "root", language, "design.sv", { }, "work", "root",
             { } } };
-        const std::array drafts { CoverageInstanceInventoryDraft { 0U, { } } };
+        const std::array drafts { CoverageInstanceInventoryDraft { 0U, { }, { } } };
         const auto family = fsim::elaboration::make_code_coverage_inventory(
             input.sources, drafts, owners);
         assert(family.ok());
@@ -308,7 +308,8 @@ void test_elaborated_design_attachment()
             specialization.instance != design.top()
                 ? std::vector<CoverageInventoryPointDraft> {
                       branch, statement }
-                : std::vector<CoverageInventoryPointDraft> { } });
+                : std::vector<CoverageInventoryPointDraft> { },
+            { } });
     }
     assert(design.attach_code_coverage_inventory(sources, drafts).ok());
     assert(design.code_coverage_inventory());

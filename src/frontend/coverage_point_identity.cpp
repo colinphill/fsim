@@ -26,7 +26,8 @@ CodeCoveragePointIdentityResult make_code_coverage_point_identity(
     const CodeCoverageSourceIdentity& source,
     const CodeCoverageLanguage language,
     const CodeCoverageConstructKind construct,
-    const CodeCoverageSourceSpan span) noexcept
+    const CodeCoverageSourceSpan span,
+    const std::uint64_t ordinal) noexcept
 {
     if (!is_code_coverage_source_identity_valid(source)) {
         return { { }, CodeCoveragePointIdentityError::InvalidSourceIdentity };
@@ -55,6 +56,9 @@ CodeCoveragePointIdentityResult make_code_coverage_point_identity(
     support::sha256_update_u64_be(hash, static_cast<std::uint8_t>(construct));
     support::sha256_update_u64_be(hash, span.begin_offset);
     support::sha256_update_u64_be(hash, span.end_offset);
+    if (ordinal != 0U) {
+        support::sha256_update_u64_be(hash, ordinal);
+    }
     const auto digest = hash.finish();
     const runtime::CodeCoveragePointId identity {
         support::sha256_digest_word_be(digest, 0U),

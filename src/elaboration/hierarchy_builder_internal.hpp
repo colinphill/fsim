@@ -1369,6 +1369,18 @@ private:
     void set_resolution(SignalId signal, ResolutionKind resolution);
     void validate_process_drivers();
     void canonicalize_process_operations(Process& process);
+    // Under code coverage, a toggle monitor process per covered object.
+    void append_toggle_coverage_monitors();
+    void append_fsm_coverage_monitors();
+    // Under code coverage, whether a concurrent statement is an assignment
+    // whose statements count, and the record of the statements that do.
+    [[nodiscard]] bool covered_concurrent_assignment(
+        const semantic::SpecializedHirUnit& specialized,
+        semantic::StatementId statement) const;
+    void record_coverage_concurrent_statements();
+    void record_vhdl_toggle_coverage_signals(std::size_t specialization,
+        const semantic::vhdl::Unit& entity,
+        const semantic::vhdl::Unit& architecture, const SignalMap& signals);
     void canonicalize_process_operations(
         const std::shared_ptr<const ProcessProgramTemplate>& common,
         ProcessInstanceProgram& instance);
@@ -2064,6 +2076,15 @@ private:
     std::optional<bool> compiled_vhdl_external_names_;
     ElaboratedDesign& design_;
     const CoverageHirContext* coverage_ { };
+    // Per VHDL specialization, the signals its toggle-covered ports and
+    // signals name.
+    std::unordered_map<std::size_t, std::unordered_map<std::string, SignalId>>
+        vhdl_toggle_coverage_signals_;
+    // Under code coverage, the state machines each lowered process infers.
+    CoverageFsmDrafts coverage_fsm_drafts_;
+    // Under code coverage, the covered concurrent assignment each lowered
+    // process evaluates.
+    std::map<ProcessId, semantic::StatementId> coverage_concurrent_statements_;
     std::vector<Diagnostic>& diagnostics_;
     std::unordered_map<std::string, const Binding*> bindings_;
     std::unordered_set<std::string> used_bindings_;

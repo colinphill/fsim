@@ -521,6 +521,7 @@ struct Statement {
     bool force_driving_value { };
     bool postponed { };
     bool conditional_assignment { };
+    bool selected_assignment { };
     bool matching_case { };
     bool guarded_assignment { };
     std::optional<ExpressionId> guard;

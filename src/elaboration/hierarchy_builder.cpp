@@ -1231,6 +1231,35 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
             : concurrent_template_rejections_);
         return lower_occurrence();
     };
+    // Code coverage counts each instance's statements, so covered
+    // processes and concurrent assignments are lowered per occurrence
+    // instead of replayed.
+    if (!process_source
+        && covered_concurrent_assignment(specialized, statement)) {
+        lowerer.set_hir_code_coverage_context(
+            coverage_, true, &coverage_fsm_drafts_);
+        lowerer.set_hir_code_coverage_active(true);
+        auto lowered = lower_ordinary();
+        lowerer.set_hir_code_coverage_active(false);
+        if (lowered) {
+            coverage_concurrent_statements_.emplace(lowered->id, statement);
+        }
+        return lowered;
+    }
+    if (coverage_ != nullptr && process_source) {
+        const auto covered = specialized.find_process(*process_source);
+        const auto& origins = compiled_->semantics.origins();
+        lowerer.set_hir_code_coverage_context(
+            coverage_, true, &coverage_fsm_drafts_);
+        lowerer.set_hir_code_coverage_active(covered
+            && covered->vhdl != nullptr && covered->vhdl->origin.valid()
+            && covered->vhdl->origin.value() < origins.size()
+            && origins[covered->vhdl->origin.value()].kind
+                == semantic::OriginKind::parsed);
+        auto lowered = lower_ordinary();
+        lowerer.set_hir_code_coverage_active(false);
+        return lowered;
+    }
     const auto source = process_source
         ? std::nullopt : specialized.find_statement(statement);
     const bool concurrent_source_supported = !(
@@ -1731,6 +1760,20 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             lowerer.lower_hir_concurrent_statement(
                 statement, source_language, path, order));
     };
+    // A covered continuous assignment counts per instance.
+    if (lowerer.hir_code_coverage_enabled()
+        && source_language == frontend::Language::SystemVerilog2017
+        && covered_concurrent_assignment(specialized, statement)) {
+        record_lowering_census(systemverilog_concurrent_template_rejections_);
+        lowerer.set_hir_code_coverage_active(true);
+        auto lowered = lowerer.lower_hir_concurrent_statement(
+            statement, source_language, path, order);
+        lowerer.set_hir_code_coverage_active(false);
+        if (lowered) {
+            coverage_concurrent_statements_.emplace(lowered->id, statement);
+        }
+        return retain_full_process(std::move(lowered));
+    }
     const auto source = specialized.find_statement(statement);
     if (!source || source->systemverilog == nullptr) {
         why("no_source");

@@ -152,7 +152,55 @@ namespace {
         const CoverageInventoryPoint& point) noexcept
     {
         return { point.point.id, point.point.metric, point.source_index,
-            point.span, point.line };
+            point.span, point.line, std::string { } };
+    }
+
+    CoverageInventoryPointDraft draft_from(
+        const CoverageInventoryExclusion& exclusion) noexcept
+    {
+        return { exclusion.id, exclusion.metric, exclusion.source_index,
+            exclusion.span, exclusion.line, std::string { } };
+    }
+
+    bool id_less(const runtime::CodeCoveragePointId left,
+        const runtime::CodeCoveragePointId right) noexcept
+    {
+        return std::tie(left.high, left.low) < std::tie(right.high, right.low);
+    }
+
+    // An instance's exclusions are sorted, distinct, valid, and name no
+    // counted point.
+    Validation validate_exclusions(const CoverageInstanceInventory& instance,
+        const std::span<const CoverageInventorySource> sources,
+        const CoverageInventoryOwner& owner,
+        const CoverageInventoryLimits limits) noexcept
+    {
+        for (std::size_t index = 0U; index < instance.exclusions.size();
+            ++index) {
+            const auto& exclusion = instance.exclusions[index];
+            const auto checked = validate_point(
+                draft_from(exclusion), sources, owner, limits, index);
+            if (!checked.ok()) {
+                return checked;
+            }
+            if (exclusion.reason.empty()) {
+                return reject(Error::InvalidPointIdentity, index);
+            }
+            if (index != 0U
+                && !id_less(instance.exclusions[index - 1U].id, exclusion.id)) {
+                return reject(Error::NonCanonicalOrder, index);
+            }
+            const auto counted = std::ranges::lower_bound(instance.points,
+                exclusion.id, id_less,
+                [](const CoverageInventoryPoint& point) {
+                    return point.point.id;
+                });
+            if (counted != instance.points.end()
+                && counted->point.id == exclusion.id) {
+                return reject(Error::DuplicatePoint, index);
+            }
+        }
+        return { };
     }
 
 } // namespace
@@ -219,6 +267,11 @@ CoverageInventoryValidationResult validate_code_coverage_inventory(
                 return reject(Error::DuplicatePoint, point_index);
             }
             ++total_points;
+        }
+        if (const auto checked = validate_exclusions(
+                instance, inventory.sources, owner, limits);
+            !checked.ok()) {
+            return checked;
         }
     }
     if (inventory.total_points != total_points) {
@@ -303,8 +356,11 @@ CoverageInventoryBuildResult make_code_coverage_inventory(
             for (const auto& point : draft->points) {
                 instance.points.push_back(CoverageInventoryPoint {
                     { point.id, point.metric, { } }, point.source_index,
-                    point.span, point.line });
+                    point.span, point.line, point.exclusion_reason });
             }
+            instance.exclusions = draft->exclusions;
+            std::ranges::sort(instance.exclusions, id_less,
+                &CoverageInventoryExclusion::id);
             std::ranges::sort(instance.points,
                 [](const CoverageInventoryPoint& left,
                     const CoverageInventoryPoint& right) {
@@ -435,6 +491,24 @@ ElaboratedDesign::bind_hir_code_coverage_hits() noexcept
                 }
                 for (std::size_t instruction = 0U;
                     instruction < operations->size(); ++instruction) {
+                    // A toggle monitor counts each bit of its object's rise
+                    // and fall points.
+                    if (auto* toggle = runtime::simir::operation_get_if<
+                            runtime::simir::CodeCoverageToggle>(
+                            &(*operations)[instruction])) {
+                        toggle->counters.clear();
+                        for (const auto& point : toggle->points) {
+                            const auto found = points.find(
+                                { point.high, point.low });
+                            if (found == points.end()
+                                || found->second.metric
+                                    != runtime::CodeCoverageMetric::Toggle) {
+                                return { Error::UnboundHit, index };
+                            }
+                            toggle->counters.push_back(found->second.counter);
+                        }
+                        continue;
+                    }
                     auto* hit = runtime::simir::operation_get_if<
                         runtime::simir::CodeCoverageHit>(
                         &(*operations)[instruction]);

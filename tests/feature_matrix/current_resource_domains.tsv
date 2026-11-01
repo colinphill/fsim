@@ -9,7 +9,7 @@ RESCOV-006	coverage	tests/frontend/coverage_source_identity_test.cpp	fsim.fronte
 RESCOV-007	coverage	tests/frontend/coverage_point_identity_test.cpp	fsim.frontend.coverage_point_identity
 RESCOV-008	coverage	tests/artifact/coverage_database_schema_test.cpp	fsim.artifact.coverage-database-schema
 RESCOV-009	coverage	tests/app/code_coverage_application_test.cpp	fsim.application.code-coverage
-RESCOV-010	coverage	tests/app/code_coverage_metrics_application_test.cpp	fsim.application.code-coverage-metrics
+RESCOV-010	coverage	tests/app/workspace_application_test.cpp	fsim.application.workspace-application
 RESCOV-011	coverage	tests/app/code_coverage_control_test.cpp	fsim.application.code-coverage-control
 RESCOV-012	coverage	tests/runtime/coverage_line_state_test.cpp	fsim.runtime.coverage_line_state
 RESCOV-013	coverage	tests/elaboration/coverage_instance_identity_test.cpp	fsim.elaboration.coverage_instance_identity

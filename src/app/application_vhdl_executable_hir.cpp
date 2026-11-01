@@ -674,6 +674,7 @@ class VhdlExecutableBuilder final {
     output.force_driving_value = input.vhdl_force_driving_value;
     output.postponed = input.vhdl_postponed;
     output.conditional_assignment = input.vhdl_conditional_assignment;
+    output.selected_assignment = input.vhdl_selected_assignment;
     output.matching_case
         = input.case_match_kind == frontend::CaseMatchKind::VhdlMatching;
     output.guarded_assignment = input.vhdl_guarded_assignment;

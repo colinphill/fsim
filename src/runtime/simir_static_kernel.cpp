@@ -21,6 +21,7 @@
 // use the generic evaluator below, built on the reference value functions.
 #include "simir_static_kernel_state.hpp"
 #include "simir_container_helpers.hpp"
+#include "fsim/runtime/simir_coverage.hpp"
 #include "fsim/support/parallel_for.hpp"
 
 #include <algorithm>
@@ -5568,6 +5569,10 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
             } else if constexpr (std::is_same_v<T, CodeCoverageHit>) {
                 // The member's expanded operation carries its instance's
                 // counter; the update rules are the reference evaluator's.
+                // A verify replay repeats a run the compiled body counted.
+                if (replaying_) {
+                    return;
+                }
                 const auto update
                     = impl_.code_coverage_counters.record(op.counter);
                 if (update == CodeCoverageCounterUpdate::Unavailable) {
@@ -5581,6 +5586,28 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                     && impl_.code_coverage_overflow_hook) {
                     impl_.code_coverage_overflow_hook(op.counter);
                 }
+            } else if constexpr (std::is_same_v<T, CodeCoverageToggle>) {
+                if (replaying_) {
+                    return;
+                }
+                record_code_coverage_toggles(reg(op.previous, pc),
+                    reg(op.current, pc), op,
+                    [&](const CodeCoverageCounterId counter) {
+                        const auto update
+                            = impl_.code_coverage_counters.record(counter);
+                        if (update == CodeCoverageCounterUpdate::Unavailable) {
+                            fail(member_index, pc,
+                                "code coverage counter service is unavailable");
+                        }
+                        if (update == CodeCoverageCounterUpdate::OutOfRange) {
+                            fail(member_index, pc,
+                                "code coverage counter is out of range");
+                        }
+                        if (update == CodeCoverageCounterUpdate::FirstOverflow
+                            && impl_.code_coverage_overflow_hook) {
+                            impl_.code_coverage_overflow_hook(counter);
+                        }
+                    });
             } else if constexpr (std::is_same_v<T, Call>) {
                 const auto size = member.operations().size();
                 if (op.stack.capacity == 0U) {

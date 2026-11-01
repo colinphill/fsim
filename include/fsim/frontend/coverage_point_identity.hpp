@@ -31,6 +31,16 @@ enum class CodeCoverageConstructKind : std::uint8_t {
     ToggleObject = 8U,
     FsmCurrentStateObject = 9U,
     FsmNextStateObject = 10U,
+    // Run-time bins. The span names the construct; an ordinal selects the
+    // bin within it (bit, row, state, or transition).
+    ConditionTrue = 11U,
+    ConditionFalse = 12U,
+    ExpressionRow = 13U,
+    ToggleRise = 14U,
+    ToggleFall = 15U,
+    FsmState = 16U,
+    FsmTransition = 17U,
+    FsmOtherTransition = 18U,
 };
 
 struct CodeCoverageSourceSpan {
@@ -72,10 +82,12 @@ struct CodeCoveragePointIdentityResult {
 [[nodiscard]] constexpr std::string_view code_coverage_construct_kind_name(
     CodeCoverageConstructKind kind) noexcept;
 
+/// A nonzero `ordinal` distinguishes the bins of one construct; zero
+/// gives the construct's own identity.
 [[nodiscard]] CodeCoveragePointIdentityResult
 make_code_coverage_point_identity(const CodeCoverageSourceIdentity& source,
     CodeCoverageLanguage language, CodeCoverageConstructKind construct,
-    CodeCoverageSourceSpan span) noexcept;
+    CodeCoverageSourceSpan span, std::uint64_t ordinal = 0U) noexcept;
 
 [[nodiscard]] std::string code_coverage_point_identity_hex(
     runtime::CodeCoveragePointId identity);
@@ -118,6 +130,22 @@ constexpr std::string_view code_coverage_construct_kind_name(
         return "fsm-current-state-object";
     case CodeCoverageConstructKind::FsmNextStateObject:
         return "fsm-next-state-object";
+    case CodeCoverageConstructKind::ConditionTrue:
+        return "condition-true";
+    case CodeCoverageConstructKind::ConditionFalse:
+        return "condition-false";
+    case CodeCoverageConstructKind::ExpressionRow:
+        return "expression-row";
+    case CodeCoverageConstructKind::ToggleRise:
+        return "toggle-rise";
+    case CodeCoverageConstructKind::ToggleFall:
+        return "toggle-fall";
+    case CodeCoverageConstructKind::FsmState:
+        return "fsm-state";
+    case CodeCoverageConstructKind::FsmTransition:
+        return "fsm-transition";
+    case CodeCoverageConstructKind::FsmOtherTransition:
+        return "fsm-other-transition";
     }
     return { };
 }

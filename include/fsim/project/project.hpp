@@ -208,6 +208,8 @@ struct RunSection {
   std::vector<std::string> trace_filters;
   std::size_t trace_report_limit{4'096U};
   bool trace_enabled{true};
+  // Code-coverage database written when the simulation ends.
+  std::optional<std::filesystem::path> coverage_output;
   // Foreign libraries loaded into the simulation: VPI modules
   // (`lib[:bootstrap]`), DPI-C libraries and VHPI modules.
   std::vector<std::string> vpi_modules;

@@ -1505,7 +1505,7 @@ void test_systemverilog_metadata(
     auto config = make_systemverilog_metadata_config(directory, source);
     const auto instrumented = build_project(config);
     const auto& discovered = instrumented.design.code_coverage_inventory();
-    assert(discovered && discovered->total_points == 9U);
+    assert(discovered && discovered->total_points == 13U);
     config.coverage.enabled = false;
     auto project = build_project(config);
     std::ifstream source_input(source, std::ios::binary);
@@ -1535,7 +1535,7 @@ void test_systemverilog_metadata(
         drafts.push_back({ specialization.id,
             { { *point_identity.identity,
                 fsim::runtime::CodeCoverageMetric::Statement,
-                0U, { 1U, 2U }, 1U } } });
+                0U, { 1U, 2U }, 1U, { } } }, { } });
     }
     assert(project.design
             .attach_code_coverage_inventory(inventory_sources, drafts)

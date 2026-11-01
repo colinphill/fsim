@@ -1385,10 +1385,20 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     || std::is_same_v<T, LoadStringConstant>
                     || std::is_same_v<T, CopyStringRegister>
                     || std::is_same_v<T, PlusArgSelect>
-                    || std::is_same_v<T, CodeCoverageHit>) {
+                    || std::is_same_v<T, CodeCoverageHit>
+                    || std::is_same_v<T, CodeCoverageToggle>) {
                     inst.op = KOp::generic;
                     inst.x = pc;
                     inst.y = 0U;
+                    if constexpr (std::is_same_v<T, CodeCoverageToggle>) {
+                        for (const auto sample : { op.previous, op.current }) {
+                            if (sample >= register_count || width[sample] == 0U
+                                || width[sample] == polymorphic) {
+                                throw reject("toggle_sample");
+                            }
+                            has_wide = has_wide || width[sample] > 64U;
+                        }
+                    }
                     if constexpr (std::is_same_v<T, FormatDisplay>) {
                         if (op.source >= register_count || width[op.source] == 0U
                             || width[op.source] == polymorphic) {
@@ -1788,6 +1798,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     generic = generic || op.string_index;
                 } else if constexpr (std::is_same_v<T, Report>
                     || std::is_same_v<T, CodeCoverageHit>
+                    || std::is_same_v<T, CodeCoverageToggle>
                     || std::is_same_v<T, Display>
                     || std::is_same_v<T, TimeDisplay>
                     || std::is_same_v<T, SystemVerilogMath>

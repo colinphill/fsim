@@ -2185,6 +2185,17 @@ struct CheckerInstance {
     OriginId origin;
 };
 
+/// One `(* fsm_current_state = "s", fsm_next_state = "n",
+/// fsm_legal_states = "A,B" *)` attribute instance on a module, as written;
+/// code coverage validates and applies it.
+struct FsmPragma {
+    std::optional<std::string> current_state;
+    std::optional<std::string> next_state;
+    std::optional<std::string> legal_states;
+    // False when a specification repeats or its value is not a string.
+    bool well_formed { true };
+};
+
 struct Unit {
     UnitId id;
     ScopeId scope;
@@ -2231,6 +2242,8 @@ struct Unit {
     // denotes a legal empty port expression and has no internal declaration or
     // runtime connection. Absent metadata preserves legacy declaration order.
     std::optional<std::vector<std::optional<std::string>>> port_slots;
+    // FSM coverage hints of a module.
+    std::vector<FsmPragma> fsm_pragmas;
 };
 
 /// Owning SystemVerilog semantic HIR, including opaque class-handle operations.

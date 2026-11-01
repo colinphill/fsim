@@ -10,11 +10,19 @@ namespace fsim::runtime {
 
 inline constexpr std::string_view kCodeCoverageModelDiagnostic = "FSIM-COV-001";
 
+// The values equal the matching artifact::CoverageDatabaseMetricFamily.
 enum class CodeCoverageMetric : std::uint8_t {
     Statement = 1U,
     Branch = 2U,
     Line = 3U,
+    Condition = 4U,
+    Expression = 5U,
+    Toggle = 6U,
+    FsmState = 7U,
+    FsmTransition = 8U,
 };
+
+inline constexpr std::size_t kCodeCoverageMetricCount = 8U;
 
 enum class CodeCoverageStatus : std::uint8_t {
     Empty,
@@ -87,7 +95,7 @@ struct CodeCoverageResult {
 
 struct CodeCoverageModelLimits {
     std::size_t maximum_points { 1U << 20U };
-    std::size_t maximum_metric_results { 3U };
+    std::size_t maximum_metric_results { kCodeCoverageMetricCount };
 };
 
 enum class CodeCoverageModelError : std::uint8_t {
@@ -140,15 +148,26 @@ struct CodeCoverageValidationResult {
         return "branch";
     case CodeCoverageMetric::Line:
         return "line";
+    case CodeCoverageMetric::Condition:
+        return "condition";
+    case CodeCoverageMetric::Expression:
+        return "expression";
+    case CodeCoverageMetric::Toggle:
+        return "toggle";
+    case CodeCoverageMetric::FsmState:
+        return "fsm-state";
+    case CodeCoverageMetric::FsmTransition:
+        return "fsm-transition";
     }
     return { };
 }
 
+/// Every metric except Line, which is derived from statement points.
 [[nodiscard]] constexpr bool is_code_coverage_point_metric(
     const CodeCoverageMetric metric) noexcept
 {
-    return metric == CodeCoverageMetric::Statement
-        || metric == CodeCoverageMetric::Branch;
+    return !code_coverage_metric_name(metric).empty()
+        && metric != CodeCoverageMetric::Line;
 }
 
 [[nodiscard]] constexpr bool is_code_coverage_status_valid(

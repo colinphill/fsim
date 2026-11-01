@@ -707,12 +707,7 @@ add_library(
     src/runtime/class_methods.cpp
     src/runtime/class_static.cpp
     src/runtime/coverage_aggregation.cpp
-    src/runtime/coverage_condition_evaluation.cpp
-    src/runtime/coverage_condition_outcomes.cpp
-    src/runtime/coverage_expression.cpp
-    src/runtime/coverage_fsm.cpp
     src/runtime/coverage_line_state.cpp
-    src/runtime/coverage_toggle.cpp
   src/runtime/native_plugin.cpp
   src/runtime/tf_argument.cpp
   src/runtime/tf_call.cpp
@@ -898,17 +893,12 @@ endif()
   add_library(
     fsim_elaboration
     ${FSIM_SUBSYSTEM_LIBRARY_TYPE}
-      src/frontend/coverage_conditions.cpp
       src/frontend/coverage_branches.cpp
       src/elaboration/coverage_exclusion_persistence.cpp
       src/elaboration/coverage_external_exclusions.cpp
-      src/frontend/coverage_fsm_inference.cpp
-      src/frontend/coverage_fsm_hints.cpp
-      src/elaboration/coverage_fsm_validation.cpp
-      src/elaboration/coverage_memory_toggle.cpp
-      src/frontend/coverage_toggle_selection.cpp
       src/elaboration/coverage_instance_identity.cpp
       src/elaboration/coverage_inventory.cpp
+      src/elaboration/coverage_hir_fsm_hints.cpp
       src/elaboration/coverage_hir_points.cpp
       src/elaboration/coverage_points.cpp
       src/elaboration/elaborated_design.cpp
@@ -916,11 +906,7 @@ endif()
       src/elaboration/elaborated_design_static_kernel.cpp
       src/elaboration/elaborate.cpp
       src/frontend/verilog_coverage_points.cpp
-      src/frontend/verilog_coverage_conditions.cpp
-      src/frontend/verilog_toggle_inventory.cpp
-      src/frontend/vhdl_coverage_conditions.cpp
       src/frontend/vhdl_coverage_points.cpp
-      src/frontend/vhdl_toggle_inventory.cpp
       src/elaboration/elaboration_constants.cpp
       src/elaboration/elaboration_vhdl_configuration_hir.cpp
       src/elaboration/elaboration_targets.cpp
@@ -932,6 +918,7 @@ endif()
       src/elaboration/hierarchy_vhdl_subprograms.cpp
       src/elaboration/hierarchy_builder.cpp
       src/elaboration/hierarchy_compiled_occurrence.cpp
+      src/elaboration/hierarchy_coverage_monitors.cpp
       src/elaboration/hierarchy_resolution.cpp
       src/elaboration/hierarchy_specify.cpp
       src/elaboration/hierarchy_specify_expression.cpp
@@ -957,6 +944,7 @@ endif()
       src/elaboration/lowerer_hir_callable_memo.cpp
       src/elaboration/dpi_c_type.cpp
       src/elaboration/lowerer_hir_container.cpp
+      src/elaboration/lowerer_hir_coverage_fsm.cpp
       src/elaboration/lowerer_hir_value_path.cpp
       src/elaboration/lowerer_hir_vhdl_shape.cpp
       src/elaboration/lowerer_hir_expression.cpp

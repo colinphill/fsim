@@ -415,6 +415,7 @@ void Interpreter::Impl::StaticKernel::build_parallel_plan()
                     || std::is_same_v<T, IntegerCheck>
                     || std::is_same_v<T, Assert>
                     || std::is_same_v<T, CodeCoverageHit>
+                    || std::is_same_v<T, CodeCoverageToggle>
                     || std::is_same_v<T, ReadContainerObject>) {
                     // Registers only (a binding's object is touched by the
                     // reads and writes through it).

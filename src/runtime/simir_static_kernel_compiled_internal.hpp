@@ -168,6 +168,9 @@ inline void operation_registers_of(const T& op, std::vector<RegisterId>& reads,
             write = op.destination;
         } else if constexpr (std::is_same_v<T, Assert>) {
             reads.push_back(op.condition);
+        } else if constexpr (std::is_same_v<T, CodeCoverageToggle>) {
+            reads.push_back(op.previous);
+            reads.push_back(op.current);
         } else if constexpr (std::is_same_v<T, IntegerBinary>) {
             reads.push_back(op.lhs);
             reads.push_back(op.rhs);

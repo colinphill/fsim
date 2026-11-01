@@ -36,6 +36,9 @@ struct CoverageInventoryPointDraft {
     std::size_t source_index { };
     frontend::CodeCoverageSourceSpan span;
     std::uint64_t line { };
+    // Non-empty for an informational point: it counts, and is reported as
+    // excluded for this reason instead of scored.
+    std::string exclusion_reason;
 
     friend bool operator==(
         const CoverageInventoryPointDraft&,
@@ -43,9 +46,27 @@ struct CoverageInventoryPointDraft {
         = default;
 };
 
+// A point that is not counted, reported as excluded for a reason: a source
+// control comment, or an object kind that is excluded by default.
+struct CoverageInventoryExclusion {
+    runtime::CodeCoveragePointId id;
+    runtime::CodeCoverageMetric metric {
+        runtime::CodeCoverageMetric::Statement
+    };
+    std::size_t source_index { };
+    frontend::CodeCoverageSourceSpan span;
+    std::uint64_t line { };
+    std::string reason;
+
+    friend bool operator==(
+        const CoverageInventoryExclusion&, const CoverageInventoryExclusion&)
+        = default;
+};
+
 struct CoverageInstanceInventoryDraft {
     std::uint32_t specialization { };
     std::vector<CoverageInventoryPointDraft> points;
+    std::vector<CoverageInventoryExclusion> exclusions;
 };
 
 struct CoverageInventoryPoint {
@@ -53,6 +74,7 @@ struct CoverageInventoryPoint {
     std::size_t source_index { };
     frontend::CodeCoverageSourceSpan span;
     std::uint64_t line { };
+    std::string exclusion_reason;
 
     friend bool operator==(
         const CoverageInventoryPoint& left,
@@ -62,7 +84,8 @@ struct CoverageInventoryPoint {
             && left.point.metric == right.point.metric
             && left.point.counter == right.point.counter
             && left.source_index == right.source_index
-            && left.span == right.span && left.line == right.line;
+            && left.span == right.span && left.line == right.line
+            && left.exclusion_reason == right.exclusion_reason;
     }
 };
 
@@ -72,6 +95,8 @@ struct CoverageInstanceInventory {
     std::string instance;
     frontend::Language language { frontend::Language::SystemVerilog2017 };
     std::vector<CoverageInventoryPoint> points;
+    // Sorted by identity, distinct from the points.
+    std::vector<CoverageInventoryExclusion> exclusions;
 
     friend bool operator==(
         const CoverageInstanceInventory&, const CoverageInstanceInventory&)

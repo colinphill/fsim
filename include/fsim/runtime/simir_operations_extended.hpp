@@ -1106,6 +1106,20 @@ struct CodeCoverageHit {
         const CodeCoverageHit&, const CodeCoverageHit&) = default;
 };
 
+/// Count the bit transitions of one toggle-covered object between two
+/// samples of its value. `points` and `counters` hold, per bit from the
+/// least significant, its rise point then its fall point; elaboration binds
+/// `counters` to the owning instance's inventory.
+struct CodeCoverageToggle {
+    RegisterId previous { };
+    RegisterId current { };
+    std::vector<::fsim::runtime::CodeCoveragePointId> points;
+    std::vector<::fsim::runtime::CodeCoverageCounterId> counters;
+
+    friend bool operator==(
+        const CodeCoverageToggle&, const CodeCoverageToggle&) = default;
+};
+
 enum class RandomKind : std::uint8_t {
     urandom,
     random,

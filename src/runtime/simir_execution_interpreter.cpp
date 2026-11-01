@@ -2,6 +2,7 @@
 
 #include "fsim/runtime/file_scanning.hpp"
 #include "fsim/runtime/scope_randomize.hpp"
+#include "fsim/runtime/simir_coverage.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "fsim/support/environment.hpp"
@@ -2197,6 +2198,25 @@ bool Interpreter::Impl::execute_operation(ProcessState& process,
                 && code_coverage_overflow_hook) {
                 code_coverage_overflow_hook(counter);
             }
+            ++process.pc;
+        } else if constexpr (
+            std::is_same_v<OperationType, CodeCoverageToggle>) {
+            record_code_coverage_toggles(get_register(process, op.previous),
+                get_register(process, op.current), op,
+                [&](const ::fsim::runtime::CodeCoverageCounterId counter) {
+                    const auto update = code_coverage_counters.record(counter);
+                    if (update == CodeCoverageCounterUpdate::Unavailable) {
+                        fail(process,
+                            "code coverage counter service is unavailable");
+                    }
+                    if (update == CodeCoverageCounterUpdate::OutOfRange) {
+                        fail(process, "code coverage counter is out of range");
+                    }
+                    if (update == CodeCoverageCounterUpdate::FirstOverflow
+                        && code_coverage_overflow_hook) {
+                        code_coverage_overflow_hook(counter);
+                    }
+                });
             ++process.pc;
         } else if constexpr (std::is_same_v<OperationType, RandomValue>) {
             const auto maximum = op.maximum

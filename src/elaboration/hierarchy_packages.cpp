@@ -16450,7 +16450,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     specialization.language = source_language;
     lowerer.set_hir_code_coverage_context(coverage_,
         unit.kind == semantic::sv::UnitKind::module
-            && source_language == frontend::Language::SystemVerilog2017);
+            && source_language == frontend::Language::SystemVerilog2017,
+        &coverage_fsm_drafts_);
     specialization.library = unit.library.empty()
         ? "work"
         : unit.library;
@@ -21504,8 +21505,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             &systemverilog_interface_exports_);
         const auto source_language = compiled_frontend_language(
             unit->language);
-        lowerer.set_hir_code_coverage_context(
-            coverage_, source_language == frontend::Language::SystemVerilog2017);
+        lowerer.set_hir_code_coverage_context(coverage_,
+            source_language == frontend::Language::SystemVerilog2017,
+            &coverage_fsm_drafts_);
         {
             const auto& disable_labels = systemverilog_disable_labels();
             lowerer.set_disable_labels(
@@ -31758,6 +31760,8 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
             specialization, concurrent_order, &deferred_regions)) {
         return false;
     }
+    record_vhdl_toggle_coverage_signals(
+        design_.specializations_.size(), *entity, architecture, signals);
     design_.specializations_.push_back(std::move(specialization));
 
     auto instance_materializations
@@ -34400,6 +34404,9 @@ void HierarchyBuilder::finalize()
             "elaboration_forward_deferred" };
         lower_forward_deferred_systemverilog({ }, true);
     }
+    record_coverage_concurrent_statements();
+    append_toggle_coverage_monitors();
+    append_fsm_coverage_monitors();
     finish();
 }
 

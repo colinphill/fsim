@@ -173,7 +173,7 @@ endmodule
     std::vector<fsim::elaboration::CoverageInstanceInventoryDraft> drafts;
     drafts.reserve(elaborated.design->specializations().size());
     for (const auto& specialization : elaborated.design->specializations()) {
-        drafts.push_back({ specialization.id, { } });
+        drafts.push_back({ specialization.id, { }, { } });
     }
     const std::array<fsim::elaboration::CoverageInventorySource, 0U> sources;
     assert(elaborated.design

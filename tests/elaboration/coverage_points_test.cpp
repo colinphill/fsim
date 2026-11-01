@@ -46,7 +46,7 @@ elaboration::CoverageInventoryPointDraft point(
     = runtime::CodeCoverageMetric::Statement)
 {
     return { { identity, identity + 100U }, metric, 0U,
-        { begin, end }, 1U };
+        { begin, end }, 1U, { } };
 }
 
 bool same_point(

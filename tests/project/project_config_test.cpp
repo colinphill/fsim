@@ -8,9 +8,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <tuple>
+#include <vector>
 
 namespace {
 
@@ -1055,6 +1057,65 @@ files = ["project_config_test.cpp"]
 
 } // namespace
 
+void test_coverage_fsm_hint_entries() {
+  const auto workspace = make_workspace();
+  write_file(workspace / "controller.sv", "module controller; endmodule\n");
+  const auto parse_manifest = [&](const std::string_view coverage_text) {
+    fsim::diagnostic::Engine diagnostics;
+    const auto config = fsim::project::parse(
+        "schema = 3\n[project]\ntop = \"controller\"\n\n[coverage]\n"
+        "enabled = true\n" + std::string{coverage_text}
+            + "\n[[source_set]]\nlanguage = \"systemverilog\"\n"
+              "files = [\"controller.sv\"]\n",
+        (workspace / "fsim.toml").generic_string(),
+        workspace,
+        diagnostics);
+    return std::pair{std::move(config), std::move(diagnostics)};
+  };
+
+  auto [hinted, hinted_diagnostics] = parse_manifest(R"toml(
+[[coverage.fsm]]
+instance = "root"
+current_state = "state"
+next_state = "next_state"
+legal_states = ["idle", "run"]
+
+[[coverage.fsm]]
+instance = "other"
+current_state = "state"
+)toml");
+  check(hinted.has_value() && !hinted_diagnostics.has_error(),
+      "manifest FSM hints are accepted");
+  if (hinted.has_value()) {
+    const auto& hints = hinted->coverage.fsm_hints;
+    check(hints.size() == 2U, "each [[coverage.fsm]] entry is one hint");
+    if (hints.size() == 2U) {
+      check(hints[0].instance == "root" && hints[0].current_state == "state"
+              && hints[0].next_state == std::optional<std::string>{"next_state"}
+              && hints[0].legal_states
+                  == std::optional<std::vector<std::string>>{
+                      std::vector<std::string>{"idle", "run"}},
+          "a full manifest FSM hint keeps every field");
+      check(hints[1].instance == "other" && !hints[1].next_state
+              && !hints[1].legal_states,
+          "optional manifest FSM hint fields stay absent");
+    }
+  }
+
+  auto [missing, missing_diagnostics] =
+      parse_manifest("[[coverage.fsm]]\ninstance = \"root\"\n");
+  check(!missing.has_value() && missing_diagnostics.has_error(),
+      "a manifest FSM entry must require current_state");
+
+  auto [unknown, unknown_diagnostics] = parse_manifest(
+      "[[coverage.fsm]]\ninstance = \"root\"\n"
+      "current_state = \"state\"\nvendor_mode = \"onehot\"\n");
+  check(!unknown.has_value() && unknown_diagnostics.has_error(),
+      "unknown vendor keys must not become manifest FSM aliases");
+  std::error_code ignored;
+  std::filesystem::remove_all(workspace, ignored);
+}
+
 int main()
 {
     // FSIM-CONFORMANCE CF-COMMON-PROJECT-001 source=SRC-FSIM expectation=accept
@@ -1073,6 +1134,7 @@ int main()
     test_verilog_systemverilog_standard_values();
     test_verilog_systemverilog_compatibility_selection();
     test_vhdl_compatibility_selection();
+    test_coverage_fsm_hint_entries();
     if (failures != 0) {
         std::cerr << failures << " test(s) failed\n";
         return 1;

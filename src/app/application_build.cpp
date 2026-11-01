@@ -31,12 +31,40 @@ namespace {
         diagnostic::Engine& diagnostics)
     {
         std::set<std::uint32_t> required_files;
+        std::set<std::uint32_t> vhdl_files;
         const auto& spans = checked.semantics.source_spans();
         for (const auto& statement : checked.systemverilog_hir.statements()) {
             if (statement.source.valid()
                 && statement.source.value() < spans.size()) {
                 required_files.insert(
                     spans[statement.source.value()].file.value());
+            }
+        }
+        // VHDL coverage points belong to processes; their statements share
+        // the process's source file.
+        for (const auto& process : checked.vhdl_hir.processes()) {
+            if (process.source.valid()
+                && process.source.value() < spans.size()) {
+                const auto file = spans[process.source.value()].file.value();
+                required_files.insert(file);
+                vhdl_files.insert(file);
+            }
+        }
+        // Toggle points belong to the declarations of design units, which
+        // may have no process (a VHDL entity is its own library object).
+        for (const auto& unit : checked.systemverilog_hir.units()) {
+            if (unit.kind == semantic::sv::UnitKind::module
+                && unit.source.valid() && unit.source.value() < spans.size()) {
+                required_files.insert(spans[unit.source.value()].file.value());
+            }
+        }
+        for (const auto& unit : checked.vhdl_hir.units()) {
+            if ((unit.kind == semantic::vhdl::UnitKind::entity
+                    || unit.kind == semantic::vhdl::UnitKind::architecture)
+                && unit.source.valid() && unit.source.value() < spans.size()) {
+                const auto file = spans[unit.source.value()].file.value();
+                required_files.insert(file);
+                vhdl_files.insert(file);
             }
         }
         if (required_files.size() > (1U << 16U)) {
@@ -126,7 +154,9 @@ namespace {
             auto identity = frontend::make_code_coverage_source_identity(
                 root, identity_path, source_bytes);
             auto controls = frontend::parse_coverage_source_controls(
-                contents, frontend::Language::SystemVerilog2017);
+                contents, vhdl_files.contains(index)
+                    ? frontend::Language::Vhdl2008
+                    : frontend::Language::SystemVerilog2017);
             if (!identity.ok() || !controls.ok()) {
                 diagnostics.error(controls.ok() ? "FSIM-COV-008"
                                                 : "FSIM-COV-041",
@@ -687,8 +717,11 @@ std::optional<BuiltProject> build_checked_project(
         if (!coverage_sources) {
             return std::nullopt;
         }
-        coverage_context.emplace(std::span<const elaboration::CoverageHirSource> {
-            *coverage_sources });
+        coverage_context.emplace(
+            std::span<const elaboration::CoverageHirSource> {
+                *coverage_sources },
+            std::span<const project::CoverageFsmHintEntry> {
+                config.coverage.fsm_hints });
     }
     auto systemc_instances = construct_systemc_instances(
         tops, systemc_registries, diagnostics);
@@ -771,7 +804,8 @@ std::optional<BuiltProject> build_checked_project(
             elaborated.design->specializations()) {
             auto discovered = elaboration::discover_hir_module_coverage_points(
                 *checked, specialization, *coverage_sources,
-                coverage_limits.maximum_points - total_points);
+                coverage_limits.maximum_points - total_points,
+                &*coverage_exclusions.plan);
             if (!discovered.ok()) {
                 diagnostics.error("FSIM-COV-008",
                     "cannot discover module-procedural coverage points for '"

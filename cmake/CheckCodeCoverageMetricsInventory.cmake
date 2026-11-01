@@ -27,7 +27,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "code_coverage_metrics_inventory.tsv"
     "MC/DC is explicitly"
     "Change 20 freezes the complete broad-metric set"
-    "abcee589bcedf70840f5814d41a3d05fd1714bac27109b9de979704288240bf8")
+    "22427a08da803d4c4c1c74490767037c4287ecc9344fb2083b671629c8353a85")
   string(FIND "${FSIM_FEATURE_README_TEXT}" "${FSIM_TOKEN}"
     FSIM_TOKEN_OFFSET)
   if(FSIM_TOKEN_OFFSET EQUAL -1)
@@ -41,7 +41,7 @@ string(REPLACE "\r\n" "\n" FSIM_INVENTORY_TEXT "${FSIM_INVENTORY_TEXT}")
 string(REPLACE "\r" "\n" FSIM_INVENTORY_TEXT "${FSIM_INVENTORY_TEXT}")
 string(SHA256 FSIM_ACTUAL_DIGEST "${FSIM_INVENTORY_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "abcee589bcedf70840f5814d41a3d05fd1714bac27109b9de979704288240bf8")
+  "22427a08da803d4c4c1c74490767037c4287ecc9344fb2083b671629c8353a85")
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "code coverage metrics inventory digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_ACTUAL_DIGEST}")

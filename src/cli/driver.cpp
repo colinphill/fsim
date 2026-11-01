@@ -493,6 +493,10 @@ namespace {
         if (invocation.trace_enabled.has_value()) {
             config.run.trace_enabled = *invocation.trace_enabled;
         }
+        if (invocation.coverage_output.has_value()) {
+            config.run.coverage_output
+                = absolute_normalized(*invocation.coverage_output);
+        }
         if (invocation.seed.has_value()) {
             config.project.seed = *invocation.seed;
         }
@@ -572,6 +576,10 @@ namespace {
         }
         if (invocation.trace_enabled.has_value()) {
             config.run.trace_enabled = *invocation.trace_enabled;
+        }
+        if (invocation.coverage_output.has_value()) {
+            config.run.coverage_output
+                = absolute_normalized(*invocation.coverage_output);
         }
         if (invocation.seed.has_value()) {
             config.project.seed = *invocation.seed;
@@ -683,7 +691,10 @@ namespace {
             << "Elaboration and simulation options:\n"
             << "  -O, --optimization O0..O3\n"
             << "  -j, --jobs COUNT\n"
-            << "      --code-coverage      Enable statement, branch, and line coverage\n"
+            << "      --code-coverage      Enable statement, branch, condition, toggle,\n"
+            << "                           and FSM coverage\n"
+            << "      --coverage-output PATH\n"
+            << "                           Write the coverage database when simulation ends\n"
             << "      --duration TIME\n"
             << "      --max-deltas COUNT\n"
             << "      --delay-mode min|typ|max\n"
@@ -948,6 +959,7 @@ namespace {
             "--dpi-header",
             "--trace",
             "--trace-output",
+            "--coverage-output",
             "--trace-format",
             "--trace-compression",
             "--trace-filter",
@@ -1539,6 +1551,13 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 invocation.trace_file = fsim::support::path_from_utf8(*value);
+            } else if (is_option(argument, "", "--coverage-output")) {
+                const auto value = take_value(index, argc, argv, argument,
+                    "--coverage-output", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                invocation.coverage_output = fsim::support::path_from_utf8(*value);
             } else if (is_option(argument, "", "--trace-format")) {
                 const auto value = take_value(
                     index, argc, argv, argument, "--trace-format", diagnostics);
@@ -2116,6 +2135,11 @@ std::optional<Invocation> parse_arguments(
         || invocation.trace_enabled.has_value();
     const bool observation_phase = invocation.command == Command::compile
         || elaborate || snapshot_consumer;
+    if (invocation.coverage_output.has_value() && !snapshot_consumer) {
+        argument_error(diagnostics,
+            "--coverage-output requires snapshot simulation");
+        return std::nullopt;
+    }
     if ((has_trace_option || invocation.code_coverage.has_value())
         && !observation_phase) {
         argument_error(diagnostics,

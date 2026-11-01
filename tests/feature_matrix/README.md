@@ -142,9 +142,11 @@ aggregation, artifact, diagnostic, and resource owners. MC/DC is explicitly
 outside Batch 179. Change 19 proves generate-instance, engine, and
 mixed-language equivalence and advances enabled artifact identity to the
 broad-metrics model; Change 20 freezes the complete broad-metric set with
-MC/DC still excluded. The registered normalized
-SHA-256 identity is
-`abcee589bcedf70840f5814d41a3d05fd1714bac27109b9de979704288240bf8`.
+MC/DC still excluded. Discovery and inference from the compiled HIR now own
+every row, with command-line evidence that runs the interpreter and the v4
+kernel; the AST-based components that first owned them are removed. The
+registered normalized SHA-256 identity is
+`22427a08da803d4c4c1c74490767037c4287ecc9344fb2083b671629c8353a85`.
 
 Batch 181 starts with the IEEE-only 18-row `legacy_tf_inventory.tsv` ledger.
 Its stable rows assign Changes 2-19 one-to-one across the direct v3 native

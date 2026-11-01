@@ -1694,7 +1694,9 @@ void Interpreter::Impl::handle_boundary(
             sample->trigger);
         return;
     }
-    if (fsim::runtime::simir::operation_holds<CodeCoverageHit>(operation)) {
+    if (fsim::runtime::simir::operation_holds<CodeCoverageHit>(operation)
+        || fsim::runtime::simir::operation_holds<CodeCoverageToggle>(
+            operation)) {
         process.pc = instruction;
         fail(process, "code coverage counter service is unavailable");
     }

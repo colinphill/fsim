@@ -552,8 +552,9 @@ bool visit_known_region_accesses(
             // Register-only: draws from the process's own generator state and
             // optional bound registers; it has no signal access.
             || std::is_same_v<T, RandomValue>
-            // A code coverage counter bump: host data, no signal access.
+            // Code coverage counter bumps: host data, no signal access.
             || std::is_same_v<T, CodeCoverageHit>
+            || std::is_same_v<T, CodeCoverageToggle>
             || std::is_same_v<T, DebugPoint>
             || std::is_same_v<T, Jump>
             || std::is_same_v<T, Branch>

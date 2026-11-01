@@ -11,15 +11,12 @@ set(FSIM_CONTRACT
 set(FSIM_HEADER "${FSIM_SOURCE_DIR}/include/fsim/project/project.hpp")
 set(FSIM_READER "${FSIM_SOURCE_DIR}/src/project/project.cpp")
 set(FSIM_TEST "${FSIM_SOURCE_DIR}/tests/project/project_config_test.cpp")
-set(FSIM_FSM_HINT_TEST
-  "${FSIM_SOURCE_DIR}/tests/elaboration/coverage_fsm_hints_test.cpp")
 set(FSIM_TEST_BUILD "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CONTRACT}"
     "${FSIM_HEADER}"
     "${FSIM_READER}"
     "${FSIM_TEST}"
-    "${FSIM_FSM_HINT_TEST}"
     "${FSIM_TEST_BUILD}")
   if(NOT EXISTS "${FSIM_INPUT}")
     message(FATAL_ERROR "project manifest freeze input is missing: ${FSIM_INPUT}")
@@ -116,7 +113,7 @@ fsim_require_project_manifest_tokens("${FSIM_TEST}"
   "schema = 18446744073709551615"
   "found schema outside the uint32 range"
   "non-current project schema is rejected")
-fsim_require_project_manifest_tokens("${FSIM_FSM_HINT_TEST}"
+fsim_require_project_manifest_tokens("${FSIM_TEST}"
   "[[coverage.fsm]]"
   "current_state = \"state\""
   "next_state = \"next_state\""

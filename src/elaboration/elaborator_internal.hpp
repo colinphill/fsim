@@ -16,6 +16,7 @@
 #include <deque>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -40,6 +41,15 @@ inline constexpr std::uint64_t maximum_compiled_event_array_elements
     = 65'536U;
 
 using support::vhdl_time_units;
+
+// Under code coverage, the state machines that each lowered process's case
+// statements infer, by process.
+using CoverageFsmDrafts
+    = std::map<ProcessId, std::vector<CoverageFsmMachine>>;
+// Adds a machine to those inferred so far: case statements over one state
+// object describe one machine, whose transitions are their union.
+void merge_coverage_fsm_machine(
+    std::vector<CoverageFsmMachine>& machines, CoverageFsmMachine machine);
 
 // Whether FSIM_HIR_LOWER_TRACE_FAILURES asks for rejected-lowering traces.
 // Read once: rejection paths are taken routinely during elaboration.

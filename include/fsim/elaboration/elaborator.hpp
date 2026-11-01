@@ -10,6 +10,7 @@
 #include "fsim/systemc_abi.h"
 
 #include <algorithm>
+#include <compare>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -577,6 +578,67 @@ struct VhdlProtectedObjectInfo {
 
 using SpecializationId = std::uint32_t;
 
+/// The ordinal offset of an object declared after others in the same
+/// declaration (`signal a, b : t;`), whose points share its span.
+[[nodiscard]] constexpr std::uint64_t coverage_object_ordinal_base(
+    const std::uint32_t declared_together) noexcept
+{
+    return std::uint64_t { declared_together } << 32U;
+}
+
+/// The reason of a state machine's informational other-transition row.
+inline constexpr std::string_view kCoverageFsmOtherTransitionReason {
+    "informational: changes between states that no case arm assigns"
+};
+
+/// The reason of a memory's toggle row: memories are excluded by default.
+inline constexpr std::string_view kCoverageToggleMemoryReason {
+    "memory: arrays of words are excluded from toggle coverage by default"
+};
+
+/// One object of an instance that a generated monitor process covers for
+/// toggles: its declaration, width in bits, and position among the objects
+/// declared with it.
+struct CoverageToggleObject {
+    semantic::SourceSpanId declaration;
+    std::uint32_t width { };
+    std::uint32_t declared_together { };
+    // Non-empty for an object reported as excluded, as one uncounted row.
+    std::string exclusion_reason;
+    // The object's name, for external exclusions.
+    std::string name;
+
+    friend bool operator==(
+        const CoverageToggleObject&, const CoverageToggleObject&) = default;
+};
+
+/// A transition between two distinct states of a covered state machine, by
+/// state index.
+struct CoverageFsmTransition {
+    std::uint32_t from { };
+    std::uint32_t to { };
+
+    friend auto operator<=>(
+        const CoverageFsmTransition&, const CoverageFsmTransition&) = default;
+};
+
+/// A state machine of an instance that a generated monitor process covers:
+/// the state object's declaration, signal and position among the objects
+/// declared with it, the value of each state (in enumeration order), and
+/// the legal transitions the case arms assign.
+struct CoverageFsmMachine {
+    semantic::SourceSpanId declaration;
+    runtime::simir::SignalId signal { };
+    std::uint32_t declared_together { };
+    std::vector<std::uint64_t> values;
+    std::vector<CoverageFsmTransition> transitions;
+    // The state object's name, for external exclusions.
+    std::string name;
+
+    friend bool operator==(
+        const CoverageFsmMachine&, const CoverageFsmMachine&) = default;
+};
+
 /// One elaborated design-unit occurrence and its directly owned processes.
 ///
 /// Parameterized VHDL and Verilog/SystemVerilog occurrences carry canonical
@@ -617,6 +679,15 @@ struct SpecializationInfo {
     // aggregate descriptions.
     std::vector<std::pair<runtime::simir::ProcessId, semantic::ProcessId>>
         semantic_processes;
+    // Objects whose toggles generated monitor processes count, under code
+    // coverage.
+    std::vector<CoverageToggleObject> coverage_toggle_objects;
+    // State machines whose states and transitions generated monitor
+    // processes count, under code coverage.
+    std::vector<CoverageFsmMachine> coverage_fsm_machines;
+    // Concurrent and continuous assignments whose statements count, under
+    // code coverage, in lowering order.
+    std::vector<semantic::StatementId> coverage_concurrent_statements;
 };
 
 using UdpTableId = std::uint32_t;

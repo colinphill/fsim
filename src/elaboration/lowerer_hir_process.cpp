@@ -246,9 +246,12 @@ void Lowerer::set_systemverilog_program_owner(
 }
 
 void Lowerer::set_hir_code_coverage_context(
-    const CoverageHirContext* coverage, const bool module) noexcept
+    const CoverageHirContext* coverage, const bool module,
+    CoverageFsmDrafts* const fsm_drafts) noexcept
 {
     coverage_hir_context_ = module ? coverage : nullptr;
+    coverage_fsm_drafts_ = coverage_hir_context_ != nullptr ? fsm_drafts
+                                                           : nullptr;
 }
 
 void Lowerer::set_hir_code_coverage_active(const bool active) noexcept
@@ -4641,6 +4644,11 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     procedural_continuous_assignments_by_target_.clear();
     readonly_signal_write_operations_.clear();
     process_.id = static_cast<ProcessId>(design_.process_count());
+    // A process lowered again (a retried or deferred attempt) records its
+    // state machines afresh.
+    if (coverage_fsm_drafts_ != nullptr) {
+        coverage_fsm_drafts_->erase(process_.id);
+    }
     hir_process_scope_ = description.scope;
     hir_process_static_scope_.clear();
     for (const auto declaration_id : description.declarations) {

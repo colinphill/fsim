@@ -172,13 +172,14 @@ struct Simulation::Impl {
         const std::int32_t scope_value,
         std::string selector,
         const std::string_view instance_context,
-        const bool selector_is_instance) const;
+        const bool selector_is_instance,
+        const runtime::CodeCoverageMetric metric) const;
 
     [[nodiscard]] static std::int32_t query_standard_coverage(
         const artifact::CoverageDatabaseContents& contents,
         const bool maximum,
-        const std::set<artifact::CoverageDatabaseIdentity>* identities
-        = nullptr) noexcept;
+        const std::set<artifact::CoverageDatabaseIdentity>* identities,
+        const artifact::CoverageDatabaseMetricFamily family) noexcept;
 
     [[nodiscard]] std::int32_t access_standard_coverage(
         const runtime::simir::CoverageAccessEvent& event) noexcept;

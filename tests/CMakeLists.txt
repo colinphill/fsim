@@ -258,105 +258,6 @@ fsim_register_simple_test(
 )
 
 fsim_add_single_source_test_target(
-  fsim_verilog_coverage_conditions_tests
-  elaboration/verilog_coverage_conditions_test.cpp
-  fsim_elaboration
-)
-fsim_register_simple_test(
-  fsim.elaboration.verilog_coverage_conditions
-  fsim_verilog_coverage_conditions_tests
-  "fast;elaboration;coverage;condition;verilog;systemverilog;identity;profiles;relocation;positive;negative;resource"
-)
-
-fsim_add_single_source_test_target(
-  fsim_verilog_toggle_inventory_tests
-  elaboration/verilog_toggle_inventory_test.cpp
-  fsim_elaboration
-)
-fsim_register_simple_test(
-  fsim.elaboration.verilog_toggle_inventory
-  fsim_verilog_toggle_inventory_tests
-  "fast;elaboration;coverage;toggle;verilog;systemverilog;hierarchy;identity;profiles;relocation;positive;negative;resource"
-)
-
-fsim_add_single_source_test_target(
-  fsim_coverage_toggle_selection_tests
-  elaboration/coverage_toggle_selection_test.cpp
-  fsim_elaboration
-)
-fsim_register_simple_test(
-  fsim.elaboration.coverage_toggle_selection
-  fsim_coverage_toggle_selection_tests
-  "fast;elaboration;coverage;toggle;exclusion;memory;array;verilog;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
-)
-
-fsim_add_single_source_test_target(
-  fsim_coverage_memory_toggle_tests
-  elaboration/coverage_memory_toggle_test.cpp
-  fsim_elaboration
-)
-fsim_register_simple_test(
-  fsim.elaboration.coverage_memory_toggle
-  fsim_coverage_memory_toggle_tests
-  "fast;elaboration;coverage;toggle;memory;array;selection;verilog;systemverilog;vhdl;hierarchy;identity;positive;negative;resource"
-)
-
-fsim_add_single_source_test_target(
-  fsim_coverage_fsm_inference_tests
-  elaboration/coverage_fsm_inference_test.cpp
-  fsim_elaboration
-)
-fsim_register_simple_test(
-  fsim.elaboration.coverage_fsm_inference
-  fsim_coverage_fsm_inference_tests
-  "fast;elaboration;coverage;fsm;state;enum;case;verilog;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
-)
-
-fsim_add_single_source_test_target(
-  fsim_coverage_fsm_hints_tests
-  elaboration/coverage_fsm_hints_test.cpp
-  fsim_elaboration fsim_project
-)
-fsim_register_simple_test(
-  fsim.elaboration.coverage_fsm_hints
-  fsim_coverage_fsm_hints_tests
-  "fast;elaboration;project;manifest;coverage;fsm;state;systemverilog;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
-)
-
-fsim_add_single_source_test_target(
-  fsim_coverage_fsm_validation_tests
-  elaboration/coverage_fsm_validation_test.cpp
-  fsim_elaboration
-)
-fsim_register_simple_test(
-  fsim.elaboration.coverage_fsm_validation
-  fsim_coverage_fsm_validation_tests
-  "fast;elaboration;coverage;fsm;diagnostic;ambiguity;incomplete;conflict;identity;positive;negative;resource"
-)
-
-fsim_add_single_source_test_target(
-  fsim_vhdl_toggle_inventory_tests
-  elaboration/vhdl_toggle_inventory_test.cpp
-  fsim_elaboration
-)
-fsim_register_simple_test(
-  fsim.elaboration.vhdl_toggle_inventory
-  fsim_vhdl_toggle_inventory_tests
-  "fast;elaboration;coverage;toggle;vhdl;hierarchy;identity;profiles;relocation;positive;negative;resource"
-)
-
-fsim_add_single_source_test_target(
-  fsim_vhdl_coverage_conditions_tests
-  elaboration/vhdl_coverage_conditions_test.cpp
-  fsim_elaboration
-)
-fsim_register_simple_test(
-  fsim.elaboration.vhdl_coverage_conditions
-  fsim_vhdl_coverage_conditions_tests
-  "fast;elaboration;coverage;condition;vhdl;identity;profiles;relocation;positive;negative;resource"
-)
-
-fsim_add_single_source_test_target(
   fsim_vhdl_coverage_points_tests
   elaboration/vhdl_coverage_points_test.cpp
   fsim_elaboration
@@ -4228,19 +4129,6 @@ if(TARGET fsim_application)
     fsim.application.code-coverage
     fsim_code_coverage_application_tests
     "fast;application;coverage;debug;interpreter;saturation;instance"
-  )
-
-  add_executable(
-    fsim_code_coverage_metrics_application_tests
-    app/code_coverage_metrics_application_test.cpp
-  )
-  fsim_configure_test(fsim_code_coverage_metrics_application_tests)
-  target_link_libraries(
-    fsim_code_coverage_metrics_application_tests PRIVATE fsim_application)
-  fsim_register_simple_test(
-    fsim.application.code-coverage-metrics
-    fsim_code_coverage_metrics_application_tests
-    "fast;application;coverage;condition;expression;toggle;fsm;verilog;systemverilog;vhdl;generate;instance;aggregation"
   )
 
   add_executable(

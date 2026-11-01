@@ -467,9 +467,15 @@ public:
         noexcept;
     void set_hir_container_declaration_bindings(
         const ContainerDeclarationBindings* bindings) noexcept;
-    void set_hir_code_coverage_context(
-        const CoverageHirContext* coverage, bool module) noexcept;
+    // Under code coverage, the state machines that lowered case statements
+    // infer are recorded in `fsm_drafts` by process.
+    void set_hir_code_coverage_context(const CoverageHirContext* coverage,
+        bool module, CoverageFsmDrafts* fsm_drafts) noexcept;
     void set_hir_code_coverage_active(bool active) noexcept;
+    [[nodiscard]] bool hir_code_coverage_enabled() const noexcept
+    {
+        return coverage_hir_context_ != nullptr;
+    }
     using HirInstanceUnits = std::unordered_map<std::string,
         std::shared_ptr<const semantic::SpecializedHirUnit>>;
     void set_systemverilog_interface_handles(
@@ -1015,6 +1021,25 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::int64_t> hir_constant_integer(
         semantic::ExpressionId expression) const;
+    // The enumeration type a VHDL subtype belongs to, through subtypes and
+    // aliases.
+    [[nodiscard]] std::optional<semantic::TypeId> hir_vhdl_enumeration_root(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    // One arm of a case statement, as FSM coverage reads it.
+    struct HirCoverageFsmArm {
+        std::span<const semantic::ExpressionId> choices;
+        std::span<const semantic::StatementId> statements;
+        bool is_default { };
+    };
+    // Records the state machine a covered case statement over an
+    // enumeration-typed signal infers: its states are the enumeration's
+    // literals, and S -> T is legal when the arm for S assigns literal T to
+    // the signal or to another object of its type.
+    void record_hir_coverage_fsm(semantic::ExpressionId selector,
+        std::span<const HirCoverageFsmArm> arms);
+    // The FSM coverage hints for the instance being lowered; empty after
+    // an invalid hint, which is reported once.
+    const std::optional<std::vector<CoverageFsmHint>>& coverage_fsm_hints();
     // The time unit of the unit being lowered, for %t of integral values;
     // the maximum value when it counts in the project resolution.
     [[nodiscard]] std::uint64_t hir_time_unit_femtoseconds() const;
@@ -5310,7 +5335,14 @@ private:
     const std::vector<const semantic::SpecializedHirUnit*>*
         ancestor_systemverilog_specializations_ { };
     const CoverageHirContext* coverage_hir_context_ { };
+    CoverageFsmDrafts* coverage_fsm_drafts_ { };
+    std::map<std::pair<std::uint32_t, std::string>,
+        std::optional<std::vector<CoverageFsmHint>>>
+        coverage_fsm_hints_;
     bool coverage_hir_process_active_ { };
+    // Inside a VHDL sequential conditional assignment: its generated
+    // assignments and nested conditionals are not separate statements.
+    bool coverage_hir_conditional_assignment_chain_ { };
     // Set for one function call lowered as a call statement, whose result is
     // discarded and which may name a void function.
     bool discarding_call_result_ { };

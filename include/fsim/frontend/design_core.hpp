@@ -1734,6 +1734,9 @@ struct Statement {
     // True only for an If node synthesized from a VHDL conditional signal
     // assignment, preserving its distinct legality diagnostic.
     bool vhdl_conditional_assignment { };
+    // True only for a Case node synthesized from a VHDL selected
+    // assignment, whose alternatives are parts of one assignment.
+    bool vhdl_selected_assignment { };
     // A concurrent guarded assignment retains the keyword plus the implicit
     // block GUARD expression attached during generated-scope expansion.
     bool vhdl_guarded_assignment { };

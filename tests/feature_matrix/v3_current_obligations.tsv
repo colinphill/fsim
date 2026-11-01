@@ -64,7 +64,7 @@ RESCOV-006	tests/frontend/coverage_source_identity_test.cpp	fsim.frontend.covera
 RESCOV-007	tests/frontend/coverage_point_identity_test.cpp	fsim.frontend.coverage_point_identity
 RESCOV-008	tests/artifact/coverage_database_schema_test.cpp	fsim.artifact.coverage-database-schema
 RESCOV-009	tests/app/code_coverage_application_test.cpp	fsim.application.code-coverage
-RESCOV-010	tests/app/code_coverage_metrics_application_test.cpp	fsim.application.code-coverage-metrics
+RESCOV-010	tests/app/workspace_application_test.cpp	fsim.application.workspace-application
 RESABI-006	cmake/CheckLegacyAccInventory.cmake	fsim.legacy-acc-inventory
 RESABI-007	tests/api/api_header_c_test.c	fsim.api.c_header
 RESABI-008	tests/runtime/acc_callback_test.cpp	fsim.runtime.acc_callback
