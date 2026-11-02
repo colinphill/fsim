@@ -338,6 +338,9 @@ namespace {
 void ApplicationTestFixture::test_non_project_cli()
 {
     test_standalone_design_ir_path_decode_budget();
+    // Beside the sources, not above the trace outputs, which a design records
+    // relative to its producer's directory only when they lie within it.
+    const ScopedCurrentDirectory source_root { directory / "work" };
 
     const auto object = directory / "unit.fsimobj";
     const auto extra_object = directory / "extra.fsimobj";
@@ -2027,8 +2030,8 @@ SC_FSIM_EXPORT_AS(IncrementalTop, "first");
     copy_tree(design, relocated_read_only_design);
     const auto producer_prefix = support::path_to_utf8(directory);
     {
-        // Sources are referenced relative to the producer's base directory
-        // ("../tmp/..."); no absolute producer path is stored.
+        // Sources are referenced relative to the producer's base directory;
+        // no absolute producer path is stored.
         const auto bytes = read_binary_file(relocated_read_only_design);
         for (auto found = bytes.find(producer_prefix); found != std::string::npos;
              found = bytes.find(producer_prefix, found + 1U)) {

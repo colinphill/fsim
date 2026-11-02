@@ -290,16 +290,21 @@ bool Store::map_library(const std::string_view name,
         error = "mapped library directory cannot be resolved: " + code.message();
         return false;
     }
-    // A mapping aliases a physical location, never its logical library name.
-    if (!detail::load_catalog({ std::string { name }, target, true }, false,
-            detail::CatalogAccess::read_only, error))
-        return false;
     const auto local = managed_directory() / "libraries" / name;
     if (support::native_fs::exists(local, code)
         && !support::native_fs::equivalent(local, target, code)) {
         error = "library mapping conflicts with an existing local library";
         return false;
     }
+    // A mapping aliases a physical location, never its logical library name.
+    // A directory without a catalog becomes an empty library of this name, so
+    // a library is mapped before anything is compiled into it.
+    auto writer = detail::lock_directory(target / ".writer-lock", error);
+    if (!writer
+        || !detail::load_catalog({ std::string { name }, target, true }, true,
+            detail::CatalogAccess::read_only, error))
+        return false;
+    writer.reset();
     (*mappings)[std::string { name }] = directory.lexically_normal();
     return detail::write_mappings(*this, *mappings, error);
 }

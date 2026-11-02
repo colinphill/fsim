@@ -63,6 +63,30 @@ class InterruptingOutputBuffer final : public std::stringbuf {
   bool raised_{};
 };
 
+// Runs a scope from `path`, created if missing. A command-line compile
+// outside a workspace takes the current directory as its source root, which
+// must reach the sources: on Windows, a test directory under TEMP may be on
+// another drive than the build tree.
+class ScopedCurrentDirectory final {
+ public:
+  explicit ScopedCurrentDirectory(const std::filesystem::path& path)
+      : previous_{std::filesystem::current_path()} {
+    std::filesystem::create_directories(path);
+    std::filesystem::current_path(path);
+  }
+
+  ScopedCurrentDirectory(const ScopedCurrentDirectory&) = delete;
+  ScopedCurrentDirectory& operator=(const ScopedCurrentDirectory&) = delete;
+
+  ~ScopedCurrentDirectory() {
+    std::error_code error;
+    std::filesystem::current_path(previous_, error);
+  }
+
+ private:
+  std::filesystem::path previous_;
+};
+
 extern volatile std::sig_atomic_t restored_interrupt_count;
 extern "C" void record_restored_interrupt(int);
 

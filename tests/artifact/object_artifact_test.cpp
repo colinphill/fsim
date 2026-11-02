@@ -430,6 +430,20 @@ int main() {
     assert(fsim::artifact::deserialize_object_metadata(
         fsim::artifact::serialize_object_metadata(outside),
         "outside", outside_diagnostics));
+#if defined(_WIN32)
+    // A source on another drive or share has no relative path and keeps its
+    // absolute one.
+    for (const auto* name : { "D:/shared/child.sv", "//server/share/child.sv" }) {
+        auto elsewhere = metadata;
+        elsewhere.sources.front().logical_name = name;
+        elsewhere.compilation_digest
+            = fsim::artifact::compute_object_compilation_digest(elsewhere);
+        fsim::diagnostic::Engine elsewhere_diagnostics;
+        assert(fsim::artifact::deserialize_object_metadata(
+            fsim::artifact::serialize_object_metadata(elsewhere),
+            "elsewhere", elsewhere_diagnostics));
+    }
+#endif
     // A source with a payload (copied source text) is refused.
     auto carried = metadata;
     carried.sources.front().artifact = "sources/child.sv";

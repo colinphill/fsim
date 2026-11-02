@@ -82,8 +82,11 @@ bool portable_semantics(
     diagnostic::Engine& diagnostics)
 {
     for (const auto& file : source_files) {
-        if (support::path_is_portably_absolute(
-                support::path_from_utf8(file.physical_name))) {
+        // A source on another Windows drive or share than the source root
+        // has no relative name; any other absolute name was not relocated.
+        const auto path = support::path_from_utf8(file.physical_name);
+        if (support::path_is_portably_absolute(path)
+            && !(path.is_absolute() && path.has_root_name())) {
             diagnostics.error(
                 std::string { kCode },
                 "semantic state contains a producer-absolute source path: "

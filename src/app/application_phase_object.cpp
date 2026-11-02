@@ -75,7 +75,8 @@ std::filesystem::path consumer_path(const std::filesystem::path& root,
   const auto consumer = base.empty() ? std::filesystem::current_path(error)
                                      : std::filesystem::absolute(base, error);
   if (!error) {
-    auto relative = absolute.lexically_relative(consumer.lexically_normal());
+    auto relative = application_detail::relative_source_path(
+        absolute, consumer.lexically_normal());
     if (!relative.empty()) {
       return relative;
     }

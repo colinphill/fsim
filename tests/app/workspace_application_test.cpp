@@ -433,6 +433,31 @@ void test_external_library_mapping_and_current_directory()
     assert_output(invoke({ "simulate" }), "WORKSPACE_MAPPED");
 }
 
+// The documented flow for an out-of-tree library: an empty directory is mapped
+// first, then compiled into, and another workspace maps what it holds.
+void test_map_empty_directory_then_compile()
+{
+    Directory directory;
+    const auto shared = directory.path / "shared" / "vendor";
+    const auto producer = directory.path / "producer";
+    const auto consumer = directory.path / "consumer";
+    for (const auto& path : { shared, producer, consumer })
+        fs::create_directories(path);
+    fs::current_path(producer);
+    invoke({ "library", "map", "vendor", "../shared/vendor" });
+    assert(fs::exists(shared / "library.sqlite3"));
+    assert_output(invoke({ "library", "list" }), "vendor");
+    write_file("cells.sv", module("vendor_top", "EMPTY_MAPPED"));
+    invoke({ "compile", "--library", "vendor", "--quiet", "cells.sv" });
+    elaborate({ "vendor_top" });
+    assert_output(simulate(), "EMPTY_MAPPED");
+
+    fs::current_path(consumer);
+    invoke({ "library", "map", "vendor", "../shared/vendor" });
+    elaborate({ "vendor_top" });
+    assert_output(simulate(), "EMPTY_MAPPED");
+}
+
 // A library compiled in one workspace and a consumer in another include one
 // header, reached by the consumer through an absolute include directory: both
 // name the same file, so the consumer compiles and elaborates.
@@ -805,7 +830,9 @@ void assert_coverage_transparent(const std::string& snapshot,
     for (const auto* engine : { "interpreter", "v4" })
         covered[engine] = simulation_output(snapshot, engine);
     assert(covered["interpreter"] == covered["v4"]);
-    std::ifstream input { fs::absolute(source), std::ios::binary };
+    // Text mode, as write_file writes: a binary read would turn Windows line
+    // ends into \r\r\n when written again and so move every source line.
+    std::ifstream input { fs::absolute(source) };
     const std::string text { std::istreambuf_iterator<char> { input },
         std::istreambuf_iterator<char> { } };
     assert(!text.empty());
@@ -1972,6 +1999,7 @@ int main(const int argc, const char* const* argv)
             test_edited_shared_header_with_one_consumer_recompiled },
         Case { "mapped-library", test_external_library_mapping_and_current_directory },
         Case { "mapped-library-header", test_mapped_library_shares_a_header },
+        Case { "mapped-empty-library", test_map_empty_directory_then_compile },
         Case { "object-other-root", test_object_elaborated_from_another_root },
         Case { "language-tops", test_language_qualification_and_multiple_roots },
         Case { "procedural-coverage", test_module_procedural_coverage },

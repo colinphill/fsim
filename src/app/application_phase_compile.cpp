@@ -67,17 +67,39 @@ artifact::ObjectSourceCoverage source_coverage(
   return { contents.size(), controls.error, std::move(controls.exclusions) };
 }
 
+std::filesystem::path relative_source_path(
+    const std::filesystem::path& path,
+    const std::filesystem::path& root) {
+  const auto leaves_root = [](const std::filesystem::path& candidate) {
+    return candidate.empty() || *candidate.begin() == "..";
+  };
+  auto relative = path.lexically_relative(root);
+  if (leaves_root(relative)) {
+    auto canonical = support::detail::normalized_absolute_path(path)
+        .lexically_relative(support::detail::normalized_absolute_path(root));
+    if (!canonical.empty() && (relative.empty() || !leaves_root(canonical))) {
+      return canonical;
+    }
+  }
+  return relative;
+}
+
 // Objects reference sources by their path relative to the source root (the
 // compiling workspace or --base-directory); a source outside it is reached
-// with "..". Where the object is saved does not change its bytes.
+// with "..". Where the object is saved does not change its bytes. A source
+// with no relative path (on Windows, on another drive or share than the
+// root) is referenced by its absolute path.
 std::optional<std::filesystem::path> source_reference(
     const std::filesystem::path& path,
     const std::filesystem::path& base,
     diagnostic::Engine& diagnostics) {
   const auto root = std::filesystem::absolute(base).lexically_normal();
   const auto absolute = (path.is_absolute() ? path : root / path).lexically_normal();
-  auto relative = absolute.lexically_relative(root);
-  if (relative.empty() || relative == ".") {
+  auto relative = relative_source_path(absolute, root);
+  if (relative.empty()) {
+    return absolute;
+  }
+  if (relative == ".") {
     diagnostics.error(
         "FSIM-ART-0004",
         "compilation source has no path relative to the source root: "

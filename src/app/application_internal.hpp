@@ -687,6 +687,15 @@ bool same_source_path(
 [[nodiscard]] std::optional<std::filesystem::path> embedded_plugin_directory(
     std::string& error);
 
+// The path from absolute, normalized `root` to `path`, empty where none
+// exists. Files are also named by canonical paths (included files, workspace
+// libraries), which may spell a directory otherwise: a Windows 8.3 short
+// name or substituted drive, a symbolic link. Where the lexical path leaves
+// the root, or none exists, both are retried canonical.
+[[nodiscard]] std::filesystem::path relative_source_path(
+    const std::filesystem::path& path,
+    const std::filesystem::path& root);
+
 // The path an artifact records for a source: relative to `workspace`,
 // reaching outside it with "..". Artifacts never hold the source text.
 [[nodiscard]] std::optional<std::filesystem::path> source_reference(

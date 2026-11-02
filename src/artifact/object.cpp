@@ -36,11 +36,14 @@ constexpr std::string_view kIoCode = "FSIM-ART-0003";
 constexpr std::uint64_t kMaximumMetadataBytes = 256U * 1024U * 1024U;
 
 // A referenced source: a relative path that may climb out of the compiling
-// workspace with "..", but is never absolute and has no empty or "."
-// components.
+// workspace with "..", or an absolute path where none exists (on Windows,
+// another drive or share), with no empty or "." components.
 bool source_reference_path(const std::filesystem::path& path) {
-  if (path.empty() || path.is_absolute() || path.has_root_name()
-      || path.has_root_directory() || path.lexically_normal() != path) {
+  // Spellings are compared: normalizing respells a UNC share's root name.
+  if (path.empty()
+      || support::path_to_utf8(path.lexically_normal()) != support::path_to_utf8(path)
+      || ((path.has_root_name() || path.has_root_directory())
+          && !(path.is_absolute() && path.has_root_name()))) {
     return false;
   }
   return std::ranges::none_of(path, [](const auto& component) {
@@ -465,7 +468,7 @@ bool validate_metadata(
         || item.compatibility_profile != metadata.compatibility_profile) {
       error(
           diagnostics, kValueCode,
-          "object sources require unique relative source references, no "
+          "object sources require unique source references, no "
           "source text, matching language, standard, compatibility profile, "
           "and lowercase SHA-256 content digests", source);
     }

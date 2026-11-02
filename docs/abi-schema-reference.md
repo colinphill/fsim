@@ -148,7 +148,7 @@ type information.
 | Family | Current identity | Top-level content |
 | --- | --- | --- |
 | `fsim.toml` (retained SDK reader) | project schema 3 | low-level project configuration; public CLI commands use the current-directory workspace and do not read this file |
-| `.fsimobj` | one SQLite container (kind `fsim-object`) holding format 10, portable schema 16, compiled-HIR bundle 3 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and source paths (relative to the source root: the compiling workspace, or the base directory outside one) with content digests and coverage facts, never source text |
+| `.fsimobj` | one SQLite container (kind `fsim-object`) holding format 10, portable schema 16, compiled-HIR bundle 3 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and source paths (relative to the source root: the compiling workspace, or the base directory outside one; absolute only for a Windows source on another drive or share) with content digests and coverage facts, never source text |
 | `.fsimdesign` | one SQLite container (kind `fsim-design`) holding format 16, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, class-specialization, SDF, trace, SystemC, and SCV state. Each payload checksum is `xxh64:` and sixteen lowercase hex digits (XXH64, seed 0; the integrity check simulate repeats at load) or lowercase SHA-256 hex |
 | `.fsimlib` | one SQLite container (kind `fsim-library`) holding canonical TOML format 8, portable schema 16, compiled-HIR bundle 3 | logical-library metadata, compiled semantic/SV/VHDL HIR, source paths with content digests and coverage facts (never source text), and optional exact native accelerators |
 | Workspace library catalog | SQLite schema 3 | artifact and dependency indexes with VHDL identifier-form columns |
@@ -172,7 +172,12 @@ form. SQLite schema 3 stores both forms as checked integer values.
 
 Objects and exported libraries record source paths relative to the source
 root they were compiled in, so where an artifact is saved, or where its
-checkout is moved, does not change its bytes. On load, an object inside a
+checkout is moved, does not change its bytes. A Windows source on another
+drive or share than that root has no relative path and is recorded by its
+absolute path (`D:/src/top.sv`, `//server/share/top.sv`); a path with a root
+but no drive or share is never accepted. Relative paths are found by
+canonical spelling too, so an 8.3 short name, substituted drive, or symbolic
+link in the root does not reach the artifact. On load, an object inside a
 workspace library (`<root>/.fsim/libraries/<library>/`) resolves its paths
 against that workspace, so a mapped library finds its own sources; any other
 object or library resolves them against the consumer's base directory. When
@@ -256,7 +261,8 @@ SystemC source + dependencies
 Portable identity includes the logical language, exact VHDL/Verilog/
 SystemVerilog revision and compatibility profile, library, source/unit content
 digests, package dependencies, selected roots, bindings, and nested schema
-identities. Producer absolute paths are excluded; logical and artifact-relative
+identities. Producer absolute paths are excluded, except the Windows drive or
+share path of a source with no path relative to its root; logical and artifact-relative
 source coordinates remain available to diagnostics, debugger, API, and trace.
 
 Native LLVM identity additionally includes build configuration, LLVM version,

@@ -26,6 +26,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -328,6 +329,27 @@ ArtifactSnapshot capture_artifact(
         return entry.first;
     });
     return snapshot;
+}
+
+// " <kind>(<payload>,...)" naming the payloads of two snapshots that differ
+// or exist in only one, or "" when they match.
+std::string snapshot_difference(const std::string_view kind,
+    const ArtifactSnapshot& left, const ArtifactSnapshot& right)
+{
+    std::map<std::string, std::pair<const std::string*, const std::string*>>
+        payloads;
+    for (const auto& [name, bytes] : left)
+        payloads[name].first = &bytes;
+    for (const auto& [name, bytes] : right)
+        payloads[name].second = &bytes;
+    std::string names;
+    for (const auto& [name, bytes] : payloads) {
+        if (bytes.first == nullptr || bytes.second == nullptr
+            || *bytes.first != *bytes.second) {
+            names += (names.empty() ? "" : ",") + name;
+        }
+    }
+    return names.empty() ? "" : " " + std::string { kind } + "(" + names + ")";
 }
 
 void require_determinism_snapshot(
@@ -1578,9 +1600,9 @@ void run_artifact_worker_determinism_test(
         const auto label = "relocation-" + std::to_string(relocation);
         const auto snapshot = capture(checkout, label, 4U);
         const auto parts = std::string { snapshot.cache == relocation_reference->cache ? "" : " cache" }
-            + (snapshot.object == relocation_reference->object ? "" : " object")
-            + (snapshot.library == relocation_reference->library ? "" : " library")
-            + (snapshot.design == relocation_reference->design ? "" : " design");
+            + snapshot_difference("object", snapshot.object, relocation_reference->object)
+            + snapshot_difference("library", snapshot.library, relocation_reference->library)
+            + snapshot_difference("design", snapshot.design, relocation_reference->design);
         require_determinism_snapshot(
             snapshot == *relocation_reference,
             label + " at 4 workers vs worker-count-checkout worker-4:" + parts);
@@ -3112,6 +3134,16 @@ int main()
     assert(fsim::app::application_detail::same_source_path(
         std::filesystem::path { "D:\\Build\\Sources\\Top.sv" },
         std::filesystem::path { "d:/build/sources/top.sv" }));
+    // A source on another drive than the source root has no relative path:
+    // an object references it absolutely.
+    {
+        fsim::diagnostic::Engine reference_diagnostics;
+        const auto reference = fsim::app::application_detail::source_reference(
+            fsim::support::path_from_utf8("Q:/sources/top.sv"),
+            fsim::support::path_from_utf8("C:/work"), reference_diagnostics);
+        assert(reference && !reference_diagnostics.has_error());
+        assert(fsim::support::path_to_utf8(*reference) == "Q:/sources/top.sv");
+    }
 #endif
     const auto unique = std::to_string(
         std::chrono::steady_clock::now().time_since_epoch().count());

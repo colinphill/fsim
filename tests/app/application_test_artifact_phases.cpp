@@ -30,6 +30,7 @@ namespace fsim::test {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
+    const ScopedCurrentDirectory source_root { directory / "work" };
     static_assert(app::kRuntimeStateSchema == 91);
     static_assert(app::kSemanticStateSchema == 4);
     static_assert(app::kDesignIrStateSchema == 5);
@@ -1713,8 +1714,11 @@ end architecture;
         }
         auto nonportable_records = built->semantics.records();
         assert(!nonportable_records.source_files.empty());
-        const auto nonportable_source_path = support::path_to_utf8(
-            std::filesystem::absolute(directory / "producer-source.sv"));
+        // Rooted but on no drive or share: an unrelocated producer path on
+        // every platform (a Windows drive or share path names a source
+        // with no relative path).
+        const std::string nonportable_source_path {
+            "/producer/producer-source.sv" };
         nonportable_records.source_files.front().physical_name
             = nonportable_source_path;
         auto nonportable_semantics = semantic::Model::from_records(
