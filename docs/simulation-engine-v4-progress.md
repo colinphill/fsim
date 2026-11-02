@@ -138,6 +138,64 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-02: Artifacts and caches as single SQLite files, no source text (`4c9ab5a6`, `7215b341`, `e854055c`, `f2337546`, sweeps `v4c67`, `v4c67a`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md` (owner, 11-01).
+
+**What landed:**
+- **Containers:** every artifact is one SQLite file (application id `FSIM`, container schema 1) whose payloads are checksummed blobs. It is written beside its destination and renamed into place. Nothing is made read-only, so `.fsim` deletes without a permission change.
+  - Objects: one `.fsimobj` per primary unit, named after it (`<entity>-<arch>`, `<pkg>-body`; merged `$unit` objects take their first unit's name). Format 10, catalog schema 3.
+  - Snapshots: `.fsim/snapshots/<name>.fsimdesign`, format 16.
+  - Exported libraries: one `.fsimlib`, format 8.
+  - SystemC `.fsimscobj`/`.fsimscplugin`: format 2.
+- **Caches:** one database each (`cache/static-kernel.sqlite3`, `compiled-hir.sqlite3`, `systemc.sqlite3`).
+- **No source text:** artifacts record source paths and SHA-256 digests. Coverage identity and pragma controls are stored as data.
+- **Legacy layout:** older catalogs and snapshot directories give one diagnostic (FSIM-WS-001) naming the platform's command to make them writable before deleting them.
+- **Source paths (owner, 11-01: root-relative):**
+  - Objects record paths relative to the source root they were compiled in: the workspace, or the base directory outside one. Where an artifact is saved, or where its checkout moves, does not change its bytes.
+  - An object in `<root>/.fsim/libraries/<lib>/` resolves against that workspace, so mapped libraries find their own sources. Other objects resolve against the consumer's base directory.
+  - For those, a source that exists there with other contents than were compiled warns once per object (`FSIM-ART-0006`, owner choice). A missing source stays silent.
+
+**Faults the removed source copies had hidden** (148 losses on the first sweep `v4c65`, all fixed):
+- sv-tests UVM (130) and vests (13): source identities collided across workspaces. Fixed by the source-root rule, plus compiled-HIR identities keyed by absolute path.
+- ivtest `vpi_br_gh1037`: duplicate source records made span lookups pick the package instance. The linker now keeps one file, expansion and span record per position.
+- nvc `genpack8`: a protected object named through a package instance now binds by the instance declaration, not by the template's span.
+- ivtest `fileline`, `br_gh782a/b`: the corpus runner maps real `ivltests` paths.
+- The span merge then lost 13 verilator DPI cases on `v4c66`. One `import "DPI-C"` in a file split into several objects is one position in several compilation units. A DPI profile source is now unique per owner scope.
+
+**Gate:**
+- ct4 on `f2337546`: 1079/1079 in all four variants. The three closure audits pin the catalog count (now 2975).
+- Normal sweep `v4c67` (frozen `e854055c`): 0 losses against `v4c64`.
+- AOT sweep `v4c67a`: 0 losses against `v4c64a`.
+- `f2337546` only adds the warning for objects outside a workspace; corpus runs use workspaces.
+- Census tables identical to `v4c64`/`v4c64a` (one first-example name differs).
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+- The vgate and fuzz work directories held old-layout `.fsim` trees; they were deleted with the owner's approval.
+
+| Suite | v4c64 passed / in scope | v4c67 passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2638 / 2638 | 2638 / 2638 | 273 |
+| nvc | 1259 / 1259 | 1259 / 1259 | 223 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
+**D6 campaign `v4c67q`** (3 samples, quiet host):
+
+| Measure | v4c64 | v4c67 |
+|---|---:|---:|
+| Geomean e2e (× xsim) | 3.88× | 3.88× |
+| Minimum simulate (× xsim) | 3.52× (mixed_codec) | 3.62× (mixed_codec) |
+| original_codec e2e, fsim / xsim | 9.77 s / 27.61 s | 10.16 s / 27.15 s |
+
+A first campaign `v4c67`, started as the sweeps ended (5-minute load 5.2), showed elaborate +2.0 s on original_codec. Pinned back-to-back runs then gave 8.69/8.72/8.56 s for v4c67 against 9.26/8.85/8.86 s for v4c64, so the code is not slower, and the quiet rerun above confirms it. The exit floors (e2e ≥ 3.5×, every simulate ≥ 3×) hold.
+
+**Kept, for the owner:** the `.writer-lock` directory; the project `.fsim-sim-cache` (goes with project-mode removal); the `make_tree_writable` test helpers; the compiled-HIR cache key holds the fsim version but not the build (pre-existing). Also found and pre-existing: two generic-package instances with a protected type in one scope conflate (also fails on `v4c64`).
+
+**Next:** remove project mode, keeping workspace mode only (owner, 11-01).
+
 ### 2026-11-01: Cone code generator stopped; D9, outline default, verify hardening (`0c4721eb`, sweeps `v4c64`, `v4c64a`)
 
 **Cone code generator (owner approved the plan 11-01; owner stopped it 11-01).** Details: `.local-artifacts/v4-migration/triage/cone-codegen-plan-1101.md`.
