@@ -450,8 +450,8 @@ fsim_installed_workspace_command("archive_top" library objects work)
 file(REMOVE "${workspace}/top.sv")
 fsim_installed_workspace_command("" elaborate work.archive_top)
 fsim_installed_workspace_command("" elaborate work.archive_top --snapshot retained)
-if(NOT EXISTS "${workspace}/.fsim/snapshots/default"
-    OR NOT EXISTS "${workspace}/.fsim/snapshots/retained")
+if(NOT EXISTS "${workspace}/.fsim/snapshots/default.fsimdesign"
+    OR NOT EXISTS "${workspace}/.fsim/snapshots/retained.fsimdesign")
   message(FATAL_ERROR "installed elaboration did not publish both snapshots")
 endif()
 fsim_installed_workspace_command("" library delete work)
