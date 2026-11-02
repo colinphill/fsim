@@ -167,12 +167,20 @@ struct CheckedProject : semantic::CompiledDesign {
 };
 
 struct MappedLibraryProvenance {
+    struct Input {
+        std::string language;
+        std::string standard;
+        std::string compatibility_profile { "none" };
+    };
     std::string library;
     std::string metadata_digest;
     std::vector<std::string> unit_checksums;
     bool native_accepted { };
     std::string native_kind;
     std::string native_fingerprint;
+    /// The language, standard and profile of the library's units.
+    std::vector<Input> inputs;
+    std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
 };
 
 /// Source-profile identity retained for each analyzed VHDL library unit. The

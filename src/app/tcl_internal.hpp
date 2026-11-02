@@ -20,6 +20,14 @@ namespace fsim::app::tcl_detail {
 
 class TclTranscript;
 
+// The configuration that fsim::config, fsim::coverage and fsim::bind
+// change. `layer` is that of the script being sourced, else session.
+struct TclConfigurationState {
+    std::shared_ptr<project::Configuration> configuration;
+    project::ConfigLayer layer { project::ConfigLayer::session };
+    std::filesystem::path script;
+};
+
 struct TclContext {
     cli::Invocation invocation;
     project::Config config;
@@ -51,6 +59,7 @@ struct TclContext {
     std::optional<elaboration::ElaboratedDesign> sdf_baseline_design { };
     std::string sdf_base_cache_key { };
     std::vector<std::string> sdf_base_specialization_keys { };
+    TclConfigurationState configuration { };
 };
 
 Tcl_Size tcl_size(std::size_t value);
@@ -83,6 +92,25 @@ const semantic::design::DesignIr* current_design_ir(const TclContext&);
 // Native workspace commands call this only after successful publication.
 void catalog_changed(
     TclContext&, std::string_view library, TclCatalogMutation mutation);
+
+// The configuration commands, on a state of their own: the Tcl session
+// reaches them through its catalog, the configuration loader of the other
+// commands registers them alone.
+int configuration_settings_command(
+    TclConfigurationState&, Tcl_Interp*, Tcl_Size, Tcl_Obj* const[]);
+int coverage_settings_command(
+    TclConfigurationState&, Tcl_Interp*, Tcl_Size, Tcl_Obj* const[]);
+int bind_settings_command(
+    TclConfigurationState&, Tcl_Interp*, Tcl_Size, Tcl_Obj* const[]);
+
+// Creates ::fsim::config, ::fsim::coverage and ::fsim::bind on `state`
+// alone, for an interpreter that runs only configuration scripts.
+bool register_configuration_commands(Tcl_Interp*, TclConfigurationState&);
+
+// Sources the configuration scripts of `workspace`, each in its layer.
+// FSIM-TCL-CFG-001 reports the first that fails.
+bool source_configuration_scripts(TclConfigurationState&, Tcl_Interp*,
+    const std::filesystem::path& workspace, diagnostic::Engine&);
 
 // Loads a snapshot transactionally, preserving the previous session on error.
 int reload_snapshot(

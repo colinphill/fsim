@@ -22,7 +22,7 @@ cli::Services make_cli_services(std::istream& input) {
             output,
             error);
       };
-  return {
+  cli::Services services {
       handle_check,
       handle_build,
       handle_run,
@@ -41,6 +41,10 @@ cli::Services make_cli_services(std::istream& input) {
       handle_workspace_library,
       handle_workspace_library,
       handle_workspace_library};
+  services.load_configuration = static_cast<bool (*)(const cli::Invocation&,
+      project::Configuration&, diagnostic::Engine&)>(load_configuration_scripts);
+  services.snapshot_info = handle_workspace_snapshot_info;
+  return services;
 }
 
 cli::Services make_cli_services() {

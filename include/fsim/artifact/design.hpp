@@ -18,7 +18,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kDesignFormatVersion = 17;
+inline constexpr std::uint32_t kDesignFormatVersion = 18;
 inline constexpr std::string_view kDesignArtifactKind = "fsim-design";
 // The design metadata record, one payload of the .fsimdesign container.
 inline constexpr std::string_view kDesignMetadataFilename = "fsim-design.bin";
@@ -35,6 +35,39 @@ struct DesignBinding {
   std::optional<std::string> target;
   std::optional<std::string> resolver;
   friend bool operator==(const DesignBinding&, const DesignBinding&) = default;
+};
+
+// A configuration-script setting in force at elaboration: an `elaborate.*`
+// key or a keyed coverage or binding entry, with where it was made.
+struct DesignSetting {
+  std::string key;
+  std::string value;
+  std::string origin;
+  friend bool operator==(const DesignSetting&, const DesignSetting&) = default;
+};
+
+// The language, standard and compatibility profile of a mapped library's
+// units, as an object input records them for its own.
+struct DesignMappedLibraryInput {
+  std::string language;
+  std::string standard;
+  std::string compatibility_profile{"none"};
+  friend bool operator==(
+      const DesignMappedLibraryInput&, const DesignMappedLibraryInput&) = default;
+};
+
+// An exported library (.fsimlib) whose units the design was elaborated from.
+struct DesignMappedLibrary {
+  std::string library;
+  std::string metadata_digest;
+  std::vector<DesignMappedLibraryInput> inputs;
+  std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
+  std::vector<std::string> unit_checksums;
+  bool native_accepted{};
+  std::string native_kind;
+  std::string native_fingerprint;
+  friend bool operator==(
+      const DesignMappedLibrary&, const DesignMappedLibrary&) = default;
 };
 
 struct DesignObjectInput {
@@ -143,6 +176,8 @@ struct DesignMetadata {
   std::vector<DesignSystemCPlugin> systemc_plugins;
   std::vector<DesignPayload> payloads;
   std::vector<std::string> specialization_cache_keys;
+  std::vector<DesignSetting> settings;
+  std::vector<DesignMappedLibrary> mapped_libraries;
   std::uint64_t unit_count{};
   std::uint64_t semantic_source_count{};
   std::uint64_t specialization_count{};

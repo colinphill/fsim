@@ -283,10 +283,6 @@ public:
     /// time step. Not called for the kernel's own publication or
     /// materialization (Impl::import_static_kernel_write filters those).
     void import_host_write(SignalId signal, SignalChangeOrigin origin);
-    /// A package static initializer that the application's class services
-    /// run before time zero (IEEE 1800-2023 6.21) wrote `signal` on the
-    /// host: a kernel-owned signal takes that value.
-    void import_startup_write(SignalId signal);
     /// Hosted tier: a wake of a hosted process, redirected from the host
     /// scheduler's queue_* entry points (Impl::static_kernel_enqueue_hosted).
     /// Runs the process to its next suspension on its hosted tier; false when

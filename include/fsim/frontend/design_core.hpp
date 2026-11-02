@@ -579,6 +579,11 @@ struct Type {
     // are retained here while packed_range mirrors their flattened width once
     // every bound is concrete.
     std::vector<PackedRangeExpression> systemverilog_packed_dimensions;
+    // Packed dimensions declared over a named type whose shape the parser
+    // does not hold (`pkg::word_t [1:0]` with the package compiled apart,
+    // IEEE 1800-2023 7.4.1), outermost first. The HIR builder applies them
+    // to the shape the name selects.
+    std::vector<PackedRangeExpression> systemverilog_named_type_dimensions;
     // The unpacked dimensions of an interface port array (`a_if p [N]`),
     // whose elements bind to the connected interface array's elements.
     std::vector<PackedRangeExpression> systemverilog_interface_array_dimensions;
@@ -992,6 +997,9 @@ struct VariableDeclaration {
     // initialized by its value. Only a non-local one may be overridden.
     bool systemverilog_parameter { };
     bool systemverilog_local_parameter { };
+    // The parameter's named type is an unpacked type of another unit's
+    // package, so it is a constant container like an inline one.
+    bool systemverilog_named_container { };
     // True for a VHDL protected-type state object that is not publicly
     // selectable. Legacy body variables are implicitly private; VHDL-2019
     // declaration members can carry the explicit `private` qualifier.

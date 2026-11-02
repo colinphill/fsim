@@ -679,6 +679,7 @@ CompiledDesign::CompiledDesign(const CompiledDesign& other)
     , vhdl_hir { other.vhdl_hir }
     , dependencies_ { other.dependencies_ }
     , references_ { other.references_ }
+    , vhdl_analysis_order_ { other.vhdl_analysis_order_ }
 {
     refresh_lookup_indexes();
 }
@@ -694,6 +695,7 @@ CompiledDesign::CompiledDesign(CompiledDesign&& other)
     , vhdl_hir { std::move(other.vhdl_hir) }
     , dependencies_ { std::move(other.dependencies_) }
     , references_ { std::move(other.references_) }
+    , vhdl_analysis_order_ { std::move(other.vhdl_analysis_order_) }
     , lookup_indexes_ { std::move(other.lookup_indexes_) }
 {
     lookup_indexes_.owner = this;
@@ -725,6 +727,7 @@ CompiledDesign& CompiledDesign::operator=(CompiledDesign&& other)
     vhdl_hir = std::move(other.vhdl_hir);
     dependencies_ = std::move(other.dependencies_);
     references_ = std::move(other.references_);
+    vhdl_analysis_order_ = std::move(other.vhdl_analysis_order_);
     lookup_indexes_ = std::move(other.lookup_indexes_);
     lookup_indexes_.owner = this;
     other.lookup_indexes_.initialized = false;
@@ -1274,6 +1277,26 @@ CompiledDesign::systemverilog_units() const noexcept
 std::span<const vhdl::Unit> CompiledDesign::vhdl_units() const noexcept
 {
     return vhdl_hir.units();
+}
+
+void CompiledDesign::set_vhdl_analysis_order(
+    std::vector<std::string> content_digests)
+{
+    vhdl_analysis_order_ = std::move(content_digests);
+}
+
+std::optional<std::size_t> CompiledDesign::vhdl_analysis_rank(
+    const std::string_view content_digest) const noexcept
+{
+    if (content_digest.empty()) {
+        return std::nullopt;
+    }
+    for (auto index = vhdl_analysis_order_.size(); index > 0U; --index) {
+        if (vhdl_analysis_order_[index - 1U] == content_digest) {
+            return index - 1U;
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<const vhdl::Unit*> CompiledDesign::vhdl_primary_unit(

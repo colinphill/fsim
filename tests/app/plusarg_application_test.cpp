@@ -2,6 +2,7 @@
 #include "fsim/app/application.hpp"
 #include "fsim/app/design_artifact.hpp"
 #include "application_workflow_test_support.hpp"
+#include "../api/api_workspace_support.hpp"
 
 #include <array>
 #include <cassert>
@@ -134,25 +135,6 @@ Capture run_once(
     return execute(std::move(*project), engine, plusargs);
 }
 
-int run_cli(
-    const std::vector<std::string>& arguments,
-    std::istream& input,
-    std::ostream& output,
-    std::ostream& error)
-{
-    std::vector<const char*> raw;
-    raw.reserve(arguments.size());
-    for (const auto& argument : arguments) {
-        raw.push_back(argument.c_str());
-    }
-    return fsim::test::run_fixture_command(
-        static_cast<int>(raw.size()),
-        raw.data(),
-        fsim::test::make_fixture_services(input),
-        output,
-        error);
-}
-
 void test_plusargs(
     const std::filesystem::path& directory,
     const std::filesystem::path& source,
@@ -210,30 +192,35 @@ void test_plusargs(
     assert(compiled.compiled_processes == 0);
 }
 
+// Runs `fsim simulate ARGUMENTS...` in the workspace that holds DESIGN; the
+// first call compiles and elaborates it there.
+fsim::tests::api_workspace::CommandResult simulate_cli(
+    const std::filesystem::path& design, std::vector<std::string> arguments)
+{
+    namespace workspace = fsim::tests::api_workspace;
+    static bool prepared = false;
+    if (!prepared) {
+        workspace::prepare(design.parent_path(),
+            "fsim::config set compile.sv.standard 2017\n"
+            "fsim::config set elaborate.time_resolution 1ns\n"
+            "fsim::config set elaborate.optimization O2\n"
+            "fsim::config set simulate.max_deltas 1000\n",
+            { design.filename().string() }, "sv:work.plusarg_test");
+        prepared = true;
+    }
+    arguments.insert(arguments.begin(), "simulate");
+    return workspace::run_streams(design.parent_path(), std::move(arguments));
+}
+
 void test_cli_plusargs(
     const std::filesystem::path& directory,
-    const std::filesystem::path& manifest)
+    const std::filesystem::path& design)
 {
-    std::istringstream input;
-    std::ostringstream output;
-    std::ostringstream error;
-    const auto result = run_cli(
-        {
-            "fsim",
-            "run",
-            "-p",
-            manifest.string(),
-            "+FLAGGED",
-            "+COUNT=-17",
-            "+WIDE=1010",
-            "+TEXT=from_cli",
-        },
-        input,
-        output,
-        error);
-    assert(result == 0);
-    assert(error.str().empty());
-    assert(output.str().find("text=from_cli\n") != std::string::npos);
+    const auto result = simulate_cli(design,
+        { "+FLAGGED", "+COUNT=-17", "+WIDE=1010", "+TEXT=from_cli" });
+    assert(result.status == 0);
+    assert(result.error.empty());
+    assert(result.output.find("text=from_cli\n") != std::string::npos);
     static_cast<void>(directory);
 }
 
@@ -563,31 +550,13 @@ module unbounded_top;
 endmodule
 )";
     }
-    const auto manifest = directory.path / "fsim.toml";
-    {
-        std::ofstream output(manifest);
-        output
-            << "schema = 3\n"
-            << "[project]\n"
-            << "name = \"plusarg-test\"\n"
-            << "top = \"sv:work.plusarg_test\"\n"
-            << "time_resolution = \"1ns\"\n"
-            << "[[source_set]]\n"
-            << "language = \"systemverilog\"\n"
-            << "standard = \"2017\"\n"
-            << "library = \"work\"\n"
-            << "files = [\"plusarg_test.sv\"]\n"
-            << "[build]\n"
-            << "optimization = \"O2\"\n"
-            << "cache_path = \"cli-cache\"\n"
-            << "[run]\n"
-            << "max_deltas = 1000\n";
-    }
+    // The CLI cases build and run the design from its source.
+    const auto design = directory.path / "plusarg_test.sv";
     test_plusargs(
         directory.path, source, fsim::project::Optimization::o0);
     test_plusargs(
         directory.path, source, fsim::project::Optimization::o2);
-    test_cli_plusargs(directory.path, manifest);
+    test_cli_plusargs(directory.path, design);
     test_invalid_plusargs(directory.path);
     test_unbounded(directory.path, unbounded_source);
     test_invalid_unbounded(directory.path);

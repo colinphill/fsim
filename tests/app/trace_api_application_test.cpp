@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/api.h"
 #include "fsim/app/trace_api.hpp"
+#include "../api/api_workspace_support.hpp"
 
 #include <cassert>
 #include <chrono>
@@ -331,7 +332,6 @@ void test_c_api_runtime_lifecycle_and_callback_queries()
 {
     TemporaryDirectory temporary;
     const auto source = temporary.path() / "trace_api.sv";
-    const auto manifest = temporary.path() / "fsim.toml";
     const auto output = temporary.path() / "callback.fst";
     write_text(source,
         "module trace_api;\n"
@@ -342,28 +342,19 @@ void test_c_api_runtime_lifecycle_and_callback_queries()
         "    #1 $finish;\n"
         "  end\n"
         "endmodule\n");
-    write_text(manifest,
-        "schema = 3\n"
-        "[project]\n"
-        "name = \"trace-api\"\n"
-        "top = \"sv:work.trace_api\"\n"
-        "time_resolution = \"1ns\"\n\n"
-        "[[source_set]]\n"
-        "language = \"systemverilog\"\n"
-        "standard = \"2017\"\n"
-        "library = \"work\"\n"
-        "files = [\"trace_api.sv\"]\n\n"
-        "[build]\n"
-        "optimization = \"O0\"\n"
-        "cache_path = \"cache\"\n\n"
-        "[run]\n"
-        "max_deltas = 1000\n");
+    namespace workspace = fsim::tests::api_workspace;
+    workspace::isolate_user_configuration(temporary.path() / "user-config");
+    workspace::write_configuration(temporary.path(),
+        "fsim::config set elaborate.time_resolution 1ns\n");
+    workspace::expect(temporary.path(),
+        { "compile", "--lang", "systemverilog", "--standard", "2017",
+            "--library", "work", "trace_api.sv" });
+    workspace::expect(
+        temporary.path(), { "elaborate", "-O", "O0", "sv:work.trace_api" });
+    const auto workspace_text = temporary.path().string();
 
     fsim_session_t session = FSIM_INVALID_SESSION;
     assert(fsim_session_create(nullptr, &session) == FSIM_STATUS_OK);
-    const auto manifest_text = manifest.string();
-    assert(fsim_session_load_project(session, manifest_text.c_str())
-        == FSIM_STATUS_OK);
 
     const fsim_string_view_t selections[] { view("trace_api.q") };
     fsim_trace_options_t options { };
@@ -388,7 +379,8 @@ void test_c_api_runtime_lifecycle_and_callback_queries()
     callbacks.user_data = &callback_state;
     callbacks.lifecycle = trace_lifecycle_callback;
     assert(fsim_session_set_callbacks(session, &callbacks) == FSIM_STATUS_OK);
-    assert(fsim_session_build(session) == FSIM_STATUS_OK);
+    assert(fsim_session_open_snapshot(session, workspace_text.c_str(), nullptr)
+        == FSIM_STATUS_OK);
     assert(callback_state.loaded_status);
     assert(callback_state.loaded_report);
     assert(callback_state.callback_configuration == FSIM_STATUS_UNAVAILABLE);
@@ -404,7 +396,8 @@ void test_c_api_runtime_lifecycle_and_callback_queries()
     assert((std::filesystem::path(std::string {
                 status.output.data, status.output.size })
         == output));
-    assert(fsim_session_build(session) == FSIM_STATUS_OK);
+    assert(fsim_session_open_snapshot(session, workspace_text.c_str(), nullptr)
+        == FSIM_STATUS_OK);
     std::size_t diagnostic_count = 1U;
     assert(fsim_session_diagnostic_count(session, &diagnostic_count)
         == FSIM_STATUS_OK);
@@ -430,12 +423,12 @@ void test_c_api_runtime_lifecycle_and_callback_queries()
     std::filesystem::create_directory(blocked_output);
     fsim_session_t failed_session = FSIM_INVALID_SESSION;
     assert(fsim_session_create(nullptr, &failed_session) == FSIM_STATUS_OK);
-    assert(fsim_session_load_project(failed_session, manifest_text.c_str())
-        == FSIM_STATUS_OK);
     options.output = view("blocked.fst");
     assert(fsim_session_configure_trace(failed_session, &options)
         == FSIM_STATUS_OK);
-    assert(fsim_session_build(failed_session) == FSIM_STATUS_RUNTIME_ERROR);
+    assert(fsim_session_open_snapshot(
+               failed_session, workspace_text.c_str(), nullptr)
+        == FSIM_STATUS_RUNTIME_ERROR);
     status.struct_size = sizeof(status);
     status.api_version = FSIM_API_VERSION;
     assert(fsim_session_get_trace_status(failed_session, &status)

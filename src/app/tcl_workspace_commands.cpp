@@ -277,6 +277,19 @@ namespace {
         dict_put(interpreter, result, "path",
             string_object(fsim::support::path_to_utf8(location.directory)));
         dict_put(interpreter, result, "mapped", Tcl_NewBooleanObj(location.mapped));
+        dict_put(interpreter, result, "exported", Tcl_NewBooleanObj(0));
+        return result;
+    }
+
+    Tcl_Obj* exported_library_object(
+        Tcl_Interp* interpreter, const workspace::ExportedLibrary& library)
+    {
+        Tcl_Obj* result = Tcl_NewDictObj();
+        dict_put(interpreter, result, "library", string_object(library.name));
+        dict_put(interpreter, result, "path",
+            string_object(fsim::support::path_to_utf8(library.path)));
+        dict_put(interpreter, result, "mapped", Tcl_NewBooleanObj(1));
+        dict_put(interpreter, result, "exported", Tcl_NewBooleanObj(1));
         return result;
     }
 
@@ -389,7 +402,7 @@ namespace {
 
     struct CompileOptions {
         std::optional<project::Language> language;
-        std::string library { "work" };
+        std::optional<std::string> library;
         std::optional<std::string> standard;
         cli::Verbosity verbosity { cli::Verbosity::normal };
         std::vector<std::filesystem::path> include_directories;
@@ -531,8 +544,11 @@ namespace {
         });
     }
 
+    // The options a command leaves out take the session configuration's
+    // defaults, as on the command line.
     std::optional<project::Config> compile_config(
         const TclContext& context,
+        const cli::Invocation& invocation,
         const CompileOptions& options,
         diagnostic::Engine& diagnostics)
     {
@@ -544,63 +560,31 @@ namespace {
                 return std::nullopt;
             }
             auto& systemc = config.systemc;
-            if (options.compiler) {
-                systemc.compiler = *options.compiler;
+            if (invocation.systemc_compiler) {
+                systemc.compiler = *invocation.systemc_compiler;
             }
-            for (const auto& directory : options.include_directories) {
+            for (const auto& directory : invocation.include_directories) {
                 systemc.include_directories.push_back(
                     normalized_source_path(config, directory));
             }
-            systemc.defines.insert(
-                systemc.defines.end(), options.defines.begin(), options.defines.end());
+            systemc.defines.insert(systemc.defines.end(),
+                invocation.defines.begin(), invocation.defines.end());
             systemc.compile_options.insert(systemc.compile_options.end(),
-                options.compile_options.begin(), options.compile_options.end());
+                invocation.systemc_compile_options.begin(),
+                invocation.systemc_compile_options.end());
             return config;
         }
-        project::SourceSet source_set;
-        const auto inherited = std::ranges::find_if(
-            config.source_sets, [&](const auto& candidate) {
-                return candidate.language == *options.language;
-            });
-        if (inherited != config.source_sets.end()) {
-            source_set = *inherited;
-        }
-        source_set.language = *options.language;
-        source_set.library = options.library;
-        source_set.files.clear();
-        source_set.file_patterns.clear();
-        for (const auto& source : options.sources) {
-            const auto path = normalized_source_path(config, source);
-            source_set.files.push_back(path);
-            source_set.file_patterns.push_back(path);
-        }
-        for (const auto& directory : options.include_directories) {
-            source_set.include_directories.push_back(
-                normalized_source_path(config, directory));
-        }
-        source_set.defines.insert(
-            source_set.defines.end(), options.defines.begin(), options.defines.end());
-        const auto requested_standard = options.standard
-            ? std::string_view { *options.standard }
-            : source_set.standard.empty()
-            ? project::default_standard(*options.language)
-            : std::string_view { source_set.standard };
-        const auto standard = project::canonical_standard(
-            *options.language, requested_standard);
-        if (!standard) {
-            diagnostics.error("FSIM-WS-TCL002",
-                "unsupported standard '" + std::string { requested_standard }
-                    + "' for " + std::string { project::to_string(*options.language) });
+        auto source_set = cli::make_source_set(
+            invocation, *options.language, diagnostics);
+        if (!source_set) {
             return std::nullopt;
         }
-        source_set.standard = std::string { *standard };
-        if (inherited == config.source_sets.end()
-            || config.manifest_path == "<workspace>") {
-            source_set.compilation_unit = *options.language == project::Language::vhdl
-                ? "file"
-                : "source-set";
+        for (const auto& source : options.sources) {
+            const auto path = normalized_source_path(config, source);
+            source_set->files.push_back(path);
+            source_set->file_patterns.push_back(path);
         }
-        config.source_sets.assign(1, std::move(source_set));
+        config.source_sets.assign(1, std::move(*source_set));
         config.project.top.clear();
         config.project.tops.clear();
         return config;
@@ -617,26 +601,40 @@ namespace {
         if (!options) {
             return TCL_ERROR;
         }
+        const bool systemc = *options->language == project::Language::systemc;
+        cli::Invocation invocation = context.invocation;
+        invocation.command = systemc ? cli::Command::systemc_compile
+                                     : cli::Command::compile;
+        invocation.verbosity = options->verbosity;
+        invocation.library_explicit = options->library.has_value();
+        invocation.library = options->library.value_or("work");
+        invocation.language = options->language;
+        invocation.standard = options->standard;
+        invocation.include_directories = options->include_directories;
+        invocation.defines = options->defines;
+        invocation.systemc_compiler = options->compiler;
+        invocation.systemc_compile_options = options->compile_options;
+        invocation.configuration = context.configuration.configuration;
+        if (invocation.configuration) {
+            cli::apply_configuration_defaults(
+                *invocation.configuration, invocation);
+        }
         diagnostic::Engine operation_diagnostics;
-        auto config = compile_config(context, *options, operation_diagnostics);
+        auto config = compile_config(
+            context, invocation, *options, operation_diagnostics);
         if (!config) {
             return fail_with_diagnostics(
                 context, interpreter, operation_diagnostics,
                 "cannot configure Tcl workspace compilation");
         }
 
-        cli::Invocation invocation = context.invocation;
-        invocation.command = *options->language == project::Language::systemc
-            ? cli::Command::systemc_compile
-            : cli::Command::compile;
-        invocation.verbosity = options->verbosity;
-        invocation.library = options->library;
         invocation.files.clear();
         for (const auto& source : options->sources) {
             invocation.files.push_back(normalized_source_path(*config, source));
         }
-        if (*options->language != project::Language::systemc) {
-            invocation.language = options->language;
+        if (systemc) {
+            invocation.language.reset();
+        } else {
             invocation.standard = config->source_sets.front().standard;
         }
         std::ostringstream output;
@@ -653,10 +651,10 @@ namespace {
         }
 
         catalog_changed(
-            context, options->library, TclCatalogMutation::replaced);
+            context, invocation.library, TclCatalogMutation::replaced);
         workspace::Store store(config->base_directory);
         std::string error;
-        const auto catalog = store.read_library(options->library, error);
+        const auto catalog = store.read_library(invocation.library, error);
         if (!catalog) {
             operation_diagnostics.error("FSIM-WS-TCL001", std::move(error));
             return fail_with_diagnostics(
@@ -673,7 +671,7 @@ namespace {
         }
 
         Tcl_Obj* result = Tcl_NewDictObj();
-        dict_put(interpreter, result, "library", string_object(options->library));
+        dict_put(interpreter, result, "library", string_object(invocation.library));
         dict_put(interpreter, result, "language",
             string_object(project::to_string(*options->language)));
         Tcl_Obj* sources = Tcl_NewListObj(0, nullptr);
@@ -717,7 +715,7 @@ namespace {
     }
 
     struct LinkOptions {
-        std::string library { "work" };
+        std::optional<std::string> library;
         cli::Verbosity verbosity { cli::Verbosity::normal };
         std::optional<std::string> compiler;
         std::vector<std::string> link_options;
@@ -783,21 +781,29 @@ namespace {
         if (!options) {
             return TCL_ERROR;
         }
-        auto config = context.initial_config;
-        auto& systemc = config.systemc;
-        if (options->compiler) {
-            systemc.compiler = *options->compiler;
-        }
-        systemc.link_options.insert(systemc.link_options.end(),
-            options->link_options.begin(), options->link_options.end());
-        systemc.libraries.insert(systemc.libraries.end(),
-            options->libraries.begin(), options->libraries.end());
-
         cli::Invocation invocation = context.invocation;
         invocation.command = cli::Command::systemc_link;
         invocation.verbosity = options->verbosity;
-        invocation.library = options->library;
+        invocation.library_explicit = options->library.has_value();
+        invocation.library = options->library.value_or("work");
         invocation.files.clear();
+        invocation.systemc_compiler = options->compiler;
+        invocation.systemc_link_options = options->link_options;
+        invocation.systemc_libraries = options->libraries;
+        if (const auto& configuration = context.configuration.configuration) {
+            cli::apply_configuration_defaults(*configuration, invocation);
+        }
+        auto config = context.initial_config;
+        auto& systemc = config.systemc;
+        if (invocation.systemc_compiler) {
+            systemc.compiler = *invocation.systemc_compiler;
+        }
+        systemc.link_options.insert(systemc.link_options.end(),
+            invocation.systemc_link_options.begin(),
+            invocation.systemc_link_options.end());
+        systemc.libraries.insert(systemc.libraries.end(),
+            invocation.systemc_libraries.begin(),
+            invocation.systemc_libraries.end());
         diagnostic::Engine operation_diagnostics;
         std::ostringstream output;
         std::ostringstream error_output;
@@ -809,10 +815,10 @@ namespace {
                 "SystemC library link failed");
         }
 
-        catalog_changed(context, options->library, TclCatalogMutation::replaced);
+        catalog_changed(context, invocation.library, TclCatalogMutation::replaced);
         workspace::Store store(config.base_directory);
         std::string error;
-        const auto catalog = store.read_library(options->library, error);
+        const auto catalog = store.read_library(invocation.library, error);
         if (!catalog) {
             operation_diagnostics.error("FSIM-WS-TCL001", std::move(error));
             return fail_with_diagnostics(
@@ -823,11 +829,11 @@ namespace {
             workspace::ArtifactKind::SystemCPlugin, &workspace::ArtifactRecord::kind);
         if (plugin == catalog->artifacts.end()) {
             return fail_command(context, interpreter, "FSIM-WS-TCL001",
-                "linked library '" + options->library + "' has no SystemC plug-in");
+                "linked library '" + invocation.library + "' has no SystemC plug-in");
         }
 
         Tcl_Obj* result = Tcl_NewDictObj();
-        dict_put(interpreter, result, "library", string_object(options->library));
+        dict_put(interpreter, result, "library", string_object(invocation.library));
         dict_put(interpreter, result, "plugin", artifact_object(interpreter, *plugin));
         Tcl_Obj* modules = Tcl_NewListObj(0, nullptr);
         for (const auto& unit : plugin->units) {
@@ -941,14 +947,6 @@ namespace {
         if (!options) {
             return TCL_ERROR;
         }
-        auto config = context.initial_config;
-        config.project.tops.clear();
-        config.project.top.clear();
-        for (const auto& top : options->tops) {
-            config.project.tops.push_back({ top, { } });
-        }
-        config.project.top = options->tops.front();
-
         cli::Invocation invocation = context.invocation;
         invocation.command = cli::Command::elaborate;
         invocation.snapshot = options->snapshot;
@@ -959,6 +957,15 @@ namespace {
             invocation.tops.push_back({ top, { } });
         }
         invocation.top = options->tops.front();
+        const auto& configuration = context.configuration.configuration;
+        if (configuration) {
+            cli::apply_configuration_defaults(*configuration, invocation);
+        }
+        auto config = context.initial_config;
+        cli::apply_invocation_options(invocation, config);
+        if (configuration) {
+            configuration->apply_elaboration_settings(config);
+        }
 
         diagnostic::Engine operation_diagnostics;
         std::ostringstream output;
@@ -1043,10 +1050,21 @@ namespace {
                 return fail_command(context, interpreter, "FSIM-WS-TCL001",
                     std::move(error));
             }
+            const auto exported = store.exported_libraries(error);
+            if (!exported) {
+                return fail_command(context, interpreter, "FSIM-WS-TCL001",
+                    std::move(error));
+            }
             Tcl_Obj* result = Tcl_NewListObj(0, nullptr);
             for (const auto& location : *locations) {
                 if (!list_append(interpreter, result,
                         library_object(interpreter, location))) {
+                    return TCL_ERROR;
+                }
+            }
+            for (const auto& library : *exported) {
+                if (!list_append(interpreter, result,
+                        exported_library_object(interpreter, library))) {
                     return TCL_ERROR;
                 }
             }
@@ -1056,7 +1074,7 @@ namespace {
         if (operation == "map") {
             if (argument_count != 4) {
                 return fail_command(context, interpreter, "FSIM-WS-TCL002",
-                    "usage: fsim::library map NAME DIRECTORY");
+                    "usage: fsim::library map NAME PATH");
             }
             const auto name = object_string(arguments[2]);
             const auto directory_text = object_string(arguments[3]);
@@ -1064,7 +1082,7 @@ namespace {
                 || name.find('\0') != std::string::npos
                 || directory_text.find('\0') != std::string::npos) {
                 return fail_command(context, interpreter, "FSIM-WS-TCL002",
-                    "library names and directory paths must be non-empty and contain no NUL bytes");
+                    "library names and paths must be non-empty and contain no NUL bytes");
             }
             std::filesystem::path directory { directory_text };
             if (directory.is_relative()) {
@@ -1075,6 +1093,18 @@ namespace {
                     std::move(error));
             }
             catalog_changed(context, name, TclCatalogMutation::remapped);
+            const auto exported = store.exported_libraries(error);
+            if (!exported) {
+                return fail_command(context, interpreter, "FSIM-WS-TCL001",
+                    std::move(error));
+            }
+            if (const auto found = std::ranges::find(
+                    *exported, name, &workspace::ExportedLibrary::name);
+                found != exported->end()) {
+                Tcl_SetObjResult(interpreter,
+                    exported_library_object(interpreter, *found));
+                return TCL_OK;
+            }
             const auto location = library_location(store, name, error);
             if (!location) {
                 return fail_command(context, interpreter, "FSIM-WS-TCL001",
@@ -1211,6 +1241,53 @@ namespace {
             "-verbosity", TclCompletionDomain::literal, true, false, verbosity_choices },
         TclCommandArgument { "top", TclCompletionDomain::compiled_definition, false, true },
     };
+    // What a snapshot was elaborated with: its configuration-script
+    // settings, each with where it was made.
+    int snapshot_command(
+        TclContext& context,
+        Tcl_Interp* interpreter,
+        const Tcl_Size argument_count,
+        Tcl_Obj* const arguments[])
+    {
+        if (argument_count < 2 || argument_count > 3
+            || object_string(arguments[1]) != "settings") {
+            return fail_command(context, interpreter, "FSIM-WS-TCL002",
+                "usage: fsim::snapshot settings ?NAME?");
+        }
+        const auto name = argument_count == 3
+            ? object_string(arguments[2])
+            : context.invocation.snapshot;
+        diagnostic::Engine operation_diagnostics;
+        const auto metadata = read_snapshot_metadata(
+            context.config, name, operation_diagnostics);
+        if (!metadata) {
+            return fail_with_diagnostics(context, interpreter,
+                operation_diagnostics, "cannot read snapshot '" + name + "'");
+        }
+        Tcl_Obj* result = Tcl_NewListObj(0, nullptr);
+        for (const auto& setting : metadata->settings) {
+            Tcl_Obj* entry = Tcl_NewDictObj();
+            dict_put(interpreter, entry, "key", string_object(setting.key));
+            dict_put(interpreter, entry, "value", string_object(setting.value));
+            dict_put(interpreter, entry, "origin", string_object(setting.origin));
+            if (!list_append(interpreter, result, entry)) {
+                return TCL_ERROR;
+            }
+        }
+        Tcl_SetObjResult(interpreter, result);
+        return TCL_OK;
+    }
+
+    constexpr std::array snapshot_subcommand_choices {
+        std::string_view { "settings" },
+    };
+    constexpr std::array snapshot_arguments {
+        TclCommandArgument {
+            "subcommand", TclCompletionDomain::literal, false, false,
+            snapshot_subcommand_choices },
+        TclCommandArgument { "name", TclCompletionDomain::snapshot, true },
+    };
+
     constexpr std::array library_arguments {
         TclCommandArgument {
             "subcommand", TclCompletionDomain::literal, false, false,
@@ -1218,7 +1295,7 @@ namespace {
     };
     constexpr std::array map_arguments {
         TclCommandArgument { "name", TclCompletionDomain::library },
-        TclCommandArgument { "directory", TclCompletionDomain::directory_path },
+        TclCommandArgument { "path", TclCompletionDomain::directory_path },
     };
     constexpr std::array unmap_arguments {
         TclCommandArgument { "name", TclCompletionDomain::library },
@@ -1237,8 +1314,8 @@ namespace {
         TclSubcommandSpec {
             "list", "fsim::library list", "List workspace libraries.", { } },
         TclSubcommandSpec {
-            "map", "fsim::library map NAME DIRECTORY",
-            "Map a logical library to a compiled library directory.", map_arguments },
+            "map", "fsim::library map NAME PATH",
+            "Map a logical library to a compiled library directory or an exported .fsimlib file.", map_arguments },
         TclSubcommandSpec {
             "unmap", "fsim::library unmap NAME",
             "Remove an external mapping for a logical library.", unmap_arguments },
@@ -1310,6 +1387,18 @@ std::span<const TclCommandSpec> workspace_command_specs()
             TclResultShape::variant,
             "workspace",
             library_subcommands,
+        },
+        TclCommandSpec {
+            "fsim::snapshot",
+            "fsim::snapshot settings ?NAME?",
+            "List the configuration-script settings a snapshot was elaborated "
+            "with (default: the session's snapshot), each with its origin.",
+            TclCommandCapability::workspace,
+            true,
+            snapshot_arguments,
+            snapshot_command,
+            TclResultShape::list,
+            "workspace",
         },
     };
     return specs;

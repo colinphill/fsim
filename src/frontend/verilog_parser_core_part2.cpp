@@ -445,11 +445,13 @@ void VerilogParser::note_implicit_net_reference(
       const auto& import_item = active_package_imports_[index - 1U];
       const bool imported_member = !import_item.name.empty()
           ? import_item.name == name.text
-          : package_constant_names_[import_item.package].contains(name.text)
-              || (package_member_lookup_
-                  && package_member_lookup_(import_item.package, name.text));
+          : package_member(import_item.package, name.text)
+              != SystemVerilogPackageMember::none;
       if (!imported_member) {
         continue;
+      }
+      if (import_item.name.empty() && !parsing_package_.empty()) {
+        package_wildcard_references_.insert(name.text);
       }
       if (import_item.name.empty()
           && index - 1U < unit_package_import_count_
@@ -491,10 +493,12 @@ void VerilogParser::note_wildcard_import_type_reference(
        --index) {
     const auto& import_item = active_package_imports_[index - 1U];
     if (!import_item.name.empty()
-        || !(package_constant_names_[import_item.package].contains(name.text)
-            || (package_member_lookup_
-                && package_member_lookup_(import_item.package, name.text)))) {
+        || package_member(import_item.package, name.text)
+            == SystemVerilogPackageMember::none) {
       continue;
+    }
+    if (!parsing_package_.empty()) {
+      package_wildcard_references_.insert(name.text);
     }
     if (index - 1U < unit_package_import_count_) {
       wildcard_import_uses_.push_back(
@@ -502,6 +506,45 @@ void VerilogParser::note_wildcard_import_type_reference(
     }
     return;
   }
+}
+
+SystemVerilogPackageMember VerilogParser::package_member(
+    const std::string_view package, const std::string_view member) const {
+  return package_members_.find(package, member, package_member_lookup_);
+}
+
+SystemVerilogPackageMember VerilogParser::imported_member(
+    const std::string_view name) const {
+  if (const auto scope = name.rfind("::"); scope != std::string_view::npos) {
+    return package_member(name.substr(0U, scope), name.substr(scope + 2U));
+  }
+  for (std::size_t index = active_package_imports_.size(); index > 0U;
+       --index) {
+    const auto& import_item = active_package_imports_[index - 1U];
+    if (!import_item.name.empty() && import_item.name != name) {
+      continue;
+    }
+    if (const auto kind = package_member(import_item.package, name);
+        kind != SystemVerilogPackageMember::none) {
+      return kind;
+    }
+  }
+  return SystemVerilogPackageMember::none;
+}
+
+bool VerilogParser::imported_packed_type_at(const std::size_t cursor) const {
+  if (!at(TokenKind::Identifier, cursor)) {
+    return false;
+  }
+  const bool qualified = at(TokenKind::Scope, cursor + 1U)
+      && at(TokenKind::Identifier, cursor + 2U);
+  if (!at(TokenKind::LeftBracket, cursor + (qualified ? 3U : 1U))) {
+    return false;
+  }
+  return imported_member(qualified
+             ? current(cursor).text + "::" + current(cursor + 2U).text
+             : current(cursor).text)
+      == SystemVerilogPackageMember::type;
 }
 
 void VerilogParser::resolve_compilation_unit_references(
@@ -1001,6 +1044,7 @@ DesignUnit VerilogParser::parse_module(
     non_ansi_port_selections_.clear();
     non_ansi_port_expressions_.clear();
     unit_value_parameter_names_.clear();
+    unit_type_parameter_names_.clear();
     explicit_port_types_.clear();
     body_port_declarations_.clear();
     unit_container_names_.clear();

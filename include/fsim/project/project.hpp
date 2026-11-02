@@ -13,8 +13,6 @@
 
 namespace fsim::project {
 
-inline constexpr std::uint32_t kSchemaVersion = 3;
-
 enum class Language : std::uint8_t {
     vhdl,
     verilog,
@@ -226,9 +224,18 @@ struct SystemCSection {
   std::vector<std::string> libraries;
 };
 
+// A configuration-script setting in force at elaboration, as a snapshot
+// records it: `key` names one `elaborate.*` key or one keyed entry
+// (`coverage.fsm[...]`, `coverage.exclude[...]`, `bind[...]`).
+struct RecordedSetting {
+    std::string key;
+    std::string value;
+    std::string origin;
+
+    friend bool operator==(const RecordedSetting&, const RecordedSetting&) = default;
+};
+
 struct Config {
-    std::uint32_t schema { kSchemaVersion };
-    std::filesystem::path manifest_path;
     std::filesystem::path base_directory;
     ProjectSection project;
     std::vector<SourceSet> source_sets;
@@ -239,6 +246,9 @@ struct Config {
     CoverageSection coverage;
     RunSection run;
     SystemCSection systemc;
+    // The configuration-script settings an elaboration records in its
+    // snapshot.
+    std::vector<RecordedSetting> recorded_settings;
 };
 
 [[nodiscard]] std::string_view to_string(Language language) noexcept;
@@ -274,24 +284,14 @@ parse_systemverilog_uvm_release(std::string_view spelling) noexcept;
 systemverilog_uvm_compatibility(SystemVerilogUvmRelease release) noexcept;
 [[nodiscard]] std::optional<DelayMode> parse_delay_mode(
     std::string_view spelling) noexcept;
+// `0`..`3` or `O0`..`O3`, either case.
+[[nodiscard]] std::optional<Optimization> parse_optimization(
+    std::string_view spelling) noexcept;
+// A library name: a letter or underscore, then letters, digits, underscores.
+[[nodiscard]] bool valid_library_name(std::string_view value) noexcept;
 [[nodiscard]] std::optional<TraceFormat> parse_trace_format(
     std::string_view spelling) noexcept;
 [[nodiscard]] std::optional<TraceCompression> parse_trace_compression(
     std::string_view spelling) noexcept;
-
-// Parses, validates, and resolves a schema-3 fsim.toml. Relative paths are
-// resolved against the manifest directory. Source globs are expanded in listed
-// pattern order, with the matches for each pattern sorted lexicographically.
-[[nodiscard]] std::optional<Config> load(
-    const std::filesystem::path& manifest,
-    diagnostic::Engine& diagnostics);
-
-// Parses an in-memory manifest. source_name is used in diagnostics and
-// base_directory is used for resolving project paths and source globs.
-[[nodiscard]] std::optional<Config> parse(
-    std::string_view source,
-    std::string source_name,
-    const std::filesystem::path& base_directory,
-    diagnostic::Engine& diagnostics);
 
 }  // namespace fsim::project

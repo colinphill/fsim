@@ -1087,6 +1087,15 @@ struct VerilogUdpDeclaration {
 /// resource guard rather than an IEEE 1364 terminal- or row-count limit.
 inline constexpr std::size_t maximum_udp_table_storage_bytes = 256U * 1024U * 1024U;
 
+/// The flattened range `[extent0 * extent1 * ... * element - 1 : 0]` of
+/// packed dimensions (outermost first) whose bounds are not all literals,
+/// folded at elaboration (IEEE 1800-2023 7.4.1). `element` is the width of
+/// one innermost element, when the dimensions select elements of a named
+/// type.
+[[nodiscard]] PackedRangeExpression flattened_packed_range_expression(
+    const std::vector<PackedRangeExpression>& dimensions,
+    const SourceSpan& span, std::optional<Expression> element = std::nullopt);
+
 [[nodiscard]] bool
 verilog_udp_table_within_resource_budget(std::size_t input_count,
     std::size_t row_count) noexcept;
@@ -1617,6 +1626,9 @@ struct DesignUnit {
     std::vector<SystemVerilogImport> systemverilog_imports;
     // Package export/re-export declarations and interface modport views.
     std::vector<SystemVerilogExport> systemverilog_exports;
+    // The names a package refers to through its wildcard imports, which its
+    // wildcard exports carry on (IEEE 1800-2023 26.6).
+    std::vector<std::string> systemverilog_wildcard_references;
     std::vector<SystemVerilogDpiDeclaration> systemverilog_dpi_declarations;
     std::vector<SystemVerilogModport> systemverilog_modports;
     // Clocking declarations are unit-owned for modules, interfaces, and

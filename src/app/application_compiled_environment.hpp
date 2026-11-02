@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design.hpp"
 
 #include <filesystem>
@@ -48,8 +49,11 @@ struct CompiledReferenceIdentity {
     VhdlUnitIdentifierForms target_vhdl_forms;
 };
 
-[[nodiscard]] bool compiled_package_has_member(const semantic::CompiledDesign&,
-    std::string_view library, std::string_view package, std::string_view member);
+// What `member` of a compiled package names (IEEE 1800-2023 26.3, 26.6), as
+// frontend::SystemVerilogPackageMembers answers it for a parsed package.
+[[nodiscard]] frontend::SystemVerilogPackageMember compiled_package_member(
+    const semantic::CompiledDesign&, std::string_view library,
+    std::string_view package, std::string_view member);
 
 // Unit IDs are relocated when compiled inputs are linked. Remember the source
 // definitions by identity and recover their final IDs after the merge.

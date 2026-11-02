@@ -59,6 +59,11 @@ selects that snapshot when `--snapshot` is omitted.
 Top names may be unqualified (`tb`) or library-qualified (`work.tb`). A
 language qualifier such as `sv:work.tb` or `vhdl:work.tb` is available when
 names are ambiguous. Ordinary elaboration does not require a language option.
+A VHDL entity top uses the entity's most recently analyzed architecture, as a
+default binding does (IEEE 1076-2008 7.3.3): the later one in a file, and the
+one in the file compiled last, so recompiling a file makes its architectures
+the most recent. `vhdl:work.tb(rtl)` names one, and a configuration
+declaration's name selects that configuration.
 Several tops share one simulation scheduler:
 
 ```sh
@@ -140,6 +145,33 @@ definitions without the original sources.
 
 `fsim library unmap vendor` removes the workspace mapping and preserves the
 external library. Mapping a library does not rename its logical identity.
+
+### Map an exported library
+
+`fsim library map NAME FILE.fsimlib` maps an exported library file instead of
+a directory:
+
+```sh
+fsim library map vendor ../packages/vendor.fsimlib
+fsim elaborate sv:vendor.cells_top
+```
+
+The file's metadata must name the same logical library, and no local library
+may share the name. fsim records the file under `[exported]` in
+`.fsim/libraries.toml` (`fsim library list` marks it `exported`). The file is
+read in place and is never written, so a read-only or relocated copy works.
+Elaboration imports, together with the workspace's own objects, only the
+exported libraries the design reaches: the library of a top or binding
+target, a library a selected object depends on, a configuration liblist
+entry, and any search library (`-L`) in scope of an instance. A mapped
+library the design does not reach is not opened, so a missing or stale file
+there does not stop it. A top in an exported library names its library, as
+above. The snapshot records each imported library's metadata digest and
+unit checksums; the C API reports them through
+`fsim_session_get_mapped_library_info`. An exported library takes no
+compiles and lists no objects. A local VHDL unit cannot yet `use` a package
+from an exported library, because `compile` does not read exported libraries.
+Map the producer's library directory for that.
 
 ## Inspect and delete library objects
 

@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 id	family	v2_identity	v3_identity	evidence	containment	owner
-V3REJECT-MANIFEST	manifest	schema=2	schema=3	tests/project/project_config_test.cpp	exact-diagnostic-no-config	B188-C03
 V3REJECT-OBJECT	object	format=6,portable=10	format=8,portable=15,compiled-HIR=1	tests/artifact/object_artifact_test.cpp	header-first-exact-diagnostic	B188A-C19
 V3REJECT-PORTABLE	object	.fsimir,.fsimudp,.fsimclass	compiled-HIR=1	tests/library/library_artifact_test.cpp	metadata-first-exact-diagnostic	B188A-C19
 V3REJECT-DESIGN	design	format=11	format=14	tests/artifact/design_artifact_test.cpp	header-first-exact-diagnostic	B188A-C19

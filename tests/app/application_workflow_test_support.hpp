@@ -220,7 +220,6 @@ inline int run_fixture_command(int argc, const char* const* argv,
     std::vector<std::string> normalized { argv[0], command };
     std::vector<std::string> source_arguments { argv[0], "check" };
     std::vector<std::filesystem::path> source_files;
-    std::optional<std::filesystem::path> manifest;
     std::optional<std::filesystem::path> destination;
     std::optional<std::filesystem::path> design;
     std::vector<std::filesystem::path> objects;
@@ -232,8 +231,7 @@ inline int run_fixture_command(int argc, const char* const* argv,
         const std::string_view argument { argv[index] };
         const auto separator = argument.find('=');
         const auto option = argument.substr(0U, separator);
-        const bool selector = option == "-p" || option == "--project"
-            || option == "-o" || option == "--output"
+        const bool selector = option == "-o" || option == "--output"
             || option == "--object" || option == "--design"
             || option == "--systemc-plugin";
         if (selector) {
@@ -245,9 +243,7 @@ inline int run_fixture_command(int argc, const char* const* argv,
             else
                 return 2;
             const auto path = std::filesystem::absolute(support::path_from_utf8(value));
-            if (option == "-p" || option == "--project")
-                manifest = path;
-            else if (option == "-o" || option == "--output")
+            if (option == "-o" || option == "--output")
                 destination = path;
             else if (option == "--object")
                 objects.push_back(path);
@@ -310,11 +306,7 @@ inline int run_fixture_command(int argc, const char* const* argv,
         }
     }
     diagnostic::Engine diagnostics;
-    if (manifest) {
-        config = project::load(*manifest, diagnostics);
-        invocation->manifest = *manifest;
-        invocation->manifest_explicit = true;
-    } else if (!source_files.empty()) {
+    if (!source_files.empty()) {
         auto original_invocation = *invocation;
         raw = workflow_detail::pointers(source_arguments);
         const auto source_status = cli::run(static_cast<int>(raw.size()),

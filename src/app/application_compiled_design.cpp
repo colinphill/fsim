@@ -1300,6 +1300,8 @@ semantic::CompiledLinkResult install_linked_compiled_design(
     if (!linked.ok()) {
         return linked;
     }
+    // The analysis order is the checked inputs', not the linked HIR's.
+    linked.design->set_vhdl_analysis_order(checked.vhdl_analysis_order());
     static_cast<semantic::CompiledDesign&>(checked) = std::move(*linked.design);
     return linked;
 }

@@ -56,8 +56,8 @@ by default; the legacy form receives `FSIM-ELAB-VHPROTECTED-008`.
 For existing RTL that needs legacy shared storage, select
 `--vhdl-compatibility legacy-unprotected-shared-variable` when compiling its
 VHDL source, or set
-`vhdl_compatibility = "legacy-unprotected-shared-variable"` in its
-`[[source_set]]`. This option retains the selected language revision and
+`fsim::config set compile.vhdl.compatibility legacy-unprotected-shared-variable`
+in the workspace `fsim.tcl`. This option retains the selected language revision and
 reuses the bounded legacy storage and scheduling behavior. It applies to
 declarations in the opted-in unit, including its generated blocks, and is
 recorded in compiled-unit, artifact, and cache identities. It adds no new
@@ -2404,7 +2404,8 @@ and do not change the selected grammar or system-service revision.
 Compatibility switches compose by the fixed canonical order. A preprocessed
 token stream retains the same selected revision and exact profile at parser
 entry; a 257-bit declaration remains exact. Unknown switches and cross-family
-standards retain the source-owned `FSIM-PROJ-0007` diagnostic. Even the complete
+standards are rejected: on the command line with `FSIM-CLI-0001`, and in a
+`compile.*` configuration key with `FSIM-TCL-CFG-001` when the script runs. Even the complete
 profile cannot admit a later `nettype` declaration, DPI surface, system service
 or VPI object. The selected revision remains the upper language boundary.
 

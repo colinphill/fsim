@@ -268,10 +268,28 @@ namespace {
             append_source(group, *source);
             group.unit_sources.emplace(workspace::unit_identity(entry), *source);
         }
+        // A source-set compilation unit's $unit declarations belong to
+        // every object of that unit; a root compiled as a unit of its own
+        // has a compilation-unit identity of its own.
+        const auto unit_identity = [&](const semantic::UnitId id) -> std::string_view {
+            const auto found = std::ranges::find(
+                checked.systemverilog_hir.units(), id, &semantic::sv::Unit::id);
+            return found == checked.systemverilog_hir.units().end()
+                ? std::string_view { }
+                : std::string_view { found->compilation_unit_identity };
+        };
         for (auto& group : result) {
             for (const auto& [id, source] : containers) {
+                const auto same_unit = [&] {
+                    const auto identity = unit_identity(id);
+                    return !identity.empty()
+                        && std::ranges::any_of(group.units, [&](const semantic::UnitId unit) {
+                               return unit_identity(unit) == identity;
+                           });
+                };
                 if ((source == group.source
-                        || config.source_sets.front().compilation_unit == "source-set")
+                        || (config.source_sets.front().compilation_unit == "source-set"
+                            && same_unit()))
                     && std::ranges::find(group.units, id) == group.units.end()) {
                     group.units.push_back(id);
                     append_source(group, source);
@@ -702,6 +720,28 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
     for (const auto& group : *groups) {
         selections.push_back({ group.units, group.classes, group.primitives });
     }
+    // The source keys of each checked root and its includes, which own
+    // the units of the groups.
+    std::vector<std::vector<std::string>> source_keys;
+    source_keys.reserve(checked.hdl_sources.size());
+    for (const auto& source : checked.hdl_sources) {
+        auto& keys = source_keys.emplace_back();
+        const auto add_key = [&](const std::filesystem::path& path) {
+            auto key = source_key(path, config, diagnostics);
+            if (key) {
+                keys.push_back(std::move(*key));
+            }
+            return key.has_value();
+        };
+        if (!add_key(source.path)) {
+            return 1;
+        }
+        for (const auto& dependency : source.dependencies) {
+            if (!add_key(dependency.path)) {
+                return 1;
+            }
+        }
+    }
     std::vector<workspace::ArtifactRecord> records;
     records.reserve(groups->size());
     // Each object is published before the next is projected, so only one
@@ -719,8 +759,25 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
             return false;
         }
         const auto path = transaction->artifact_path(*record);
+        // The object records the roots of the compilation units its units
+        // were parsed in, so a file compiled with independent files records
+        // what it records when compiled alone.
+        std::set<std::string> units;
+        std::vector<std::filesystem::path> roots;
+        for (std::size_t index = 0; index < checked.hdl_sources.size(); ++index) {
+            if (std::ranges::any_of(source_keys[index], [&](const auto& key) {
+                    return std::ranges::find(group.sources, key) != group.sources.end();
+                })) {
+                units.insert(checked.hdl_sources[index].compilation_unit_digest);
+            }
+        }
+        for (const auto& source : checked.hdl_sources) {
+            if (units.contains(source.compilation_unit_digest)) {
+                roots.push_back(source.path);
+            }
+        }
         if (!publish_workspace_object(config, checked, std::move(*projection.design),
-                path, diagnostics)) {
+                path, diagnostics, &roots)) {
             return false;
         }
         const auto metadata = artifact::load_object_metadata(path, diagnostics);

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api_internal.hpp"
 #include "../app/application_sdf_session.hpp"
+#include "../app/application_workspace.hpp"
+#include "../app/tcl.hpp"
 #include "fsim/support/path.hpp"
 
 using namespace fsim::api::detail;
@@ -254,11 +256,17 @@ fsim_status_t fsim_session_create(
                     max_deltas)) {
                 session->max_deltas = options->max_deltas == 0 ? std::uint64_t { 100'000 }
                                                                : options->max_deltas;
+                session->max_deltas_override = options->max_deltas != 0;
             }
             if (FSIM_STRUCT_CONTAINS(
                     options->struct_size, fsim_session_options_t, seed)) {
                 session->seed = options->seed;
                 session->seed_override = true;
+            }
+            if (FSIM_STRUCT_CONTAINS(
+                    options->struct_size, fsim_session_options_t, flags)) {
+                session->no_config
+                    = (options->flags & FSIM_SESSION_FLAG_NO_CONFIG) != 0;
             }
         }
         fsim_session_t handle = next_session.fetch_add(1, std::memory_order_relaxed);
@@ -312,48 +320,154 @@ fsim_status_t fsim_session_destroy(const fsim_session_t session)
     }
 }
 
-fsim_status_t fsim_session_load_project(
-    const fsim_session_t session,
-    const char* manifest_path)
+namespace {
+
+// Drops the design a session holds, keeping its options, callbacks and SDF
+// and trace requests for the next one.
+void reset_design(Session& value)
 {
-    if (manifest_path == nullptr || *manifest_path == '\0') {
+    reset_sdf_effective(value);
+    value.trace_runtime.reset();
+    value.trace_lifecycle_override.reset();
+    value.diagnostics.clear();
+    value.simulation.reset();
+    value.sdf_baseline_design.reset();
+    value.scopes.clear();
+    value.process_names.clear();
+    value.variables.clear();
+    value.drivers.clear();
+    advance_design_generation(value);
+    value.finished = false;
+    value.current_execution_process.reset();
+}
+
+fsim_status_t start_design(Session& value, fsim::app::BuiltProject built)
+{
+    if (value.sdf_control
+        && !value.sdf_control->request().inputs.empty()) {
+        value.sdf_baseline_design = built.design;
+        auto planned = fsim::app::plan_sdf_session_inputs(
+            built.design, built.time_resolution, built.cache_key,
+            value.sdf_control->request(), value.sdf_resolved_paths,
+            value.diagnostics);
+        if (!planned)
+            return FSIM_STATUS_COMPILE_ERROR;
+        built.design = std::move(planned->design);
+        fsim::app::apply_sdf_session_cache_identity(
+            built, *planned->control);
+        value.sdf_control = std::move(planned->control);
+    }
+    value.simulation = std::make_unique<fsim::app::Simulation>(
+        std::move(built), value.max_deltas);
+    if (value.config->run.trace_file && value.config->run.trace_enabled) {
+        value.trace_runtime = fsim::app::TraceRuntime::attach(
+            *value.simulation, *value.config, value.diagnostics, true,
+            value.trace_control);
+        if (!value.trace_runtime) {
+            value.trace_lifecycle_override
+                = fsim::app::TraceLifecycle::Failed;
+            value.simulation.reset();
+            return FSIM_STATUS_RUNTIME_ERROR;
+        }
+        value.trace_control = value.trace_runtime->control_handle();
+    }
+    if (!rebuild_debug_objects(value)) {
+        if (value.trace_runtime) {
+            value.trace_lifecycle_override
+                = fsim::app::TraceLifecycle::Failed;
+        }
+        value.trace_runtime.reset();
+        value.simulation.reset();
+        value.diagnostics.error(
+            "FSIM-API-0004",
+            "the design contains too many debug-visible scopes, local "
+            "variables, or drivers for the version-1 object handle encoding");
+        return FSIM_STATUS_INTERNAL_ERROR;
+    }
+    attach_callbacks(value);
+    lifecycle(value, FSIM_LIFECYCLE_DESIGN_LOADED);
+    return FSIM_STATUS_OK;
+}
+
+} // namespace
+
+fsim_status_t fsim_session_open_snapshot(
+    const fsim_session_t session,
+    const char* workspace_dir,
+    const char* snapshot)
+{
+    if (workspace_dir == nullptr || *workspace_dir == '\0') {
         return FSIM_STATUS_INVALID_ARGUMENT;
     }
     return with_session(session, [&](Session& value) {
         if (mutation_forbidden(value)) {
             return FSIM_STATUS_UNAVAILABLE;
         }
-        reset_sdf_effective(value);
-        value.trace_runtime.reset();
-        value.diagnostics.clear();
-        value.project.reset();
-        value.trace_control.reset();
-        value.trace_lifecycle_override.reset();
-        value.simulation.reset();
-        value.sdf_baseline_design.reset();
-        value.scopes.clear();
-        value.process_names.clear();
-        value.variables.clear();
-        value.drivers.clear();
-        advance_design_generation(value);
-        value.finished = false;
-        value.current_execution_process.reset();
-        auto loaded = fsim::project::load(
-            fsim::support::path_from_utf8(manifest_path), value.diagnostics);
-        if (!loaded) {
+        reset_design(value);
+        value.config.reset();
+        const auto given = fsim::support::path_from_utf8(workspace_dir);
+        std::error_code error;
+        auto workspace = std::filesystem::absolute(given, error);
+        workspace = (error ? given : workspace).lexically_normal();
+
+        // The simulate command of that workspace, with its scripts' defaults.
+        fsim::cli::Invocation invocation;
+        invocation.command = fsim::cli::Command::simulate;
+        invocation.program_path.clear();
+        if (snapshot != nullptr && *snapshot != '\0') {
+            invocation.snapshot = snapshot;
+        }
+        invocation.no_config = value.no_config;
+        if (value.seed_override) {
+            invocation.seed = value.seed;
+        }
+        if (fsim::cli::configuration_enabled(invocation)) {
+            auto configuration
+                = std::make_shared<fsim::project::Configuration>();
+            if (!fsim::app::load_configuration_scripts(workspace, { },
+                    *configuration, value.diagnostics)) {
+                return FSIM_STATUS_COMPILE_ERROR;
+            }
+            fsim::cli::apply_configuration_defaults(
+                *configuration, invocation);
+            invocation.configuration = std::move(configuration);
+        }
+        fsim::project::Config config;
+        config.base_directory = workspace;
+        config.project.name = "simulate";
+        config.build.cache_path = workspace / ".fsim" / "cache";
+        fsim::cli::apply_invocation_options(invocation, config);
+
+        const auto metadata = fsim::app::read_snapshot_metadata(
+            config, invocation.snapshot, value.diagnostics);
+        if (!metadata) {
             return FSIM_STATUS_COMPILE_ERROR;
         }
-        value.max_deltas = loaded->run.max_deltas;
-        if (value.seed_override) {
-            loaded->project.seed = value.seed;
-            loaded->project.random_seed = false;
-        } else if (!loaded->project.random_seed) {
-            value.seed = loaded->project.seed;
+        fsim::app::warn_changed_snapshot_settings(
+            invocation.configuration.get(), invocation.snapshot, *metadata,
+            value.diagnostics);
+        auto built = fsim::app::load_workspace_snapshot(
+            invocation, config, value.diagnostics);
+        if (!built) {
+            return FSIM_STATUS_COMPILE_ERROR;
         }
-        auto trace = fsim::app::apply_trace_control(
-            fsim::app::trace_control_request(loaded->run,
+        if (!value.max_deltas_override) {
+            value.max_deltas = config.run.max_deltas;
+        }
+        if (!value.seed_override) {
+            value.seed = built->seed;
+        }
+        // A trace the session configured overrides the configuration's; its
+        // relative output is in the workspace.
+        auto request = value.trace_requested && value.trace_control
+            ? value.trace_control->request()
+            : fsim::app::trace_control_request(config.run,
                 fsim::app::TraceControlSurface::CApi,
-                fsim::app::TraceControlPhase::Simulate));
+                fsim::app::TraceControlPhase::Simulate);
+        if (!request.output.empty() && request.output.is_relative()) {
+            request.output = workspace / request.output;
+        }
+        auto trace = fsim::app::apply_trace_control(std::move(request));
         if (!trace.ok()) {
             for (const auto& entry : trace.diagnostics) {
                 value.diagnostics.error(entry.code, entry.message);
@@ -361,103 +475,11 @@ fsim_status_t fsim_session_load_project(
             return FSIM_STATUS_COMPILE_ERROR;
         }
         value.trace_control = std::move(trace.application);
-        value.project = std::move(loaded);
-        return FSIM_STATUS_OK;
-    });
-}
-
-fsim_status_t fsim_session_check(const fsim_session_t session)
-{
-    return with_session(session, [](Session& value) {
-        if (mutation_forbidden(value)) {
-            return FSIM_STATUS_UNAVAILABLE;
+        if (value.trace_requested) {
+            fsim::app::publish_trace_control(*value.trace_control, config.run);
         }
-        value.diagnostics.clear();
-        if (!value.project) {
-            value.diagnostics.error(
-                "FSIM-API-0002", "load a project before checking it");
-            return FSIM_STATUS_INVALID_ARGUMENT;
-        }
-        return fsim::app::check_project(*value.project, value.diagnostics)
-            ? FSIM_STATUS_OK
-            : FSIM_STATUS_COMPILE_ERROR;
-    });
-}
-
-fsim_status_t fsim_session_build(const fsim_session_t session)
-{
-    return with_session(session, [](Session& value) {
-        if (mutation_forbidden(value)) {
-            return FSIM_STATUS_UNAVAILABLE;
-        }
-        reset_sdf_effective(value);
-        value.trace_runtime.reset();
-        value.trace_lifecycle_override.reset();
-        value.diagnostics.clear();
-        value.simulation.reset();
-        value.sdf_baseline_design.reset();
-        value.scopes.clear();
-        value.process_names.clear();
-        value.variables.clear();
-        value.drivers.clear();
-        advance_design_generation(value);
-        value.finished = false;
-        value.current_execution_process.reset();
-        if (!value.project) {
-            value.diagnostics.error(
-                "FSIM-API-0002", "load a project before building it");
-            return FSIM_STATUS_INVALID_ARGUMENT;
-        }
-        auto built = fsim::app::build_project(
-            *value.project, value.diagnostics);
-        if (!built) {
-            return FSIM_STATUS_COMPILE_ERROR;
-        }
-        if (value.sdf_control
-            && !value.sdf_control->request().inputs.empty()) {
-            value.sdf_baseline_design = built->design;
-            auto planned = fsim::app::plan_sdf_session_inputs(
-                built->design, built->time_resolution, built->cache_key,
-                value.sdf_control->request(), value.sdf_resolved_paths,
-                value.diagnostics);
-            if (!planned)
-                return FSIM_STATUS_COMPILE_ERROR;
-            built->design = std::move(planned->design);
-            fsim::app::apply_sdf_session_cache_identity(
-                *built, *planned->control);
-            value.sdf_control = std::move(planned->control);
-        }
-        value.simulation = std::make_unique<fsim::app::Simulation>(
-            std::move(*built), value.max_deltas);
-        if (value.project->run.trace_file
-            && value.project->run.trace_enabled) {
-            value.trace_runtime = fsim::app::TraceRuntime::attach(
-                *value.simulation, *value.project, value.diagnostics, true,
-                value.trace_control);
-            if (!value.trace_runtime) {
-                value.trace_lifecycle_override
-                    = fsim::app::TraceLifecycle::Failed;
-                value.simulation.reset();
-                return FSIM_STATUS_RUNTIME_ERROR;
-            }
-            value.trace_control = value.trace_runtime->control_handle();
-        }
-        if (!rebuild_debug_objects(value)) {
-            if (value.trace_runtime) {
-                value.trace_lifecycle_override
-                    = fsim::app::TraceLifecycle::Failed;
-            }
-            value.trace_runtime.reset();
-            value.simulation.reset();
-            value.diagnostics.error(
-                "FSIM-API-0004",
-                "the design contains too many debug-visible scopes, local "
-                "variables, or drivers for the version-1 object handle encoding");
-            return FSIM_STATUS_INTERNAL_ERROR;
-        }
-        attach_callbacks(value);
-        lifecycle(value, FSIM_LIFECYCLE_DESIGN_LOADED);
-        return FSIM_STATUS_OK;
+        value.config = std::move(config);
+        return start_design(value, std::move(*built));
     });
 }
 
@@ -635,9 +657,9 @@ fsim_status_t fsim_session_configure_trace(
         request.output = fsim::support::path_from_utf8(
             sdf_string(options->output));
         if (!request.output.empty() && request.output.is_relative()
-            && value.project) {
+            && value.config) {
             request.output
-                = value.project->base_directory / request.output;
+                = value.config->base_directory / request.output;
         }
         request.format = *format;
         request.compression = *compression;
@@ -662,10 +684,11 @@ fsim_status_t fsim_session_configure_trace(
         }
         value.diagnostics.clear();
         value.trace_control = std::move(configured.application);
+        value.trace_requested = true;
         value.trace_lifecycle_override.reset();
-        if (value.project) {
+        if (value.config) {
             fsim::app::publish_trace_control(
-                *value.trace_control, value.project->run);
+                *value.trace_control, value.config->run);
         }
         return FSIM_STATUS_OK;
     });

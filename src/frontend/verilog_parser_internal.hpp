@@ -297,6 +297,9 @@ class VerilogParser final : private detail::ParserBase {
   // Value parameters declared so far in the current unit: `[N]` with a
   // parameter N is a constant array size, not an associative index type.
   std::unordered_set<std::string> unit_value_parameter_names_;
+  // Type parameters declared so far in the current unit: `T [1:0]` in a
+  // parameter override is a type actual (IEEE 1800-2023 6.20.3, 7.4.1).
+  std::unordered_set<std::string> unit_type_parameter_names_;
   // Discards the implicit-net references noted while it lives: names in a
   // class body or an out-of-block method (`C::m`) resolve to class members
   // (IEEE 1800-2017 6.10, 8.24).
@@ -758,6 +761,23 @@ class VerilogParser final : private detail::ParserBase {
       const std::size_t offset = 0) const;
 
   Type parse_named_type();
+  // Whether packed dimensions (`[l:r]...`) followed by a declared name start
+  // at `cursor`.
+  [[nodiscard]] bool packed_declarator_at(std::size_t cursor) const;
+  // Parses packed dimensions declared over a named type (`t [1:0]`, IEEE
+  // 1800-2023 7.4.1), which compose with its shape where it is known.
+  void parse_named_type_dimensions(Type& type);
+  // What `member` of `package` names, from the packages parsed so far or
+  // the compiled ones.
+  [[nodiscard]] SystemVerilogPackageMember package_member(
+      std::string_view package, std::string_view member) const;
+  // What a type name (`p::t`, or `t` through an import in effect) names
+  // in a package; none when it names no package member.
+  [[nodiscard]] SystemVerilogPackageMember imported_member(
+      std::string_view name) const;
+  // Whether the identifier at `cursor` (`t` or `p::t`) is followed by a
+  // packed dimension and names a package data type.
+  [[nodiscard]] bool imported_packed_type_at(std::size_t cursor) const;
 
   Type parse_virtual_interface_type(
       const Token& start);
@@ -1176,10 +1196,11 @@ class VerilogParser final : private detail::ParserBase {
   std::vector<SystemVerilogAssertionDeclaration>
       compilation_unit_checkers_;
   std::vector<SystemVerilogImport> active_package_imports_;
-  std::unordered_map<
-      std::string,
-      std::unordered_set<std::string>>
-      package_constant_names_;
+  SystemVerilogPackageMembers package_members_;
+  // The package being parsed, and the names it refers to through its
+  // wildcard imports.
+  std::string parsing_package_;
+  std::unordered_set<std::string> package_wildcard_references_;
   SystemVerilogPackageMemberLookup package_member_lookup_;
   std::string current_default_nettype_{"wire"};
   bool current_cell_define_{};

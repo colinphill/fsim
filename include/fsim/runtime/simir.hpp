@@ -2366,19 +2366,6 @@ public:
     /// never relocated. This is an optional setup hint, not a process limit.
     void reserve_process_capacity(std::size_t capacity);
     [[nodiscard]] ProcessId add_process(Process process);
-    /// Register a synchronous package-static initializer action. The runtime
-    /// copies the typed write allowlists and callback; the callback itself is
-    /// reconstructed by the application from serialized design metadata and
-    /// is never part of a SimIR artifact. Its order shares the same namespace
-    /// as Process::startup_order and must be unique across both action kinds.
-    /// It runs once during start(), before ordinary time-zero processes, with
-    /// listed package storage writes establishing the silent startup baseline.
-    void register_package_static_startup_callback(
-        std::uint64_t startup_order,
-        std::span<const SignalId> writable_signal_ids,
-        std::span<const StringObjectId> writable_string_object_ids,
-        std::span<const ContainerObjectId> writable_container_object_ids,
-        std::function<void()> callback);
     /// Register and validate one process topology without retaining its
     /// program or allocating its execution frame. The interpreter becomes a
     /// validation-only builder and cannot subsequently start.

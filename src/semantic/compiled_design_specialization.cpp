@@ -14990,6 +14990,35 @@ void concretize_type_operator_declarations(
     }
 }
 
+// Packed dimensions declared over a type parameter (`T [N-1:0] x`) compose
+// with this specialization's actual (IEEE 1800-2023 7.4.1), so every reader
+// of the declaration sees the packed array. An actual that is no packed type
+// leaves the declaration as written, which elaboration reports.
+void compose_type_parameter_packed_declarations(
+    SpecializedHirUnit& unit, const sv::Unit& source)
+{
+    const CompiledDesignResolver resolver { unit };
+    for (const auto id : source.declarations) {
+        const auto declaration = unit.find_declaration(id);
+        if (!declaration || declaration->systemverilog == nullptr) {
+            continue;
+        }
+        const auto& record = *declaration->systemverilog;
+        if (!record.type || !record.type->packed_over_named_type) {
+            continue;
+        }
+        auto composed = resolver.effective_systemverilog_type(
+            *record.type, record.scope);
+        if (!composed || composed->packed_over_named_type) {
+            continue;
+        }
+        composed->source_order = record.type->source_order;
+        auto replacement = record;
+        replacement.type = std::move(*composed);
+        static_cast<void>(unit.replace(std::move(replacement)));
+    }
+}
+
 std::optional<SpecializedHirUnit> working_specialization(
     const CompiledDesign& design,
     std::optional<SpecializedHirOverlay> specialization,
@@ -15029,6 +15058,8 @@ std::optional<SpecializedHirUnit> working_specialization(
     }
     if (selected->systemverilog != nullptr) {
         concretize_type_operator_declarations(
+            result, *selected->systemverilog);
+        compose_type_parameter_packed_declarations(
             result, *selected->systemverilog);
     }
     return result;
@@ -16831,6 +16862,16 @@ std::optional<sv::TypeReference> specialized_systemverilog_type_actual(
         return input;
     }
     auto result = input;
+    // `U [1:0]` with U the parent's type parameter composes with the
+    // parent's actual for U (IEEE 1800-2023 7.4.1).
+    if (input.packed_over_named_type && !input.packed_dimensions.empty()) {
+        auto composed = CompiledDesignResolver { *parent }
+            .effective_systemverilog_type(input, parent->scope());
+        if (!composed || composed->packed_over_named_type) {
+            return input;
+        }
+        result = std::move(*composed);
+    }
     std::set<DeclarationId> visited;
     for (;;) {
         const auto separator = result.target.spelling.rfind("::");
@@ -17880,6 +17921,19 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
                 binding.systemverilog_type
                     = specialized_systemverilog_type_actual(
                         *actual.systemverilog_type, parent);
+                if (binding.systemverilog_type
+                    && binding.systemverilog_type->packed_over_named_type) {
+                    reject(actual,
+                        SpecializedHirAssociationDiagnostic::
+                            type_actual_not_packed,
+                        "type actual of '" + std::string { formal.name }
+                            + "' declares packed dimensions over '"
+                            + actual.systemverilog_type->target.spelling
+                            + "', whose actual type is not a packed type "
+                              "(IEEE 1800-2023 7.4.1)",
+                        formal.declaration);
+                    continue;
+                }
             }
             if (actual.vhdl_type != nullptr) {
                 binding.vhdl_type = *actual.vhdl_type;

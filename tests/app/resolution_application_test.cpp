@@ -1149,7 +1149,6 @@ endmodule
     }
 
     fsim::project::Config compile_config;
-    compile_config.manifest_path = "<strength-artifact-compile>";
     compile_config.base_directory = directory;
     compile_config.project.name = "strength-artifact-compile";
     fsim::project::SourceSet sources;
@@ -1188,7 +1187,6 @@ endmodule
         != object_inspection->units.end());
 
     fsim::project::Config elaborate_config;
-    elaborate_config.manifest_path = "<strength-artifact-elaborate>";
     elaborate_config.base_directory = directory;
     elaborate_config.project.name = "strength-artifact-elaborate";
     elaborate_config.project.tops.push_back(

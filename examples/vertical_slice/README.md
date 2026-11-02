@@ -53,5 +53,4 @@ available when `two-roots` is replaced.
 The example uses equal-width descending vectors and whole-signal connections.
 See the [workspace phase tutorial](../non_project_phases/README.md) and
 [three-language tutorial](../three_language_hierarchy/README.md) for mapped
-libraries and SystemC. The historical `fsim.toml` fixture is not loaded by
-current commands.
+libraries and SystemC.

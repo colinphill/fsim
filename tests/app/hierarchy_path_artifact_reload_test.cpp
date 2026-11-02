@@ -66,7 +66,6 @@ endmodule
     }
 
     project::Config config;
-    config.manifest_path = "<hierarchy-path-reload>";
     config.base_directory = directory.path;
     config.project.name = "hierarchy-path-reload";
     config.project.tops.push_back({ "sv:work.path_reload_top", "root" });

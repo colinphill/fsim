@@ -2603,10 +2603,12 @@ CMake accepts a Tcl 9.0 development package at patchlevel 9.0.4 or newer.
 Older Tcl 8.6 packages, older Tcl 9.0 patchlevels, and other release series are
 ignored. When no compatible package is present, the Tcl adapter downloads the
 checksum-pinned 9.0.4 source archive, builds only the native static core, and
-installs its headers and script library into the build tree. Installation
-copies the runtime script library to `share/fsim/tcl9.0`; the embedded
-interpreter locates it relative to the fsim executable so a staged
-installation remains relocatable. The C++ boundary uses Tcl 9
+installs its headers and script library into the build tree. The build zips
+that script library with the fetched `tclsh` (`zipfs mkzip`) and compiles the
+archive into fsim; the embedded interpreter mounts it at `//zipfs:/fsim`, so
+neither fsim nor an application that embeds fsim through the C API looks for
+`init.tcl` on disk, wherever it is installed or copied; the installation has
+no script-library directory. The C++ boundary uses Tcl 9
 `Tcl_Size`-bearing object commands and channel version 5 without legacy
 integer-length narrowing. `FSIM_TCL_LIBRARY` overrides the standard-library
 location for custom package layouts. `FSIM_TCL_MODE=OFF` is the explicit

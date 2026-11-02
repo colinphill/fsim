@@ -290,6 +290,10 @@ function(fsim_add_fetched_tcl)
     "${tcl_library_version}"
     PARENT_SCOPE
   )
+  # fsim embeds the script library; the build reads it from here once the
+  # static core is installed.
+  set(FSIM_FETCHED_TCL_INSTALL_DIR "${tcl_install}" PARENT_SCOPE)
+  set(FSIM_FETCHED_TCL_STATIC_LIBRARY "${tcl_library}" PARENT_SCOPE)
   set(
     FSIM_FETCHED_TCL_LICENSE_FILE
     "${tcl_source}/license.terms"

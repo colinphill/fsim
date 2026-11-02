@@ -1752,23 +1752,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool has_bidirectional_switches { };
     bool switch_refreshing { };
     bool started { };
-    struct PackageStaticStartupCallback {
-        std::uint64_t startup_order { };
-        std::vector<SignalId> writable_signal_ids;
-        std::vector<StringObjectId> writable_string_object_ids;
-        std::vector<ContainerObjectId> writable_container_object_ids;
-        std::function<void()> callback;
-    };
-    std::vector<PackageStaticStartupCallback>
-        package_static_startup_callbacks;
-    bool package_static_startup_registration_closed { };
     bool package_static_startup_actions_entered { };
     bool start_in_progress { };
     bool package_static_initialization_active { };
-    bool package_static_initialization_callback_active { };
-    std::size_t package_static_initialization_callback_index {
-        std::numeric_limits<std::size_t>::max()
-    };
     ProcessId package_static_initialization_process {
         std::numeric_limits<ProcessId>::max()
     };

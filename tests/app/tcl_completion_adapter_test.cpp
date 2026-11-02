@@ -196,7 +196,7 @@ void test_command_catalog_completion_metadata()
     require(library != nullptr && library->capability == TclCommandCapability::workspace
             && find_subcommand(*library, "map") != nullptr
             && has_argument(find_subcommand(*library, "map")->arguments,
-                "directory", TclCompletionDomain::directory_path),
+                "path", TclCompletionDomain::directory_path),
         "library subcommand metadata must route map directory completion");
     require(object != nullptr && object->capability == TclCommandCapability::workspace
             && find_subcommand(*object, "info") != nullptr

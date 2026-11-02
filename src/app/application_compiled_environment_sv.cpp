@@ -1245,6 +1245,14 @@ public:
             for (auto& base : declaration.implemented_interfaces)
                 relation(base);
         }
+        // A type actual with packed dimensions over a package type
+        // (`m #(t [1:0])`) composes as a declaration does.
+        for (auto& instance : hir.mutable_instances()) {
+            for (auto& actual : instance.parameters) {
+                if (actual.type && actual.type->packed_over_named_type)
+                    bind_type(*actual.type, instance.scope);
+            }
+        }
         for (auto& expression : expressions) {
             if (expression.referenced_name)
                 bind_name(*expression.referenced_name, expression.scope);
@@ -1378,6 +1386,17 @@ private:
                 type.executable_width = 64U;
                 type.four_state = false;
             }
+        }
+        if (type.packed_over_named_type
+            && (!type.class_identity.empty()
+                || (type.target.target.valid()
+                    && sv::compose_named_packed_dimensions(
+                           type, design_.mutable_systemverilog())
+                        == sv::NamedPackedDimensions::not_packed))) {
+            diagnostics_.error("FSIM-SV-SEM-424", "packed dimensions over '"
+                + type.target.spelling + "', which is not a packed type "
+                + "(IEEE 1800-2023 7.4.1)", source_span(type.target.source));
+            type.packed_over_named_type = false;
         }
         for (auto& nested : type.container_element_types)
             bind_type(nested, scope);

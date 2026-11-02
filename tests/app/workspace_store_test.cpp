@@ -226,7 +226,7 @@ int leave_hot_journal(const fs::path& database_path)
         return 10;
     }
     const int updated = sqlite3_exec(database,
-        "BEGIN IMMEDIATE; UPDATE metadata SET version=99 WHERE version=3",
+        "BEGIN IMMEDIATE; UPDATE metadata SET version=99 WHERE version=4",
         nullptr, nullptr, nullptr);
     if (updated != SQLITE_OK || sqlite3_changes(database) != 1
         || sqlite3_db_cacheflush(database) != SQLITE_OK) {
@@ -404,6 +404,25 @@ void test_source_replacement_and_group_selection()
     transaction.reset();
     catalog = store.read_library("work", error);
     assert(catalog && catalog->artifacts.size() == 3U);
+
+    // The catalog lists artifacts in analysis order: a recompiled artifact
+    // is the most recently analyzed one.
+    const auto paths = [&] {
+        std::vector<std::string> result;
+        const auto listed = store.read_library("work", error);
+        assert(listed);
+        for (const auto& record : listed->artifacts)
+            result.push_back(fsim::support::path_to_utf8(record.path));
+        return result;
+    };
+    assert((paths() == std::vector<std::string> {
+        "a-unit.fsimobj", "keep.fsimobj", "KEEP~2.fsimobj" }));
+    transaction = store.begin_library("work", error);
+    auto reanalyzed = artifact(*transaction, { "lower.sv" }, { { unit("keep"), "lower.sv" } });
+    assert(transaction->commit(reanalyzed, error));
+    transaction.reset();
+    assert((paths() == std::vector<std::string> {
+        "a-unit.fsimobj", "KEEP~2.fsimobj", "keep.fsimobj" }));
 }
 
 void test_vhdl_identifier_form_round_trip_and_v1_rejection()
@@ -460,7 +479,7 @@ void test_vhdl_identifier_form_round_trip_and_v1_rejection()
     assert(fs::remove(old_database));
     write_v1_database(old_database, old_location, original);
 
-    // A catalog written with the previous table schema is not migrated.
+    // A catalog written by an older fsim is not migrated.
     const auto file_bytes = [](const fs::path& path) {
         std::ifstream input { path, std::ios::binary };
         return std::string { std::istreambuf_iterator<char> { input }, { } };
@@ -468,10 +487,10 @@ void test_vhdl_identifier_form_round_trip_and_v1_rejection()
     const auto old_bytes = file_bytes(old_database);
     error.clear();
     assert(!legacy_store.read_library("work", error));
-    assert(error.find("unsupported schema") != std::string::npos);
+    assert(error.find("older fsim") != std::string::npos);
     error.clear();
     assert(!legacy_store.begin_library("work", error));
-    assert(error.find("unsupported schema") != std::string::npos);
+    assert(error.find("older fsim") != std::string::npos);
     assert(file_bytes(old_database) == old_bytes);
 }
 
@@ -578,20 +597,24 @@ void test_mapping_and_corrupt_metadata()
     const auto modified = fs::last_write_time(database);
     assert(!consumer.read_library("work", error));
     assert(fs::last_write_time(database) == modified);
-    execute_sql(database, "UPDATE metadata SET version=3; CREATE TABLE foreign_data(value TEXT)");
+    execute_sql(database, "UPDATE metadata SET version=4; CREATE TABLE foreign_data(value TEXT)");
     assert(!consumer.read_library("work", error));
     assert(error.find("schema") != std::string::npos);
     execute_sql(database, "DROP TABLE foreign_data");
-    execute_sql(database, "UPDATE metadata SET version=3; UPDATE artifacts SET path='../outside'");
+    execute_sql(database, "UPDATE metadata SET version=4; UPDATE artifacts SET path='../outside'");
     assert(!consumer.read_library("work", error));
     assert(error.find("unsafe") != std::string::npos);
     execute_sql(database, "UPDATE artifacts SET path='nested/top.fsimobj'");
     assert(!consumer.read_library("work", error));
     assert(error.find("unsafe") != std::string::npos);
-    // A catalog of the read-only tree layout asks for recompilation.
-    execute_sql(database, "UPDATE metadata SET version=2");
-    assert(!consumer.read_library("work", error));
-    assert(error.find("older fsim") != std::string::npos);
+    // Catalogs without analysis order, and of the read-only tree layout,
+    // ask for recompilation.
+    for (const auto* older : { "UPDATE metadata SET version=3",
+             "UPDATE metadata SET version=2" }) {
+        execute_sql(database, older);
+        assert(!consumer.read_library("work", error));
+        assert(error.find("older fsim") != std::string::npos);
+    }
     assert(!consumer.delete_library("work", error));
 }
 

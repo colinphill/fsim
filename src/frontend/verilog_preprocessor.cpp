@@ -148,6 +148,8 @@ namespace {
         {
             current_dependency_names_.clear();
             current_dependencies_.clear();
+            const auto changes = state_changes_;
+            const auto first_token = output_.size();
             process_file(root, 0);
             const auto found = source_snapshots_.find(fsim::support::path_to_utf8(root));
             roots_.push_back({ root,
@@ -155,7 +157,75 @@ namespace {
                     ? std::string { }
                     : found->second,
                 std::move(current_dependencies_),
-                standard_revision_ });
+                standard_revision_,
+                state_changes_ != changes || !conditionals_.empty()
+                    || protected_envelope_
+                    || has_unit_scope_text(first_token) });
+        }
+
+        // Whether the output from `first` holds text outside the design
+        // elements (module, interface, program, package, config) it
+        // declares: compilation-unit scope items, which later roots of the
+        // unit see (IEEE 1800-2023 3.12.1). Unbalanced text counts, and so
+        // does a primitive, since the parser resolves UDP instances against
+        // the declarations it has already read. Later roots see a package's
+        // members as they see a compiled package's.
+        [[nodiscard]] bool has_unit_scope_text(const std::size_t first) const
+        {
+            const auto closer = [](const std::string_view opener)
+                -> std::string_view {
+                if (opener == "module" || opener == "macromodule") {
+                    return "endmodule";
+                }
+                if (opener == "interface") return "endinterface";
+                if (opener == "program") return "endprogram";
+                if (opener == "package") return "endpackage";
+                if (opener == "primitive") return "endprimitive";
+                if (opener == "config") return "endconfig";
+                return { };
+            };
+            const auto opens = [&](const std::size_t index,
+                                   const std::string_view end) {
+                const auto& token = output_[index];
+                if (token.kind != TokenKind::Identifier
+                    || closer(token.text) != end) {
+                    return false;
+                }
+                // An interface class is a class (IEEE 1800-2023 8.26).
+                return token.text != "interface" || index + 1 >= output_.size()
+                    || output_[index + 1].text != "class";
+            };
+            std::string_view end;
+            std::size_t depth { };
+            for (auto index = first; index < output_.size(); ++index) {
+                const auto& token = output_[index];
+                if (token.kind == TokenKind::EndOfFile) {
+                    continue;
+                }
+                if (depth == 0U) {
+                    end = token.kind == TokenKind::Identifier
+                        ? closer(token.text)
+                        : std::string_view { };
+                    if (end.empty() || end == "endprimitive"
+                        || !opens(index, end)) {
+                        return true;
+                    }
+                    depth = 1U;
+                    continue;
+                }
+                if (opens(index, end)) {
+                    ++depth;
+                } else if (token.kind == TokenKind::Identifier
+                    && token.text == end && --depth == 0U) {
+                    // An end label (`endmodule : m`) belongs to the element.
+                    if (index + 2U < output_.size()
+                        && output_[index + 1U].kind == TokenKind::Colon
+                        && output_[index + 2U].kind == TokenKind::Identifier) {
+                        index += 2U;
+                    }
+                }
+            }
+            return depth != 0U;
         }
 
         [[nodiscard]] bool active() const noexcept
@@ -964,6 +1034,7 @@ namespace {
                 const auto macro_name = directive_macro_name(tokens, arguments, end, name_token);
                 if (macro_name) {
                     macros_.erase(*macro_name);
+                    ++state_changes_;
                 }
                 return;
             }
@@ -976,6 +1047,7 @@ namespace {
                 reject_extra_directive_tokens(
                     tokens, arguments, end, name_token);
                 macros_.clear();
+                ++state_changes_;
                 return;
             }
             if (name == "include") {
@@ -995,6 +1067,7 @@ namespace {
                 || name == "endcelldefine" || name == "begin_keywords"
                 || name == "end_keywords" || name == "unconnected_drive"
                 || name == "nounconnected_drive") {
+                ++state_changes_;
                 output_.push_back(tokens[begin]);
                 output_.push_back(tokens[begin + 1]);
                 using Difference = std::vector<Token>::difference_type;
@@ -1384,6 +1457,7 @@ namespace {
                         + location_text(existing->second.definition) } });
             }
             macros_[name.text] = std::move(definition);
+            ++state_changes_;
         }
 
         [[nodiscard]] std::optional<std::filesystem::path> resolve_include(
@@ -2310,6 +2384,9 @@ namespace {
         std::optional<SourceSpan> protected_envelope_span_;
         std::optional<std::pair<std::string, std::size_t>> protected_payload_start_;
         std::vector<ProtectedPayloadRange> protected_payload_ranges_;
+        // Counts macro definitions, undefinitions and parser-state
+        // directives, which carry from one root to the next.
+        std::size_t state_changes_ { };
     };
 
 } // namespace

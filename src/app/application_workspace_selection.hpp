@@ -9,6 +9,8 @@ struct WorkspaceDesignSelection {
     std::vector<WorkspaceObjectSelection> objects;
     std::vector<std::filesystem::path> plugins;
     WorkspaceCatalogs catalogs;
+    // Mapped exported libraries the design reaches, sorted.
+    std::vector<std::string> exported_libraries;
 };
 
 // Tops have already been resolved to qualified catalog names. Validate the

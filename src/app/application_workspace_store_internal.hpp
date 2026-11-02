@@ -39,6 +39,17 @@ void remove_artifact(const std::filesystem::path&) noexcept;
     std::string_view text, std::string& error);
 [[nodiscard]] std::optional<std::string> read_text(
     const std::filesystem::path&, std::size_t limit, std::string& error);
+// .fsim/libraries.toml: [libraries] maps names to library directories and
+// [exported] maps names to exported .fsimlib files.
+struct MappingFile {
+    LibraryMappings libraries;
+    LibraryMappings exported;
+};
+[[nodiscard]] std::optional<MappingFile> read_mapping_file(
+    const Store&, std::string& error);
+[[nodiscard]] bool write_mapping_file(
+    const Store&, const MappingFile&, std::string& error);
+// The directory mappings alone; writing them keeps the exported ones.
 [[nodiscard]] std::optional<LibraryMappings> read_mappings(
     const Store&, std::string& error);
 [[nodiscard]] bool write_mappings(

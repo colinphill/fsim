@@ -7554,12 +7554,6 @@ std::uint32_t Interpreter::Impl::StaticKernel::import_slot(const SignalId signal
     return slot_index;
 }
 
-void Interpreter::Impl::StaticKernel::import_startup_write(const SignalId signal)
-{
-    // Before time zero nothing has started that a change would wake.
-    (void)import_slot(signal);
-}
-
 void Interpreter::Impl::StaticKernel::import_host_write(
     const SignalId signal, const SignalChangeOrigin origin)
 {

@@ -9003,60 +9003,6 @@ namespace {
         std::optional<semantic::CompiledUnitView> result;
         const semantic::vhdl::Unit* latest { };
         matches = 0U;
-        const auto& spans = compiled.semantics.source_spans();
-        const auto position = [&](const semantic::vhdl::Unit& unit) {
-            return unit.source.valid() && unit.source.value() < spans.size()
-                ? std::optional { spans[unit.source.value()].begin.offset }
-                : std::nullopt;
-        };
-        const auto analyzed_after = [&](
-                                        const semantic::vhdl::Unit& candidate,
-                                        const semantic::vhdl::Unit& previous) {
-            if (!candidate.source.valid()
-                || candidate.source.value() >= spans.size()
-                || !previous.source.valid()
-                || previous.source.value() >= spans.size()) {
-                return true;
-            }
-            const auto& candidate_span = spans[candidate.source.value()];
-            const auto& previous_span = spans[previous.source.value()];
-            const auto& source_files = compiled.semantics.source_files();
-            const auto source_file = [&](const semantic::SourceSpan& span)
-                -> const semantic::SourceFile* {
-                return span.file.valid()
-                        && span.file.value() < source_files.size()
-                    ? &source_files[span.file.value()]
-                    : nullptr;
-            };
-            const auto* candidate_file = source_file(candidate_span);
-            const auto* previous_file = source_file(previous_span);
-            const bool same_digest
-                = candidate_file != nullptr && previous_file != nullptr
-                && !candidate_file->content_digest.empty()
-                && candidate_file->content_digest
-                    == previous_file->content_digest;
-            const bool same_source
-                = (candidate_span.file.valid()
-                      && previous_span.file.valid()
-                      && candidate_span.file == previous_span.file)
-                || (!candidate_span.logical_name.empty()
-                    && candidate_span.logical_name
-                        == previous_span.logical_name)
-                || same_digest;
-            if (!same_source) {
-                // Across source files, retain compiled candidate order.
-                return true;
-            }
-            const auto candidate_position = position(candidate);
-            const auto previous_position = position(previous);
-            if (candidate_position && previous_position
-                && *candidate_position != *previous_position) {
-                return *candidate_position > *previous_position;
-            }
-            // SourceSpanIds are relocated while object HIR is linked, so their
-            // order is not the order in which VHDL units were analyzed.
-            return true;
-        };
         for (const auto& candidate : compiled.vhdl_units()) {
             if (candidate.kind != semantic::vhdl::UnitKind::architecture
                 || !compiled_vhdl_library_equal(candidate.library, library)
@@ -9069,7 +9015,7 @@ namespace {
             // Without a name, the most recently analyzed architecture: the
             // later one of a source (IEEE 1076-2008 7.3.3).
             if (latest == nullptr || !architecture.empty()
-                || analyzed_after(candidate, *latest)) {
+                || vhdl_unit_analyzed_after(compiled, candidate, *latest)) {
                 result = compiled.find_unit(candidate.id);
                 latest = &candidate;
             }

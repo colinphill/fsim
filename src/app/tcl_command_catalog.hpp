@@ -73,6 +73,7 @@ struct TclCommandSpec {
 std::span<const TclCommandSpec> workspace_command_specs();
 std::span<const TclCommandSpec> object_command_specs();
 std::span<const TclCommandSpec> debugger_command_specs();
+std::span<const TclCommandSpec> configuration_command_specs();
 std::span<const TclCommandSpec> existing_command_specs();
 
 // The canonical catalog lives in tcl_command_catalog.cpp. Callers must not

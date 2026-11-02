@@ -551,6 +551,7 @@ std::optional<semantic::CompiledUnitView> choose_bound_unit(
         return std::nullopt;
     }
     if (target.language == "vhdl") {
+        const semantic::vhdl::Unit* latest { };
         for (const auto& unit : compiled.vhdl_units()) {
             if (unit.kind == semantic::vhdl::UnitKind::architecture
                 && support::same_vhdl_identifier(unit.primary_name,
@@ -562,11 +563,89 @@ std::optional<semantic::CompiledUnitView> choose_bound_unit(
                     || support::same_vhdl_identifier(unit.name,
                         unit.extended_name, *target.architecture,
                         target.architecture_extended))) {
-                return unit_view(compiled, unit);
+                if (target.architecture) {
+                    return unit_view(compiled, unit);
+                }
+                if (latest == nullptr
+                    || vhdl_unit_analyzed_after(compiled, unit, *latest)) {
+                    latest = &unit;
+                }
             }
+        }
+        if (latest != nullptr) {
+            return unit_view(compiled, *latest);
         }
     }
     return std::nullopt;
+}
+
+bool has_vhdl_entity(
+    const semantic::CompiledDesign& compiled,
+    const TargetSpec& target)
+{
+    return std::ranges::any_of(compiled.vhdl_units(),
+        [&](const semantic::vhdl::Unit& unit) {
+            return unit.kind == semantic::vhdl::UnitKind::entity
+                && support::same_vhdl_identifier(unit.name,
+                    unit.extended_name, target.unit, target.unit_extended)
+                && (target.library.empty() || unit.library.empty()
+                    || equal_ignoring_ascii_case(unit.library, target.library));
+        });
+}
+
+bool vhdl_unit_analyzed_after(
+    const semantic::CompiledDesign& compiled,
+    const semantic::vhdl::Unit& candidate,
+    const semantic::vhdl::Unit& previous)
+{
+    const auto& spans = compiled.semantics.source_spans();
+    if (!candidate.source.valid()
+        || candidate.source.value() >= spans.size()
+        || !previous.source.valid()
+        || previous.source.value() >= spans.size()) {
+        return true;
+    }
+    const auto& candidate_span = spans[candidate.source.value()];
+    const auto& previous_span = spans[previous.source.value()];
+    const auto& source_files = compiled.semantics.source_files();
+    const auto source_file = [&](const semantic::SourceSpan& span)
+        -> const semantic::SourceFile* {
+        return span.file.valid() && span.file.value() < source_files.size()
+            ? &source_files[span.file.value()]
+            : nullptr;
+    };
+    const auto* candidate_file = source_file(candidate_span);
+    const auto* previous_file = source_file(previous_span);
+    const bool same_digest = candidate_file != nullptr
+        && previous_file != nullptr
+        && !candidate_file->content_digest.empty()
+        && candidate_file->content_digest == previous_file->content_digest;
+    const bool same_source
+        = (candidate_span.file.valid() && previous_span.file.valid()
+              && candidate_span.file == previous_span.file)
+        || (!candidate_span.logical_name.empty()
+            && candidate_span.logical_name == previous_span.logical_name)
+        || same_digest;
+    if (!same_source) {
+        // Across source files, the file analyzed later; without a recorded
+        // analysis order, the later candidate in compiled order.
+        const auto rank = [&](const semantic::SourceFile* file) {
+            return file == nullptr ? std::nullopt
+                                   : compiled.vhdl_analysis_rank(file->content_digest);
+        };
+        const auto candidate_rank = rank(candidate_file);
+        const auto previous_rank = rank(previous_file);
+        if (candidate_rank && previous_rank) {
+            return *candidate_rank > *previous_rank;
+        }
+        return true;
+    }
+    if (candidate_span.begin.offset != previous_span.begin.offset) {
+        return candidate_span.begin.offset > previous_span.begin.offset;
+    }
+    // SourceSpanIds are relocated while object HIR is linked, so their
+    // order is not the order in which VHDL units were analyzed.
+    return true;
 }
 
 

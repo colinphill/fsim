@@ -16,11 +16,13 @@
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <set>
 
 namespace fsim::app::application_detail {
 
@@ -48,6 +50,56 @@ HdlVcdState::~HdlVcdState()
 }
 
 namespace {
+
+    // The order in which VHDL files were analyzed selects an entity's
+    // architecture only when its architectures come from more than one file
+    // (IEEE 1076-2008 7.3.3), so only those files' order is part of a key.
+    void add_vhdl_analysis_order(compiler::CacheKeyBuilder& key,
+        const semantic::CompiledDesign& design)
+    {
+        const auto& spans = design.semantics.source_spans();
+        const auto& files = design.semantics.source_files();
+        const auto folded = [](const std::string_view name) {
+            std::string result { name.empty() ? std::string_view { "work" } : name };
+            if (!result.starts_with('\\')) {
+                std::ranges::transform(result, result.begin(), [](const char character) {
+                    return static_cast<char>(
+                        std::tolower(static_cast<unsigned char>(character)));
+                });
+            }
+            return result;
+        };
+        std::map<std::pair<std::string, std::string>, std::set<std::string>> entity_files;
+        for (const auto& unit : design.vhdl_units()) {
+            if (unit.kind != semantic::vhdl::UnitKind::architecture
+                || !unit.source.valid() || unit.source.value() >= spans.size()) {
+                continue;
+            }
+            const auto file = spans[unit.source.value()].file;
+            if (!file.valid() || file.value() >= files.size()
+                || files[file.value()].content_digest.empty()) {
+                continue;
+            }
+            entity_files[{ folded(unit.library), folded(unit.primary_name) }].insert(
+                files[file.value()].content_digest);
+        }
+        std::set<std::string> ordered_files;
+        for (const auto& [entity, digests] : entity_files) {
+            if (digests.size() > 1U) {
+                ordered_files.insert(digests.begin(), digests.end());
+            }
+        }
+        std::vector<std::pair<std::size_t, std::string>> ranked;
+        for (const auto& digest : ordered_files) {
+            if (const auto rank = design.vhdl_analysis_rank(digest)) {
+                ranked.emplace_back(*rank, digest);
+            }
+        }
+        std::ranges::sort(ranked);
+        for (const auto& [rank, digest] : ranked) {
+            key.add("vhdl-analysis-order", digest);
+        }
+    }
 
     [[nodiscard]] std::uint64_t stable_trace_hash(
         const std::string_view text) noexcept
@@ -175,6 +227,7 @@ std::string make_cache_key(
     if (!checked.objects.empty()) {
         key.add("workspace-object-order", "managed-catalog-content-v1");
     }
+    add_vhdl_analysis_order(key, checked);
     add_systemverilog_standard_package_identities(key, checked);
     key.add("vhdl-compatibility-profile", vhdl_compatibility_profile());
     key.add(
@@ -755,6 +808,7 @@ make_specialization_cache_keys(
         key.add("fsim-version", version);
         key.add("standard-library", standard_library_cache_version);
         key.add("workspace-object-order", "managed-catalog-content-v1");
+        add_vhdl_analysis_order(key, checked);
         add_systemverilog_standard_package_identities(key, checked);
         key.add(
             "vhdl-compatibility-profile",
@@ -1205,9 +1259,7 @@ std::unique_ptr<TraceState> attach_trace(
     if (!format) {
         return nullptr;
     }
-    const auto surface = config.manifest_path == std::filesystem::path { "<command-line>" }
-        ? TraceControlSurface::NonProjectSimulate
-        : TraceControlSurface::ProjectCli;
+    const auto surface = TraceControlSurface::ProjectCli;
     TraceControlResult configured;
     if (configured_application) {
         configured.application = std::move(configured_application);

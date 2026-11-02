@@ -2,6 +2,8 @@
 #include "fsim/api.h"
 #include "fsim/support/path.hpp"
 
+#include "api_workspace_support.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -56,7 +58,8 @@ struct CallbackCounts {
     std::string provenance_profile;
     std::uint32_t detailed_line { };
     std::uint64_t detailed_instruction { UINT64_MAX };
-    std::string manifest;
+    std::string workspace;
+    std::string snapshot;
 };
 
 void lifecycle(
@@ -97,7 +100,8 @@ void safe_point(
     }
     if (!state.reentry_attempted) {
         state.reentry_attempted = true;
-        state.reentry_status = fsim_session_load_project(session, state.manifest.c_str());
+        state.reentry_status = fsim_session_open_snapshot(
+            session, state.workspace.c_str(), state.snapshot.c_str());
     }
     if (state.stop_on_safe_point && !state.stop_attempted) {
         state.stop_attempted = true;
@@ -235,7 +239,8 @@ fsim_string_view_t text(const char* value)
 
 void test_multiple_root_api(const std::filesystem::path& directory);
 void test_mapped_library_api(const std::filesystem::path& directory);
-void test_systemc_api(const std::filesystem::path& systemc_manifest_path);
+void test_systemc_api(
+    const std::filesystem::path& workspace, const char* snapshot);
 
 int main()
 {
@@ -301,29 +306,15 @@ module child;
 endmodule
 )";
     }
-    const auto manifest_path = directory / "fsim.toml";
-    {
-        std::ofstream manifest(manifest_path);
-        manifest << R"(
-schema = 3
-[project]
-name = "api-test"
-top = "sv:work.tb"
-time_resolution = "1ns"
-
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-library = "work"
-files = ["tb.sv"]
-
-[build]
-cache_path = "cache"
-
-[run]
-max_deltas = 1000
-)";
-    }
+    namespace workspace = fsim::tests::api_workspace;
+    workspace::isolate_user_configuration(directory / "user-config");
+    workspace::write_configuration(
+        directory, "fsim::config set elaborate.time_resolution 1ns\n");
+    workspace::expect(directory,
+        { "compile", "--lang", "systemverilog", "--standard", "2017",
+            "--library", "work", "tb.sv" });
+    workspace::expect(directory, { "elaborate", "sv:work.tb" });
+    const auto workspace_path = fsim::support::path_to_utf8(directory);
     {
         std::ofstream source(directory / "named_systemc.cpp");
         source << R"CPP(
@@ -365,33 +356,15 @@ extern "C" fsim_sc_status_v1 fsim_plugin_init_v1(
 }
 )CPP";
     }
-    const auto systemc_manifest_path = directory / "systemc.toml";
-    {
-        std::ofstream manifest(systemc_manifest_path);
-        manifest
-            << R"TOML(schema = 3
-[project]
-name = "api-systemc-test"
-top = "systemc:api.named"
-time_resolution = "1ns"
-
-[[source_set]]
-language = "systemc"
-standard = "2023-subset"
-library = "api"
-files = ["named_systemc.cpp"]
-include_directories = [")TOML"
-            << (std::filesystem::path { FSIM_TEST_SOURCE_DIR } / "include")
-                   .generic_string()
-            << R"TOML("]
-
-[build]
-cache_path = "systemc-cache"
-
-[run]
-max_deltas = 1000
-)TOML";
-    }
+    workspace::expect(directory,
+        { "systemc", "compile", "--library", "api", "--include",
+            (std::filesystem::path { FSIM_TEST_SOURCE_DIR } / "include")
+                .generic_string(),
+            "named_systemc.cpp" });
+    workspace::expect(directory, { "systemc", "link", "--library", "api" });
+    workspace::expect(directory,
+        { "elaborate", "--snapshot", "systemc", "--search-library", "api",
+            "systemc:api.named" });
     {
         std::ofstream source(directory / "assertion.vhd");
         source << R"(
@@ -408,29 +381,11 @@ begin
 end architecture;
 )";
     }
-    const auto assertion_manifest_path = directory / "assertion.toml";
-    {
-        std::ofstream manifest(assertion_manifest_path);
-        manifest << R"TOML(
-schema = 3
-[project]
-name = "api-assertion-test"
-top = "vhdl:work.assertion_test(rtl)"
-time_resolution = "1ns"
-
-[[source_set]]
-language = "vhdl"
-standard = "2008"
-library = "work"
-files = ["assertion.vhd"]
-
-[build]
-cache_path = "assertion-cache"
-
-[run]
-max_deltas = 1000
-)TOML";
-    }
+    workspace::expect(directory,
+        { "compile", "--lang", "vhdl", "--standard", "2008", "--library",
+            "work", "assertion.vhd" });
+    workspace::expect(directory,
+        { "elaborate", "--snapshot", "assertion", "vhdl:work.assertion_test(rtl)" });
     {
         std::ofstream source(directory / "logic9.vhd");
         source << R"(
@@ -444,29 +399,11 @@ begin
 end architecture;
 )";
     }
-    const auto logic9_manifest_path = directory / "logic9.toml";
-    {
-        std::ofstream manifest(logic9_manifest_path);
-        manifest << R"TOML(
-schema = 3
-[project]
-name = "api-logic9-test"
-top = "vhdl:work.api_logic9(rtl)"
-time_resolution = "1ns"
-
-[[source_set]]
-language = "vhdl"
-standard = "2008"
-library = "work"
-files = ["logic9.vhd"]
-
-[build]
-cache_path = "logic9-cache"
-
-[run]
-max_deltas = 1000
-)TOML";
-    }
+    workspace::expect(directory,
+        { "compile", "--lang", "vhdl", "--standard", "2008", "--library",
+            "work", "logic9.vhd" });
+    workspace::expect(directory,
+        { "elaborate", "--snapshot", "logic9", "vhdl:work.api_logic9(rtl)" });
     {
         std::ofstream source(directory / "severity_actions.sv");
         source << R"(
@@ -481,29 +418,11 @@ module severity_actions;
 endmodule
 )";
     }
-    const auto severity_manifest_path = directory / "severity.toml";
-    {
-        std::ofstream manifest(severity_manifest_path);
-        manifest << R"TOML(
-schema = 3
-[project]
-name = "api-severity-test"
-top = "sv:work.severity_actions"
-time_resolution = "1ns"
-
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-library = "work"
-files = ["severity_actions.sv"]
-
-[build]
-cache_path = "severity-cache"
-
-[run]
-max_deltas = 1000
-)TOML";
-    }
+    workspace::expect(directory,
+        { "compile", "--lang", "systemverilog", "--standard", "2017", "--library",
+            "work", "severity_actions.sv" });
+    workspace::expect(directory,
+        { "elaborate", "--snapshot", "severity", "sv:work.severity_actions" });
     {
         std::ofstream source(directory / "api_random.sv");
         source << R"(
@@ -513,30 +432,11 @@ module api_random;
 endmodule
 )";
     }
-    const auto random_manifest_path = directory / "random.toml";
-    {
-        std::ofstream manifest(random_manifest_path);
-        manifest << R"(
-schema = 3
-[project]
-name = "api-random-test"
-top = "sv:work.api_random"
-time_resolution = "1ns"
-seed = 999
-
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-library = "work"
-files = ["api_random.sv"]
-
-[build]
-cache_path = "random-cache"
-
-[run]
-max_deltas = 1000
-)";
-    }
+    workspace::expect(directory,
+        { "compile", "--lang", "systemverilog", "--standard", "2017", "--library",
+            "work", "api_random.sv" });
+    workspace::expect(directory,
+        { "elaborate", "--snapshot", "random", "--seed", "999", "sv:work.api_random" });
 
     fsim_session_options_t options { };
     options.struct_size = sizeof(options);
@@ -571,7 +471,7 @@ max_deltas = 1000
         fsim_session_create(&options, &legacy_callback_session)
         == FSIM_STATUS_OK);
     CallbackCounts legacy_counts;
-    legacy_counts.manifest = fsim::support::path_to_utf8(manifest_path);
+    legacy_counts.workspace = workspace_path;
     fsim_callbacks_t legacy_callbacks { };
     legacy_callbacks.struct_size = FSIM_CALLBACKS_V1_SIZE;
     legacy_callbacks.api_version = FSIM_API_VERSION;
@@ -582,14 +482,8 @@ max_deltas = 1000
         fsim_session_set_callbacks(
             legacy_callback_session, &legacy_callbacks)
         == FSIM_STATUS_OK);
-    assert(
-        fsim_session_load_project(
-            legacy_callback_session,
-            fsim::support::path_to_utf8(manifest_path).c_str())
-        == FSIM_STATUS_OK);
-    assert(fsim_session_check(legacy_callback_session) == FSIM_STATUS_OK);
-    const auto legacy_build_status
-        = fsim_session_build(legacy_callback_session);
+    const auto legacy_build_status = fsim_session_open_snapshot(
+        legacy_callback_session, workspace_path.c_str(), nullptr);
     if (legacy_build_status != FSIM_STATUS_OK) {
         std::size_t diagnostic_count { };
         const auto count_status = fsim_session_diagnostic_count(
@@ -627,7 +521,7 @@ max_deltas = 1000
     assert(session != FSIM_INVALID_SESSION);
 
     CallbackCounts counts;
-    counts.manifest = fsim::support::path_to_utf8(manifest_path);
+    counts.workspace = workspace_path;
     fsim_callbacks_t callbacks { };
     callbacks.struct_size = sizeof(callbacks);
     callbacks.api_version = FSIM_API_VERSION;
@@ -646,17 +540,13 @@ max_deltas = 1000
         fsim_session_set_callbacks(session, &prefix_callbacks)
         == FSIM_STATUS_OK);
     assert(
-        fsim_session_load_project(
-            session, fsim::support::path_to_utf8(manifest_path).c_str())
+        fsim_session_open_snapshot(session, workspace_path.c_str(), nullptr)
         == FSIM_STATUS_OK);
     assert(counts.lifecycle == 0);
     assert(fsim_session_set_callbacks(session, &callbacks) == FSIM_STATUS_OK);
     assert(
-        fsim_session_load_project(
-            session, fsim::support::path_to_utf8(manifest_path).c_str())
+        fsim_session_open_snapshot(session, workspace_path.c_str(), nullptr)
         == FSIM_STATUS_OK);
-    assert(fsim_session_check(session) == FSIM_STATUS_OK);
-    assert(fsim_session_build(session) == FSIM_STATUS_OK);
     assert(counts.lifecycle >= 1);
 
     fsim_object_t root = FSIM_INVALID_OBJECT;
@@ -1594,7 +1484,9 @@ max_deltas = 1000
     const auto old_generated_scope = generated_scope;
     const auto old_control_scope = control_scope;
     const auto old_control_state = control_state;
-    assert(fsim_session_build(session) == FSIM_STATUS_OK);
+    assert(
+        fsim_session_open_snapshot(session, workspace_path.c_str(), nullptr)
+        == FSIM_STATUS_OK);
     assert(
         fsim_session_read_value(
             session, old_q, value, sizeof(value), &required)
@@ -1673,7 +1565,9 @@ max_deltas = 1000
     // A statement step must stop at the call point after first stopping at the
     // containing assignment. The result remains unwritten until the following
     // statement step executes the call and reaches the delay statement.
-    assert(fsim_session_build(session) == FSIM_STATUS_OK);
+    assert(
+        fsim_session_open_snapshot(session, workspace_path.c_str(), nullptr)
+        == FSIM_STATUS_OK);
     assert(
         fsim_session_find_object(session, text("q"), &rebuilt_q)
         == FSIM_STATUS_OK);
@@ -1713,7 +1607,9 @@ max_deltas = 1000
         == FSIM_STATUS_OK);
     assert(std::string(value) == "0");
 
-    assert(fsim_session_build(session) == FSIM_STATUS_OK);
+    assert(
+        fsim_session_open_snapshot(session, workspace_path.c_str(), nullptr)
+        == FSIM_STATUS_OK);
     assert(
         fsim_session_find_object(session, text("q"), &rebuilt_q)
         == FSIM_STATUS_OK);
@@ -1741,7 +1637,9 @@ max_deltas = 1000
     // Rebuild to obtain a fresh, resumable simulation and request a stop from
     // the synchronous safe-point callback. request_stop is the only control
     // operation intentionally allowed to cross this callback boundary.
-    assert(fsim_session_build(session) == FSIM_STATUS_OK);
+    assert(
+        fsim_session_open_snapshot(session, workspace_path.c_str(), nullptr)
+        == FSIM_STATUS_OK);
     fsim_object_t stopped_q = FSIM_INVALID_OBJECT;
     assert(
         fsim_session_find_object(session, text("q"), &stopped_q)
@@ -1764,14 +1662,11 @@ max_deltas = 1000
         == FSIM_STATUS_OK);
     assert(std::string(value) == "1");
 
-    counts.manifest = fsim::support::path_to_utf8(assertion_manifest_path);
+    counts.snapshot = "assertion";
     assert(
-        fsim_session_load_project(
-            session,
-            fsim::support::path_to_utf8(assertion_manifest_path).c_str())
+        fsim_session_open_snapshot(
+            session, workspace_path.c_str(), "assertion")
         == FSIM_STATUS_OK);
-    assert(fsim_session_check(session) == FSIM_STATUS_OK);
-    assert(fsim_session_build(session) == FSIM_STATUS_OK);
     assert(fsim_session_run(session, 10) == FSIM_STATUS_RUNTIME_ERROR);
     assert(counts.assertions == 2);
     assert(counts.first_assertion_code == "FSIM-API-REPORT-0001");
@@ -1782,9 +1677,11 @@ max_deltas = 1000
     assert(
         counts.assertion_message.find("api mismatch")
         != std::string::npos);
-    assert(
-        counts.assertion_path
-        == fsim::support::path_to_utf8(directory / "assertion.vhd"));
+    // Workspace objects record sources relative to the workspace root.
+    if (counts.assertion_path != "assertion.vhd") {
+        std::cerr << "assertion path: " << counts.assertion_path << '\n';
+    }
+    assert(counts.assertion_path == "assertion.vhd");
     assert(counts.assertion_line == 10);
     assert(counts.assertion_column == 5);
     assert(counts.assertion_safe_points > 0);
@@ -1821,12 +1718,9 @@ max_deltas = 1000
         fsim_session_create(&options, &logic9_session)
         == FSIM_STATUS_OK);
     assert(
-        fsim_session_load_project(
-            logic9_session,
-            fsim::support::path_to_utf8(logic9_manifest_path).c_str())
+        fsim_session_open_snapshot(
+            logic9_session, workspace_path.c_str(), "logic9")
         == FSIM_STATUS_OK);
-    assert(fsim_session_check(logic9_session) == FSIM_STATUS_OK);
-    assert(fsim_session_build(logic9_session) == FSIM_STATUS_OK);
     fsim_object_t logic9_value = FSIM_INVALID_OBJECT;
     assert(
         fsim_session_find_object(
@@ -1891,7 +1785,8 @@ max_deltas = 1000
         == FSIM_STATUS_OK);
 
     CallbackCounts severity_counts;
-    severity_counts.manifest = fsim::support::path_to_utf8(severity_manifest_path);
+    severity_counts.workspace = workspace_path;
+    severity_counts.snapshot = "severity";
     fsim_session_options_t severity_options { };
     severity_options.struct_size = sizeof(severity_options);
     severity_options.api_version = FSIM_API_VERSION;
@@ -1908,15 +1803,8 @@ max_deltas = 1000
             severity_session, &severity_callbacks)
         == FSIM_STATUS_OK);
     assert(
-        fsim_session_load_project(
-            severity_session,
-            fsim::support::path_to_utf8(severity_manifest_path).c_str())
-        == FSIM_STATUS_OK);
-    assert(
-        fsim_session_check(severity_session)
-        == FSIM_STATUS_OK);
-    assert(
-        fsim_session_build(severity_session)
+        fsim_session_open_snapshot(
+            severity_session, workspace_path.c_str(), "severity")
         == FSIM_STATUS_OK);
     assert(
         fsim_session_run(severity_session, 10)
@@ -1966,15 +1854,8 @@ max_deltas = 1000
                     &random_options, &random_session)
                 == FSIM_STATUS_OK);
             assert(
-                fsim_session_load_project(
-                    random_session,
-                    fsim::support::path_to_utf8(random_manifest_path).c_str())
-                == FSIM_STATUS_OK);
-            assert(
-                fsim_session_check(random_session)
-                == FSIM_STATUS_OK);
-            assert(
-                fsim_session_build(random_session)
+                fsim_session_open_snapshot(
+                    random_session, workspace_path.c_str(), "random")
                 == FSIM_STATUS_OK);
             assert(
                 fsim_session_run(random_session, 10)
@@ -2006,7 +1887,7 @@ max_deltas = 1000
     assert(api_seed_111 == api_random_value(111));
     assert(api_seed_111 != api_random_value(112));
 
-    test_systemc_api(systemc_manifest_path);
+    test_systemc_api(directory, "systemc");
 
     test_multiple_root_api(directory);
     test_mapped_library_api(directory);

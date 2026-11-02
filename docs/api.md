@@ -44,8 +44,9 @@ if (!result.ok()) {
 }
 ```
 
-`trace_control_request` converts a project run section and
-`publish_trace_control` publishes a validated request back into it.
+`trace_control_request` converts the run settings of a configuration
+(`project::RunSection`) and `publish_trace_control` publishes a validated
+request back into them.
 `TraceRuntime::attach`, `status`, `flush`, `close`, and `fail` own live
 simulation lifecycle. `TraceControlLimits` bounds selections, report entries,
 output text, and aggregate selection text before publication.
@@ -72,7 +73,7 @@ and `api_version`; fsim never reads or writes beyond the advertised prefix.
 
 CLI controls are `--trace`, `--trace-format`, `--trace-compression`, repeatable
 `--trace-filter`, `--trace-lifecycle`, and `--trace-report-limit`. They are
-valid for project build/run/debug and the owning manifest-free phases.
+valid for `simulate` and `debug`.
 
 Tcl uses `fsim::tracing configure|disable|status|report|add|add_all|remove|clear|list`.
 Debugger selection uses `trace add|remove|all|clear|list|status`. These paths

@@ -2038,8 +2038,7 @@ void Interpreter::Impl::require_package_static_write(
         fail_with(std::string { kind } + " write is outside startup actions");
     }
     if (process) {
-        if (package_static_initialization_callback_active
-            || *process != package_static_initialization_process) {
+        if (*process != package_static_initialization_process) {
             fail_with(std::string { kind } + " process identity is not active");
         }
         const auto program = processes.program_view(*process);
@@ -2060,21 +2059,7 @@ void Interpreter::Impl::require_package_static_write(
         }
         return;
     }
-    if (!package_static_initialization_callback_active
-        || package_static_initialization_callback_index
-            >= package_static_startup_callbacks.size()) {
-        fail_with(
-            std::string { kind } + " write is outside its startup callback");
-    }
-    const auto& callback = package_static_startup_callbacks[
-        package_static_initialization_callback_index];
-    const auto& writable = container
-        ? callback.writable_container_object_ids
-        : callback.writable_string_object_ids;
-    if (!std::ranges::binary_search(writable, object)) {
-        fail_with("callback wrote outside its " + std::string { kind }
-            + " closure");
-    }
+    fail_with(std::string { kind } + " write is outside its startup process");
 }
 
 void Interpreter::Impl::initialize_package_static_container_object(
@@ -2339,8 +2324,7 @@ void Interpreter::Impl::write_container_object_element_value(
     const InstructionIndex instruction,
     const SignalChangeOrigin origin)
 {
-    if (package_static_initialization_active
-        && !package_static_initialization_callback_active) {
+    if (package_static_initialization_active) {
         throw std::logic_error {
             "package startup processes cannot write container elements"
         };

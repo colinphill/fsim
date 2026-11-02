@@ -494,6 +494,12 @@ bool resolve_workspace_tops(project::Config& config,
         if (!parsed) {
             return workspace_error(diagnostics, "invalid top-level name '" + top.target + "'");
         }
+        // A top in an exported library names it; the import checks the unit.
+        if (!parsed->library.empty()
+            && std::ranges::any_of(config.library_mappings,
+                [&](const auto& mapping) { return mapping.library == parsed->library; })) {
+            continue;
+        }
         std::vector<std::string> candidates;
         for (const auto& catalog : catalogs) {
             if (!parsed->library.empty() && parsed->library != catalog.location.name) {

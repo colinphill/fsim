@@ -32,11 +32,14 @@ partition_workspace_objects(const CompilationWorkspace&, const project::Config&,
 compiled_object_unit_entries(const semantic::CompiledDesign&,
     std::string_view library);
 
+// With `mapped_libraries`, its .fsimlib mappings are imported and linked
+// with the objects.
 [[nodiscard]] std::optional<CompilationWorkspace> load_workspace_objects(
     std::span<const WorkspaceObjectSelection> objects,
     diagnostic::Engine& diagnostics,
     bool validate_uvm_surface = true,
-    const std::filesystem::path& base_directory = { });
+    const std::filesystem::path& base_directory = { },
+    const project::Config* mapped_libraries = nullptr);
 
 [[nodiscard]] std::optional<BuiltProject> build_workspace_objects(
     const project::Config& config,

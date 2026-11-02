@@ -97,7 +97,7 @@ fsim_require_relocation_tokens(cmake/CheckInstalledPublicContract.cmake
   "file(CHMOD_RECURSE" "read-only relocation")
 fsim_require_relocation_tokens(tests/api/api_mapped_library_test.cpp
   "relocated mapped packages" "vendor library.fsimlib" "producer-hidden"
-  "perm_options::remove" "fsim_session_build")
+  "perm_options::remove" "fsim_session_open_snapshot")
 fsim_require_relocation_tokens(tests/app/application_test_non_project_cli.cpp
   "relocated artifacts" "read only design.fsimdesign"
   "make_tree_read_only" "producer_prefix" "relocated outputs"

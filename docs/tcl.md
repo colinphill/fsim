@@ -56,6 +56,9 @@ takes precedence.
 | `fsim::compile` | `?-lang LANGUAGE? ?-library LIBRARY? ?-standard STANDARD? ?-verbosity LEVEL? ?-include DIRECTORY? ?-define NAME[=VALUE]? ?-compiler PATH? ?-compile-option ARG? SOURCE ...`; compile files into a managed library and return a dictionary. `-include`, `-define`, and `-compile-option` repeat; `-compiler` and `-compile-option` apply to SystemC sources. |
 | `fsim::link` | `?-library LIBRARY? ?-compiler PATH? ?-link-option ARG? ?-link-library ARG? ?-verbosity LEVEL?`; link a library's compiled SystemC objects into its plug-in, register its modules for elaboration, and return a dictionary. `-link-option` and `-link-library` repeat. |
 | `fsim::elaborate` | `?-snapshot NAME? ?-verbosity LEVEL? TOP ...`; create a managed snapshot and return a dictionary. |
+| `fsim::config` | `set KEY VALUE`, `get KEY`, `unset KEY`, `list ?PATTERN?`, or `keys ?PATTERN?`; set or read the default options of fsim commands (see [Configuration](#configuration)). |
+| `fsim::coverage` | `fsm\|exclude add\|remove\|show\|list\|clear ...`; manage coverage FSM hints and exclusions applied at elaboration. |
+| `fsim::bind` | `add\|remove\|show\|list\|clear ...`; bind design instances to units or port resolvers at elaboration. |
 | `fsim::library` | `list`, `map NAME DIRECTORY`, `unmap NAME`, `objects NAME`, `delete-object NAME ARTIFACT_ID`, or `delete NAME`. |
 | `fsim::object` | `roots`, `resolve PATH`, `children REFERENCE`, `info REFERENCE`, `read REFERENCE`, `write REFERENCE VALUE`, `definitions ?LIBRARY?`, or `definition LIBRARY NAME`. |
 | `fsim::get_signals` | Return the paths of loaded signals. |
@@ -85,6 +88,110 @@ fsim::debug inspect PATH_OR_REFERENCE
 fsim::debug restart ?SNAPSHOT?
 fsim::debug provenance ?PATH?
 ```
+
+## Configuration
+
+Every fsim command first runs the per-user `fsim.tcl`, then the workspace's
+`fsim.tcl`. The per-user script is `$XDG_CONFIG_HOME/fsim/fsim.tcl`, else
+`~/.config/fsim/fsim.tcl`, or `%APPDATA%\fsim\fsim.tcl` on Windows. A missing
+script is skipped. `--no-config` or `FSIM_NO_CONFIG=1` runs neither, which
+scripted regressions use to stay independent of the user's settings. A
+configuration script is ordinary Tcl code, as a Makefile is code: run only
+scripts you trust. A failing script stops the command with `FSIM-TCL-CFG-001`,
+which names the script and carries the Tcl error trace.
+
+```tcl
+# fsim.tcl
+fsim::config set compile.sv.standard 2023
+fsim::config set elaborate.time_resolution 1ns
+fsim::config set elaborate.search_libraries {models vendor}
+fsim::config set simulate.max_deltas 1000
+fsim::coverage fsm add -instance tb.u_ctrl -current state -legal {IDLE RUN}
+fsim::bind add tb.u_dut -target sv:work.fast_cell
+```
+
+A key sets the default of one command option. An option given on the command
+line wins over the default; for a list key, such as
+`elaborate.search_libraries`, the command-line values are added after the
+configured ones. A key named `command.language.option` applies to sources of
+that language (`vhdl`, `verilog`, or `sv`) and wins over `command.option`. Values
+are checked when they are set: a boolean accepts `1`/`true`/`yes`/`on` and
+`0`/`false`/`no`/`off`, and an integer is unsigned.
+
+`fsim::config set KEY VALUE` records a value and `unset KEY` removes it.
+`get KEY` returns the value in force or the default. `list ?PATTERN?` returns
+a dictionary of the keys that are set, each with its value and origin: its
+`layer` and `source`, the script and line or `interactive`. `keys ?PATTERN?` returns every documented
+key with its kind, default, and summary. A setting made in a Tcl session wins
+over both scripts until the session ends.
+
+FSM hints, coverage exclusions, and bindings are keyed entries:
+`fsim::coverage fsm` is keyed by instance and current-state object,
+`fsim::coverage exclude` by its `-name` (generated when omitted), and
+`fsim::bind` by instance. Each takes `add`, which replaces an entry with the
+same key, `remove`, `show`, `list ?PATTERN?`, and `clear`, and reports the
+origin of each entry. The [coverage guide](code-coverage.md) describes the FSM
+hint and exclusion options.
+
+Elaboration records each `elaborate.*` setting and keyed entry in force, with
+its origin, in the snapshot. When a snapshot is simulated with other settings
+in force, `FSIM-TCL-CFG-003` names the keys that differ; run `fsim elaborate`
+to apply them.
+
+<!-- fsim-config-keys:begin -->
+| Key | Kind | Default | Purpose |
+| --- | --- | --- | --- |
+| `compile.code_coverage` | boolean | `false` | compile with code coverage; elaborate.code_coverage must match |
+| `compile.compilation_unit` | text |  | compilation unit of every language: file, source-set, combined |
+| `compile.defines` | list |  | preprocessor defines (NAME or NAME=VALUE) of Verilog and SystemVerilog |
+| `compile.include_directories` | list |  | include directories of Verilog and SystemVerilog, relative to the workspace |
+| `compile.jobs` | integer | `0` | parallel compilation jobs; 0 picks the machine's count |
+| `compile.library` | text | `work` | library compiled sources go into |
+| `compile.sv.compatibility` | list |  | SystemVerilog compatibility switches |
+| `compile.sv.compilation_unit` | text | `source-set` | SystemVerilog compilation unit |
+| `compile.sv.defines` | list |  | SystemVerilog preprocessor defines |
+| `compile.sv.include_directories` | list |  | SystemVerilog include directories |
+| `compile.sv.standard` | text | `2017` | SystemVerilog standard |
+| `compile.sv.uvm_release` | text | `none` | governed UVM release SystemVerilog sources compile against |
+| `compile.verilog.compatibility` | list |  | Verilog compatibility switches |
+| `compile.verilog.compilation_unit` | text | `source-set` | Verilog compilation unit |
+| `compile.verilog.defines` | list |  | Verilog preprocessor defines |
+| `compile.verilog.include_directories` | list |  | Verilog include directories |
+| `compile.verilog.standard` | text | `2005` | Verilog standard |
+| `compile.vhdl.compatibility` | text |  | VHDL compatibility profile |
+| `compile.vhdl.compilation_unit` | text | `file` | VHDL compilation unit |
+| `compile.vhdl.standard` | text | `2008` | VHDL standard |
+| `elaborate.aot` | boolean | `false` | build the static kernel's native code at elaboration |
+| `elaborate.code_coverage` | boolean | `false` | instrument the design for code coverage; compile.code_coverage must match |
+| `elaborate.delay_mode` | text | `typical` | delay mode: minimum, typical, maximum |
+| `elaborate.generics` | list |  | top-level generic and parameter overrides, NAME=VALUE |
+| `elaborate.jobs` | integer | `0` | parallel elaboration jobs; 0 picks the machine's count |
+| `elaborate.optimization` | text | `2` | optimization level 0 to 3 |
+| `elaborate.search_libraries` | list |  | libraries searched for unqualified design units, in order |
+| `elaborate.seed` | text | `1` | random seed, or 'random' |
+| `elaborate.time_resolution` | text | `auto` | simulation time resolution, or 'auto' |
+| `elaborate.vpi` | list |  | VPI modules LIB[:BOOTSTRAP] loaded for elaboration |
+| `simulate.coverage_output` | text |  | code-coverage database written at the end of simulation |
+| `simulate.delay_mode` | text | `typical` | delay mode: minimum, typical, maximum |
+| `simulate.duration` | text |  | time to simulate, e.g. 10us; empty runs to the end |
+| `simulate.max_deltas` | integer | `100000` | delta cycles allowed in one time step |
+| `simulate.seed` | text | `1` | random seed, or 'random' |
+| `simulate.sv_libs` | list |  | DPI-C libraries loaded for simulation |
+| `simulate.trace` | boolean | `true` | write the waveform trace |
+| `simulate.trace_compression` | text | `auto` | trace compression: auto, none, deterministic |
+| `simulate.trace_filters` | list |  | trace selections |
+| `simulate.trace_format` | text | `auto` | trace format: auto, vcd, fst |
+| `simulate.trace_output` | text |  | waveform trace file |
+| `simulate.trace_report_limit` | integer | `4096` | trace diagnostics reported before the rest are counted |
+| `simulate.vhpi` | list |  | VHPI modules LIB[:BOOTSTRAP] loaded for simulation |
+| `simulate.vpi` | list |  | VPI modules LIB[:BOOTSTRAP] loaded for simulation |
+| `systemc.compile_options` | list |  | options passed to the SystemC compiler |
+| `systemc.compiler` | text |  | SystemC C++ compiler |
+| `systemc.defines` | list |  | SystemC preprocessor defines |
+| `systemc.include_directories` | list |  | SystemC include directories |
+| `systemc.link_libraries` | list |  | libraries linked into SystemC plug-ins |
+| `systemc.link_options` | list |  | options passed to the SystemC linker |
+<!-- fsim-config-keys:end -->
 
 ## Structured workspace results
 

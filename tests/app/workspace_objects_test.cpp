@@ -451,10 +451,13 @@ void check_compilation_unit_partition(const std::filesystem::path& root,
 {
     const auto declarations = root / "declarations.sv";
     const auto modules = root / "modules.sv";
-    write_file(declarations, mutable_state
-            ? "module carrier; int shared_counter = 0; endmodule\n"
-            : "module carrier; typedef int shared_type; "
-              "localparam int shared_limit = 3; endmodule\n");
+    // The macro passes state to the next file, so both files form one
+    // compilation group as a real compilation unit's declarations would.
+    write_file(declarations, std::string { "`define CARRIER_STATE 1\n" }
+            + (mutable_state
+                    ? "module carrier; int shared_counter = 0; endmodule\n"
+                    : "module carrier; typedef int shared_type; "
+                      "localparam int shared_limit = 3; endmodule\n"));
     write_file(modules, "module first; endmodule\nmodule second; endmodule\n");
     fsim::project::Config config;
     config.base_directory = root;

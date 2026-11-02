@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/configuration.hpp"
 #include "fsim/project/project.hpp"
 
 #include <cstddef>
@@ -9,6 +10,7 @@
 #include <filesystem>
 #include <functional>
 #include <iosfwd>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -34,6 +36,7 @@ enum class Command {
   library_objects,
   library_delete_object,
   library_delete,
+  snapshot_info,
 };
 
 enum class DiagnosticFormat {
@@ -75,8 +78,6 @@ struct Invocation {
   std::string program_name{"fsim"};
   std::filesystem::path program_path{"fsim"};
   Command command{Command::check};
-  std::filesystem::path manifest;
-  bool manifest_explicit{false};
   std::string snapshot{"default"};
   Verbosity verbosity{Verbosity::normal};
   std::optional<std::string> library_name;
@@ -95,8 +96,8 @@ struct Invocation {
   std::vector<std::pair<std::string, std::string>> generics;
   std::optional<std::string> top;
   std::string library{"work"};
+  bool library_explicit{false};
   std::vector<std::string> search_libraries;
-  std::vector<project::LibraryMapping> library_mappings;
   std::vector<project::LibraryMapping> library_exports;
   std::vector<std::filesystem::path> include_directories;
   std::vector<std::string> defines;
@@ -155,6 +156,11 @@ struct Invocation {
   diagnostic::ColorMode color_mode{diagnostic::ColorMode::automatic};
   bool help{false};
   bool version{false};
+  // `--no-config` (or FSIM_NO_CONFIG=1): run no configuration script.
+  bool no_config{false};
+  // The configuration the scripts built; the commands of a Tcl session
+  // read and change it. Null when no configuration was loaded.
+  std::shared_ptr<project::Configuration> configuration;
 };
 
 using Handler = std::function<int(
@@ -163,6 +169,13 @@ using Handler = std::function<int(
     diagnostic::Engine& diagnostics,
     std::ostream& output,
     std::ostream& error)>;
+
+// Runs the per-user and workspace configuration scripts of a command into
+// the configuration; false after a diagnosed failure.
+using ConfigurationLoader = std::function<bool(
+    const Invocation& invocation,
+    project::Configuration& configuration,
+    diagnostic::Engine& diagnostics)>;
 
 struct Services {
   Handler check;
@@ -187,6 +200,9 @@ struct Services {
   // callers always use run/simulate, preserving their callback semantics.
   Handler stdio_run { };
   Handler stdio_simulate { };
+  // Absent for callers that read no configuration scripts.
+  ConfigurationLoader load_configuration { };
+  Handler snapshot_info { };
 };
 
 [[nodiscard]] std::optional<Invocation> parse_arguments(
@@ -202,5 +218,31 @@ int run(
     std::ostream& error);
 
 int run(int argc, const char* const* argv, const Services& services = {});
+
+// Puts the invocation's run, elaboration and SystemC options into the
+// configuration, as the driver does before it calls a handler.
+void apply_invocation_options(
+    const Invocation& invocation, project::Config& config);
+
+// Whether a command reads configuration scripts: not when the invocation
+// says --no-config or the environment sets FSIM_NO_CONFIG=1.
+[[nodiscard]] bool configuration_enabled(const Invocation& invocation);
+
+// Fills the options the invocation does not give from the configuration's
+// keys for its command (`compile.*`, `elaborate.*`, `simulate.*`,
+// `systemc.*`). Explicit single-value options keep their values; list
+// options (defines, include directories, search libraries, compiler and
+// linker options, trace filters, generics) add theirs after the configured
+// ones, a generic of the same name replacing its configured value.
+void apply_configuration_defaults(
+    const project::Configuration& configuration, Invocation& invocation);
+
+// The source set a compile of `language` uses: the invocation's options,
+// and for each option it leaves out the configuration's
+// `compile.<language>.option` or `compile.option` value, else the default.
+// Empty after a diagnosed unsupported standard. Files are left to the caller.
+[[nodiscard]] std::optional<project::SourceSet> make_source_set(
+    const Invocation& invocation, project::Language language,
+    diagnostic::Engine& diagnostics);
 
 }  // namespace fsim::cli

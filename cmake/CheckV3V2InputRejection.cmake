@@ -10,8 +10,8 @@ set(FSIM_LEDGER
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/v3_v2_input_rejection_inventory.tsv")
 file(STRINGS "${FSIM_LEDGER}" FSIM_LINES ENCODING UTF-8)
 list(LENGTH FSIM_LINES FSIM_LINE_COUNT)
-if(NOT FSIM_LINE_COUNT EQUAL 15)
-  message(FATAL_ERROR "v3 v2-input rejection inventory must contain 13 rows")
+if(NOT FSIM_LINE_COUNT EQUAL 14)
+  message(FATAL_ERROR "v3 v2-input rejection inventory must contain 12 rows")
 endif()
 list(GET FSIM_LINES 0 FSIM_LICENSE)
 list(GET FSIM_LINES 1 FSIM_HEADER)
@@ -22,7 +22,6 @@ if(NOT FSIM_LICENSE STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
 endif()
 
 set(FSIM_EXPECTED_IDS
-  V3REJECT-MANIFEST
   V3REJECT-OBJECT
   V3REJECT-PORTABLE
   V3REJECT-DESIGN
@@ -35,7 +34,7 @@ set(FSIM_EXPECTED_IDS
   V3REJECT-UVM
   V3REJECT-VHDL-HIR
   V3REJECT-PLUGIN)
-set(FSIM_EXPECTED_FAMILIES manifest object design checkpoint plugin)
+set(FSIM_EXPECTED_FAMILIES object design checkpoint plugin)
 set(FSIM_BATCH_188A_IDS
   V3REJECT-OBJECT
   V3REJECT-PORTABLE
@@ -45,7 +44,7 @@ set(FSIM_BATCH_188A_IDS
   V3REJECT-VHDL-HIR)
 set(FSIM_IDS)
 set(FSIM_FAMILIES)
-foreach(FSIM_INDEX RANGE 2 14)
+foreach(FSIM_INDEX RANGE 2 13)
   list(GET FSIM_LINES ${FSIM_INDEX} FSIM_LINE)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_LINE}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -77,7 +76,7 @@ foreach(FSIM_INDEX RANGE 2 14)
     message(FATAL_ERROR "v3 v2-input evidence path is unsafe or missing: ${FSIM_ID}")
   endif()
   if(NOT FSIM_CONTAINMENT MATCHES
-       "^(exact-diagnostic-no-config|header-first-exact-diagnostic|header-first-no-unit|metadata-first-exact-diagnostic|header-first-no-state|namespace-miss-no-fallback|abi-error-no-metadata)$")
+       "^(header-first-exact-diagnostic|header-first-no-unit|metadata-first-exact-diagnostic|header-first-no-state|namespace-miss-no-fallback|abi-error-no-metadata)$")
     message(FATAL_ERROR "v3 v2-input containment changed: ${FSIM_ID}")
   endif()
   list(APPEND FSIM_IDS "${FSIM_ID}")
@@ -106,9 +105,6 @@ function(fsim_require_v2_rejection_tokens FSIM_RELATIVE)
   endforeach()
 endfunction()
 
-fsim_require_v2_rejection_tokens(tests/project/project_config_test.cpp
-  "found schema 2; required schema 3"
-  "non-current project schema is rejected")
 fsim_require_v2_rejection_tokens(tests/artifact/object_artifact_test.cpp
   "store_u32(v2_header, 8U, 6U)"
   "store_u32(v2_header, 12U, 10U)"
@@ -143,7 +139,6 @@ fsim_require_v2_rejection_tokens(tests/runtime/native_plugin_abi_test.cpp
   "invalid metadata is never partially published")
 
 foreach(FSIM_CHECKER IN ITEMS
-    CheckProjectManifestFreeze.cmake
     CheckPortableStaleSchemaPolicy.cmake
     CheckNestedPortableFreeze.cmake
     CheckIncrementalNativeFreeze.cmake
@@ -167,10 +162,10 @@ fsim_require_v2_rejection_tokens(tests/CMakeLists.txt
   "CheckCurrentV2InputRejection.cmake")
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 set(FSIM_EXPECTED_DIGEST
-  "ba6dbe2ddcd3fdf2b34b259d98b1f11c9ed385073765cc96955ec0854791a602")
+  "576fefa71ab04cb5a54d24b36932cb48b3c8ae2a73a49bf874a30bd5e3c6a4fb")
 if(NOT FSIM_LEDGER_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "v3 v2-input rejection digest changed: expected=${FSIM_EXPECTED_DIGEST} actual=${FSIM_LEDGER_DIGEST}")
 endif()
 message(STATUS
-  "v3 v2-input rejection passed: rows=13 families=5 direct-readers=13 digest=${FSIM_LEDGER_DIGEST}")
+  "v3 v2-input rejection passed: rows=12 families=4 direct-readers=12 digest=${FSIM_LEDGER_DIGEST}")

@@ -697,7 +697,7 @@ fsim debug [--snapshot NAME] [-c SCRIPT ... | SCRIPT [ARG ...]]
 fsim tcl [--snapshot NAME] [-c SCRIPT ... | SCRIPT [ARG ...]]
 fsim systemc compile [--library NAME] FILE...
 fsim systemc link [--library NAME]
-fsim library map NAME DIRECTORY
+fsim library map NAME PATH
 fsim library list
 fsim library unmap NAME
 fsim library objects [NAME]

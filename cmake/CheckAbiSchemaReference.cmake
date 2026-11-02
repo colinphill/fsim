@@ -18,7 +18,7 @@ set(FSIM_CONTRACT
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/abi_schema_reference_contract.tsv")
 set(FSIM_REFERENCE "${FSIM_SOURCE_DIR}/docs/abi-schema-reference.md")
 set(FSIM_EXPECTED_DIGEST
-  "711f90f4e8732d9d7b873fe6e473196f192667406de80db27068f49243ca0834")
+  "7a827be7430ac4fd3e2d185660cff837c8ff3cbeebfd32340ac2825d401b388a")
 fsim_normalized_text_sha256("${FSIM_CONTRACT}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
@@ -28,8 +28,8 @@ endif()
 
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 34)
-  message(FATAL_ERROR "ABI/schema reference requires SPDX, header and 32 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 33)
+  message(FATAL_ERROR "ABI/schema reference requires SPDX, header and 31 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -40,7 +40,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
 endif()
 
 set(FSIM_IDS)
-foreach(FSIM_INDEX RANGE 2 33)
+foreach(FSIM_INDEX RANGE 2 32)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -82,15 +82,14 @@ foreach(FSIM_TOKEN IN ITEMS
     "## Rejection and transactionality"
     "## Regeneration and rebuild workflows"
     "## Audit anchors"
-    "FSIM_API_VERSION` is 1"
+    "FSIM_API_VERSION` is 2"
     "`fsim::api`"
     "`SystemC::systemc`"
     "`SCV::scv`"
     "| SystemC | ABI 4 |"
-    "project schema 3"
     "format 10, portable schema 16, compiled-HIR bundle 3"
     "format 8/schema 15"
-    "format 17, runtime ABI 1"
+    "format 18, runtime ABI 1"
     "fsim-code-coverage-foundation-v3"
     "format 8, portable schema 16, compiled-HIR bundle 3"
     "format 2, runtime ABI 1, SystemC ABI 4"
@@ -113,8 +112,8 @@ file(STRINGS
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/core_api_contract.tsv"
   FSIM_API_SYMBOL_ROWS REGEX "^symbol\t")
 list(LENGTH FSIM_API_SYMBOL_ROWS FSIM_API_SYMBOL_COUNT)
-if(NOT FSIM_API_SYMBOL_COUNT EQUAL 31)
-  message(FATAL_ERROR "core API contract no longer has exactly 31 symbols")
+if(NOT FSIM_API_SYMBOL_COUNT EQUAL 29)
+  message(FATAL_ERROR "core API contract no longer has exactly 29 symbols")
 endif()
 foreach(FSIM_SYMBOL_ROW IN LISTS FSIM_API_SYMBOL_ROWS)
   string(REPLACE "\t" ";" FSIM_SYMBOL_FIELDS "${FSIM_SYMBOL_ROW}")
@@ -134,4 +133,4 @@ foreach(FSIM_OWNER IN ITEMS README.md docs/architecture.md docs/diagnostics.md)
 endforeach()
 
 message(STATUS
-  "ABI/schema reference passed: rows=31 symbols=31 digest=${FSIM_ACTUAL_DIGEST}")
+  "ABI/schema reference passed: rows=31 symbols=29 digest=${FSIM_ACTUAL_DIGEST}")

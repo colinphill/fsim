@@ -99,7 +99,7 @@ fsim_require_toolchain_tokens(cmake/CheckInstalledPublicContract.cmake
 fsim_require_toolchain_tokens(tests/scv/scv_installed_consumer_test.cmake
   "installed consumer resolved a non-relocated SCV or SystemC runtime")
 fsim_require_toolchain_tokens(tests/api/api_mapped_library_test.cpp
-  "native_accepted" "native_fingerprint" "fsim_session_build")
+  "native_accepted" "native_fingerprint" "fsim_session_open_snapshot")
 
 message(STATUS
   "mixed-toolchain install contract passed: rows=32 digest=${FSIM_ACTUAL_DIGEST}")

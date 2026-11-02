@@ -89,12 +89,15 @@ void VerilogParser::parse_parameter_overrides(
         || (at(TokenKind::Identifier) && at(TokenKind::Hash, 1))
         // A packed array of a typedef name (`t[7:0]`, `p::t[3:0]`, 7.4.1).
         || (at(TokenKind::Identifier) && at(TokenKind::LeftBracket, 1)
-            && packed_typedef_types_.contains(current().text))
+            && (packed_typedef_types_.contains(current().text)
+                || unit_type_parameter_names_.contains(current().text)))
         || (at(TokenKind::Identifier) && at(TokenKind::Scope, 1)
             && at(TokenKind::Identifier, 2) && at(TokenKind::LeftBracket, 3)
             && (packed_typedef_types_.contains(
                     current().text + "::" + current(2).text)
-                || packed_typedef_types_.contains(current(2).text)));
+                || packed_typedef_types_.contains(current(2).text)))
+        // ... of another unit's package (26.3).
+        || imported_packed_type_at(0U);
   };
   const auto parse_actual = [&](ParameterOverride& override) {
     // `type(...)` is a type actual (6.23) unless it begins a constant
@@ -1287,6 +1290,72 @@ void VerilogParser::require_default_port_net_type(
       "shortreal", "real", "realtime"});
 }
 
+void VerilogParser::parse_named_type_dimensions(Type& type) {
+  Type outer;
+  parse_optional_range(outer);
+  type.systemverilog_named_type_dimensions
+      = std::move(outer.systemverilog_packed_dimensions);
+  if (outer.packed_range_expression
+      && type.systemverilog_named_type_dimensions.empty()) {
+    type.systemverilog_named_type_dimensions.push_back(
+        std::move(*outer.packed_range_expression));
+  }
+}
+
+[[nodiscard]] bool VerilogParser::packed_declarator_at(
+  std::size_t cursor) const  {
+  bool saw_dimension = false;
+  while (at(TokenKind::LeftBracket, cursor)) {
+    ++cursor;
+    std::size_t nested_brackets{};
+    std::size_t parentheses{};
+    std::size_t braces{};
+    std::size_t conditional_depth{};
+    bool has_range_separator = false;
+    bool closed = false;
+    for (; !at(TokenKind::EndOfFile, cursor); ++cursor) {
+      const auto kind = current(cursor).kind;
+      if (kind == TokenKind::LeftBracket) {
+        ++nested_brackets;
+      } else if (kind == TokenKind::RightBracket) {
+        if (parentheses == 0U && braces == 0U
+            && nested_brackets == 0U) {
+          closed = true;
+          break;
+        }
+        if (nested_brackets != 0U) {
+          --nested_brackets;
+        }
+      } else if (kind == TokenKind::LeftParen) {
+        ++parentheses;
+      } else if (kind == TokenKind::RightParen && parentheses != 0U) {
+        --parentheses;
+      } else if (kind == TokenKind::LeftBrace) {
+        ++braces;
+      } else if (kind == TokenKind::RightBrace && braces != 0U) {
+        --braces;
+      } else if (parentheses == 0U && braces == 0U
+                 && nested_brackets == 0U) {
+        if (kind == TokenKind::Question) {
+          ++conditional_depth;
+        } else if (kind == TokenKind::Colon) {
+          if (conditional_depth != 0U) {
+            --conditional_depth;
+          } else {
+            has_range_separator = true;
+          }
+        }
+      }
+    }
+    if (!closed || !has_range_separator) {
+      return false;
+    }
+    ++cursor;
+    saw_dimension = true;
+  }
+  return saw_dimension && at(TokenKind::Identifier, cursor);
+}
+
 [[nodiscard]] bool VerilogParser::is_named_type_reference_start(
   const std::size_t offset) const  {
   if (language_ != Language::SystemVerilog2017) {
@@ -1301,61 +1370,9 @@ void VerilogParser::require_default_port_net_type(
           current(offset).text)) {
     return false;
   }
-  const auto has_packed_declarator = [&](std::size_t cursor) {
-    bool saw_dimension = false;
-    while (at(TokenKind::LeftBracket, cursor)) {
-      ++cursor;
-      std::size_t nested_brackets{};
-      std::size_t parentheses{};
-      std::size_t braces{};
-      std::size_t conditional_depth{};
-      bool has_range_separator = false;
-      bool closed = false;
-      for (; !at(TokenKind::EndOfFile, cursor); ++cursor) {
-        const auto kind = current(cursor).kind;
-        if (kind == TokenKind::LeftBracket) {
-          ++nested_brackets;
-        } else if (kind == TokenKind::RightBracket) {
-          if (parentheses == 0U && braces == 0U
-              && nested_brackets == 0U) {
-            closed = true;
-            break;
-          }
-          if (nested_brackets != 0U) {
-            --nested_brackets;
-          }
-        } else if (kind == TokenKind::LeftParen) {
-          ++parentheses;
-        } else if (kind == TokenKind::RightParen && parentheses != 0U) {
-          --parentheses;
-        } else if (kind == TokenKind::LeftBrace) {
-          ++braces;
-        } else if (kind == TokenKind::RightBrace && braces != 0U) {
-          --braces;
-        } else if (parentheses == 0U && braces == 0U
-                   && nested_brackets == 0U) {
-          if (kind == TokenKind::Question) {
-            ++conditional_depth;
-          } else if (kind == TokenKind::Colon) {
-            if (conditional_depth != 0U) {
-              --conditional_depth;
-            } else {
-              has_range_separator = true;
-            }
-          }
-        }
-      }
-      if (!closed || !has_range_separator) {
-        return false;
-      }
-      ++cursor;
-      saw_dimension = true;
-    }
-    return saw_dimension && at(TokenKind::Identifier, cursor);
-  };
   const auto has_type_declarator = [&](std::size_t cursor) {
     return at(TokenKind::Identifier, cursor)
-        || has_packed_declarator(cursor);
+        || packed_declarator_at(cursor);
   };
   if (at(TokenKind::Hash, offset + 1)) {
     std::size_t cursor = offset + 2U;
@@ -1418,7 +1435,7 @@ void VerilogParser::require_default_port_net_type(
   return (at(TokenKind::Identifier, offset + 1)
           && !at(TokenKind::LeftParen, offset + 2)
           && !at(TokenKind::Hash, offset + 2))
-      || has_packed_declarator(offset + 1U);
+      || packed_declarator_at(offset + 1U);
 }
 
 Type VerilogParser::parse_named_type() {
@@ -1529,6 +1546,11 @@ Type VerilogParser::parse_named_type() {
       type.domain = ValueDomain::String;
       type.is_signed = false;
     }
+  }
+  // Packed dimensions over a type whose shape is not known here; a packed
+  // typedef parsed in this unit was expanded by the caller instead.
+  if (language_ == Language::SystemVerilog2017 && packed_declarator_at(0U)) {
+    parse_named_type_dimensions(type);
   }
   return type;
 }
@@ -1643,7 +1665,8 @@ void VerilogParser::parse_virtual_interface_declaration(
       || keyword("struct") || keyword("union") || keyword("enum")
       || is_named_type_reference_start()
       || (at(TokenKind::Identifier) && at(TokenKind::LeftBracket, 1)
-          && packed_typedef_types_.contains(current().text));
+          && packed_typedef_types_.contains(current().text))
+      || imported_packed_type_at(0U);
 }
 
 void VerilogParser::parse_event_declaration(
@@ -2080,7 +2103,9 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             // class parsed in this file constructs it.
             && (named.find("::") == std::string::npos
                 || known_class_names_.contains(
-                    named.substr(named.rfind("::") + 2U)))
+                    named.substr(named.rfind("::") + 2U))
+                || imported_member(named)
+                    == SystemVerilogPackageMember::class_type)
             && std::ranges::none_of(
                 unit.systemverilog_covergroups,
                 [&](const SystemVerilogCovergroupDeclaration& covergroup) {

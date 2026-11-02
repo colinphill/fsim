@@ -15,7 +15,7 @@ constexpr std::array<std::pair<std::string_view, const char*>, 5> kSchema { {
         "CREATE TABLE metadata(version INTEGER NOT NULL, library TEXT NOT NULL)" },
     { "artifacts",
         "CREATE TABLE artifacts(id TEXT PRIMARY KEY NOT NULL, kind INTEGER NOT NULL, "
-        "path TEXT NOT NULL, fingerprint TEXT NOT NULL)" },
+        "path TEXT NOT NULL, fingerprint TEXT NOT NULL, analyzed INTEGER NOT NULL UNIQUE)" },
     { "sources",
         "CREATE TABLE sources(owner TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
         "source TEXT NOT NULL, PRIMARY KEY(owner, source))" },

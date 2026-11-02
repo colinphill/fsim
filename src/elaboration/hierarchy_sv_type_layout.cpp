@@ -245,6 +245,16 @@ std::optional<std::size_t> systemverilog_declaration_width(
         if (reference.virtual_interface) {
             return 64U;
         }
+        // Dimensions over a type parameter compose with its actual here.
+        if (reference.packed_over_named_type) {
+            const auto effective
+                = type_resolver.effective_systemverilog_type(
+                    reference, declaration.scope);
+            if (!effective || effective->packed_over_named_type) {
+                return std::nullopt;
+            }
+            return self(self, *effective);
+        }
         std::optional<std::size_t> width
             = specialized_type_parameter_actual_width(reference);
         if (!width && reference.packed_range) {

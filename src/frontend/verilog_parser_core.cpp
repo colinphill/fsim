@@ -474,32 +474,9 @@ ParseResult VerilogParser::run() {
                             + "' is not backed by an import of that package");
                 }
             }
-            auto& exports = package_constant_names_[package.name];
-            for (const auto& parameter : package.parameters) {
-                exports.insert(parameter.name);
-            }
-            // Package variables and nets are visible through a wildcard
-            // import, so they are not implicit nets (IEEE 1800-2017 26.3).
-            for (const auto& variable : package.variables) {
-                exports.insert(variable.name);
-            }
-            for (const auto& signal : package.signals) {
-                exports.insert(signal.name);
-            }
-            // Types and subroutines named through an import are not nets
-            // either.
-            for (const auto& alias : package.type_aliases) {
-                exports.insert(alias.name);
-            }
-            for (const auto& function : package.functions) {
-                exports.insert(function.name);
-            }
-            for (const auto& task : package.tasks) {
-                exports.insert(task.name);
-            }
-            for (const auto& declared : package.systemverilog_classes) {
-                exports.insert(declared.name);
-            }
+            // Its members are visible through imports, so a use of one is
+            // not an implicit net (IEEE 1800-2023 26.3).
+            package_members_.add(package);
             design.units.push_back(std::move(package));
         } else if (dpi_declaration_start("import")) {
             compilation_unit_has_design_item_ = true;
@@ -747,15 +724,17 @@ void VerilogParser::parse_compilation_unit_declaration() {
             "unsupported compilation-unit item '" + unexpected.text + "'");
         skip_to_semicolon();
     }
-    auto& exports = package_constant_names_[unit.name];
     for (auto index = parameters; index < unit.parameters.size(); ++index) {
-        exports.insert(unit.parameters[index].name);
+        package_members_.add_member(unit.name, unit.parameters[index].name,
+            SystemVerilogPackageMember::value);
     }
     for (auto index = signals; index < unit.signals.size(); ++index) {
-        exports.insert(unit.signals[index].name);
+        package_members_.add_member(unit.name, unit.signals[index].name,
+            SystemVerilogPackageMember::value);
     }
     for (const auto& variable : unit.variables) {
-        exports.insert(variable.name);
+        package_members_.add_member(
+            unit.name, variable.name, SystemVerilogPackageMember::value);
     }
 }
 

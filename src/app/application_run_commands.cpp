@@ -200,10 +200,7 @@ int run_built_project(
             return 1;
         }
         if (config.run.trace_file && config.run.trace_enabled) {
-            const auto surface
-                = config.manifest_path == std::filesystem::path { "<command-line>" }
-                ? TraceControlSurface::NonProjectSimulate
-                : TraceControlSurface::ProjectCli;
+            const auto surface = TraceControlSurface::ProjectCli;
             auto current = apply_trace_control(trace_control_request(
                 config.run, surface, TraceControlPhase::Simulate));
             if (!current.ok()) {

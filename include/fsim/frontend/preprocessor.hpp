@@ -46,6 +46,12 @@ struct PreprocessedRoot {
   // Includes consumed while preprocessing this root, in first-use order.
   std::vector<PreprocessedDependency> dependencies;
   StandardRevision standard_revision{StandardRevision::SystemVerilog2017};
+  // Whether this root may leave state that later roots of its compilation
+  // unit read (IEEE 1800-2023 3.12.1, 22): a macro definition or
+  // undefinition, a parser-state directive, an unterminated conditional, a
+  // primitive declaration, or text outside its design elements (a $unit
+  // declaration or import).
+  bool exports_state{};
 };
 
 struct PreprocessCompilationUnitResult {

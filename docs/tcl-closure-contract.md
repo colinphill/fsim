@@ -19,7 +19,7 @@ a structured fsim diagnostic. Tcl scripts may inspect `::errorCode` and
 | `fsim::link` | `?-library LIBRARY? ?-compiler PATH? ?-link-option ARG? ?-link-library ARG? ?-verbosity LEVEL?` | Dictionary with library, plug-in artifact, registered modules, linked object count, and diagnostics. |
 | `fsim::elaborate` | `?-snapshot NAME? ?-verbosity LEVEL? TOP ...` | Dictionary with snapshot, selected roots, counts, and diagnostics. A bare top uses metadata lookup; a language prefix is needed only for ambiguous names. |
 | `fsim::library list` | none | List of library dictionaries. |
-| `fsim::library map` | `NAME DIRECTORY` | Updated library dictionary. |
+| `fsim::library map` | `NAME PATH` (library directory or `.fsimlib` file) | Updated library dictionary. |
 | `fsim::library unmap` | `NAME` | Updated library dictionary. |
 | `fsim::library objects` | `NAME` | List of artifact dictionaries with owned units, sources, and dependencies. |
 | `fsim::library delete-object` | `NAME ARTIFACT_ID` | Deletion summary dictionary. |

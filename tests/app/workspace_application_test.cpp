@@ -1985,6 +1985,157 @@ endmodule
 
 } // namespace
 
+void test_vhdl_latest_architecture()
+{
+    // A bare VHDL entity top uses the most recently analyzed architecture
+    // (IEEE 1076-2008 7.3.3), across files in analysis order.
+    Directory directory;
+    workspace::Store store { directory.path };
+    write_file("entity.vhd", "entity s is\nend entity s;\n");
+    const auto architecture = [](const std::string_view name) {
+        return "architecture " + std::string { name } + " of s is\nbegin\n"
+            + "  process begin report \"ARCH_" + std::string { name }
+            + "\"; wait; end process;\nend architecture "
+            + std::string { name } + ";\n";
+    };
+    write_file("one.vhd", architecture("one"));
+    write_file("two.vhd", architecture("two"));
+    const auto cache_key = [&] {
+        fsim::diagnostic::Engine diagnostics;
+        const auto metadata = fsim::artifact::load_design_metadata(
+            snapshot(store).path, diagnostics);
+        assert(metadata && !diagnostics.has_error());
+        return metadata->cache_key;
+    };
+    const auto selected = [&](const std::string_view top,
+                              const std::string_view marker) {
+        elaborate({ std::string { top } });
+        const auto run = simulate();
+        assert_output(run, marker);
+        assert(run.output.find(marker == "ARCH_one" ? "ARCH_two" : "ARCH_one")
+            == std::string::npos);
+    };
+    assert(invoke({ "compile", "--quiet", "entity.vhd", "one.vhd", "two.vhd" })
+               .output.empty());
+    for (const auto* top : { "s", "work.s", "vhdl:work.s" }) {
+        selected(top, "ARCH_two");
+    }
+    // Elaborating the same workspace again gives the same design.
+    const auto two_key = cache_key();
+    selected("s", "ARCH_two");
+    assert(cache_key() == two_key);
+    // Recompiling a file makes its architecture the most recent.
+    assert(invoke({ "compile", "--quiet", "one.vhd" }).output.empty());
+    selected("s", "ARCH_one");
+    const auto one_key = cache_key();
+    assert(one_key != two_key);
+    selected("s", "ARCH_one");
+    assert(cache_key() == one_key);
+    selected("vhdl:work.s(two)", "ARCH_two");
+}
+
+void test_compile_order_keeps_cache_key()
+{
+    // Analysis order is part of a design's key only where it selects an
+    // architecture, and SV files that pass no state to each other compile
+    // alike together or apart: recompiling unchanged files keeps the key.
+    Directory directory;
+    workspace::Store store { directory.path };
+    write_file("leaf.sv", "module leaf; initial $display(\"ORDER_LEAF\"); endmodule\n");
+    write_file("top.sv", "module top; leaf child(); endmodule\n");
+    write_file("unit.vhd", "entity v is\nend entity v;\n"
+        "architecture a of v is\nbegin\nend architecture a;\n"
+        "architecture b of v is\nbegin\nend architecture b;\n");
+    const auto cache_key = [&] {
+        fsim::diagnostic::Engine diagnostics;
+        const auto metadata = fsim::artifact::load_design_metadata(
+            snapshot(store).path, diagnostics);
+        assert(metadata && !diagnostics.has_error());
+        return metadata->cache_key;
+    };
+    assert(invoke({ "compile", "--quiet", "leaf.sv", "top.sv" }).output.empty());
+    assert(invoke({ "compile", "--quiet", "unit.vhd" }).output.empty());
+    elaborate({ "top", "v" });
+    const auto original = cache_key();
+    for (const auto* file : { "top.sv", "unit.vhd", "leaf.sv" }) {
+        assert(invoke({ "compile", "--quiet", file }).output.empty());
+    }
+    elaborate({ "top", "v" });
+    assert(cache_key() == original);
+    assert(invoke({ "compile", "--quiet", "leaf.sv", "top.sv" }).output.empty());
+    elaborate({ "top", "v" });
+    assert(cache_key() == original);
+
+    // A macro defined by an earlier file of one compile reaches the later
+    // files (IEEE 1800-2023 3.12.1); compiled alone, the later file fails.
+    write_file("defs.sv", "`define ORDER_VALUE 7\n");
+    write_file("use.sv", "module use_macro; initial $display(\"ORDER_MACRO=%0d\", "
+                         "`ORDER_VALUE); endmodule\n");
+    assert(invoke({ "compile", "--quiet", "defs.sv", "use.sv" }).output.empty());
+    elaborate({ "use_macro" });
+    assert_output(simulate(), "ORDER_MACRO=7");
+    invoke({ "compile", "--quiet", "use.sv" }, false);
+}
+
+void test_package_first_compile()
+{
+    // A package passes no state to the files after it, so its users compile
+    // alike with it or after it; packed arrays over its typedefs and over
+    // type parameters compose either way (IEEE 1800-2023 7.4.1, 26.3).
+    Directory directory;
+    workspace::Store store { directory.path };
+    write_file("pkg.sv", "package pf_q;\n  typedef logic [3:0] nib_t;\n"
+                         "  typedef int i_t;\n  class cls; endclass\nendpackage\n");
+    write_file("use.sv",
+        "module pf_m #(parameter type T = logic [2:0]); T [1:0] x;\n"
+        "  initial begin x = '1; x[0] = T'(0);\n"
+        "    #1 $display(\"PF_M %0d %h\", $bits(x), x); end\nendmodule\n"
+        "module pf_p #(parameter type U = bit); pf_m #(U [1:0]) c(); endmodule\n"
+        "module pf_top; import pf_q::*; nib_t [1:0] n;\n"
+        "  pf_m a(); pf_m #(pf_q::nib_t) b(); pf_p #(logic [2:0]) p();\n"
+        "  initial begin n = 8'hA5; #2 $display(\"PF_TOP %0d %h\", $bits(n), n[1]); end\n"
+        "endmodule\n");
+    const auto cache_key = [&] {
+        fsim::diagnostic::Engine diagnostics;
+        const auto metadata = fsim::artifact::load_design_metadata(
+            snapshot(store).path, diagnostics);
+        assert(metadata && !diagnostics.has_error());
+        return metadata->cache_key;
+    };
+    const auto check = [] {
+        const auto output = simulate();
+        assert_output(output, "PF_M 6 38");
+        assert_output(output, "PF_M 8 f0");
+        assert_output(output, "PF_M 12 fc0");
+        assert_output(output, "PF_TOP 8 a");
+    };
+    assert(invoke({ "compile", "--quiet", "pkg.sv", "use.sv" }).output.empty());
+    elaborate({ "pf_top" });
+    const auto joint = cache_key();
+    check();
+    assert(invoke({ "compile", "--quiet", "pkg.sv" }).output.empty());
+    assert(invoke({ "compile", "--quiet", "use.sv" }).output.empty());
+    elaborate({ "pf_top" });
+    assert(cache_key() == joint);
+    check();
+
+    // Only packed types are packed array elements (7.4.1).
+    const auto rejected = [](const Capture& capture, const std::string_view code) {
+        if ((capture.output + capture.error).find(code) == std::string::npos)
+            std::cerr << "Missing '" << code << "':\n" << capture.output << capture.error;
+        assert((capture.output + capture.error).find(code) != std::string::npos);
+    };
+    write_file("bad_int.sv", "module pf_bad_int; import pf_q::*; i_t [1:0] v; endmodule\n");
+    rejected(invoke({ "compile", "--quiet", "bad_int.sv" }, false), "FSIM-SV-SEM-424");
+    write_file("bad_cls.sv", "module pf_bad_cls; pf_q::cls [1:0] h; endmodule\n");
+    rejected(invoke({ "compile", "--quiet", "bad_cls.sv" }, false), "FSIM-SV-SEM-424");
+    write_file("bad_actual.sv", "module pf_bad_m; pf_m #(int) a(); endmodule\n"
+                                "module pf_bad_p; pf_p #(int) a(); endmodule\n");
+    assert(invoke({ "compile", "--quiet", "bad_actual.sv" }).output.empty());
+    rejected(elaborate({ "pf_bad_m" }, "default", false), "FSIM-ELAB-SVTYPEPARAM-005");
+    rejected(elaborate({ "pf_bad_p" }, "default", false), "FSIM-ELAB-SVTYPEPARAM-005");
+}
+
 int main(const int argc, const char* const* argv)
 {
     struct Case {
@@ -2018,6 +2169,9 @@ int main(const int argc, const char* const* argv)
         Case { "coverage-controls-callable", test_coverage_controls_and_callable_boundary },
         Case { "coverage-disabled", test_disabled_coverage_snapshot },
         Case { "sdf-session", test_sdf_session_application },
+        Case { "vhdl-latest-architecture", test_vhdl_latest_architecture },
+        Case { "compile-order-cache-key", test_compile_order_keeps_cache_key },
+        Case { "package-first-compile", test_package_first_compile },
     };
     if (argc > 2) {
         std::cerr << "usage: workspace-application [CASE]\n";

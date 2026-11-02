@@ -68,7 +68,7 @@ CompletionSnapshot make_snapshot(const Generations generations)
     };
     static constexpr std::array library_subcommands {
         CompletionSubcommand { "list", "fsim::library list", "List workspace libraries", { }, { } },
-        CompletionSubcommand { "map", "fsim::library map NAME DIRECTORY",
+        CompletionSubcommand { "map", "fsim::library map NAME PATH",
             "Map a logical library", map_arguments, { } },
     };
     static constexpr std::array break_arguments {
@@ -115,7 +115,7 @@ CompletionSnapshot make_snapshot(const Generations generations)
             capability_mask(Capability::workspace), false, load_arguments, { } },
         CompletionCommand { "::fsim::object", "fsim::object resolve PATH", "Resolve a loaded object",
             capability_mask(Capability::workspace), true, { }, { }, object_subcommands },
-        CompletionCommand { "::fsim::library", "fsim::library map NAME DIRECTORY",
+        CompletionCommand { "::fsim::library", "fsim::library map NAME PATH",
             "Manage workspace libraries", capability_mask(Capability::workspace), false,
             { }, { }, library_subcommands },
     };

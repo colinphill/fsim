@@ -114,7 +114,8 @@ bool publish_workspace_object(
     const CheckedProject& checked,
     semantic::CompiledDesign compiled_bundle,
     const std::filesystem::path& destination,
-    diagnostic::Engine& diagnostics) {
+    diagnostic::Engine& diagnostics,
+    const std::vector<std::filesystem::path>* roots) {
   if (config.source_sets.size() != 1
       || config.source_sets.front().language == project::Language::systemc) {
     diagnostics.error(
@@ -164,25 +165,39 @@ bool publish_workspace_object(
   std::vector<library::SourceNameMapping> source_mappings;
   std::map<std::filesystem::path, std::string> expected_digests;
   std::vector<std::filesystem::path> ordered_paths;
+  std::set<std::filesystem::path> recorded_paths;
   const auto add_source = [&](
       const std::filesystem::path& raw_path,
-      const std::string& digest) {
+      const std::string& digest,
+      const bool recorded) {
     const auto path = raw_path.lexically_normal();
     if (!expected_digests.contains(path)) {
       expected_digests.emplace(path, digest);
       ordered_paths.push_back(path);
     }
+    if (recorded) {
+      recorded_paths.insert(path);
+    }
   };
   for (const auto& source : checked.hdl_sources) {
-    add_source(source.path, source.content_digest);
+    const auto recorded = roots == nullptr
+        || std::ranges::find(*roots, source.path) != roots->end();
+    add_source(source.path, source.content_digest, recorded);
     for (const auto& dependency : source.dependencies) {
-      add_source(dependency.path, dependency.content_digest);
+      add_source(dependency.path, dependency.content_digest, recorded);
     }
   }
   for (const auto& path : ordered_paths) {
     auto logical = object_reference(path);
     if (!logical) {
       return false;
+    }
+    // Sources of other compilation units of the same command are only named
+    // for relocation; their objects record them.
+    if (!recorded_paths.contains(path)) {
+      source_mappings.push_back(
+          {support::path_to_utf8(path), support::path_to_utf8(*logical)});
+      continue;
     }
     // The text is read once to confirm it is what was compiled and to take
     // its coverage facts; only its path and digest are stored.

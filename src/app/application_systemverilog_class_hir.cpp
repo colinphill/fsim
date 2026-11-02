@@ -821,11 +821,9 @@ void SystemVerilogHirBuilder::collect_unit_parameters(
                 || parameter.type.domain == frontend::ValueDomain::String) {
                 continue;
             }
-            if (const auto value = class_constant_value(
-                    parameter.default_value)) {
-                unit_parameters_.emplace(parameter.name,
-                    UnitParameter { unit.name, parameter.type, *value });
-            }
+            unit_parameters_.emplace(parameter.name,
+                UnitParameter { unit.name, parameter.type,
+                    class_constant_value(parameter.default_value) });
         }
     }
 }
@@ -842,7 +840,6 @@ SystemVerilogHirBuilder::unit_parameter_binding(
     const UnitParameter* selected = nullptr;
     std::size_t candidates { };
     for (auto entry = first; entry != last; ++entry) {
-        ++candidates;
         const auto& unit = entry->second.unit;
         if (!unit.empty()
             && declaration.canonical_identity.find("::" + unit + "::")
@@ -851,6 +848,11 @@ SystemVerilogHirBuilder::unit_parameter_binding(
             candidates = 1U;
             break;
         }
+        // Only a class of the unit reads a value its instance computes.
+        if (!entry->second.value) {
+            continue;
+        }
+        ++candidates;
         selected = &entry->second;
     }
     if (selected == nullptr || candidates != 1U) {
@@ -867,7 +869,9 @@ SystemVerilogHirBuilder::unit_parameter_binding(
         binding.type.executable_width = 32U;
         binding.type.signed_value = true;
     }
-    binding.constant_value = std::to_string(selected->value);
+    if (selected->value) {
+        binding.constant_value = std::to_string(*selected->value);
+    }
     return binding;
 }
 

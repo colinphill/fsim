@@ -180,6 +180,7 @@ namespace hierarchy_vhdl_associations_detail {
         case Diagnostic::missing_type_actual:
         case Diagnostic::type_actual_for_value_parameter:
         case Diagnostic::value_actual_for_type_parameter:
+        case Diagnostic::type_actual_not_packed:
             return "FSIM-ELAB-GENERIC-001";
         case Diagnostic::callable_result_profile:
             return "FSIM-ELAB-VHFUNC-003";

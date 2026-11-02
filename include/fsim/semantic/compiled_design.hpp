@@ -239,6 +239,21 @@ public:
     systemverilog_units() const noexcept;
     [[nodiscard]] std::span<const vhdl::Unit> vhdl_units() const noexcept;
 
+    /// The content digests of VHDL design files in the order they were last
+    /// analyzed (a workspace catalog's order), for the most recently analyzed
+    /// architecture of an entity (IEEE 1076-2008 7.3.3). Linking orders its
+    /// inputs by content, so this order is kept beside the HIR, not in it;
+    /// empty when unknown.
+    void set_vhdl_analysis_order(std::vector<std::string> content_digests);
+    [[nodiscard]] const std::vector<std::string>&
+    vhdl_analysis_order() const noexcept
+    {
+        return vhdl_analysis_order_;
+    }
+    /// The position of a file's last analysis in that order.
+    [[nodiscard]] std::optional<std::size_t> vhdl_analysis_rank(
+        std::string_view content_digest) const noexcept;
+
     /// The VHDL units that own a scope and its enclosing scopes, innermost
     /// first and without repeats; null unless the lookup indexes are current.
     [[nodiscard]] const std::vector<const vhdl::Unit*>* vhdl_scope_units(
@@ -555,6 +570,7 @@ private:
 
     std::vector<CompiledDependency> dependencies_;
     std::vector<CompiledReference> references_;
+    std::vector<std::string> vhdl_analysis_order_;
     LookupIndexes lookup_indexes_;
 };
 

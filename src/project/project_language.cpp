@@ -446,6 +446,35 @@ SystemVerilogUvmCompatibility systemverilog_uvm_compatibility(
   return {};
 }
 
+std::optional<Optimization> parse_optimization(
+    const std::string_view spelling) noexcept {
+  const auto normalized = lowercase(spelling);
+  if (normalized == "o0" || normalized == "0") {
+    return Optimization::o0;
+  }
+  if (normalized == "o1" || normalized == "1") {
+    return Optimization::o1;
+  }
+  if (normalized == "o2" || normalized == "2") {
+    return Optimization::o2;
+  }
+  if (normalized == "o3" || normalized == "3") {
+    return Optimization::o3;
+  }
+  return std::nullopt;
+}
+
+bool valid_library_name(const std::string_view value) noexcept {
+  if (value.empty()
+      || (std::isalpha(static_cast<unsigned char>(value.front())) == 0
+          && value.front() != '_')) {
+    return false;
+  }
+  return std::ranges::all_of(value, [](const unsigned char character) {
+    return std::isalnum(character) != 0 || character == '_';
+  });
+}
+
 std::optional<DelayMode> parse_delay_mode(
     const std::string_view spelling) noexcept {
   const auto normalized = lowercase(spelling);

@@ -7,6 +7,8 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -56,10 +58,8 @@ FSIM_CPP_SIGNATURE(
     fsim_status_t (*)(const fsim_session_options_t*, fsim_session_t*));
 FSIM_CPP_SIGNATURE(fsim_session_destroy, fsim_status_t (*)(fsim_session_t));
 FSIM_CPP_SIGNATURE(
-    fsim_session_load_project,
-    fsim_status_t (*)(fsim_session_t, const char*));
-FSIM_CPP_SIGNATURE(fsim_session_check, fsim_status_t (*)(fsim_session_t));
-FSIM_CPP_SIGNATURE(fsim_session_build, fsim_status_t (*)(fsim_session_t));
+    fsim_session_open_snapshot,
+    fsim_status_t (*)(fsim_session_t, const char*, const char*));
 FSIM_CPP_SIGNATURE(
     fsim_session_configure_sdf,
     fsim_status_t (*)(fsim_session_t, const fsim_sdf_options_t*));
@@ -144,8 +144,53 @@ static_assert(std::is_same_v<fsim_visit_object_callback_t,
 
 #undef FSIM_CPP_SIGNATURE
 
+namespace {
+
+// The installed-contract check sets FSIM_CONSUMER_WORKSPACE to a workspace
+// with an fsim.tcl and an elaborated default snapshot. This runs outside
+// assert, which a release consumer compiles out.
+int open_configured_snapshot(const char* workspace)
+{
+    fsim_session_options_t options { };
+    options.struct_size = sizeof(options);
+    options.api_version = FSIM_API_VERSION;
+    fsim_session_t session = FSIM_INVALID_SESSION;
+    if (fsim_session_create(&options, &session) != FSIM_STATUS_OK) {
+        std::fputs("fsim_session_create failed\n", stderr);
+        return 1;
+    }
+    const auto opened = fsim_session_open_snapshot(session, workspace, nullptr);
+    if (opened != FSIM_STATUS_OK) {
+        std::size_t count { };
+        (void)fsim_session_diagnostic_count(session, &count);
+        for (std::size_t index = 0; index < count; ++index) {
+            fsim_diagnostic_t diagnostic { };
+            diagnostic.struct_size = sizeof(diagnostic);
+            diagnostic.api_version = FSIM_API_VERSION;
+            if (fsim_session_get_diagnostic(session, index, &diagnostic)
+                == FSIM_STATUS_OK) {
+                std::fprintf(stderr, "%.*s: %.*s\n",
+                    static_cast<int>(diagnostic.code.size), diagnostic.code.data,
+                    static_cast<int>(diagnostic.message.size),
+                    diagnostic.message.data);
+            }
+        }
+        std::fprintf(stderr, "fsim_session_open_snapshot failed with %d\n",
+            static_cast<int>(opened));
+    }
+    (void)fsim_session_destroy(session);
+    return opened == FSIM_STATUS_OK ? 0 : 1;
+}
+
+} // namespace
+
 int main()
 {
+    if (const char* workspace = std::getenv("FSIM_CONSUMER_WORKSPACE");
+        workspace != nullptr && workspace[0] != '\0') {
+        return open_configured_snapshot(workspace);
+    }
+
     assert(fsim_api_abi_c_probe() == 0);
 
     try {

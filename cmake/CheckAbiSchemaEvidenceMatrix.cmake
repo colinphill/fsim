@@ -32,9 +32,9 @@ foreach(FSIM_LINE IN LISTS FSIM_INVENTORY_LINES)
   list(APPEND FSIM_LEDGER_IDS "${FSIM_LEDGER_ID}")
 endforeach()
 list(LENGTH FSIM_LEDGER_IDS FSIM_LEDGER_COUNT)
-if(NOT FSIM_LEDGER_COUNT EQUAL 18)
+if(NOT FSIM_LEDGER_COUNT EQUAL 17)
   message(FATAL_ERROR
-    "ABI/schema evidence expected 18 ledger rows, found ${FSIM_LEDGER_COUNT}")
+    "ABI/schema evidence expected 17 ledger rows, found ${FSIM_LEDGER_COUNT}")
 endif()
 
 set(FSIM_BOUNDARIES
@@ -126,10 +126,10 @@ foreach(FSIM_LEDGER_ID IN LISTS FSIM_LEDGER_IDS)
 endforeach()
 
 list(LENGTH FSIM_MATRIX_LINES FSIM_CELL_COUNT)
-if(NOT FSIM_CELL_COUNT EQUAL 198)
+if(NOT FSIM_CELL_COUNT EQUAL 187)
   message(FATAL_ERROR
-    "ABI/schema evidence expected 198 cells, found ${FSIM_CELL_COUNT}")
+    "ABI/schema evidence expected 187 cells, found ${FSIM_CELL_COUNT}")
 endif()
 
 message(STATUS
-  "ABI/schema evidence matrix: 18 ledger rows, 11 boundaries and 198 owned cells")
+  "ABI/schema evidence matrix: 17 ledger rows, 11 boundaries and 187 owned cells")

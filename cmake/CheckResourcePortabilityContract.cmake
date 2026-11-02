@@ -102,7 +102,7 @@ set(FSIM_VERILOG_COVERAGE_POINTS_IMPLEMENTATION
 set(FSIM_VERILOG_COVERAGE_POINTS_TEST
   "${FSIM_SOURCE_DIR}/tests/elaboration/verilog_coverage_points_test.cpp")
 set(FSIM_COVERAGE_FSM_HINTS_PROJECT_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/project/project.cpp")
+  "${FSIM_SOURCE_DIR}/src/project/configuration.cpp")
 set(FSIM_FRONTEND_DESIGN
   "${FSIM_SOURCE_DIR}/include/fsim/frontend/design.hpp")
 set(FSIM_VERILOG_PARSER_CORE
@@ -518,7 +518,7 @@ set(FSIM_VHDL_2019_FRONTEND_IDENTITY
 set(FSIM_VHDL_2019_PROJECT_IDENTITY
   "${FSIM_SOURCE_DIR}/include/fsim/project/project.hpp")
 set(FSIM_VHDL_2019_PROJECT_IMPLEMENTATION
-  "${FSIM_SOURCE_DIR}/src/project/project.cpp")
+  "${FSIM_SOURCE_DIR}/src/project/project_language.cpp")
 set(FSIM_VHDL_2019_ANALYSIS_IDENTITY
   "${FSIM_SOURCE_DIR}/src/app/application_analysis.cpp")
 set(FSIM_VHDL_2019_CLI_IDENTITY

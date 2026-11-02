@@ -6,6 +6,121 @@
 
 namespace fsim::frontend {
 
+void SystemVerilogPackageMembers::add(const DesignUnit& package) {
+  auto& record = packages_[package.name];
+  const auto member = [&](const std::string& name,
+                          const SystemVerilogPackageMember kind) {
+    record.members.try_emplace(name, kind);
+  };
+  const auto literals = [&](const Type& type) {
+    for (const auto& literal : type.enumeration_literals) {
+      member(literal, SystemVerilogPackageMember::value);
+    }
+  };
+  for (const auto& parameter : package.parameters) {
+    member(parameter.name, parameter.kind == ParameterKind::Type
+            ? SystemVerilogPackageMember::type
+            : SystemVerilogPackageMember::value);
+    literals(parameter.type);
+  }
+  for (const auto& variable : package.variables) {
+    member(variable.name, SystemVerilogPackageMember::value);
+    literals(variable.type);
+  }
+  for (const auto& signal : package.signals) {
+    member(signal.name, SystemVerilogPackageMember::value);
+    literals(signal.type);
+  }
+  for (const auto& alias : package.type_aliases) {
+    member(alias.name, alias.type.systemverilog_container
+            ? SystemVerilogPackageMember::unpacked_type
+            : SystemVerilogPackageMember::type);
+    literals(alias.type);
+    for (const auto& literal : alias.enum_literals) {
+      member(literal.name, SystemVerilogPackageMember::value);
+    }
+  }
+  for (const auto& function : package.functions) {
+    member(function.name, SystemVerilogPackageMember::value);
+  }
+  for (const auto& task : package.tasks) {
+    member(task.name, SystemVerilogPackageMember::value);
+  }
+  for (const auto& let : package.systemverilog_lets) {
+    member(let.name, SystemVerilogPackageMember::value);
+  }
+  for (const auto& covergroup : package.systemverilog_covergroups) {
+    member(covergroup.name, SystemVerilogPackageMember::type);
+  }
+  for (const auto& declared : package.systemverilog_classes) {
+    member(declared.name, SystemVerilogPackageMember::class_type);
+  }
+  record.imports = package.systemverilog_imports;
+  record.exports = package.systemverilog_exports;
+  record.wildcard_references.insert(
+      package.systemverilog_wildcard_references.begin(),
+      package.systemverilog_wildcard_references.end());
+}
+
+void SystemVerilogPackageMembers::add_member(const std::string_view package,
+    const std::string_view member, const SystemVerilogPackageMember kind) {
+  packages_[std::string { package }].members.try_emplace(
+      std::string { member }, kind);
+}
+
+SystemVerilogPackageMember SystemVerilogPackageMembers::find(
+    const std::string_view package, const std::string_view member,
+    const SystemVerilogPackageMemberLookup& fallback) const {
+  std::vector<std::string_view> visiting;
+  return find(package, member, fallback, visiting);
+}
+
+SystemVerilogPackageMember SystemVerilogPackageMembers::find(
+    const std::string_view package, const std::string_view member,
+    const SystemVerilogPackageMemberLookup& fallback,
+    std::vector<std::string_view>& visiting) const {
+  const auto record = packages_.find(std::string { package });
+  if (record == packages_.end()) {
+    return fallback ? fallback(package, member)
+                    : SystemVerilogPackageMember::none;
+  }
+  if (std::ranges::find(visiting, package) != visiting.end()) {
+    return SystemVerilogPackageMember::none;
+  }
+  if (const auto found = record->second.members.find(std::string { member });
+      found != record->second.members.end()) {
+    return found->second;
+  }
+  // An export carries on a member of a package the package imports; a
+  // wildcard export of a wildcard import carries on only the names the
+  // package refers to (IEEE 1800-2023 26.6).
+  visiting.push_back(package);
+  for (const auto& exported : record->second.exports) {
+    if ((exported.package == "*" && !exported.name.empty())
+        || (!exported.name.empty() && exported.name != member)) {
+      continue;
+    }
+    for (const auto& imported : record->second.imports) {
+      if ((exported.package != "*" && exported.package != imported.package)
+          || (!imported.name.empty() && imported.name != member)) {
+        continue;
+      }
+      if (exported.name.empty() && imported.name.empty()
+          && !record->second.wildcard_references.contains(
+              std::string { member })) {
+        continue;
+      }
+      const auto kind = find(imported.package, member, fallback, visiting);
+      if (kind != SystemVerilogPackageMember::none) {
+        visiting.pop_back();
+        return kind;
+      }
+    }
+  }
+  visiting.pop_back();
+  return SystemVerilogPackageMember::none;
+}
+
 ParseResult parse_verilog(SourceText source, bool system_verilog) {
   return parse_verilog(
       std::move(source),

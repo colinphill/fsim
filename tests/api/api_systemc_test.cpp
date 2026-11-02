@@ -27,19 +27,17 @@ int collect_object(
 
 } // namespace
 
-void test_systemc_api(const std::filesystem::path& systemc_manifest_path)
+void test_systemc_api(
+    const std::filesystem::path& workspace, const char* snapshot)
 {
     fsim_session_t systemc_session = FSIM_INVALID_SESSION;
     assert(
         fsim_session_create(nullptr, &systemc_session)
         == FSIM_STATUS_OK);
     assert(
-        fsim_session_load_project(
-            systemc_session,
-            fsim::support::path_to_utf8(systemc_manifest_path).c_str())
+        fsim_session_open_snapshot(systemc_session,
+            fsim::support::path_to_utf8(workspace).c_str(), snapshot)
         == FSIM_STATUS_OK);
-    assert(fsim_session_check(systemc_session) == FSIM_STATUS_OK);
-    assert(fsim_session_build(systemc_session) == FSIM_STATUS_OK);
 
     const auto find_systemc = [&](const char* path) {
         fsim_object_t object = FSIM_INVALID_OBJECT;

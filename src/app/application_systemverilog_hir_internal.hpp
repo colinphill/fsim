@@ -425,6 +425,11 @@ private:
         const frontend::SourceSpan& fallback,
         semantic::ScopeId scope,
         semantic::OriginId parent);
+    void apply_named_type_dimensions(sv::TypeReference& output,
+        const frontend::Type& input,
+        const frontend::SourceSpan& fallback,
+        semantic::ScopeId scope,
+        semantic::OriginId parent);
     [[nodiscard]] semantic::DeclarationId add_declaration_record(
         semantic::ScopeId scope,
         sv::DeclarationForm form,
@@ -646,7 +651,9 @@ private:
     struct UnitParameter {
         std::string unit;
         frontend::Type type;
-        std::uint64_t value { };
+        // The default when it is a constant; a class of the unit reads the
+        // value of its instance (IEEE 1800-2023 6.22), bound at run time.
+        std::optional<std::uint64_t> value;
     };
     std::multimap<std::string, UnitParameter, std::less<>> unit_parameters_;
 };

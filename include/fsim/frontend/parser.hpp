@@ -10,6 +10,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -115,10 +117,53 @@ struct ParseResult {
   [[nodiscard]] bool ok() const { return !has_errors(diagnostics); }
 };
 
+// What a SystemVerilog package member names, as far as parsing a use of it
+// needs (IEEE 1800-2023 26.3).
+enum class SystemVerilogPackageMember : std::uint8_t {
+  none,
+  // A parameter, variable, net, subroutine, enumeration literal, or let.
+  value,
+  // A data type of packed or scalar shape, or a covergroup.
+  type,
+  // A data type with unpacked dimensions or a dynamic shape.
+  unpacked_type,
+  // A class.
+  class_type,
+};
+
 // Recognize imported names without constructing parser declarations for
 // compiled packages. The owning compiler keeps the lookup alive during parse.
-using SystemVerilogPackageMemberLookup = std::function<bool(
-    std::string_view package, std::string_view member)>;
+using SystemVerilogPackageMemberLookup = std::function<
+    SystemVerilogPackageMember(
+        std::string_view package, std::string_view member)>;
+
+// The members of parsed packages: those each declares, and those it exports
+// from the packages it imports (IEEE 1800-2023 26.3, 26.6). A package not
+// held here is answered by a lookup of compiled packages.
+class SystemVerilogPackageMembers {
+public:
+  // Records a parsed package.
+  void add(const DesignUnit& package);
+  // Records one member of a package being parsed.
+  void add_member(std::string_view package, std::string_view member,
+      SystemVerilogPackageMember kind);
+  [[nodiscard]] SystemVerilogPackageMember find(std::string_view package,
+      std::string_view member,
+      const SystemVerilogPackageMemberLookup& fallback) const;
+
+private:
+  struct Package {
+    std::unordered_map<std::string, SystemVerilogPackageMember> members;
+    std::vector<SystemVerilogImport> imports;
+    std::vector<SystemVerilogExport> exports;
+    std::unordered_set<std::string> wildcard_references;
+  };
+  [[nodiscard]] SystemVerilogPackageMember find(std::string_view package,
+      std::string_view member,
+      const SystemVerilogPackageMemberLookup& fallback,
+      std::vector<std::string_view>& visiting) const;
+  std::unordered_map<std::string, Package> packages_;
+};
 
 // The names IEEE fixed_generic_pkg and float_generic_pkg (and their
 // fixed_pkg and float_pkg instances) export as compiler intrinsics; empty

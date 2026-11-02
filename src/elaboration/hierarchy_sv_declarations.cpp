@@ -2237,6 +2237,22 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         }
         return true;
     }
+    if (declaration.type && declaration.type->packed_over_named_type) {
+        const auto effective = semantic::CompiledDesignResolver {
+            working_specialization
+        }.effective_systemverilog_type(*declaration.type, declaration.scope);
+        if (!effective || effective->packed_over_named_type) {
+            report(
+                "FSIM-ELAB-SVTYPEPARAM-005",
+                "signal '" + declaration.name + "' declares packed "
+                    + "dimensions over '" + declaration.type->target.spelling
+                    + "', whose actual type is not a packed type "
+                    + "(IEEE 1800-2023 7.4.1)",
+                compiled_source_span(
+                    *compiled_, declaration.source));
+            return false;
+        }
+    }
     const auto executable_width
         = hierarchy_sv_type_layout_detail::systemverilog_declaration_width(
             working_specialization, declaration);

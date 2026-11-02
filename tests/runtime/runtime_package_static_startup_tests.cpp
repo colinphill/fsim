@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <span>
@@ -313,6 +314,29 @@ namespace {
         ContainerValue value_;
     };
 
+    // A startup process whose executor calls a host API.
+    class HostCallStartupExecutor final : public ProcessExecutor {
+    public:
+        explicit HostCallStartupExecutor(std::function<void()> call)
+            : call_ { std::move(call) }
+        {
+        }
+
+        [[nodiscard]] ProcessResumeResult resume(
+            ProcessExecutionContext&,
+            const InstructionIndex start) override
+        {
+            require(start == 0U, "startup host call starts at PC zero");
+            call_();
+            ProcessResumeResult result { 0U, 1U };
+            result.external.kind = ExternalSuspendKind::halt;
+            return result;
+        }
+
+    private:
+        std::function<void()> call_;
+    };
+
     class ContainerWriteStartupExecutor final : public ProcessExecutor {
     public:
         ContainerWriteStartupExecutor(
@@ -389,18 +413,6 @@ namespace {
         const auto native_last_active = interpreter.add_signal({
             "top.native_last_active", PackedLogic4::from_aval_bval(64U, 0U, 0U) });
 
-        const auto text_object = interpreter.add_string_object({
-            "package.text", "before" });
-        ContainerType queue_type;
-        queue_type.element_width = 8U;
-        queue_type.queue = true;
-        const auto queue_object = interpreter.add_container_object({
-            "package.queue",
-            ContainerValue {
-                queue_type,
-                { PackedLogic4::from_msb_string("00000000") }, { } },
-            std::nullopt });
-
         auto native = startup_process(0U, native_value, 20U);
         const auto native_process = interpreter.add_process(std::move(native));
         std::size_t native_resume_count { };
@@ -442,57 +454,30 @@ namespace {
         };
         (void)interpreter.add_process(std::move(observer));
 
-        std::array signal_allowlist { package_value };
-        std::array string_allowlist { text_object };
-        std::array container_allowlist { queue_object };
-        std::size_t package_callback_count { };
-        std::size_t class_property_callback_count { };
-        const ContainerValue initialized_queue {
-            queue_type,
-            { PackedLogic4::from_msb_string("00000001"),
-                PackedLogic4::from_msb_string("00000010") },
-            { } };
-
-        // Register actions in the reverse of their semantic order. The class
-        // callback models a package-owned static property initializer with no
-        // target signal; it runs after the tagged SimIR action.
-        interpreter.register_package_static_startup_callback(
-            30U, std::span { signal_allowlist }, { }, { }, [&] {
-                ++class_property_callback_count;
-                require(interpreter.package_static_initialization_active(),
-                    "package callbacks observe startup phase");
-                interpreter.deposit_signal(
-                    package_value,
-                    PackedLogic4::from_msb_string("00000010"));
-            });
-        interpreter.register_package_static_startup_callback(
-            10U, std::span { signal_allowlist },
-            std::span { string_allowlist },
-            std::span { container_allowlist }, [&] {
-                ++package_callback_count;
-                require(interpreter.package_static_initialization_active(),
-                    "package callbacks observe startup phase");
-                interpreter.deposit_signal(
-                    package_value,
-                    PackedLogic4::from_msb_string("00000001"));
-                interpreter.deposit_string_object(text_object, "initialized");
-                interpreter.deposit_container_object(
-                    queue_object, initialized_queue);
-            });
-        signal_allowlist[0U] = native_value;
-        string_allowlist[0U] = std::numeric_limits<StringObjectId>::max();
-        container_allowlist[0U]
-            = std::numeric_limits<ContainerObjectId>::max();
+        // Register the package actions in the reverse of their semantic
+        // order; the tagged native process runs between them.
+        auto later = startup_process(2U, package_value, 30U);
+        later.operations = {
+            LoadConstant { 0U, PackedLogic4::from_msb_string("00000010") },
+            WriteBlocking { package_value, 0U },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(later));
+        auto earlier = startup_process(3U, package_value, 10U);
+        earlier.operations = {
+            LoadConstant { 0U, PackedLogic4::from_msb_string("00000001") },
+            WriteBlocking { package_value, 0U },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(earlier));
 
         interpreter.start();
         interpreter.start();
         require(native_observed_startup_active
                 && !interpreter.package_static_initialization_active(),
             "startup phase query covers tagged executors and clears afterward");
-        require(package_callback_count == 1U
-                && class_property_callback_count == 1U
-                && native_resume_count == 1U,
-            "ordered startup callbacks run once even when start is repeated");
+        require(native_resume_count == 1U,
+            "ordered startup actions run once even when start is repeated");
         require(interpreter.process_program(native_process).startup_phase
                     == ProcessStartupPhase::package_static_initializer
                 && interpreter.process_program(native_process).startup_order
@@ -508,11 +493,7 @@ namespace {
                     == "00000010"
                 && interpreter.signal_value(order_observed).to_msb_string()
                     == "00000101",
-            "callbacks and the tagged process follow their shared startup order");
-        require(interpreter.string_object_value(text_object) == "initialized"
-                && interpreter.container_object_value_snapshot(queue_object)
-                    == initialized_queue,
-            "typed startup allowlists establish package string and container values");
+            "package processes follow their shared startup order");
 
         const auto never_time
             = PackedLogic4::from_aval_bval(
@@ -526,7 +507,7 @@ namespace {
                     == "00000010"
                 && interpreter.signal_value(last_event) == never_time
                 && interpreter.signal_value(last_active) == never_time,
-            "callback writes establish a silent signal history baseline");
+            "startup writes establish a silent signal history baseline");
         require(interpreter.signal_value(native_event).to_msb_string() == "0"
                 && interpreter.signal_value(native_active).to_msb_string()
                     == "0"
@@ -536,9 +517,7 @@ namespace {
                 && interpreter.signal_value(native_last_active) == never_time,
             "compiled word and slice paths fall back to silent startup commits");
         (void)interpreter.run();
-        require(package_callback_count == 1U
-                && class_property_callback_count == 1U
-                && native_resume_count == 1U,
+        require(native_resume_count == 1U,
             "completed startup actions are not repeated by later runs");
     }
 
@@ -554,44 +533,18 @@ namespace {
             Halt { },
         };
         (void)interpreter.add_process(std::move(process));
-        std::size_t callback_count { };
-        interpreter.register_package_static_startup_callback(
-            7U, { }, { }, { }, [&] { ++callback_count; });
+        auto duplicate = startup_process(1U, target, 7U);
+        duplicate.operations = {
+            LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+            WriteBlocking { target, 0U },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(duplicate));
         (void)require_logic_error(
             [&] { interpreter.start(); },
             "startup action order is not unique");
-        require(callback_count == 0U
-                && interpreter.signal_value(target).to_msb_string() == "0",
+        require(interpreter.signal_value(target).to_msb_string() == "0",
             "duplicate order is rejected before any startup side effect");
-    }
-
-    void verify_callback_allowlist_and_failed_start_are_one_shot()
-    {
-        Interpreter interpreter;
-        const auto allowed = interpreter.add_signal({
-            "package.allowed", PackedLogic4::from_msb_string("0") });
-        const auto denied = interpreter.add_signal({
-            "package.denied", PackedLogic4::from_msb_string("0") });
-        const std::array allowed_ids { allowed };
-        std::size_t callback_count { };
-        interpreter.register_package_static_startup_callback(
-            3U, std::span { allowed_ids }, { }, { }, [&] {
-                ++callback_count;
-                interpreter.deposit_signal(
-                    denied, PackedLogic4::from_msb_string("1"));
-            });
-        (void)require_logic_error(
-            [&] { interpreter.start(); },
-            "outside its package write closure");
-        require(callback_count == 1U
-                && interpreter.signal_value(allowed).to_msb_string() == "0"
-                && interpreter.signal_value(denied).to_msb_string() == "0",
-            "an out-of-closure callback write does not modify signal state");
-        (void)require_logic_error(
-            [&] { interpreter.start(); },
-            "cannot be retried after package startup actions ran");
-        require(callback_count == 1U,
-            "a failed startup action is never replayed on retry");
     }
 
     void verify_completed_action_is_not_replayed_after_later_failure()
@@ -603,35 +556,31 @@ namespace {
         const auto denied = interpreter.add_signal({
             "package.failing_action",
             PackedLogic4::from_msb_string("0") });
-        const std::array allowed_ids { allowed };
-        std::size_t completed_action_count { };
-        std::size_t failing_action_count { };
-        interpreter.register_package_static_startup_callback(
-            1U, std::span { allowed_ids }, { }, { }, [&] {
-                ++completed_action_count;
-                interpreter.deposit_signal(
-                    allowed, PackedLogic4::from_msb_string("1"));
-            });
-        interpreter.register_package_static_startup_callback(
-            2U, { }, { }, { }, [&] {
-                ++failing_action_count;
-                interpreter.deposit_signal(
-                    denied, PackedLogic4::from_msb_string("1"));
-            });
+        auto completed = startup_process(0U, allowed, 1U);
+        completed.operations = {
+            LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+            WriteBlocking { allowed, 0U },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(completed));
+        // The failing action's closure is the completed action's signal.
+        auto failing = startup_process(1U, allowed, 2U);
+        failing.operations = {
+            LoadConstant { 0U, PackedLogic4::from_msb_string("1") },
+            WriteBlocking { denied, 0U },
+            Halt { },
+        };
+        (void)interpreter.add_process(std::move(failing));
         (void)require_logic_error(
             [&] { interpreter.start(); },
             "outside its package write closure");
-        require(completed_action_count == 1U
-                && failing_action_count == 1U
-                && interpreter.signal_value(allowed).to_msb_string() == "1"
+        require(interpreter.signal_value(allowed).to_msb_string() == "1"
                 && interpreter.signal_value(denied).to_msb_string() == "0",
             "failure preserves completed baseline effects "
             "without partial denied writes");
         (void)require_logic_error(
             [&] { interpreter.start(); },
             "cannot be retried after package startup actions ran");
-        require(completed_action_count == 1U && failing_action_count == 1U,
-            "retry cannot replay completed or failed startup actions");
     }
 
     void verify_process_allowlist_and_retry_guard()
@@ -764,7 +713,7 @@ namespace {
                     interpreter, object));
             (void)require_logic_error(
                 [&] { interpreter.start(); },
-                "outside its startup callback");
+                "outside its startup process");
             require(interpreter.string_object_value(object) == "before",
                 "public string deposit cannot borrow a process write closure");
         }
@@ -1182,7 +1131,7 @@ namespace {
                     interpreter, object, changed_queue));
             (void)require_logic_error(
                 [&] { interpreter.start(); },
-                "outside its startup callback");
+                "outside its startup process");
             require(interpreter.container_object_value_snapshot(object)
                         == empty_queue,
                 "public container deposit cannot borrow a process write closure");
@@ -1213,12 +1162,13 @@ namespace {
             Interpreter interpreter;
             const auto target = interpreter.add_signal({
                 "package.force_target", PackedLogic4::from_msb_string("0") });
-            const std::array allowed { target };
-            interpreter.register_package_static_startup_callback(
-                1U, std::span { allowed }, { }, { }, [&] {
+            const auto id = interpreter.add_process(
+                startup_process(0U, target, 1U));
+            interpreter.set_process_executor(id,
+                std::make_unique<HostCallStartupExecutor>([&] {
                     interpreter.force_signal(
                         target, PackedLogic4::from_msb_string("1"));
-                });
+                }));
             (void)require_logic_error(
                 [&] { interpreter.start(); },
                 "cannot force a signal");
@@ -1234,23 +1184,24 @@ namespace {
             const ContainerValue initial {
                 queue_type,
                 { PackedLogic4::from_msb_string("00000000") }, { } };
-            const auto allowed = interpreter.add_container_object({
-                "package.allowed_queue", initial, std::nullopt });
-            const auto denied = interpreter.add_container_object({
-                "package.denied_queue", initial, std::nullopt });
-            const std::array allowed_ids { allowed };
-            interpreter.register_package_static_startup_callback(
-                1U, { }, { }, std::span { allowed_ids }, [&] {
+            const auto target = interpreter.add_signal({
+                "package.element_target", PackedLogic4::from_msb_string("0") });
+            const auto queue = interpreter.add_container_object({
+                "package.element_queue", initial, std::nullopt,
+                kPackageOwnerId });
+            const auto id = interpreter.add_process(
+                startup_process(0U, target, 1U));
+            interpreter.set_process_executor(id,
+                std::make_unique<HostCallStartupExecutor>([&] {
                     interpreter.deposit_container_object_element(
-                        denied, 0U,
-                        PackedLogic4::from_msb_string("00000001"));
-                });
+                        queue, 0U, PackedLogic4::from_msb_string("00000001"));
+                }));
             (void)require_logic_error(
                 [&] { interpreter.start(); },
-                "outside its container closure");
-            require(interpreter.container_object_value_snapshot(denied)
+                "outside its startup process");
+            require(interpreter.container_object_value_snapshot(queue)
                         == initial,
-                "element deposits pass through the typed startup allowlist");
+                "element deposits cannot change package startup storage");
         }
     }
 
@@ -1385,7 +1336,6 @@ void test_package_static_startup_runtime()
 {
     verify_ordered_actions_and_silent_baseline();
     verify_duplicate_order_rejected_before_execution();
-    verify_callback_allowlist_and_failed_start_are_one_shot();
     verify_completed_action_is_not_replayed_after_later_failure();
     verify_process_allowlist_and_retry_guard();
     verify_startup_string_object_process_writes_fail_closed();

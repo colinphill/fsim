@@ -870,7 +870,6 @@ void ApplicationTestFixture::test_non_project_cli()
                              std::ostream&, std::ostream&) {
         elaborate_called = true;
         assert(invocation.command == cli::Command::elaborate);
-        assert(config.manifest_path == "<workspace>");
         assert(config.project.tops == invocation.tops);
         return 0;
     };

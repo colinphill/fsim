@@ -3,12 +3,16 @@
 
 #include "fsim/cli/driver.hpp"
 #include "fsim/diagnostic/diagnostic.hpp"
+#include "fsim/project/configuration.hpp"
 #include "fsim/project/project.hpp"
 
+#include <filesystem>
 #include <iosfwd>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace fsim::app {
 
@@ -19,6 +23,23 @@ int handle_tcl(
     std::istream& input,
     std::ostream& output,
     std::ostream& error);
+
+// The configuration scripts a command in `workspace` runs, in order: the
+// per-user script, then the workspace's `fsim.tcl`. Only existing files.
+[[nodiscard]] std::vector<std::pair<project::ConfigLayer, std::filesystem::path>>
+configuration_scripts(const std::filesystem::path& workspace);
+
+// Runs the configuration scripts of the current workspace in a Tcl
+// interpreter that has only the configuration commands. A build without
+// Tcl fails when a script exists rather than ignoring it.
+bool load_configuration_scripts(const cli::Invocation& invocation,
+    project::Configuration& configuration, diagnostic::Engine& diagnostics);
+
+// The same for the scripts of `workspace`, for a host that is not the fsim
+// executable (an empty `program` lets Tcl find the running one).
+bool load_configuration_scripts(const std::filesystem::path& workspace,
+    const std::filesystem::path& program,
+    project::Configuration& configuration, diagnostic::Engine& diagnostics);
 
 namespace tcl_detail {
 

@@ -511,7 +511,6 @@ if(FSIM_CHANGE12_LANE)
       fsim.abi-schema-reference
       fsim.abi-schema-evidence-matrix
       fsim.nested-portable-schema-freeze
-      fsim.project-manifest-schema-freeze
       fsim.portable-stale-schema-policy
       fsim.artifact.object
       fsim.artifact.design

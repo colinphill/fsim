@@ -43,7 +43,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "ad6f2dfa02f48610006c5296fec42db39a6969a29ac5549056c59baa2e14bc8e")
+  "84d9b902d6d950b183b78027038689a7d351b2b2ac388672a88bfb6b3af6a67b")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "core API contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -51,8 +51,8 @@ endif()
 
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 43)
-  message(FATAL_ERROR "core API contract requires 43 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 41)
+  message(FATAL_ERROR "core API contract requires 41 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER_ROW)
@@ -74,7 +74,7 @@ file(READ "${FSIM_LAYOUT_PROBE}" FSIM_LAYOUT_TEXT)
 file(READ "${FSIM_INSTALLED_CONSUMER}" FSIM_CONSUMER_TEXT)
 
 set(FSIM_SYMBOLS)
-foreach(FSIM_INDEX RANGE 2 42)
+foreach(FSIM_INDEX RANGE 2 40)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -96,8 +96,8 @@ foreach(FSIM_INDEX RANGE 2 42)
   endif()
 endforeach()
 list(LENGTH FSIM_SYMBOLS FSIM_SYMBOL_COUNT)
-if(NOT FSIM_SYMBOL_COUNT EQUAL 31)
-  message(FATAL_ERROR "core API contract requires 31 symbols")
+if(NOT FSIM_SYMBOL_COUNT EQUAL 29)
+  message(FATAL_ERROR "core API contract requires 29 symbols")
 endif()
 
 string(FIND "${FSIM_EXPORT_TEXT}" "fsim_*;" FSIM_WILDCARD_EXPORT)
@@ -139,7 +139,7 @@ endforeach()
 
 foreach(FSIM_TOKEN IN ITEMS
     "extern \"C\""
-    "FSIM_API_VERSION UINT32_C(1)"
+    "FSIM_API_VERSION UINT32_C(2)"
     "Returned string views remain valid until the next call that mutates")
   string(FIND "${FSIM_HEADER_TEXT}" "${FSIM_TOKEN}" FSIM_TOKEN_OFFSET)
   if(FSIM_TOKEN_OFFSET EQUAL -1)

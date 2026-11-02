@@ -19,7 +19,7 @@ set(FSIM_EXECUTABLE_CONTENTS [=[#!/bin/sh
 set -eu
 case "$*" in
   --version)
-    printf '%s\n' 'fsim 2026.0 (C API 1)'
+    printf '%s\n' 'fsim 2026.0 (C API 2)'
     ;;
   'compile --library work top.sv')
     test -f top.sv
@@ -35,8 +35,8 @@ case "$*" in
     test -f .fsim/libraries/work/library.sqlite3
     snapshot=default
     if [ "$#" -eq 4 ]; then snapshot="$4"; fi
-    mkdir -p ".fsim/snapshots/$snapshot"
-    printf '%s\n' fixture > ".fsim/snapshots/$snapshot/runtime.bin"
+    mkdir -p .fsim/snapshots
+    printf '%s\n' fixture > ".fsim/snapshots/$snapshot.fsimdesign"
     ;;
   'library delete work')
     test -f .fsim/libraries/work/library.sqlite3
@@ -46,7 +46,7 @@ case "$*" in
     test ! -e .fsim/libraries/work
     snapshot=default
     if [ "$#" -eq 5 ]; then snapshot="$3"; fi
-    test -f ".fsim/snapshots/$snapshot/runtime.bin"
+    test -f ".fsim/snapshots/$snapshot.fsimdesign"
     printf '%s\n' WORKSPACE_ARCHIVE_PASS
     ;;
   *)

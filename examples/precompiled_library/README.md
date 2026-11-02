@@ -45,6 +45,4 @@ elaborating a new snapshot.
 
 `library unmap vendor` preserves the external library. `library delete vendor`
 removes the library's managed state and mapping while preserving unrelated
-files in that directory. Existing snapshots remain independent. The old
-producer and consumer `fsim.toml` files are historical fixtures, not inputs to
-this workflow.
+files in that directory. Existing snapshots remain independent.

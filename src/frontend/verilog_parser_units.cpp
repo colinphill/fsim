@@ -21,6 +21,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   non_ansi_ports_.clear();
   explicit_port_types_.clear();
   body_port_declarations_.clear();
+    unit_type_parameter_names_.clear();
     unit_container_names_.clear();
     unit_string_names_.clear();
     unit_associative_index_types_.clear();
@@ -74,6 +75,8 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   }
   const auto name = expect_identifier("package name");
   unit.name = name.text;
+  parsing_package_ = unit.name;
+  package_wildcard_references_.clear();
   if (unit.name == "std") {
     error(
         name,
@@ -303,6 +306,12 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
       unit.tasks);
   unit.span = span_from(start, previous());
   unit_default_automatic_ = false;
+  unit.systemverilog_wildcard_references.assign(
+      package_wildcard_references_.begin(),
+      package_wildcard_references_.end());
+  std::ranges::sort(unit.systemverilog_wildcard_references);
+  parsing_package_.clear();
+  package_wildcard_references_.clear();
   return unit;
 }
 
@@ -1594,7 +1603,7 @@ Type VerilogParser::parse_type_parameter_actual() {
     auto named = parse_named_type();
     // `foo_t [1:0]`: packed dimensions of a named type (6.20.3, 7.4.1).
     if (at(TokenKind::LeftBracket)) {
-      parse_optional_range(named);
+      parse_named_type_dimensions(named);
     }
     return named;
   }
@@ -1686,6 +1695,8 @@ void VerilogParser::add_parameter(
   }
   if (parameter.kind == ParameterKind::Value) {
     unit_value_parameter_names_.insert(parameter.name);
+  } else {
+    unit_type_parameter_names_.insert(parameter.name);
   }
   unit.parameters.push_back(std::move(parameter));
 }
@@ -1736,9 +1747,14 @@ void VerilogParser::parse_parameter_group(
       }
       return found->second;
     }();
+    // One of another unit's package keeps its name, which elaboration
+    // resolves.
+    const bool imported_array = !typedef_array && !type.named_type.empty()
+        && imported_member(type.named_type)
+            == SystemVerilogPackageMember::unpacked_type;
     if (!type_parameter && !class_list
         && language_ == Language::SystemVerilog2017
-        && (at(TokenKind::LeftBracket) || typedef_array)) {
+        && (at(TokenKind::LeftBracket) || typedef_array || imported_array)) {
       auto container_type = at(TokenKind::LeftBracket) || !typedef_array
           ? type
           : *typedef_array;
@@ -1756,7 +1772,7 @@ void VerilogParser::parse_parameter_group(
             "FSIM-SV-PARSE-050",
             "value parameters require a default constant expression");
       }
-      if (container_type.systemverilog_container) {
+      if (container_type.systemverilog_container || imported_array) {
         unit_container_names_.insert(name.text);
         VariableDeclaration variable {
             name.text,
@@ -1764,6 +1780,7 @@ void VerilogParser::parse_parameter_group(
             std::move(initializer),
             cover(start.span, previous().span) };
         variable.systemverilog_const = true;
+        variable.systemverilog_named_container = imported_array;
         variable.systemverilog_parameter = !local;
         variable.systemverilog_local_parameter = local;
         unit.variables.push_back(std::move(variable));

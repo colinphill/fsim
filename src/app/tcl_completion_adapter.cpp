@@ -612,9 +612,6 @@ namespace {
         if (!context.config.base_directory.empty()) {
             return context.config.base_directory;
         }
-        if (!context.invocation.manifest.empty()) {
-            return context.invocation.manifest.parent_path();
-        }
         std::error_code error;
         const auto current = fs::current_path(error);
         return error ? fs::path { "." } : current;

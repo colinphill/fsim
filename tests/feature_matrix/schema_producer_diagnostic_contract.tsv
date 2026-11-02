@@ -3,10 +3,6 @@ family	boundary	found_identity	required_identity	safe_action	containment
 policy	shared-builder	explicit-found	explicit-required	regenerate-artifact-with-this-fsim-build	one-canonical-message-shape
 policy	current-only	stale-or-future	current-schema-or-producer	regenerate-never-migrate	no-compatibility-reader
 policy	malformed-input	corrupt,truncated,oversized	bounded-current-reader	recreate-from-source	no-partial-returned-state
-project	missing-schema	no-schema	schema-2	regenerate-fsim.toml	no-config
-project	stale-schema	schema-0-or-1	schema-2	regenerate-fsim.toml	no-config
-project	future-schema	schema-3	schema-2	regenerate-fsim.toml	no-config
-project	oversized-schema	outside-uint32-range	schema-2	regenerate-fsim.toml	no-config
 object	envelope	format-0-through-8-or-10,portable-schema-0-through-15-or-17	format-9,portable-schema-16,compiled-HIR-schema-3	regenerate-.fsimobj	no-root-decode
 object	publication	caller-format-and-schema	format-9,portable-schema-16,compiled-HIR-schema-3	regenerate-.fsimobj	no-destination-or-staging-tree
 design	envelope	format-0-through-13-or-15,runtime-ABI-mismatch	format-14,runtime-ABI-1	regenerate-.fsimdesign	no-root-decode

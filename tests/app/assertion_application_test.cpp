@@ -4,6 +4,7 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/support/path.hpp"
 #include "application_workflow_test_support.hpp"
+#include "../api/api_workspace_support.hpp"
 #include "assertion_application_support.hpp"
 
 #include <algorithm>
@@ -64,25 +65,6 @@ struct Capture {
     std::size_t compiled_processes { };
     fsim::app::NativeCacheStatistics native_cache;
 };
-
-int run_cli(
-    const std::vector<std::string>& arguments,
-    std::istream& input,
-    std::ostream& output,
-    std::ostream& error)
-{
-    std::vector<const char*> raw;
-    raw.reserve(arguments.size());
-    for (const auto& argument : arguments) {
-        raw.push_back(argument.c_str());
-    }
-    return fsim::test::run_fixture_command(
-        static_cast<int>(raw.size()),
-        raw.data(),
-        fsim::test::make_fixture_services(input),
-        output,
-        error);
-}
 
 fsim::project::Config config_for(
     const std::filesystem::path& directory,
@@ -278,19 +260,32 @@ void test_assertion_actions(
     assert(changed.compiled_processes == 0);
 }
 
-void test_cli_failure_reporting(
-    const std::filesystem::path& manifest)
+// Runs `fsim simulate ARGUMENTS...` in the workspace that holds DESIGN; the
+// first call compiles and elaborates it there.
+fsim::tests::api_workspace::CommandResult simulate_cli(
+    const std::filesystem::path& design, std::vector<std::string> arguments)
 {
-    std::istringstream input;
-    std::ostringstream output;
-    std::ostringstream error;
-    const auto result = run_cli(
-        { "fsim", "run", "-p", manifest.string() },
-        input,
-        output,
-        error);
-    assert(result == 1);
-    const auto report_text = output.str();
+    namespace workspace = fsim::tests::api_workspace;
+    static bool prepared = false;
+    if (!prepared) {
+        workspace::prepare(design.parent_path(),
+            "fsim::config set compile.sv.standard 2017\n"
+            "fsim::config set elaborate.time_resolution 1ns\n"
+            "fsim::config set elaborate.optimization O2\n"
+            "fsim::config set simulate.max_deltas 1000\n",
+            { design.filename().string() }, "sv:work.assertion_actions");
+        prepared = true;
+    }
+    arguments.insert(arguments.begin(), "simulate");
+    return workspace::run_streams(design.parent_path(), std::move(arguments));
+}
+
+void test_cli_failure_reporting(
+    const std::filesystem::path& design)
+{
+    const auto result = simulate_cli(design, { });
+    assert(result.status == 1);
+    const auto& report_text = result.output;
     const std::string_view marker { "[FSIM-HDL-REPORT]" };
     std::size_t report_count { };
     for (auto position = report_text.find(marker);
@@ -313,7 +308,7 @@ void test_cli_failure_reporting(
         report_text.find("failure[FSIM-HDL-REPORT]: terminal")
         != std::string::npos);
     assert(
-        error.str().find("FSIM-RUN-ASSERT-0001")
+        result.error.find("FSIM-RUN-ASSERT-0001")
         != std::string::npos);
 }
 
@@ -1756,26 +1751,8 @@ module assertion_actions;
 endmodule
 )";
     }
-    const auto manifest = directory.path / "fsim.toml";
-    {
-        std::ofstream output(manifest);
-        output
-            << "schema = 3\n"
-            << "[project]\n"
-            << "name = \"assertion-actions\"\n"
-            << "top = \"sv:work.assertion_actions\"\n"
-            << "time_resolution = \"1ns\"\n"
-            << "[[source_set]]\n"
-            << "language = \"systemverilog\"\n"
-            << "standard = \"2017\"\n"
-            << "library = \"work\"\n"
-            << "files = [\"assertion_actions.sv\"]\n"
-            << "[build]\n"
-            << "optimization = \"O2\"\n"
-            << "cache_path = \"cli-cache\"\n"
-            << "[run]\n"
-            << "max_deltas = 1000\n";
-    }
+    // The CLI cases build and run the design from its source.
+    const auto design = directory.path / "assertion_actions.sv";
 
     test_assertion_actions(
         directory.path,
@@ -1785,7 +1762,7 @@ endmodule
         directory.path,
         source,
         fsim::project::Optimization::o2);
-    test_cli_failure_reporting(manifest);
+    test_cli_failure_reporting(design);
     test_deferred_immediate_assertions(directory.path);
     test_concurrent_assertions(directory.path);
     test_overlapped_implication(directory.path);

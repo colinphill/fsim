@@ -5,6 +5,7 @@
 #include "fsim/cli/driver.hpp"
 #include "fsim/elaboration/coverage_inventory.hpp"
 #include "fsim/frontend/coverage_point_identity.hpp"
+#include "fsim/project/configuration.hpp"
 #include "fsim/project/project.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
 
@@ -54,18 +55,6 @@ void write_text(
     assert(output.good());
 }
 
-std::string manifest(const std::string_view coverage = {})
-{
-    return "schema = 3\n"
-           "[project]\n"
-           "top = \"sv:work.top\"\n"
-        + std::string { coverage }
-        + "[[source_set]]\n"
-          "language = \"systemverilog\"\n"
-          "standard = \"2017\"\n"
-          "files = [\"top.sv\"]\n";
-}
-
 constexpr std::string_view kCoverageSelectionSource = R"(
 module selector_leaf;
   int covered;
@@ -92,46 +81,35 @@ module selector_top;
 endmodule
 )";
 
-std::optional<fsim::project::Config> parse_manifest(
-    const TemporaryDirectory& directory,
-    const std::string_view text,
-    fsim::diagnostic::Engine& diagnostics)
+// `elaborate.code_coverage` in fsim.tcl turns coverage on as
+// --code-coverage does; an elaboration config keeps it off by default.
+void test_configuration_surface()
 {
-    return fsim::project::parse(
-        text, "fsim.toml", directory.path, diagnostics);
-}
+    const fsim::project::Config disabled;
+    assert(!disabled.coverage.enabled);
+    assert(!fsim::app::code_coverage_enabled(disabled));
+    fsim::project::Config enabled;
+    enabled.coverage.enabled = true;
+    assert(fsim::app::code_coverage_enabled(enabled));
 
-void test_manifest_surface(const TemporaryDirectory& directory)
-{
-    fsim::diagnostic::Engine default_diagnostics;
-    const auto disabled
-        = parse_manifest(directory, manifest(), default_diagnostics);
-    assert(disabled && !default_diagnostics.has_error());
-    assert(disabled->schema == 3U);
-    assert(!disabled->coverage.enabled);
-    assert(!fsim::app::code_coverage_enabled(*disabled));
-
-    fsim::diagnostic::Engine enabled_diagnostics;
-    const auto enabled = parse_manifest(directory,
-        manifest("[coverage]\nenabled = true\n"), enabled_diagnostics);
-    assert(enabled && !enabled_diagnostics.has_error());
-    assert(enabled->coverage.enabled);
-    assert(fsim::app::code_coverage_enabled(*enabled));
-
-    for (const auto& bad : {
-             manifest("[coverage]\nenabled = \"yes\"\n"),
-             manifest("[coverage]\nunknown = true\n"),
-             manifest("[coverage]\nenabled = true\n[coverage]\n") }) {
-        fsim::diagnostic::Engine diagnostics;
-        assert(!parse_manifest(directory, bad, diagnostics));
-        assert(diagnostics.has_error());
-    }
-
-    auto stale = manifest("[coverage]\nenabled = true\n");
-    stale.replace(9U, 1U, "2");
-    fsim::diagnostic::Engine stale_diagnostics;
-    assert(!parse_manifest(directory, stale, stale_diagnostics));
-    assert(stale_diagnostics.has_error());
+    const fsim::project::ConfigOrigin origin {
+        fsim::project::ConfigLayer::workspace, "fsim.tcl", 1U };
+    fsim::project::Configuration configuration;
+    assert(configuration.find("elaborate.code_coverage") == nullptr);
+    assert(!configuration.set("elaborate.code_coverage", { "true" }, origin));
+    const auto* setting = configuration.find("elaborate.code_coverage");
+    assert(setting != nullptr && setting->values.size() == 1U
+        && setting->values.front() == "true");
+    // Tcl's boolean spellings normalize; anything else is refused.
+    assert(!configuration.set("elaborate.code_coverage", { "off" }, origin));
+    assert(configuration.find("elaborate.code_coverage")->values.front()
+        == "false");
+    assert(!configuration.set("elaborate.code_coverage", { "yes" }, origin));
+    assert(configuration.set("elaborate.code_coverage", { "maybe" }, origin));
+    assert(configuration.set("elaborate.code_coverage_unknown", { "true" },
+        origin));
+    assert(configuration.find("elaborate.code_coverage")->values.front()
+        == "true");
 }
 
 void test_cli_override(const TemporaryDirectory& directory)
@@ -173,7 +151,6 @@ void test_disabled_build_has_no_runtime_state(
 {
     fsim::project::Config config;
     config.base_directory = directory.path;
-    config.manifest_path = directory.path / "fsim.toml";
     config.project.name = "coverage-control";
     config.project.top = "sv:work.top";
     config.project.tops = { { "sv:work.top", "top" } };
@@ -196,7 +173,7 @@ void test_disabled_build_has_no_runtime_state(
     assert(enabled && !enabled_diagnostics.has_error());
     assert(enabled->code_coverage_enabled);
 
-    // A manifest exclusion keeps the points it selects counted, reported
+    // A configured exclusion keeps the points it selects counted, reported
     // as excluded for its reason.
     config.coverage.exclusions.push_back({ .source = std::nullopt,
         .hierarchy = "top", .object = std::nullopt, .metric = "statement",
@@ -640,10 +617,10 @@ std::vector<std::pair<int, std::vector<std::uint64_t>>> fsm_hits(
     return result;
 }
 
-// A manifest [[coverage.fsm]] hint is the only evidence that a vector with
-// named-constant case choices is a state machine; a hint for another
-// instance leaves it uncovered. Both engines count the same.
-void test_manifest_fsm_hint(const TemporaryDirectory& directory,
+// A configured FSM hint (fsim::coverage fsm add) is the only evidence that
+// a vector with named-constant case choices is a state machine; a hint for
+// another instance leaves it uncovered. Both engines count the same.
+void test_configured_fsm_hint(const TemporaryDirectory& directory,
     const bool vhdl, const std::string_view instance)
 {
     std::vector<std::pair<int, std::vector<std::uint64_t>>> reference;
@@ -797,7 +774,7 @@ int main()
     TemporaryDirectory directory;
     write_text(directory.path / "top.sv",
         "module top; initial begin $finish; end endmodule\n");
-    test_manifest_surface(directory);
+    test_configuration_surface();
     test_cli_override(directory);
     test_disabled_build_has_no_runtime_state(directory);
     test_mapped_library_coverage(directory);
@@ -927,7 +904,7 @@ begin
 end architecture;
 )");
     for (const bool vhdl : { false, true }) {
-        test_manifest_fsm_hint(directory, vhdl, "mtb.u");
-        test_manifest_fsm_hint(directory, vhdl, "mtb.other");
+        test_configured_fsm_hint(directory, vhdl, "mtb.u");
+        test_configured_fsm_hint(directory, vhdl, "mtb.other");
     }
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "application_workflow_test_support.hpp"
+#include "../api/api_workspace_support.hpp"
 #include "../../src/app/application_internal.hpp"
 
 #include <array>
@@ -56,25 +57,6 @@ struct Capture {
     std::size_t wide_immediate_format_displays { };
     std::size_t wide_postponed_format_displays { };
 };
-
-int run_cli(
-    const std::vector<std::string>& arguments,
-    std::istream& input,
-    std::ostream& output,
-    std::ostream& error)
-{
-    std::vector<const char*> raw;
-    raw.reserve(arguments.size());
-    for (const auto& argument : arguments) {
-        raw.push_back(argument.c_str());
-    }
-    return fsim::test::run_fixture_command(
-        static_cast<int>(raw.size()),
-        raw.data(),
-        fsim::test::make_fixture_services(input),
-        output,
-        error);
-}
 
 Capture execute(
     fsim::app::BuiltProject project,
@@ -372,55 +354,54 @@ void test_random(
 #endif
 }
 
+// Runs `fsim simulate ARGUMENTS...` in the workspace that holds DESIGN; the
+// first call compiles and elaborates it there.
+fsim::tests::api_workspace::CommandResult simulate_cli(
+    const std::filesystem::path& design, std::vector<std::string> arguments)
+{
+    namespace workspace = fsim::tests::api_workspace;
+    static bool prepared = false;
+    if (!prepared) {
+        workspace::prepare(design.parent_path(),
+            "fsim::config set compile.sv.standard 2023\n"
+            "fsim::config set elaborate.time_resolution 1ns\n"
+            "fsim::config set elaborate.optimization O2\n"
+            "fsim::config set simulate.max_deltas 1000\n",
+            { design.filename().string() }, "sv:work.random_test");
+        prepared = true;
+    }
+    arguments.insert(arguments.begin(), "simulate");
+    return workspace::run_streams(design.parent_path(), std::move(arguments));
+}
+
 std::string run_seeded_cli(
-    const std::filesystem::path& manifest,
+    const std::filesystem::path& design,
     const std::string_view seed)
 {
-    std::istringstream input;
-    std::ostringstream output;
-    std::ostringstream error;
-    const auto result = run_cli(
-        {
-            "fsim",
-            "run",
-            "-p",
-            manifest.string(),
-            "--seed",
-            std::string { seed },
-        },
-        input,
-        output,
-        error);
-    assert(result == 0);
-    assert(error.str().empty());
-    return output.str();
+    const auto result
+        = simulate_cli(design, { "--seed", std::string { seed } });
+    assert(result.status == 0);
+    assert(result.error.empty());
+    return result.output;
 }
 
 void test_cli_seed_selection(
     const std::filesystem::path& directory,
-    const std::filesystem::path& manifest)
+    const std::filesystem::path& design)
 {
-    std::istringstream default_input;
-    std::ostringstream default_output;
-    std::ostringstream default_error;
-    assert(
-        run_cli(
-            { "fsim", "run", "-p", manifest.string() },
-            default_input,
-            default_output,
-            default_error)
-        == 0);
-    assert(default_error.str().empty());
-    assert(default_output.str() == run_seeded_cli(manifest, "1"));
+    const auto default_result = simulate_cli(design, { });
+    assert(default_result.status == 0);
+    assert(default_result.error.empty());
+    assert(default_result.output == run_seeded_cli(design, "1"));
 
-    const auto first = run_seeded_cli(manifest, "555");
-    const auto repeated = run_seeded_cli(manifest, "555");
-    const auto changed = run_seeded_cli(manifest, "556");
+    const auto first = run_seeded_cli(design, "555");
+    const auto repeated = run_seeded_cli(design, "555");
+    const auto changed = run_seeded_cli(design, "556");
     assert(first == repeated);
     assert(first != changed);
     assert(first.find("cli=") != std::string::npos);
 
-    const auto random = run_seeded_cli(manifest, "random");
+    const auto random = run_seeded_cli(design, "random");
     const std::string_view marker { "random seed " };
     const auto marker_position = random.find(marker);
     assert(marker_position != std::string::npos);
@@ -664,33 +645,15 @@ module random_test;
 endmodule
 )";
     }
-    const auto manifest = directory.path / "fsim.toml";
-    {
-        std::ofstream output(manifest);
-        output
-            << "schema = 3\n"
-            << "[project]\n"
-            << "name = \"random-test\"\n"
-            << "top = \"sv:work.random_test\"\n"
-            << "time_resolution = \"1ns\"\n"
-            << "[[source_set]]\n"
-            << "language = \"systemverilog\"\n"
-            << "standard = \"2023\"\n"
-            << "library = \"work\"\n"
-            << "files = [\"random_test.sv\"]\n"
-            << "[build]\n"
-            << "optimization = \"O2\"\n"
-            << "cache_path = \"cli-cache\"\n"
-            << "[run]\n"
-            << "max_deltas = 1000\n";
-    }
+    // The CLI cases build and run the design from its source.
+    const auto design = directory.path / "random_test.sv";
 
     test_random(
         directory.path, source, fsim::project::Optimization::o0);
     test_random(
         directory.path, source, fsim::project::Optimization::o2);
     test_invalid_scope_randomize(directory.path);
-    test_cli_seed_selection(directory.path, manifest);
+    test_cli_seed_selection(directory.path, design);
     std::cout << "random application tests passed\n";
     return 0;
 }

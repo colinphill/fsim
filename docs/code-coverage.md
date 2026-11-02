@@ -107,9 +107,16 @@ attribute fsm_next_state of state : signal is "next_state";
 attribute fsm_legal_states of state : signal is "idle,run";
 ```
 
-A project manifest can also give hints in `config.coverage.fsm_hints`
-(instance, current state, next state, legal states). An invalid hint is
-reported as FSIM-COV-026.
+The workspace configuration script (`fsim.tcl`) can also give hints, keyed by
+instance and current-state object:
+
+```tcl
+fsim::coverage fsm add -instance tb.u_ctrl -current state -next next_state \
+    -legal {IDLE RUN DONE}
+```
+
+`fsim::coverage fsm list`, `show`, `remove` and `clear` manage them. An
+invalid hint is reported as FSIM-COV-026.
 
 ### Exclusions
 
@@ -127,16 +134,17 @@ VHDL uses `-- fsim coverage off ...` and `-- fsim coverage on ...`. A point in
 an excluded region has no counter and is reported as an exclusion row with
 the comment's reason. Metrics are excluded independently.
 
-A project manifest can exclude points by source, hierarchy, object and
-metric:
+The workspace configuration script can exclude points by source, hierarchy,
+object and metric:
 
-```toml
-[[coverage.exclude]]
-hierarchy = "tb.u_*"
-object = "status*"
-metric = "toggle"
-reason = "unused status plumbing"
+```tcl
+fsim::coverage exclude add -name status -hierarchy tb.u_* -object status* \
+    -metric toggle -reason "unused status plumbing"
 ```
+
+A rule without `-name` gets a generated one; `fsim::coverage exclude list`,
+`show`, `remove` and `clear` manage the rules, and each records the script
+that added it.
 
 Every rule needs a metric (or `all`) and a reason, and its selectors are
 conjunctive. Source patterns match the source's logical path, hierarchy

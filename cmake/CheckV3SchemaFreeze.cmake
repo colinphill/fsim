@@ -10,8 +10,8 @@ set(FSIM_LEDGER
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/v3_schema_freeze_inventory.tsv")
 file(STRINGS "${FSIM_LEDGER}" FSIM_LINES ENCODING UTF-8)
 list(LENGTH FSIM_LINES FSIM_LINE_COUNT)
-if(NOT FSIM_LINE_COUNT EQUAL 8)
-  message(FATAL_ERROR "v3 schema freeze inventory must contain six rows")
+if(NOT FSIM_LINE_COUNT EQUAL 7)
+  message(FATAL_ERROR "v3 schema freeze inventory must contain five rows")
 endif()
 list(GET FSIM_LINES 0 FSIM_LICENSE)
 list(GET FSIM_LINES 1 FSIM_HEADER)
@@ -21,12 +21,12 @@ if(NOT FSIM_LICENSE STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
   message(FATAL_ERROR "v3 schema freeze inventory header changed")
 endif()
 
-set(FSIM_EXPECTED_DOMAINS manifest abi object design checkpoint cache)
+set(FSIM_EXPECTED_DOMAINS abi object design checkpoint cache)
 set(FSIM_BATCH_188A_DOMAINS object design checkpoint)
 set(FSIM_IDS)
 set(FSIM_DOMAINS)
 set(FSIM_TOTAL_ROWS 0)
-foreach(FSIM_INDEX RANGE 2 7)
+foreach(FSIM_INDEX RANGE 2 6)
   list(GET FSIM_LINES ${FSIM_INDEX} FSIM_LINE)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_LINE}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -89,13 +89,6 @@ foreach(FSIM_INDEX RANGE 2 7)
         "v3 schema freeze evidence changed for ${FSIM_ID}: ${FSIM_REQUIRED_OUTPUT}")
     endif()
   endforeach()
-  if(FSIM_DOMAIN STREQUAL "manifest")
-    string(FIND "${FSIM_CHECK_OUTPUT}" "schema=3" FSIM_FOUND)
-    if(FSIM_FOUND EQUAL -1)
-      message(FATAL_ERROR "v3 manifest schema identity changed")
-    endif()
-  endif()
-
   list(APPEND FSIM_IDS "${FSIM_ID}")
   list(APPEND FSIM_DOMAINS "${FSIM_DOMAIN}")
   math(EXPR FSIM_TOTAL_ROWS "${FSIM_TOTAL_ROWS} + ${FSIM_EXPECTED_ROWS}")
@@ -106,7 +99,7 @@ foreach(FSIM_DOMAIN IN LISTS FSIM_EXPECTED_DOMAINS)
     message(FATAL_ERROR "v3 schema freeze domain is missing: ${FSIM_DOMAIN}")
   endif()
 endforeach()
-if(NOT FSIM_TOTAL_ROWS EQUAL 268)
+if(NOT FSIM_TOTAL_ROWS EQUAL 252)
   message(FATAL_ERROR "v3 schema freeze row total changed: ${FSIM_TOTAL_ROWS}")
 endif()
 
@@ -125,8 +118,6 @@ function(fsim_require_schema_tokens FSIM_RELATIVE)
   endforeach()
 endfunction()
 
-fsim_require_schema_tokens(include/fsim/project/project.hpp
-  "kSchemaVersion = 3")
 fsim_require_schema_tokens(include/fsim/runtime/native_plugin_abi.h
   "FSIM_NATIVE_PLUGIN_ABI_VERSION 3u")
 fsim_require_schema_tokens(include/fsim/runtime/tf_plugin_abi.h
@@ -143,7 +134,7 @@ fsim_require_schema_tokens(include/fsim/library/artifact.hpp
   "kPortableSchemaVersion = 16"
   "kCompiledHirSchemaVersion = 3")
 fsim_require_schema_tokens(include/fsim/artifact/design.hpp
-  "kDesignFormatVersion = 17")
+  "kDesignFormatVersion = 18")
 fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
   "kRuntimeStateSchema = 92"
   "kSemanticStateSchema = 4"
@@ -158,4 +149,4 @@ fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
 
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 message(STATUS
-  "v3 schema freeze passed: domains=6 owner-rows=268 manifest=3 object=9/16/3 design=14/90 checkpoint=2/1/2 cache=v169 digest=${FSIM_LEDGER_DIGEST}")
+  "v3 schema freeze passed: domains=5 owner-rows=252 object=9/16/3 design=14/90 checkpoint=2/1/2 cache=v169 digest=${FSIM_LEDGER_DIGEST}")

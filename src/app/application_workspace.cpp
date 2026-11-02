@@ -9,10 +9,26 @@
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
 
+#include <algorithm>
 #include <sstream>
 
 namespace fsim::app {
 using namespace application_detail;
+
+std::optional<artifact::DesignMetadata> read_snapshot_metadata(
+    const project::Config& config, const std::string_view snapshot,
+    diagnostic::Engine& diagnostics)
+{
+    workspace::Store store(config.base_directory);
+    std::string error;
+    const auto stored = store.read_snapshot(std::string { snapshot }, error);
+    if (!stored) {
+        workspace_error(diagnostics, "cannot load snapshot '"
+            + std::string { snapshot } + "': " + error);
+        return std::nullopt;
+    }
+    return artifact::load_design_metadata(stored->path, diagnostics);
+}
 
 std::optional<BuiltProject> load_workspace_snapshot(const cli::Invocation& invocation,
     const project::Config& config, diagnostic::Engine& diagnostics)
@@ -80,6 +96,17 @@ int handle_workspace_elaborate(const cli::Invocation& invocation, const project:
         return 1;
     }
     auto selected_config = config;
+    // Exported libraries the workspace maps are imported as elaboration
+    // reads its own objects; the selection keeps those the design reaches.
+    std::string mapping_error;
+    const auto exported = store.exported_libraries(mapping_error);
+    if (!exported) {
+        workspace_error(diagnostics, std::move(mapping_error));
+        return 1;
+    }
+    for (const auto& library : *exported) {
+        selected_config.library_mappings.push_back({ library.name, library.path });
+    }
     if (!resolve_workspace_tops(selected_config, *catalogs, diagnostics)) {
         return 1;
     }
@@ -90,6 +117,10 @@ int handle_workspace_elaborate(const cli::Invocation& invocation, const project:
     if (!selection || !validate_workspace_dependencies(selection->catalogs, diagnostics)) {
         return 1;
     }
+    std::erase_if(selected_config.library_mappings, [&](const auto& mapping) {
+        return !std::ranges::binary_search(
+            selection->exported_libraries, mapping.library);
+    });
     std::string error;
     auto transaction = store.begin_snapshot(invocation.snapshot, error);
     if (!transaction) {
@@ -126,6 +157,45 @@ int handle_workspace_elaborate(const cli::Invocation& invocation, const project:
     }
     if (invocation.verbosity != cli::Verbosity::quiet) {
         output << "snapshot '" << invocation.snapshot << "' is ready\n";
+    }
+    return 0;
+}
+
+int handle_workspace_snapshot_info(const cli::Invocation& invocation,
+    const project::Config& config, diagnostic::Engine& diagnostics,
+    std::ostream& output, std::ostream&)
+{
+    const auto metadata
+        = read_snapshot_metadata(config, invocation.snapshot, diagnostics);
+    if (!metadata) {
+        return 1;
+    }
+    output << "snapshot " << invocation.snapshot << '\n';
+    for (const auto& root : metadata->roots) {
+        output << "  top: " << root.target << '\n';
+    }
+    output << "  time resolution: " << metadata->time_resolution << '\n'
+           << "  delay mode: " << metadata->delay_mode << '\n'
+           << "  code coverage: "
+           << (metadata->code_coverage.enabled ? "on" : "off") << '\n';
+    if (!metadata->search_libraries.empty()) {
+        output << "  search libraries:";
+        for (const auto& library : metadata->search_libraries) {
+            output << ' ' << library;
+        }
+        output << '\n';
+    }
+    if (metadata->settings.empty()) {
+        output << "  configuration settings: none\n";
+    } else {
+        output << "  configuration settings:\n";
+        for (const auto& setting : metadata->settings) {
+            output << "    " << setting.key;
+            if (!setting.value.empty()) {
+                output << ' ' << setting.value;
+            }
+            output << "  (" << setting.origin << ")\n";
+        }
     }
     return 0;
 }
@@ -204,9 +274,18 @@ int handle_workspace_library(const cli::Invocation& invocation, const project::C
             workspace_error(diagnostics, std::move(error));
             return 1;
         }
+        const auto exported = store.exported_libraries(error);
+        if (!exported) {
+            workspace_error(diagnostics, std::move(error));
+            return 1;
+        }
         for (const auto& library : *libraries) {
             output << library.name << '\t' << support::path_to_utf8(library.directory)
                    << (library.mapped ? "\tmapped" : "") << '\n';
+        }
+        for (const auto& library : *exported) {
+            output << library.name << '\t' << support::path_to_utf8(library.path)
+                   << "\texported\n";
         }
         return 0;
     }

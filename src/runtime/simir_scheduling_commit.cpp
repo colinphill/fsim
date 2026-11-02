@@ -98,22 +98,13 @@ void Interpreter::Impl::initialize_package_static_signal(
             "package static signal initialization is outside the startup baseline"
         };
     }
-    const bool callback_write_allowed
-        = package_static_initialization_callback_active
-        && package_static_initialization_callback_index
-            < package_static_startup_callbacks.size()
-        && std::ranges::binary_search(
-            package_static_startup_callbacks[
-                package_static_initialization_callback_index]
-                .writable_signal_ids,
-            signal_id);
     const bool process_write_allowed
         = package_static_initialization_process
                 != std::numeric_limits<ProcessId>::max()
         && signal_id < package_static_startup_signal_processes.size()
         && package_static_startup_signal_processes[signal_id]
             == package_static_initialization_process;
-    if (!callback_write_allowed && !process_write_allowed) {
+    if (!process_write_allowed) {
         throw std::logic_error {
             "package static startup action wrote outside its package write closure"
         };

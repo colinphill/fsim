@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 kind	name	contract
 platform	object-model	Windows-or-Linux-x86-64,pointer=8,size_t=8,enum=4,alignment-max=8
-version	FSIM_API_VERSION	1
+version	FSIM_API_VERSION	2
 calling-convention	public-functions	extern-C-platform-default-C
 exception-boundary	public-functions	no-C++-exception-crosses-boundary,failure=FSIM_STATUS_INTERNAL_ERROR
 ownership	fsim_session_t	library-owned-until-successful-fsim_session_destroy
@@ -14,9 +14,7 @@ symbol	fsim_get_api_version	uint32_t(void)
 symbol	fsim_status_string	const-char*(fsim_status_t)
 symbol	fsim_session_create	fsim_status_t(const-fsim_session_options_t*,fsim_session_t*)
 symbol	fsim_session_destroy	fsim_status_t(fsim_session_t)
-symbol	fsim_session_load_project	fsim_status_t(fsim_session_t,const-char*)
-symbol	fsim_session_check	fsim_status_t(fsim_session_t)
-symbol	fsim_session_build	fsim_status_t(fsim_session_t)
+symbol	fsim_session_open_snapshot	fsim_status_t(fsim_session_t,const-char*,const-char*)
 symbol	fsim_session_configure_sdf	fsim_status_t(fsim_session_t,const-fsim_sdf_options_t*)
 symbol	fsim_session_get_sdf_summary	fsim_status_t(fsim_session_t,fsim_sdf_summary_t*)
 symbol	fsim_session_get_sdf_report_entry	fsim_status_t(fsim_session_t,size_t,fsim_sdf_report_entry_t*)

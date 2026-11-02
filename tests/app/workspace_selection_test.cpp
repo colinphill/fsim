@@ -348,11 +348,14 @@ endmodule
     const auto cold_y = cold.find_signal("dut.y");
     assert(cold_result.status == fsim::runtime::RunStatus::stopped && cold_y && cold.read_signal(*cold_y).to_msb_string() == "1");
 #endif
+    // Artifact ids do not order the catalog: it lists artifacts in analysis
+    // order, so swapped ids leave the order and the design unchanged.
     reverse_catalog_revision_ids(root, *catalog);
     auto reversed = store.read_library("work", error);
     assert(reversed && error.empty() && reversed->artifacts.size() == 2U
-        && reversed->artifacts[0].fingerprint == catalog->artifacts[1].fingerprint
-        && reversed->artifacts[1].fingerprint == catalog->artifacts[0].fingerprint);
+        && reversed->artifacts[0].id == catalog->artifacts[1].id
+        && reversed->artifacts[0].fingerprint == catalog->artifacts[0].fingerprint
+        && reversed->artifacts[1].fingerprint == catalog->artifacts[1].fingerprint);
     diagnostics.clear();
     const auto second = build();
     assert(first.cache_key == second.cache_key

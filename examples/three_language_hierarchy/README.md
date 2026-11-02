@@ -205,5 +205,4 @@ cross-language targets. If a width, encoding, direction, or construction actual
 is incompatible, elaboration rejects it instead of guessing a conversion.
 
 Generated compiler state stays under `.fsim`; `three_language.vcd` is the
-selected waveform output. The old `fsim.toml` and `fsim-fst.toml` files are
-historical fixtures and are not loaded by current commands.
+selected waveform output.

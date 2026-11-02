@@ -552,7 +552,7 @@ add_library(
   src/diagnostic/compiled_hir_compatibility_codes.cpp
   src/diagnostic/diagnostic.cpp
   src/platform/dynamic_library.cpp
-  src/project/project.cpp
+  src/project/configuration.cpp
   src/project/project_language.cpp
   src/support/allocation_hooks.cpp
   src/support/environment.cpp
@@ -1407,6 +1407,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
         src/app/tcl.cpp
         src/app/tcl_commands.cpp
         src/app/tcl_command_catalog.cpp
+        src/app/tcl_config_commands.cpp
         src/app/tcl_references.cpp
         src/app/tcl_workspace_commands.cpp
         src/app/tcl_object_commands.cpp
@@ -1510,25 +1511,35 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
     target_link_libraries(fsim_tcl PRIVATE fsim_isocline fsim_tcl_dependency)
     target_compile_definitions(fsim_tcl PUBLIC FSIM_HAS_TCL=1)
     if(FSIM_WITH_BUNDLED_TCL)
-      file(
-        RELATIVE_PATH
-        FSIM_TCL_LIBRARY_RELATIVE_TO_BINDIR
-        "${CMAKE_INSTALL_FULL_BINDIR}"
-        "${CMAKE_INSTALL_FULL_DATADIR}/fsim/tcl${FSIM_TCL_LIBRARY_VERSION}"
+      # The script library is built in, so fsim and applications that embed
+      # it need no Tcl files on disk; FSIM_TCL_LIBRARY still overrides it.
+      set(FSIM_EMBEDDED_TCL_SOURCE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/fsim_embedded_tcl_library.cpp")
+      add_custom_command(
+        OUTPUT "${FSIM_EMBEDDED_TCL_SOURCE}"
+        COMMAND
+          "${CMAKE_COMMAND}"
+          "-DTCL_INSTALL_DIR=${FSIM_FETCHED_TCL_INSTALL_DIR}"
+          "-DTCL_LIBRARY_VERSION=${FSIM_TCL_LIBRARY_VERSION}"
+          "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/generated/embedded-tcl"
+          "-DOUTPUT=${FSIM_EMBEDDED_TCL_SOURCE}"
+          -P "${PROJECT_SOURCE_DIR}/cmake/EmbedTclLibrary.cmake"
+        DEPENDS
+          "${FSIM_FETCHED_TCL_STATIC_LIBRARY}"
+          "${PROJECT_SOURCE_DIR}/cmake/EmbedTclLibrary.cmake"
+        COMMENT "Embedding the Tcl script library"
+        VERBATIM
       )
-      file(
-        TO_CMAKE_PATH
-        "${FSIM_TCL_LIBRARY_RELATIVE_TO_BINDIR}"
-        FSIM_TCL_LIBRARY_RELATIVE_TO_BINDIR
-      )
+      target_sources(fsim_tcl PRIVATE "${FSIM_EMBEDDED_TCL_SOURCE}")
       target_compile_definitions(
         fsim_tcl
         PRIVATE
-          "FSIM_BUNDLED_TCL_LIBRARY_RELATIVE_PATH=\"${FSIM_TCL_LIBRARY_RELATIVE_TO_BINDIR}\""
+          "FSIM_EMBEDDED_TCL_LIBRARY=\"tcl${FSIM_TCL_LIBRARY_VERSION}\""
       )
     endif()
   endif()
-  target_link_libraries(fsim_api PRIVATE fsim_application)
+  # The configuration scripts a snapshot opens with run in the CLI library.
+  target_link_libraries(fsim_api PRIVATE ${FSIM_CLI_LIBRARY})
 endif()
 
 if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
@@ -1612,11 +1623,7 @@ if(TARGET fsim)
   )
 endif()
 if(FSIM_WITH_BUNDLED_TCL)
-  install(
-    DIRECTORY "${FSIM_FETCHED_TCL_LIBRARY_DIR}/"
-    DESTINATION
-      "${CMAKE_INSTALL_DATADIR}/fsim/tcl${FSIM_TCL_LIBRARY_VERSION}"
-  )
+  # The Tcl script library is built into fsim (zipfs), so it is not installed.
   install(
     FILES "${FSIM_FETCHED_TCL_LICENSE_FILE}"
     DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party"

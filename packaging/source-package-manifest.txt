@@ -60,7 +60,6 @@ cmake/CheckNonProjectRestartability.cmake
 cmake/CheckObservabilityQualification.cmake
 cmake/CheckPortableObjectFreeze.cmake
 cmake/CheckPortableStaleSchemaPolicy.cmake
-cmake/CheckProjectManifestFreeze.cmake
 cmake/CheckReleaseCandidateLogAudit.cmake
 cmake/CheckRequiredCTestSet.cmake
 cmake/CheckRequiredIdSet.cmake
@@ -139,6 +138,7 @@ cmake/CheckWindowsLlvmContract.cmake
 cmake/CheckWindowsPackageDefinitions.cmake
 cmake/CreateDeterministicArchive.cmake
 cmake/CurrentEvidenceOwners.cmake
+cmake/EmbedTclLibrary.cmake
 cmake/FsimDebugFootprint.cmake
 cmake/FsimDependencies.cmake
 cmake/FsimLibffi.cmake
@@ -259,9 +259,7 @@ docs/vhdl-vhpi.md
 docs/workspace-mode.md
 examples/non_project_phases/README.md
 examples/precompiled_library/README.md
-examples/precompiled_library/consumer/fsim.toml
 examples/precompiled_library/consumer/tb.sv
-examples/precompiled_library/producer/fsim.toml
 examples/precompiled_library/producer/library_child.sv
 examples/sdf_annotation/README.md
 examples/sdf_annotation/annotate.tcl
@@ -272,18 +270,15 @@ examples/sdf_vital_mixed/mixed.sdf
 examples/sdf_vital_mixed/vital_cell.vhd
 examples/three_language_hierarchy/README.md
 examples/three_language_hierarchy/debug-session.sh
-examples/three_language_hierarchy/fsim-fst.toml
-examples/three_language_hierarchy/fsim.toml
 examples/three_language_hierarchy/logic_stage.vhd
 examples/three_language_hierarchy/mixed_bridge.cpp
 examples/three_language_hierarchy/three_language_tb.sv
 examples/v3_coverage/README.md
 examples/v3_coverage/counter.sv
 examples/v3_coverage/coverage_tb.sv
-examples/v3_coverage/fsim.toml
+examples/v3_coverage/fsim.tcl
 examples/vertical_slice/README.md
 examples/vertical_slice/counter.vhd
-examples/vertical_slice/fsim.toml
 examples/vertical_slice/sv_child.sv
 examples/vertical_slice/tb.sv
 include/fsim/api.h
@@ -402,6 +397,7 @@ include/fsim/frontend/vhdl_coverage_points.hpp
 include/fsim/library/artifact.hpp
 include/fsim/library/source_mapping.hpp
 include/fsim/platform/dynamic_library.hpp
+include/fsim/project/configuration.hpp
 include/fsim/project/project.hpp
 include/fsim/runtime/acc_handle_bridge.h
 include/fsim/runtime/acc_user.h
@@ -829,6 +825,7 @@ src/app/tcl_completion.cpp
 src/app/tcl_completion.hpp
 src/app/tcl_completion_adapter.cpp
 src/app/tcl_completion_adapter.hpp
+src/app/tcl_config_commands.cpp
 src/app/tcl_console.cpp
 src/app/tcl_console.hpp
 src/app/tcl_debugger_commands.cpp
@@ -1070,7 +1067,7 @@ src/main.cpp
 src/platform/dynamic_library.cpp
 src/platform/windows_long_paths.manifest
 src/platform/windows_long_paths.rc
-src/project/project.cpp
+src/project/configuration.cpp
 src/project/project_language.cpp
 src/runtime/acc_callback.cpp
 src/runtime/acc_handle.cpp
@@ -1381,6 +1378,7 @@ tests/api/api_mapped_library_test.cpp
 tests/api/api_multiple_root_test.cpp
 tests/api/api_systemc_test.cpp
 tests/api/api_test.cpp
+tests/api/api_workspace_support.hpp
 tests/api/installed_consumer/CMakeLists.txt
 tests/api/schema_identity_test.cpp
 tests/app/acc_scheduler_application_test.cpp
@@ -1596,6 +1594,7 @@ tests/app/vhdl_vital_delay_application_test.cpp
 tests/app/vpi_application_test.cpp
 tests/app/workspace_application_test.cpp
 tests/app/workspace_cli_test.cpp
+tests/app/workspace_configuration_test.cpp
 tests/app/workspace_controls_test.cpp
 tests/app/workspace_long_paths_test.cpp
 tests/app/workspace_objects_test.cpp
@@ -1735,7 +1734,6 @@ tests/feature_matrix/nested_portable_contract.tsv
 tests/feature_matrix/non_project_restartability_contract.tsv
 tests/feature_matrix/portable_object_contract.tsv
 tests/feature_matrix/portable_stale_schema_contract.tsv
-tests/feature_matrix/project_manifest_contract.tsv
 tests/feature_matrix/schema_producer_diagnostic_contract.tsv
 tests/feature_matrix/scv_inventory.tsv
 tests/feature_matrix/sdf_application_inventory.tsv
@@ -1859,6 +1857,7 @@ tests/fixtures/compliance/sv_class_global_void_shadow_precedence_batch58.sv
 tests/fixtures/compliance/sv_class_handle_fixed_array_range_index_20261015.sv
 tests/fixtures/compliance/sv_class_handle_fixed_array_wide_index_invalid_20261015.sv
 tests/fixtures/compliance/sv_class_handle_multidim_index_batch57.sv
+tests/fixtures/compliance/sv_class_instance_constraint_parameters.sv
 tests/fixtures/compliance/sv_class_instance_runtime_services.sv
 tests/fixtures/compliance/sv_class_instance_statics.sv
 tests/fixtures/compliance/sv_class_method_default_arguments_batch58_20261014.sv
@@ -1922,6 +1921,8 @@ tests/fixtures/compliance/sv_package_class_handle_initializers.sv
 tests/fixtures/compliance/sv_package_generate_scope_writes.sv
 tests/fixtures/compliance/sv_package_module_variable_identity_batch58.sv
 tests/fixtures/compliance/sv_package_timescale_and_returns.sv
+tests/fixtures/compliance/sv_package_typedef_packed_arrays_20261102.sv
+tests/fixtures/compliance/sv_package_typedef_packed_arrays_pkg_20261102.sv.in
 tests/fixtures/compliance/sv_package_unknown_integral_constant_batch58.sv
 tests/fixtures/compliance/sv_packed_multidim.sv
 tests/fixtures/compliance/sv_parameter_types.sv

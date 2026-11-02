@@ -1,13 +1,11 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-FSIM_1.0 {
+FSIM_2.0 {
   global:
     fsim_get_api_version;
     fsim_status_string;
     fsim_session_create;
     fsim_session_destroy;
-    fsim_session_load_project;
-    fsim_session_check;
-    fsim_session_build;
+    fsim_session_open_snapshot;
     fsim_session_configure_sdf;
     fsim_session_get_sdf_summary;
     fsim_session_get_sdf_report_entry;

@@ -3,6 +3,7 @@
 #include "fsim/api.h"
 #include "fsim/app/sdf_control.hpp"
 #include "fsim/cli/driver.hpp"
+#include "../api/api_workspace_support.hpp"
 #include "../support/test_helpers.hpp"
 
 #include <algorithm>
@@ -296,24 +297,15 @@ module top;
   end
 endmodule
 )sv");
-    fsim::test::write_text(temporary.path / "project.toml", R"toml(
-schema = 3
-[project]
-name = "api-sdf-session"
-time_resolution = "1ps"
-[[project.top]]
-target = "sv:work.top"
-alias = "top"
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-library = "work"
-files = ["top.sv"]
-[build]
-cache_path = "cache"
-[run]
-max_deltas = 1000
-)toml");
+    namespace workspace = fsim::tests::api_workspace;
+    workspace::isolate_user_configuration(temporary.path / "user-config");
+    workspace::write_configuration(temporary.path,
+        "fsim::config set elaborate.time_resolution 1ps\n");
+    workspace::expect(temporary.path,
+        { "compile", "--lang", "systemverilog", "--standard", "2017",
+            "--library", "work", "top.sv" });
+    workspace::expect(
+        temporary.path, { "elaborate", "--top", "top=sv:work.top" });
     const auto sdf_text = [](const int delay) {
         return "(DELAYFILE\n"
             "  (SDFVERSION \"4.0\")\n"
@@ -355,12 +347,11 @@ max_deltas = 1000
     require(pending_status == FSIM_STATUS_OK
             && summary().effective == 0U,
         "relative pre-load C API input must remain pending after cwd changes");
-    const auto manifest = (temporary.path / "project.toml").string();
-    require(fsim_session_load_project(session, manifest.c_str())
+    const auto workspace_text = temporary.path.string();
+    require(fsim_session_open_snapshot(
+                session, workspace_text.c_str(), nullptr)
             == FSIM_STATUS_OK,
-        "SDF project must load");
-    require(fsim_session_build(session) == FSIM_STATUS_OK,
-        "pending SDF file must apply at project build");
+        "pending SDF file must apply when the snapshot opens");
     const auto built = summary();
     require(built.effective == 1U && built.applied_path_count == 1U
             && built.applied_timing_check_count == 0U,
@@ -420,9 +411,13 @@ max_deltas = 1000
     require(fsim_session_run(session, 32'500U) == FSIM_STATUS_OK
             && output_value() == "0",
         "new 2 ns path must deliver the future fall before old 33 ns");
-    require(fsim_session_load_project(session, manifest.c_str())
-            == FSIM_STATUS_OK && summary().effective == 0U,
-        "reloaded project must return retained SDF input to pending state");
+    require(fsim_session_open_snapshot(
+                session, workspace_text.c_str(), nullptr)
+            == FSIM_STATUS_OK,
+        "reopened snapshot must load");
+    const auto reopened = summary();
+    require(reopened.effective == 1U && reopened.applied_path_count == 1U,
+        "reopened snapshot must apply the retained SDF input afresh");
     require(fsim_session_destroy(session) == FSIM_STATUS_OK,
         "loaded SDF C API session must close");
 }

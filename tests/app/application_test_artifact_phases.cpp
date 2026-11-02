@@ -1988,7 +1988,6 @@ end architecture;
     assert(!std::filesystem::exists(systemc_phase_object));
 
     project::Config api_compile_config;
-    api_compile_config.manifest_path = "<artifact-api>";
     api_compile_config.base_directory = directory;
     api_compile_config.project.name = "artifact-api-compile";
     project::SourceSet api_sources;
@@ -2006,7 +2005,6 @@ end architecture;
     assert(!api_compile_diagnostics.has_error());
 
     project::Config api_elaborate_config;
-    api_elaborate_config.manifest_path = "<artifact-api>";
     api_elaborate_config.base_directory = directory;
     api_elaborate_config.project.name = "artifact-api-elaborate";
     api_elaborate_config.project.tops.push_back(

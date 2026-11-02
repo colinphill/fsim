@@ -25,8 +25,18 @@ foreach(FSIM_INPUT IN ITEMS "${FSIM_INVENTORY}" "${FSIM_PLAN}" "${FSIM_TEST_CMAK
 endforeach()
 
 set(FSIM_EXPECTED_DIGEST
-  "1bcdc0c14fd5ef3bb7bf7577e6cbb2fab24fb705f59e21306408db04c845c32d")
+  "afc475ddff8aeb0649a46cb0a787f23c1d28b226edc92b3c14c06b81695ceecf")
 set(FSIM_COMPLETED_CHANGE 19)
+# Change 9 (project-manifest stale-schema policy) was retired with the
+# project manifest; its obligation no longer exists, so it has no row.
+set(FSIM_RETIRED_CHANGES 9)
+set(FSIM_LEDGER_CHANGES)
+foreach(FSIM_CHANGE RANGE 2 ${FSIM_COMPLETED_CHANGE})
+  list(FIND FSIM_RETIRED_CHANGES ${FSIM_CHANGE} FSIM_RETIRED_INDEX)
+  if(FSIM_RETIRED_INDEX EQUAL -1)
+    list(APPEND FSIM_LEDGER_CHANGES ${FSIM_CHANGE})
+  endif()
+endforeach()
 fsim_normalized_text_sha256("${FSIM_INVENTORY}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
@@ -95,7 +105,6 @@ set(FSIM_EXPECTED_DOMAINS
   design-library-schemas
   incremental-native-cache
   nested-portable-schemas
-  project-stale-schema-policy
   portable-stale-schema-policy
   native-producer-policy
   schema-producer-diagnostics
@@ -118,8 +127,8 @@ endfunction()
 
 file(STRINGS "${FSIM_INVENTORY}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 20)
-  message(FATAL_ERROR "ABI/schema inventory requires SPDX, header and 18 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 19)
+  message(FATAL_ERROR "ABI/schema inventory requires SPDX, header and 17 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_ACTUAL_HEADER)
@@ -132,7 +141,7 @@ set(FSIM_IDS)
 set(FSIM_CLOSURES)
 set(FSIM_ACTIVE_COUNT 0)
 set(FSIM_PRESERVED_COUNT 0)
-foreach(FSIM_INDEX RANGE 2 19)
+foreach(FSIM_INDEX RANGE 2 18)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -141,13 +150,13 @@ foreach(FSIM_INDEX RANGE 2 19)
       "ABI/schema row ${FSIM_INDEX} does not have fifteen fields")
   endif()
 
-  set(FSIM_CHANGE ${FSIM_INDEX})
+  math(EXPR FSIM_DOMAIN_INDEX "${FSIM_INDEX} - 2")
+  list(GET FSIM_LEDGER_CHANGES ${FSIM_DOMAIN_INDEX} FSIM_CHANGE)
   if(FSIM_CHANGE LESS 10)
     set(FSIM_CHANGE_TEXT "0${FSIM_CHANGE}")
   else()
     set(FSIM_CHANGE_TEXT "${FSIM_CHANGE}")
   endif()
-  math(EXPR FSIM_DOMAIN_INDEX "${FSIM_CHANGE} - 2")
   list(GET FSIM_EXPECTED_DOMAINS ${FSIM_DOMAIN_INDEX} FSIM_EXPECTED_DOMAIN)
   if(FSIM_CHANGE LESS_EQUAL FSIM_COMPLETED_CHANGE)
     set(FSIM_EXPECTED_BOUNDARY preserved)
@@ -202,11 +211,11 @@ foreach(FSIM_INDEX RANGE 2 19)
   endif()
 endforeach()
 
-math(EXPR FSIM_EXPECTED_PRESERVED "${FSIM_COMPLETED_CHANGE} - 1")
+list(LENGTH FSIM_LEDGER_CHANGES FSIM_EXPECTED_PRESERVED)
 math(EXPR FSIM_EXPECTED_ACTIVE "19 - ${FSIM_COMPLETED_CHANGE}")
 list(LENGTH FSIM_IDS FSIM_ID_COUNT)
 list(LENGTH FSIM_CLOSURES FSIM_CLOSURE_COUNT)
-if(NOT FSIM_ID_COUNT EQUAL 18 OR NOT FSIM_CLOSURE_COUNT EQUAL 18 OR
+if(NOT FSIM_ID_COUNT EQUAL 17 OR NOT FSIM_CLOSURE_COUNT EQUAL 17 OR
    NOT FSIM_ACTIVE_COUNT EQUAL FSIM_EXPECTED_ACTIVE OR
    NOT FSIM_PRESERVED_COUNT EQUAL FSIM_EXPECTED_PRESERVED)
   message(FATAL_ERROR
@@ -214,4 +223,4 @@ if(NOT FSIM_ID_COUNT EQUAL 18 OR NOT FSIM_CLOSURE_COUNT EQUAL 18 OR
 endif()
 
 message(STATUS
-  "ABI/schema inventory passed: rows=18 preserved=${FSIM_PRESERVED_COUNT} active=${FSIM_ACTIVE_COUNT} digest=${FSIM_ACTUAL_DIGEST}")
+  "ABI/schema inventory passed: rows=17 preserved=${FSIM_PRESERVED_COUNT} active=${FSIM_ACTIVE_COUNT} digest=${FSIM_ACTUAL_DIGEST}")

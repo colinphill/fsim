@@ -379,6 +379,16 @@ ElaborationResult elaborate_impl(
                 {}});
                 return result;
             }
+        } else if (!resolved.compiled_unit && requested_target
+            && requested_target->language == "vhdl"
+            && !requested_target->architecture
+            && has_vhdl_entity(compiled, *requested_target)) {
+            result.diagnostics.push_back({
+                "FSIM-ELAB-004",
+                "top-level VHDL entity '" + requested
+                    + "' has no architecture",
+                {}});
+            return result;
         } else if (!resolved.compiled_unit) {
             result.diagnostics.push_back({
                 "FSIM-ELAB-001",
@@ -388,18 +398,6 @@ ElaborationResult elaborate_impl(
                            : "' was not found in search scope ["
                                  + formatted_scope
                                  + "]; candidates: <none>"),
-                {}});
-            return result;
-        } else if (requested_target
-            && requested_target->language == "vhdl"
-            && !requested_target->architecture
-            && (resolved.compiled_unit->vhdl == nullptr
-                || resolved.compiled_unit->vhdl->kind
-                    != semantic::vhdl::UnitKind::configuration)) {
-            result.diagnostics.push_back({
-                "FSIM-ELAB-004",
-                "a qualified VHDL entity top must name an architecture, "
-                "or name a configuration declaration",
                 {}});
             return result;
         }

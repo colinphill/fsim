@@ -19,9 +19,8 @@ FSIM_C_SIGNATURE(
     fsim_status_t (*)(const fsim_session_options_t*, fsim_session_t*));
 FSIM_C_SIGNATURE(fsim_session_destroy, fsim_status_t (*)(fsim_session_t));
 FSIM_C_SIGNATURE(
-    fsim_session_load_project, fsim_status_t (*)(fsim_session_t, const char*));
-FSIM_C_SIGNATURE(fsim_session_check, fsim_status_t (*)(fsim_session_t));
-FSIM_C_SIGNATURE(fsim_session_build, fsim_status_t (*)(fsim_session_t));
+    fsim_session_open_snapshot,
+    fsim_status_t (*)(fsim_session_t, const char*, const char*));
 FSIM_C_SIGNATURE(
     fsim_session_configure_sdf,
     fsim_status_t (*)(fsim_session_t, const fsim_sdf_options_t*));
@@ -201,9 +200,8 @@ int fsim_api_abi_c_probe(void)
         diagnostic.struct_size = sizeof(diagnostic);
         diagnostic.api_version = FSIM_API_VERSION;
 
-        assert(fsim_session_load_project(session, "missing") == FSIM_STATUS_INVALID_HANDLE);
-        assert(fsim_session_check(session) == FSIM_STATUS_INVALID_HANDLE);
-        assert(fsim_session_build(session) == FSIM_STATUS_INVALID_HANDLE);
+        assert(fsim_session_open_snapshot(session, "missing", NULL)
+            == FSIM_STATUS_INVALID_HANDLE);
         assert(fsim_session_configure_sdf(session, &sdf) == FSIM_STATUS_INVALID_HANDLE);
         assert(
             fsim_session_get_sdf_summary(session, &sdf_summary)

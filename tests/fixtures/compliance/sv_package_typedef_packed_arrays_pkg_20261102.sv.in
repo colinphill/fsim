@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: Apache-2.0
+// Compiled on its own before sv_package_typedef_packed_arrays_20261102.sv.
+package pta_q;
+  typedef logic [3:0] nib_t;
+  typedef struct packed { nib_t hi; logic [3:0] lo; } pair_t;
+  typedef enum nib_t { A = 3, B = 9 } e_t;
+  typedef logic b_t;
+  typedef enum { C0, C1 } en_t;
+  typedef string s_t;
+  typedef logic [7:0] arr_t [0:1];
+  parameter int P4 = 4;
+  class cls; int v = 7; endclass
+endpackage
+package pta_r;
+  import pta_q::*;
+  export pta_q::nib_t;
+  export pta_q::P4;
+endpackage

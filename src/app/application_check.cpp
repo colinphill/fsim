@@ -462,7 +462,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
       group.package_member_lookup =
           [imported, library = group.inputs.front().library](
               const std::string_view package, const std::string_view member) {
-            return compiled_package_has_member(*imported, library, package, member);
+            return compiled_package_member(*imported, library, package, member);
           };
     }
   }
@@ -503,11 +503,11 @@ static std::optional<CompilationWorkspace> check_project_impl(
   checked.source_count = hdl_source_count + systemc_source_count;
   if (const auto request = systemc_request(config)) {
     checked.systemc_sources.reserve(request->sources.size());
-    for (const auto& manifest_path : request->sources) {
+    for (const auto& requested_path : request->sources) {
       CheckedSource source;
-      source.path = manifest_path.is_absolute()
-          ? manifest_path
-          : config.base_directory / manifest_path;
+      source.path = requested_path.is_absolute()
+          ? requested_path
+          : config.base_directory / requested_path;
       source.path = source.path.lexically_normal();
       auto input = support::native_fs::open_ifstream(source.path, std::ios::binary);
       if (!input) {

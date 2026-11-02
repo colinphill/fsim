@@ -131,6 +131,36 @@ namespace {
     };
 }
 
+void SystemVerilogHirBuilder::apply_named_type_dimensions(
+    sv::TypeReference& output,
+    const frontend::Type& input,
+    const frontend::SourceSpan& fallback,
+    const semantic::ScopeId scope,
+    const semantic::OriginId parent)
+{
+    // The named type's shape may come from another compilation unit or a
+    // type parameter actual: the dimensions stay with the use, and the range
+    // spans them with that type's width (IEEE 1800-2023 7.4.1). The
+    // environment binding composes them with a typedef's shape, a
+    // specialization with a type parameter's actual.
+    const auto& declared = input.systemverilog_named_type_dimensions;
+    output.packed_dimensions.clear();
+    for (const auto& dimension : declared) {
+        output.packed_dimensions.push_back(
+            packed_range(dimension, scope, parent));
+    }
+    output.packed_range = packed_range(
+        frontend::flattened_packed_range_expression(declared, fallback,
+            frontend::Expression { frontend::ExpressionKind::Call, "$bits",
+                { frontend::Expression { frontend::ExpressionKind::Identifier,
+                    input.named_type, { }, input.named_type_span } },
+                fallback }),
+        scope, parent);
+    output.executable_width.reset();
+    output.signed_value = false;
+    output.packed_over_named_type = true;
+}
+
 [[nodiscard]] sv::TypeReference SystemVerilogHirBuilder::type_reference(
     const frontend::Type& input,
     const frontend::SourceSpan& fallback,
@@ -210,6 +240,9 @@ namespace {
                     packed_range(dimension, scope, parent));
             }
         }
+    }
+    if (!input.systemverilog_named_type_dimensions.empty()) {
+        apply_named_type_dimensions(output, input, fallback, scope, parent);
     }
     // An interface port array keeps its dimensions without a container
     // form: its elements are interface bindings, not stored values.
@@ -698,7 +731,8 @@ template <typename Input>
     // scope (IEEE 1800-2017 6.20.1, 6.20.4); one declared with `parameter`
     // stays a parameter a defparam can redefine (23.10.1).
     if (input.systemverilog_local_parameter
-        && !input.type.systemverilog_container && input.initializer) {
+        && !input.type.systemverilog_container
+        && !input.systemverilog_named_container && input.initializer) {
         frontend::ParameterDeclaration parameter;
         parameter.name = input.name;
         parameter.type = input.type;

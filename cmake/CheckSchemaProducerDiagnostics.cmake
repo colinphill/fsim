@@ -10,7 +10,6 @@ set(FSIM_CONTRACT
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/schema_producer_diagnostic_contract.tsv")
 set(FSIM_BUILDER
   "${FSIM_SOURCE_DIR}/src/diagnostic/artifact_identity.cpp")
-set(FSIM_PROJECT "${FSIM_SOURCE_DIR}/src/project/project.cpp")
 set(FSIM_OBJECT "${FSIM_SOURCE_DIR}/src/artifact/object.cpp")
 set(FSIM_DESIGN "${FSIM_SOURCE_DIR}/src/artifact/design.cpp")
 set(FSIM_LIBRARY "${FSIM_SOURCE_DIR}/src/library/artifact.cpp")
@@ -28,8 +27,6 @@ set(FSIM_VHPI_CHECKPOINT
   "${FSIM_SOURCE_DIR}/src/runtime/vhpi_checkpoint.cpp")
 set(FSIM_UVM_CHECKPOINT
   "${FSIM_SOURCE_DIR}/src/runtime/uvm_checkpoint.cpp")
-set(FSIM_PROJECT_TEST
-  "${FSIM_SOURCE_DIR}/tests/project/project_config_test.cpp")
 set(FSIM_OBJECT_TEST
   "${FSIM_SOURCE_DIR}/tests/artifact/object_artifact_test.cpp")
 set(FSIM_DESIGN_TEST
@@ -52,7 +49,6 @@ set(FSIM_TEST_BUILD "${FSIM_SOURCE_DIR}/tests/CMakeLists.txt")
 foreach(FSIM_INPUT IN ITEMS
     "${FSIM_CONTRACT}"
     "${FSIM_BUILDER}"
-    "${FSIM_PROJECT}"
     "${FSIM_OBJECT}"
     "${FSIM_DESIGN}"
     "${FSIM_LIBRARY}"
@@ -63,7 +59,6 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_VPI_CHECKPOINT}"
     "${FSIM_VHPI_CHECKPOINT}"
     "${FSIM_UVM_CHECKPOINT}"
-    "${FSIM_PROJECT_TEST}"
     "${FSIM_OBJECT_TEST}"
     "${FSIM_DESIGN_TEST}"
     "${FSIM_LIBRARY_TEST}"
@@ -85,16 +80,16 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "65aebe62fb4a582a820259434354a9ef863411fc9869a4e9406d839fc4bf82f6")
+  "8ba36dc1e09eab3d6bba57f8a7a6979fb4569d250bbef354b821077cbf87ea88")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "schema/producer diagnostic contract changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 36)
+if(NOT FSIM_ROW_COUNT EQUAL 32)
   message(FATAL_ERROR
-    "schema/producer diagnostic contract requires SPDX, header and 34 rows")
+    "schema/producer diagnostic contract requires SPDX, header and 30 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -104,7 +99,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
   message(FATAL_ERROR
     "schema/producer diagnostic header or SPDX policy changed")
 endif()
-foreach(FSIM_INDEX RANGE 2 35)
+foreach(FSIM_INDEX RANGE 2 31)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   # Count TSV delimiters directly. Replacing tabs with CMake list separators
   # would also split semicolons embedded in an identity cell.
@@ -152,11 +147,6 @@ fsim_require_schema_diagnostic_tokens("${FSIM_BUILDER}"
   "; required "
   "; regenerate "
   " with this fsim build")
-fsim_require_schema_diagnostic_tokens("${FSIM_PROJECT}"
-  "\"project manifest\", \"no schema\""
-  "\"schema \" + std::to_string(kSchemaVersion), \"fsim.toml\""
-  "\"schema outside the uint32 range\""
-  "config_.schema != kSchemaVersion")
 fsim_require_schema_diagnostic_tokens("${FSIM_OBJECT}"
   "\".fsimobj\""
   "\".fsimobj publication\""
@@ -206,10 +196,6 @@ fsim_require_schema_diagnostic_tokens("${FSIM_UVM_CHECKPOINT}"
   "artifact.schema != systemverilog_uvm_checkpoint_schema"
   "return SystemVerilogUvmCheckpointError::SchemaMismatch")
 
-fsim_require_schema_diagnostic_tokens("${FSIM_PROJECT_TEST}"
-  "unsupported project manifest identity: found schema 1"
-  "found no schema"
-  "found schema outside the uint32 range")
 fsim_require_schema_diagnostic_tokens("${FSIM_OBJECT_TEST}"
   "expect_identity_rejection"
   "regenerate "
@@ -255,4 +241,4 @@ fsim_require_schema_diagnostic_tokens("${FSIM_TEST_BUILD}"
   "CheckSchemaProducerDiagnostics.cmake")
 
 message(STATUS
-  "schema/producer diagnostic policy passed: rows=34 digest=${FSIM_CONTRACT_DIGEST}")
+  "schema/producer diagnostic policy passed: rows=30 digest=${FSIM_CONTRACT_DIGEST}")

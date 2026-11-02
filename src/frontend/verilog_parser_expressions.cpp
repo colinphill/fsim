@@ -2040,7 +2040,9 @@ Expression VerilogParser::parse_primary_impl()
                     };
                 } else if (at(TokenKind::Identifier)
                     && at(TokenKind::LeftBrace, 1U)
-                    && packed_typedef_types_.contains(current().text)) {
+                    && (packed_typedef_types_.contains(current().text)
+                        || imported_member(current().text)
+                            == SystemVerilogPackageMember::type)) {
                     // A user type as the slice size gives its width
                     // (IEEE 1800-2017 11.4.14).
                     const auto type = advance();

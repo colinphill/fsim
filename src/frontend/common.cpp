@@ -997,4 +997,42 @@ const DesignUnit* ParsedDesign::find(UnitKind kind,
     return found == units.end() ? nullptr : &*found;
 }
 
+PackedRangeExpression flattened_packed_range_expression(
+    const std::vector<PackedRangeExpression>& dimensions,
+    const SourceSpan& span, std::optional<Expression> element)
+{
+    const auto literal = [&](const std::string_view text) {
+        return Expression { ExpressionKind::IntegerLiteral,
+            std::string { text }, { }, span };
+    };
+    std::optional<Expression> product;
+    for (auto dimension = dimensions.begin(); dimension != dimensions.end();
+         ++dimension) {
+        Expression descending { ExpressionKind::Binary, ">=",
+            { dimension->left, dimension->right }, span };
+        Expression down { ExpressionKind::Binary, "-",
+            { dimension->left, dimension->right }, span };
+        Expression up { ExpressionKind::Binary, "-",
+            { dimension->right, dimension->left }, span };
+        Expression distance { ExpressionKind::Call, "?:",
+            { std::move(descending), std::move(down), std::move(up) }, span };
+        Expression extent { ExpressionKind::Binary, "+",
+            { std::move(distance), literal("1") }, span };
+        product = product
+            ? Expression { ExpressionKind::Binary, "*",
+                  { std::move(*product), std::move(extent) }, span }
+            : std::move(extent);
+    }
+    if (element) {
+        product = product
+            ? Expression { ExpressionKind::Binary, "*",
+                  { std::move(*product), std::move(*element) }, span }
+            : std::move(*element);
+    }
+    return PackedRangeExpression {
+        Expression { ExpressionKind::Binary, "-",
+            { product.value_or(literal("1")), literal("1") }, span },
+        literal("0"), span, std::nullopt };
+}
+
 } // namespace fsim::frontend

@@ -58,6 +58,9 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-TCL-0002` | error | The Tcl interpreter, standard library, fsim namespace, or standard channels could not be initialized. |
 | `FSIM-TCL-0003` | error | A batch Tcl command or script failed during evaluation. |
 | `FSIM-TCL-0004` | error | Interactive input ended with an incomplete Tcl command. |
+| `FSIM-TCL-CFG-001` | error | A configuration script (the per-user `fsim.tcl` or the workspace `fsim.tcl`) failed; the message names the script and carries the Tcl error trace. |
+| `FSIM-TCL-CFG-003` | warning | The snapshot being simulated was elaborated with other configuration-script settings than the current ones; the message names the keys. Run `fsim elaborate` to apply them. |
+| `FSIM-TCL-CFG-002` | error | A configuration script exists but the build has no Tcl interface; pass `--no-config` or set `FSIM_NO_CONFIG=1`. |
 | `FSIM-TCL-0005` | error | A complete interactive Tcl command failed during evaluation; the diagnostic includes the interpreter's error result. |
 | `FSIM-TCL-0006` | error | The Tcl transcript could not be opened or written. |
 | `FSIM-TCL-WORKSPACE-0001` | error | Tcl could not determine the process working directory while synchronizing the active workspace. |
@@ -76,7 +79,6 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-TCL-OBJECT-0006` | error | An object value could not be parsed, converted, read, or otherwise processed. |
 | `FSIM-TCL-ASSERT-0001` | note/warning/error/fatal | An HDL assertion failed while a Tcl-controlled simulation was running. |
 | `FSIM-TCL-REPORT-0001` | note/warning/error/fatal | A VHDL report or SystemVerilog severity task was delivered to Tcl diagnostics and callbacks. |
-| `FSIM-API-0002` | error | A C API check or build was requested before loading a project. |
 | `FSIM-API-0003` | error | A C API operation requires a successfully built design. |
 | `FSIM-API-0004` | error | A built design contains more debug-visible local variables than the version-1 object-handle encoding can represent. |
 | `FSIM-API-ASSERT-0001` | assertion severity | A false HDL assertion stopped simulation through the C API; the diagnostic carries its process, source location, severity, and message. |
@@ -176,19 +178,23 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-COV-046` | error | LCOV or Cobertura projection failed because the database-backed report model, source location, source path, requested format, or bounded line, branch, or output resource contract is invalid. |
 | `FSIM-COV-047` | error | Coverage merge or report execution failed because an input database, strict or explicit partial merge, deterministic report rendering, atomic destination replacement, metric threshold, or output operation is invalid; unmet thresholds return the dedicated CI exit status after publishing the report. |
 
-## Project manifest
+## Project manifest (retired)
+
+fsim no longer reads `fsim.toml`; workspaces are configured by `fsim.tcl`
+scripts, whose failures have the Tcl configuration codes above. These codes
+are no longer emitted.
 
 | Code | Severity | Meaning |
 |---|---|---|
-| `FSIM-PROJ-0001` | error | TOML syntax or lexical error in the project manifest. |
-| `FSIM-PROJ-0002` | error | A manifest value has the wrong type. |
-| `FSIM-PROJ-0003` | error | Unknown manifest table or key. |
-| `FSIM-PROJ-0004` | error | Duplicate table declaration or key assignment. |
-| `FSIM-PROJ-0005` | error | Missing, unsupported, or out-of-range project schema; the diagnostic names the found and required identity and directs regeneration of `fsim.toml` with the current build. |
-| `FSIM-PROJ-0006` | error | Required project, source-set, or binding field is missing. |
-| `FSIM-PROJ-0007` | error | A manifest value is outside its accepted range or vocabulary. |
-| `FSIM-PROJ-0008` | error | Project-manifest or source-glob I/O failed. |
-| `FSIM-PROJ-0009` | error | A listed source or source-glob root is missing, or a glob matched nothing. |
+| `FSIM-PROJ-0001` | retired | Formerly: TOML syntax or lexical error in the project manifest. |
+| `FSIM-PROJ-0002` | retired | Formerly: A manifest value had the wrong type. |
+| `FSIM-PROJ-0003` | retired | Formerly: Unknown manifest table or key. |
+| `FSIM-PROJ-0004` | retired | Formerly: Duplicate table declaration or key assignment. |
+| `FSIM-PROJ-0005` | retired | Formerly: Missing, unsupported, or out-of-range project schema. |
+| `FSIM-PROJ-0006` | retired | Formerly: A required project, source-set, or binding field was missing. |
+| `FSIM-PROJ-0007` | retired | Formerly: A manifest value was outside its accepted range or vocabulary. |
+| `FSIM-PROJ-0008` | retired | Formerly: Project-manifest or source-glob I/O failed. |
+| `FSIM-PROJ-0009` | retired | Formerly: A listed source or source-glob root was missing, or a glob matched nothing. |
 
 ## Common frontend and source analysis
 
@@ -1838,6 +1844,7 @@ scheduler.
 | `FSIM-SV-SEM-421` | error | A wildcard-imported identifier is referenced before a later conflicting declaration in the same scope. |
 | `FSIM-SV-SEM-422` | error | A Verilog (IEEE 1364-2005) function declares no input argument (IEEE 1364-2005 10.4.1). |
 | `FSIM-SV-SEM-423` | error | A design unit or generate block declares more than one `default disable iff` (IEEE 1800-2017 16.15). |
+| `FSIM-SV-SEM-424` | error | Packed dimensions are declared over a named type that is not a packed type, such as a class, a real or an `int` (IEEE 1800-2023 7.4.1). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -1912,7 +1919,7 @@ scheduler.
 | `FSIM-ELAB-001` | error | The requested top-level design unit was not found. |
 | `FSIM-ELAB-002` | error | A VHDL architecture has no matching entity. |
 | `FSIM-ELAB-003` | error | A qualified top-level target is malformed. |
-| `FSIM-ELAB-004` | error | A qualified VHDL top does not name an architecture. |
+| `FSIM-ELAB-004` | error | A VHDL entity top has no architecture. |
 | `FSIM-ELAB-005` | error | An unqualified top name is ambiguous across its complete effective logical-library scope. |
 | `FSIM-ELAB-006` | error | An unqualified top lookup needs one or more configured logical libraries which are unavailable. |
 | `FSIM-ELAB-007` | error | A uniquely inferred top-level SystemC factory could not be constructed. |
@@ -2758,6 +2765,7 @@ scheduler.
 | `FSIM-ELAB-SVTYPEPARAM-002` | error | A SystemVerilog value parameter received a data-type actual. |
 | `FSIM-ELAB-SVTYPEPARAM-003` | error | A SystemVerilog type-parameter actual/default is invisible or outside the bounded packed integral subset. |
 | `FSIM-ELAB-SVTYPEPARAM-004` | error | A SystemVerilog type parameter was associated across a mixed-language boundary instead of through a same-language wrapper. |
+| `FSIM-ELAB-SVTYPEPARAM-005` | error | A signal declares packed dimensions over a type parameter whose actual is not a packed type, such as `int`, a real, a string or a class (IEEE 1800-2023 7.4.1). |
 | `FSIM-ELAB-SVSTRUCT-001` | error | A packed-struct member range or total layout cannot be specialized into a supported width. |
 | `FSIM-ELAB-SVSTRUCT-002` | error | A packed-aggregate member read/write has no executable normalized layout. |
 | `FSIM-ELAB-SVUNION-001` | error | Packed/tagged-union layout, construction context, discriminator, or selected-write timing is invalid. |

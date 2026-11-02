@@ -28,9 +28,11 @@ FSIM_ABI_ASSERT(sizeof(size_t) == 8, "fsim requires 64-bit size_t");
 FSIM_ABI_ASSERT(sizeof(fsim_session_t) == 8, "session handle width changed");
 FSIM_ABI_ASSERT(sizeof(fsim_object_t) == 8, "object handle width changed");
 FSIM_ABI_ASSERT(sizeof(fsim_time_t) == 8, "time width changed");
-FSIM_ABI_ASSERT(FSIM_API_VERSION == UINT32_C(1), "API version changed");
+FSIM_ABI_ASSERT(FSIM_API_VERSION == UINT32_C(2), "API version changed");
 FSIM_ABI_ASSERT(FSIM_INVALID_SESSION == UINT64_C(0), "invalid session changed");
 FSIM_ABI_ASSERT(FSIM_INVALID_OBJECT == UINT64_C(0), "invalid object changed");
+FSIM_ABI_ASSERT(
+    FSIM_SESSION_FLAG_NO_CONFIG == UINT32_C(1), "session flag changed");
 
 FSIM_ABI_ASSERT(sizeof(fsim_status_t) == 4, "status enum width changed");
 FSIM_ABI_ASSERT(FSIM_STATUS_OK == 0, "status values changed");

@@ -387,7 +387,9 @@ void configure_systemverilog_class_constraints(
     const semantic::sv::ClassSpecialization& specialization,
     const std::function<bool(std::string_view)>& constraint_enabled = { },
     std::string_view identity_prefix = { },
-    const std::map<std::string, std::string, std::less<>>& string_state = { });
+    const std::map<std::string, std::string, std::less<>>& string_state = { },
+    const std::map<std::string, std::string, std::less<>>&
+        instance_parameters = { });
 
 void configure_systemverilog_randomize_selection(
     runtime::SystemVerilogClassRandomizeRequest& request,
@@ -712,11 +714,19 @@ std::string compilation_unit_digest(
     const std::filesystem::path& base_directory);
 
 ParsedSnapshot parse_group_snapshot(const ParseGroup& group);
+/// The roots of an SV group parsed as units of their own up to the first one
+/// that leaves state for later roots; none when no root is independent.
+std::optional<ParsedSnapshot> parse_independent_roots(
+    const ParseGroup& group,
+    std::span<const frontend::PreprocessedRoot> roots);
 
+// Imports the mapped .fsimlib libraries the design needs, or with
+// `all_mappings` every mapped library (a workspace maps only what it uses).
 bool load_required_mapped_libraries(
     const project::Config& config,
     CompilationWorkspace& checked,
-    diagnostic::Engine& diagnostics);
+    diagnostic::Engine& diagnostics,
+    bool all_mappings = false);
 
 std::optional<systemc::PluginCompileRequest> systemc_request(
     const project::Config& config);

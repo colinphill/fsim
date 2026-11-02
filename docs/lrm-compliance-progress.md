@@ -7554,7 +7554,6 @@ them are not counted as gaps.
 | Compiled engine: a procedure that reads a formal whose actual is a literal fails with "register has not been initialized" (the interpreter is correct) | default-engine users; the corpus runs the interpreter |
 | VHDL: generic packages with protected types, interface package generics (`package p is new g generic map (<>)`) and templates from other design files | ~15 nvc genpack/issue cases |
 | VHDL: records whose elements are two-dimensional or subtype-constrained arrays as signal initial values | 11 VESTs cases (`FSIM-ELAB-HIR-001` initializer) |
-| CLI: `fsim elaborate --top <entity>` for a VHDL entity fails with `FSIM-ELAB-004` (the CLI qualifies the name without an architecture); `entity(arch)` works | usability |
 | SV: an X/Z or out-of-range dynamic index in a signal write must skip the write instead of failing (interpreter and LLVM paths) | Verilator, ivtest (`FSIM-RUN-0001`) |
 | SV: `void'($fgets(...))` and other discarded system-function calls | sv-tests chapter 21 |
 | SV: packed arrays of a named type (`T [3:0] v;`, `typedef T1 [7:0] T2;`) | ~80 ivtest/Verilator cases (`FSIM-SV-UNSUPPORTED-004`/`-024`) |

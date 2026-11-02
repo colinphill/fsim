@@ -582,12 +582,27 @@ bool validate(
                         != object.vhdl_package_dependencies.end();
                   });
         });
+    const auto matching_mapped = std::ranges::any_of(
+        metadata.mapped_libraries, [&](const auto& mapped) {
+          return std::ranges::any_of(mapped.inputs, [&](const auto& input) {
+                   return input.language == "vhdl"
+                       && input.standard == unit.standard
+                       && input.compatibility_profile
+                           == unit.compatibility_profile;
+                 })
+              && std::ranges::all_of(
+                  unit.package_dependencies, [&](const auto& dependency) {
+                    return std::ranges::find(
+                               mapped.vhdl_package_dependencies, dependency)
+                        != mapped.vhdl_package_dependencies.end();
+                  });
+        });
     if (unit.unit >= metadata.unit_count
         || !vhdl_units.insert(unit.unit).second || unit.standard.empty()
         || unit.predefined_environment.empty()
         || unit.compatibility_profile.empty()
         || unit.compatibility_profile == "none"
-        || matching_object == metadata.objects.end()
+        || (matching_object == metadata.objects.end() && !matching_mapped)
         || std::ranges::any_of(
             unit.package_dependencies, [&](const auto& dependency) {
                 return dependency.standard != unit.standard
@@ -620,12 +635,20 @@ bool validate(
               && object.standard == unit.standard
               && object.compatibility_profile == unit.compatibility_profile;
         });
+    const auto matching_mapped = std::ranges::any_of(
+        metadata.mapped_libraries, [&](const auto& mapped) {
+          return std::ranges::any_of(mapped.inputs, [&](const auto& input) {
+            return input.language == unit.language
+                && input.standard == unit.standard
+                && input.compatibility_profile == unit.compatibility_profile;
+          });
+        });
     if (unit.unit >= metadata.unit_count
         || !verilog_units.insert(unit.unit).second
         || (unit.language != "verilog"
             && unit.language != "systemverilog")
         || unit.standard.empty() || unit.compatibility_profile.empty()
-        || matching_object == metadata.objects.end()) {
+        || (matching_object == metadata.objects.end() && !matching_mapped)) {
         report(
             diagnostics, kValueCode,
             "design Verilog/SystemVerilog unit provenance requires unique "
@@ -730,8 +753,18 @@ bool validate(
         "design specialization cache keys must be lowercase SHA-256 values",
         source);
   }
+  if (std::ranges::any_of(metadata.mapped_libraries, [](const auto& mapped) {
+        return mapped.library.empty()
+            || !checksum_spelling(mapped.metadata_digest);
+      })) {
+    report(
+        diagnostics, kValueCode,
+        "design mapped libraries require a name and a SHA-256 metadata digest",
+        source);
+  }
   if (metadata.roots.empty()
-      || (metadata.objects.empty() && metadata.systemc_plugins.empty())
+      || (metadata.objects.empty() && metadata.systemc_plugins.empty()
+          && metadata.mapped_libraries.empty())
       || metadata.payloads.empty()
       || (metadata.unit_count == 0 && metadata.systemc_plugins.empty())) {
     report(
@@ -855,6 +888,34 @@ std::string serialize_design_metadata(const DesignMetadata& metadata) {
   });
   writer.sequence(metadata.specialization_cache_keys, [&](const auto& key) {
     writer.string(key);
+  });
+  writer.sequence(metadata.settings, [&](const auto& setting) {
+    writer.string(setting.key);
+    writer.string(setting.value);
+    writer.string(setting.origin);
+  });
+  writer.sequence(metadata.mapped_libraries, [&](const auto& mapped) {
+    writer.string(mapped.library);
+    writer.string(mapped.metadata_digest);
+    writer.sequence(mapped.inputs, [&](const auto& input) {
+      writer.string(input.language);
+      writer.string(input.standard);
+      writer.string(input.compatibility_profile);
+    });
+    writer.sequence(
+        mapped.vhdl_package_dependencies, [&](const auto& dependency) {
+          writer.string(dependency.standard);
+          writer.string(dependency.predefined_environment);
+          writer.string(dependency.package);
+          writer.string(dependency.revision);
+          writer.string(dependency.source_digest);
+        });
+    writer.sequence(mapped.unit_checksums, [&](const auto& checksum) {
+      writer.string(checksum);
+    });
+    writer.boolean(mapped.native_accepted);
+    writer.string(mapped.native_kind);
+    writer.string(mapped.native_fingerprint);
   });
   writer.u64(metadata.unit_count);
   writer.u64(metadata.semantic_source_count);
@@ -1090,6 +1151,55 @@ std::optional<DesignMetadata> deserialize_design_metadata(
                  metadata.specialization_cache_keys.push_back(
                      std::move(*key));
              return key.has_value();
+         })
+      || !read_sequence([&] {
+             DesignSetting setting;
+             if (!read_string(setting.key) || !read_string(setting.value)
+                 || !read_string(setting.origin))
+                 return false;
+             metadata.settings.push_back(std::move(setting));
+             return true;
+         })
+      || !read_sequence([&] {
+             DesignMappedLibrary mapped;
+             if (!read_string(mapped.library)
+                 || !read_string(mapped.metadata_digest)
+                 || !read_sequence([&] {
+                        DesignMappedLibraryInput input;
+                        if (!read_string(input.language)
+                            || !read_string(input.standard)
+                            || !read_string(input.compatibility_profile))
+                            return false;
+                        mapped.inputs.push_back(std::move(input));
+                        return true;
+                    })
+                 || !read_sequence([&] {
+                        library::VhdlPackageDependency dependency;
+                        if (!read_string(dependency.standard)
+                            || !read_string(dependency.predefined_environment)
+                            || !read_string(dependency.package)
+                            || !read_string(dependency.revision)
+                            || !read_string(dependency.source_digest))
+                            return false;
+                        mapped.vhdl_package_dependencies.push_back(
+                            std::move(dependency));
+                        return true;
+                    })
+                 || !read_sequence([&] {
+                        auto checksum = reader.string();
+                        if (checksum)
+                            mapped.unit_checksums.push_back(
+                                std::move(*checksum));
+                        return checksum.has_value();
+                    }))
+                 return false;
+             const auto native = reader.boolean();
+             if (!native || !read_string(mapped.native_kind)
+                 || !read_string(mapped.native_fingerprint))
+                 return false;
+             mapped.native_accepted = *native;
+             metadata.mapped_libraries.push_back(std::move(mapped));
+             return true;
          })) {
       report(diagnostics, kSchemaCode, "truncated .fsimdesign index", source_name);
       return std::nullopt;

@@ -127,7 +127,6 @@ fsim.portability-corpus
 fsim.portable-object-schema-freeze
 fsim.portable-stale-schema-policy
 fsim.project
-fsim.project-manifest-schema-freeze
 fsim.release-case-ids
 fsim.runtime
 fsim.runtime.acc_callback

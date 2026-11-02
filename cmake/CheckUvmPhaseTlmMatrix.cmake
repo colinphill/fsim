@@ -291,7 +291,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "compiled warm.fst"
     "debug debug.vcd"
     "TIMEOUT \"\${FSIM_STAGE_TIMEOUT_SECONDS}\""
-    "file(REMOVE_RECURSE")
+    "file(REMOVE \"\${FSIM_WORK_DIR}/cache/static-kernel.sqlite3\")")
   fsim_require_token(
     cmake/RunUvmPhaseTlmExample.cmake "${FSIM_TOKEN}"
     "direct/artifact/engine/cache runner coverage")

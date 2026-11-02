@@ -2,6 +2,8 @@
 #include "fsim/api.h"
 #include "fsim/support/path.hpp"
 
+#include "api_workspace_support.hpp"
+
 #include <cassert>
 #include <filesystem>
 #include <fstream>
@@ -29,44 +31,14 @@ int collect_object(
 
 void test_multiple_root_api(const std::filesystem::path& directory)
 {
-    const auto manifest_path = directory / "multiple-roots.toml";
-    {
-        std::ofstream manifest(manifest_path);
-        manifest << R"(
-schema = 3
-[project]
-name = "api-multiple-roots"
-time_resolution = "1ns"
-
-[[project.top]]
-target = "sv:work.tb"
-alias = "left"
-
-[[project.top]]
-target = "sv:work.tb"
-alias = "right"
-
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-library = "work"
-files = ["tb.sv"]
-
-[build]
-cache_path = "multiple-root-cache"
-
-[run]
-max_deltas = 1000
-)";
-    }
+    // tb.sv is compiled in the workspace by the caller.
+    fsim::tests::api_workspace::expect(directory,
+        { "elaborate", "--snapshot", "multiple-roots", "--top",
+            "left=sv:work.tb", "--top", "right=sv:work.tb" });
     fsim_session_t session = FSIM_INVALID_SESSION;
     assert(fsim_session_create(nullptr, &session) == FSIM_STATUS_OK);
-    assert(
-        fsim_session_load_project(
-            session, fsim::support::path_to_utf8(manifest_path).c_str())
-        == FSIM_STATUS_OK);
-    assert(fsim_session_check(session) == FSIM_STATUS_OK);
-    const auto build_status = fsim_session_build(session);
+    const auto build_status = fsim_session_open_snapshot(session,
+        fsim::support::path_to_utf8(directory).c_str(), "multiple-roots");
     if (build_status != FSIM_STATUS_OK) {
         std::cerr << "multiple-root API build status "
                   << static_cast<unsigned>(build_status) << '\n';

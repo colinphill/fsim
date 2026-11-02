@@ -8,7 +8,7 @@ namespace fsim {
 
 inline constexpr std::string_view version = "2026.0";
 inline constexpr std::uint32_t manifest_schema_version = 1;
-inline constexpr std::uint32_t native_abi_version = 1;
+inline constexpr std::uint32_t native_abi_version = 2;
 inline constexpr std::uint32_t runtime_abi_version = 1;
 inline constexpr std::string_view production_llvm_version = "22.1.8";
 // Bump when bundled HDL declarations/bodies can affect elaboration or

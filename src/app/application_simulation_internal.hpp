@@ -534,6 +534,15 @@ struct Simulation::Impl {
         generated_class_index;
     [[nodiscard]] const semantic::sv::ClassSpecialization*
     generated_class_specialization(std::string_view identity) const;
+    // The parameters of the module, interface or program instance whose
+    // class `specialization` is, by constraint binding identity
+    // (`unit::name`) as decimal values; empty for any other class.
+    [[nodiscard]] const std::map<std::string, std::string, std::less<>>&
+    class_instance_parameters(
+        const semantic::sv::ClassSpecialization& specialization) const;
+    mutable std::map<std::string,
+        std::map<std::string, std::string, std::less<>>, std::less<>>
+        class_instance_parameter_cache;
 
     std::vector<SignalId> package_static_startup_signal_ids;
 

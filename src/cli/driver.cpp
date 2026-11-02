@@ -2,6 +2,7 @@
 #include "fsim/cli/driver.hpp"
 
 #include "fsim/api.h"
+#include "fsim/support/environment.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/version.hpp"
@@ -90,6 +91,8 @@ namespace {
             return "library delete-object";
         case Command::library_delete:
             return "library delete";
+        case Command::snapshot_info:
+            return "snapshot info";
         }
         return "check";
     }
@@ -221,20 +224,6 @@ namespace {
         };
     }
 
-    bool valid_library_name(const std::string_view value)
-    {
-        if (value.empty()
-            || (std::isalpha(static_cast<unsigned char>(value.front())) == 0
-                && value.front() != '_')) {
-            return false;
-        }
-        return std::ranges::all_of(
-            value,
-            [](const unsigned char character) {
-                return std::isalnum(character) != 0 || character == '_';
-            });
-    }
-
     bool valid_snapshot_name(const std::string_view value)
     {
         if (value.empty() || value.size() > 128U) {
@@ -301,25 +290,6 @@ namespace {
         return alias;
     }
 
-    std::optional<project::Optimization> parse_optimization(
-        const std::string_view spelling)
-    {
-        const auto normalized = lowercase(spelling);
-        if (normalized == "o0" || normalized == "0") {
-            return project::Optimization::o0;
-        }
-        if (normalized == "o1" || normalized == "1") {
-            return project::Optimization::o1;
-        }
-        if (normalized == "o2" || normalized == "2") {
-            return project::Optimization::o2;
-        }
-        if (normalized == "o3" || normalized == "3") {
-            return project::Optimization::o3;
-        }
-        return std::nullopt;
-    }
-
     std::optional<project::Language> infer_language(
         const std::filesystem::path& path)
     {
@@ -351,7 +321,6 @@ namespace {
         diagnostic::Engine& diagnostics)
     {
         project::Config config;
-        config.manifest_path = "<workspace>";
         std::error_code error;
         config.base_directory = std::filesystem::current_path(error);
         if (error) {
@@ -432,36 +401,11 @@ namespace {
                 config.source_sets.end(),
                 [&](const project::SourceSet& set) { return set.language == *language; });
             if (iterator == config.source_sets.end()) {
-                project::SourceSet source_set;
-                source_set.language = *language;
-                const auto requested_standard = invocation.standard.value_or(
-                    std::string { project::default_standard(*language) });
-                const auto canonical_standard = project::canonical_standard(
-                    *language, requested_standard);
-                if (!canonical_standard) {
-                    argument_error(
-                        diagnostics,
-                        "unsupported standard '" + requested_standard + "' for "
-                            + std::string(project::to_string(*language)));
+                auto source_set = make_source_set(invocation, *language, diagnostics);
+                if (!source_set) {
                     continue;
                 }
-                source_set.standard = *canonical_standard;
-                source_set.compatibility_switches = invocation.compatibility_switches;
-                source_set.vhdl_compatibility =
-                    invocation.vhdl_compatibility.value_or(std::string { });
-                source_set.library = invocation.library;
-                source_set.compilation_unit = invocation.compilation_unit.value_or(
-                    invocation.command == Command::compile
-                            && *language != project::Language::vhdl
-                        ? "source-set"
-                        : "file");
-                source_set.uvm_release = invocation.uvm_release.value_or(
-                    project::SystemVerilogUvmRelease::none);
-                for (const auto& directory : invocation.include_directories) {
-                    source_set.include_directories.push_back(absolute_normalized(directory));
-                }
-                source_set.defines = invocation.defines;
-                config.source_sets.push_back(std::move(source_set));
+                config.source_sets.push_back(std::move(*source_set));
                 iterator = std::prev(config.source_sets.end());
             }
             iterator->file_patterns.push_back(path);
@@ -517,12 +461,6 @@ namespace {
         config.run.vpi_modules = invocation.vpi_modules;
         config.run.sv_libs = invocation.sv_libs;
         config.run.vhpi_modules = invocation.vhpi_modules;
-        if (!invocation.library_mappings.empty()) {
-            config.library_mappings = invocation.library_mappings;
-            for (auto& mapping : config.library_mappings) {
-                mapping.path = absolute_normalized(mapping.path);
-            }
-        }
         if (invocation.uvm_release.has_value()) {
             for (auto& source_set : config.source_sets) {
                 if (source_set.language == project::Language::system_verilog) {
@@ -603,12 +541,6 @@ namespace {
         config.run.vpi_modules = invocation.vpi_modules;
         config.run.sv_libs = invocation.sv_libs;
         config.run.vhpi_modules = invocation.vhpi_modules;
-        if (!invocation.library_mappings.empty()) {
-            config.library_mappings = invocation.library_mappings;
-            for (auto& mapping : config.library_mappings) {
-                mapping.path = absolute_normalized(mapping.path);
-            }
-        }
         if (invocation.systemc_compiler.has_value()) {
             config.systemc.compiler = *invocation.systemc_compiler;
         }
@@ -635,13 +567,14 @@ namespace {
             << "  tcl                    Open the Tcl console or evaluate a script\n"
             << "  systemc compile FILE... Compile SystemC translation units into a library\n"
             << "  systemc link           Link the managed SystemC library objects\n"
-            << "  library map NAME DIR   Persist an external library mapping\n"
+            << "  library map NAME PATH  Map a library directory or an exported .fsimlib\n"
             << "  library list           List local and mapped libraries\n"
             << "  library unmap NAME     Remove an external library mapping\n"
             << "  library objects [NAME] List managed object IDs and units (default: work)\n"
             << "  library delete-object NAME OBJECT_ID\n"
             << "                         Delete an object from a library\n"
             << "  library delete NAME    Delete a managed library\n"
+            << "  snapshot info [NAME]   Show what a snapshot was elaborated with\n"
             << "  coverage merge Merge .fsimcov databases (strict by default)\n"
             << "  coverage report Render or enforce a .fsimcov report\n"
             << "\n"
@@ -739,6 +672,14 @@ namespace {
             << "  -c, --command SCRIPT    Evaluate Tcl text (repeatable)\n"
             << "  SCRIPT [ARG...]         Evaluate a Tcl file with argv/argc set\n"
             << "                          Available with tcl or debug; omit both for the Tcl console\n"
+            << "\n"
+            << "Configuration:\n"
+            << "      --no-config          Run no configuration script (also FSIM_NO_CONFIG=1)\n"
+            << "  Every command first runs the per-user fsim.tcl ($XDG_CONFIG_HOME/fsim,\n"
+            << "  ~/.config/fsim, or %APPDATA%\\fsim) and then the workspace's fsim.tcl.\n"
+            << "  They set option defaults with fsim::config and elaboration settings\n"
+            << "  with fsim::coverage and fsim::bind; an option given here wins.\n"
+            << "\n"
             << "  -h, --help\n"
             << "      --version\n";
     }
@@ -828,6 +769,8 @@ namespace {
             return &services.library_delete_object;
         case Command::library_delete:
             return &services.library_delete;
+        case Command::snapshot_info:
+            return &services.snapshot_info;
         }
         return nullptr;
     }
@@ -997,6 +940,7 @@ namespace {
             "--code-coverage",
             "--partial",
             "--preprocess-only",
+            "--no-config",
         };
         for (const auto flag : flags) {
             if (argument == flag) {
@@ -1123,6 +1067,8 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 verbosity_explicit = true;
+            } else if (argument == "--no-config") {
+                invocation.no_config = true;
             } else if (argument == "-q" || argument == "--quiet") {
                 invocation.verbosity = Verbosity::quiet;
                 verbosity_explicit = true;
@@ -1248,6 +1194,7 @@ std::optional<Invocation> parse_arguments(
                 }
                 invocation.library = std::string(*value);
                 library_explicit = true;
+                invocation.library_explicit = true;
             } else if (is_option(argument, "", "--search-library")) {
                 const auto value = take_value(
                     index, argc, argv, argument, "--search-library", diagnostics);
@@ -1416,7 +1363,7 @@ std::optional<Invocation> parse_arguments(
                 if (!value.has_value()) {
                     return std::nullopt;
                 }
-                invocation.optimization = parse_optimization(*value);
+                invocation.optimization = project::parse_optimization(*value);
                 if (!invocation.optimization.has_value()) {
                     argument_error(diagnostics, "optimization must be O0, O1, O2, or O3");
                     return std::nullopt;
@@ -1751,6 +1698,17 @@ std::optional<Invocation> parse_arguments(
                 command_selected = true;
                 continue;
             }
+            if (argument == "snapshot") {
+                if (index + 1 >= argc || argv[index + 1] == nullptr
+                    || std::string_view { argv[index + 1] } != "info") {
+                    argument_error(diagnostics, "snapshot requires the info subcommand");
+                    return std::nullopt;
+                }
+                ++index;
+                invocation.command = Command::snapshot_info;
+                command_selected = true;
+                continue;
+            }
             if (argument == "systemc") {
                 if (index + 1 >= argc || argv[index + 1] == nullptr) {
                     argument_error(
@@ -1778,11 +1736,18 @@ std::optional<Invocation> parse_arguments(
                     diagnostics,
                     "unknown command '" + std::string(argument)
                         + "'; expected check, compile, elaborate, simulate, "
-                          "debug, tcl, systemc, library, or coverage");
+                          "debug, tcl, systemc, library, snapshot, or coverage");
                 return std::nullopt;
             }
             invocation.command = *command;
             command_selected = true;
+        } else if (invocation.command == Command::snapshot_info) {
+            if (snapshot_explicit) {
+                argument_error(diagnostics, "snapshot info takes one snapshot name");
+                return std::nullopt;
+            }
+            invocation.snapshot = std::string { argument };
+            snapshot_explicit = true;
         } else if (invocation.command == Command::library_map
             || invocation.command == Command::library_unmap
             || invocation.command == Command::library_objects
@@ -1821,7 +1786,7 @@ std::optional<Invocation> parse_arguments(
         argument_error(
             diagnostics,
             "missing command; expected check, compile, elaborate, simulate, "
-            "debug, tcl, systemc, library, or coverage");
+            "debug, tcl, systemc, library, snapshot, or coverage");
         return std::nullopt;
     }
     if (!invocation.tops.empty()) {
@@ -1924,7 +1889,7 @@ std::optional<Invocation> parse_arguments(
     if (invocation.library_name) {
         const auto& name = *invocation.library_name;
         const auto normalized = lowercase(name);
-        if (!valid_library_name(name) || normalized == "std"
+        if (!project::valid_library_name(name) || normalized == "std"
             || normalized == "ieee" || normalized == "fsim") {
             argument_error(diagnostics,
                 "library commands require a safe, non-reserved library name");
@@ -1937,7 +1902,7 @@ std::optional<Invocation> parse_arguments(
             "library delete-object requires an object ID, not a path");
         return std::nullopt;
     }
-    if (!valid_library_name(invocation.library)) {
+    if (!project::valid_library_name(invocation.library)) {
         argument_error(diagnostics, "--library requires a safe library name");
         return std::nullopt;
     }
@@ -1953,7 +1918,8 @@ std::optional<Invocation> parse_arguments(
             "'_', or '-'");
         return std::nullopt;
     }
-    if (snapshot_explicit && !elaborate && !snapshot_consumer) {
+    if (snapshot_explicit && !elaborate && !snapshot_consumer
+        && invocation.command != Command::snapshot_info) {
         argument_error(diagnostics,
             "--snapshot requires elaborate, simulate, debug, or tcl");
         return std::nullopt;
@@ -2012,7 +1978,7 @@ std::optional<Invocation> parse_arguments(
         return std::nullopt;
     }
     for (const auto& library : invocation.search_libraries) {
-        if (!valid_library_name(library)) {
+        if (!project::valid_library_name(library)) {
             argument_error(diagnostics,
                 "--search-library requires a safe library name");
             return std::nullopt;
@@ -2221,6 +2187,281 @@ std::optional<Invocation> parse_arguments(
     return invocation;
 }
 
+std::optional<project::SourceSet> make_source_set(const Invocation& invocation,
+    const project::Language language, diagnostic::Engine& diagnostics)
+{
+    project::SourceSet source_set;
+    source_set.language = language;
+    // An option the command leaves out takes the configuration's
+    // `compile.<language>.option` or `compile.option` value; list options
+    // add the command's values after the configured ones.
+    const auto configured = [&](const std::string_view option)
+        -> const std::vector<std::string>* {
+        const auto* setting = invocation.configuration
+            ? invocation.configuration->find("compile", language, option)
+            : nullptr;
+        return setting == nullptr ? nullptr : &setting->values;
+    };
+    const auto* configured_standard = configured("standard");
+    const auto requested_standard = invocation.standard
+        ? *invocation.standard
+        : configured_standard != nullptr
+        ? configured_standard->front()
+        : std::string { project::default_standard(language) };
+    const auto canonical_standard = project::canonical_standard(
+        language, requested_standard);
+    if (!canonical_standard) {
+        argument_error(
+            diagnostics,
+            "unsupported standard '" + requested_standard + "' for "
+                + std::string(project::to_string(language)));
+        return std::nullopt;
+    }
+    source_set.standard = *canonical_standard;
+    const bool verilog_family = language == project::Language::verilog
+        || language == project::Language::system_verilog;
+    if (verilog_family) {
+        if (const auto* values = configured("compatibility")) {
+            source_set.compatibility_switches = *values;
+        }
+    }
+    source_set.compatibility_switches.insert(
+        source_set.compatibility_switches.end(),
+        invocation.compatibility_switches.begin(),
+        invocation.compatibility_switches.end());
+    source_set.vhdl_compatibility =
+        invocation.vhdl_compatibility.value_or(std::string { });
+    if (!invocation.vhdl_compatibility && language == project::Language::vhdl) {
+        if (const auto* values = configured("compatibility")) {
+            source_set.vhdl_compatibility = values->front();
+        }
+    }
+    source_set.library = invocation.library;
+    const auto* configured_unit = configured("compilation_unit");
+    source_set.compilation_unit = invocation.compilation_unit
+        ? *invocation.compilation_unit
+        : configured_unit != nullptr ? configured_unit->front()
+        : invocation.command == Command::compile
+                && language != project::Language::vhdl
+            ? "source-set"
+            : "file";
+    source_set.uvm_release = invocation.uvm_release.value_or(
+        project::SystemVerilogUvmRelease::none);
+    if (!invocation.uvm_release && language == project::Language::system_verilog) {
+        if (const auto* values = configured("uvm_release")) {
+            source_set.uvm_release
+                = *project::parse_systemverilog_uvm_release(values->front());
+        }
+    }
+    std::vector<std::filesystem::path> include_directories;
+    if (verilog_family) {
+        if (const auto* values = configured("include_directories")) {
+            include_directories.assign(values->begin(), values->end());
+        }
+        if (const auto* values = configured("defines")) {
+            source_set.defines = *values;
+        }
+    }
+    include_directories.insert(include_directories.end(),
+        invocation.include_directories.begin(),
+        invocation.include_directories.end());
+    source_set.defines.insert(source_set.defines.end(),
+        invocation.defines.begin(), invocation.defines.end());
+    for (const auto& directory : include_directories) {
+        source_set.include_directories.push_back(absolute_normalized(directory));
+    }
+    return source_set;
+}
+
+void apply_invocation_options(
+    const Invocation& invocation, project::Config& config)
+{
+    apply_overrides(invocation, config);
+}
+
+bool configuration_enabled(const Invocation& invocation)
+{
+    if (invocation.no_config) {
+        return false;
+    }
+    const auto disabled = support::environment_variable("FSIM_NO_CONFIG");
+    return !disabled || disabled->empty() || *disabled == "0";
+}
+
+void apply_configuration_defaults(
+    const project::Configuration& configuration, Invocation& invocation)
+{
+    const auto values = [&](const std::string_view key)
+        -> const std::vector<std::string>* {
+        const auto* setting = configuration.find(key);
+        return setting == nullptr ? nullptr : &setting->values;
+    };
+    const auto text = [&](const std::string_view key)
+        -> std::optional<std::string> {
+        const auto* found = values(key);
+        return found == nullptr ? std::nullopt
+                                : std::optional { found->front() };
+    };
+    const auto number = [&](const std::string_view key)
+        -> std::optional<std::uint64_t> {
+        const auto found = text(key);
+        std::uint64_t result {};
+        if (!found || !parse_unsigned(*found, result)) {
+            return std::nullopt;
+        }
+        return result;
+    };
+    const auto boolean = [&](const std::string_view key) {
+        const auto found = text(key);
+        return found ? std::optional { *found == "true" } : std::nullopt;
+    };
+    // A list option keeps the configured values and adds the command's.
+    const auto fill_list = [&](auto& target, const std::string_view key) {
+        if (const auto* found = values(key); found != nullptr) {
+            target.insert(target.begin(), found->begin(), found->end());
+        }
+    };
+    const auto fill_seed = [&](const std::string_view key) {
+        if (invocation.seed || invocation.random_seed) {
+            return;
+        }
+        if (const auto seed = text(key)) {
+            if (lowercase(*seed) == "random") {
+                invocation.random_seed = true;
+            } else {
+                invocation.seed = number(key);
+            }
+        }
+    };
+    const auto fill_delay_mode = [&](const std::string_view key) {
+        if (const auto mode = text(key); mode && !invocation.delay_mode) {
+            invocation.delay_mode = project::parse_delay_mode(*mode);
+        }
+    };
+    switch (invocation.command) {
+    case Command::compile:
+    case Command::check:
+        if (!invocation.library_explicit) {
+            if (const auto library = text("compile.library")) {
+                invocation.library = *library;
+            }
+        }
+        if (!invocation.code_coverage && invocation.command == Command::compile) {
+            invocation.code_coverage = boolean("compile.code_coverage");
+        }
+        if (!invocation.jobs) {
+            if (const auto jobs = number("compile.jobs")) {
+                invocation.jobs = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                    *jobs, std::numeric_limits<std::uint32_t>::max()));
+            }
+        }
+        break;
+    case Command::elaborate:
+        if (!invocation.aot) {
+            invocation.aot = boolean("elaborate.aot");
+        }
+        if (!invocation.code_coverage) {
+            invocation.code_coverage = boolean("elaborate.code_coverage");
+        }
+        fill_delay_mode("elaborate.delay_mode");
+        // Generics are keyed: the command's value of a name replaces the
+        // configured one.
+        if (const auto* generics = values("elaborate.generics")) {
+            std::vector<std::pair<std::string, std::string>> configured;
+            for (const auto& generic : *generics) {
+                const auto separator = generic.find('=');
+                auto name = generic.substr(0U, separator);
+                const bool overridden = std::ranges::any_of(invocation.generics,
+                    [&](const auto& given) { return given.first == name; });
+                if (!overridden) {
+                    configured.emplace_back(
+                        std::move(name), generic.substr(separator + 1U));
+                }
+            }
+            invocation.generics.insert(invocation.generics.begin(),
+                configured.begin(), configured.end());
+        }
+        if (!invocation.jobs) {
+            if (const auto jobs = number("elaborate.jobs")) {
+                invocation.jobs = static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                    *jobs, std::numeric_limits<std::uint32_t>::max()));
+            }
+        }
+        if (!invocation.optimization) {
+            if (const auto level = text("elaborate.optimization")) {
+                invocation.optimization = project::parse_optimization(*level);
+            }
+        }
+        fill_list(invocation.search_libraries, "elaborate.search_libraries");
+        fill_seed("elaborate.seed");
+        fill_list(invocation.vpi_modules, "elaborate.vpi");
+        break;
+    case Command::simulate:
+    case Command::run:
+    case Command::debug:
+        if (!invocation.coverage_output) {
+            if (const auto path = text("simulate.coverage_output")) {
+                invocation.coverage_output = std::filesystem::path { *path };
+            }
+        }
+        fill_delay_mode("simulate.delay_mode");
+        if (!invocation.duration) {
+            invocation.duration = text("simulate.duration");
+        }
+        if (!invocation.max_deltas) {
+            invocation.max_deltas = number("simulate.max_deltas");
+        }
+        fill_seed("simulate.seed");
+        fill_list(invocation.sv_libs, "simulate.sv_libs");
+        if (!invocation.trace_enabled) {
+            invocation.trace_enabled = boolean("simulate.trace");
+        }
+        if (!invocation.trace_compression) {
+            if (const auto compression = text("simulate.trace_compression")) {
+                invocation.trace_compression
+                    = project::parse_trace_compression(*compression);
+            }
+        }
+        fill_list(invocation.trace_filters, "simulate.trace_filters");
+        if (!invocation.trace_format) {
+            if (const auto format = text("simulate.trace_format")) {
+                invocation.trace_format = project::parse_trace_format(*format);
+            }
+        }
+        if (!invocation.trace_file) {
+            if (const auto path = text("simulate.trace_output")) {
+                invocation.trace_file = std::filesystem::path { *path };
+            }
+        }
+        if (!invocation.trace_report_limit) {
+            if (const auto limit = number("simulate.trace_report_limit")) {
+                invocation.trace_report_limit = static_cast<std::size_t>(*limit);
+            }
+        }
+        fill_list(invocation.vhpi_modules, "simulate.vhpi");
+        fill_list(invocation.vpi_modules, "simulate.vpi");
+        break;
+    case Command::systemc_compile:
+    case Command::systemc_link:
+        if (!invocation.library_explicit) {
+            if (const auto library = text("compile.library")) {
+                invocation.library = *library;
+            }
+        }
+        if (!invocation.systemc_compiler) {
+            invocation.systemc_compiler = text("systemc.compiler");
+        }
+        fill_list(invocation.systemc_compile_options, "systemc.compile_options");
+        fill_list(invocation.defines, "systemc.defines");
+        fill_list(invocation.include_directories, "systemc.include_directories");
+        fill_list(invocation.systemc_libraries, "systemc.link_libraries");
+        fill_list(invocation.systemc_link_options, "systemc.link_options");
+        break;
+    default:
+        break;
+    }
+}
+
 namespace {
 
     int run_impl(
@@ -2279,6 +2520,22 @@ namespace {
                 print_help(output, invocation->program_name);
                 return kSuccess;
             }
+            // A console runs the scripts in its own interpreter. A debug
+            // session does too, but its snapshot load needs the simulate
+            // defaults first.
+            if (services.load_configuration && configuration_enabled(*invocation)
+                && invocation->command != Command::tcl) {
+                auto configuration = std::make_shared<project::Configuration>();
+                if (!services.load_configuration(
+                        *invocation, *configuration, diagnostics)) {
+                    print_diagnostics(error, diagnostics,
+                        invocation->diagnostic_format, invocation->color_mode,
+                        error_is_terminal, no_color);
+                    return kUserError;
+                }
+                apply_configuration_defaults(*configuration, *invocation);
+                invocation->configuration = std::move(configuration);
+            }
             std::optional<project::Config> config;
             if (invocation->command == Command::compile
                 || invocation->command == Command::check
@@ -2289,6 +2546,10 @@ namespace {
             }
             if (config.has_value()) {
                 apply_overrides(*invocation, *config);
+                if (invocation->configuration
+                    && invocation->command == Command::elaborate) {
+                    invocation->configuration->apply_elaboration_settings(*config);
+                }
             }
             if (!config.has_value() || diagnostics.has_error()) {
                 print_diagnostics(error, diagnostics, invocation->diagnostic_format,

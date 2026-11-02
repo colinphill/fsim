@@ -705,35 +705,106 @@ sv::TypeReference retain_systemverilog_declarator(
                        : *range.right - *range.left)
             + 1U;
     };
-    std::vector<sv::PackedRange> composed;
-    std::optional<std::uint64_t> composed_width { 1U };
-    if (packed_element && use.packed_range && replacement.packed_range) {
-        composed = dimensions_of(use);
-        const auto element = dimensions_of(replacement);
+    if (use.packed_over_named_type && !use.packed_dimensions.empty()) {
+        // The dimensions declared over the name come first, then the
+        // selected type's own; a bound of a parameter keeps its expression
+        // and the range keeps the use's span over the named type.
+        auto element = dimensions_of(replacement);
+        const auto form = replacement.value_form.value_or(
+            sv::TypeForm::packed_integral);
+        const bool element_is_packed = !replacement.container_form
+            && replacement.unpacked_dimensions.empty()
+            && replacement.class_identity.empty()
+            && !replacement.virtual_interface
+            && (form == sv::TypeForm::enumeration
+                || form == sv::TypeForm::packed_structure
+                || form == sv::TypeForm::packed_union
+                || (form == sv::TypeForm::packed_integral
+                    && sv::packed_element_spelling(
+                        replacement.target.spelling)));
+        if (!element_is_packed) {
+            // Not a packed array: the use stays as declared, which
+            // elaboration reports.
+            return use;
+        }
+        if (element.empty() && form == sv::TypeForm::enumeration
+            && replacement.executable_width
+            && *replacement.executable_width > 1U) {
+            element.push_back({ static_cast<std::int64_t>(
+                                    *replacement.executable_width - 1U),
+                0, std::nullopt, std::nullopt, true,
+                use.packed_range ? use.packed_range->source
+                                 : use.target.source });
+        }
+        auto composed = use.packed_dimensions;
+        composed.back().element_signed = replacement.signed_value;
         composed.insert(composed.end(), element.begin(), element.end());
+        std::optional<std::uint64_t> width { 1U };
         for (const auto& dimension : composed) {
             const auto size = extent(dimension);
-            composed_width = size && composed_width
-                ? std::optional { *composed_width * *size }
-                : std::nullopt;
+            width = size && width ? std::optional { *width * *size }
+                                  : std::nullopt;
         }
-    }
-    if (!composed.empty() && composed_width && *composed_width != 0U) {
-        const auto outer = extent(*use.packed_range).value_or(1U);
-        replacement.packed_range = sv::PackedRange {
-            static_cast<std::int64_t>(*composed_width) - 1, 0,
-            std::nullopt, std::nullopt, true, use.packed_range->source };
-        replacement.packed_dimensions = std::move(composed);
-        if (replacement.executable_width) {
-            replacement.executable_width
-                = *replacement.executable_width * outer;
+        if (width && *width != 0U) {
+            replacement.packed_range = sv::PackedRange {
+                static_cast<std::int64_t>(*width) - 1, 0, std::nullopt,
+                std::nullopt, true, use.packed_range
+                    ? use.packed_range->source
+                    : composed.front().source };
+        } else {
+            replacement.packed_range = use.packed_range;
         }
-    } else if (use.packed_range) {
-        replacement.packed_range = use.packed_range;
+        if (composed.size() == 1U) {
+            replacement.packed_dimensions.clear();
+            replacement.packed_range = composed.front();
+        } else {
+            replacement.packed_dimensions = std::move(composed);
+        }
+        const bool aggregate = form == sv::TypeForm::packed_structure
+            || form == sv::TypeForm::packed_union;
+        replacement.executable_width = width;
+        replacement.signed_value = false;
+        replacement.four_state = replacement.four_state || use.four_state;
+        // A composed array of bits names no type, so no later lookup of the
+        // spelling composes it again.
+        if (!aggregate) {
+            replacement.value_form = sv::TypeForm::packed_integral;
+            replacement.target.target = { };
+            replacement.target.spelling
+                = replacement.four_state ? "logic" : "bit";
+        }
+        replacement.packed_over_named_type = false;
+    } else {
+        std::vector<sv::PackedRange> composed;
+        std::optional<std::uint64_t> composed_width { 1U };
+        if (packed_element && use.packed_range && replacement.packed_range) {
+            composed = dimensions_of(use);
+            const auto element = dimensions_of(replacement);
+            composed.insert(composed.end(), element.begin(), element.end());
+            for (const auto& dimension : composed) {
+                const auto size = extent(dimension);
+                composed_width = size && composed_width
+                    ? std::optional { *composed_width * *size }
+                    : std::nullopt;
+            }
+        }
+        if (!composed.empty() && composed_width && *composed_width != 0U) {
+            const auto outer = extent(*use.packed_range).value_or(1U);
+            replacement.packed_range = sv::PackedRange {
+                static_cast<std::int64_t>(*composed_width) - 1, 0,
+                std::nullopt, std::nullopt, true, use.packed_range->source };
+            replacement.packed_dimensions = std::move(composed);
+            if (replacement.executable_width) {
+                replacement.executable_width
+                    = *replacement.executable_width * outer;
+            }
+        } else if (use.packed_range) {
+            replacement.packed_range = use.packed_range;
+        }
+        replacement.signed_value
+            = replacement.signed_value || use.signed_value;
+        replacement.four_state = replacement.four_state || use.four_state;
     }
-    replacement.signed_value
-        = replacement.signed_value || use.signed_value;
-    replacement.four_state = replacement.four_state || use.four_state;
     if (!use.container_form) {
         return replacement;
     }

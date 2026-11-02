@@ -108,6 +108,9 @@ namespace {
                 root_libraries_.insert(parse_target(top.target).library);
             }
             for (const auto& top : config_.project.tops) {
+                if (use_exported(parse_target(top.target).library)) {
+                    continue;
+                }
                 if (!select_target(parse_target(top.target), { })) {
                     workspace_error(diagnostics_, "selected top-level was not found: " + top.target);
                     return std::nullopt;
@@ -117,6 +120,7 @@ namespace {
                 if (!binding.target) {
                     continue;
                 }
+                use_exported(parse_target(*binding.target).library);
                 for (const auto& library : root_libraries_) {
                     select_target(parse_target(*binding.target), library);
                 }
@@ -221,6 +225,11 @@ namespace {
         bool select_target(const Target& target, std::string_view owner_library,
             std::string_view required_kind = { }, bool include_architectures = true)
         {
+            for (const auto& mapping : config_.library_mappings) {
+                if (in_scope(mapping.library, target, owner_library)) {
+                    used_exported_.insert(mapping.library);
+                }
+            }
             bool found { false };
             for (std::size_t index = 0; index < records_.size(); ++index) {
                 if (!in_scope(location(index).name, target, owner_library)) {
@@ -306,9 +315,25 @@ namespace {
             }
         }
 
+        // Exported libraries are imported whole, not selected unit by unit;
+        // the selection names those the design can reach.
+        bool use_exported(const std::string_view library)
+        {
+            const auto mapping = std::ranges::find_if(config_.library_mappings,
+                [&](const auto& mapping) { return mapping.library == library; });
+            if (mapping == config_.library_mappings.end()) {
+                return false;
+            }
+            used_exported_.insert(mapping->library);
+            return true;
+        }
+
         void select_dependencies(std::size_t index)
         {
             for (const auto& dependency : artifact(index).dependencies) {
+                if (use_exported(dependency.library)) {
+                    continue;
+                }
                 bool found { false };
                 for (std::size_t candidate = 0; candidate < records_.size(); ++candidate) {
                     if (location(candidate).name != dependency.library) {
@@ -333,6 +358,7 @@ namespace {
 
         void select_hierarchy_scope(std::string_view library)
         {
+            use_exported(library);
             for (std::size_t index = 0; index < records_.size(); ++index) {
                 if (location(index).name == library
                     && std::ranges::any_of(artifact(index).units, [](const auto& owned) {
@@ -725,6 +751,8 @@ namespace {
         std::optional<WorkspaceDesignSelection> finish()
         {
             WorkspaceDesignSelection result;
+            result.exported_libraries.assign(
+                used_exported_.begin(), used_exported_.end());
             for (std::size_t library = 0; library < catalogs_.size(); ++library) {
                 workspace::LibraryCatalog catalog { catalogs_[library].location, { } };
                 for (std::size_t index = 0; index < records_.size(); ++index) {
@@ -766,6 +794,7 @@ namespace {
         std::vector<std::size_t> pending_;
         std::set<std::string> root_libraries_;
         std::set<std::string> involved_libraries_;
+        std::set<std::string> used_exported_;
         bool stale_dependency_ { false };
     };
 

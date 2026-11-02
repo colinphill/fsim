@@ -397,7 +397,8 @@ std::optional<CompilationWorkspace> load_workspace_objects(
     const std::span<const WorkspaceObjectSelection> objects,
     diagnostic::Engine& diagnostics,
     const bool validate_uvm_surface,
-    const std::filesystem::path& base_directory)
+    const std::filesystem::path& base_directory,
+    const project::Config* mapped_libraries)
 {
     const auto ordered = ordered_workspace_objects(objects, diagnostics);
     if (!ordered) {
@@ -443,6 +444,8 @@ std::optional<CompilationWorkspace> load_workspace_objects(
     }
     compiler::CacheKeyBuilder uvm_identity;
     uvm_identity.add("uvm-provenance-schema", "fsim-uvm-object-v1");
+    // The files each object's VHDL units come from, for analysis order.
+    std::map<const WorkspaceObjectSelection*, std::vector<std::string>> vhdl_files;
     for (const auto* entry : *ordered) {
         const auto& selection = *entry;
         if (selection.active_units.empty()) {
@@ -497,7 +500,45 @@ std::optional<CompilationWorkspace> load_workspace_objects(
         provenance.unit_checksums.assign(selection.active_units.size(),
             metadata->compiled_hir_checksum);
         result.objects.push_back(std::move(provenance));
+        const auto& design = *projected.design;
+        const auto& spans = design.semantics.source_spans();
+        const auto& files = design.semantics.source_files();
+        auto& digests = vhdl_files[entry];
+        for (const auto& unit : design.vhdl_units()) {
+            if (!unit.source.valid() || unit.source.value() >= spans.size()) {
+                continue;
+            }
+            const auto file = spans[unit.source.value()].file;
+            if (file.valid() && file.value() < files.size()
+                && !files[file.value()].content_digest.empty()
+                && std::ranges::find(digests, files[file.value()].content_digest)
+                    == digests.end()) {
+                digests.push_back(files[file.value()].content_digest);
+            }
+        }
         bundles.push_back(std::move(*projected.design));
+    }
+    // Objects link in content order; the selection lists them in catalog
+    // order, which is analysis order (IEEE 1076-2008 7.3.3).
+    std::vector<std::string> analysis_order;
+    for (const auto& selection : objects) {
+        const auto found = vhdl_files.find(&selection);
+        if (found != vhdl_files.end()) {
+            analysis_order.insert(analysis_order.end(),
+                found->second.begin(), found->second.end());
+        }
+    }
+    result.set_vhdl_analysis_order(std::move(analysis_order));
+    if (mapped_libraries != nullptr
+        && !mapped_libraries->library_mappings.empty()) {
+        if (!load_required_mapped_libraries(
+                *mapped_libraries, result, diagnostics, true)) {
+            return std::nullopt;
+        }
+        for (auto& design : result.mapped_compiled_designs) {
+            bundles.push_back(std::move(design));
+        }
+        result.mapped_compiled_designs.clear();
     }
     const auto linked = install_linked_compiled_design(result, std::move(bundles));
     if (!linked.ok()) {

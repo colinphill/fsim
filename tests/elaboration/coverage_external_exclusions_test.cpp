@@ -1,22 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
-#include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/elaboration/coverage_external_exclusions.hpp"
+#include "fsim/project/configuration.hpp"
 #include "fsim/project/project.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
-#include <filesystem>
+#include <optional>
 #include <span>
-#include <string_view>
+#include <string>
 #include <vector>
 
 namespace {
 
-std::optional<fsim::project::Config> parse_manifest(
-    const std::string_view text, fsim::diagnostic::Engine& diagnostics)
+// Records the exclusions as `fsim::coverage exclude add` does, then applies
+// the configuration to an elaboration config.
+std::optional<fsim::project::Config> configure_exclusions(
+    std::span<const fsim::project::CoverageExclusionEntry> exclusions)
 {
-    return fsim::project::parse(text, "fsim.toml",
-        std::filesystem::path { "/checkout" }, diagnostics);
+    fsim::project::Configuration configuration;
+    for (const auto& exclusion : exclusions) {
+        auto change = fsim::project::ConfigChange::added;
+        std::string id;
+        if (configuration.put_exclusion(std::nullopt, exclusion,
+                { fsim::project::ConfigLayer::workspace, "fsim.tcl", 1U },
+                change, id)) {
+            return std::nullopt;
+        }
+    }
+    fsim::project::Config config;
+    config.coverage.enabled = true;
+    configuration.apply_elaboration_settings(config);
+    return config;
 }
 
 fsim::elaboration::CoverageExternalExclusionMatchResult match_one(
@@ -28,45 +43,26 @@ fsim::elaboration::CoverageExternalExclusionMatchResult match_one(
         plan, std::span { &target, 1U }, limits);
 }
 
-void test_manifest_and_matching()
+void test_configuration_and_matching()
 {
     using namespace fsim;
-    constexpr std::string_view manifest = R"(
-schema = 3
-
-[project]
-top = "tb"
-
-[coverage]
-enabled = true
-
-[[library_map]]
-library = "vendor"
-path = "vendor.fsimlib"
-
-[[coverage.exclude]]
-source = "rtl/generated/*.sv"
-metric = "statement"
-reason = "generated protocol adapter"
-
-[[coverage.exclude]]
-hierarchy = "tb.u_*"
-object = "status*"
-metric = "toggle"
-reason = "unused status plumbing"
-
-[[coverage.exclude]]
-metric = "psl_property"
-reason = "property waived by verification plan"
-
-[[coverage.exclude]]
-hierarchy = "tb.*"
-metric = "all"
-reason = "integration wrapper"
-)";
-    diagnostic::Engine diagnostics;
-    const auto config = parse_manifest(manifest, diagnostics);
-    assert(config && !diagnostics.has_error());
+    const std::array exclusions {
+        project::CoverageExclusionEntry { .source = "rtl/generated/*.sv",
+            .hierarchy = std::nullopt, .object = std::nullopt,
+            .metric = "statement", .reason = "generated protocol adapter" },
+        project::CoverageExclusionEntry { .source = std::nullopt,
+            .hierarchy = "tb.u_*", .object = "status*", .metric = "toggle",
+            .reason = "unused status plumbing" },
+        project::CoverageExclusionEntry { .source = std::nullopt,
+            .hierarchy = std::nullopt, .object = std::nullopt,
+            .metric = "psl_property",
+            .reason = "property waived by verification plan" },
+        project::CoverageExclusionEntry { .source = std::nullopt,
+            .hierarchy = "tb.*", .object = std::nullopt, .metric = "all",
+            .reason = "integration wrapper" },
+    };
+    const auto config = configure_exclusions(exclusions);
+    assert(config);
     assert(config->coverage.enabled
         && config->coverage.exclusions.size() == 4U);
 
@@ -245,29 +241,25 @@ void test_validation_and_resources()
         == Error::ResourceLimit);
 }
 
-void test_manifest_rejections()
+void test_configuration_rejections()
 {
-    const auto reject = [](const std::string_view table) {
-        fsim::diagnostic::Engine diagnostics;
-        const auto config = parse_manifest(
-            std::string { "schema = 3\n[project]\ntop = \"tb\"\n"
-                          "[[library_map]]\nlibrary = \"vendor\"\n"
-                          "path = \"vendor.fsimlib\"\n" }
-                + std::string { table },
-            diagnostics);
-        assert(!config && diagnostics.has_error());
+    const auto reject = [](fsim::project::CoverageExclusionEntry exclusion) {
+        const std::array exclusions { std::move(exclusion) };
+        assert(!configure_exclusions(exclusions));
     };
-    reject("[[coverage.exclude]]\nreason = \"missing metric\"\n");
-    reject("[[coverage.exclude]]\nmetric = \"statement\"\n");
-    reject("[[coverage.exclude]]\nsource = \"\"\nmetric = \"statement\"\nreason = \"empty\"\n");
-    reject("[[coverage.exclude]]\nmetric = \"statement\"\nreason = \"ok\"\nunknown = \"bad\"\n");
+    reject({ .source = std::nullopt, .hierarchy = std::nullopt,
+        .object = std::nullopt, .metric = "", .reason = "missing metric" });
+    reject({ .source = std::nullopt, .hierarchy = std::nullopt,
+        .object = std::nullopt, .metric = "statement", .reason = "" });
+    reject({ .source = "", .hierarchy = std::nullopt,
+        .object = std::nullopt, .metric = "statement", .reason = "empty" });
 }
 
 } // namespace
 
 int main()
 {
-    test_manifest_and_matching();
+    test_configuration_and_matching();
     test_validation_and_resources();
-    test_manifest_rejections();
+    test_configuration_rejections();
 }

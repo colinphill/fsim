@@ -260,7 +260,6 @@ namespace {
                                  std::ostream&) {
             ++calls;
             assert(config.base_directory == workspace.directory());
-            assert(config.manifest_path == "<workspace>");
             assert(config.build.cache_path == workspace.directory() / ".fsim" / "cache");
             if (invocation.command == fsim::cli::Command::compile) {
                 assert(config.source_sets.size() == 1U);

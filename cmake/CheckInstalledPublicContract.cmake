@@ -603,6 +603,55 @@ if(NOT FSIM_API_CONSUMER_RESULT EQUAL 0)
     "${FSIM_API_CONSUMER_OUTPUT}${FSIM_API_CONSUMER_ERROR}")
 endif()
 
+# An application outside the install opens a snapshot whose workspace has an
+# fsim.tcl. Its interpreter needs Tcl's script library wherever the
+# application runs, including from the copy of fsim_api.dll a Windows
+# consumer carries beside itself.
+if(FSIM_WITH_TCL)
+  set(FSIM_API_WORKSPACE "${FSIM_WORK_DIR}/core-api-consumer-workspace")
+  set(FSIM_API_USER_CONFIGURATION "${FSIM_WORK_DIR}/core-api-consumer-user")
+  file(MAKE_DIRECTORY "${FSIM_API_WORKSPACE}" "${FSIM_API_USER_CONFIGURATION}")
+  file(WRITE "${FSIM_API_WORKSPACE}/tb.sv"
+    "module tb;\n  initial #1 $finish;\nendmodule\n")
+  file(WRITE "${FSIM_API_WORKSPACE}/fsim.tcl"
+    "fsim::config set elaborate.time_resolution 1ns\n")
+  set(FSIM_API_ENVIRONMENT
+    --unset=FSIM_TCL_LIBRARY
+    "XDG_CONFIG_HOME=${FSIM_API_USER_CONFIGURATION}"
+    "APPDATA=${FSIM_API_USER_CONFIGURATION}")
+  foreach(FSIM_API_WORKSPACE_COMMAND IN ITEMS "compile;tb.sv" "elaborate;sv:work.tb")
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" -E env ${FSIM_API_ENVIRONMENT}
+        "${FSIM_STAGE}/${FSIM_BINDIR}/${FSIM_EXECUTABLE_NAME}"
+        ${FSIM_API_WORKSPACE_COMMAND}
+      WORKING_DIRECTORY "${FSIM_API_WORKSPACE}"
+      RESULT_VARIABLE FSIM_API_WORKSPACE_RESULT
+      OUTPUT_VARIABLE FSIM_API_WORKSPACE_OUTPUT
+      ERROR_VARIABLE FSIM_API_WORKSPACE_ERROR
+    )
+    if(NOT FSIM_API_WORKSPACE_RESULT EQUAL 0)
+      message(FATAL_ERROR
+        "installed fsim ${FSIM_API_WORKSPACE_COMMAND} failed with "
+        "${FSIM_API_WORKSPACE_RESULT}\n"
+        "${FSIM_API_WORKSPACE_OUTPUT}${FSIM_API_WORKSPACE_ERROR}")
+    endif()
+  endforeach()
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env ${FSIM_API_ENVIRONMENT}
+      "FSIM_CONSUMER_WORKSPACE=${FSIM_API_WORKSPACE}"
+      "${FSIM_API_CONSUMER_EXECUTABLE}"
+    RESULT_VARIABLE FSIM_API_CONSUMER_RESULT
+    OUTPUT_VARIABLE FSIM_API_CONSUMER_OUTPUT
+    ERROR_VARIABLE FSIM_API_CONSUMER_ERROR
+  )
+  if(NOT FSIM_API_CONSUMER_RESULT EQUAL 0)
+    message(FATAL_ERROR
+      "installed core API consumer could not open a configured snapshot: "
+      "${FSIM_API_CONSUMER_RESULT}\n"
+      "${FSIM_API_CONSUMER_OUTPUT}${FSIM_API_CONSUMER_ERROR}")
+  endif()
+endif()
+
 set(FSIM_TF_CONSUMER_BUILD "${FSIM_WORK_DIR}/tf-consumer-build")
 set(FSIM_TF_CONSUMER_CONFIGURE_COMMAND
   "${CMAKE_COMMAND}"
@@ -715,7 +764,7 @@ execute_process(
 string(STRIP "${FSIM_VERSION_OUTPUT}" FSIM_VERSION_OUTPUT_STRIPPED)
 if(NOT FSIM_VERSION_RESULT EQUAL 0
     OR NOT FSIM_VERSION_OUTPUT_STRIPPED STREQUAL
-      "fsim ${FSIM_PROJECT_VERSION} (C API 1)")
+      "fsim ${FSIM_PROJECT_VERSION} (C API 2)")
   message(FATAL_ERROR
     "installed version contract failed with ${FSIM_VERSION_RESULT}\n"
     "${FSIM_VERSION_OUTPUT}${FSIM_VERSION_ERROR}")

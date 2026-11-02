@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <functional>
+#include <iterator>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -490,6 +492,86 @@ void assign_dpi_source_metadata(
     declaration.verilog_compatibility_profile = compatibility_profile;
 }
 
+namespace {
+
+void append_snapshot(ParsedSnapshot& into, ParsedSnapshot&& part)
+{
+  const auto append = [](auto& target, auto& source) {
+    target.insert(target.end(), std::make_move_iterator(source.begin()),
+        std::make_move_iterator(source.end()));
+  };
+  auto& design = into.result.design;
+  auto& added = part.result.design;
+  append(design.units, added.units);
+  append(design.udp_declarations, added.udp_declarations);
+  append(design.systemverilog_dpi_declarations,
+      added.systemverilog_dpi_declarations);
+  append(design.systemverilog_classes, added.systemverilog_classes);
+  append(design.systemverilog_class_method_definitions,
+      added.systemverilog_class_method_definitions);
+  append(design.systemverilog_covergroup_instances,
+      added.systemverilog_covergroup_instances);
+  append(design.systemverilog_covergroup_instance_syntax,
+      added.systemverilog_covergroup_instance_syntax);
+  design.vhdl_profile_compatible
+      = design.vhdl_profile_compatible && added.vhdl_profile_compatible;
+  append(into.result.diagnostics, part.result.diagnostics);
+  append(into.sources, part.sources);
+  append(into.unit_source_orders, part.unit_source_orders);
+  append(into.udp_source_orders, part.udp_source_orders);
+  append(into.class_source_orders, part.class_source_orders);
+  append(into.class_method_source_orders, part.class_method_source_orders);
+}
+
+} // namespace
+
+std::optional<ParsedSnapshot> parse_independent_roots(
+    const ParseGroup& group,
+    const std::span<const frontend::PreprocessedRoot> roots)
+{
+  // A root that reads no state of the roots before it is a compilation unit
+  // of its own (the grouping of files is the tool's, IEEE 1800-2023
+  // 3.12.1), so its objects are the ones it has when compiled alone. The
+  // first root that leaves state, and every root after it, stay one unit.
+  if (group.inputs.size() < 2U || roots.size() != group.inputs.size()) {
+    return std::nullopt;
+  }
+  const auto shared = static_cast<std::size_t>(std::distance(roots.begin(),
+      std::ranges::find_if(roots, &frontend::PreprocessedRoot::exports_state)));
+  if (shared == 0U) {
+    return std::nullopt;
+  }
+  const auto joined = shared + 1U >= roots.size() ? roots.size() : shared;
+  ParsedSnapshot snapshot;
+  // A later root sees the packages of earlier ones as it would see them
+  // compiled (IEEE 1800-2023 26.3), before the compiled packages.
+  const auto earlier = std::make_shared<frontend::SystemVerilogPackageMembers>();
+  const auto part = [&](const std::size_t first, const std::size_t last) {
+    ParseGroup subgroup = group;
+    subgroup.inputs.assign(group.inputs.begin() + static_cast<std::ptrdiff_t>(first),
+        group.inputs.begin() + static_cast<std::ptrdiff_t>(last));
+    subgroup.package_member_lookup = [earlier,
+        fallback = group.package_member_lookup](
+        const std::string_view package, const std::string_view member) {
+      return earlier->find(package, member, fallback);
+    };
+    auto parsed = parse_group_snapshot(subgroup);
+    for (const auto& unit : parsed.result.design.units) {
+      if (unit.kind == frontend::UnitKind::SystemVerilogPackage) {
+        earlier->add(unit);
+      }
+    }
+    append_snapshot(snapshot, std::move(parsed));
+  };
+  for (std::size_t index = 0; index < joined; ++index) {
+    part(index, index + 1U);
+  }
+  if (joined < roots.size()) {
+    part(joined, roots.size());
+  }
+  return snapshot;
+}
+
 ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
   if (group.language == frontend::Language::Verilog2005
       || group.language == frontend::Language::SystemVerilog2017) {
@@ -505,6 +587,9 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
     auto preprocessed =
         frontend::preprocess_verilog_compilation_unit(
             paths, group.language, options);
+    if (auto split = parse_independent_roots(group, preprocessed.roots)) {
+      return std::move(*split);
+    }
     ParsedSnapshot snapshot;
     const auto unit_digest = compilation_unit_digest(
         preprocessed.roots, preprocessed.inputs,

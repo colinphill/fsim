@@ -653,6 +653,10 @@ struct TypeReference {
     // actuals are bound (IEEE 1800-2017 8.25); set by class specialization,
     // empty in source HIR.
     std::string class_specialization;
+    // packed_range (and packed_dimensions) are dimensions declared over the
+    // named target whose shape is selected later, such as a type parameter's
+    // (`T [1:0]`, IEEE 1800-2023 7.4.1): they come before the target's own.
+    bool packed_over_named_type { };
 
     friend bool operator==(
         const TypeReference&, const TypeReference&) = default;
@@ -2305,6 +2309,29 @@ private:
     std::vector<CovergroupInstance> covergroup_instances_;
     std::uint64_t revision_ { };
 };
+
+/// What applying packed dimensions declared over a named type did.
+enum class NamedPackedDimensions : std::uint8_t {
+    // The reference now spells the packed array.
+    composed,
+    // The name selects a type parameter, whose shape each specialization
+    // selects, or a type not resolved yet.
+    deferred,
+    // The name selects a type that is not a packed element type.
+    not_packed,
+};
+
+/// Whether a type spelled this way may be a packed array element: the
+/// predefined-width integer types and the non-integral types may not.
+[[nodiscard]] bool packed_element_spelling(std::string_view spelling) noexcept;
+
+/// Applies the dimensions of a reference marked packed_over_named_type (its
+/// packed_dimensions, with packed_range spanning them and the named type) to
+/// the shape its target selects: the declared dimensions come first, then
+/// the target's own (IEEE 1800-2023 7.4.1). Packed arrays hold single-bit
+/// types, enumerations, and packed structures and unions.
+[[nodiscard]] NamedPackedDimensions compose_named_packed_dimensions(
+    TypeReference& reference, const Hir& hir);
 
 /// The independently serialized top-level collections whose logical
 /// identities cannot be validated by checking ID ranges alone.

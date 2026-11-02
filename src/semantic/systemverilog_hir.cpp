@@ -2,6 +2,7 @@
 #include "fsim/semantic/systemverilog_hir.hpp"
 
 #include <algorithm>
+#include <array>
 #include <set>
 #include <unordered_map>
 #include <tuple>
@@ -1166,6 +1167,129 @@ std::vector<DpiDeclaration>& Hir::mutable_dpi_declarations() noexcept {
 std::vector<CovergroupInstance>& Hir::mutable_covergroup_instances() noexcept {
     note_mutation();
     return covergroup_instances_;
+}
+
+bool packed_element_spelling(const std::string_view spelling) noexcept
+{
+    // An integer type of predefined width is not a packed array, and a
+    // non-integral type is no packed element (IEEE 1800-2023 7.4.1).
+    static constexpr std::array excluded {
+        std::string_view { "byte" }, std::string_view { "shortint" },
+        std::string_view { "int" }, std::string_view { "longint" },
+        std::string_view { "integer" }, std::string_view { "time" },
+        std::string_view { "real" }, std::string_view { "shortreal" },
+        std::string_view { "realtime" }, std::string_view { "string" },
+        std::string_view { "chandle" }, std::string_view { "event" },
+    };
+    return std::ranges::find(excluded, spelling) == excluded.end();
+}
+
+NamedPackedDimensions compose_named_packed_dimensions(
+    TypeReference& reference, const Hir& hir)
+{
+    const auto extent = [](const PackedRange& range)
+        -> std::optional<std::uint64_t> {
+        if (!range.left || !range.right) {
+            return std::nullopt;
+        }
+        return static_cast<std::uint64_t>(*range.left >= *range.right
+                       ? *range.left - *range.right
+                       : *range.right - *range.left)
+            + 1U;
+    };
+    // The shape the name selects, through typedef aliases.
+    const TypeReference* shape { };
+    auto form = TypeForm::unresolved;
+    std::vector<TypeId> visited;
+    for (auto target = reference.target.target; target.valid()
+         && std::ranges::find(visited, target) == visited.end();) {
+        visited.push_back(target);
+        const auto* definition = hir.find_type(target);
+        if (definition == nullptr
+            || definition->form == TypeForm::type_parameter) {
+            return NamedPackedDimensions::deferred;
+        }
+        const auto& base = definition->base;
+        if (base.value_form || base.packed_range
+            || !base.packed_dimensions.empty() || base.executable_width
+            || base.container_form || !base.class_identity.empty()
+            || !base.target.target.valid()) {
+            shape = &base;
+            form = base.value_form.value_or(definition->form);
+            break;
+        }
+        target = base.target.target;
+    }
+    if (shape == nullptr || form == TypeForm::type_parameter
+        || (form == TypeForm::unresolved && !shape->executable_width)) {
+        return NamedPackedDimensions::deferred;
+    }
+    auto element = shape->packed_dimensions.empty() && shape->packed_range
+        ? std::vector<PackedRange> { *shape->packed_range }
+        : shape->packed_dimensions;
+    const auto source = reference.packed_range
+        ? reference.packed_range->source
+        : reference.target.source;
+    // An enumeration of an integer atom base has no declared range.
+    if (element.empty() && form == TypeForm::enumeration
+        && shape->executable_width && *shape->executable_width > 1U) {
+        element.push_back({ static_cast<std::int64_t>(
+                                *shape->executable_width - 1U),
+            0, std::nullopt, std::nullopt, true, source });
+    }
+    const bool packed_element = !shape->container_form
+        && shape->unpacked_dimensions.empty() && shape->class_identity.empty()
+        && !shape->virtual_interface
+        && (form == TypeForm::enumeration || form == TypeForm::packed_structure
+            || form == TypeForm::packed_union
+            || (form == TypeForm::packed_integral
+                && packed_element_spelling(shape->target.spelling)
+                && (!element.empty()
+                    || shape->executable_width.value_or(1U) == 1U)));
+    if (!packed_element || reference.packed_dimensions.empty()) {
+        return NamedPackedDimensions::not_packed;
+    }
+    auto composed = reference.packed_dimensions;
+    // Selecting an element keeps the element type's signedness, although the
+    // array as a whole is unsigned.
+    composed.back().element_signed = shape->signed_value;
+    composed.insert(composed.end(), element.begin(), element.end());
+    std::optional<std::uint64_t> width { 1U };
+    for (const auto& dimension : composed) {
+        const auto size = extent(dimension);
+        width = size && width ? std::optional { *width * *size }
+                              : std::nullopt;
+    }
+    if (composed.size() == 1U) {
+        reference.packed_range = composed.front();
+        reference.packed_dimensions.clear();
+    } else {
+        // Otherwise packed_range keeps its expression over the named type.
+        if (width) {
+            reference.packed_range = PackedRange {
+                static_cast<std::int64_t>(*width) - 1, 0, std::nullopt,
+                std::nullopt, true, source };
+        }
+        reference.packed_dimensions = std::move(composed);
+    }
+    // An aggregate element keeps its members' type; any other element is
+    // its bits (IEEE 1800-2023 7.4.1).
+    const bool aggregate = form == TypeForm::packed_structure
+        || form == TypeForm::packed_union;
+    reference.value_form = aggregate ? form : TypeForm::packed_integral;
+    reference.signed_value = false;
+    reference.four_state = shape->four_state;
+    // A composed array of bits names no type, so no later lookup of the
+    // spelling composes it again.
+    if (!aggregate) {
+        reference.target.target = { };
+        reference.target.spelling = shape->four_state ? "logic" : "bit";
+    } else if (shape->target.target.valid()) {
+        reference.target.target = shape->target.target;
+    }
+    reference.executable_width = width;
+    reference.packed_over_named_type = false;
+    return NamedPackedDimensions::composed;
 }
 
 } // namespace fsim::semantic::sv

@@ -333,6 +333,100 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
     return *found;
 }
 
+[[nodiscard]] const std::map<std::string, std::string, std::less<>>&
+Simulation::Impl::class_instance_parameters(
+    const semantic::sv::ClassSpecialization& specialization) const
+{
+    const auto cached = class_instance_parameter_cache.find(
+        specialization.specialization_identity);
+    if (cached != class_instance_parameter_cache.end()) {
+        return cached->second;
+    }
+    std::map<std::string, std::string, std::less<>> values;
+    const auto instance = std::ranges::find(
+        specialization.generate_environment,
+        semantic::sv::class_instance_environment,
+        &std::pair<std::string, std::string>::first);
+    if (instance != specialization.generate_environment.end()) {
+        const semantic::design::InstanceOccurrence* occurrence = nullptr;
+        for (const auto& candidate : built.design_ir.instances()) {
+            if (candidate.path.valid()
+                && built.design_ir.path(candidate.path) == instance->second) {
+                occurrence = &candidate;
+                break;
+            }
+        }
+        const auto* owner = occurrence == nullptr
+            ? nullptr
+            : exact_specialization(
+                built.design_ir, occurrence->specialization);
+        const semantic::sv::Unit* unit = nullptr;
+        if (owner != nullptr) {
+            for (const auto& candidate : built.systemverilog_hir.units()) {
+                if (candidate.id == owner->unit) {
+                    unit = &candidate;
+                    break;
+                }
+            }
+        }
+        if (unit == nullptr) {
+            throw std::logic_error {
+                "SystemVerilog class '" + specialization.specialization_identity
+                + "' names no design element instance"
+            };
+        }
+        const auto parameter_form = [](const semantic::sv::DeclarationForm form) {
+            return form == semantic::sv::DeclarationForm::parameter
+                || form == semantic::sv::DeclarationForm::local_parameter;
+        };
+        for (const auto& parameter : owner->parameters) {
+            // Specializations also record imported package values; only the
+            // unit's own value parameters bind its classes' constraints.
+            const auto own = std::ranges::any_of(unit->declarations,
+                [&](const semantic::DeclarationId id) {
+                    const auto* declaration
+                        = built.systemverilog_hir.find_declaration(id);
+                    return declaration != nullptr
+                        && declaration->name == parameter.name
+                        && parameter_form(declaration->form)
+                        && (!parameter.declaration
+                            || *parameter.declaration == id);
+                });
+            if (!own) {
+                continue;
+            }
+            // A value that is not a known integer of at most 64 bits leaves
+            // the binding without a constant, so lowering reports it.
+            std::string value;
+            if (const auto decoded
+                = elaboration::decode_hir_systemverilog_constant(
+                    parameter.identity);
+                decoded) {
+                const auto integer = decoded->known() && !decoded->scalar
+                        && decoded->width <= 64U
+                    ? decoded->integer_value()
+                    : std::nullopt;
+                if (integer) {
+                    value = std::to_string(static_cast<std::uint64_t>(*integer));
+                }
+            } else {
+                std::int64_t integer { };
+                const std::string_view text { parameter.value };
+                const auto parsed = std::from_chars(
+                    text.data(), text.data() + text.size(), integer);
+                if (parsed.ec == std::errc { }
+                    && parsed.ptr == text.data() + text.size()) {
+                    value = std::to_string(static_cast<std::uint64_t>(integer));
+                }
+            }
+            values.emplace(unit->name + "::" + parameter.name, std::move(value));
+        }
+    }
+    return class_instance_parameter_cache
+        .emplace(specialization.specialization_identity, std::move(values))
+        .first->second;
+}
+
 [[nodiscard]] runtime::SystemVerilogUvmRootHandle Simulation::Impl::component_root(
     const std::string_view allocation_scope)
 {
@@ -747,7 +841,9 @@ void Simulation::Impl::add_constraint_state_variables(
                         }
                         return class_heap.constraint_mode(target, identity);
                     },
-                    path, string_state(target, specialization));
+                    path, string_state(target, specialization),
+                    class_instance_parameters(
+                        class_specialization(specialization)));
             }
         };
     };

@@ -321,7 +321,8 @@ std::span<const TclCommandSpec> command_specs()
         std::vector<TclCommandSpec> result;
         for (const auto group : {
                  existing_command_specs(), workspace_command_specs(),
-                 object_command_specs(), debugger_command_specs() }) {
+                 object_command_specs(), debugger_command_specs(),
+                 configuration_command_specs() }) {
             result.insert(result.end(), group.begin(), group.end());
         }
         std::ranges::sort(result, [](const auto& left, const auto& right) {

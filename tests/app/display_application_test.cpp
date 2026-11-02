@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "application_workflow_test_support.hpp"
+#include "../api/api_workspace_support.hpp"
 #include "path_test_support.hpp"
 
 #include <array>
@@ -155,25 +156,6 @@ struct FailureCapture {
     std::size_t compiled_processes { };
     bool failed { };
 };
-
-int run_cli(
-    const std::vector<std::string>& arguments,
-    std::istream& input,
-    std::ostream& output,
-    std::ostream& error)
-{
-    std::vector<const char*> raw;
-    raw.reserve(arguments.size());
-    for (const auto& argument : arguments) {
-        raw.push_back(argument.c_str());
-    }
-    return fsim::test::run_fixture_command(
-        static_cast<int>(raw.size()),
-        raw.data(),
-        fsim::test::make_fixture_services(input),
-        output,
-        error);
-}
 
 Capture execute(
     fsim::app::BuiltProject project,
@@ -853,6 +835,26 @@ void test_vhdl_failure_report(
     assert(compiled.compiled_processes == 0);
 }
 
+// Runs `fsim simulate ARGUMENTS...` in the workspace that holds DESIGN; the
+// first call compiles and elaborates it there.
+fsim::tests::api_workspace::CommandResult simulate_cli(
+    const std::filesystem::path& design, std::vector<std::string> arguments)
+{
+    namespace workspace = fsim::tests::api_workspace;
+    static bool prepared = false;
+    if (!prepared) {
+        workspace::prepare(design.parent_path(),
+            "fsim::config set compile.sv.standard 2017\n"
+            "fsim::config set elaborate.time_resolution 1ns\n"
+            "fsim::config set elaborate.optimization O2\n"
+            "fsim::config set simulate.max_deltas 1000\n",
+            { design.filename().string() }, "sv:work.display_test");
+        prepared = true;
+    }
+    arguments.insert(arguments.begin(), "simulate");
+    return workspace::run_streams(design.parent_path(), std::move(arguments));
+}
+
 } // namespace
 
 int main()
@@ -1002,46 +1004,21 @@ end architecture;
 )";
     }
 
-    const auto manifest = directory.path / "fsim.toml";
+    // The CLI cases build and run the design from its source.
+    const auto design = directory.path / "display_test.sv";
     {
-        std::ofstream output(manifest);
-        output
-            << "schema = 3\n"
-            << "[project]\n"
-            << "name = \"display-test\"\n"
-            << "top = \"sv:work.display_test\"\n"
-            << "time_resolution = \"1ns\"\n"
-            << "[[source_set]]\n"
-            << "language = \"systemverilog\"\n"
-            << "standard = \"2017\"\n"
-            << "library = \"work\"\n"
-            << "files = [\"display_test.sv\"]\n"
-            << "[build]\n"
-            << "optimization = \"O2\"\n"
-            << "cache_path = \"cli-cache\"\n"
-            << "[run]\n"
-            << "max_deltas = 1000\n";
-    }
-    {
-        std::istringstream input;
-        std::ostringstream output;
-        std::ostringstream error;
-        const auto result = run_cli(
-            { "fsim", "run", "-p", manifest.string() },
-            input,
-            output,
-            error);
-        if (result != 0) {
-            std::cerr << "display CLI failed: " << error.str();
+        const auto result = simulate_cli(design, { });
+        if (result.status != 0) {
+            std::cerr << "display CLI failed: " << result.error;
         }
-        assert(result == 0);
-        assert(error.str().empty());
+        assert(result.status == 0);
+        assert(result.error.empty());
         assert(
             // Decimal values without an explicit field width are padded to
             // the width of their largest magnitude (IEEE 1800-2017
             // 21.2.1.3): 78 digits for 257 bits, 1234 for 4097 bits.
             // A hex digit with only some bits x prints X (21.2.1.5).
-            output.str().find(
+            result.output.find(
                 std::string { "first\t+line\nembedded \"quote\" \\ A\n"
                               " 42\n  -1\nq=%:10xz!\n[10xz]h=X\no=245\n"
                               "d=165\ns=  -1\nu= X\nc=A\ntext=test\n"

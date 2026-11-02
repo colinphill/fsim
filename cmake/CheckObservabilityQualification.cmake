@@ -27,7 +27,7 @@ fsim_require_tokens(
   "assert(poisoned_status.poisoned);"
   "compiled_debug_output.str() == transcript"
   "set_signal_change_hook("
-  "const auto debug_trace = directory / \"debug-select.vcd\""
+  "const auto debug_trace = debug_workspace / \"debug-select.vcd\""
   "assert(!debug_vcd.empty());")
 
 fsim_require_tokens(

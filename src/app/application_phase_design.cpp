@@ -629,6 +629,25 @@ static bool publish_design_artifact_impl(
     metadata.seed = project.seed;
     metadata.entropy_seed = project.entropy_seed;
     metadata.search_libraries = config.elaboration.search_libraries;
+    for (const auto& setting : config.recorded_settings) {
+        metadata.settings.push_back(
+            { setting.key, setting.value, setting.origin });
+    }
+    for (const auto& mapped : project.mapped_libraries) {
+        artifact::DesignMappedLibrary record;
+        record.library = mapped.library;
+        record.metadata_digest = mapped.metadata_digest;
+        for (const auto& input : mapped.inputs) {
+            record.inputs.push_back({ input.language, input.standard,
+                input.compatibility_profile });
+        }
+        record.vhdl_package_dependencies = mapped.vhdl_package_dependencies;
+        record.unit_checksums = mapped.unit_checksums;
+        record.native_accepted = mapped.native_accepted;
+        record.native_kind = mapped.native_kind;
+        record.native_fingerprint = mapped.native_fingerprint;
+        metadata.mapped_libraries.push_back(std::move(record));
+    }
     for (std::size_t index = 0; index < config.project.tops.size(); ++index) {
         const auto& root = config.project.tops[index];
         const auto alias = root.alias.empty()
@@ -892,11 +911,12 @@ static bool publish_design_artifact_impl(
             "or more selected SystemC logical libraries");
         return false;
     }
-    if (metadata.objects.empty() && metadata.systemc_plugins.empty()) {
+    if (metadata.objects.empty() && metadata.systemc_plugins.empty()
+        && metadata.mapped_libraries.empty()) {
         diagnostics.error(
             "FSIM-ART-0014",
-            "standalone design publication requires explicit HDL object or "
-            "SystemC plug-in provenance");
+            "standalone design publication requires explicit HDL object, "
+            "SystemC plug-in or mapped library provenance");
         return false;
     }
     metadata.specialization_cache_keys = project.specialization_cache_keys;
@@ -1387,17 +1407,31 @@ std::optional<BuiltProject> load_design_artifact(
         }
     }
     classes_bytes.reset();
+    std::vector<MappedLibraryProvenance> mapped_libraries;
+    mapped_libraries.reserve(metadata->mapped_libraries.size());
+    for (const auto& mapped : metadata->mapped_libraries) {
+        auto& provenance = mapped_libraries.emplace_back(MappedLibraryProvenance {
+            mapped.library, mapped.metadata_digest, mapped.unit_checksums,
+            mapped.native_accepted, mapped.native_kind,
+            mapped.native_fingerprint, { },
+            mapped.vhdl_package_dependencies });
+        for (const auto& input : mapped.inputs) {
+            provenance.inputs.push_back({ input.language, input.standard,
+                input.compatibility_profile });
+        }
+    }
     auto built = BuiltProject {
         std::move(*runtime), std::move(*design_ir), std::move(*semantics),
         std::move(*constraint_hir), std::move(*vhdl_hir),
         metadata->cache_key, metadata->time_resolution,
-        directory.parent_path() / ".fsim-sim-cache", optimization,
+        // Beside the design file; workspace commands name .fsim/cache.
+        directory.parent_path() / "cache", optimization,
         metadata->specialization_cache_keys,
         std::move(live_systemc->native_plugins),
         std::move(primary_hierarchy), std::move(live_systemc->roots),
         metadata->seed, metadata->entropy_seed, false,
-        directory.parent_path(), std::move(live_systemc->registries), { },
-        std::move(objects),
+        directory.parent_path(), std::move(live_systemc->registries),
+        std::move(mapped_libraries), std::move(objects),
         { project::parse_systemverilog_uvm_release(metadata->uvm_release)
                 .value_or(project::SystemVerilogUvmRelease::none),
             metadata->uvm_source_identity },
@@ -1569,6 +1603,35 @@ std::optional<ArtifactInspection> inspect_artifact(
     return result;
 }
 
+// Configuration-script settings apply at elaboration; a snapshot made under
+// other settings still runs, with a warning naming what changed since.
+void warn_changed_snapshot_settings(
+    const project::Configuration* configuration, std::string_view snapshot,
+    const artifact::DesignMetadata& metadata, diagnostic::Engine& diagnostics)
+{
+    if (configuration == nullptr) {
+        return;
+    }
+    std::vector<project::RecordedSetting> recorded;
+    recorded.reserve(metadata.settings.size());
+    for (const auto& setting : metadata.settings) {
+        recorded.push_back({ setting.key, setting.value, setting.origin });
+    }
+    const auto current = configuration->elaboration_record();
+    const auto changed = project::differing_settings(recorded, current);
+    if (changed.empty()) {
+        return;
+    }
+    std::string keys;
+    for (const auto& key : changed) {
+        keys += (keys.empty() ? "" : ", ") + key;
+    }
+    diagnostics.warning("FSIM-TCL-CFG-003",
+        "snapshot '" + std::string { snapshot }
+            + "' was elaborated with other configuration settings ("
+            + keys + "); run fsim elaborate to apply the current ones");
+}
+
 } // namespace fsim::app
 
 namespace fsim::app::application_detail {
@@ -1716,6 +1779,8 @@ static int handle_simulate_impl(
             ".fsimdesign has no code-coverage instrumentation; re-elaborate with --code-coverage");
         return 1;
     }
+    warn_changed_snapshot_settings(invocation.configuration.get(),
+        invocation.snapshot, *metadata, diagnostics);
     if (invocation.delay_mode
         && metadata->delay_mode
             != project::to_string(*invocation.delay_mode)) {

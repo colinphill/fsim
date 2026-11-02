@@ -38,6 +38,8 @@ const char* systemverilog_parameter_diagnostic_code(
         return "FSIM-ELAB-SVTYPEPARAM-002";
     case Diagnostic::value_actual_for_type_parameter:
         return "FSIM-ELAB-SVTYPEPARAM-003";
+    case Diagnostic::type_actual_not_packed:
+        return "FSIM-ELAB-SVTYPEPARAM-005";
     case Diagnostic::callable_result_profile:
     case Diagnostic::callable_name_required:
     case Diagnostic::callable_no_match:

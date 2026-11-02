@@ -4,10 +4,13 @@
 #include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/support/path.hpp"
 
+#include "api_workspace_support.hpp"
+
 #include <cassert>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -66,22 +69,38 @@ void test_mapped_library_api(const std::filesystem::path& directory) {
       artifact, std::filesystem::perms::owner_write,
       std::filesystem::perm_options::remove);
 
-  const auto manifest_path = directory / "api-mapped-library.toml";
+  // The consumer workspace maps the relocated, read-only .fsimlib and
+  // elaborates its top in place; it compiles nothing of its own.
+  namespace workspace = fsim::tests::api_workspace;
+  const auto consumer = directory / "api-mapped-library-consumer";
+  workspace::write_configuration(
+      consumer, "fsim::config set elaborate.time_resolution 1ns\n");
+  workspace::expect(
+      consumer,
+      {"library", "map", "vendor", fsim::support::path_to_utf8(artifact)});
+  // Elaborate imports only the exported libraries the design reaches, so a
+  // mapped library whose file has since gone missing does not stop it. The
+  // mapping is written as `library map` leaves it, after its [exported] entry.
   {
-    std::ofstream manifest(manifest_path, std::ios::binary);
-    manifest
-        << "schema = 3\n"
-        << "[project]\n"
-        << "name = \"api-mapped-library-consumer\"\n"
-        << "top = \"sv:vendor.api_mapped_library\"\n"
-        << "time_resolution = \"1ns\"\n"
-        << "[[library_map]]\n"
-        << "library = \"vendor\"\n"
-        << "path = \"relocated mapped packages \xc2\xb5/vendor library.fsimlib\"\n"
-        << "[build]\n"
-        << "cache_path = \"api-mapped-consumer-cache\"\n";
-    assert(manifest.good());
+    std::ofstream mappings(consumer / ".fsim" / "libraries.toml",
+        std::ios::binary | std::ios::app);
+    mappings << "unused = \"missing.fsimlib\"\n";
+    assert(mappings.good());
   }
+  const auto listed = workspace::run(consumer, {"library", "list"});
+  assert(listed.status == 0);
+  assert(listed.output.find("vendor\t") != std::string::npos);
+  assert(listed.output.find("\texported\n") != std::string::npos);
+  {
+    std::ofstream extra(consumer / "extra.sv", std::ios::binary);
+    extra << "module api_mapped_extra; endmodule\n";
+    assert(extra.good());
+  }
+  const auto refused = workspace::run(
+      consumer, {"compile", "--library", "vendor", "extra.sv"});
+  assert(refused.status != 0);
+  assert(refused.output.find("exported library") != std::string::npos);
+  workspace::expect(consumer, {"elaborate", "sv:vendor.api_mapped_library"});
 
   fsim_session_options_t options{};
   options.struct_size = sizeof(options);
@@ -90,11 +109,9 @@ void test_mapped_library_api(const std::filesystem::path& directory) {
   fsim_session_t session = FSIM_INVALID_SESSION;
   assert(fsim_session_create(&options, &session) == FSIM_STATUS_OK);
   assert(
-      fsim_session_load_project(
-          session, fsim::support::path_to_utf8(manifest_path).c_str())
+      fsim_session_open_snapshot(
+          session, fsim::support::path_to_utf8(consumer).c_str(), nullptr)
       == FSIM_STATUS_OK);
-  assert(fsim_session_check(session) == FSIM_STATUS_OK);
-  assert(fsim_session_build(session) == FSIM_STATUS_OK);
 
   std::size_t count{};
   assert(

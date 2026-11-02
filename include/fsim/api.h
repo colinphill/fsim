@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define FSIM_API_VERSION UINT32_C(1)
+#define FSIM_API_VERSION UINT32_C(2)
 #define FSIM_INVALID_SESSION UINT64_C(0)
 #define FSIM_INVALID_OBJECT UINT64_C(0)
 #define FSIM_OBJECT_FLAG_FORCED UINT32_C(0x00000001)
@@ -30,6 +30,8 @@ extern "C" {
 #define FSIM_OBJECT_FLAG_ENTERED UINT32_C(0x00000008)
 #define FSIM_OBJECT_FLAG_RESOLVED UINT32_C(0x00000010)
 #define FSIM_OBJECT_FLAG_HAS_PROVENANCE UINT32_C(0x00000020)
+/* fsim_session_options_t.flags: read no configuration scripts. */
+#define FSIM_SESSION_FLAG_NO_CONFIG UINT32_C(0x00000001)
 
 typedef uint64_t fsim_session_t;
 typedef uint64_t fsim_object_t;
@@ -405,11 +407,16 @@ FSIM_PUBLIC fsim_status_t fsim_session_create(
     fsim_session_t* out_session);
 FSIM_PUBLIC fsim_status_t fsim_session_destroy(fsim_session_t session);
 
-FSIM_PUBLIC fsim_status_t fsim_session_load_project(
+/*
+ * Loads snapshot `snapshot` (NULL or "" for "default") of the workspace in
+ * `workspace_dir`, as `fsim simulate` does: the per-user and workspace
+ * fsim.tcl give the simulate.* defaults unless the session was created with
+ * FSIM_SESSION_FLAG_NO_CONFIG or FSIM_NO_CONFIG=1 is set.
+ */
+FSIM_PUBLIC fsim_status_t fsim_session_open_snapshot(
     fsim_session_t session,
-    const char* manifest_path);
-FSIM_PUBLIC fsim_status_t fsim_session_check(fsim_session_t session);
-FSIM_PUBLIC fsim_status_t fsim_session_build(fsim_session_t session);
+    const char* workspace_dir,
+    const char* snapshot);
 
 FSIM_PUBLIC fsim_status_t fsim_session_configure_sdf(
     fsim_session_t session,

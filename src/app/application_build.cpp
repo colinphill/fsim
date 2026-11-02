@@ -1017,9 +1017,30 @@ std::optional<BuiltProject> build_checked_project(
     std::vector<MappedLibraryProvenance> mapped_libraries;
     mapped_libraries.reserve(checked->mapped_libraries.size());
     for (const auto& mapped : checked->mapped_libraries) {
-        mapped_libraries.push_back({ mapped.library, mapped.metadata_digest, mapped.unit_checksums,
+        auto& provenance = mapped_libraries.emplace_back(MappedLibraryProvenance {
+            mapped.library, mapped.metadata_digest, mapped.unit_checksums,
             mapped.native_accepted, mapped.native_kind,
-            mapped.native_fingerprint });
+            mapped.native_fingerprint, { }, mapped.vhdl_package_dependencies });
+        for (const auto& settings : mapped.source_settings) {
+            if (settings.language == project::Language::systemc) {
+                continue;
+            }
+            MappedLibraryProvenance::Input input {
+                std::string { project::to_string(settings.language) },
+                settings.standard,
+                settings.language == project::Language::vhdl
+                    ? vhdl_compatibility_profile(settings.vhdl_compatibility)
+                    : project::compatibility_profile(
+                          settings.compatibility_switches) };
+            if (std::ranges::none_of(provenance.inputs, [&](const auto& known) {
+                    return known.language == input.language
+                        && known.standard == input.standard
+                        && known.compatibility_profile
+                            == input.compatibility_profile;
+                })) {
+                provenance.inputs.push_back(std::move(input));
+            }
+        }
     }
     auto result = BuiltProject {
         std::move(*elaborated.design),
@@ -1106,15 +1127,23 @@ std::optional<BuiltProject> application_detail::build_workspace_objects(
     const std::span<const std::filesystem::path> systemc_plugins,
     diagnostic::Engine& diagnostics)
 {
+    const bool mapped = !config.library_mappings.empty();
     if (std::ranges::none_of(objects, [](const auto& object) {
             return !object.active_units.empty();
         })) {
-        return build_objects(config, { }, systemc_plugins, diagnostics);
+        if (!mapped) {
+            return build_objects(config, { }, systemc_plugins, diagnostics);
+        }
+        // Every unit comes from exported libraries: the source check path
+        // imports them with no sources of its own.
+        return build_checked_project(config,
+            check_project_workspace(config, diagnostics), systemc_plugins,
+            diagnostics);
     }
     auto workspace = [&] {
         ScopedPhaseProfile decode_phase { "object_decode" };
-        return load_workspace_objects(
-            objects, diagnostics, true, config.base_directory);
+        return load_workspace_objects(objects, diagnostics, true,
+            config.base_directory, mapped ? &config : nullptr);
     }();
     return build_checked_project(config, std::move(workspace),
         systemc_plugins, diagnostics);

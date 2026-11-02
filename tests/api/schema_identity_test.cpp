@@ -12,7 +12,6 @@
 
 #include <string_view>
 
-static_assert(fsim::project::kSchemaVersion == 3);
 static_assert(FSIM_NATIVE_PLUGIN_ABI_VERSION == 3U);
 static_assert(FSIM_TF_INTERFACE_ABI_VERSION == 3U);
 static_assert(FSIM_TF_REGISTRATION_TABLE_ABI_VERSION == 3U);
@@ -22,7 +21,7 @@ static_assert(fsim::artifact::kObjectFormatVersion == 10);
 static_assert(fsim::library::kFormatVersion == 8);
 static_assert(fsim::library::kPortableSchemaVersion == 16);
 static_assert(fsim::library::kCompiledHirSchemaVersion == 3);
-static_assert(fsim::artifact::kDesignFormatVersion == 17);
+static_assert(fsim::artifact::kDesignFormatVersion == 18);
 static_assert(fsim::app::kRuntimeStateSchema == 92);
 static_assert(fsim::app::kSemanticStateSchema == 4);
 static_assert(fsim::app::kDesignIrStateSchema == 5);

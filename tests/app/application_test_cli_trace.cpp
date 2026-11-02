@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
 #include "application_workflow_test_support.hpp"
+#include "../api/api_workspace_support.hpp"
 
 #include <cassert>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -12,12 +14,12 @@
 
 namespace fsim::test {
 
-void ApplicationTestFixture::test_cli_trace_and_timescale(
-    fsim::cli::Services& services)
+void ApplicationTestFixture::test_cli_trace_and_timescale()
 {
     const auto wide_cli_source = directory / "wide-cli.sv";
-    const auto wide_cli_manifest = directory / "wide-cli.toml";
-    const auto wide_cli_trace = directory / "wide-cli.vcd";
+    namespace workspace = fsim::tests::api_workspace;
+    const auto wide_cli_workspace = directory / "wide-cli-workspace";
+    const auto wide_cli_trace = wide_cli_workspace / "wide-cli.vcd";
     {
         std::ofstream output(wide_cli_source);
         output << R"(
@@ -30,44 +32,18 @@ module wide_cli;
 endmodule
 )";
     }
-    {
-        std::ofstream output(wide_cli_manifest);
-        output << R"(
-schema = 3
-[project]
-name = "wide-cli"
-top = "sv:work.wide_cli"
-time_resolution = "1ns"
-
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-library = "work"
-files = ["wide-cli.sv"]
-
-[build]
-cache_path = "wide-cli-cache"
-
-[run]
-max_deltas = 1000
-trace_file = "wide-cli.vcd"
-)";
-    }
-    std::ostringstream wide_cli_output;
-    std::ostringstream wide_cli_error;
-    const auto wide_cli_manifest_text = wide_cli_manifest.string();
-    const std::vector<const char*> wide_cli_arguments {
-        "fsim", "run", "-p", wide_cli_manifest_text.c_str()
-    };
-    assert(
-        fsim::test::run_fixture_command(
-            static_cast<int>(wide_cli_arguments.size()),
-            wide_cli_arguments.data(),
-            services,
-            wide_cli_output,
-            wide_cli_error)
-        == 0);
-    assert(wide_cli_error.str().empty());
+    std::filesystem::create_directories(wide_cli_workspace);
+    std::filesystem::copy_file(wide_cli_source,
+        wide_cli_workspace / "wide-cli.sv",
+        std::filesystem::copy_options::overwrite_existing);
+    workspace::prepare(wide_cli_workspace,
+        "fsim::config set elaborate.time_resolution 1ns\n"
+        "fsim::config set simulate.max_deltas 1000\n",
+        { "wide-cli.sv" }, "sv:work.wide_cli");
+    const auto wide_cli = workspace::run_streams(wide_cli_workspace,
+        { "simulate", "--trace-output", "wide-cli.vcd" });
+    assert(wide_cli.status == 0);
+    assert(wide_cli.error.empty());
     std::ifstream wide_cli_stream(wide_cli_trace);
     const std::string wide_cli_vcd {
         std::istreambuf_iterator<char> { wide_cli_stream },
@@ -86,45 +62,18 @@ trace_file = "wide-cli.vcd"
             "language=systemverilog standard=systemverilog-2017 profile=none")
         != std::string::npos);
 
-    const auto scaled_manifest = directory / "scaled.toml";
-    const auto scaled_trace = directory / "scaled.vcd";
-    {
-        std::ofstream output(scaled_manifest);
-        output << R"(
-schema = 3
-[project]
-name = "scaled-vcd"
-top = "sv:work.tb"
-time_resolution = "2ps"
-
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-library = "work"
-files = ["tb.sv"]
-
-[build]
-cache_path = "scaled-cache"
-
-[run]
-max_deltas = 1000
-trace_file = "scaled.vcd"
-)";
-    }
-    std::ostringstream scaled_output;
-    std::ostringstream scaled_error;
-    const auto scaled_manifest_text = scaled_manifest.string();
-    const std::vector<const char*> scaled_arguments {
-        "fsim", "run", "-p", scaled_manifest_text.c_str()
-    };
-    assert(
-        fsim::test::run_fixture_command(
-            static_cast<int>(scaled_arguments.size()),
-            scaled_arguments.data(),
-            services,
-            scaled_output,
-            scaled_error)
-        == 0);
+    const auto scaled_workspace = directory / "scaled-workspace";
+    const auto scaled_trace = scaled_workspace / "scaled.vcd";
+    std::filesystem::create_directories(scaled_workspace);
+    std::filesystem::copy_file(directory / "tb.sv", scaled_workspace / "tb.sv",
+        std::filesystem::copy_options::overwrite_existing);
+    workspace::prepare(scaled_workspace,
+        "fsim::config set elaborate.time_resolution 2ps\n"
+        "fsim::config set simulate.max_deltas 1000\n",
+        { "tb.sv" }, "sv:work.tb");
+    const auto scaled = workspace::run_streams(scaled_workspace,
+        { "simulate", "--trace-output", "scaled.vcd" });
+    assert(scaled.status == 0);
     std::ifstream scaled_stream(scaled_trace);
     const std::string scaled_vcd {
         std::istreambuf_iterator<char> { scaled_stream },

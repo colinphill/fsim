@@ -15,7 +15,7 @@ fsim v3 distinguishes public native ABIs from persisted development artifacts:
   and append-only. A consumer validates the required prefix before using it.
 - Portable and native artifact readers are exact-current readers. They do not
   migrate, downgrade, infer omitted legacy fields, or dual-write old formats.
-  The workspace library catalog accepts only SQLite schema 3.
+  The workspace library catalog accepts only SQLite schema 4.
 - Portable payloads are independent of the producer host when all declared
   language, standard, compatibility, schema, and content identities match.
 - Native payloads and caches require the exact producer identity. They are
@@ -46,10 +46,18 @@ target's interface.
 
 ## Core C API
 
-`FSIM_API_VERSION` is 1. `fsim_session_t`, `fsim_object_t`, and `fsim_time_t`
+`FSIM_API_VERSION` is 2. `fsim_session_t`, `fsim_object_t`, and `fsim_time_t`
 are opaque 64-bit values; zero is the invalid session/object identity. All
 public functions have C linkage. No C++ exception crosses the boundary; an
 unexpected internal failure maps to `FSIM_STATUS_INTERNAL_ERROR`.
+
+Version 2 replaced the project calls (`fsim_session_load_project`,
+`fsim_session_check`, `fsim_session_build`) with
+`fsim_session_open_snapshot(session, workspace_dir, snapshot)`. It loads an
+elaborated workspace snapshot as `fsim simulate` does, including the
+`simulate.*` defaults of the per-user and workspace `fsim.tcl`, unless the
+session options set `FSIM_SESSION_FLAG_NO_CONFIG` or the environment sets
+`FSIM_NO_CONFIG=1`. The exported symbols carry the `FSIM_2.0` version node.
 
 The current x86-64 layouts are:
 
@@ -75,7 +83,7 @@ header. The retained v1 prefixes are 88 bytes for `fsim_object_info_t` and 48
 bytes for `fsim_callbacks_t`. Exact field offsets, enum values, callback types,
 and C/C++ compile probes are frozen by the
 [core API ABI probe](../tests/api/api_abi_contract.h) and
-[31-symbol contract](../tests/feature_matrix/core_api_contract.tsv).
+[29-symbol contract](../tests/feature_matrix/core_api_contract.tsv).
 
 The exported symbol set is exactly:
 
@@ -84,9 +92,7 @@ fsim_get_api_version
 fsim_status_string
 fsim_session_create
 fsim_session_destroy
-fsim_session_load_project
-fsim_session_check
-fsim_session_build
+fsim_session_open_snapshot
 fsim_session_configure_sdf
 fsim_session_get_sdf_summary
 fsim_session_get_sdf_report_entry
@@ -147,11 +153,10 @@ type information.
 
 | Family | Current identity | Top-level content |
 | --- | --- | --- |
-| `fsim.toml` (retained SDK reader) | project schema 3 | low-level project configuration; public CLI commands use the current-directory workspace and do not read this file |
 | `.fsimobj` | one SQLite container (kind `fsim-object`) holding format 10, portable schema 16, compiled-HIR bundle 3 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and source paths (relative to the source root: the compiling workspace, or the base directory outside one; absolute only for a Windows source on another drive or share) with content digests and coverage facts, never source text |
-| `.fsimdesign` | one SQLite container (kind `fsim-design`) holding format 17, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, class-specialization, SDF, trace, SystemC, and SCV state. Each payload checksum is `xxh64:` and sixteen lowercase hex digits (XXH64, seed 0; the integrity check simulate repeats at load) or lowercase SHA-256 hex |
+| `.fsimdesign` | one SQLite container (kind `fsim-design`) holding format 18, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, the configuration settings it was elaborated with (key, value, origin), one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, class-specialization, SDF, trace, SystemC, and SCV state. Each payload checksum is `xxh64:` and sixteen lowercase hex digits (XXH64, seed 0; the integrity check simulate repeats at load) or lowercase SHA-256 hex |
 | `.fsimlib` | one SQLite container (kind `fsim-library`) holding canonical TOML format 8, portable schema 16, compiled-HIR bundle 3 | logical-library metadata, compiled semantic/SV/VHDL HIR, source paths with content digests and coverage facts (never source text), and optional exact native accelerators |
-| Workspace library catalog | SQLite schema 3 | artifact and dependency indexes with VHDL identifier-form columns |
+| Workspace library catalog | SQLite schema 4 | artifact and dependency indexes with VHDL identifier-form columns; artifacts in analysis order (a recompiled artifact is the most recently analyzed), which selects an entity's latest architecture across files |
 | `.fsimscobj` | one SQLite container (kind `fsim-systemc-object`) holding format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | one SQLite container (kind `fsim-systemc-plugin`) holding format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
 | Object caches | one SQLite database per cache (`static-kernel.sqlite3`, `compiled-hir.sqlite3` in the cache directory), application id `FSIM`, cache schema 1: one row per entry with its key, `xxh64:<16 hex>` payload checksum, size, last use and payload; a database of another cache schema is rebuilt; LLVM key schema `fsim-llvm-native-object-v169`; ordinary payload compiled-HIR bundle 3 | native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB payload ceiling; every load verifies the checksum and a corrupt entry is a miss |
@@ -168,7 +173,8 @@ change. `.fsimlib` format 7/schema 16 writes `name_form` and
 Earlier identities (`.fsimobj` format 8/schema 15, `.fsimlib` format 6/schema
 15, catalog schema 1) are rejected like any other stale identity. The
 compiled-HIR schema remains 3 because the HIR already carries the identifier
-form. SQLite schema 3 stores both forms as checked integer values.
+form. The catalog stores both forms as checked integer values; a catalog
+before schema 4 has no analysis order and is rejected as made by an older fsim.
 
 Objects and exported libraries record source paths relative to the source
 root they were compiled in, so where an artifact is saved, or where its
@@ -351,7 +357,9 @@ Its exhaustive
 [evidence matrix](../tests/feature_matrix/abi_schema_evidence_matrix.tsv)
 owns positive, single-field mutation, stale/future version, corruption,
 truncation, resource, relocation, read-only, source-hidden, toolchain, and
-platform cells for every ledger row. Each of the 198 cells names one generated
+platform cells for every ledger row. Change 9, the project-manifest
+stale-schema policy, was retired with the manifest and has no row. Each of
+the 187 cells names one generated
 CTest, one cataloged diagnostic, and checked-in implementation and evidence
 paths. Exact generated commands have one ordinary-regression owner; recursive
 closure summaries consume fixture witnesses instead of starting nested CTest

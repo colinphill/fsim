@@ -18,6 +18,7 @@
 #include <array>
 #include <cerrno>
 #include <charconv>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -39,6 +40,12 @@
 #endif
 
 namespace fsim::app {
+
+#if defined(FSIM_EMBEDDED_TCL_LIBRARY)
+// Tcl's script library as a zip archive, from cmake/EmbedTclLibrary.cmake.
+extern const unsigned char embedded_tcl_library[];
+extern const std::size_t embedded_tcl_library_size;
+#endif
 namespace tcl_detail {
 
     constexpr int kUnavailable = 3;
@@ -639,33 +646,25 @@ namespace tcl_detail {
             return;
         }
 
-#if defined(FSIM_BUNDLED_TCL_LIBRARY_RELATIVE_PATH)
-        const char* executable = Tcl_GetNameOfExecutable();
-        if (executable == nullptr || executable[0] == '\0') {
-            return;
+#if defined(FSIM_EMBEDDED_TCL_LIBRARY)
+        // Tcl's script library is built into fsim, so neither fsim nor an
+        // application that embeds it looks for init.tcl on disk. zipfs
+        // mounts are process-wide: the first interpreter mounts it.
+        static constexpr const char* mount_point = "//zipfs:/fsim";
+        static const bool mounted = TclZipfs_MountBuffer(nullptr,
+                                        embedded_tcl_library,
+                                        embedded_tcl_library_size,
+                                        mount_point, 0)
+            == TCL_OK;
+        if (mounted) {
+            const std::string library = std::string(mount_point) + "/"
+                + FSIM_EMBEDDED_TCL_LIBRARY;
+            (void)Tcl_SetVar(
+                interpreter,
+                "tcl_library",
+                library.c_str(),
+                TCL_GLOBAL_ONLY);
         }
-#if defined(_WIN32)
-        const std::u8string executable_utf8 {
-            reinterpret_cast<const char8_t*>(executable)
-        };
-        const std::filesystem::path executable_path { executable_utf8 };
-#else
-        const std::filesystem::path executable_path { executable };
-#endif
-        const auto candidate = (executable_path.parent_path()
-            / FSIM_BUNDLED_TCL_LIBRARY_RELATIVE_PATH)
-                                   .lexically_normal();
-        std::error_code error;
-        if (!support::native_fs::is_regular_file(
-                candidate / "init.tcl", error)) {
-            return;
-        }
-        const auto encoded = fsim::support::path_to_utf8(candidate);
-        (void)Tcl_SetVar(
-            interpreter,
-            "tcl_library",
-            encoded.c_str(),
-            TCL_GLOBAL_ONLY);
 #else
         (void)interpreter;
 #endif
@@ -1226,6 +1225,31 @@ int handle_tcl(
         return kUnavailable;
     }
 
+    // The session sources the configuration scripts itself, so their procs
+    // stay defined and its commands read and change one configuration.
+    context.configuration.configuration
+        = std::make_shared<project::Configuration>();
+    if (cli::configuration_enabled(invocation)) {
+        std::error_code workspace_error;
+        auto workspace = std::filesystem::current_path(workspace_error);
+        if (workspace_error) {
+            workspace.clear();
+        }
+        if (!source_configuration_scripts(context.configuration,
+                interpreter.get(), workspace, diagnostics)) {
+            return kUserError;
+        }
+        // The driver gave a debug session its simulate defaults; a console
+        // takes them for the snapshots it loads.
+        if (invocation.command == cli::Command::tcl) {
+            auto simulate = context.invocation;
+            simulate.command = cli::Command::simulate;
+            cli::apply_configuration_defaults(
+                *context.configuration.configuration, simulate);
+            cli::apply_invocation_options(simulate, context.config);
+        }
+    }
+
     if (invocation.command == cli::Command::debug) {
         if (reload_snapshot(context, interpreter.get(), invocation.snapshot)
             != TCL_OK) {
@@ -1239,6 +1263,120 @@ int handle_tcl(
     }
     return evaluate_interactive(
         interpreter.get(), context, diagnostics, input);
+#endif
+}
+
+namespace {
+
+std::optional<std::filesystem::path> user_configuration_script()
+{
+#if defined(_WIN32)
+    const auto data = support::environment_variable("APPDATA");
+    if (data && !data->empty()) {
+        return support::path_from_utf8(*data) / "fsim" / "fsim.tcl";
+    }
+#else
+    const auto config_home = support::environment_variable("XDG_CONFIG_HOME");
+    if (config_home && !config_home->empty()) {
+        const auto path = support::path_from_utf8(*config_home);
+        if (path.is_absolute()) {
+            return path / "fsim" / "fsim.tcl";
+        }
+    }
+    const auto home = support::environment_variable("HOME");
+    if (home && !home->empty()) {
+        return support::path_from_utf8(*home) / ".config" / "fsim" / "fsim.tcl";
+    }
+#endif
+    return std::nullopt;
+}
+
+} // namespace
+
+std::vector<std::pair<project::ConfigLayer, std::filesystem::path>>
+configuration_scripts(const std::filesystem::path& workspace)
+{
+    std::vector<std::pair<project::ConfigLayer, std::filesystem::path>> result;
+    const auto add = [&](const project::ConfigLayer layer,
+                         const std::filesystem::path& script) {
+        std::error_code error;
+        if (support::native_fs::is_regular_file(script, error)) {
+            result.emplace_back(layer, script.lexically_normal());
+        }
+    };
+    const auto user = user_configuration_script();
+    if (user) {
+        add(project::ConfigLayer::user, *user);
+    }
+    if (!workspace.empty()) {
+        const auto script = workspace / "fsim.tcl";
+        // A workspace in the per-user configuration directory has one script.
+        if (!user || script.lexically_normal() != user->lexically_normal()) {
+            add(project::ConfigLayer::workspace, script);
+        }
+    }
+    return result;
+}
+
+bool load_configuration_scripts(const cli::Invocation& invocation,
+    project::Configuration& configuration, diagnostic::Engine& diagnostics)
+{
+    std::error_code workspace_error;
+    auto workspace = std::filesystem::current_path(workspace_error);
+    if (workspace_error) {
+        workspace.clear();
+    }
+    return load_configuration_scripts(
+        workspace, invocation.program_path, configuration, diagnostics);
+}
+
+bool load_configuration_scripts(const std::filesystem::path& workspace,
+    const std::filesystem::path& program,
+    project::Configuration& configuration, diagnostic::Engine& diagnostics)
+{
+    const auto scripts = configuration_scripts(workspace);
+    if (scripts.empty()) {
+        return true;
+    }
+#if !defined(FSIM_HAS_TCL)
+    (void)program;
+    (void)configuration;
+    diagnostics.error("FSIM-TCL-CFG-002",
+        "configuration script '" + support::path_to_utf8(scripts.front().second)
+            + "' needs the Tcl interface, which this build lacks; pass "
+              "--no-config or set FSIM_NO_CONFIG=1 to run without it");
+    return false;
+#else
+    const auto executable = support::path_to_utf8(program);
+    Tcl_FindExecutable(executable.empty() ? nullptr : executable.c_str());
+    TclInterpreter interpreter { Tcl_CreateInterp() };
+    if (!interpreter) {
+        diagnostics.error(
+            "FSIM-TCL-0002", "failed to create the Tcl interpreter");
+        return false;
+    }
+    configure_tcl_library(interpreter.get());
+    if (Tcl_Init(interpreter.get()) != TCL_OK) {
+        diagnostics.error("FSIM-TCL-0002",
+            "failed to initialize the Tcl standard library: "
+                + interpreter_result(interpreter.get()));
+        return false;
+    }
+    // Shares the caller's configuration without owning it.
+    TclConfigurationState state {
+        std::shared_ptr<project::Configuration> {
+            std::shared_ptr<project::Configuration> { }, &configuration },
+        project::ConfigLayer::session,
+        { },
+    };
+    if (!register_configuration_commands(interpreter.get(), state)) {
+        diagnostics.error("FSIM-TCL-0002",
+            "failed to create the fsim configuration commands: "
+                + interpreter_result(interpreter.get()));
+        return false;
+    }
+    return source_configuration_scripts(
+        state, interpreter.get(), workspace, diagnostics);
 #endif
 }
 

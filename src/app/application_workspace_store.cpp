@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_workspace_store_internal.hpp"
 
+#include "fsim/diagnostic/diagnostic.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
@@ -60,6 +61,14 @@ std::string quote_mapping_path(const std::string_view value)
     return result + '"';
 }
 
+std::string exported_library_error(
+    const std::string_view name, const std::filesystem::path& path)
+{
+    return "library '" + std::string { name }
+        + "' is mapped to the exported library " + support::path_to_utf8(path)
+        + "; it holds no workspace objects and takes no compiles";
+}
+
 bool ensure_workspace(const Store& store, std::string& error)
 {
     return detail::ensure_directory(store.managed_directory(), error)
@@ -70,58 +79,92 @@ bool ensure_workspace(const Store& store, std::string& error)
 
 namespace detail {
 
-std::optional<LibraryMappings> read_mappings(const Store& store, std::string& error)
+std::optional<MappingFile> read_mapping_file(const Store& store, std::string& error)
 {
     const auto path = store.managed_directory() / "libraries.toml";
     if (!safe_descendant(store.root(), ".fsim/libraries.toml", error))
         return std::nullopt;
     std::error_code code;
     if (!support::native_fs::exists(path, code) && !code)
-        return LibraryMappings { };
+        return MappingFile { };
     const auto text = read_text(path, kMaximumTextBytes, error);
     if (!text)
         return std::nullopt;
-    LibraryMappings result;
+    MappingFile result;
+    LibraryMappings* section = nullptr;
+    std::set<std::string, std::less<>> seen_sections;
     std::istringstream input { *text };
-    bool section = false;
     for (std::string line; std::getline(input, line);) {
         const auto value = trim(line);
         if (value.empty() || value.front() == '#')
             continue;
-        if (value.starts_with("[libraries]")) {
-            const auto remainder = trim(value.substr(11U));
-            if (section || (!remainder.empty() && remainder.front() != '#')) {
-                error = "invalid or repeated [libraries] mapping section";
+        if (value.front() == '[') {
+            const auto close = value.find(']');
+            const auto header = close == std::string_view::npos
+                ? std::string_view { } : value.substr(0U, close + 1U);
+            const auto remainder = close == std::string_view::npos
+                ? std::string_view { } : trim(value.substr(close + 1U));
+            LibraryMappings* next = header == "[libraries]" ? &result.libraries
+                : header == "[exported]"                     ? &result.exported
+                                                             : nullptr;
+            if (next == nullptr || !seen_sections.emplace(header).second
+                || (!remainder.empty() && remainder.front() != '#')) {
+                error = "invalid or repeated mapping section in .fsim/libraries.toml";
                 return std::nullopt;
             }
-            section = true;
+            section = next;
             continue;
         }
         const auto equal = value.find('=');
         const auto name = trim(value.substr(0U, equal));
         const auto mapping = equal == std::string_view::npos
             ? std::nullopt : parse_mapping_path(value.substr(equal + 1U));
-        if (!section || !valid_name(name) || !mapping
-            || result.size() >= kMaximumRecords
-            || !result.emplace(name, support::path_from_utf8(*mapping)).second) {
+        if (section == nullptr || !valid_name(name) || !mapping
+            || result.libraries.size() + result.exported.size() >= kMaximumRecords
+            || result.libraries.contains(std::string { name })
+            || result.exported.contains(std::string { name })
+            || !section->emplace(name, support::path_from_utf8(*mapping)).second) {
             error = "invalid or duplicate library mapping in .fsim/libraries.toml";
             return std::nullopt;
         }
     }
-    if (!section && !text->empty()) {
+    if (!seen_sections.contains("[libraries]") && !text->empty()) {
         error = "library mapping file requires a [libraries] section";
         return std::nullopt;
     }
     return result;
 }
 
-bool write_mappings(const Store& store, const LibraryMappings& mappings,
+bool write_mapping_file(const Store& store, const MappingFile& file,
     std::string& error)
 {
     std::string text { "[libraries]\n" };
-    for (const auto& [name, path] : mappings)
+    for (const auto& [name, path] : file.libraries)
         text += name + " = " + quote_mapping_path(support::path_to_utf8(path)) + '\n';
+    if (!file.exported.empty()) {
+        text += "[exported]\n";
+        for (const auto& [name, path] : file.exported)
+            text += name + " = " + quote_mapping_path(support::path_to_utf8(path)) + '\n';
+    }
     return replace_text(store.managed_directory() / "libraries.toml", text, error);
+}
+
+std::optional<LibraryMappings> read_mappings(const Store& store, std::string& error)
+{
+    auto file = read_mapping_file(store, error);
+    if (!file)
+        return std::nullopt;
+    return std::move(file->libraries);
+}
+
+bool write_mappings(const Store& store, const LibraryMappings& mappings,
+    std::string& error)
+{
+    auto file = read_mapping_file(store, error);
+    if (!file)
+        return false;
+    file->libraries = mappings;
+    return write_mapping_file(store, *file, error);
 }
 
 std::optional<LibraryLocation> locate_library(const Store& store,
@@ -131,9 +174,15 @@ std::optional<LibraryLocation> locate_library(const Store& store,
         error = "invalid logical library name: " + std::string { name };
         return std::nullopt;
     }
-    const auto mappings = read_mappings(store, error);
-    if (!mappings)
+    const auto file = read_mapping_file(store, error);
+    if (!file)
         return std::nullopt;
+    if (const auto exported = file->exported.find(std::string { name });
+        exported != file->exported.end()) {
+        error = exported_library_error(name, exported->second);
+        return std::nullopt;
+    }
+    const auto* mappings = &file->libraries;
     LibraryLocation location { std::string { name },
         store.managed_directory() / "libraries" / name, false };
     const auto mapped = mappings->find(std::string { name });
@@ -237,9 +286,15 @@ std::optional<LibraryCatalog> Store::read_library(
         error = "invalid logical library name";
         return std::nullopt;
     }
-    const auto mappings = detail::read_mappings(*this, error);
-    if (!mappings)
+    const auto file = detail::read_mapping_file(*this, error);
+    if (!file)
         return std::nullopt;
+    if (const auto exported = file->exported.find(std::string { name });
+        exported != file->exported.end()) {
+        error = exported_library_error(name, exported->second);
+        return std::nullopt;
+    }
+    const auto* mappings = &file->libraries;
     const auto local = managed_directory() / "libraries" / name;
     std::error_code code;
     if (!mappings->contains(std::string { name })
@@ -270,27 +325,47 @@ std::optional<std::filesystem::path> Store::artifact_path(
 }
 
 bool Store::map_library(const std::string_view name,
-    const std::filesystem::path& directory, std::string& error) const
+    const std::filesystem::path& path, std::string& error) const
 {
     error.clear();
-    if (!valid_name(name) || directory.empty()) {
-        error = "library mapping requires a valid name and directory";
+    if (!valid_name(name) || path.empty()) {
+        error = "library mapping requires a valid name and a directory or .fsimlib file";
         return false;
     }
     if (!ensure_workspace(*this, error))
         return false;
     auto lock = detail::lock_directory(managed_directory() / ".mapping-lock", error);
-    auto mappings = detail::read_mappings(*this, error);
-    if (!lock || !mappings)
+    auto file = detail::read_mapping_file(*this, error);
+    if (!lock || !file)
         return false;
     std::error_code code;
     const auto target = support::native_fs::canonical(
-        directory.is_absolute() ? directory : root_ / directory, code);
+        path.is_absolute() ? path : root_ / path, code);
     if (code) {
-        error = "mapped library directory cannot be resolved: " + code.message();
+        error = "mapped library path cannot be resolved: " + code.message();
         return false;
     }
     const auto local = managed_directory() / "libraries" / name;
+    const std::string key { name };
+    if (support::native_fs::is_regular_file(target, code)) {
+        // An exported library is read in place: its metadata must name this
+        // logical library, and no local library may share the name.
+        if (support::native_fs::exists(local, code)) {
+            error = "library mapping conflicts with an existing local library";
+            return false;
+        }
+        diagnostic::Engine diagnostics;
+        if (!library::load_metadata(target, name, diagnostics)) {
+            error = diagnostics.diagnostics().empty()
+                ? "mapped file is not an exported library: "
+                    + support::path_to_utf8(target)
+                : diagnostics.diagnostics().front().message;
+            return false;
+        }
+        file->libraries.erase(key);
+        file->exported[key] = path.lexically_normal();
+        return detail::write_mapping_file(*this, *file, error);
+    }
     if (support::native_fs::exists(local, code)
         && !support::native_fs::equivalent(local, target, code)) {
         error = "library mapping conflicts with an existing local library";
@@ -301,12 +376,26 @@ bool Store::map_library(const std::string_view name,
     // a library is mapped before anything is compiled into it.
     auto writer = detail::lock_directory(target / ".writer-lock", error);
     if (!writer
-        || !detail::load_catalog({ std::string { name }, target, true }, true,
+        || !detail::load_catalog({ key, target, true }, true,
             detail::CatalogAccess::read_only, error))
         return false;
     writer.reset();
-    (*mappings)[std::string { name }] = directory.lexically_normal();
-    return detail::write_mappings(*this, *mappings, error);
+    file->exported.erase(key);
+    file->libraries[key] = path.lexically_normal();
+    return detail::write_mapping_file(*this, *file, error);
+}
+
+std::optional<std::vector<ExportedLibrary>> Store::exported_libraries(
+    std::string& error) const
+{
+    error.clear();
+    const auto file = detail::read_mapping_file(*this, error);
+    if (!file)
+        return std::nullopt;
+    std::vector<ExportedLibrary> result;
+    for (const auto& [name, path] : file->exported)
+        result.push_back({ name, (path.is_absolute() ? path : root_ / path).lexically_normal() });
+    return result;
 }
 
 bool Store::unmap_library(const std::string_view name, std::string& error) const
@@ -318,14 +407,15 @@ bool Store::unmap_library(const std::string_view name, std::string& error) const
         return false;
     }
     auto lock = detail::lock_directory(managed_directory() / ".mapping-lock", error);
-    auto mappings = detail::read_mappings(*this, error);
-    if (!lock || !mappings)
+    auto file = detail::read_mapping_file(*this, error);
+    if (!lock || !file)
         return false;
-    if (mappings->erase(std::string { name }) == 0U) {
+    if (file->libraries.erase(std::string { name }) == 0U
+        && file->exported.erase(std::string { name }) == 0U) {
         error = "library has no external mapping: " + std::string { name };
         return false;
     }
-    return detail::write_mappings(*this, *mappings, error);
+    return detail::write_mapping_file(*this, *file, error);
 }
 
 } // namespace fsim::app::workspace

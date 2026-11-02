@@ -93,7 +93,7 @@ fsim_require_restart_tokens(tests/app/application_test_multiple_roots.cpp
 fsim_require_restart_tokens(tests/app/application_test_source_updates.cpp
   "write_provenance_source" "write_unused_source" "write_parameter_top")
 fsim_require_restart_tokens(tests/api/api_mapped_library_test.cpp
-  "producer-hidden" "fsim_session_build" "native_accepted")
+  "producer-hidden" "fsim_session_open_snapshot" "native_accepted")
 fsim_require_restart_tokens(tests/runtime/runtime_vpi_checkpoint_tests.cpp
   "checkpoint" "restore")
 fsim_require_restart_tokens(tests/runtime/runtime_vhpi_checkpoint_tests.cpp
@@ -104,7 +104,33 @@ fsim_require_restart_tokens(tests/runtime/runtime_vhpi_checkpoint_tests.cpp
 fsim_require_restart_tokens(tests/app/workspace_cli_test.cpp
   "test_phase_arguments" "test_library_arguments"
   "test_workspace_configuration" "invalid legacy manifest that must never be loaded"
-  "simulate.snapshot == \"default\"" "--snapshot=nightly-1")
+  "simulate.snapshot == \"default\"" "--snapshot=nightly-1"
+  "test_removed_surface_and_preserved_controls"
+  "reject({ \"build\" })"
+  "reject({ \"run\" })"
+  "reject({ \"check\", \"--project\", \"fsim.toml\" })"
+  "reject({ \"compile\", \"--output\""
+  "reject({ \"elaborate\", \"--object\""
+  "reject({ \"simulate\", \"--design\""
+  "config.base_directory == workspace.directory()"
+  "config.build.cache_path == workspace.directory() / \".fsim\" / \"cache\""
+  "coverage.artifact_output && coverage.artifact_output->is_absolute()")
+# The public driver has no project manifest or artifact-path routing.
+file(READ "${FSIM_SOURCE_DIR}/src/cli/driver.cpp" FSIM_PUBLIC_DRIVER)
+foreach(FSIM_FORBIDDEN IN ITEMS
+    "project::load("
+    "project::parse("
+    "command == \"build\""
+    "command == \"run\""
+    "argument == \"--project\""
+    "argument == \"--object\""
+    "argument == \"--design\"")
+  string(FIND "${FSIM_PUBLIC_DRIVER}" "${FSIM_FORBIDDEN}" FSIM_OFFSET)
+  if(NOT FSIM_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+      "public workspace driver regained project/artifact routing: ${FSIM_FORBIDDEN}")
+  endif()
+endforeach()
 fsim_require_restart_tokens(tests/app/workspace_application_test.cpp
   "test_managed_objects_default_and_named_snapshots"
   "test_recompilation_removes_old_names_and_rolls_back_errors"

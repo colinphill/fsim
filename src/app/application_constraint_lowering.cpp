@@ -2793,6 +2793,41 @@ lower_systemverilog_solve_before(
   return result;
 }
 
+namespace {
+
+/// `expression` with the parameters of the enclosing module, interface or
+/// program bound to `instance_parameters` (the values of the instance whose
+/// class is randomized, IEEE 1800-2023 6.22, 8.25), or none when it reads
+/// none of them.
+std::optional<sv::ConstraintExpression> bind_instance_parameters(
+    const sv::ConstraintExpression& expression,
+    const std::map<std::string, std::string, std::less<>>&
+        instance_parameters) {
+  if (instance_parameters.empty()) return std::nullopt;
+  std::optional<sv::ConstraintExpression> bound;
+  for (std::size_t index = 0; index < expression.bindings.size(); ++index) {
+    const auto& binding = expression.bindings[index];
+    if (binding.kind != sv::ConstraintReferenceKind::parameter) continue;
+    const auto value = instance_parameters.find(binding.canonical_identity);
+    if (value == instance_parameters.end()
+        || value->second == binding.constant_value) {
+      continue;
+    }
+    if (!bound) bound = expression;
+    bound->bindings[index].constant_value = value->second;
+  }
+  for (std::size_t index = 0; index < expression.operands.size(); ++index) {
+    auto operand = bind_instance_parameters(
+        expression.operands[index], instance_parameters);
+    if (!operand) continue;
+    if (!bound) bound = expression;
+    bound->operands[index] = std::move(*operand);
+  }
+  return bound;
+}
+
+}  // namespace
+
 void configure_class_constraints(
     runtime::SystemVerilogConstraintSolver& solver,
     const runtime::SystemVerilogClassRandomizeVariables& variables,
@@ -2800,7 +2835,9 @@ void configure_class_constraints(
     const semantic::sv::ClassSpecialization& specialization,
     const std::function<bool(std::string_view)>& constraint_enabled,
     const std::string_view identity_prefix,
-    const std::map<std::string, std::string, std::less<>>& string_state) {
+    const std::map<std::string, std::string, std::less<>>& string_state,
+    const std::map<std::string, std::string, std::less<>>&
+        instance_parameters) {
   const auto declaration = std::ranges::find(
       hir.classes(), specialization.declaration_identity,
       &semantic::sv::ClassDeclaration::canonical_identity);
@@ -2870,7 +2907,10 @@ void configure_class_constraints(
     }
     for (std::size_t index = 0; index < constraint->expressions.size();
          ++index) {
-      const auto& expression = constraint->expressions[index];
+      const auto instance_bound = bind_instance_parameters(
+          constraint->expressions[index], instance_parameters);
+      const auto& expression = instance_bound
+          ? *instance_bound : constraint->expressions[index];
       // Objects of one class reached along different paths each add their
       // constraints; the path keeps the clause identities distinct.
       const auto identity = std::string{identity_prefix}
@@ -2980,10 +3020,12 @@ void configure_systemverilog_class_constraints(
     const semantic::sv::ClassSpecialization& specialization,
     const std::function<bool(std::string_view)>& constraint_enabled,
     const std::string_view identity_prefix,
-    const std::map<std::string, std::string, std::less<>>& string_state) {
+    const std::map<std::string, std::string, std::less<>>& string_state,
+    const std::map<std::string, std::string, std::less<>>&
+        instance_parameters) {
   configure_class_constraints(
       solver, variables, hir, specialization, constraint_enabled,
-      identity_prefix, string_state);
+      identity_prefix, string_state, instance_parameters);
 }
 
 }  // namespace fsim::app::application_detail

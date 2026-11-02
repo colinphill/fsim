@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
 #include "application_workflow_test_support.hpp"
+#include "../api/api_workspace_support.hpp"
 #include "../support/container_test_support.hpp"
 
 #include "fsim/app/design_artifact.hpp"
@@ -18,6 +19,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -30,6 +32,43 @@
 namespace fsim::test {
 
 namespace {
+
+    fsim::project::SourceSet example_sources(
+        const fsim::project::Language language, std::string standard,
+        std::string library, const std::filesystem::path& directory,
+        const std::vector<std::string_view>& files,
+        std::string compilation_unit = "file")
+    {
+        fsim::project::SourceSet sources;
+        sources.language = language;
+        sources.standard = std::move(standard);
+        sources.library = std::move(library);
+        sources.compilation_unit = std::move(compilation_unit);
+        for (const auto file : files) {
+            sources.files.push_back(directory / file);
+        }
+        return sources;
+    }
+
+    // The design and settings of an example: 1 ns resolution, O2, 100000
+    // deltas and seed 1, as its README runs it.
+    fsim::project::Config example_config(const std::string_view example,
+        std::string top, const std::filesystem::path& cache)
+    {
+        fsim::project::Config config;
+        config.base_directory = std::filesystem::path { FSIM_TEST_SOURCE_DIR }
+            / "examples" / example;
+        config.project.name = std::string { example };
+        config.project.top = top;
+        config.project.tops = { { std::move(top), { } } };
+        config.project.time_resolution = "1ns";
+        config.project.seed = 1;
+        config.build.optimization = fsim::project::Optimization::o2;
+        config.build.cache_path = cache;
+        config.run.duration = "10ns";
+        config.run.max_deltas = 100'000;
+        return config;
+    }
 
     // A library is one container file; a copy is writable like any file.
     void clone_library_writable(
@@ -1161,12 +1200,15 @@ endmodule
         == std::vector<std::string> { "1" });
 
     fsim::diagnostic::Engine mixed_diagnostics;
-    const auto mixed_manifest = std::filesystem::path { FSIM_TEST_SOURCE_DIR }
-        / "examples/vertical_slice/fsim.toml";
-    auto mixed_config = fsim::project::load(mixed_manifest, mixed_diagnostics);
-    assert(mixed_config);
-    mixed_config->build.cache_path = directory / "mixed-cache";
-    mixed_config->run.trace_file.reset();
+    auto mixed_config = std::optional { example_config(
+        "vertical_slice", "sv:work.tb", directory / "mixed-cache") };
+    mixed_config->source_sets = {
+        example_sources(fsim::project::Language::system_verilog, "2017",
+            "work", mixed_config->base_directory,
+            { "tb.sv", "sv_child.sv" }, "source-set"),
+        example_sources(fsim::project::Language::vhdl, "2008", "work",
+            mixed_config->base_directory, { "counter.vhd" }),
+    };
     auto mixed_reference_project = fsim::app::build_project(*mixed_config, mixed_diagnostics);
     auto mixed_hybrid_project = fsim::app::build_project(*mixed_config, mixed_diagnostics);
     assert(mixed_reference_project);
@@ -1184,13 +1226,20 @@ endmodule
     assert(mixed_hybrid.result.time == 6);
 
     fsim::diagnostic::Engine three_language_diagnostics;
-    const auto three_language_manifest = std::filesystem::path { FSIM_TEST_SOURCE_DIR }
-        / "examples/three_language_hierarchy/fsim.toml";
-    auto three_language_config = fsim::project::load(
-        three_language_manifest, three_language_diagnostics);
-    assert(three_language_config);
-    three_language_config->build.cache_path = directory / "three-language-cache";
-    three_language_config->run.trace_file.reset();
+    auto three_language_config = std::optional { example_config(
+        "three_language_hierarchy", "sv:work.three_language_tb",
+        directory / "three-language-cache") };
+    three_language_config->source_sets = {
+        example_sources(fsim::project::Language::system_verilog, "2017",
+            "work", three_language_config->base_directory,
+            { "three_language_tb.sv" }, "source-set"),
+        example_sources(fsim::project::Language::systemc, "2023-subset",
+            "models", three_language_config->base_directory,
+            { "mixed_bridge.cpp" }),
+        example_sources(fsim::project::Language::vhdl, "2008", "models",
+            three_language_config->base_directory, { "logic_stage.vhd" }),
+    };
+    three_language_config->elaboration.search_libraries = { "models" };
     auto three_language_reference_project = fsim::app::build_project(
         *three_language_config, three_language_diagnostics);
     auto three_language_hybrid_project = fsim::app::build_project(
@@ -1425,33 +1474,17 @@ endmodule
     std::istringstream cli_input;
     auto services = fsim::test::make_fixture_services(cli_input);
 #if defined(FSIM_HAS_TCL)
-    const auto manifest = directory / "fsim.toml";
-    {
-        std::ofstream output(manifest);
-        output << R"(
-schema = 3
-
-[project]
-name = "debug-cli-test"
-top = "sv:work.tb"
-time_resolution = "1ns"
-
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-library = "work"
-files = ["tb.sv"]
-
-[build]
-cache_path = "cli-cache"
-
-[run]
-max_deltas = 1000
-trace_file = "debug-select.vcd"
-trace_filters = ["__none__"]
-)";
-    }
-    const auto debug_trace = directory / "debug-select.vcd";
+    // The debugger runs the snapshot of a workspace around tb.sv.
+    namespace workspace = fsim::tests::api_workspace;
+    const auto debug_workspace = directory / "debug-workspace";
+    std::filesystem::create_directories(debug_workspace);
+    std::filesystem::copy_file(directory / "tb.sv", debug_workspace / "tb.sv",
+        std::filesystem::copy_options::overwrite_existing);
+    workspace::prepare(debug_workspace,
+        "fsim::config set elaborate.time_resolution 1ns\n"
+        "fsim::config set simulate.max_deltas 1000\n",
+        { "tb.sv" }, "sv:work.tb");
+    const auto debug_trace = debug_workspace / "debug-select.vcd";
     const std::string cli_script = R"tcl(
 set initial [fsim::debug status]
 if {[dict get $initial time] != 0 ||
@@ -1494,24 +1527,14 @@ if {[dict get $completed time] != 3 || ![dict get $completed finished] ||
 }
 puts "structured-debug-cli-ok"
 )tcl";
-    std::ostringstream cli_output;
-    std::ostringstream cli_error;
-    const auto manifest_text = manifest.string();
-    const std::vector<const char*> arguments {
-        "fsim", "debug", "-p", manifest_text.c_str(),
-        "-c", cli_script.c_str()
-    };
-    const auto cli_status = fsim::test::run_fixture_command(
-        static_cast<int>(arguments.size()),
-        arguments.data(),
-        services,
-        cli_output,
-        cli_error);
-    if (cli_status != 0)
-        std::cerr << cli_error.str();
-    assert(cli_status == 0);
+    const auto cli = workspace::run_streams(debug_workspace,
+        { "debug", "--trace-output", "debug-select.vcd", "--trace-filter",
+            "__none__", "-c", cli_script });
+    if (cli.status != 0)
+        std::cerr << cli.error;
+    assert(cli.status == 0);
     assert(
-        cli_output.str().find("structured-debug-cli-ok")
+        cli.output.find("structured-debug-cli-ok")
         != std::string::npos);
     std::ifstream debug_trace_stream(debug_trace);
     const std::string debug_vcd {
@@ -1572,27 +1595,15 @@ puts "process [dict get $frame process]"
 puts "stopped at time [dict get $stopped time]"
 puts "simulation finished at time [dict get $finished time]"
 )tcl";
-    std::ostringstream interrupted_cli_output;
-    std::ostringstream interrupted_cli_error;
-    std::istringstream interrupted_cli_input;
-    auto interrupted_services = fsim::test::make_fixture_services(
-        interrupted_cli_input);
-    const std::vector<const char*> interrupted_arguments {
-        "fsim", "debug", "-p", manifest_text.c_str(),
-        "-c", interrupted_cli_script.c_str()
-    };
-    const auto interrupted_result = fsim::test::run_fixture_command(
-        static_cast<int>(interrupted_arguments.size()),
-        interrupted_arguments.data(),
-        interrupted_services,
-        interrupted_cli_output,
-        interrupted_cli_error);
-    if (interrupted_result != 0) {
-        std::cerr << interrupted_cli_error.str();
+    const auto interrupted = workspace::run_streams(debug_workspace,
+        { "debug", "--trace-output", "debug-select.vcd", "--trace-filter",
+            "__none__", "-c", interrupted_cli_script });
+    if (interrupted.status != 0) {
+        std::cerr << interrupted.error;
     }
-    assert(interrupted_result == 0);
-    assert(interrupted_cli_error.str().empty());
-    const auto interrupted_transcript = interrupted_cli_output.str();
+    assert(interrupted.status == 0);
+    assert(interrupted.error.empty());
+    const auto& interrupted_transcript = interrupted.output;
     assert(
         interrupted_transcript.find("process ")
         != std::string::npos);
@@ -1795,7 +1806,6 @@ puts "simulation finished at time [dict get $finished time]"
             assert((
                 captured.elaboration.search_libraries
                 == std::vector<std::string> { "vendor", "shared" }));
-            assert(captured.library_mappings.empty());
             assert(captured.project.top.empty());
             assert((
                 captured.project.tops
@@ -1876,7 +1886,7 @@ puts "simulation finished at time [dict get $finished time]"
         standard_error.str().find("unsupported standard 'bogus'")
         != std::string::npos);
 
-    test_cli_trace_and_timescale(services);
+    test_cli_trace_and_timescale();
 }
 
 } // namespace fsim::test

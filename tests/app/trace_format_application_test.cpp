@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_workflow_test_support.hpp"
+#include "../api/api_workspace_support.hpp"
 
 #include "fsim/app/application.hpp"
 #include "fsim/cli/driver.hpp"
@@ -85,83 +86,67 @@ void write_text(
     }
 }
 
-[[nodiscard]] std::filesystem::path write_manifest(
+// One `fsim simulate` of a snapshot in the test workspace.
+struct TraceRun {
+    std::filesystem::path workspace;
+    std::vector<std::string> arguments;
+};
+
+// Simulates the snapshot elaborated from SOURCE_FILE with its trace written
+// to TRACE_FILE, in TRACE_FORMAT when one is given.
+[[nodiscard]] TraceRun trace_run(
     const std::filesystem::path& directory,
-    const std::string_view identity,
     const std::string_view trace_file,
     const std::string_view trace_format = { },
     const std::string_view source_file = "trace_format.sv")
 {
-    const auto manifest = directory / (std::string { identity } + ".toml");
-    std::ostringstream text;
-    text << "schema = 3\n"
-         << "[project]\n"
-         << "name = \"trace-format\"\n"
-         << "top = \"sv:work.trace_format\"\n"
-         << "time_resolution = \"1ns\"\n\n"
-         << "[[source_set]]\n"
-         << "language = \"systemverilog\"\n"
-         << "standard = \"2017\"\n"
-         << "library = \"work\"\n"
-         << "files = [\"" << source_file << "\"]\n\n"
-         << "[build]\n"
-         << "optimization = \"O0\"\n"
-         << "cache_path = \"cache\"\n\n"
-         << "[run]\n"
-         << "max_deltas = 1000\n"
-         << "trace_file = \"" << trace_file << "\"\n";
+    TraceRun run { directory,
+        { "simulate", "--snapshot",
+            source_file == "typed_trace.sv" ? "typed" : "trace",
+            "--trace-output", std::string { trace_file } } };
     if (!trace_format.empty()) {
-        text << "trace_format = \"" << trace_format << "\"\n";
+        run.arguments.insert(run.arguments.end(),
+            { "--trace-format", std::string { trace_format } });
     }
-    write_text(manifest, text.str());
-    return manifest;
+    return run;
 }
 
-[[nodiscard]] std::filesystem::path write_vhdl_manifest(
-    const std::filesystem::path& directory)
+[[nodiscard]] TraceRun vhdl_trace_run(const std::filesystem::path& directory)
 {
-    const auto manifest = directory / "logic9.toml";
-    write_text(manifest, R"toml(schema = 3
-[project]
-name = "logic9-trace"
-top = "vhdl:work.trace_format(rtl)"
-time_resolution = "1ns"
-
-[[source_set]]
-language = "vhdl"
-standard = "2008"
-library = "work"
-files = ["logic9_trace.vhd"]
-
-[build]
-optimization = "O0"
-cache_path = "logic9-cache"
-
-[run]
-duration = "1ns"
-max_deltas = 1000
-trace_file = "logic9.fst"
-trace_format = "fst"
-)toml");
-    return manifest;
+    return { directory,
+        { "simulate", "--snapshot", "logic9", "--duration", "1ns",
+            "--trace-output", "logic9.fst", "--trace-format", "fst" } };
 }
 
-[[nodiscard]] RunResult run_manifest(
-    const std::filesystem::path& manifest)
+[[nodiscard]] RunResult run_trace(TraceRun run)
 {
-    const auto manifest_text = manifest.string();
-    const std::vector<const char*> arguments {
-        "fsim", "run", "--project", manifest_text.c_str()
-    };
-    std::ostringstream output;
-    std::ostringstream error;
-    const auto status = fsim::test::run_fixture_command(
-        static_cast<int>(arguments.size()),
-        arguments.data(),
-        fsim::test::make_fixture_services(),
-        output,
-        error);
-    return { status, output.str(), error.str() };
+    const auto result = fsim::tests::api_workspace::run_streams(
+        run.workspace, std::move(run.arguments));
+    return { result.status, result.output, result.error };
+}
+
+// The test directory is the workspace: each design is compiled into its own
+// library and elaborated into its own snapshot.
+void prepare_workspace(const std::filesystem::path& directory)
+{
+    namespace workspace = fsim::tests::api_workspace;
+    workspace::isolate_user_configuration(directory / "user-configuration");
+    workspace::write_configuration(directory,
+        "fsim::config set elaborate.time_resolution 1ns\n"
+        "fsim::config set elaborate.optimization O0\n"
+        "fsim::config set simulate.max_deltas 1000\n");
+    workspace::expect(directory, { "compile", "trace_format.sv" });
+    workspace::expect(
+        directory, { "compile", "--library", "typed", "typed_trace.sv" });
+    workspace::expect(directory,
+        { "compile", "--library", "logic9", "logic9_trace.vhd" });
+    workspace::expect(directory,
+        { "elaborate", "--snapshot", "trace", "sv:work.trace_format" });
+    workspace::expect(directory,
+        { "elaborate", "--snapshot", "typed", "sv:typed.trace_format" });
+    workspace::expect(directory,
+        { "elaborate", "--snapshot", "logic9",
+            "vhdl:logic9.trace_format(rtl)" });
 }
 
 void test_public_format_model()
@@ -183,8 +168,8 @@ void test_vcd_defaults_and_replacement(
 {
     const auto default_path = directory / "default.vcd";
     write_text(default_path, "previous-default");
-    const auto default_result = run_manifest(write_manifest(
-        directory, "default", default_path.filename().string()));
+    const auto default_result = run_trace(trace_run(
+        directory, default_path.filename().string()));
     assert(default_result.status == 0 && default_result.error.empty());
     const auto default_vcd = read_bytes(default_path);
     assert(default_vcd.starts_with("$version fsim $end\n"));
@@ -192,20 +177,20 @@ void test_vcd_defaults_and_replacement(
     assert(!std::filesystem::exists(default_path.string() + ".fsim-lock"));
 
     const auto automatic_path = directory / "automatic.vcd";
-    const auto automatic_result = run_manifest(write_manifest(
-        directory, "automatic", automatic_path.filename().string(), "auto"));
+    const auto automatic_result = run_trace(trace_run(
+        directory, automatic_path.filename().string(), "auto"));
     assert(automatic_result.status == 0 && automatic_result.error.empty());
     assert(read_bytes(automatic_path) == default_vcd);
 
     const auto explicit_path = directory / "explicit.wave";
-    const auto explicit_result = run_manifest(write_manifest(
-        directory, "explicit", explicit_path.filename().string(), "vcd"));
+    const auto explicit_result = run_trace(trace_run(
+        directory, explicit_path.filename().string(), "vcd"));
     assert(explicit_result.status == 0 && explicit_result.error.empty());
     assert(read_bytes(explicit_path) == default_vcd);
 
     const auto inferred_path = directory / "inferred.wave";
-    const auto inferred_result = run_manifest(write_manifest(
-        directory, "inferred", inferred_path.filename().string()));
+    const auto inferred_result = run_trace(trace_run(
+        directory, inferred_path.filename().string()));
     assert(inferred_result.status == 0 && inferred_result.error.empty());
     assert(read_bytes(inferred_path) == default_vcd);
 }
@@ -238,8 +223,8 @@ void test_fst_inference_and_selection(
     const std::filesystem::path& directory)
 {
     const auto inferred_path = directory / "inferred.fst";
-    const auto inferred_result = run_manifest(write_manifest(
-        directory, "fst-inferred", inferred_path.filename().string()));
+    const auto inferred_result = run_trace(trace_run(
+        directory, inferred_path.filename().string()));
     if (inferred_result.status != 0) {
         std::cerr << inferred_result.error;
     }
@@ -247,14 +232,14 @@ void test_fst_inference_and_selection(
     check_fst(inferred_path);
 
     const auto case_path = directory / "case.FST";
-    const auto case_result = run_manifest(write_manifest(
-        directory, "fst-case", case_path.filename().string(), "auto"));
+    const auto case_result = run_trace(trace_run(
+        directory, case_path.filename().string(), "auto"));
     assert(case_result.status == 0 && case_result.error.empty());
     check_fst(case_path);
 
     const auto explicit_path = directory / "explicit.bin";
-    const auto explicit_result = run_manifest(write_manifest(
-        directory, "fst-explicit", explicit_path.filename().string(), "fst"));
+    const auto explicit_result = run_trace(trace_run(
+        directory, explicit_path.filename().string(), "fst"));
     assert(explicit_result.status == 0 && explicit_result.error.empty());
     check_fst(explicit_path);
 }
@@ -264,36 +249,35 @@ void test_configuration_failures_preserve_destinations(
 {
     const auto fst_conflict = directory / "fst-conflict.vcd";
     write_text(fst_conflict, "keep-fst-conflict");
-    const auto fst_result = run_manifest(write_manifest(
-        directory, "fst-conflict", fst_conflict.filename().string(), "fst"));
+    const auto fst_result = run_trace(trace_run(
+        directory, fst_conflict.filename().string(), "fst"));
     assert(fst_result.status == 1);
-    assert(fst_result.error.find("FSIM-TRACE-CONTROL-002")
+    assert(fst_result.error.find("FSIM-TRACE-0001")
         != std::string::npos);
     assert(read_bytes(fst_conflict) == "keep-fst-conflict");
 
     const auto vcd_conflict = directory / "vcd-conflict.fst";
     write_text(vcd_conflict, "keep-vcd-conflict");
-    const auto vcd_result = run_manifest(write_manifest(
-        directory, "vcd-conflict", vcd_conflict.filename().string(), "vcd"));
+    const auto vcd_result = run_trace(trace_run(
+        directory, vcd_conflict.filename().string(), "vcd"));
     assert(vcd_result.status == 1);
-    assert(vcd_result.error.find("FSIM-TRACE-CONTROL-002")
+    assert(vcd_result.error.find("FSIM-TRACE-0001")
         != std::string::npos);
     assert(read_bytes(vcd_conflict) == "keep-vcd-conflict");
 
     const auto unknown_path = directory / "unknown.fst";
-    const auto unknown_result = run_manifest(write_manifest(
-        directory, "unknown", unknown_path.filename().string(), "wave"));
-    assert(unknown_result.status == 1);
-    assert(unknown_result.error.find("trace_format") != std::string::npos);
+    const auto unknown_result = run_trace(trace_run(
+        directory, unknown_path.filename().string(), "wave"));
+    assert(unknown_result.status != 0);
+    assert(unknown_result.error.find("--trace-format") != std::string::npos);
     assert(!std::filesystem::exists(unknown_path));
 }
 
 void test_extended_typed_values(const std::filesystem::path& directory)
 {
     const auto typed_target = directory / "typed.fst";
-    const auto typed_result = run_manifest(write_manifest(
+    const auto typed_result = run_trace(trace_run(
         directory,
-        "typed-target",
         typed_target.filename().string(),
         "fst",
         "typed_trace.sv"));
@@ -315,7 +299,7 @@ void test_extended_typed_values(const std::filesystem::path& directory)
 
 void test_logic9_value(const std::filesystem::path& directory)
 {
-    const auto result = run_manifest(write_vhdl_manifest(directory));
+    const auto result = run_trace(vhdl_trace_run(directory));
     assert(result.status == 0 && result.error.empty());
     const auto path = directory / "logic9.fst";
     check_fst(path, 1U);
@@ -329,8 +313,8 @@ void test_unsafe_outputs_are_transactional(
 {
     const auto directory_target = directory / "directory.vcd";
     std::filesystem::create_directory(directory_target);
-    const auto directory_result = run_manifest(write_manifest(
-        directory, "directory-target", directory_target.filename().string()));
+    const auto directory_result = run_trace(trace_run(
+        directory, directory_target.filename().string()));
     assert(directory_result.status == 1);
     assert(directory_result.error.find("FSIM-VCD-0002") != std::string::npos);
     assert(std::filesystem::is_directory(directory_target));
@@ -341,8 +325,8 @@ void test_unsafe_outputs_are_transactional(
         locked_target.string() + ".fsim-lock"
     };
     std::filesystem::create_directory(lock);
-    const auto locked_result = run_manifest(write_manifest(
-        directory, "locked-target", locked_target.filename().string()));
+    const auto locked_result = run_trace(trace_run(
+        directory, locked_target.filename().string()));
     assert(locked_result.status == 1);
     assert(locked_result.error.find("FSIM-VCD-0002") != std::string::npos);
     assert(read_bytes(locked_target) == "keep-locked");
@@ -443,6 +427,7 @@ begin
 end architecture;
 )");
 
+    prepare_workspace(directory.path);
     test_public_format_model();
     test_vcd_defaults_and_replacement(directory.path);
     test_fst_inference_and_selection(directory.path);

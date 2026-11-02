@@ -1045,7 +1045,6 @@ endmodule
 )");
 
     fsim::project::Config compile_config;
-    compile_config.manifest_path = "<systemverilog-2023-artifact>";
     compile_config.base_directory = root;
     compile_config.project.name = "systemverilog-2023-artifact-compile";
     compile_config.source_sets = { identity_source_set(
@@ -1093,7 +1092,6 @@ endmodule
         && compilation_unit != checked->systemverilog_hir.units().end());
 
     fsim::project::Config elaborate_config;
-    elaborate_config.manifest_path = "<systemverilog-2023-artifact>";
     elaborate_config.base_directory = root;
     elaborate_config.project.name = "systemverilog-2023-artifact-elaborate";
     elaborate_config.project.tops.push_back(
@@ -1318,7 +1316,6 @@ endmodule
 )");
 
     fsim::project::Config compile_config;
-    compile_config.manifest_path = "<systemverilog-dynamic-memory-nba>";
     compile_config.base_directory = root;
     compile_config.project.name = "systemverilog-dynamic-memory-nba-compile";
     compile_config.source_sets = { identity_source_set(
@@ -1341,8 +1338,6 @@ endmodule
     for (std::size_t index = 0; index < optimizations.size(); ++index) {
         const auto optimization = optimizations[index];
         fsim::project::Config elaborate_config;
-        elaborate_config.manifest_path =
-            "<systemverilog-dynamic-memory-nba>";
         elaborate_config.base_directory = root;
         elaborate_config.project.name =
             index == 0 ? "systemverilog-dynamic-memory-nba-o0"

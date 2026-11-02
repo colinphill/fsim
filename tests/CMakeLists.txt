@@ -890,7 +890,7 @@ add_executable(
 fsim_configure_test(fsim_sdf_control_tests)
 target_link_libraries(
   fsim_sdf_control_tests
-  PRIVATE fsim_application fsim_cli fsim_api
+  PRIVATE fsim_application fsim_cli fsim_api ${FSIM_CLI_LIBRARY}
 )
 fsim_register_simple_test(
   fsim.application.sdf_control
@@ -991,6 +991,10 @@ fsim_register_simple_test(
 
 add_executable(fsim_project_tests project/project_config_test.cpp)
 fsim_configure_test(fsim_project_tests)
+target_compile_definitions(
+  fsim_project_tests
+  PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+)
 target_link_libraries(fsim_project_tests PRIVATE fsim_project)
 add_test(NAME fsim.project COMMAND fsim_project_tests)
 
@@ -1010,7 +1014,7 @@ fsim_register_simple_test(
   "fast;support;paths;windows;positive;negative"
 )
 
-foreach(workspace_case IN ITEMS cli store packages sv_packages vhdl_packages objects selection systemc controls application long_paths)
+foreach(workspace_case IN ITEMS cli store packages sv_packages vhdl_packages objects selection systemc controls application long_paths configuration)
   fsim_add_single_source_test_target(
     fsim_workspace_${workspace_case}_tests
     app/workspace_${workspace_case}_test.cpp
@@ -1023,7 +1027,7 @@ foreach(workspace_case IN ITEMS cli store packages sv_packages vhdl_packages obj
   )
 endforeach()
 # These cases run the CLI, so they need its composition root.
-foreach(workspace_case IN ITEMS application controls long_paths systemc vhdl_packages)
+foreach(workspace_case IN ITEMS application configuration controls long_paths systemc vhdl_packages)
   target_link_libraries(
     fsim_workspace_${workspace_case}_tests PRIVATE ${FSIM_CLI_LIBRARY})
 endforeach()
@@ -2366,18 +2370,6 @@ set_tests_properties(
     LABELS "artifact;sdf;trace;transaction;coverage;assertion;uvm;checkpoint;scv;schema;resources;positive;negative;fast"
 )
 add_test(
-  NAME fsim.project-manifest-schema-freeze
-  COMMAND
-    "${CMAKE_COMMAND}"
-    "-DFSIM_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
-    -P "${PROJECT_SOURCE_DIR}/cmake/CheckProjectManifestFreeze.cmake"
-)
-set_tests_properties(
-  fsim.project-manifest-schema-freeze
-  PROPERTIES
-    LABELS "project;manifest;schema;diagnostics;regeneration;positive;negative;fast"
-)
-add_test(
   NAME fsim.portable-stale-schema-policy
   COMMAND
     "${CMAKE_COMMAND}"
@@ -2745,6 +2737,7 @@ add_test(
     "-DFSIM_CXX_FLAGS=${CMAKE_CXX_FLAGS}"
     "-DFSIM_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
     "-DFSIM_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}"
+    "-DFSIM_WITH_TCL=${FSIM_WITH_TCL}"
     -P "${PROJECT_SOURCE_DIR}/cmake/CheckInstalledPublicContract.cmake"
 )
 add_test(
@@ -4262,7 +4255,7 @@ if(TARGET fsim_application)
   fsim_configure_test(fsim_trace_api_application_tests)
   target_link_libraries(
     fsim_trace_api_application_tests
-    PRIVATE fsim_application fsim_cli fsim_api
+    PRIVATE fsim_application fsim_cli fsim_api ${FSIM_CLI_LIBRARY}
   )
   fsim_register_simple_test(
     fsim.application.trace_api
@@ -6164,7 +6157,7 @@ fsim_register_simple_test(
     PRIVATE FSIM_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
   )
   target_link_libraries(
-    fsim_api_tests PRIVATE fsim_api fsim_application)
+    fsim_api_tests PRIVATE fsim_api fsim_application ${FSIM_CLI_LIBRARY})
   add_test(NAME fsim.api COMMAND fsim_api_tests)
   set_tests_properties(fsim.api PROPERTIES TIMEOUT 120)
 

@@ -1286,63 +1286,6 @@ ProcessId Interpreter::add_process(Process process)
     return add_process_impl(process, &process);
 }
 
-void Interpreter::register_package_static_startup_callback(
-    const std::uint64_t startup_order,
-    const std::span<const SignalId> writable_signal_ids,
-    const std::span<const StringObjectId> writable_string_object_ids,
-    const std::span<const ContainerObjectId> writable_container_object_ids,
-    std::function<void()> callback)
-{
-    if (impl_->started || impl_->package_static_startup_registration_closed) {
-        throw std::logic_error {
-            "package static startup callbacks must be registered before start"
-        };
-    }
-    if (impl_->validation_only || !callback) {
-        throw std::invalid_argument {
-            "invalid package static startup callback"
-        };
-    }
-    if (std::ranges::any_of(
-            impl_->package_static_startup_callbacks,
-            [&](const auto& existing) {
-                return existing.startup_order == startup_order;
-            })) {
-        throw std::invalid_argument {
-            "package static startup callback order is not unique"
-        };
-    }
-    const auto copy_ordered_ids = []<typename Id>(
-        const std::span<const Id> source,
-        const std::size_t limit,
-        const char* message) {
-        std::vector<Id> result(source.begin(), source.end());
-        std::ranges::sort(result);
-        if (std::ranges::adjacent_find(result) != result.end()
-            || std::ranges::any_of(result, [&](const auto id) {
-                   return static_cast<std::size_t>(id) >= limit;
-               })) {
-            throw std::invalid_argument { message };
-        }
-        return result;
-    };
-    auto registration = Impl::PackageStaticStartupCallback {
-        .startup_order = startup_order,
-        .writable_signal_ids = copy_ordered_ids(
-            writable_signal_ids, impl_->signals.size(),
-            "package static startup callback has an invalid signal allowlist"),
-        .writable_string_object_ids = copy_ordered_ids(
-            writable_string_object_ids, impl_->string_objects.size(),
-            "package static startup callback has an invalid string allowlist"),
-        .writable_container_object_ids = copy_ordered_ids(
-            writable_container_object_ids, impl_->container_objects.size(),
-            "package static startup callback has an invalid container allowlist"),
-        .callback = std::move(callback),
-    };
-    impl_->package_static_startup_callbacks.push_back(
-        std::move(registration));
-}
-
 ProcessId Interpreter::validate_process(const Process& process)
 {
     if (!impl_->validation_only && !impl_->processes.empty()) {
@@ -3153,7 +3096,6 @@ void Interpreter::start()
     };
     impl_->start_in_progress = true;
     const StartAttemptGuard start_attempt_guard { impl_->start_in_progress };
-    impl_->package_static_startup_registration_closed = true;
     // Aggregate registration validates complete proxy families; sparse
     // element-only alias maps remain supported. Promote retained aggregate
     // authority before any process can observe the simulation state.
@@ -3187,12 +3129,9 @@ void Interpreter::start()
     struct PackageStartupAction {
         std::uint64_t order { };
         ProcessId process { std::numeric_limits<ProcessId>::max() };
-        std::size_t callback { std::numeric_limits<std::size_t>::max() };
     };
     std::vector<PackageStartupAction> package_startup_actions;
-    package_startup_actions.reserve(
-        impl_->processes.size()
-        + impl_->package_static_startup_callbacks.size());
+    package_startup_actions.reserve(impl_->processes.size());
     // A static kernel member's startup action is the kernel's: the kernel
     // lists its package static initializers (the host's own program is the
     // kernel's stub).
@@ -3202,9 +3141,7 @@ void Interpreter::start()
     };
     if (impl_->static_kernel) {
         for (const auto& member : impl_->static_kernel->startup_members()) {
-            package_startup_actions.push_back({
-                member.order, member.process,
-                std::numeric_limits<std::size_t>::max() });
+            package_startup_actions.push_back({ member.order, member.process });
         }
     }
     for (ProcessId id = 0U; id < impl_->processes.size(); ++id) {
@@ -3218,17 +3155,8 @@ void Interpreter::start()
                     "package static initializer was compacted as a scheduled write"
                 };
             }
-            package_startup_actions.push_back({
-                program.startup_order(), id,
-                std::numeric_limits<std::size_t>::max() });
+            package_startup_actions.push_back({ program.startup_order(), id });
         }
-    }
-    for (std::size_t index = 0U;
-         index < impl_->package_static_startup_callbacks.size();
-         ++index) {
-        package_startup_actions.push_back({
-            impl_->package_static_startup_callbacks[index].startup_order,
-            std::numeric_limits<ProcessId>::max(), index });
     }
     std::ranges::sort(package_startup_actions, [](const auto& left,
                                                   const auto& right) {
@@ -3261,67 +3189,38 @@ void Interpreter::start()
         }
         impl_->package_static_startup_actions_entered = true;
         impl_->package_static_initialization_active = true;
-        if (action.callback
-            != std::numeric_limits<std::size_t>::max()) {
-            impl_->package_static_initialization_callback_active = true;
-            impl_->package_static_initialization_callback_index
-                = action.callback;
-            try {
-                const auto& callback
-                    = impl_->package_static_startup_callbacks.at(action.callback);
-                callback.callback();
-                // The application's class services ran the initializer on
-                // the host's signals: kernel-owned ones take its values.
-                if (impl_->static_kernel) {
-                    for (const auto signal : callback.writable_signal_ids) {
-                        impl_->static_kernel->import_startup_write(signal);
-                    }
-                }
-            } catch (...) {
-                impl_->package_static_initialization_callback_active = false;
-                impl_->package_static_initialization_callback_index
-                    = std::numeric_limits<std::size_t>::max();
+        const auto id = action.process;
+        const auto program = impl_->processes.program_view(id);
+        for (const auto& region : program.driver_regions()) {
+            if (region.signal >= impl_->signals.size()) {
                 impl_->package_static_initialization_active = false;
-                throw;
+                throw std::logic_error {
+                    "package static initializer has an invalid write signal"
+                };
             }
-            impl_->package_static_initialization_callback_active = false;
-            impl_->package_static_initialization_callback_index
-                = std::numeric_limits<std::size_t>::max();
-        } else {
-            const auto id = action.process;
-            const auto program = impl_->processes.program_view(id);
-            for (const auto& region : program.driver_regions()) {
-                if (region.signal >= impl_->signals.size()) {
-                    impl_->package_static_initialization_active = false;
-                    throw std::logic_error {
-                        "package static initializer has an invalid write signal"
-                    };
-                }
-                impl_->package_static_startup_signal_processes[
-                    region.signal] = id;
+            impl_->package_static_startup_signal_processes[
+                region.signal] = id;
+        }
+        impl_->package_static_initialization_process = id;
+        try {
+            if (kernel_member(id)) {
+                impl_->static_kernel->run_startup_member(id);
+            } else if (impl_->static_kernel_hosts(id)) {
+                // Hosted tier: the kernel runs the initializer (S25).
+                impl_->static_kernel->execute_hosted_startup(id);
+            } else {
+                impl_->execute(id);
             }
-            impl_->package_static_initialization_process = id;
-            try {
-                if (kernel_member(id)) {
-                    impl_->static_kernel->run_startup_member(id);
-                } else if (impl_->static_kernel_hosts(id)) {
-                    // Hosted tier: the kernel runs the initializer (S25).
-                    impl_->static_kernel->execute_hosted_startup(id);
-                } else {
-                    impl_->execute(id);
-                }
-            } catch (...) {
-                impl_->package_static_initialization_active = false;
-                impl_->package_static_initialization_process
-                    = std::numeric_limits<ProcessId>::max();
-                throw;
-            }
+        } catch (...) {
+            impl_->package_static_initialization_active = false;
             impl_->package_static_initialization_process
                 = std::numeric_limits<ProcessId>::max();
+            throw;
         }
+        impl_->package_static_initialization_process
+            = std::numeric_limits<ProcessId>::max();
         impl_->package_static_initialization_active = false;
-        if (action.process != std::numeric_limits<ProcessId>::max()
-            && !kernel_member(action.process)) {
+        if (!kernel_member(action.process)) {
             const auto& process = impl_->get_process(action.process);
             if (!process.halted || process.suspended
                 || process.status != ProcessStatus::finished) {
@@ -3336,7 +3235,6 @@ void Interpreter::start()
             };
         }
     }
-    impl_->package_static_startup_callbacks.clear();
     // The startup assignments above establish the simulation baseline. Build
     // active runtime inventories and sampled defaults only after that baseline
     // is final, before ordinary time-zero processes are prearmed or queued.

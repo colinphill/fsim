@@ -889,7 +889,6 @@ endmodule
     }
 
     fsim::project::Config compile_config;
-    compile_config.manifest_path = "<udp-artifact-compile>";
     compile_config.base_directory = directory;
     compile_config.project.name = "udp-artifact-compile";
     fsim::project::SourceSet producer_sources;
@@ -975,7 +974,6 @@ endprimitive
         }));
 
     fsim::project::Config elaborate_config;
-    elaborate_config.manifest_path = "<udp-artifact-elaborate>";
     elaborate_config.base_directory = directory;
     elaborate_config.project.name = "udp-artifact-elaborate";
     elaborate_config.project.tops.push_back(

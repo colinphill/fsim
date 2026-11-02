@@ -187,6 +187,8 @@ enum class SpecializedHirAssociationDiagnostic : std::uint8_t {
     missing_type_actual,
     type_actual_for_value_parameter,
     value_actual_for_type_parameter,
+    // Packed dimensions over a type whose actual is no packed type (7.4.1).
+    type_actual_not_packed,
     callable_result_profile,
     callable_name_required,
     callable_no_match,

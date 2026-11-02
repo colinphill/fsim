@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_test_support.hpp"
 #include "application_workflow_test_support.hpp"
+#include "../api/api_workspace_support.hpp"
 
 #include "fsim/cli/driver.hpp"
 
 #include <algorithm>
 #include <cassert>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 
@@ -229,59 +231,30 @@ endmodule
       fsim::app::SimulationEngine::compiled);
   compare_captures(mixed_reference, mixed_compiled);
 
-  const auto manifest = directory / "multiple-roots.toml";
-  const auto filtered_trace = directory / "multiple-roots-filtered.vcd";
-  {
-    std::ofstream output(manifest, std::ios::binary);
-    output << R"(
-schema = 3
-
-[project]
-name = "multiple-root-cli"
-time_resolution = "1ns"
-
-[[project.top]]
-target = "sv:work.producer"
-alias = "source"
-
-[[project.top]]
-target = "sv:work.consumer"
-alias = "sink"
-
-[[source_set]]
-language = "systemverilog"
-standard = "2017"
-library = "work"
-files = ["multiple-roots.sv"]
-
-[build]
-cache_path = "multiple-root-cli-cache"
-
-[run]
-max_deltas = 1000
-trace_file = "multiple-roots-filtered.vcd"
-trace_filters = ["sink.*"]
-)";
-    assert(output.good());
+  // Both roots, aliased, in one snapshot of a workspace around the source.
+  namespace workspace = fsim::tests::api_workspace;
+  const auto cli_workspace = directory / "multiple-roots-workspace";
+  const auto filtered_trace = cli_workspace / "multiple-roots-filtered.vcd";
+  std::filesystem::create_directories(cli_workspace);
+  std::filesystem::copy_file(directory / "multiple-roots.sv",
+      cli_workspace / "multiple-roots.sv",
+      std::filesystem::copy_options::overwrite_existing);
+  workspace::isolate_user_configuration(cli_workspace / "user-configuration");
+  workspace::write_configuration(cli_workspace,
+      "fsim::config set elaborate.time_resolution 1ns\n"
+      "fsim::config set simulate.max_deltas 1000\n");
+  workspace::expect(cli_workspace, {"compile", "multiple-roots.sv"});
+  workspace::expect(cli_workspace,
+      {"elaborate", "--top", "source=sv:work.producer", "--top",
+       "sink=sv:work.consumer"});
+  const auto cli = workspace::run_streams(cli_workspace,
+      {"simulate", "--trace-output", "multiple-roots-filtered.vcd",
+       "--trace-filter", "sink.*"});
+  if (cli.status != 0) {
+    std::cerr << cli.error;
   }
-  std::istringstream cli_input;
-  std::ostringstream cli_output;
-  std::ostringstream cli_error;
-  auto services = fsim::test::make_fixture_services(cli_input);
-  const auto manifest_text = manifest.string();
-  const std::vector<const char*> arguments{
-      "fsim", "run", "-p", manifest_text.c_str()};
-  const auto cli_status = fsim::test::run_fixture_command(
-      static_cast<int>(arguments.size()),
-      arguments.data(),
-      services,
-      cli_output,
-      cli_error);
-  if (cli_status != 0) {
-    std::cerr << cli_error.str();
-  }
-  assert(cli_status == 0);
-  assert(cli_error.str().empty());
+  assert(cli.status == 0);
+  assert(cli.error.empty());
   std::ifstream trace_input(filtered_trace, std::ios::binary);
   const std::string filtered_vcd{
       std::istreambuf_iterator<char>{trace_input},

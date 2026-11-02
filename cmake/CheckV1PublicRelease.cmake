@@ -110,7 +110,7 @@ foreach(FSIM_LIBRARY IN ITEMS fsim_api fsim_systemc_plugin_exports)
 endforeach()
 
 foreach(FSIM_INVARIANT IN ITEMS
-    "#define FSIM_API_VERSION UINT32_C(1)"
+    "#define FSIM_API_VERSION UINT32_C(2)"
     "#define FSIM_SYSTEMC_ABI_VERSION 4u")
   string(FIND
     "${FSIM_API_CONTENTS}${FSIM_SYSTEMC_CONTENTS}"

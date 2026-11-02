@@ -98,28 +98,68 @@ std::filesystem::path unit_source_owner(const semantic::CompiledDesign& design,
 
 } // namespace
 
-bool compiled_package_has_member(const semantic::CompiledDesign& design,
-    const std::string_view library, const std::string_view package,
-    const std::string_view member)
+frontend::SystemVerilogPackageMember compiled_package_member(
+    const semantic::CompiledDesign& design, const std::string_view library,
+    const std::string_view package, const std::string_view member)
 {
+    using Member = frontend::SystemVerilogPackageMember;
     const semantic::CompiledDesignResolver resolver { design, { } };
-    const auto contains = [&](const semantic::sv::Unit& provider) {
-        return !resolver.resolve_systemverilog_package_member(
-            provider.library, provider.name, member).candidates.empty();
+    const auto kind = [&](const semantic::sv::Unit& provider) {
+        if (!resolver.resolve_systemverilog_package_class(
+                provider.library, provider.name, member).candidates.empty()) {
+            return Member::class_type;
+        }
+        auto result = Member::none;
+        for (const auto id : resolver.resolve_systemverilog_package_member(
+                 provider.library, provider.name, member).candidates) {
+            const auto declaration = design.find_declaration(id);
+            if (!declaration || declaration->systemverilog == nullptr) {
+                continue;
+            }
+            const auto& record = *declaration->systemverilog;
+            if (record.form == semantic::sv::DeclarationForm::type_parameter) {
+                return Member::type;
+            }
+            if (record.form
+                != semantic::sv::DeclarationForm::typedef_declaration) {
+                result = Member::value;
+                continue;
+            }
+            const auto* type = record.declared_type
+                ? design.systemverilog_hir.find_type(*record.declared_type)
+                : nullptr;
+            return type != nullptr
+                    && (type->base.container_form
+                        || !type->base.unpacked_dimensions.empty())
+                ? Member::unpacked_type
+                : Member::type;
+        }
+        if (result == Member::none
+            && !resolver.resolve_systemverilog_package_let(
+                provider.library, provider.name, member).candidates.empty()) {
+            result = Member::value;
+        }
+        return result;
     };
     if (const auto provider = resolver.find_systemverilog_package(
             library_name(library), package)) {
-        return provider->systemverilog && contains(*provider->systemverilog);
+        return provider->systemverilog ? kind(*provider->systemverilog)
+                                       : Member::none;
     }
     if (package.find("::") != std::string_view::npos) {
-        return false;
+        return Member::none;
     }
     // Provider ambiguity is diagnosed during analysis. Avoid manufacturing a
     // local net that would hide the imported name before that check can run.
-    return std::ranges::any_of(design.systemverilog_units(), [&](const auto& provider) {
-        return provider.kind == semantic::sv::UnitKind::package
-            && provider.name == package && contains(provider);
-    });
+    for (const auto& provider : design.systemverilog_units()) {
+        if (provider.kind == semantic::sv::UnitKind::package
+            && provider.name == package) {
+            if (const auto found = kind(provider); found != Member::none) {
+                return found;
+            }
+        }
+    }
+    return Member::none;
 }
 
 std::vector<CompiledSourceUnitIdentity> compiled_source_unit_identities(

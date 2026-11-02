@@ -189,12 +189,16 @@ workspace commands:
    standards, include paths, definitions, and compilation-unit policy.
 3. Create external library mappings with `library map NAME DIRECTORY` before
    compiling into them. A mapped directory contains the new library catalog;
-   an old standalone `.fsimlib` is not a workspace catalog.
+   `library map NAME FILE.fsimlib` maps an exported library read-only.
 4. Compile SystemC sources with `systemc compile --library NAME`, then run
    `systemc link --library NAME` to register their factories.
 5. Elaborate the top names and select a default or named snapshot. Run
    `simulate`, `debug`, or `tcl` against that snapshot.
-6. Compare the simulation transcript, final values, debugger observations, and
+6. Move settings the commands repeat (standards, time resolution, search
+   libraries, trace and delta limits) and the manifest's coverage FSM hints,
+   coverage exclusions, and bindings into the workspace `fsim.tcl`; see
+   [Configuration](tcl.md#configuration).
+7. Compare the simulation transcript, final values, debugger observations, and
    VCD/FST output before retiring the previous workflow.
 
 Public phases no longer take `--object`, `--design`, or artifact `--output`

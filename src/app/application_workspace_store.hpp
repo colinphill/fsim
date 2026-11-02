@@ -43,6 +43,11 @@ struct LibraryLocation {
     bool mapped { false };
 };
 
+struct ExportedLibrary {
+    std::string name;
+    std::filesystem::path path;
+};
+
 struct LibraryCatalog {
     LibraryLocation location;
     std::vector<ArtifactRecord> artifacts;
@@ -72,8 +77,13 @@ public:
     [[nodiscard]] std::filesystem::path managed_directory() const;
     [[nodiscard]] std::optional<std::vector<LibraryLocation>> library_locations(
         std::string& error) const;
+    // `path` names a library directory, or an exported .fsimlib file whose
+    // units elaborate reads in place; such a library takes no compiles.
     [[nodiscard]] bool map_library(std::string_view name,
-        const std::filesystem::path& directory, std::string& error) const;
+        const std::filesystem::path& path, std::string& error) const;
+    // The exported libraries the workspace maps, with absolute paths.
+    [[nodiscard]] std::optional<std::vector<ExportedLibrary>> exported_libraries(
+        std::string& error) const;
     [[nodiscard]] bool unmap_library(
         std::string_view name, std::string& error) const;
     [[nodiscard]] bool delete_artifact(std::string_view library,

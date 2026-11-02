@@ -203,7 +203,6 @@ V3WARN-LINUX-LLVM-DEBUG	tests/feature_matrix/v3_warning_audit_inventory.tsv	fsim
 V3WARN-LINUX-LLVM-RELEASE	tests/feature_matrix/v3_warning_audit_inventory.tsv	fsim.v3-hosted-toolchains
 V3WARN-WINDOWS-DEBUG-ON	tests/feature_matrix/v3_warning_audit_inventory.tsv	fsim.v3-hosted-toolchains
 V3WARN-WINDOWS-RELEASE-ON	tests/feature_matrix/v3_warning_audit_inventory.tsv	fsim.v3-hosted-toolchains
-V3SCHEMA-MANIFEST	cmake/CheckProjectManifestFreeze.cmake	fsim.v3-schema-freeze
 V3SCHEMA-ABI	cmake/CheckForeignAbiFreeze.cmake	fsim.v3-schema-freeze
 V3SCHEMA-OBJECT	cmake/CheckPortableObjectFreeze.cmake	fsim.v3-schema-freeze
 V3SCHEMA-DESIGN	cmake/CheckDesignLibraryFreeze.cmake	fsim.v3-schema-freeze
@@ -222,7 +221,6 @@ V3PROFILE-SV2005	tests/app/application_test_artifact_verilog.cpp	fsim.applicatio
 V3PROFILE-SV2009	tests/app/application_test_artifact_verilog.cpp	fsim.application.artifact_phases
 V3PROFILE-SV2012	tests/app/application_test_artifact_verilog.cpp	fsim.application.artifact_phases
 V3PROFILE-SV2017	tests/app/typed_boundary_application_test.cpp	fsim.application.typed_boundaries
-V3REJECT-MANIFEST	tests/project/project_config_test.cpp	fsim.project
 V3REJECT-OBJECT	tests/artifact/object_artifact_test.cpp	fsim.artifact.object
 V3REJECT-PORTABLE	tests/library/library_artifact_test.cpp	fsim.library.artifact
 V3REJECT-DESIGN	tests/artifact/design_artifact_test.cpp	fsim.artifact.design

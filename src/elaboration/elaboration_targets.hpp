@@ -102,7 +102,21 @@ std::optional<std::vector<CompiledPortView>> unit_ports(
     const semantic::CompiledDesign& compiled,
     semantic::CompiledUnitView unit);
 
+/// Whether candidate was analyzed after previous, for choosing the most
+/// recently analyzed architecture of an entity (IEEE 1076-2008 7.3.3).
+[[nodiscard]] bool vhdl_unit_analyzed_after(
+    const semantic::CompiledDesign& compiled,
+    const semantic::vhdl::Unit& candidate,
+    const semantic::vhdl::Unit& previous);
+
+/// Without an architecture, a VHDL target selects the entity's most recently
+/// analyzed architecture.
 std::optional<semantic::CompiledUnitView> choose_bound_unit(
+    const semantic::CompiledDesign& compiled,
+    const TargetSpec& target);
+
+/// Whether the compiled design has the entity a VHDL target names.
+[[nodiscard]] bool has_vhdl_entity(
     const semantic::CompiledDesign& compiled,
     const TargetSpec& target);
 

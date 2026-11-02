@@ -327,7 +327,8 @@ namespace {
 bool load_required_mapped_libraries(
     const project::Config& config,
     CompilationWorkspace& checked,
-    diagnostic::Engine& diagnostics)
+    diagnostic::Engine& diagnostics,
+    const bool all_mappings)
 {
     std::map<std::string, const project::LibraryMapping*> mappings;
     for (const auto& mapping : config.library_mappings) {
@@ -338,6 +339,11 @@ bool load_required_mapped_libraries(
     }
 
     std::set<std::string> required;
+    if (all_mappings) {
+        for (const auto& [library_name, mapping] : mappings) {
+            required.insert(library_name);
+        }
+    }
     bool unqualified_root = false;
     for (const auto& top : config.project.tops) {
         if (const auto library_name = qualified_library(top.target)) {

@@ -95,7 +95,8 @@ struct Session {
   std::recursive_mutex mutex;
   fsim_session_t handle{FSIM_INVALID_SESSION};
   fsim::diagnostic::Engine diagnostics;
-  std::optional<fsim::project::Config> project;
+  // The workspace configuration of the open snapshot.
+  std::optional<fsim::project::Config> config;
   std::shared_ptr<const fsim::app::SdfControlApplication> sdf_control;
   std::vector<std::filesystem::path> sdf_resolved_paths;
   std::optional<fsim::elaboration::ElaboratedDesign> sdf_baseline_design;
@@ -113,6 +114,10 @@ struct Session {
   std::uint64_t max_deltas{100'000};
   std::uint64_t seed{1};
   bool seed_override{};
+  bool max_deltas_override{};
+  bool no_config{};
+  // fsim_session_configure_trace set the trace, not the configuration.
+  bool trace_requested{};
   std::optional<fsim::runtime::simir::ProcessId>
       current_execution_process;
   std::vector<ScopeObject> scopes;

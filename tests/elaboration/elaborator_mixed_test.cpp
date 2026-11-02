@@ -1651,10 +1651,51 @@ end architecture rtl;
     assert(selected_vhdl.ok());
     assert(selected_vhdl.design->find_signal("vhdl_only"));
     assert(!selected_vhdl.design->find_signal("sv_only"));
-    const auto ambiguous_vhdl_top = compile_and_elaborate(
+    // Without an architecture, a VHDL top uses the entity's most recently
+    // analyzed architecture.
+    const auto entity_vhdl_top = compile_and_elaborate(
         colliding_sv.design, "vhdl:work.duplicate");
-    assert(!ambiguous_vhdl_top.ok());
-    assert(has_diagnostic(ambiguous_vhdl_top, "FSIM-ELAB-004"));
+    assert(entity_vhdl_top.ok());
+    assert(entity_vhdl_top.design->find_signal("vhdl_only"));
+    assert(!entity_vhdl_top.design->find_signal("sv_only"));
+
+    auto latest_architecture = fsim::frontend::parse_text(
+        "latest_architecture.vhd",
+        R"(
+entity two_bodies is
+end entity two_bodies;
+
+architecture first of two_bodies is
+  signal first_only : bit;
+begin
+end architecture first;
+
+architecture second of two_bodies is
+  signal second_only : bit;
+begin
+end architecture second;
+
+entity no_body is
+end entity no_body;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(latest_architecture.ok());
+    for (const auto* spelling :
+        { "vhdl:work.two_bodies", "vhdl:two_bodies" }) {
+        const auto latest = compile_and_elaborate(
+            latest_architecture.design, spelling);
+        assert(latest.ok());
+        assert(latest.design->find_signal("second_only"));
+        assert(!latest.design->find_signal("first_only"));
+    }
+    const auto named_first = compile_and_elaborate(
+        latest_architecture.design, "vhdl:work.two_bodies(first)");
+    assert(named_first.ok());
+    assert(named_first.design->find_signal("first_only"));
+    const auto bodiless = compile_and_elaborate(
+        latest_architecture.design, "vhdl:work.no_body");
+    assert(!bodiless.ok());
+    assert(has_diagnostic(bodiless, "FSIM-ELAB-004"));
 
     auto cross_library = fsim::frontend::parse_text(
         "cross_library.vhd",

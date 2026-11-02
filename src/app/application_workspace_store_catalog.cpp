@@ -11,9 +11,10 @@ namespace fsim::app::workspace::detail {
 namespace {
 
 // The `metadata.version` of a catalog with the current table schema.
-// Version 3 names each artifact file after its primary unit beside the
-// catalog; version 2 kept read-only `artifacts/r<hex>` trees.
-constexpr int kCatalogSchemaVersion = 3;
+// Version 4 records the order in which artifacts were analyzed; version 3
+// named each artifact file after its primary unit beside the catalog;
+// version 2 kept read-only `artifacts/r<hex>` trees.
+constexpr int kCatalogSchemaVersion = 4;
 
 class PendingCatalog final {
 public:
@@ -86,8 +87,10 @@ ArtifactRecord* owner_record(Statement& query, LibraryCatalog& catalog,
 bool read_artifacts(Database& database, LibraryCatalog& catalog,
     RecordMap& records, std::size_t& count, std::string& error)
 {
+    // In analysis order: VHDL's most recently analyzed architecture of an
+    // entity is the later one (IEEE 1076-2008 7.3.3).
     Statement query { database,
-        "SELECT id, kind, path, fingerprint FROM artifacts ORDER BY id", error };
+        "SELECT id, kind, path, fingerprint FROM artifacts ORDER BY analyzed", error };
     if (!query)
         return false;
     support::sqlite::Step status;
@@ -196,13 +199,15 @@ bool read_dependencies(Database& database, LibraryCatalog& catalog,
     return status == support::sqlite::Step::done;
 }
 
-bool insert_record(Database& database, const ArtifactRecord& record, std::string& error)
+bool insert_record(Database& database, const ArtifactRecord& record,
+    const int analyzed, std::string& error)
 {
-    Statement artifact { database, "INSERT INTO artifacts VALUES(?, ?, ?, ?)", error };
+    Statement artifact { database, "INSERT INTO artifacts VALUES(?, ?, ?, ?, ?)", error };
     if (!artifact || !artifact.bind(1, record.id, error)
         || !artifact.bind(2, static_cast<int>(record.kind), error)
         || !artifact.bind(3, support::path_to_utf8(record.path), error)
-        || !artifact.bind(4, record.fingerprint, error) || !artifact.finish(error))
+        || !artifact.bind(4, record.fingerprint, error)
+        || !artifact.bind(5, analyzed, error) || !artifact.finish(error))
         return false;
     for (const auto& source : record.sources) {
         Statement query { database, "INSERT INTO sources VALUES(?, ?)", error };
@@ -255,8 +260,8 @@ std::optional<LibraryCatalog> load_catalog(const LibraryLocation& location,
     const auto mode = access == CatalogAccess::writer_lock_held
         ? Database::OpenMode::read_write_existing : Database::OpenMode::read_only;
     if (!database.open(location, mode, error)
-        || !database.execute("BEGIN", error) || !database.validate_schema(error)
-        || !read_identity(database, location, error))
+        || !database.execute("BEGIN", error) || !read_identity(database, location, error)
+        || !database.validate_schema(error))
         return std::nullopt;
     LibraryCatalog catalog { location, { } };
     RecordMap records;
@@ -301,7 +306,7 @@ bool save_catalog(const LibraryCatalog& catalog, std::string& error)
         || !database.execute("BEGIN IMMEDIATE", error))
         return false;
     if (exists) {
-        if (!database.validate_schema(error) || !read_identity(database, catalog.location, error))
+        if (!read_identity(database, catalog.location, error) || !database.validate_schema(error))
             return false;
     } else {
         if (!database.initialize_schema(error))
@@ -313,8 +318,12 @@ bool save_catalog(const LibraryCatalog& catalog, std::string& error)
     }
     if (!database.execute("DELETE FROM artifacts", error))
         return false;
+    // The catalog keeps artifacts in analysis order: a recompiled artifact
+    // moves to the end.
+    int analyzed = 0;
     for (const auto& record : catalog.artifacts) {
-        if (!valid_record(record, error) || !insert_record(database, record, error))
+        if (!valid_record(record, error)
+            || !insert_record(database, record, analyzed++, error))
             return false;
     }
     if (!database.execute("COMMIT", error))

@@ -22046,6 +22046,16 @@ std::optional<std::size_t> Lowerer::hir_systemverilog_type_width(
             || !reference.class_identity.empty()) {
             return 64U;
         }
+        // Dimensions over a type parameter compose with its actual here.
+        if (reference.packed_over_named_type) {
+            const auto effective
+                = type_resolver.effective_systemverilog_type(
+                    reference, resolution_scope);
+            if (!effective || effective->packed_over_named_type) {
+                return std::nullopt;
+            }
+            return self(self, *effective);
+        }
         // An event value outside the module scope is the handle of its
         // event object (IEEE 1800-2017 15.5).
         if (reference.target.spelling == "event"

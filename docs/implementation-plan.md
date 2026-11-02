@@ -52,8 +52,9 @@ the sole current **In progress** batch.
   actuals for an HDL child through an append-only C ABI extension. These values
   become ordinary specialization/cache identity; they are never mutable
   runtime configuration.
-- Cross-language selection remains explicit through `fsim.toml`; fsim never
-  guesses a SystemC, VHDL, or Verilog/SystemVerilog target by name.
+- Cross-language selection remains explicit through language-qualified top
+  names and `fsim::bind` bindings; fsim never guesses a SystemC, VHDL, or
+  Verilog/SystemVerilog target by name.
 - Tcl is the first scripted automation surface. Interactive and batch Tcl
   commands must wrap the same project, session, debugger, and callback model
   as the CLI and native C API; they do not own a separate simulation kernel.
@@ -969,7 +970,9 @@ The dependency migration is implementation-complete and locally validated:
    the exact LLVM 22.1.8 warnings-as-errors Tcl application, version
    selection, and staged relocation tests passed.
 6. A real temporary-prefix install ran without `FSIM_TCL_LIBRARY`, discovered
-   its executable-relative `share/fsim/tcl9.0`, and reported patchlevel 9.0.4.
+   its executable-relative `share/fsim/tcl9.0`, and reported patchlevel 9.0.4. Since
+   2026-11-02 the script library is built into fsim (zipfs) and the install no
+   longer has `share/fsim/tcl9.0`; `FSIM_TCL_LIBRARY` still selects one on disk.
 7. The strict native C API and C-header tests pass while linked through the
    Tcl 9 application build.
 

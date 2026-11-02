@@ -375,7 +375,7 @@ endif()
 execute_process(COMMAND ${launcher} "${prefix}/bin/fsim${suffix}" --version
   RESULT_VARIABLE version_result OUTPUT_VARIABLE version ERROR_VARIABLE version_error)
 string(STRIP "${version}" version)
-if(NOT version_result EQUAL 0 OR NOT version STREQUAL "fsim 2026.0 (C API 1)")
+if(NOT version_result EQUAL 0 OR NOT version STREQUAL "fsim 2026.0 (C API 2)")
   message(FATAL_ERROR
     "v3 installed archive version failed with ${version_result}: "
     "${version}${version_error}")
