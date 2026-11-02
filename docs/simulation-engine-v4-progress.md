@@ -138,6 +138,48 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-02: Class statics per instance, generic-package fixes, Windows paths (`b259b1d6`, `58c40e58`, `ff0466c4`, sweeps `v4c68b`, `v4c68ba`)
+
+**What landed:**
+- **Windows paths (`b259b1d6`):** source references match by canonical spelling (8.3 short names, `subst` drives, symbolic links in the root). Sources on another drive or share keep their absolute path in objects. `library map` on a directory without a catalog creates an empty library.
+- **SystemVerilog (`58c40e58`):**
+  - Parameterized class static initializers read their class parameters.
+  - Classes declared in modules, interfaces and programs are per instance (IEEE 1800-2023 6.22, 8.25): each has its own static storage and methods lowered in the instance's class. Hierarchical receivers resolve statically, and pure virtual functions dispatch natively.
+  - Loop-generate processes write package arrays, queues, strings and associative arrays.
+  - Package class-handle initializers run as package startup processes, which list the package owners they may write. Runtime state schema 92, design format 17.
+- **VHDL (`58c40e58`):** generic-package instances with a protected type stay distinct; names through nested package instances; record aggregates with generics in generic-package constants; protected variables initialised from generics.
+- **Runtime services (`ff0466c4`):** the class executor, constraint lowering and bindings, and the UVM registry resolve per-instance class specializations. This fixed the 9 verilator losses of the first sweep `v4c68` (interface-class dispatch, solve-before, rand_mode, inline constraints).
+
+**Gate:**
+- ct4 on `58c40e58`: 1093/1093 in all four variants.
+- ct4 on `ff0466c4`: normal 1095/1095. The strict, verify and mt4 failures came from configuration-script work then uncommitted in the tree: an undocumented diagnostic in the closure audit, unlisted files in the source manifest, and SystemC and packaging tests that ran while headers changed. All passed on rerun, and both audits pass on a clean worktree of the commit.
+- Normal sweep `v4c68b` (frozen `ff0466c4`): 0 losses against `v4c67`.
+- AOT sweep `v4c68ba`: 0 losses against `v4c67a`.
+- Census tables identical to `v4c67`/`v4c67a` (one first-example name differs).
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+| Suite | v4c67 passed / in scope | v4c68b passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2638 / 2638 | 2638 / 2638 | 273 |
+| nvc | 1259 / 1259 | 1259 / 1259 | 223 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
+**D6 campaign `v4c68bq`** (3 samples):
+
+| Measure | v4c67q | v4c68bq |
+|---|---:|---:|
+| Geomean e2e (× xsim) | 3.88× | 3.81× |
+| Minimum simulate (× xsim) | 3.62× (mixed_codec) | 3.52× (mixed_codec) |
+| original_codec e2e, fsim / xsim | 10.16 s / 27.15 s | 11.12 s / 31.08 s |
+
+xsim's own times rose by as much as fsim's (original_codec 27.15 s to 31.08 s), so the host was slower than for `v4c67q`. The exit floors (e2e ≥ 3.5×, every simulate ≥ 3×) hold.
+
+**Next:** remove project mode (plan `~/.claude/plans/remove-project-mode.md`, approved 11-02).
+
 ### 2026-11-02: Artifacts and caches as single SQLite files, no source text (`4c9ab5a6`, `7215b341`, `e854055c`, `f2337546`, sweeps `v4c67`, `v4c67a`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md` (owner, 11-01).
