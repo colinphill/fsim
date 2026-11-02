@@ -366,7 +366,7 @@ namespace codec_detail {
                     >= runtime::simir::ProcessStartupPhase::ordinary
                 && value
                     <= runtime::simir::ProcessStartupPhase::
-                        after_procedures;
+                        class_static_initializer;
         } else if constexpr (std::same_as<T, semantic::CompiledReferenceKind>) {
             return value >= semantic::CompiledReferenceKind::package
                 && value <= semantic::CompiledReferenceKind::context;
@@ -937,6 +937,7 @@ namespace codec_detail {
             value.program_owner, value.postponed, value.final,
             value.startup_phase, value.startup_order,
             value.startup_package_owner_id,
+            value.startup_writable_package_owner_ids,
             value.startup_writable_string_object_ids,
             value.startup_writable_container_object_ids);
     }
@@ -1738,6 +1739,7 @@ namespace codec_detail {
                 write(instance.startup_phase);
                 write(instance.startup_order);
                 write(instance.startup_package_owner_id);
+                write(instance.startup_writable_package_owner_ids);
                 write(instance.startup_writable_string_object_ids);
                 write(instance.startup_writable_container_object_ids);
             }
@@ -2661,6 +2663,7 @@ namespace codec_detail {
                     || !read(instance.startup_phase)
                     || !read(instance.startup_order)
                     || !read(instance.startup_package_owner_id)
+                    || !read(instance.startup_writable_package_owner_ids)
                     || !read(instance.startup_writable_string_object_ids)
                     || !read(instance.startup_writable_container_object_ids)) {
                     return false;

@@ -32,7 +32,7 @@ fsim_scv_require_tokens(
   "std::string scv_compatibility")
 fsim_scv_require_tokens(
   "include/fsim/artifact/design.hpp"
-  "kDesignFormatVersion = 16"
+  "kDesignFormatVersion = 17"
   "struct DesignSystemCPlugin"
   "std::string scv_compatibility")
 fsim_scv_require_tokens(

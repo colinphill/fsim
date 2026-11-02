@@ -165,6 +165,21 @@ struct ClassSpecialization {
     OriginId origin;
 };
 
+/// The generate_environment entry naming the instance of the module,
+/// interface or program that declares a class: each instance has a class of
+/// its own (IEEE 1800-2023 6.22, 8.25). Its value is the instance path.
+inline constexpr std::string_view class_instance_environment { "$instance" };
+
+/// Whether `specialization` has static properties of its own rather than
+/// the bare declaration's: a parameterized class, or the class of one
+/// generated scope or design element instance (IEEE 1800-2023 6.22, 8.25).
+[[nodiscard]] inline bool has_own_static_storage(
+    const ClassSpecialization& specialization) noexcept
+{
+    return !specialization.parameters.empty()
+        || !specialization.generate_environment.empty();
+}
+
 struct ClassSpecializationResult {
     std::vector<ClassSpecialization> specializations;
     std::vector<ClassSpecializationError> errors;
@@ -240,18 +255,23 @@ public:
     /// (`Box#(7)::f()`).
     [[nodiscard]] std::optional<ClassSpecializationId> for_expression(
         ExpressionId expression) const;
-    /// The genvars whose values distinguish the classes of a class
-    /// declaration (those of the loop generates enclosing it, outermost
-    /// first); empty for a class outside every loop generate.
+    /// The names whose values distinguish the classes of a class
+    /// declaration: class_instance_environment for a class declared in a
+    /// module, interface or program, then the genvars of the loop generates
+    /// enclosing it, outermost first; empty for a class of a package or
+    /// compilation unit outside every loop generate.
     [[nodiscard]] std::span<const std::string> generate_iterators(
         std::string_view declaration_identity) const;
-    /// The specialization of a class declared in a loop generate for the
-    /// iteration `environment` names (the genvar values of the scope in which
-    /// the class is used); none when the class is not iteration-specific or
-    /// the environment lacks one of its genvars. Materialized when new.
+    /// The class of the generated scope or design element instance
+    /// `environment` names (the genvar values and instance path of the scope
+    /// in which the class is used), made from `base_specialization` (the
+    /// default specialization when empty); none when the class is not
+    /// scope-specific or the environment lacks one of its names.
+    /// Materialized when new.
     [[nodiscard]] std::optional<ClassSpecializationId> specialize_generated(
         std::string_view declaration_identity,
-        std::span<const std::pair<std::string, std::string>> environment);
+        std::span<const std::pair<std::string, std::string>> environment,
+        std::string_view base_specialization = { });
     /// The specialization an identity made by specialize_generated names,
     /// rebuilt from the identity alone (a loaded design names it).
     [[nodiscard]] std::optional<ClassSpecializationId>

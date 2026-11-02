@@ -1198,7 +1198,8 @@ private:
         std::span<const semantic::DeclarationId> selected_generates,
         std::span<const hierarchy_sv_generate_detail::Occurrence>
             occurrences);
-    void register_generated_class_specializations(
+    void register_generated_class_specializations(std::string_view path,
+        semantic::UnitId unit,
         std::span<const hierarchy_sv_generate_detail::Occurrence>
             occurrences);
 
@@ -1682,13 +1683,10 @@ private:
         semantic::DeclarationId declaration;
         semantic::ExpressionId initializer;
         runtime::simir::SignalId signal;
-    };
-
-    struct PendingSystemVerilogPackageClassInitializer {
-        semantic::UnitId unit;
-        semantic::DeclarationId declaration;
-        runtime::simir::SignalId signal;
-        semantic::ExpressionId initializer;
+        // A class-handle allocation: its constructor may write the storage
+        // of the packages the class depends on, as class static
+        // initializers may.
+        bool class_allocation { };
     };
 
     void resolve_compiled_systemverilog_virtual_interface_initializers(
@@ -1763,7 +1761,8 @@ private:
             generated_materializations,
         const std::vector<DeferredGeneratedSystemVerilogItem>& deferred,
         std::size_t specialization_index,
-        std::optional<std::uint32_t> program_owner);
+        std::optional<std::uint32_t> program_owner,
+        const Lowerer& package_storage);
     // Lower processes and concurrent statements whose hierarchical
     // references named instances that did not exist yet (an interface
     // instance's members); called once the unit's children are
@@ -2158,6 +2157,13 @@ private:
     std::unordered_map<std::string,
         std::shared_ptr<const semantic::SpecializedHirUnit>>
         systemverilog_instance_specializations_;
+    // The paths of the module, interface and program instances (not of
+    // generated scopes): each has classes of its own (IEEE 1800-2023 6.22).
+    std::unordered_set<std::string> systemverilog_design_element_instances_;
+    // The classes declared directly in each unit (outside generates and
+    // without parameters of their own), by unit id.
+    std::optional<std::unordered_map<std::uint32_t, std::vector<std::string>>>
+        systemverilog_unit_classes_;
     // The last name component of every SystemVerilog disable target, and
     // the labels of named blocks and tasks it may name.
     struct SystemVerilogDisableLabels {
@@ -2221,8 +2227,6 @@ private:
     std::vector<semantic::UnitId> systemverilog_package_units_;
     std::vector<PendingSystemVerilogPackageInitializer>
         systemverilog_package_initializers_;
-    std::vector<PendingSystemVerilogPackageClassInitializer>
-        systemverilog_package_class_initializers_;
     std::unordered_map<std::uint32_t, ContainerObjectId>
         systemverilog_package_container_objects_;
     std::unordered_map<std::uint32_t, StringObjectId>

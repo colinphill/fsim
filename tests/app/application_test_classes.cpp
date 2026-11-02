@@ -316,7 +316,7 @@ module class_hir_report_exception_top;
 
     function string fail_after_mutation();
       int local_report_value;
-      // Reading the enclosing unit parameter keeps this call on runtime HIR.
+      // Reading the enclosing unit parameter runs in this instance's class.
       $info("class HIR info");
       $warning("class HIR warning");
       $error("class HIR error");
@@ -364,10 +364,11 @@ endmodule
             return config;
         };
 
-    // This module-local class reads its enclosing parameter, so the lowerer
-    // keeps the string-return call on runtime class HIR. Its packed property
-    // write is published while the original HIR $fatal unwinds; a throwing
-    // observer must not replace that active exception.
+    // This module-local class reads its enclosing parameter: the
+    // string-return call runs in the instance's class (IEEE 1800-2023 6.22),
+    // lowered to SimIR. Its reports keep their order and source, its packed
+    // property write is published once, and its $fatal stops the run with
+    // the method's own text.
     for (const auto engine : {
              fsim::app::SimulationEngine::interpreter,
              fsim::app::SimulationEngine::compiled }) {
@@ -423,23 +424,20 @@ endmodule
                 assert(value.low_word().bval == 0U);
                 assert(value.low_word().aval == 1U);
                 ++hir_failure_events;
-                throw std::runtime_error {
-                    "HIR-unwind property observer failure"
-                };
             });
         bool hir_failure_observed { };
-        bool observer_failure_escaped { };
         try {
             (void)hir_failure_simulation.run();
-        } catch (const std::invalid_argument& error) {
-            hir_failure_observed = std::string_view { error.what() }
-                == "class method executed $fatal";
-        } catch (const std::runtime_error& error) {
-            observer_failure_escaped = std::string_view { error.what() }
-                == "HIR-unwind property observer failure";
+        } catch (const fsim::runtime::simir::AssertionError& error) {
+            hir_failure_observed = error.severity()
+                    == fsim::runtime::simir::AssertionSeverity::failure
+                && error.what()
+                    == "SimIR process " + std::to_string(error.process())
+                        + ", instruction "
+                        + std::to_string(error.instruction())
+                        + ": expected HIR function failure 1";
         }
         assert(hir_failure_observed);
-        assert(!observer_failure_escaped);
         assert(hir_reports.size() == 6U);
         const auto expected_report_time = hir_failure_simulation.now();
         const auto expected_report_delta = hir_failure_simulation.delta();
@@ -463,7 +461,7 @@ endmodule
                 "class HIR info",
                 "class HIR warning",
                 "class HIR error",
-                "1",
+                "          1",
                 "class HIR local value 7",
                 "expected HIR function failure 1" }));
         assert((std::vector<fsim::runtime::simir::AssertionSeverity> {
@@ -887,7 +885,7 @@ module string_dispatch_hir_failure_top;
     int packed_changes;
 
     function string fail_after_mutation();
-      // Reading the enclosing unit parameter keeps this call on runtime HIR.
+      // Reading the enclosing unit parameter runs in this instance's class.
       $info("class HIR info");
       $warning("class HIR warning");
       $error("class HIR error");

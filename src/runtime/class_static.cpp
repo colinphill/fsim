@@ -275,6 +275,14 @@ std::string SystemVerilogClassStaticStore::resolve(
 
 SystemVerilogClassStaticStore::Entry& SystemVerilogClassStaticStore::entry(
     const std::string_view specialization_or_alias) {
+  const std::string spelling{specialization_or_alias};
+  if (missing_specialization_resolver_ && !entries_.contains(spelling)
+      && !aliases_.contains(spelling)) {
+    auto descriptor = missing_specialization_resolver_(spelling);
+    if (descriptor && descriptor->specialization_identity == spelling) {
+      register_specialization(std::move(*descriptor));
+    }
+  }
   return entries_.at(resolve(specialization_or_alias));
 }
 

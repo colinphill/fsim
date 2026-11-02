@@ -1840,6 +1840,11 @@ void Simulation::Impl::assign_property_value(
             && exact->declaration_identity != named_owner) {
             owner = exact->declaration_identity;
             specialization = &*exact;
+        } else if (const auto* generated
+                   = generated_class_specialization(named_owner)) {
+            // The class of a generated scope or design element instance.
+            owner = generated->declaration_identity;
+            specialization = generated;
         }
         // The property's type comes from the specialization of the object
         // that holds it, or of the base it inherits the property from: a

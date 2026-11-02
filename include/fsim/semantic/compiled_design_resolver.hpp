@@ -142,6 +142,10 @@ struct CompiledSystemVerilogClassMethodResolution {
 struct CompiledVhdlPackageMember {
     DeclarationId member;
     std::optional<DeclarationId> package_instance;
+    // The package instances whose templates declare `package_instance`,
+    // outermost first (`g1.nb.m`: g1), each elaborated per enclosing
+    // instance (IEEE 1076-2008 4.9).
+    std::vector<DeclarationId> enclosing_package_instances;
     UnitId template_unit;
     CompiledBindingFrame generic_bindings;
 
@@ -170,6 +174,7 @@ struct CompiledVhdlCallableResolution {
     DeclarationId key;
     DeclarationId body;
     std::optional<DeclarationId> package_instance;
+    std::vector<DeclarationId> enclosing_package_instances;
     CompiledBindingFrame generic_bindings;
 
     friend bool operator==(const CompiledVhdlCallableResolution&,

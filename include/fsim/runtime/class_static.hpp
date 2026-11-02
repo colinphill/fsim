@@ -7,9 +7,11 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::runtime {
@@ -47,7 +49,18 @@ class SystemVerilogClassStaticStore final {
   explicit SystemVerilogClassStaticStore(
       SystemVerilogClassStaticLimits limits = {});
 
+  /// Supplies the descriptor of a specialization first named after
+  /// registration, such as the class of one generated scope or design
+  /// element instance; none leaves the name unknown.
+  using MissingSpecializationResolver =
+      std::function<std::optional<SystemVerilogClassStaticDescriptor>(
+          std::string_view)>;
+
   void register_specialization(SystemVerilogClassStaticDescriptor descriptor);
+  void set_missing_specialization_resolver(
+      MissingSpecializationResolver resolver) {
+    missing_specialization_resolver_ = std::move(resolver);
+  }
   void initialize(std::string_view specialization_or_alias);
   void initialize_all();
 
@@ -93,6 +106,7 @@ class SystemVerilogClassStaticStore final {
   SystemVerilogClassStaticLimits limits_;
   std::map<std::string, Entry> entries_;
   std::map<std::string, std::string> aliases_;
+  MissingSpecializationResolver missing_specialization_resolver_;
   std::size_t property_count_{};
   std::size_t storage_bytes_{};
 };

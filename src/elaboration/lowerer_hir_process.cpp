@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "lowerer_driver_regions.hpp"
 #include "lowerer_internal.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
 
 #include <algorithm>
 #include <array>
@@ -3708,7 +3709,54 @@ std::optional<Process> Lowerer::lower_hir_package_initializer(
     description.kind = frontend::ProcessKind::Initial;
     description.initial = true;
     description.require_wildcard_dependency = false;
-    return lower_hir_process_body(description, language, hierarchy);
+    // `C#(7) h = new` allocates the declaration's class specialization
+    // (IEEE 1800-2017 8.25).
+    const auto saved_target = std::exchange(
+        hir_allocation_target_, std::optional { declaration_id });
+    auto process = lower_hir_process_body(description, language, hierarchy);
+    hir_allocation_target_ = saved_target;
+    return process;
+}
+
+std::optional<Process> Lowerer::lower_hir_class_static_initializer(
+    const std::string_view specialization_identity,
+    const semantic::DeclarationId property_declaration,
+    const std::string_view hierarchy)
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    auto& index = class_specializations();
+    const auto specialization = index.find(specialization_identity);
+    if (!specialization) {
+        return std::nullopt;
+    }
+    // The index may grow while the initializer is lowered, which moves its
+    // entries; the description keeps its own copy of the property.
+    const auto& owner = index.at(*specialization);
+    const auto found = std::ranges::find_if(owner.properties,
+        [&](const semantic::sv::SpecializedClassProperty& candidate) {
+            return candidate.declaration == property_declaration
+                && candidate.owner_identity == owner.declaration_identity;
+        });
+    if (found == owner.properties.end() || !found->static_storage
+        || !found->initializer) {
+        return std::nullopt;
+    }
+    const auto property = *found;
+    HirProcessDescription description;
+    description.source = property.source;
+    description.scope = owner.declaration_scope;
+    description.name = "$class_static_initializer_"
+        + std::string { specialization_identity } + "::" + property.name;
+    description.class_static_initializer
+        = HirProcessDescription::ClassStaticInitializer {
+              *specialization, &property };
+    description.kind = frontend::ProcessKind::Initial;
+    description.initial = true;
+    description.require_wildcard_dependency = false;
+    return lower_hir_process_body(
+        description, frontend::Language::SystemVerilog2017, hierarchy);
 }
 
 std::optional<Lowerer::HirVhdlResolverProgram>
@@ -4524,6 +4572,11 @@ std::optional<Process> Lowerer::lower_hir_process_body(
         hir_failed_class_functions_.clear();
         lowered = lower_hir_process_body_once(
             description, language, hierarchy);
+        // A virtual call that must test the classes of instances not yet
+        // elaborated defers the whole process to the second pass.
+        if (hierarchical_reference_retry_ && hir_class_dispatch_deferred_) {
+            return std::nullopt;
+        }
         // A pass that reported errors failed too, even if it produced a
         // process.
         if ((lowered && diagnostics_.size() == diagnostics_before)
@@ -4917,6 +4970,15 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             complete,
             UnknownBranchPolicy::when_false,
         };
+    } else if (description.class_static_initializer) {
+        const auto& initializer = *description.class_static_initializer;
+        if (input_adapter || output_adapter
+            || initializer.property == nullptr
+            || !lower_hir_class_static_property_initializer(
+                initializer.specialization, *initializer.property)) {
+            process_ = { };
+            return std::nullopt;
+        }
     } else if (description.vhdl_resolver) {
         const auto& resolver = *description.vhdl_resolver;
         const auto& signal = design_.signal_info_[resolver.signal];

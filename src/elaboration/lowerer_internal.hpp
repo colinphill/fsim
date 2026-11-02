@@ -16,10 +16,12 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <unordered_set>
 #include <vector>
 
 namespace fsim::semantic::sv {
 class ClassSpecializationIndex;
+struct SpecializedClassProperty;
 }
 
 namespace fsim::elaboration {
@@ -482,8 +484,9 @@ public:
         const std::unordered_map<std::string, std::uint64_t>* handles,
         const std::unordered_map<std::string, std::string>* types = nullptr,
         const HirInstanceUnits* instance_units = nullptr,
-        const std::unordered_map<std::string, std::string>* exports = nullptr)
-        noexcept;
+        const std::unordered_map<std::string, std::string>* exports = nullptr,
+        const std::unordered_set<std::string>* design_element_instances
+        = nullptr) noexcept;
     // The design's VHDL lowering index, which the caller owns and this
     // lowerer fills on first use.
     void set_vhdl_lowering_index(VhdlLoweringIndex* index) noexcept
@@ -552,6 +555,7 @@ public:
     {
         hierarchical_reference_used_ = false;
         hierarchical_reference_missed_ = false;
+        hir_class_dispatch_deferred_ = false;
     }
     [[nodiscard]] bool hierarchical_reference_used() const noexcept
     {
@@ -611,6 +615,14 @@ public:
         semantic::DeclarationId declaration,
         SignalId destination,
         frontend::Language language,
+        std::string_view hierarchy);
+    /// Lower the initializer of static property `property` of class
+    /// specialization `specialization_identity` as a one-shot startup
+    /// process that writes the property (IEEE 1800-2017 8.9, 8.25).
+    [[nodiscard]] std::optional<Process>
+    lower_hir_class_static_initializer(
+        std::string_view specialization_identity,
+        semantic::DeclarationId property,
         std::string_view hierarchy);
     // The nets and constant bit ranges that an inout port actual selects
     // (`bus[0]`, `bus[3:2]`, `{a, b[1]}`), each with its offset in the
@@ -711,6 +723,15 @@ public:
     void set_package_constant_signal(PackageConstantSignal materialize)
     {
         package_constant_signal_ = std::move(materialize);
+    }
+    // The package storage `other` materializes: a generate block's processes
+    // name the same package objects as their instance's (IEEE 1800-2017
+    // 26.3).
+    void share_package_storage(const Lowerer& other)
+    {
+        package_constant_signal_ = other.package_constant_signal_;
+        package_container_object_ = other.package_container_object_;
+        package_string_object_ = other.package_string_object_;
     }
     // Binds generics, such as a package instance's generic map, for every
     // process lowered next (IEEE 1076-2008 4.9, 6.5.6.2).
@@ -1001,6 +1022,13 @@ private:
             std::vector<VhdlDriverRegions> driver_regions;
         };
         std::optional<VhdlResolver> vhdl_resolver;
+        // A class static property initializer: the specialization and the
+        // property it initializes.
+        struct ClassStaticInitializer {
+            std::uint32_t specialization { };
+            const semantic::sv::SpecializedClassProperty* property { };
+        };
+        std::optional<ClassStaticInitializer> class_static_initializer;
     };
 
     [[nodiscard]] std::optional<Process> lower_hir_process_body(
@@ -1963,6 +1991,18 @@ private:
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
         const semantic::vhdl::SubtypeIndication* vhdl_array_context = nullptr) const;
+    // Pushes onto hir_generic_binding_frames_ the generics of the package
+    // instance a selected name reads through (`inst.c.e`, IEEE 1076-2008
+    // 4.9): the first prefix, or the whole name, that resolves to a
+    // constant of a package instance. The caller restores the frames.
+    void push_hir_vhdl_instance_member_frames(
+        const semantic::vhdl::Expression& expression) const;
+    // The generics push_hir_vhdl_instance_member_frames pushes for an
+    // expression; empty when it pushes none. The resolution depends only
+    // on the name and its scope.
+    mutable std::unordered_map<const semantic::vhdl::Expression*,
+        std::optional<semantic::CompiledBindingFrame>>
+        hir_vhdl_instance_member_frames_cache_;
     [[nodiscard]] std::optional<std::size_t> compute_hir_expression_width(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
@@ -3503,7 +3543,8 @@ private:
     // was last named (`p2.s`), by the object's template declaration.
     // hir_runtime_binding binds the template object to that instance's own
     // object (IEEE 1076-2008 4.9); see vhdl_package_object_key.
-    mutable std::unordered_map<std::uint32_t, semantic::DeclarationId>
+    mutable std::unordered_map<std::uint32_t,
+        std::vector<semantic::DeclarationId>>
         hir_package_object_instances_;
     void select_hir_package_object_instance(
         semantic::ExpressionId expression,
@@ -4111,6 +4152,24 @@ private:
     [[nodiscard]] std::optional<std::uint32_t>
     hir_vhdl_lexical_enclosing_callable(
         semantic::ScopeId declaration_scope) const;
+    // The package instance a VHDL subprogram call runs in: the one the
+    // call names, or, for a subprogram of the same package called from
+    // within an instance's subprogram, the caller's.
+    [[nodiscard]] std::vector<semantic::DeclarationId>
+    hir_vhdl_callable_package_instance(
+        const semantic::CompiledVhdlCallableResolution& resolution) const;
+    // The package instances an object or constant named through `member`
+    // belongs to, outermost first: an instance declared in a generic
+    // package template is, within a subprogram of an instance of that
+    // template, the enclosing instance's own (IEEE 1076-2008 4.9).
+    [[nodiscard]] std::vector<semantic::DeclarationId>
+    hir_vhdl_package_member_path(
+        const semantic::CompiledVhdlPackageMember& member) const;
+    // The active subprogram's package instance path when `declaration`
+    // belongs to the same generic package template as that subprogram.
+    [[nodiscard]] const std::vector<semantic::DeclarationId>*
+    hir_vhdl_owning_frame_package_path(
+        semantic::DeclarationId declaration) const;
     [[nodiscard]] bool emit_hir_callable_scalar_range_check(
         semantic::DeclarationId formal,
         semantic::ScopeId callable_scope,
@@ -4326,6 +4385,24 @@ private:
     };
     [[nodiscard]] std::vector<HirClassOverride> hir_class_method_overrides(
         semantic::DeclarationId declaration) const;
+    // The classes of the design element instances whose objects a call of
+    // method `declaration` reaches when the call site does not know the
+    // instance (`top.u.h.f()`): each instance has a class of its own (IEEE
+    // 1800-2023 6.22), so the call tests the object against each. Empty
+    // when `specialization` already is one instance's class.
+    // The class of the instance whose variable a hierarchical receiver
+    // (`top.u.h`) names, when method `declaration` belongs to a class of a
+    // design element instance (IEEE 1800-2023 6.22, 23.6): such a handle
+    // holds objects of that instance's classes only.
+    [[nodiscard]] std::optional<std::uint32_t>
+    hir_class_receiver_instance_specialization(
+        semantic::DeclarationId declaration,
+        std::optional<std::uint32_t> specialization,
+        std::optional<semantic::ExpressionId> receiver) const;
+    [[nodiscard]] std::vector<HirClassOverride> hir_class_instance_candidates(
+        semantic::DeclarationId declaration,
+        std::optional<std::uint32_t> specialization,
+        const std::string& identity) const;
     // A non-static class function call lowered as a subroutine, dispatched
     // on the receiver's class; none when the call needs the runtime path.
     [[nodiscard]] std::optional<HirClassCallResult>
@@ -4369,6 +4446,11 @@ private:
     [[nodiscard]] bool lower_hir_class_property_initializers(
         const semantic::sv::ClassDeclaration& declaration,
         RegisterId receiver);
+    // The initializer of static property `property` of `specialization`,
+    // written to that specialization's property (8.9, 8.25).
+    [[nodiscard]] bool lower_hir_class_static_property_initializer(
+        std::uint32_t specialization,
+        const semantic::sv::SpecializedClassProperty& property);
     // Before a constructor body without `super.new(...)`: the base class's
     // implicit construction and this class's property initializers.
     [[nodiscard]] bool lower_hir_constructor_prologue(
@@ -4940,15 +5022,22 @@ private:
     [[nodiscard]] std::optional<std::uint32_t>
     hir_declaration_class_specialization(
         semantic::DeclarationId declaration) const;
-    // The specialization of a class declared in a loop generate that the
-    // generated scope being lowered selects: each iteration's class is a
-    // distinct type whose members see that iteration's genvars (IEEE
-    // 1800-2017 27.4). None for any other class.
+    // The specialization of a class declared in a loop generate or in a
+    // module, interface or program that the scope being lowered selects:
+    // each iteration's and instance's class is a distinct type whose members
+    // see that iteration's genvars and that instance's parameters (IEEE
+    // 1800-2023 6.22, 27.4). None for any other class.
     [[nodiscard]] std::optional<std::uint32_t>
     hir_generate_class_specialization(std::uint32_t specialization) const;
-    // The unit a class body of an iteration-specific specialization is
-    // lowered in: the current one with the iteration's genvars; null when
-    // the specialization has none.
+    // The path of the module, interface or program instance whose class
+    // `declaration_identity` the scope being lowered names; none when that
+    // scope is not within an instance declaring it.
+    [[nodiscard]] std::optional<std::string> hir_class_instance_path(
+        std::string_view declaration_identity) const;
+    // The unit a class body of a scope-specific specialization is lowered
+    // in: the current one (or, for a design element instance's class, that
+    // instance's) with the scope's genvars and instance path; null when the
+    // specialization has none.
     [[nodiscard]] const semantic::SpecializedHirUnit*
     hir_generate_class_unit(std::uint32_t specialization) const;
     mutable std::map<
@@ -5354,6 +5443,9 @@ private:
     // function or task called through the instance has its types
     // (IEEE 1800-2017 25.7).
     const HirInstanceUnits* systemverilog_instance_units_ { };
+    // The paths of the module, interface and program instances among them.
+    const std::unordered_set<std::string>*
+        systemverilog_design_element_instances_ { };
     // The instance defining each subroutine a modport exports, keyed
     // "<interface handle>:<name>" (IEEE 1800-2017 25.7.3).
     const std::unordered_map<std::string, std::string>*
@@ -5412,6 +5504,11 @@ private:
         // 'DRIVING_VALUE in that caller process, even while its deferred body
         // is lowered in the callable's nested scope.
         std::optional<semantic::ScopeId> vhdl_driver_process_scope;
+        // The generic package instance whose subprogram this frame runs,
+        // after the instances enclosing it (`g1.nb`): its body's package
+        // objects are that instance's (IEEE 1076-2008 4.9); part of the
+        // frame key.
+        std::vector<semantic::DeclarationId> vhdl_package_instance_path;
         HirCallableType type;
         RegisterId result { };
         StringRegisterId string_result { };
@@ -5831,6 +5928,10 @@ private:
     mutable bool hierarchical_reference_used_ { };
     mutable std::uint64_t hir_instance_path_uses_ { };
     mutable bool hierarchical_reference_missed_ { };
+    // A virtual call whose overrides include classes of design element
+    // instances not yet elaborated was lowered: the process is retried once
+    // every instance exists.
+    mutable bool hir_class_dispatch_deferred_ { };
     bool hierarchical_reference_retry_ { };
     // `g[1].h[2].x` as a hierarchical name when every index is constant.
     // A task or function of a module instance named by a hierarchical

@@ -140,6 +140,21 @@ vhdl_character_control_literal_code(const std::string_view name)
         + lowercase_ascii_copy(name);
 }
 
+// The same for an instance declared in a generic package template, which
+// each instance of the template has its own of (`g1.nb.s`): bound by the
+// instances from the outermost.
+[[nodiscard]] inline std::string vhdl_package_object_key(
+    const std::span<const semantic::DeclarationId> path,
+    const std::string_view name)
+{
+    std::string key { "@pkgobj:" };
+    for (const auto instance : path) {
+        key += std::to_string(instance.value());
+        key += '.';
+    }
+    return key + lowercase_ascii_copy(name);
+}
+
 [[nodiscard]] inline bool equal_ignoring_ascii_case(
     const std::string_view left, const std::string_view right) noexcept
 {

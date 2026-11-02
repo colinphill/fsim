@@ -143,9 +143,9 @@ fsim_require_schema_tokens(include/fsim/library/artifact.hpp
   "kPortableSchemaVersion = 16"
   "kCompiledHirSchemaVersion = 3")
 fsim_require_schema_tokens(include/fsim/artifact/design.hpp
-  "kDesignFormatVersion = 16")
+  "kDesignFormatVersion = 17")
 fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
-  "kRuntimeStateSchema = 91"
+  "kRuntimeStateSchema = 92"
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 5"
   "kCompiledHirBundleSchema = 3"

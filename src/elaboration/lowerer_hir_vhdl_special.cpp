@@ -833,10 +833,12 @@ Lowerer::hir_vhdl_protected_method_resolutions(
     // A protected type declared in an instance of a generic package has
     // that instance's generic actuals (IEEE 1076-2008 4.9, 5.6.2).
     std::optional<semantic::DeclarationId> package_instance;
+    std::vector<semantic::DeclarationId> enclosing_package_instances;
     semantic::CompiledBindingFrame generic_bindings;
     if (const auto instance
         = hir_vhdl_protected_instance(object_scope, selected->object)) {
         package_instance = instance->package_instance;
+        enclosing_package_instances = instance->enclosing_package_instances;
         generic_bindings = instance->generic_bindings;
     }
     for (const auto member_id : body->protected_members) {
@@ -857,8 +859,21 @@ Lowerer::hir_vhdl_protected_method_resolutions(
                     != member->callable->formals.size())) {
             continue;
         }
-        result.push_back(
-            { member_id, member_id, package_instance, generic_bindings });
+        result.push_back({ member_id, member_id, package_instance,
+            enclosing_package_instances, generic_bindings });
+        // A method of an object the instance's own subprogram names runs
+        // with that instance's generics (IEEE 1076-2008 4.9).
+        if (!package_instance && active_hir_callable_
+            && !hir_vhdl_callable_package_instance(result.back()).empty()) {
+            const auto& path = hir_callable_frames_[*active_hir_callable_]
+                                   .vhdl_package_instance_path;
+            result.back().package_instance = path.back();
+            result.back().enclosing_package_instances.assign(
+                path.begin(), path.end() - 1);
+            result.back().generic_bindings
+                = hir_callable_frames_[*active_hir_callable_]
+                      .generic_bindings;
+        }
     }
     return result;
 }
@@ -944,7 +959,7 @@ std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
             : nullptr;
         if (member != nullptr) {
             const auto found = container_objects_.find(vhdl_package_object_key(
-                *owners.candidates.front().package_instance,
+                hir_vhdl_package_member_path(owners.candidates.front()),
                 member->name + ".@protected"));
             if (found != container_objects_.end()) {
                 anchor = found->second;
@@ -960,7 +975,31 @@ std::optional<ContainerObjectId> Lowerer::hir_vhdl_protected_anchor(
         const auto* declaration = object_id
             ? find_vhdl_declaration(*specialized_hir_unit_, *object_id)
             : nullptr;
-        if (declaration != nullptr
+        // Within a subprogram of a generic package instance, the body's
+        // object is that instance's (IEEE 1076-2008 4.9).
+        const auto* instance = active_hir_callable_
+                && !hir_callable_frames_[*active_hir_callable_]
+                        .vhdl_package_instance_path.empty()
+            ? &hir_callable_frames_[*active_hir_callable_]
+                   .vhdl_package_instance_path
+            : nullptr;
+        if (declaration != nullptr && instance != nullptr
+            && declaration->form == semantic::vhdl::DeclarationForm::variable) {
+            const auto span = hir_source_span(declaration->source);
+            const auto found = container_objects_.find(vhdl_package_object_key(
+                *instance, declaration->name + ".@protected"));
+            if (found != container_objects_.end()
+                && std::ranges::any_of(design_.vhdl_protected_object_info_,
+                    [&](const VhdlProtectedObjectInfo& candidate) {
+                        return candidate.declaration_span == span
+                            && !candidate.members.empty()
+                            && candidate.members.front().storage
+                                == found->second;
+                    })) {
+                anchor = found->second;
+            }
+        }
+        if (!anchor && declaration != nullptr
             && declaration->form == semantic::vhdl::DeclarationForm::variable) {
             const auto span = hir_source_span(declaration->source);
             const auto declared = [&](const VhdlProtectedObjectInfo& candidate) {
@@ -1439,21 +1478,26 @@ bool Lowerer::materialize_hir_vhdl_global_constant(
     // Each package instance has its own constants; an instance declared in
     // an architecture is elaborated per design instance (IEEE 1076-2008
     // 4.9, 14.4.2.1).
-    const auto* instance_declaration = constant.instance
-        ? find_vhdl_declaration(
-              *specialized_hir_unit_, *constant.instance->package_instance)
+    // An instance nested in a template's instance (`g1.nb`) is bound by
+    // the outermost one's place.
+    const auto instance_path = constant.instance
+        ? hir_vhdl_package_member_path(*constant.instance)
+        : std::vector<semantic::DeclarationId> { };
+    const auto* instance_declaration = !instance_path.empty()
+        ? find_vhdl_declaration(*specialized_hir_unit_, instance_path.front())
         : nullptr;
     const bool package = instance_declaration != nullptr
         ? package_scope(instance_declaration->scope)
         : unit && unit->vhdl != nullptr
             && unit->vhdl->kind == semantic::vhdl::UnitKind::package;
+    std::string instance_key;
+    for (const auto instance : instance_path) {
+        instance_key += std::to_string(instance.value()) + "/";
+    }
     const auto key = std::string { "@vhdl-constant:" }
         + (package ? std::string { "package" } : hierarchy_) + "@"
-        + (constant.instance
-                ? std::to_string(constant.instance->package_instance->value())
-                    + "/"
-                : std::string { })
-        + std::to_string(declaration_id.value()) + "." + declaration->name;
+        + instance_key + std::to_string(declaration_id.value()) + "."
+        + declaration->name;
     const auto flag_name = key + ".@initialized";
     const auto value_name = key + ".@value";
     const auto zero = load_integer(0, 32U, frontend::ValueDomain::Integer);

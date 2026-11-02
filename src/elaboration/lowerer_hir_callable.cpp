@@ -2569,10 +2569,11 @@ Lowerer::hir_class_property_profile(
                 return std::nullopt;
             }
             HirClassPropertyProfile result;
-            result.identity = index.at(*owner).parameters.empty()
-                ? found->canonical_identity
-                : index.at(*owner).specialization_identity + "::"
-                    + found->name;
+            result.identity
+                = semantic::sv::has_own_static_storage(index.at(*owner))
+                ? index.at(*owner).specialization_identity + "::"
+                    + found->name
+                : found->canonical_identity;
             result.static_storage = true;
             result.writable = !found->constant && !found->parameter;
             result.type = type;
@@ -2715,8 +2716,11 @@ Lowerer::hir_class_property_profile(
                 specialized_type = found->type;
             }
             // Each specialization has its own static properties (IEEE
-            // 1800-2017 8.25); the runtime stores them by specialization.
-            if (selected->static_storage && !owner.parameters.empty()) {
+            // 1800-2017 8.25), as has each design element instance's and
+            // generated scope's class (IEEE 1800-2023 6.22); the runtime
+            // stores them by specialization.
+            if (selected->static_storage
+                && semantic::sv::has_own_static_storage(owner)) {
                 specialized_identity = owner.specialization_identity + "::"
                     + selected->name;
             }
@@ -4443,12 +4447,19 @@ std::optional<std::uint32_t> Lowerer::hir_class_member_specialization(
                                  .specialization_identity.c_str()
                            : "-");
     }
-    // A class of a loop generate runs in the generated scope's
-    // specialization (IEEE 1800-2017 27.4).
+    // A class of a loop generate or of a design element instance runs in
+    // the specialization of the generated scope or instance being lowered
+    // (IEEE 1800-2023 6.22, 27.4), `C::n` outside the class included.
+    const auto declared_default = !specialization && !accessed && !receiver;
+    if (declared_default) {
+        specialization = index.default_for(*owner);
+    }
     if (specialization) {
         if (const auto generated
             = hir_generate_class_specialization(*specialization)) {
             specialization = generated;
+        } else if (declared_default) {
+            specialization.reset();
         }
     }
     if (!specialization || !index.bound(*specialization)) {
@@ -4572,6 +4583,12 @@ std::optional<std::uint32_t> Lowerer::hir_scoped_class_owner(
     }
     if (current) {
         leaf = segments.back();
+        // `C::n` names the class of the generated scope or instance being
+        // lowered (IEEE 1800-2023 6.22, 27.4).
+        if (const auto generated
+            = hir_generate_class_specialization(*current)) {
+            current = generated;
+        }
     }
     return current;
 }
@@ -4606,7 +4623,9 @@ Lowerer::hir_scoped_class_method(const semantic::sv::Expression& call) const
                 specialized_hir_unit_->design(), selected->declaration)) {
             result.specialization = index.ancestor(*current, *declaring);
             if (result.specialization
-                && index.binding_frame(*result.specialization).empty()) {
+                && index.binding_frame(*result.specialization).empty()
+                && !semantic::sv::has_own_static_storage(
+                    index.at(*result.specialization))) {
                 result.specialization.reset();
             }
         }
@@ -5920,6 +5939,106 @@ bool Lowerer::lower_hir_class_property_initializers(
     return true;
 }
 
+bool Lowerer::lower_hir_class_static_property_initializer(
+    const std::uint32_t specialization,
+    const semantic::sv::SpecializedClassProperty& property)
+{
+    if (!property.static_storage || !property.initializer
+        || property.parameter || property.type.container_form) {
+        return false;
+    }
+    auto& index = class_specializations();
+    // The initializer reads its specialization's parameters and static
+    // properties (IEEE 1800-2017 8.25).
+    const auto identity
+        = semantic::sv::has_own_static_storage(index.at(specialization))
+        ? index.at(specialization).specialization_identity + "::"
+            + property.name
+        : property.canonical_identity;
+    // The class of a generated scope or design element instance reads that
+    // scope's genvars and that instance's parameters (IEEE 1800-2023 6.22).
+    const HirUnitSwap unit_swap {
+        *this, hir_generate_class_unit(specialization)
+    };
+    const SizeRestoreGuard frames { hir_generic_binding_frames_ };
+    hir_generic_binding_frames_.push_back(index.binding_frame(specialization));
+    struct ContextRestore {
+        Lowerer& lowerer;
+        std::optional<HirInitializerContext> context;
+        ~ContextRestore()
+        {
+            lowerer.hir_initializer_context_ = std::move(context);
+            lowerer.hir_allocation_target_.reset();
+            lowerer.hir_allocation_target_type_.reset();
+        }
+    } const restore { *this, hir_initializer_context_ };
+    hir_initializer_context_
+        = HirInitializerContext { active_hir_callable_, specialization };
+    // `static C#(4) c = new;` allocates the property's specialization.
+    hir_allocation_target_ = property.declaration;
+    hir_allocation_target_type_ = property.type;
+
+    const auto initializer
+        = specialized_hir_unit_->find_expression(*property.initializer);
+    if (!initializer || initializer->systemverilog == nullptr) {
+        return false;
+    }
+    if (property.type.value_form == semantic::sv::TypeForm::string) {
+        const auto text = lower_hir_string_expression(*property.initializer);
+        if (!text) {
+            return false;
+        }
+        ClassStaticMethodCall call;
+        call.destination = allocate_register(1U, frontend::ValueDomain::Bit2);
+        call.method_identity = identity;
+        prepare_string_property_call(call, *text, true);
+        process_.operations.emplace_back(std::move(call));
+        return true;
+    }
+    // `static mailbox m = new(n);` constructs the property's mailbox or
+    // semaphore (IEEE 1800-2017 15.3, 15.4).
+    if (initializer->systemverilog->kind == semantic::sv::ExpressionKind::call
+        && initializer->systemverilog->text.starts_with("@sv-sync-new:")) {
+        const auto synchronization = lower_hir_synchronization_expression(
+            *property.initializer, 64U, &property.type);
+        if (!synchronization.handled || !synchronization.succeeded
+            || !synchronization.value) {
+            return false;
+        }
+        process_.operations.emplace_back(ClassStaticPropertyWrite {
+            *synchronization.value, identity });
+        return true;
+    }
+    const bool handle
+        = property.type.value_form == semantic::sv::TypeForm::class_handle
+        || !property.type.class_identity.empty();
+    const auto width = handle ? std::optional<std::size_t> { 64U }
+                              : hir_systemverilog_type_width(property.type);
+    if (!width || *width == 0U) {
+        return false;
+    }
+    const auto spelling = std::string_view { property.type.target.spelling };
+    const auto scalar = spelling == "real"
+        ? frontend::SystemVerilogScalarKind::Real
+        : spelling == "shortreal"
+        ? frontend::SystemVerilogScalarKind::ShortReal
+        : spelling == "realtime"
+        ? frontend::SystemVerilogScalarKind::Realtime
+        : frontend::SystemVerilogScalarKind::None;
+    auto value = lower_hir_scalar_converted_value(
+        *property.initializer, *width, scalar);
+    if (!value) {
+        return false;
+    }
+    if (register_width(*value) != *width) {
+        value = resize_register(*value, *width,
+            hir_expression_signed(*property.initializer));
+    }
+    process_.operations.emplace_back(ClassStaticPropertyWrite {
+        *value, identity });
+    return true;
+}
+
 bool Lowerer::lower_hir_class_construction(
     const semantic::sv::ClassDeclaration& declaration,
     const RegisterId receiver,
@@ -6014,6 +6133,20 @@ std::optional<std::uint32_t> Lowerer::hir_constructor_base_specialization()
 namespace {
 
 constexpr std::string_view base_constructor_prefix { "@sv-base-constructor:" };
+
+// Whether `specialization` is the class of one design element instance,
+// whose body is lowered in that instance's unit and so reads its parameters
+// (IEEE 1800-2023 6.22).
+bool instance_class_specialization(
+    const semantic::sv::ClassSpecializationIndex& index,
+    const std::optional<std::uint32_t> specialization)
+{
+    return specialization
+        && std::ranges::any_of(index.at(*specialization).generate_environment,
+            [](const auto& bound) {
+                return bound.first == semantic::sv::class_instance_environment;
+            });
+}
 
 bool class_method_reads_enclosing_unit_parameter(
     const semantic::SpecializedHirUnit& specialization,
@@ -6546,7 +6679,7 @@ Lowerer::hir_class_static_container_binding(
         access_id, property->declaration, std::nullopt);
     if (specialization) {
         const auto& owner = class_specializations().at(*specialization);
-        if (!owner.parameters.empty()) {
+        if (semantic::sv::has_own_static_storage(owner)) {
             identity = owner.specialization_identity + "::" + property->name;
         }
         if (const auto found = std::ranges::find(owner.properties,
@@ -6688,7 +6821,12 @@ Lowerer::lower_hir_class_function_call(
         std::string_view { "get_randstate" },
         std::string_view { "set_randstate" },
     };
-    if (method == nullptr || !method->defined || method->pure
+    // A pure virtual function runs the override of the object's class: a
+    // handle of an abstract class always holds an object of a derived one.
+    const bool pure_dispatch = method != nullptr && method->pure
+        && profile.virtual_dispatch && receiver.has_value();
+    if (method == nullptr
+        || ((!method->defined || method->pure) && !pure_dispatch)
         || method->kind != semantic::sv::ClassMethodKind::function
         || std::ranges::find(runtime_methods, method->name)
             != runtime_methods.end()
@@ -6709,25 +6847,46 @@ Lowerer::lower_hir_class_function_call(
     }();
     if (!record || record->systemverilog == nullptr || !type
         || type->string != profile.string_result
-        || type->container.has_value() != profile.container_result) {
+        || type->container.has_value() != profile.container_result
+        || (pure_dispatch && (type->string || type->container))) {
         return std::nullopt;
     }
-    // A body that reads a class value parameter needs its specialization.
-    if (receiver
-        && (class_method_reads_enclosing_unit_parameter(
-                *specialized_hir_unit_, profile.declaration)
+    if (const auto exact = receiver
+            ? hir_class_receiver_instance_specialization(profile.declaration,
+                  profile.specialization, profile.receiver)
+            : std::nullopt) {
+        auto instance_profile = profile;
+        instance_profile.specialization = exact;
+        return lower_hir_class_function_call(
+            expression, instance_profile, receiver);
+    }
+    const auto instances = receiver
+        ? hir_class_instance_candidates(
+              profile.declaration, profile.specialization, profile.identity)
+        : std::vector<HirClassOverride> { };
+    const bool instance_dispatch = !instances.empty();
+    // A body that reads a class value parameter needs its specialization,
+    // one that reads its module's parameters the instance's class.
+    if (receiver && !instance_dispatch
+        && ((class_method_reads_enclosing_unit_parameter(
+                 *specialized_hir_unit_, profile.declaration)
+                && !instance_class_specialization(
+                    class_specializations(), profile.specialization))
             || (!profile.specialization
                 && class_method_reads_class_value_parameter(
                     *specialized_hir_unit_, profile.declaration)))) {
         return std::nullopt;
     }
-    const auto overrides = profile.virtual_dispatch && receiver
+    auto overrides = profile.virtual_dispatch && receiver
         ? hir_class_method_overrides(profile.declaration)
         : std::vector<HirClassOverride> { };
-    if (receiver && std::ranges::any_of(overrides, [&](const auto& item) {
-            return class_method_reads_enclosing_unit_parameter(
-                *specialized_hir_unit_, item.declaration);
-        })) {
+    if ((pure_dispatch && overrides.empty())
+        || (receiver && std::ranges::any_of(overrides, [&](const auto& item) {
+               return class_method_reads_enclosing_unit_parameter(
+                          *specialized_hir_unit_, item.declaration)
+                   && !instance_class_specialization(
+                       class_specializations(), item.specialization);
+           }))) {
         return std::nullopt;
     }
     // Each override runs in the one specialization of its class that
@@ -6772,6 +6931,12 @@ Lowerer::lower_hir_class_function_call(
                 return std::nullopt;
             }
         }
+    }
+    // An object no override matched has one instance's class of the
+    // method's own.
+    for (const auto& item : instances) {
+        overrides.push_back(item);
+        override_specializations.emplace_back(item.specialization);
     }
     {
         const auto callable_has_variable_dimension_query
@@ -7028,10 +7193,20 @@ Lowerer::lower_hir_class_function_call(
             UnknownBranchPolicy::when_false,
         };
     }
-    const auto value = lower_hir_class_callable_invocation(
-        source, call, receiver, true);
-    if (!value || !keep(*value)) {
-        return std::nullopt;
+    if (pure_dispatch || (instance_dispatch && result.packed)) {
+        // Only a null handle matches no candidate: the runtime call reports
+        // it as it reports any method call through a null handle.
+        process_.operations.emplace_back(ClassMethodCall {
+            *result.packed, *receiver, profile.identity, { }, { }, { },
+            static_cast<std::uint32_t>(register_width(*result.packed)),
+            true,
+        });
+    } else {
+        const auto value = lower_hir_class_callable_invocation(
+            source, call, receiver, true);
+        if (!value || !keep(*value)) {
+            return std::nullopt;
+        }
     }
     for (const auto exit : exits) {
         process_.operations[exit] = Jump {
@@ -7392,7 +7567,8 @@ std::string Lowerer::hir_class_static_scope(
             auto& index = class_specializations();
             const auto owner = index.ancestor(
                 *frame.class_specialization, candidate.canonical_identity);
-            if (owner && !index.at(*owner).parameters.empty()) {
+            if (owner
+                && semantic::sv::has_own_static_storage(index.at(*owner))) {
                 identity = index.at(*owner).specialization_identity;
             }
         }
@@ -7924,10 +8100,17 @@ bool Lowerer::lower_hir_class_task_call(
         };
         return true;
     }
-    const auto profile = hir_class_task_profile(
+    auto profile = hir_class_task_profile(
         statement_id, hir_process_scope_);
     if (!profile) {
         return false;
+    }
+    if (!profile->static_method) {
+        if (const auto exact = hir_class_receiver_instance_specialization(
+                profile->declaration, profile->specialization,
+                profile->receiver)) {
+            profile->specialization = exact;
+        }
     }
     const auto native_uvm
         = hir_uvm_library_identity(profile->identity);
@@ -8350,7 +8533,14 @@ bool Lowerer::lower_hir_class_task_call(
     // against each overriding class, most derived first.
     if (receiver && !profile->static_method) {
         std::vector<InstructionIndex> exits;
-        for (const auto& item : hir_class_method_overrides(profile->declaration)) {
+        auto candidates = hir_class_method_overrides(profile->declaration);
+        // An object no override matched has one instance's class of the
+        // method's own (IEEE 1800-2023 6.22).
+        for (auto& item : hir_class_instance_candidates(profile->declaration,
+                 profile->specialization, profile->identity)) {
+            candidates.push_back(std::move(item));
+        }
+        for (const auto& item : candidates) {
             const auto selected = allocate_register(
                 1U, frontend::ValueDomain::Logic4);
             process_.operations.emplace_back(ClassMethodCall {
@@ -8556,12 +8746,38 @@ std::vector<Lowerer::HirClassOverride> Lowerer::hir_class_method_overrides(
     std::vector<HirClassOverride> result;
     result.reserve(overrides.size());
     auto& index = class_specializations();
+    const auto instance_class = [&](const std::string_view identity) {
+        const auto iterators = index.generate_iterators(identity);
+        return !iterators.empty()
+            && iterators.front() == semantic::sv::class_instance_environment;
+    };
+    // A handle whose class is a design element instance's holds objects of
+    // that instance's classes only (IEEE 1800-2023 6.22).
+    const auto owner_identity
+        = semantic::sv::class_declaration_identity(*owner);
+    const auto receiver_instance = instance_class(owner_identity)
+        ? hir_class_instance_path(owner_identity)
+        : std::nullopt;
+    bool every_instance { };
     for (auto& item : overrides) {
-        // Each generated scope of a loop generate has a class of its own
-        // (IEEE 1800-2017 27.4): the override of every one is tested.
+        // Each generated scope of a loop generate and each design element
+        // instance has a class of its own (IEEE 1800-2023 6.22, 27.4): the
+        // override of every one is tested.
         if (!index.generate_iterators(item.declaration_identity).empty()) {
+            const auto instance = instance_class(item.declaration_identity);
+            every_instance = every_instance || (instance && !receiver_instance);
             for (const auto id : index.generated_specializations(
                      item.declaration_identity)) {
+                if (instance && receiver_instance
+                    && std::ranges::none_of(
+                        index.at(id).generate_environment,
+                        [&](const auto& bound) {
+                            return bound.first
+                                == semantic::sv::class_instance_environment
+                                && bound.second == *receiver_instance;
+                        })) {
+                    continue;
+                }
                 auto generated = item.item;
                 generated.owner_identity
                     = index.at(id).specialization_identity;
@@ -8571,6 +8787,170 @@ std::vector<Lowerer::HirClassOverride> Lowerer::hir_class_method_overrides(
             continue;
         }
         result.push_back(std::move(item.item));
+    }
+    // The classes of the instances not yet elaborated are overrides too:
+    // lower the call once every instance exists.
+    if (every_instance && hierarchical_reference_retry_) {
+        hierarchical_reference_missed_ = true;
+        hir_class_dispatch_deferred_ = true;
+    }
+    return result;
+}
+
+std::optional<std::uint32_t>
+Lowerer::hir_class_receiver_instance_specialization(
+    const semantic::DeclarationId declaration,
+    const std::optional<std::uint32_t> specialization,
+    const std::optional<semantic::ExpressionId> receiver) const
+{
+    auto& index = class_specializations();
+    if (!receiver || instance_class_specialization(index, specialization)) {
+        return std::nullopt;
+    }
+    const auto owner = hir_method_owner_identity(
+        specialized_hir_unit_->design(), declaration);
+    if (!owner) {
+        return std::nullopt;
+    }
+    // A class of a loop generate inside the instance also needs the
+    // iteration; only the instance itself is read from the path.
+    const auto iterators = index.generate_iterators(*owner);
+    if (iterators.size() != 1U
+        || iterators.front() != semantic::sv::class_instance_environment) {
+        return std::nullopt;
+    }
+    // A property or element of a handle (`top.u.h.next`, `top.u.hs[1]`)
+    // starts at the handle's variable.
+    auto record = specialized_hir_unit_->find_expression(*receiver);
+    for (std::size_t depth { }; depth < 64U && record
+         && record->systemverilog != nullptr
+         && (record->systemverilog->kind
+                 == semantic::sv::ExpressionKind::class_property
+             || record->systemverilog->kind
+                 == semantic::sv::ExpressionKind::index)
+         && !record->systemverilog->operands.empty();
+         ++depth) {
+        record = specialized_hir_unit_->find_expression(
+            record->systemverilog->operands.front());
+    }
+    if (!record || record->systemverilog == nullptr
+        || record->systemverilog->kind != semantic::sv::ExpressionKind::name
+        || record->systemverilog->text.find('.') == std::string::npos) {
+        return std::nullopt;
+    }
+    // The variable the name starts at (`top.u.h` of `top.u.h.next`): a
+    // property of a class of instance P can only name P's classes.
+    std::optional<SignalId> signal;
+    for (std::string_view name { record->systemverilog->text };
+         !signal && name.find('.') != std::string_view::npos;
+         name = name.substr(0U, name.rfind('.'))) {
+        signal = hir_hierarchical_signal(name);
+    }
+    if (!signal || systemverilog_design_element_instances_ == nullptr
+        || systemverilog_instance_units_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto& design = specialized_hir_unit_->design();
+    const auto& classes = design.systemverilog_hir.classes();
+    const auto declared = std::ranges::find_if(classes,
+        [&](const semantic::sv::ClassDeclaration& candidate) {
+            return !candidate.forward_declaration
+                && semantic::sv::class_declaration_identity(candidate)
+                == *owner;
+        });
+    const auto& scopes = design.semantics.scopes();
+    if (declared == classes.end() || !declared->scope.valid()
+        || declared->scope.value() >= scopes.size()) {
+        return std::nullopt;
+    }
+    const auto unit = scopes[declared->scope.value()].unit;
+    // The innermost design element instance around the variable.
+    std::string path = design_.signal_info_[*signal].name;
+    for (auto separator = path.rfind('.'); separator != std::string::npos;
+         separator = path.rfind('.')) {
+        path.resize(separator);
+        if (!systemverilog_design_element_instances_->contains(path)) {
+            continue;
+        }
+        const auto instance = systemverilog_instance_units_->find(path);
+        if (instance == systemverilog_instance_units_->end()
+            || !instance->second || instance->second->unit() != unit) {
+            return std::nullopt;
+        }
+        const auto named = specialization ? specialization
+                                          : index.default_for(*owner);
+        if (!named) {
+            return std::nullopt;
+        }
+        const auto prefix
+            = index.at(*named).specialization_identity + "#gen{";
+        for (const auto id : index.generated_specializations(*owner)) {
+            if (index.at(id).specialization_identity.starts_with(prefix)
+                && std::ranges::any_of(index.at(id).generate_environment,
+                    [&](const auto& bound) {
+                        return bound.first
+                            == semantic::sv::class_instance_environment
+                            && bound.second == path;
+                    })) {
+                return id;
+            }
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::vector<Lowerer::HirClassOverride>
+Lowerer::hir_class_instance_candidates(
+    const semantic::DeclarationId declaration,
+    const std::optional<std::uint32_t> specialization,
+    const std::string& identity) const
+{
+    auto& index = class_specializations();
+    if (instance_class_specialization(index, specialization)) {
+        return { };
+    }
+    // A pure prototype has no body; only its overrides run.
+    for (const auto& candidate :
+        specialized_hir_unit_->design().systemverilog_hir.classes()) {
+        for (const auto& method : candidate.methods) {
+            if (method.declaration == declaration
+                && (method.pure || method.static_method)) {
+                return { };
+            }
+        }
+    }
+    const auto owner = hir_method_owner_identity(
+        specialized_hir_unit_->design(), declaration);
+    if (!owner) {
+        return { };
+    }
+    const auto iterators = index.generate_iterators(*owner);
+    if (iterators.empty()
+        || iterators.front() != semantic::sv::class_instance_environment) {
+        return { };
+    }
+    const auto named = specialization ? specialization
+                                      : index.default_for(*owner);
+    if (!named) {
+        return { };
+    }
+    // Each instance's class is made from the specialization the call
+    // names.
+    const auto prefix = index.at(*named).specialization_identity + "#gen{";
+    std::vector<HirClassOverride> result;
+    for (const auto id : index.generated_specializations(*owner)) {
+        if (index.at(id).specialization_identity.starts_with(prefix)
+            && instance_class_specialization(index, id)) {
+            result.push_back({ index.at(id).specialization_identity,
+                declaration, identity, id });
+        }
+    }
+    // The classes of the instances not yet elaborated are candidates too:
+    // lower the call once every instance exists.
+    if (hierarchical_reference_retry_) {
+        hierarchical_reference_missed_ = true;
+        hir_class_dispatch_deferred_ = true;
     }
     return result;
 }
@@ -8606,13 +8986,17 @@ bool Lowerer::lower_hir_class_task_invocation(
     }
     bool owner_parameter_read = function && receiver
         && class_method_reads_enclosing_unit_parameter(
-            *specialized_hir_unit_, profile.declaration);
+            *specialized_hir_unit_, profile.declaration)
+        && !instance_class_specialization(
+            class_specializations(), profile.specialization);
     if (!owner_parameter_read && function && receiver && virtual_dispatch) {
         const auto overrides = hir_class_method_overrides(profile.declaration);
         owner_parameter_read = std::ranges::any_of(
             overrides, [&](const auto& item) {
                 return class_method_reads_enclosing_unit_parameter(
-                    *specialized_hir_unit_, item.declaration);
+                           *specialized_hir_unit_, item.declaration)
+                    && !instance_class_specialization(
+                        class_specializations(), item.specialization);
             });
     }
     if (owner_parameter_read) {
@@ -10068,6 +10452,7 @@ void Lowerer::clear_hir_vhdl_query_caches() const noexcept
     hir_vhdl_expression_subtype_cache_.clear();
     hir_vhdl_expression_subtype_cache_entries_ = 0U;
     hir_vhdl_width_cache_.clear();
+    hir_vhdl_instance_member_frames_cache_.clear();
     hir_vhdl_shape_cache_.clear();
     hir_vhdl_array_selection_cache_.clear();
     clear_hir_binding_frame_snapshots();
@@ -10307,7 +10692,7 @@ Lowerer::hir_callable_resolution(
         declaration_id);
     if (declaration && declaration->systemverilog != nullptr) {
         return HirCallableResolution { declaration_id, declaration_id,
-            std::nullopt, { } };
+            std::nullopt, { }, { } };
     }
     return hir_resolver()
         .resolve_vhdl_callable(declaration_id)
@@ -18921,9 +19306,11 @@ Lowerer::lower_hir_function_call_value(
     callable_key += signal_actual_key;
     // A subprogram of one package instance is not another instance's: each
     // reads its own generics (IEEE 1076-2008 4.9).
-    if (resolution->package_instance) {
+    const auto package_instance
+        = hir_vhdl_callable_package_instance(*resolution);
+    for (const auto instance : package_instance) {
         callable_key += "|instance:";
-        append_decimal(callable_key, resolution->package_instance->value());
+        append_decimal(callable_key, instance.value());
     }
     append_hir_generic_binding_key(
         callable_key, resolution->generic_bindings);
@@ -19043,6 +19430,7 @@ Lowerer::lower_hir_function_call_value(
         }
         frame.vhdl_driver_process_scope
             = hir_vhdl_current_process_scope();
+        frame.vhdl_package_instance_path = package_instance;
         frame.enclosing_callable_invocation_identity = lexical_parent;
         frame.type = *type;
         frame.vhdl_result_subtype = result_context;
@@ -21027,6 +21415,14 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         | (static_cast<std::uint64_t>(resolution->key.value()) << 32U);
     auto callable_key_text = std::to_string(callable_key)
         + (interface_callable ? "|receiver:" + interface_callable->receiver : "");
+    // Each instance of a generic package has its own objects and
+    // generics (IEEE 1076-2008 4.9).
+    const auto package_instance
+        = hir_vhdl_callable_package_instance(*resolution);
+    for (const auto instance : package_instance) {
+        callable_key_text += "|instance:"
+            + std::to_string(instance.value());
+    }
     append_hir_generic_binding_key(
         callable_key_text, resolution->generic_bindings);
     const auto generic_environment
@@ -21095,6 +21491,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         }
         frame.vhdl_driver_process_scope
             = hir_vhdl_current_process_scope();
+        frame.vhdl_package_instance_path = package_instance;
         frame.enclosing_callable_invocation_identity = lexical_parent;
         frame.type = *type;
         frame.formals = formals;
@@ -22599,6 +22996,14 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             callable_key_text += std::to_string(member.storage) + ",";
         }
     }
+    // Each instance of a generic package has its own objects and
+    // generics (IEEE 1076-2008 4.9).
+    const auto package_instance
+        = hir_vhdl_callable_package_instance(*resolution);
+    for (const auto instance : package_instance) {
+        callable_key_text += "|instance:"
+            + std::to_string(instance.value());
+    }
     append_hir_generic_binding_key(
         callable_key_text, resolution->generic_bindings);
     const auto generic_environment
@@ -22632,6 +23037,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         }
         frame.vhdl_driver_process_scope
             = hir_vhdl_current_process_scope();
+        frame.vhdl_package_instance_path = package_instance;
         frame.enclosing_callable_invocation_identity = lexical_parent;
         frame.type = {
             1U,
@@ -23603,6 +24009,84 @@ Lowerer::hir_vhdl_lexical_enclosing_callable(
         frame_index = *parent;
     }
     return std::nullopt;
+}
+
+namespace {
+
+// The generic package (library and primary name) whose specification or
+// body declares `id`.
+std::optional<std::pair<std::string_view, std::string_view>>
+hir_vhdl_declaring_package(
+    const semantic::SpecializedHirUnit& unit, const semantic::DeclarationId id)
+{
+    const auto declaration = unit.find_declaration(id);
+    const auto* owner = declaration && declaration->vhdl != nullptr
+        ? unit.design().vhdl_scope_unit(declaration->vhdl->scope)
+        : nullptr;
+    if (owner == nullptr || owner->kind != semantic::vhdl::UnitKind::package) {
+        return std::nullopt;
+    }
+    return std::pair { std::string_view { owner->library },
+        std::string_view { owner->primary_name.empty()
+                ? owner->name
+                : owner->primary_name } };
+}
+
+} // namespace
+
+std::vector<semantic::DeclarationId>
+Lowerer::hir_vhdl_callable_package_instance(
+    const semantic::CompiledVhdlCallableResolution& resolution) const
+{
+    if (resolution.package_instance) {
+        semantic::CompiledVhdlPackageMember member;
+        member.member = resolution.body;
+        member.package_instance = resolution.package_instance;
+        member.enclosing_package_instances
+            = resolution.enclosing_package_instances;
+        return hir_vhdl_package_member_path(member);
+    }
+    // A subprogram the instance's own subprogram names directly is that
+    // instance's when it is declared in the same package template.
+    const auto* path = hir_vhdl_owning_frame_package_path(resolution.body);
+    return path != nullptr ? *path : std::vector<semantic::DeclarationId> { };
+}
+
+std::vector<semantic::DeclarationId> Lowerer::hir_vhdl_package_member_path(
+    const semantic::CompiledVhdlPackageMember& member) const
+{
+    if (!member.package_instance) {
+        return { };
+    }
+    auto path = member.enclosing_package_instances;
+    path.push_back(*member.package_instance);
+    if (const auto* enclosing
+        = hir_vhdl_owning_frame_package_path(path.front())) {
+        path.insert(path.begin(), enclosing->begin(), enclosing->end());
+    }
+    return path;
+}
+
+const std::vector<semantic::DeclarationId>*
+Lowerer::hir_vhdl_owning_frame_package_path(
+    const semantic::DeclarationId declaration) const
+{
+    if (!active_hir_callable_ || specialized_hir_unit_ == nullptr
+        || *active_hir_callable_ >= hir_callable_frames_.size()) {
+        return nullptr;
+    }
+    const auto& active = hir_callable_frames_[*active_hir_callable_];
+    if (active.vhdl_package_instance_path.empty()) {
+        return nullptr;
+    }
+    const auto owner
+        = hir_vhdl_declaring_package(*specialized_hir_unit_, declaration);
+    return owner
+            && owner
+                == hir_vhdl_declaring_package(
+                    *specialized_hir_unit_, active.declaration)
+        ? &active.vhdl_package_instance_path
+        : nullptr;
 }
 
 std::optional<std::string> Lowerer::hir_vhdl_foreign_model(
@@ -24830,20 +25314,10 @@ Lowerer::hir_vhdl_generic_environment(
         return { };
     }
     // An actual naming a generic of the enclosing instance (IEEE 1076-2008
-    // 4.9, 6.5.6.2) is bound by an active frame, not by the callee's own.
-    const auto names_bound_generic = [&](const HirGenericBinding& binding) {
-        auto named = binding.actual_declaration;
-        if (!named && binding.expression) {
-            const auto expression
-                = specialized_hir_unit_->find_expression(*binding.expression);
-            if (expression && expression->vhdl != nullptr
-                && expression->vhdl->referenced_name) {
-                named = expression->vhdl->referenced_name->selected;
-            }
-        }
-        const auto declaration = named
-            ? specialized_hir_unit_->find_declaration(*named)
-            : std::nullopt;
+    // 4.9, 6.5.6.2), also within an expression (`m => n + 1`), is bound by
+    // an active frame, not by the callee's own.
+    const auto bound_generic = [&](const semantic::DeclarationId named) {
+        const auto declaration = specialized_hir_unit_->find_declaration(named);
         if (!declaration || declaration->vhdl == nullptr
             || !semantic::vhdl::is_generic_formal(declaration->vhdl->form)) {
             return false;
@@ -24852,9 +25326,37 @@ Lowerer::hir_vhdl_generic_environment(
             [&](const semantic::CompiledBindingFrame& frame) {
                 return std::ranges::any_of(frame,
                     [&](const HirGenericBinding& outer) {
-                        return outer.formal == *named;
+                        return outer.formal == named;
                     });
             });
+    };
+    const auto names_bound_generic_in = [&](const auto& self,
+                                            const semantic::ExpressionId id,
+                                            const std::size_t depth) -> bool {
+        constexpr std::size_t maximum_depth = 32U;
+        const auto expression = depth < maximum_depth
+            ? specialized_hir_unit_->find_expression(id)
+            : std::nullopt;
+        if (!expression || expression->vhdl == nullptr) {
+            return false;
+        }
+        if (expression->vhdl->referenced_name
+            && expression->vhdl->referenced_name->selected
+            && bound_generic(*expression->vhdl->referenced_name->selected)) {
+            return true;
+        }
+        return std::ranges::any_of(expression->vhdl->operands,
+            [&](const semantic::ExpressionId operand) {
+                return self(self, operand, depth + 1U);
+            });
+    };
+    const auto names_bound_generic = [&](const HirGenericBinding& binding) {
+        if (binding.actual_declaration) {
+            return bound_generic(*binding.actual_declaration);
+        }
+        return binding.expression
+            && names_bound_generic_in(
+                names_bound_generic_in, *binding.expression, 0U);
     };
     if (std::ranges::none_of(bindings, names_bound_generic)) {
         return { };

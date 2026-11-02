@@ -13754,6 +13754,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    // A constant of a package instance (`inst.c.e`) has that instance's
+    // generics (IEEE 1076-2008 4.9), in its value and in its subtype.
+    const SizeRestoreGuard instance_frames { hir_generic_binding_frames_ };
+    if (const auto named = specialized_hir_unit_->find_expression(
+            expression_id);
+        named && named->vhdl != nullptr
+        && named->vhdl->kind == semantic::vhdl::ExpressionKind::name) {
+        push_hir_vhdl_instance_member_frames(*named->vhdl);
+    }
     // An inertial port actual has the value of its expression.
     if (const auto inertial = specialized_hir_unit_->find_expression(
             expression_id);
@@ -15693,8 +15702,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const auto width = expected_width != 0U
             ? std::optional { expected_width }
             : hir_expression_width(expression_id, hir_process_scope_);
+        // A class parameter of the running specialization (IEEE
+        // 1800-2017 8.25) has the frame's value, which the unit's evaluator
+        // does not see: the frame-aware fold below takes such expressions.
         if (expression->systemverilog != nullptr && width
-            && *width != 0U) {
+            && *width != 0U && !hir_frame_bound_expression(expression_id)) {
             std::string error;
             const auto value = evaluate_hir_systemverilog_constant(
                 *specialized_hir_unit_, expression_id, error);
@@ -16024,7 +16036,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 }
                 return std::nullopt;
             }
+            // A class parameter of the running specialization (IEEE
+            // 1800-2017 8.25) has the frame's value, which the unit's
+            // evaluator does not see.
             return hir_vhdl_active_package_constant(expression_id)
+                    || hir_frame_bound_expression(expression_id)
                 ? hir_constant_integer(expression_id)
                 : specialized_hir_unit_->evaluate_integral_expression(
                       expression_id);
@@ -17679,7 +17695,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             if (const auto found = index.specialize(
                     *type, context, allocation.source);
                 found && !index.at(*found).parameters.empty()) {
-                specialization = index.at(*found).specialization_identity;
+                // A parameterized class of a design element instance is
+                // that instance's (IEEE 1800-2023 6.22).
+                const auto generated
+                    = hir_generate_class_specialization(*found);
+                specialization = index.at(generated.value_or(*found))
+                                     .specialization_identity;
             }
         } else {
             specialization = hir_allocation_target_specialization(
@@ -29099,6 +29120,11 @@ std::optional<std::string> Lowerer::hir_allocation_target_specialization(
     if (!found || index.at(*found).declaration_identity != class_identity
         || index.at(*found).parameters.empty()) {
         return std::nullopt;
+    }
+    // A parameterized class of a design element instance is that
+    // instance's (IEEE 1800-2023 6.22).
+    if (const auto generated = hir_generate_class_specialization(*found)) {
+        found = generated;
     }
     return index.at(*found).specialization_identity;
 }

@@ -2046,10 +2046,14 @@ void Interpreter::Impl::require_package_static_write(
         const auto writable = container
             ? program.startup_writable_container_object_ids()
             : program.startup_writable_string_object_ids();
-        if (program.startup_phase()
-                != ProcessStartupPhase::package_static_initializer
-            || program.startup_package_owner_id() == 0U
-            || program.startup_package_owner_id() != owner
+        // A package's initializer writes its own storage; class code also
+        // that of the packages its class depends on, which it lists.
+        if (!startup_initializer_phase(program.startup_phase())
+            || (program.startup_phase()
+                    == ProcessStartupPhase::package_static_initializer
+                && program.startup_package_owner_id() == 0U)
+            || !startup_owner_writable(program.startup_package_owner_id(),
+                program.startup_writable_package_owner_ids(), owner)
             || !std::ranges::binary_search(writable, object)) {
             fail_with("process wrote outside its direct "
                 + std::string { kind } + " closure");

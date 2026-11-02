@@ -227,14 +227,6 @@ public:
         std::optional<runtime::simir::ProcessId> report_process
             = std::nullopt);
 
-    // A static property initializer, evaluated outside any object.
-    [[nodiscard]] std::optional<runtime::PackedLogic4> evaluate_initializer(
-        semantic::ExpressionId id)
-    {
-        PackedEnvironment environment;
-        return evaluate_packed(id, 0U, environment);
-    }
-
     [[nodiscard]] SystemVerilogClassExecutionStatistics
     statistics() const noexcept;
 

@@ -777,8 +777,8 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             // the end of the time step (IEEE 1076-2019 11.3, 14.7.5.3).
             member.phase = process_execution_phase(
                 program.observed(), program.reactive(), program.postponed());
-            member.package_startup = program.startup_phase()
-                == ProcessStartupPhase::package_static_initializer;
+            member.package_startup
+                = startup_initializer_phase(program.startup_phase());
             member.partition_key = member.lazy ? no_slot : member_spec.partition;
             member.body_begin = member_spec.body_begin;
             member.prologue_end = member_spec.body_begin;

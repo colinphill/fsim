@@ -106,10 +106,6 @@ template <typename ProcessRows>
     diagnostic::Engine& diagnostics,
     const std::string_view source_name = { })
 {
-    const auto& handle_initializers
-        = state.systemverilog_package_class_initializers;
-    const auto& static_initializers
-        = state.systemverilog_package_class_static_initializers;
     using namespace runtime::simir;
     std::set<std::uint64_t> startup_orders;
     for (const auto& row : process_rows) {
@@ -117,21 +113,25 @@ template <typename ProcessRows>
         const bool package_initializer
             = process.startup_phase
                 == ProcessStartupPhase::package_static_initializer;
+        const bool class_initializer
+            = process.startup_phase
+                == ProcessStartupPhase::class_static_initializer;
         if (process.startup_phase != ProcessStartupPhase::ordinary
             && process.startup_phase != ProcessStartupPhase::after_procedures
-            && !package_initializer) {
+            && !package_initializer && !class_initializer) {
             report_error(diagnostics,
                 "runtime process has an invalid startup phase", source_name);
             return false;
         }
-        if (package_initializer
+        if ((package_initializer || class_initializer)
             && !startup_orders.insert(process.startup_order).second) {
             report_error(diagnostics,
                 "runtime package startup order is duplicated", source_name);
             return false;
         }
-        if (!package_initializer) {
+        if (!package_initializer && !class_initializer) {
             if (process.startup_package_owner_id != 0U
+                || !process.startup_writable_package_owner_ids.empty()
                 || !process.startup_writable_string_object_ids.empty()
                 || !process.startup_writable_container_object_ids.empty()) {
                 report_error(diagnostics,
@@ -141,7 +141,17 @@ template <typename ProcessRows>
             }
             continue;
         }
-        if (process.startup_package_owner_id == 0U
+        // A package's initializer writes its own storage; class code (a
+        // class static initializer, or the constructor of a package
+        // class-handle initializer) also that of the packages its class
+        // depends on, which the process lists.
+        const auto permitted_owner = [&](const std::uint32_t owner) {
+            return startup_owner_writable(process.startup_package_owner_id,
+                process.startup_writable_package_owner_ids, owner);
+        };
+        if ((package_initializer && process.startup_package_owner_id == 0U)
+            || !canonical_startup_owner_ids(
+                process.startup_writable_package_owner_ids)
             || !canonical_ids_within(
                 process.startup_writable_string_object_ids,
                 state.string_objects.size())
@@ -203,8 +213,8 @@ template <typename ProcessRows>
             const auto& info = state.string_object_info[object];
             if (info.id != object || info.is_port
                 || info.name != state.string_objects[object].name
-                || state.string_objects[object].package_owner_id
-                    != process.startup_package_owner_id) {
+                || !permitted_owner(
+                    state.string_objects[object].package_owner_id)) {
                 report_error(diagnostics,
                     "runtime package process string permission has a foreign owner",
                     source_name);
@@ -238,53 +248,14 @@ template <typename ProcessRows>
             if (info.id != object || info.is_port || info.slice_alias
                 || state.container_objects[object].slice_alias
                 || info.name != state.container_objects[object].name
-                || state.container_objects[object].package_owner_id
-                    != process.startup_package_owner_id
+                || !permitted_owner(
+                    state.container_objects[object].package_owner_id)
                 || has_signal_alias) {
                 report_error(diagnostics,
                     "runtime package process container permission is not direct owned storage",
                     source_name);
                 return false;
             }
-        }
-    }
-    for (const auto& row : handle_initializers) {
-        if (!row.unit.valid() || !row.declaration.valid()
-            || !row.initializer.valid()
-            || row.signal >= state.signals.size()
-            || !startup_orders.insert(row.startup_order).second
-            || !std::ranges::binary_search(
-                row.writable_signal_ids, row.signal)
-            || !canonical_ids_within(
-                row.writable_signal_ids, state.signals.size())
-            || !canonical_ids_within(
-                row.writable_string_object_ids, state.string_objects.size())
-            || !canonical_ids_within(
-                row.writable_container_object_ids,
-                state.container_objects.size())) {
-            report_error(diagnostics,
-                "runtime package class-handle initializer metadata is invalid",
-                source_name);
-            return false;
-        }
-    }
-    for (const auto& row : static_initializers) {
-        if (!row.unit.valid() || row.class_identity.empty()
-            || row.specialization_identity.empty()
-            || !row.property_declaration.valid() || row.property_name.empty()
-            || row.canonical_identity.empty() || !row.initializer.valid()
-            || !startup_orders.insert(row.startup_order).second
-            || !canonical_ids_within(
-                row.writable_signal_ids, state.signals.size())
-            || !canonical_ids_within(
-                row.writable_string_object_ids, state.string_objects.size())
-            || !canonical_ids_within(
-                row.writable_container_object_ids,
-                state.container_objects.size())) {
-            report_error(diagnostics,
-                "runtime package static-property initializer metadata is invalid",
-                source_name);
-            return false;
         }
     }
     return true;
@@ -676,8 +647,6 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
         state.systemc_processes, state.systemc_objects,
         state.signal_names, state.string_names, state.container_names,
         state.code_coverage_inventory, state.signal_driver_inventory,
-        state.systemverilog_package_class_initializers,
-        state.systemverilog_package_class_static_initializers
     };
 }
 

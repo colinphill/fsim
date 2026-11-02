@@ -535,20 +535,6 @@ struct Simulation::Impl {
     [[nodiscard]] const semantic::sv::ClassSpecialization*
     generated_class_specialization(std::string_view identity) const;
 
-    // Package class allocations are evaluated after the class heap and its
-    // construction services are configured, so retain their exact signal and
-    // expression identities before the interpreter takes ownership of design.
-    // Derived from HIR only to cross-check the stored startup metadata; empty
-    // for a trusted artifact.
-    std::vector<std::pair<runtime::simir::SignalId, semantic::ExpressionId>>
-        package_class_handle_initializers;
-
-    std::vector<elaboration::SystemVerilogPackageClassInitializerInfo>
-        package_class_startup_initializers;
-
-    std::vector<elaboration::SystemVerilogPackageClassStaticInitializerInfo>
-        package_static_class_startup_initializers;
-
     std::vector<SignalId> package_static_startup_signal_ids;
 
     bool vpi_runtime_updates_enabled { true };

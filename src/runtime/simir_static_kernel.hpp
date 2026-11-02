@@ -1553,8 +1553,7 @@ template <typename ViewOf, typename Ignored, typename Excluded, typename Resolve
             continue;
         }
         const auto& program = view_of(id);
-        if (program.startup_phase()
-            == ProcessStartupPhase::package_static_initializer) {
+        if (startup_initializer_phase(program.startup_phase())) {
             continue;
         }
         if (!program.static_sensitivity().empty() || event_driven(id)

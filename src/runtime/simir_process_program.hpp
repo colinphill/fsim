@@ -73,6 +73,7 @@ struct ProcessInstanceProgram {
     ProcessStartupPhase startup_phase { ProcessStartupPhase::ordinary };
     std::uint64_t startup_order { };
     std::uint32_t startup_package_owner_id { };
+    std::vector<std::uint32_t> startup_writable_package_owner_ids;
     std::vector<StringObjectId> startup_writable_string_object_ids;
     std::vector<ContainerObjectId> startup_writable_container_object_ids;
 
@@ -225,6 +226,8 @@ public:
     [[nodiscard]] const std::uint64_t& startup_order() const noexcept;
     [[nodiscard]] const std::uint32_t&
     startup_package_owner_id() const noexcept;
+    [[nodiscard]] const std::vector<std::uint32_t>&
+        startup_writable_package_owner_ids() const noexcept;
     [[nodiscard]] const std::vector<StringObjectId>&
         startup_writable_string_object_ids() const noexcept;
     [[nodiscard]] const std::vector<ContainerObjectId>&

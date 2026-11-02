@@ -477,6 +477,8 @@ bool same_callable_resolution_identity(
 {
     return left.body == right.body
         && left.package_instance == right.package_instance
+        && left.enclosing_package_instances
+            == right.enclosing_package_instances
         && left.generic_bindings == right.generic_bindings;
 }
 
@@ -7888,7 +7890,8 @@ CompiledDesignResolver::resolve_vhdl_package_members(
     const CompiledDeclarationPredicate& predicate) const
 {
     const auto parts = vhdl_name_parts(vhdl_spelling(name));
-    if (parts.empty() || parts.size() > 3U) {
+    constexpr std::size_t maximum_name_parts = 8U;
+    if (parts.empty() || parts.size() > maximum_name_parts) {
         return { parts.empty() ? CompiledResolutionStatus::invalid
                                : CompiledResolutionStatus::not_found,
             { } };
@@ -8074,6 +8077,36 @@ CompiledDesignResolver::resolve_vhdl_package_members(
             }
             scope = *record->parent;
         }
+        // The declarations of a package are visible in its body (IEEE
+        // 1076-2008 12.1), the package instances among them included.
+        if (instances.empty()) {
+            const auto* body = design_->vhdl_scope_unit(use_scope);
+            if (body != nullptr && body->kind == vhdl::UnitKind::package
+                && !body->primary_name.empty()) {
+                for (const auto& package : design_->vhdl_units()) {
+                    if (package.kind != vhdl::UnitKind::package
+                        || !package.primary_name.empty()
+                        || !same_vhdl_identifier(
+                            package.name, body->primary_name)
+                        || !same_vhdl_identifier(
+                            normalized_library(package.library),
+                            normalized_library(body->library))) {
+                        continue;
+                    }
+                    visit_vhdl_declarations_in_scope(*design_, effective_,
+                        package.scope, name,
+                        [&](const vhdl::Declaration& declaration) {
+                            if (declaration.form
+                                    == vhdl::DeclarationForm::package_instance
+                                && same_vhdl_identifier(
+                                    declaration.name, name)) {
+                                instances.push_back(declaration.id);
+                            }
+                        });
+                }
+                sort_unique(instances);
+            }
+        }
         // A package instance declared in a package is visible where a use
         // clause makes that package's declarations visible (IEEE 1076-2008
         // 4.9, 12.4).
@@ -8227,10 +8260,14 @@ CompiledDesignResolver::resolve_vhdl_package_members(
 
     // `inst.p.m`: member `m` of the package instance bound to the package
     // generic `p` of `inst` (IEEE 1076-2008 6.5.7.2, 8.3).
-    if (parts.size() == 3U) {
+    if (parts.size() >= 3U) {
         vhdl::Name head;
-        head.spelling
-            = std::string { parts[0] } + "." + std::string { parts[1] };
+        for (std::size_t index { }; index + 1U < parts.size(); ++index) {
+            if (index != 0U) {
+                head.spelling += '.';
+            }
+            head.spelling += parts[index];
+        }
         head.canonical = head.spelling;
         const auto generic_package_formals = resolve_vhdl_package_members(
             head, use_scope, [](const CompiledDeclarationView& view) {
@@ -8273,6 +8310,37 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                 }
             }
         }
+        // `inst.nested.m`: member `m` of the package instance `nested`
+        // declared in the template of the instance `inst`. Each instance of
+        // that template has its own `nested`, whose generic map names
+        // `inst`'s generics (IEEE 1076-2008 4.9), so `inst`'s bindings come
+        // before its own.
+        if (candidates.empty()) {
+            const auto nested_instances = resolve_vhdl_package_members(head,
+                use_scope, [](const CompiledDeclarationView& view) {
+                    return view.vhdl != nullptr
+                        && view.vhdl->form
+                            == vhdl::DeclarationForm::package_instance;
+                });
+            for (const auto& nested : nested_instances.candidates) {
+                if (!nested.package_instance) {
+                    continue;
+                }
+                const auto first = candidates.size();
+                append_instance(nested.member, parts.back());
+                for (auto index = first; index < candidates.size(); ++index) {
+                    auto& candidate = candidates[index];
+                    candidate.enclosing_package_instances
+                        = nested.enclosing_package_instances;
+                    candidate.enclosing_package_instances.push_back(
+                        *nested.package_instance);
+                    candidate.generic_bindings.insert(
+                        candidate.generic_bindings.begin(),
+                        nested.generic_bindings.begin(),
+                        nested.generic_bindings.end());
+                }
+            }
+        }
         if (!candidates.empty()) {
             std::ranges::sort(candidates, {},
                 [](const CompiledVhdlPackageMember& candidate) {
@@ -8287,6 +8355,9 @@ CompiledDesignResolver::resolve_vhdl_package_members(
             candidates.erase(duplicate.begin(), duplicate.end());
             return { status_for(candidates.size()),
                 std::move(candidates) };
+        }
+        if (parts.size() > 3U) {
+            return { CompiledResolutionStatus::not_found, { } };
         }
     }
 
@@ -9685,6 +9756,8 @@ CompiledDesignResolver::resolve_vhdl_callables(
         }.resolve_vhdl_callable(package.member);
         for (auto candidate : resolved.candidates) {
             candidate.package_instance = package.package_instance;
+            candidate.enclosing_package_instances
+                = package.enclosing_package_instances;
             candidate.generic_bindings.insert(
                 candidate.generic_bindings.begin(),
                 package.generic_bindings.begin(),
@@ -10124,7 +10197,7 @@ CompiledDesignResolver::resolve_vhdl_callable(
                             }
                         }
                         results.push_back({ requested, bodies.front(),
-                            std::nullopt,
+                            std::nullopt, { },
                             std::move(resolved_bindings) });
                     }
                 }
@@ -10180,7 +10253,7 @@ CompiledDesignResolver::resolve_vhdl_callable(
                 }
             }
             return { CompiledResolutionStatus::unique,
-                { { requested, selected, std::nullopt,
+                { { requested, selected, std::nullopt, { },
                     std::move(propagated_bindings) } } };
         }
         const auto* scope = find_scope(
@@ -10219,7 +10292,7 @@ CompiledDesignResolver::resolve_vhdl_callable(
         std::vector<CompiledVhdlCallableResolution> results;
         for (const auto body : bodies) {
             results.push_back(
-                { requested, body, std::nullopt,
+                { requested, body, std::nullopt, { },
                     propagated_bindings });
         }
         return { status_for(results.size()), std::move(results) };

@@ -230,33 +230,6 @@ inline ElaboratedDesignState make_startup_metadata_state()
         Halt { },
     };
 
-    elaboration::SystemVerilogPackageClassInitializerInfo handle;
-    handle.unit = fsim::semantic::UnitId::from_index(7U);
-    handle.declaration = fsim::semantic::DeclarationId::from_index(11U);
-    handle.signal = 1U;
-    handle.initializer = fsim::semantic::ExpressionId::from_index(21U);
-    handle.startup_order = 41U;
-    handle.writable_signal_ids = { 0U, 1U, 4U };
-    handle.writable_string_object_ids = { 0U };
-    handle.writable_container_object_ids = { 0U };
-    state.systemverilog_package_class_initializers.push_back(handle);
-
-    elaboration::SystemVerilogPackageClassStaticInitializerInfo property;
-    property.unit = fsim::semantic::UnitId::from_index(8U);
-    property.class_identity = "work::startup_pkg::owner";
-    property.specialization_identity = "work::startup_pkg::owner<>";
-    property.property_declaration
-        = fsim::semantic::DeclarationId::from_index(12U);
-    property.property_name = "item";
-    property.canonical_identity =
-        "work::startup_pkg::owner::item";
-    property.initializer = fsim::semantic::ExpressionId::from_index(22U);
-    property.startup_order = 42U;
-    property.writable_signal_ids = { 2U, 4U };
-    property.writable_string_object_ids = { 0U };
-    property.writable_container_object_ids = { 0U };
-    state.systemverilog_package_class_static_initializers.push_back(
-        std::move(property));
     return state;
 }
 
@@ -506,43 +479,6 @@ inline void assert_startup_metadata_view_rows(const ElaboratedDesign& design)
     assert(second.startup_order() == 0U);
     assert(independent.startup_phase() == ProcessStartupPhase::ordinary);
     assert(independent.startup_order() == 0U);
-}
-
-inline void assert_package_startup_sidecar_rows(const ElaboratedDesign& design)
-{
-    const auto handles = design.systemverilog_package_class_initializers();
-    assert(handles.size() == 1U);
-    assert(handles.front().unit.value() == 7U);
-    assert(handles.front().declaration.value() == 11U);
-    assert(handles.front().signal == 1U);
-    assert(handles.front().initializer.value() == 21U);
-    assert(handles.front().startup_order == 41U);
-    assert((handles.front().writable_signal_ids
-        == std::vector<SignalId> { 0U, 1U, 4U }));
-    assert((handles.front().writable_string_object_ids
-        == std::vector<runtime::simir::StringObjectId> { 0U }));
-    assert((handles.front().writable_container_object_ids
-        == std::vector<runtime::simir::ContainerObjectId> { 0U }));
-
-    const auto properties
-        = design.systemverilog_package_class_static_initializers();
-    assert(properties.size() == 1U);
-    assert(properties.front().unit.value() == 8U);
-    assert(properties.front().class_identity == "work::startup_pkg::owner");
-    assert(properties.front().specialization_identity
-        == "work::startup_pkg::owner<>");
-    assert(properties.front().property_declaration.value() == 12U);
-    assert(properties.front().property_name == "item");
-    assert(properties.front().canonical_identity
-        == "work::startup_pkg::owner::item");
-    assert(properties.front().initializer.value() == 22U);
-    assert(properties.front().startup_order == 42U);
-    assert((properties.front().writable_signal_ids
-        == std::vector<SignalId> { 2U, 4U }));
-    assert((properties.front().writable_string_object_ids
-        == std::vector<runtime::simir::StringObjectId> { 0U }));
-    assert((properties.front().writable_container_object_ids
-        == std::vector<runtime::simir::ContainerObjectId> { 0U }));
 }
 
 inline void assert_startup_metadata_facade_rows(

@@ -94,7 +94,7 @@ void test_tagged_fork_runtime_roundtrip()
 
 void test_schema_and_direct_row_roundtrip()
 {
-    assert(fsim::app::kRuntimeStateSchema == 91U);
+    assert(fsim::app::kRuntimeStateSchema == 92U);
     const auto source_bytes = encode_startup_metadata_design();
     assert(source_bytes.has_value());
     const auto wire_payload = read_runtime_wire_payload(*source_bytes);
@@ -107,7 +107,6 @@ void test_schema_and_direct_row_roundtrip()
     auto restored = decode_design(*source_bytes);
     assert_view_rows(*restored);
     assert_startup_metadata_view_rows(*restored);
-    assert_package_startup_sidecar_rows(*restored);
     using ProcessAccess
         = fsim::elaboration::detail::ElaboratedDesignProcessAccess;
     const auto independent_view = ProcessAccess::process_view(*restored, 2U);
@@ -138,7 +137,6 @@ void test_schema_and_direct_row_roundtrip()
     auto repeated = decode_design(*repeated_bytes);
     assert_view_rows(*repeated);
     assert_startup_metadata_view_rows(*repeated);
-    assert_package_startup_sidecar_rows(*repeated);
     fsim::diagnostic::Engine repeated_diagnostics;
     const auto third_bytes = fsim::app::serialize_runtime_state(*repeated, repeated_diagnostics);
     assert(third_bytes && *third_bytes == *source_bytes);
@@ -184,32 +182,13 @@ void test_schema_and_direct_row_roundtrip()
             second.startup_order
                 = payload.process_rows->rows.front().instance.startup_order;
         });
-    reject_startup_metadata("duplicate-process-callback-order",
-        "runtime package class-handle initializer metadata is invalid",
-        [](auto& payload) {
-            payload.state.systemverilog_package_class_initializers.front()
-                .startup_order
+    reject_startup_metadata("duplicate-class-static-process-order",
+        "runtime package startup order is duplicated", [](auto& payload) {
+            auto& second = payload.process_rows->rows[1U].instance;
+            second.startup_phase
+                = ProcessStartupPhase::class_static_initializer;
+            second.startup_order
                 = payload.process_rows->rows.front().instance.startup_order;
-        });
-    reject_startup_metadata("duplicate-package-callback-order",
-        "runtime package static-property initializer metadata is invalid",
-        [](auto& payload) {
-            payload.state.systemverilog_package_class_static_initializers
-                .front().startup_order = payload.state
-                    .systemverilog_package_class_initializers.front()
-                    .startup_order;
-        });
-    reject_startup_metadata("package-callback-omits-target-store",
-        "runtime package class-handle initializer metadata is invalid",
-        [](auto& payload) {
-            payload.state.systemverilog_package_class_initializers.front()
-                .writable_signal_ids = { 0U, 4U };
-        });
-    reject_startup_metadata("package-callback-unsorted-store-set",
-        "runtime package class-handle initializer metadata is invalid",
-        [](auto& payload) {
-            payload.state.systemverilog_package_class_initializers.front()
-                .writable_signal_ids = { 1U, 0U, 4U };
         });
     reject_startup_metadata("package-process-duplicate-string-permission",
         "runtime package process object permissions are invalid",
@@ -256,6 +235,19 @@ void test_schema_and_direct_row_roundtrip()
         "runtime package process container permission is not direct owned storage",
         [](auto& payload) {
             payload.state.container_objects[0U].package_owner_id = 9U;
+        });
+    reject_startup_metadata("package-process-unlisted-owner",
+        "runtime package process string permission has a foreign owner",
+        [](auto& payload) {
+            payload.state.string_objects[0U].package_owner_id = 9U;
+            payload.process_rows->rows[0U].instance
+                .startup_writable_package_owner_ids = { 10U };
+        });
+    reject_startup_metadata("package-process-noncanonical-owner-list",
+        "runtime package process object permissions are invalid",
+        [](auto& payload) {
+            payload.process_rows->rows[0U].instance
+                .startup_writable_package_owner_ids = { 9U, 9U };
         });
     reject_startup_metadata("package-process-aliased-container-object",
         "runtime package process container permission is not direct owned storage",

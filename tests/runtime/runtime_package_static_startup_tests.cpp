@@ -801,6 +801,30 @@ namespace {
                 "equal display names in distinct semantic packages do not share ownership");
         }
         {
+            // Class code at startup (a constructor run by a package
+            // class-handle initializer) writes the packages it lists.
+            Interpreter interpreter;
+            const auto target = interpreter.add_signal({
+                "top.listed_package_target",
+                PackedLogic4::from_msb_string("0") });
+            const auto foreign = interpreter.add_string_object({
+                "log_pkg.message", "before", 19U });
+            auto process = startup_process(0U, target, 1U);
+            process.startup_package_owner_id = 7U;
+            process.startup_writable_package_owner_ids = { 19U };
+            process.string_register_count = 1U;
+            process.operations = {
+                LoadStringConstant { 0U, "after" },
+                WriteStringObject { foreign, 0U },
+                Halt { },
+            };
+            process.startup_writable_string_object_ids = { foreign };
+            (void)interpreter.add_process(std::move(process));
+            interpreter.start();
+            require(interpreter.string_object_value(foreign) == "after",
+                "a startup process writes the packages it lists");
+        }
+        {
             Interpreter interpreter;
             const auto target = interpreter.add_signal({
                 "top.escaped_package_target",

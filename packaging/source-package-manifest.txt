@@ -1859,11 +1859,13 @@ tests/fixtures/compliance/sv_class_global_void_shadow_precedence_batch58.sv
 tests/fixtures/compliance/sv_class_handle_fixed_array_range_index_20261015.sv
 tests/fixtures/compliance/sv_class_handle_fixed_array_wide_index_invalid_20261015.sv
 tests/fixtures/compliance/sv_class_handle_multidim_index_batch57.sv
+tests/fixtures/compliance/sv_class_instance_statics.sv
 tests/fixtures/compliance/sv_class_method_default_arguments_batch58_20261014.sv
 tests/fixtures/compliance/sv_class_module_owner_context_batch58_20261013.sv
 tests/fixtures/compliance/sv_class_package_receiver_identity_batch58_20261013.sv
 tests/fixtures/compliance/sv_class_qualified_module_enum_batch58.sv
 tests/fixtures/compliance/sv_class_statements.sv
+tests/fixtures/compliance/sv_class_static_initializers.sv
 tests/fixtures/compliance/sv_compilation_unit_declarations.sv
 tests/fixtures/compliance/sv_compiler_directive_wrapped_arguments_batch57.sv
 tests/fixtures/compliance/sv_conditional_intrinsic_width_batch56.sv
@@ -1915,6 +1917,8 @@ tests/fixtures/compliance/sv_nested_interface_member_port_20261013.sv
 tests/fixtures/compliance/sv_net_data_types.sv
 tests/fixtures/compliance/sv_nonblocking_struct_members.sv
 tests/fixtures/compliance/sv_operand_signedness.sv
+tests/fixtures/compliance/sv_package_class_handle_initializers.sv
+tests/fixtures/compliance/sv_package_generate_scope_writes.sv
 tests/fixtures/compliance/sv_package_module_variable_identity_batch58.sv
 tests/fixtures/compliance/sv_package_timescale_and_returns.sv
 tests/fixtures/compliance/sv_package_unknown_integral_constant_batch58.sv
@@ -2019,6 +2023,8 @@ tests/fixtures/compliance/vhdl_function_signal_attributes_batch59.vhd
 tests/fixtures/compliance/vhdl_function_signal_indexed_actual_batch59.vhd
 tests/fixtures/compliance/vhdl_generate_composite_constant_wide_resolved_20261024.vhd
 tests/fixtures/compliance/vhdl_generate_configuration.vhd
+tests/fixtures/compliance/vhdl_generic_package_generic_values.vhd
+tests/fixtures/compliance/vhdl_generic_package_protected_instances.vhd
 tests/fixtures/compliance/vhdl_guarded_and_real_ranges.vhd
 tests/fixtures/compliance/vhdl_guarded_bus_port.vhd
 tests/fixtures/compliance/vhdl_individual_association.vhd
@@ -2033,6 +2039,7 @@ tests/fixtures/compliance/vhdl_mode_in_variable_defaults_batch58.vhd
 tests/fixtures/compliance/vhdl_names_and_orderings.vhd
 tests/fixtures/compliance/vhdl_nested_component_configuration_batch56.vhd
 tests/fixtures/compliance/vhdl_nested_open_array_aggregate_batch59.vhd
+tests/fixtures/compliance/vhdl_nested_package_instances.vhd
 tests/fixtures/compliance/vhdl_nested_unconstrained_actual_batch57.vhd
 tests/fixtures/compliance/vhdl_now_and_string_formals.vhd
 tests/fixtures/compliance/vhdl_numeric_std_function_result_shape_20261024.vhd

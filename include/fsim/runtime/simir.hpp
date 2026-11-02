@@ -9,6 +9,7 @@
 #include "fsim/runtime/simir_shared_vector.hpp"
 #include "fsim/runtime/systemverilog_scalar.hpp"
 #include "fsim/support/rare_vector.hpp"
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -1698,7 +1699,45 @@ enum class ProcessStartupPhase : std::uint8_t {
     // process: an always_comb or always_latch runs once after all initial
     // and always procedures have started (IEEE 1800-2017 9.2.2.2.2).
     after_procedures,
+    // Runs one class static property's initializer in its specialization,
+    // in the same startup order as package static initializers and before
+    // any procedure (IEEE 1800-2017 8.9, 6.21). It writes only class static
+    // properties, so it drives no signal.
+    class_static_initializer,
 };
+
+/// Whether a process of `phase` runs once in the startup order, before the
+/// ordinary time-zero processes.
+[[nodiscard]] constexpr bool startup_initializer_phase(
+    const ProcessStartupPhase phase) noexcept
+{
+    return phase == ProcessStartupPhase::package_static_initializer
+        || phase == ProcessStartupPhase::class_static_initializer;
+}
+
+/// Whether a startup process owned by `own` (zero for a class outside every
+/// package) with the canonical `others` list may write an object of `owner`.
+/// Objects outside every package (owner zero) are never writable.
+[[nodiscard]] inline bool startup_owner_writable(const std::uint32_t own,
+    const std::span<const std::uint32_t> others,
+    const std::uint64_t owner) noexcept
+{
+    return owner != 0U
+        && (owner == own || std::ranges::binary_search(others, owner));
+}
+
+/// Whether a startup owner list is canonical: ascending, unique, nonzero.
+[[nodiscard]] inline bool canonical_startup_owner_ids(
+    const std::span<const std::uint32_t> owners) noexcept
+{
+    for (std::size_t index { }; index < owners.size(); ++index) {
+        if (owners[index] == 0U
+            || (index != 0U && owners[index] <= owners[index - 1U])) {
+            return false;
+        }
+    }
+    return true;
+}
 
 struct Process {
     static constexpr std::uint64_t full_static_trigger_mask
@@ -1780,6 +1819,11 @@ struct Process {
     /// Opaque design-local semantic unit identity of a package initializer.
     /// Zero is reserved for processes outside package startup.
     std::uint32_t startup_package_owner_id { };
+    /// The other packages whose objects this startup process may write,
+    /// as canonical owner tokens: those a class's code depends on (a class
+    /// static initializer, or the constructor a package class-handle
+    /// initializer runs). Empty for a package's own variable initializers.
+    std::vector<std::uint32_t> startup_writable_package_owner_ids { };
     /// Direct package objects this process may write synchronously during
     /// its own startup action. These IDs are instance-owned and canonical.
     std::vector<StringObjectId> startup_writable_string_object_ids { };

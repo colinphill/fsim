@@ -1644,21 +1644,27 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     const bool package_static_initializer
         = process.startup_phase()
             == ProcessStartupPhase::package_static_initializer;
+    const bool class_static_initializer
+        = process.startup_phase()
+            == ProcessStartupPhase::class_static_initializer;
+    const bool startup_initializer
+        = package_static_initializer || class_static_initializer;
     if (process.startup_phase() != ProcessStartupPhase::ordinary
         && process.startup_phase() != ProcessStartupPhase::after_procedures
-        && !package_static_initializer) {
+        && !startup_initializer) {
         throw std::invalid_argument {
             "invalid SimIR process startup phase"
         };
     }
-    if ((!package_static_initializer && process.startup_order() != 0U)
-        || (package_static_initializer
+    if ((!startup_initializer && process.startup_order() != 0U)
+        || (startup_initializer
             && (!process.initialize() || process.final()
                 || process.scheduling_domain()
                     != ProcessSchedulingDomain::systemverilog
                 || !process.static_sensitivity().empty()
                 || process.operations().empty()
-                || process.driver_regions().empty()
+                || (package_static_initializer
+                    && process.driver_regions().empty())
                 || process.observed() || process.reactive()
                 || process.postponed() || process.program_owner()
                 || process.switch_source() || process.switch_target()
@@ -1673,8 +1679,10 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     const auto& container_write_closure
         = process.startup_writable_container_object_ids();
     const auto package_owner_id = process.startup_package_owner_id();
-    if (!package_static_initializer) {
-        if (package_owner_id != 0U || !string_write_closure.empty()
+    if (!startup_initializer) {
+        if (package_owner_id != 0U
+            || !process.startup_writable_package_owner_ids().empty()
+            || !string_write_closure.empty()
             || !container_write_closure.empty()) {
             throw std::invalid_argument {
                 "ordinary SimIR process carries package startup object permissions"
@@ -1692,7 +1700,11 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             }
             return true;
         };
-        if (package_owner_id == 0U
+        // A package's initializer writes its own storage; class code also
+        // that of the packages its class depends on, which it lists.
+        if ((package_static_initializer && package_owner_id == 0U)
+            || !canonical_startup_owner_ids(
+                process.startup_writable_package_owner_ids())
             || !canonical_ids(string_write_closure, string_objects.size())
             || !canonical_ids(container_write_closure,
                 container_objects.size())) {
@@ -1735,8 +1747,12 @@ ProcessId Interpreter::Impl::add_process_program_impl(
                 "SimIR package startup object permissions do not match process writes"
             };
         }
+        const auto permitted_owner = [&](const std::uint32_t owner) {
+            return startup_owner_writable(package_owner_id,
+                process.startup_writable_package_owner_ids(), owner);
+        };
         for (const auto object : string_write_closure) {
-            if (string_objects[object].package_owner_id != package_owner_id) {
+            if (!permitted_owner(string_objects[object].package_owner_id)) {
                 throw std::invalid_argument {
                     "SimIR package startup string permission has a foreign owner"
                 };
@@ -1744,7 +1760,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         }
         for (const auto object : container_write_closure) {
             const auto& target = container_objects[object];
-            if (target.package_owner_id != package_owner_id
+            if (!permitted_owner(target.package_owner_id)
                 || target.slice_alias
                 || container_has_signal_alias(object)) {
                 throw std::invalid_argument {
@@ -2044,7 +2060,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         const auto signal = outputs[begin].signal;
         const std::span<const Process::DriverRegion> regions {
             outputs.data() + begin, end - begin };
-        if (!switch_connection && !package_static_initializer) {
+        if (!switch_connection && !startup_initializer) {
             auto& writer_count = signal_writer_counts[signal];
             if (writer_count != std::numeric_limits<std::uint32_t>::max()) {
                 ++writer_count;
@@ -2139,7 +2155,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     };
     std::optional<Impl::ConstantDriverStartupEntry> compact_shape;
     if (executable
-        && program.startup_phase() != ProcessStartupPhase::package_static_initializer) {
+        && !startup_initializer_phase(program.startup_phase())) {
         compact_shape
             = recognize_constant_driver_startup(id, program);
     }
@@ -3196,8 +3212,7 @@ void Interpreter::start()
             continue;
         }
         const auto program = impl_->processes.program_view(id);
-        if (program.startup_phase()
-            == ProcessStartupPhase::package_static_initializer) {
+        if (startup_initializer_phase(program.startup_phase())) {
             if (impl_->processes.is_compact_constant(id)) {
                 throw std::logic_error {
                     "package static initializer was compacted as a scheduled write"

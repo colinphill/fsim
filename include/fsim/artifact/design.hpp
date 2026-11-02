@@ -18,7 +18,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kDesignFormatVersion = 16;
+inline constexpr std::uint32_t kDesignFormatVersion = 17;
 inline constexpr std::string_view kDesignArtifactKind = "fsim-design";
 // The design metadata record, one payload of the .fsimdesign container.
 inline constexpr std::string_view kDesignMetadataFilename = "fsim-design.bin";

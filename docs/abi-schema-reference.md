@@ -149,7 +149,7 @@ type information.
 | --- | --- | --- |
 | `fsim.toml` (retained SDK reader) | project schema 3 | low-level project configuration; public CLI commands use the current-directory workspace and do not read this file |
 | `.fsimobj` | one SQLite container (kind `fsim-object`) holding format 10, portable schema 16, compiled-HIR bundle 3 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and source paths (relative to the source root: the compiling workspace, or the base directory outside one; absolute only for a Windows source on another drive or share) with content digests and coverage facts, never source text |
-| `.fsimdesign` | one SQLite container (kind `fsim-design`) holding format 16, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, class-specialization, SDF, trace, SystemC, and SCV state. Each payload checksum is `xxh64:` and sixteen lowercase hex digits (XXH64, seed 0; the integrity check simulate repeats at load) or lowercase SHA-256 hex |
+| `.fsimdesign` | one SQLite container (kind `fsim-design`) holding format 17, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, class-specialization, SDF, trace, SystemC, and SCV state. Each payload checksum is `xxh64:` and sixteen lowercase hex digits (XXH64, seed 0; the integrity check simulate repeats at load) or lowercase SHA-256 hex |
 | `.fsimlib` | one SQLite container (kind `fsim-library`) holding canonical TOML format 8, portable schema 16, compiled-HIR bundle 3 | logical-library metadata, compiled semantic/SV/VHDL HIR, source paths with content digests and coverage facts (never source text), and optional exact native accelerators |
 | Workspace library catalog | SQLite schema 3 | artifact and dependency indexes with VHDL identifier-form columns |
 | `.fsimscobj` | one SQLite container (kind `fsim-systemc-object`) holding format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
@@ -203,23 +203,28 @@ rejected directly.
 
 The compiled-HIR bundle is schema 3 and embeds semantic schema 4,
 SystemVerilog HIR schema 14, and VHDL HIR schema 8. The standalone design's
-other current state schemas are runtime 91, DesignIR 5, coverage 7, UVM 3, and
-class specializations (`FSIMSVCS`) 1. Runtime schema 91 stores packed values as
+other current state schemas are runtime 92, DesignIR 5, coverage 7, UVM 3, and
+class specializations (`FSIMSVCS`) 1. Runtime schema 92 stores packed values as
 their width and raw bit planes. The standalone `FSIMSVCH` constraint-HIR state
 is schema 14. The runtime schema carries opaque design-local package owner IDs on package
 string/container objects and initializer process rows. Elaboration derives the
 same token as `UnitId.value() + 1` for both sides, reserving zero for unowned
-objects and ordinary processes; runtime
-admission requires exact owner equality plus canonical per-process object-ID
-closures. Ownership does not depend on library, package, or escaped-member
-display spelling. The closure currently covers direct string writes and
+objects and ordinary processes. A startup process row also lists, as a
+canonical owner-token list, the other packages it may write: empty for a
+package variable initializer, which writes only its own package's objects,
+and the packages its class depends on for a class static initializer or for
+the constructor a package class-handle initializer (`C h = new`, a startup
+process like any other) runs. Runtime admission requires each written
+object's owner to be the row's owner or listed, plus canonical per-process
+object-ID closures. Ownership does not depend on
+library, package, or escaped-member display spelling. The closure currently
+covers direct string writes and
 synchronous whole-container writes emitted by the initializer call graph,
 including source forms lowered as temporary container read/modify/write
 followed by a guarded whole-object write. Deferred container writes and direct
 `WriteContainerObjectElement` operations remain outside this support boundary.
 This does not establish support for every source-level element, member,
-dynamic-part, or associative update. Startup callbacks retain their separate
-typed allowlists.
+dynamic-part, or associative update.
 Runtime and DesignIR references use the canonical `FSIMHPT1` hierarchy-path
 table, schema 1, stored at `state/hierarchy-paths.bin`; standalone DesignIR
 and runtime payloads carry their own inline schema-1 table when serialized

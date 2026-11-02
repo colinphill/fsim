@@ -125,6 +125,8 @@ ProcessInstanceProgram::ProcessInstanceProgram(Process process)
     , startup_phase { process.startup_phase }
     , startup_order { process.startup_order }
     , startup_package_owner_id { process.startup_package_owner_id }
+    , startup_writable_package_owner_ids {
+          std::move(process.startup_writable_package_owner_ids) }
     , startup_writable_string_object_ids {
           std::move(process.startup_writable_string_object_ids) }
     , startup_writable_container_object_ids {
@@ -158,6 +160,8 @@ ProcessInstanceProgram::ProcessInstanceProgram(
     , startup_phase { process.startup_phase() }
     , startup_order { process.startup_order() }
     , startup_package_owner_id { process.startup_package_owner_id() }
+    , startup_writable_package_owner_ids {
+          process.startup_writable_package_owner_ids() }
     , startup_writable_string_object_ids {
           process.startup_writable_string_object_ids() }
     , startup_writable_container_object_ids {
@@ -667,6 +671,14 @@ ProcessProgramView::startup_package_owner_id() const noexcept
                               : instance_->startup_package_owner_id;
 }
 
+const std::vector<std::uint32_t>&
+ProcessProgramView::startup_writable_package_owner_ids() const noexcept
+{
+    return facade_ != nullptr
+        ? facade_->startup_writable_package_owner_ids
+        : instance_->startup_writable_package_owner_ids;
+}
+
 const std::vector<StringObjectId>&
 ProcessProgramView::startup_writable_string_object_ids() const noexcept
 {
@@ -741,6 +753,8 @@ Process ProcessProgramView::materialize_impl(
     process.startup_phase = startup_phase();
     process.startup_order = startup_order();
     process.startup_package_owner_id = startup_package_owner_id();
+    process.startup_writable_package_owner_ids
+        = startup_writable_package_owner_ids();
     process.startup_writable_string_object_ids
         = startup_writable_string_object_ids();
     process.startup_writable_container_object_ids

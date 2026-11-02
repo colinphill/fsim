@@ -32,9 +32,6 @@ template <typename Id, typename Index>
     return static_cast<Id>(*index);
 }
 
-using PackageClassHandleInitializer = std::pair<
-    runtime::simir::SignalId, semantic::ExpressionId>;
-
 // A class-handle container property as a container of 64-bit handle values
 // of `type` (IEEE 1800-2017 7.4, 7.8, 7.10): sequential elements in order,
 // associative elements in key order.
@@ -143,22 +140,6 @@ void assign_handle_container(runtime::SystemVerilogClassHeap& heap,
     }
 }
 
-[[nodiscard]] std::vector<elaboration::SystemVerilogPackageClassInitializerInfo>
-copy_package_class_startup_initializers(const BuiltProject& built)
-{
-    const auto rows = built.design.systemverilog_package_class_initializers();
-    return { rows.begin(), rows.end() };
-}
-
-[[nodiscard]] std::vector<
-    elaboration::SystemVerilogPackageClassStaticInitializerInfo>
-copy_package_static_class_startup_initializers(const BuiltProject& built)
-{
-    const auto rows
-        = built.design.systemverilog_package_class_static_initializers();
-    return { rows.begin(), rows.end() };
-}
-
 [[nodiscard]] std::vector<runtime::simir::SignalId>
 collect_package_static_startup_signal_ids(const BuiltProject& built)
 {
@@ -168,259 +149,17 @@ collect_package_static_startup_signal_ids(const BuiltProject& built)
     using Access = elaboration::detail::ElaboratedDesignProcessAccess;
     for (std::size_t index = 0U; index < built.design.process_count(); ++index) {
         const auto process = Access::process_view(built.design, index);
-        if (process.startup_phase()
-            != runtime::simir::ProcessStartupPhase::package_static_initializer) {
+        if (!runtime::simir::startup_initializer_phase(
+                process.startup_phase())) {
             continue;
         }
         for (const auto& region : process.driver_regions()) {
             result.push_back(region.signal);
         }
     }
-    const auto append_writable_signals = [&result](const auto& rows) {
-        for (const auto& row : rows) {
-            result.insert(result.end(), row.writable_signal_ids.begin(),
-                row.writable_signal_ids.end());
-        }
-    };
-    append_writable_signals(
-        built.design.systemverilog_package_class_initializers());
-    append_writable_signals(
-        built.design.systemverilog_package_class_static_initializers());
     std::ranges::sort(result);
     result.erase(std::unique(result.begin(), result.end()), result.end());
     return result;
-}
-
-[[nodiscard]] std::vector<PackageClassHandleInitializer>
-compiled_systemverilog_package_class_handle_initializers(
-    const BuiltProject& built)
-{
-    std::vector<PackageClassHandleInitializer> result;
-    std::set<std::uint32_t> seen_declarations;
-    for (const auto& unit : built.systemverilog_hir.units()) {
-        if (unit.kind != semantic::sv::UnitKind::package) {
-            continue;
-        }
-        for (const auto declaration_id : unit.declarations) {
-            const auto* declaration
-                = built.systemverilog_hir.find_declaration(declaration_id);
-            if (declaration == nullptr
-                || declaration->scope != unit.scope
-                || declaration->form
-                    != semantic::sv::DeclarationForm::variable
-                || !declaration->initializer) {
-                continue;
-            }
-            const auto initializer = std::ranges::find(
-                built.systemverilog_hir.expressions(),
-                *declaration->initializer, &semantic::sv::Expression::id);
-            if (initializer == built.systemverilog_hir.expressions().end()
-                || initializer->kind
-                    != semantic::sv::ExpressionKind::class_allocation) {
-                continue;
-            }
-            if (!declaration->declared_value) {
-                throw std::logic_error {
-                    "package class allocation has no declaration value identity"
-                };
-            }
-            std::optional<runtime::simir::SignalId> signal;
-            for (const auto& object : built.design_ir.objects()) {
-                if (object.kind != semantic::design::ObjectKind::signal
-                    || object.declaration_value != declaration->declared_value) {
-                    continue;
-                }
-                if (object.runtime_index
-                        > std::numeric_limits<runtime::simir::SignalId>::max()
-                    || object.runtime_index >= built.design.signals().size()) {
-                    throw std::logic_error {
-                        "package class allocation maps to an invalid runtime signal"
-                    };
-                }
-                const auto candidate
-                    = static_cast<runtime::simir::SignalId>(
-                        object.runtime_index);
-                if (signal && *signal != candidate) {
-                    throw std::logic_error {
-                        "package class allocation has multiple runtime signals"
-                    };
-                }
-                signal = candidate;
-            }
-            if (!signal) {
-                throw std::logic_error {
-                    "package class allocation has no exact runtime signal binding"
-                };
-            }
-            if (seen_declarations.insert(declaration_id.value()).second) {
-                result.push_back({ *signal, *declaration->initializer });
-            }
-        }
-    }
-    return result;
-}
-
-[[nodiscard]] const semantic::sv::Unit* package_unit_for_class(
-    const BuiltProject& built,
-    const semantic::sv::ClassSpecialization& specialization)
-{
-    const auto scope = std::ranges::find(
-        built.semantics.scopes(), specialization.declaration_scope,
-        &semantic::Scope::id);
-    if (scope == built.semantics.scopes().end()) {
-        throw std::logic_error {
-            "compiled class initializer has no exact semantic scope"
-        };
-    }
-    const auto unit = std::ranges::find(
-        built.systemverilog_hir.units(), scope->unit,
-        &semantic::sv::Unit::id);
-    return unit == built.systemverilog_hir.units().end() ? nullptr : &*unit;
-}
-
-void validate_package_class_startup_initializers(
-    const BuiltProject& built,
-    const std::vector<PackageClassHandleInitializer>& expected_handles,
-    const std::vector<elaboration::SystemVerilogPackageClassInitializerInfo>&
-        handle_rows,
-    const std::vector<
-        elaboration::SystemVerilogPackageClassStaticInitializerInfo>&
-        static_rows)
-{
-    if (expected_handles.size() != handle_rows.size()) {
-        throw std::logic_error {
-            "package class-handle startup metadata does not cover every HIR initializer"
-        };
-    }
-    std::set<std::uint32_t> seen_handle_declarations;
-    for (const auto& row : handle_rows) {
-        if (!row.unit.valid() || !row.declaration.valid()
-            || !row.initializer.valid()
-            || !seen_handle_declarations.insert(row.declaration.value()).second) {
-            throw std::logic_error {
-                "package class-handle startup metadata has an invalid identity"
-            };
-        }
-        const auto unit = std::ranges::find(
-            built.systemverilog_hir.units(), row.unit,
-            &semantic::sv::Unit::id);
-        const auto* declaration
-            = built.systemverilog_hir.find_declaration(row.declaration);
-        const auto initializer = std::ranges::find(
-            built.systemverilog_hir.expressions(), row.initializer,
-            &semantic::sv::Expression::id);
-        if (unit == built.systemverilog_hir.units().end()
-            || unit->kind != semantic::sv::UnitKind::package
-            || declaration == nullptr
-            || declaration->scope != unit->scope
-            || declaration->form != semantic::sv::DeclarationForm::variable
-            || declaration->initializer != row.initializer
-            || !declaration->declared_value
-            || initializer == built.systemverilog_hir.expressions().end()
-            || initializer->kind
-                != semantic::sv::ExpressionKind::class_allocation) {
-            throw std::logic_error {
-                "package class-handle startup metadata does not match its HIR declaration"
-            };
-        }
-        if (std::ranges::count_if(expected_handles,
-                [&](const auto& candidate) {
-                    return candidate.first == row.signal
-                        && candidate.second == row.initializer;
-                }) != 1) {
-            throw std::logic_error {
-                "package class-handle startup metadata has no unique runtime binding"
-            };
-        }
-    }
-
-    const auto property_row = [&](const std::string_view specialization,
-                                  const semantic::DeclarationId declaration) {
-        return std::ranges::find_if(static_rows, [&](const auto& row) {
-            return row.specialization_identity == specialization
-                && row.property_declaration == declaration;
-        });
-    };
-    std::set<std::pair<std::string, std::uint32_t>> seen_static_properties;
-    for (const auto& row : static_rows) {
-        if (!row.unit.valid() || row.class_identity.empty()
-            || row.specialization_identity.empty()
-            || !row.property_declaration.valid() || row.property_name.empty()
-            || row.canonical_identity.empty() || !row.initializer.valid()
-            || !seen_static_properties.emplace(row.specialization_identity,
-                   row.property_declaration.value()).second) {
-            throw std::logic_error {
-                "package static-property startup metadata has an invalid identity"
-            };
-        }
-        const auto specialization = std::ranges::find(
-            built.compiled_systemverilog_class_specializations,
-            row.specialization_identity,
-            &semantic::sv::ClassSpecialization::specialization_identity);
-        if (specialization
-                == built.compiled_systemverilog_class_specializations.end()
-            || specialization->declaration_identity != row.class_identity) {
-            throw std::logic_error {
-                "package static-property startup metadata has no exact class specialization"
-            };
-        }
-        const auto* unit = package_unit_for_class(built, *specialization);
-        if (unit == nullptr || unit->kind != semantic::sv::UnitKind::package
-            || unit->id != row.unit) {
-            throw std::logic_error {
-                "package static-property startup metadata has the wrong owning package"
-            };
-        }
-        const auto property = std::ranges::find(
-            specialization->properties, row.property_declaration,
-            &semantic::sv::SpecializedClassProperty::declaration);
-        const auto initializer = std::ranges::find(
-            built.systemverilog_hir.expressions(), row.initializer,
-            &semantic::sv::Expression::id);
-        if (property == specialization->properties.end()
-            || !property->static_storage || property->name != row.property_name
-            || property->canonical_identity != row.canonical_identity
-            || property->initializer != row.initializer
-            || initializer == built.systemverilog_hir.expressions().end()
-            || initializer->kind
-                != semantic::sv::ExpressionKind::class_allocation) {
-            throw std::logic_error {
-                "package static-property startup metadata does not match its HIR initializer"
-            };
-        }
-    }
-
-    for (const auto& specialization :
-        built.compiled_systemverilog_class_specializations) {
-        const auto* unit = package_unit_for_class(built, specialization);
-        if (unit == nullptr || unit->kind != semantic::sv::UnitKind::package) {
-            continue;
-        }
-        for (const auto& property : specialization.properties) {
-            if (!property.static_storage || !property.initializer) {
-                continue;
-            }
-            const auto initializer = std::ranges::find(
-                built.systemverilog_hir.expressions(), *property.initializer,
-                &semantic::sv::Expression::id);
-            if (initializer == built.systemverilog_hir.expressions().end()
-                || initializer->kind
-                    != semantic::sv::ExpressionKind::class_allocation) {
-                continue;
-            }
-            const auto row = property_row(
-                specialization.specialization_identity, property.declaration);
-            if (row == static_rows.end() || row->unit != unit->id
-                || row->initializer != *property.initializer
-                || row->class_identity != specialization.declaration_identity
-                || row->property_name != property.name
-                || row->canonical_identity != property.canonical_identity) {
-                throw std::logic_error {
-                    "package static class allocation is missing exact startup metadata"
-                };
-            }
-        }
-    }
 }
 
 #if defined(FSIM_HAS_LLVM)
@@ -927,14 +666,6 @@ Simulation::Impl::Impl(
     const SimulationEngine engine,
     const SystemVerilogVpiRuntimeUpdates vpi_runtime_updates)
     : built(std::move(project))
-    , package_class_handle_initializers(built.trusted_artifact
-              ? std::vector<PackageClassHandleInitializer> { }
-              : compiled_systemverilog_package_class_handle_initializers(
-                  built))
-    , package_class_startup_initializers(
-          copy_package_class_startup_initializers(built))
-    , package_static_class_startup_initializers(
-          copy_package_static_class_startup_initializers(built))
     , package_static_startup_signal_ids(
           collect_package_static_startup_signal_ids(built))
     , vpi_runtime_updates_enabled(
@@ -1026,14 +757,6 @@ Simulation::Impl::Impl(
 {
     if (interpreter) {
         interpreter->retain_state_until_exit();
-    }
-    // A trusted artifact's startup metadata is not re-derived from HIR;
-    // FSIM_VERIFY_ARTIFACT=1 keeps the check.
-    if (!built.trusted_artifact) {
-        validate_package_class_startup_initializers(built,
-            package_class_handle_initializers,
-            package_class_startup_initializers,
-            package_static_class_startup_initializers);
     }
     uvm_components.set_post_destroy_hook(
         [this](const runtime::SystemVerilogUvmComponentSnapshot& object) {
@@ -2093,109 +1816,49 @@ Simulation::Impl::Impl(
         built.compiled_systemverilog_class_specializations) {
         ++declaration_counts[specialization.declaration_identity];
     }
+    const auto static_descriptor
+        = [this](const semantic::sv::ClassSpecialization& specialization) {
+              runtime::SystemVerilogClassStaticDescriptor descriptor;
+              descriptor.specialization_identity
+                  = specialization.specialization_identity;
+              descriptor.base_specialization_identity = specialization.base
+                  ? specialization.base->specialization_identity
+                  : std::string { };
+              for (const auto& property : specialization.properties) {
+                  if (property.static_storage) {
+                      descriptor.properties.push_back(
+                          class_property_descriptor(
+                              property, built.systemverilog_hir));
+                  }
+              }
+              return descriptor;
+          };
     for (const auto& specialization :
         built.compiled_systemverilog_class_specializations) {
-        runtime::SystemVerilogClassStaticDescriptor descriptor;
-        descriptor.specialization_identity = specialization.specialization_identity;
-        descriptor.base_specialization_identity = specialization.base
-            ? specialization.base->specialization_identity
-            : std::string { };
+        auto descriptor = static_descriptor(specialization);
         if (declaration_counts[specialization.declaration_identity] == 1
             && specialization.declaration_identity
                 != specialization.specialization_identity) {
             descriptor.aliases.push_back(specialization.declaration_identity);
         }
-        for (const auto& property : specialization.properties) {
-            if (property.static_storage) {
-                descriptor.properties.push_back(
-                    class_property_descriptor(
-                        property, built.systemverilog_hir));
-            }
-        }
         class_static_store.register_specialization(std::move(descriptor));
     }
+    // The class of a generated scope or design element instance has static
+    // properties of its own (IEEE 1800-2023 6.22, 27.4), stored once the
+    // design first names it.
+    class_static_store.set_missing_specialization_resolver(
+        [this, static_descriptor](const std::string_view identity)
+            -> std::optional<runtime::SystemVerilogClassStaticDescriptor> {
+            const auto* specialization
+                = generated_class_specialization(identity);
+            if (specialization == nullptr) {
+                return std::nullopt;
+            }
+            return static_descriptor(*specialization);
+        });
     class_static_store.initialize_all();
-    for (const auto& row : package_class_startup_initializers) {
-        interpreter->register_package_static_startup_callback(
-            row.startup_order, row.writable_signal_ids,
-            row.writable_string_object_ids, row.writable_container_object_ids,
-            [this, signal = row.signal, initializer = row.initializer] {
-                const auto value
-                    = class_hir_execution.evaluate_initializer(initializer);
-                if (!value || value->width() != 64U) {
-                    throw std::logic_error {
-                        "compiled package class-handle initializer could not be evaluated"
-                    };
-                }
-                interpreter->deposit_signal(signal, *value);
-            });
-    }
-    for (const auto& row : package_static_class_startup_initializers) {
-        interpreter->register_package_static_startup_callback(
-            row.startup_order, row.writable_signal_ids,
-            row.writable_string_object_ids, row.writable_container_object_ids,
-            [this, specialization = row.specialization_identity,
-                property = row.property_name,
-                canonical = row.canonical_identity,
-                initializer = row.initializer] {
-                const auto value
-                    = class_hir_execution.evaluate_initializer(initializer);
-                if (!value) {
-                    throw std::logic_error {
-                        "compiled package static class-property initializer could not be evaluated"
-                    };
-                }
-                assign_property_value(
-                    class_static_store.property(specialization, property),
-                    canonical, *value);
-            });
-    }
-    // Nonpackage static class properties retain their eager pre-process
-    // construction. Package-owned `new` initializers are registered above so
-    // their effects share declaration order with package variable initializers.
-    for (const auto& specialization :
-        built.compiled_systemverilog_class_specializations) {
-        const auto* owner_unit = package_unit_for_class(built, specialization);
-        for (const auto& property : specialization.properties) {
-            if (!property.static_storage || !property.initializer
-                || property.type.class_identity.empty()
-                || property.type.container_form) {
-                continue;
-            }
-            const auto initializer = std::ranges::find(
-                built.systemverilog_hir.expressions(), *property.initializer,
-                &semantic::sv::Expression::id);
-            if (initializer == built.systemverilog_hir.expressions().end()
-                || initializer->kind
-                    != semantic::sv::ExpressionKind::class_allocation) {
-                continue;
-            }
-            if (owner_unit != nullptr
-                && owner_unit->kind == semantic::sv::UnitKind::package) {
-                const auto row = std::ranges::find_if(
-                    package_static_class_startup_initializers,
-                    [&](const auto& candidate) {
-                        return candidate.specialization_identity
-                                == specialization.specialization_identity
-                            && candidate.property_declaration
-                                == property.declaration;
-                    });
-                if (row == package_static_class_startup_initializers.end()) {
-                    throw std::logic_error {
-                        "package static class allocation is missing startup callback metadata"
-                    };
-                }
-                continue;
-            }
-            if (const auto value = class_hir_execution.evaluate_initializer(
-                    *property.initializer)) {
-                assign_property_value(
-                    class_static_store.property(
-                        specialization.specialization_identity, property.name),
-                    property.canonical_identity, *value);
-            }
-        }
-    }
+    // Static class property initializers other than literals run as
+    // class_static_initializer processes in the startup order.
     interpreter->set_file_root(built.file_root);
     if (vpi_runtime_updates
         == SystemVerilogVpiRuntimeUpdates::omitted) {

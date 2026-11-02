@@ -9,6 +9,7 @@
 #include "hierarchy_sv_parameters_internal.hpp"
 #include "hierarchy_sv_ports_internal.hpp"
 #include "lowerer_internal.hpp"
+#include "fsim/support/uvm_identity.hpp"
 #include "fsim/support/vhdl_standard_enumeration.hpp"
 #include "fsim/support/phase_profile.hpp"
 #include "vhdl_hir_type_validation.hpp"
@@ -24,6 +25,7 @@
 #include <iostream>
 #include <cctype>
 #include <charconv>
+#include <deque>
 #include <functional>
 #include <numeric>
 #include <set>
@@ -16031,6 +16033,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     systemverilog_instance_specializations_.try_emplace(path,
         std::shared_ptr<const semantic::SpecializedHirUnit>(
             specialized_owner, &*specialized));
+    systemverilog_design_element_instances_.insert(path);
     // Classify before evaluating any constant, so equal specializations
     // share their constant results (overlay_class).
     static_cast<void>(overlay_class(*specialized));
@@ -16410,7 +16413,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     lowerer.set_systemverilog_interface_handles(
         &systemverilog_interface_handles_, &systemverilog_interface_types_,
             &systemverilog_instance_specializations_,
-            &systemverilog_interface_exports_);
+            &systemverilog_interface_exports_,
+            &systemverilog_design_element_instances_);
     lowerer.set_hir_container_declaration_bindings(
         &root_materialization.container_declaration_bindings);
     {
@@ -16665,7 +16669,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     std::vector<std::pair<semantic::StatementId, std::size_t>>
         deferred_statements;
     std::vector<DeferredGeneratedSystemVerilogItem> deferred_generated;
-    register_generated_class_specializations(generate_occurrences);
+    register_generated_class_specializations(
+        path, specialized->unit(), generate_occurrences);
     if (!lower_compiled_systemverilog_processes(
             unit, *specialized, path, source_language,
             active_concurrent_statements, active_processes,
@@ -16804,7 +16809,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     if (!deferred_generated.empty()
         && !lower_deferred_generated_systemverilog(unit, source_language,
             generate_occurrences, generated_materializations,
-            deferred_generated, specialization_index, program_owner)) {
+            deferred_generated, specialization_index, program_owner,
+            lowerer)) {
         return false;
     }
     // Every lowerer that records under this instance's path is done.
@@ -20693,17 +20699,20 @@ HierarchyBuilder::compiled_systemverilog_package_variable_signal(
                         *compiled_, declaration->systemverilog->source));
                 return std::nullopt;
             }
-            const PendingSystemVerilogPackageClassInitializer class_initializer {
-                scope->unit, declaration_id, found->second,
-                *declaration->systemverilog->initializer,
+            // The allocation and its constructor run as a package startup
+            // process in declaration order (IEEE 1800-2023 6.21, 8.7).
+            const PendingSystemVerilogPackageInitializer class_initializer {
+                scope->unit, declaration_id,
+                *declaration->systemverilog->initializer, found->second,
+                true,
             };
             if (std::ranges::find_if(
-                    systemverilog_package_class_initializers_,
+                    systemverilog_package_initializers_,
                     [&](const auto& current) {
                         return current.unit == class_initializer.unit
                             && current.declaration == class_initializer.declaration;
-                    }) == systemverilog_package_class_initializers_.end()) {
-                systemverilog_package_class_initializers_.push_back(class_initializer);
+                    }) == systemverilog_package_initializers_.end()) {
+                systemverilog_package_initializers_.push_back(class_initializer);
             }
         }
     }
@@ -20803,9 +20812,10 @@ HierarchyBuilder::compiled_systemverilog_package_string_object(
 
 bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
 {
+    // Classes outside every package still own static startup initializers.
     if (systemverilog_package_initializers_.empty()
-        && systemverilog_package_class_initializers_.empty()
-        && systemverilog_package_units_.empty()) {
+        && systemverilog_package_units_.empty()
+        && compiled_->systemverilog_hir.classes().empty()) {
         return true;
     }
 
@@ -20816,9 +20826,6 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
         }
     };
     for (const auto& initializer : systemverilog_package_initializers_) {
-        append_package_unit(initializer.unit);
-    }
-    for (const auto& initializer : systemverilog_package_class_initializers_) {
         append_package_unit(initializer.unit);
     }
 
@@ -20858,6 +20865,42 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
         return initializer && initializer->systemverilog != nullptr
             && initializer->systemverilog->kind
                 == semantic::sv::ExpressionKind::class_allocation;
+    };
+    // Whether a static class property's initializer runs as a startup
+    // process (IEEE 1800-2017 8.9): every initializer except a literal the
+    // class static store already holds (class_property_descriptor), a class
+    // parameter, which folds where it is read (8.25), and a value container,
+    // made at its first use. The UVM library's static state is the
+    // simulation's UVM services', apart from the objects it allocates.
+    const auto static_class_startup_initializer = [&](const auto& property) {
+        if (!property.static_storage || !property.initializer
+            || property.parameter || property.type.container_form) {
+            return false;
+        }
+        const auto initializer
+            = compiled_->find_expression(*property.initializer);
+        if (!initializer || initializer->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& value = *initializer->systemverilog;
+        using semantic::sv::ExpressionKind;
+        if (value.kind == ExpressionKind::class_allocation) {
+            return true;
+        }
+        if (support::is_uvm_library_identity(property.owner_identity)
+            || value.kind == ExpressionKind::boolean_literal
+            || (value.kind == ExpressionKind::string_literal
+                && value.decoded_string)) {
+            return false;
+        }
+        if (value.kind == ExpressionKind::integer_literal) {
+            std::int64_t decimal { };
+            const auto* const begin = value.text.data();
+            const auto* const end = begin + value.text.size();
+            const auto converted = std::from_chars(begin, end, decimal, 10);
+            return converted.ec != std::errc { } || converted.ptr != end;
+        }
+        return true;
     };
     const auto package_dependencies = [&](const semantic::UnitId owner,
                                           const bool collected_only) {
@@ -20939,6 +20982,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
         std::vector<StringObjectId> strings;
         std::vector<ContainerObjectId> containers;
         std::unordered_set<SignalId> signal_set;
+        // The runtime owner tokens of those packages.
+        std::vector<std::uint32_t> owners;
     };
     const auto package_dependency_closure = [&](const semantic::UnitId root) {
         std::vector<semantic::UnitId> result;
@@ -20972,6 +21017,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             const auto unit = compiled_->find_unit(unit_id);
             if (!unit || unit->systemverilog == nullptr) {
                 continue;
+            }
+            if (unit->systemverilog->kind == semantic::sv::UnitKind::package) {
+                writable.owners.push_back(unit_id.value() + 1U);
             }
             for (const auto declaration_id : unit->systemverilog->declarations) {
                 const auto declaration = compiled_->find_declaration(
@@ -21038,6 +21086,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
         sort_unique(writable.signals);
         sort_unique(writable.strings);
         sort_unique(writable.containers);
+        sort_unique(writable.owners);
         return writable;
     };
     std::unordered_map<std::uint32_t, PackageWritableObjects>
@@ -21059,8 +21108,13 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
         std::uint32_t source_file_order { };
         std::uint64_t source_offset { };
         std::size_t property_order { };
+        // The design element instance whose class it is, if any.
+        std::string hierarchy;
     };
     std::vector<PackageStaticClassCandidate> static_class_candidates;
+    // Static class properties of classes outside every package start after
+    // the packages' (IEEE 1800-2017 6.21, 8.9), in source order.
+    std::vector<PackageStaticClassCandidate> nonpackage_class_candidates;
     auto class_specializations
         = semantic::sv::specialize_classes(*compiled_);
     const auto& source_spans = compiled_->semantics.source_spans();
@@ -21112,7 +21166,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
         const auto identity
             = semantic::sv::class_declaration_identity(class_declaration);
         const auto has_static_allocation = std::ranges::any_of(
-            class_declaration.properties, static_class_allocation);
+            class_declaration.properties, static_class_startup_initializer);
         const auto specialization_count = std::ranges::count_if(
             class_specializations.specializations,
             [&](const auto& candidate) {
@@ -21121,16 +21175,26 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             });
         if (has_static_allocation && specialization_count == 0U) {
             const auto property = std::ranges::find_if(
-                class_declaration.properties, static_class_allocation);
+                class_declaration.properties,
+                static_class_startup_initializer);
             report(
                 "FSIM-ELAB-HIR-001",
-                "package class allocation initializer '"
+                "package class static initializer '"
                     + property->name
                     + "' has no exact class specialization",
                 compiled_source_span(*compiled_, property->source));
             return false;
         }
     }
+    if (!design_.class_specializations_) {
+        design_.class_specializations_
+            = std::make_shared<semantic::sv::ClassSpecializationIndex>(
+                compiled_->semantics, compiled_->systemverilog_hir);
+    }
+    auto& live_classes = *design_.class_specializations_;
+    std::deque<semantic::sv::ClassSpecialization>
+        scoped_class_specializations;
+    std::set<std::string> scoped_classes_seen;
     for (const auto& class_specialization :
         class_specializations.specializations) {
         const auto* declaration_scope = compiled_semantic_scope(
@@ -21139,10 +21203,65 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             continue;
         }
         const auto unit = compiled_->find_unit(declaration_scope->unit);
-        if (!unit || unit->systemverilog == nullptr
-            || unit->systemverilog->kind != semantic::sv::UnitKind::package
+        if (!unit || unit->systemverilog == nullptr) {
+            continue;
+        }
+        if (unit->systemverilog->kind != semantic::sv::UnitKind::package
             || std::ranges::find(package_units, declaration_scope->unit)
                 == package_units.end()) {
+            if (unit->systemverilog->kind == semantic::sv::UnitKind::package) {
+                continue;
+            }
+            // The class of each design element instance and generated scope
+            // has static properties of its own, initialized with that
+            // instance's parameters (IEEE 1800-2023 6.22, 8.9): one startup
+            // per class the elaboration made, none for the declaration.
+            std::vector<const semantic::sv::ClassSpecialization*> owners;
+            const auto& identity = class_specialization.declaration_identity;
+            if (!live_classes.generate_iterators(identity).empty()) {
+                if (!scoped_classes_seen.insert(identity).second) {
+                    continue;
+                }
+                for (const auto id :
+                    live_classes.generated_specializations(identity)) {
+                    owners.push_back(
+                        &scoped_class_specializations.emplace_back(
+                            live_classes.at(id)));
+                }
+            } else {
+                owners.push_back(&class_specialization);
+            }
+            for (const auto* owner : owners) {
+                std::string hierarchy;
+                for (const auto& [name, value] : owner->generate_environment) {
+                    if (name == semantic::sv::class_instance_environment) {
+                        hierarchy = value;
+                    }
+                }
+                for (std::size_t property_index { };
+                    property_index < owner->properties.size();
+                    ++property_index) {
+                    const auto& property = owner->properties[property_index];
+                    if (property.owner_identity != owner->declaration_identity
+                        || !static_class_startup_initializer(property)) {
+                        continue;
+                    }
+                    const auto order = source_order(property.source);
+                    if (!order) {
+                        report(
+                            "FSIM-ELAB-HIR-001",
+                            "class static initializer '" + property.name
+                                + "' has no exact declaration source order",
+                            compiled_source_span(*compiled_, property.source));
+                        return false;
+                    }
+                    nonpackage_class_candidates.push_back({
+                        declaration_scope->unit, owner, nullptr, &property,
+                        order->first, order->second, property_index,
+                        hierarchy,
+                    });
+                }
+            }
             continue;
         }
         const auto* class_declaration = package_class(
@@ -21150,12 +21269,13 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             class_specialization.declaration_scope);
         if (class_declaration == nullptr) {
             const auto property = std::ranges::find_if(
-                class_specialization.properties, static_class_allocation);
+                class_specialization.properties,
+                static_class_startup_initializer);
             if (property
                 != class_specialization.properties.end()) {
                 report(
                     "FSIM-ELAB-HIR-001",
-                    "package class allocation initializer '"
+                    "package class static initializer '"
                         + property->name
                         + "' has no exact owning class declaration",
                     compiled_source_span(*compiled_, property->source));
@@ -21167,7 +21287,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             property_index < class_specialization.properties.size();
             ++property_index) {
             const auto& property = class_specialization.properties[property_index];
-            if (!static_class_allocation(property)) {
+            if (property.owner_identity
+                    != class_specialization.declaration_identity
+                || !static_class_startup_initializer(property)) {
                 continue;
             }
             const auto class_property = std::ranges::find_if(
@@ -21182,13 +21304,14 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                 || class_property->initializer != property.initializer) {
                 report(
                     "FSIM-ELAB-HIR-001",
-                    "package class allocation initializer '" + property.name
+                    "package class static initializer '" + property.name
                         + "' has no unique exact owning property",
                     compiled_source_span(*compiled_, property.source));
                 return false;
             }
-            if (property.type.class_identity.empty()
-                || property.type.container_form) {
+            if (static_class_allocation(property)
+                && (property.type.class_identity.empty()
+                    || property.type.container_form)) {
                 report(
                     "FSIM-ELAB-HIR-001",
                     "package class allocation initializer '" + property.name
@@ -21200,21 +21323,20 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             if (!order) {
                 report(
                     "FSIM-ELAB-HIR-001",
-                    "package class allocation initializer '" + property.name
+                    "package class static initializer '" + property.name
                         + "' has no exact declaration source order",
                     compiled_source_span(*compiled_, property.source));
                 return false;
             }
             static_class_candidates.push_back({
                 declaration_scope->unit, &class_specialization, class_declaration,
-                &property, order->first, order->second, property_index,
+                &property, order->first, order->second, property_index, { },
             });
         }
     }
 
     enum class StartupActionKind : std::uint8_t {
         packed_initializer,
-        package_handle,
         static_class_property,
     };
     struct StartupAction {
@@ -21225,12 +21347,17 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
         std::uint64_t source_offset { };
         std::size_t nested_order { };
         const PendingSystemVerilogPackageInitializer* packed_initializer { };
-        const PendingSystemVerilogPackageClassInitializer* handle { };
         const PackageStaticClassCandidate* static_property { };
         std::string specialization_identity { };
     };
     std::unordered_map<std::uint32_t, std::uint64_t> process_startup_orders;
     std::uint64_t next_startup_order { };
+    // Each static class property initializer and its startup order.
+    struct ClassStaticStartup {
+        const PackageStaticClassCandidate* candidate { };
+        std::uint64_t order { };
+    };
+    std::vector<ClassStaticStartup> class_static_startups;
     for (const auto unit_id : dependency_first_units) {
         const auto unit = compiled_->find_unit(unit_id);
         if (!unit || unit->systemverilog == nullptr
@@ -21272,31 +21399,6 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                     &*packed_initializer,
                 });
             }
-            const auto handle = std::ranges::find_if(
-                systemverilog_package_class_initializers_,
-                [&](const auto& current) {
-                    return current.unit == unit_id
-                        && current.declaration == declaration_id;
-                });
-            if (handle != systemverilog_package_class_initializers_.end()) {
-                const auto order = source_order(
-                    declaration->systemverilog->source);
-                if (!order) {
-                    report(
-                        "FSIM-ELAB-HIR-001",
-                        "package class-handle initializer '"
-                            + declaration->systemverilog->name
-                            + "' has no exact declaration source order",
-                        compiled_source_span(
-                            *compiled_, declaration->systemverilog->source));
-                    return false;
-                }
-                actions.push_back({
-                    StartupActionKind::package_handle, unit_id,
-                    declaration_id, order->first, order->second, 0U,
-                    nullptr, &*handle,
-                });
-            }
         }
         for (const auto& candidate : static_class_candidates) {
             if (candidate.unit == unit_id && candidate.specialization != nullptr
@@ -21306,7 +21408,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                     candidate.property->declaration,
                     candidate.source_file_order, candidate.source_offset,
                     candidate.property_order,
-                    nullptr, nullptr, &candidate,
+                    nullptr, &candidate,
                     candidate.specialization->specialization_identity,
                 });
             }
@@ -21360,31 +21462,205 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                 }
                 break;
             }
-            case StartupActionKind::package_handle:
-                design_.systemverilog_package_class_initializers_.push_back({
-                    action.unit, action.declaration, action.handle->signal,
-                    action.handle->initializer, startup_order,
-                    writable->second.signals, writable->second.strings,
-                    writable->second.containers,
-                });
-                break;
             case StartupActionKind::static_class_property:
-                design_.systemverilog_package_class_static_initializers_.push_back({
-                    action.unit,
-                    action.static_property->specialization->declaration_identity,
-                    action.static_property->specialization->specialization_identity,
-                    action.static_property->property->declaration,
-                    action.static_property->property->name,
-                    action.static_property->property->canonical_identity,
-                    *action.static_property->property->initializer,
-                    startup_order, writable->second.signals,
-                    writable->second.strings, writable->second.containers,
-                });
+                class_static_startups.push_back({
+                    action.static_property, startup_order });
                 break;
             }
         }
     }
+    std::ranges::sort(nonpackage_class_candidates,
+        [](const auto& left, const auto& right) {
+            return std::tuple {
+                       left.source_file_order, left.source_offset,
+                       left.property_order,
+                       std::string_view {
+                           left.specialization->specialization_identity },
+                   }
+                < std::tuple {
+                       right.source_file_order, right.source_offset,
+                       right.property_order,
+                       std::string_view {
+                           right.specialization->specialization_identity },
+                   };
+        });
+    for (const auto& candidate : nonpackage_class_candidates) {
+        if (next_startup_order == std::numeric_limits<std::uint64_t>::max()) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "too many class static initializers to assign unique order",
+                compiled_source_span(*compiled_, candidate.property->source));
+            return false;
+        }
+        class_static_startups.push_back({ &candidate, next_startup_order++ });
+    }
 
+    const std::vector<const semantic::SpecializedHirUnit*>
+        no_type_owner_contexts;
+    const auto packed_type_resolver = [&](
+        const semantic::SpecializedHirUnit& working,
+        const semantic::sv::TypeReference& type) {
+        return compiled_systemverilog_packed_type(
+            *compiled_, working, type, no_type_owner_contexts);
+    };
+    const auto packed_default_resolver = [&] (
+        const semantic::SpecializedHirUnit& working,
+        const semantic::sv::TypeReference& type,
+        const std::size_t width) {
+        return compiled_systemverilog_packed_default(
+            *compiled_, working, type, width);
+    };
+    const SystemVerilogPackedTypeResolver packed_type {
+        packed_type_resolver
+    };
+    const SystemVerilogPackedDefaultResolver packed_default {
+        packed_default_resolver
+    };
+    const SystemVerilogPackedFallbackResolver packed_fallback {
+        [](const PackedTypeMetadata& type, const std::size_t width) {
+            return default_compiled_packed_value(type, width);
+        }
+    };
+    // A lowerer for startup code of `specialized`, which outlives it.
+    const auto configure_startup_lowerer = [&](Lowerer& lowerer,
+        const semantic::SpecializedHirUnit& specialized,
+        const frontend::Language source_language) {
+        lowerer.set_vhdl_lowering_index(&vhdl_lowering_index_);
+        lowerer.set_specialized_hir_unit(&specialized);
+        lowerer.set_ancestor_systemverilog_specializations(
+            &no_type_owner_contexts);
+        lowerer.set_package_constant_signal(
+            [&, unit = &specialized](
+                const semantic::DeclarationId declaration) {
+                return compiled_systemverilog_package_variable_signal(
+                    *unit, declaration, packed_type,
+                    packed_default, packed_fallback);
+            });
+        lowerer.set_package_container_object(
+            [&, unit = &specialized](
+                const semantic::DeclarationId declaration) {
+                return compiled_systemverilog_package_container_object(
+                    *unit, declaration, packed_type,
+                    packed_default, packed_fallback);
+            });
+        lowerer.set_package_string_object(
+            [&, unit = &specialized](
+                const semantic::DeclarationId declaration) {
+                return compiled_systemverilog_package_string_object(
+                    *unit, declaration, packed_type,
+                    packed_default, packed_fallback);
+            });
+        lowerer.set_systemverilog_interface_handles(
+            &systemverilog_interface_handles_,
+            &systemverilog_interface_types_,
+            &systemverilog_instance_specializations_,
+            &systemverilog_interface_exports_,
+            &systemverilog_design_element_instances_);
+        lowerer.set_hir_code_coverage_context(coverage_,
+            source_language == frontend::Language::SystemVerilog2017,
+            &coverage_fsm_drafts_);
+        const auto& disable_labels = systemverilog_disable_labels();
+        lowerer.set_disable_labels(
+            &disable_labels.targets, &disable_labels.declared);
+    };
+    // Lower one class static property initializer as a startup process
+    // (IEEE 1800-2017 8.9) and append it to the design.
+    const auto lower_class_static_startup = [&](Lowerer& lowerer,
+        const ClassStaticStartup& startup, const auto& owner_unit,
+        const std::string_view hierarchy,
+        const PackageWritableObjects& writable,
+        const std::uint32_t package_owner_id) -> std::optional<ProcessId> {
+        const auto& property = *startup.candidate->property;
+        const auto source = compiled_source_span(*compiled_, property.source);
+        if (design_.process_count()
+            > std::numeric_limits<ProcessId>::max()) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "too many processes to materialize class static initializers",
+                source);
+            return std::nullopt;
+        }
+        lowerer.reset_hierarchical_reference_state();
+        lowerer.set_hir_code_coverage_active(false);
+        auto lowered = lowerer.lower_hir_class_static_initializer(
+            startup.candidate->specialization->specialization_identity,
+            property.declaration, hierarchy);
+        if (!lowered || lowerer.has_generated_processes()) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "class static property initializer '" + property.name
+                    + "' could not be lowered as a startup process",
+                source);
+            return std::nullopt;
+        }
+        if (lowered->id != static_cast<ProcessId>(design_.process_count())
+            || !lowered->initialize || lowered->final
+            || lowered->scheduling_domain
+                != ProcessSchedulingDomain::systemverilog
+            || !lowered->static_sensitivity.empty()) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "class static property initializer '" + property.name
+                    + "' did not lower to a synchronous initial process",
+                source);
+            return std::nullopt;
+        }
+        // Besides class statics, it may write the storage of the packages
+        // its class depends on, as their own initializers may (6.21).
+        bool outside_closure = std::ranges::any_of(lowered->driver_regions,
+            [&](const auto& region) {
+                return !writable.signal_set.contains(region.signal);
+            });
+        for (const auto& operation : lowered->operations) {
+            if (const auto* string_write
+                = operation_get_if<WriteStringObject>(&operation)) {
+                outside_closure = outside_closure
+                    || !std::ranges::binary_search(
+                        writable.strings, string_write->object);
+                lowered->startup_writable_string_object_ids.push_back(
+                    string_write->object);
+            } else if (const auto* container_write
+                = operation_get_if<WriteContainerObject>(&operation)) {
+                outside_closure = outside_closure
+                    || container_write->nonblocking
+                    || container_write->transaction_signal
+                    || !std::ranges::binary_search(
+                        writable.containers, container_write->object);
+                lowered->startup_writable_container_object_ids.push_back(
+                    container_write->object);
+            } else if (operation_holds<WriteContainerObjectElement>(
+                           operation)) {
+                outside_closure = true;
+            }
+        }
+        if (outside_closure) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "class static property initializer '" + property.name
+                    + "' writes storage outside the packages its class depends on",
+                source);
+            return std::nullopt;
+        }
+        const auto canonicalize_object_ids = [](auto& object_ids) {
+            std::ranges::sort(object_ids);
+            object_ids.erase(
+                std::unique(object_ids.begin(), object_ids.end()),
+                object_ids.end());
+        };
+        canonicalize_object_ids(lowered->startup_writable_string_object_ids);
+        canonicalize_object_ids(
+            lowered->startup_writable_container_object_ids);
+        lowered->startup_package_owner_id = package_owner_id;
+        lowered->startup_writable_package_owner_ids = writable.owners;
+        lowered->startup_phase = ProcessStartupPhase::class_static_initializer;
+        lowered->startup_order = startup.order;
+        lowered->language_standard = owner_unit.standard;
+        lowered->compatibility_profile = owner_unit.compatibility_profile;
+        canonicalize_process_operations(*lowered);
+        const auto id = lowered->id;
+        design_.append_process_record(std::move(*lowered));
+        return id;
+    };
     for (const auto unit_id : dependency_first_units) {
         const auto unit = compiled_->find_unit(unit_id);
         if (!unit || unit->systemverilog == nullptr
@@ -21415,7 +21691,11 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                 initializers.push_back(&*pending);
             }
         }
-        if (initializers.empty()) {
+        const auto class_statics_owned = std::ranges::any_of(
+            class_static_startups, [&](const ClassStaticStartup& startup) {
+                return startup.candidate->unit == unit_id;
+            });
+        if (initializers.empty() && !class_statics_owned) {
             continue;
         }
 
@@ -21449,70 +21729,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             read_only_strings, containers, read_only_containers,
             diagnostics_,
         };
-        lowerer.set_vhdl_lowering_index(
-            &vhdl_lowering_index_);
-        lowerer.set_specialized_hir_unit(&*specialized);
-        const std::vector<const semantic::SpecializedHirUnit*>
-            no_type_owner_contexts;
-        lowerer.set_ancestor_systemverilog_specializations(
-            &no_type_owner_contexts);
-        const auto packed_type_resolver = [&](
-            const semantic::SpecializedHirUnit& working,
-            const semantic::sv::TypeReference& type) {
-            return compiled_systemverilog_packed_type(
-                *compiled_, working, type, no_type_owner_contexts);
-        };
-        const auto packed_default_resolver = [&] (
-            const semantic::SpecializedHirUnit& working,
-            const semantic::sv::TypeReference& type,
-            const std::size_t width) {
-            return compiled_systemverilog_packed_default(
-                *compiled_, working, type, width);
-        };
-        const SystemVerilogPackedTypeResolver packed_type {
-            packed_type_resolver
-        };
-        const SystemVerilogPackedDefaultResolver packed_default {
-            packed_default_resolver
-        };
-        const SystemVerilogPackedFallbackResolver packed_fallback {
-            [](const PackedTypeMetadata& type, const std::size_t width) {
-                return default_compiled_packed_value(type, width);
-            }
-        };
-        lowerer.set_package_constant_signal(
-            [&](const semantic::DeclarationId declaration) {
-                return compiled_systemverilog_package_variable_signal(
-                    *specialized, declaration, packed_type,
-                    packed_default, packed_fallback);
-            });
-        lowerer.set_package_container_object(
-            [&](const semantic::DeclarationId declaration) {
-                return compiled_systemverilog_package_container_object(
-                    *specialized, declaration, packed_type,
-                    packed_default, packed_fallback);
-            });
-        lowerer.set_package_string_object(
-            [&](const semantic::DeclarationId declaration) {
-                return compiled_systemverilog_package_string_object(
-                    *specialized, declaration, packed_type,
-                    packed_default, packed_fallback);
-            });
-        lowerer.set_systemverilog_interface_handles(
-            &systemverilog_interface_handles_,
-            &systemverilog_interface_types_,
-            &systemverilog_instance_specializations_,
-            &systemverilog_interface_exports_);
         const auto source_language = compiled_frontend_language(
             unit->language);
-        lowerer.set_hir_code_coverage_context(coverage_,
-            source_language == frontend::Language::SystemVerilog2017,
-            &coverage_fsm_drafts_);
-        {
-            const auto& disable_labels = systemverilog_disable_labels();
-            lowerer.set_disable_labels(
-                &disable_labels.targets, &disable_labels.declared);
-        }
+        configure_startup_lowerer(lowerer, *specialized, source_language);
 
         SpecializationInfo specialization;
         specialization.id = static_cast<SpecializationId>(
@@ -21660,12 +21879,26 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                     }
                 }
             }
+            // A constructor may also write the objects of the packages its
+            // class depends on.
+            const auto writable_string = [&](const StringObjectId object) {
+                return direct_package_strings.contains(object)
+                    || (initializer->class_allocation
+                        && std::ranges::binary_search(
+                            writable->second.strings, object));
+            };
+            const auto writable_container
+                = [&](const ContainerObjectId object) {
+                      return direct_package_containers.contains(object)
+                          || (initializer->class_allocation
+                              && std::ranges::binary_search(
+                                  writable->second.containers, object));
+                  };
             bool unsupported_object_write { };
             for (const auto& operation : lowered->operations) {
                 if (const auto* string_write
                     = operation_get_if<WriteStringObject>(&operation)) {
-                    if (!direct_package_strings.contains(
-                            string_write->object)) {
+                    if (!writable_string(string_write->object)) {
                         unsupported_object_write = true;
                         break;
                     }
@@ -21675,8 +21908,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                     = operation_get_if<WriteContainerObject>(&operation)) {
                     if (container_write->nonblocking
                         || container_write->transaction_signal
-                        || !direct_package_containers.contains(
-                            container_write->object)) {
+                        || !writable_container(container_write->object)) {
                         unsupported_object_write = true;
                         break;
                     }
@@ -21719,6 +21951,10 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
                 return false;
             }
             lowered->startup_package_owner_id = package_owner_id;
+            if (initializer->class_allocation) {
+                lowered->startup_writable_package_owner_ids
+                    = writable->second.owners;
+            }
             for (const auto& region : lowered->driver_regions) {
                 if (!writable->second.signal_set.contains(region.signal)) {
                     report(
@@ -21760,7 +21996,111 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_package_initializers()
             specialization.processes.push_back(lowered->id);
             design_.append_process_record(std::move(*lowered));
         }
+        for (const auto& startup : class_static_startups) {
+            if (startup.candidate->unit != unit_id) {
+                continue;
+            }
+            const auto writable = writable_by_package.find(unit_id.value());
+            if (writable == writable_by_package.end()) {
+                report(
+                    "FSIM-ELAB-HIR-001",
+                    "package class static initializer has no exact package storage closure",
+                    compiled_source_span(
+                        *compiled_, unit->systemverilog->source));
+                return false;
+            }
+            const auto process = lower_class_static_startup(lowerer, startup,
+                *unit->systemverilog, unit->systemverilog->name,
+                writable->second, package_owner_id);
+            if (!process) {
+                return false;
+            }
+            specialization.processes.push_back(*process);
+        }
         design_.specializations_.push_back(std::move(specialization));
+    }
+
+    // The static properties of classes outside every package, lowered in
+    // the unit that declares the class.
+    std::map<std::uint32_t, std::vector<const ClassStaticStartup*>>
+        nonpackage_startups;
+    for (const auto& startup : class_static_startups) {
+        const auto owner = compiled_->find_unit(startup.candidate->unit);
+        if (owner && owner->systemverilog != nullptr
+            && owner->systemverilog->kind != semantic::sv::UnitKind::package) {
+            nonpackage_startups[startup.candidate->unit.value()].push_back(
+                &startup);
+        }
+    }
+    for (const auto& [unit_value, startups] : nonpackage_startups) {
+        const auto unit_id = startups.front()->candidate->unit;
+        const auto unit = compiled_->find_unit(unit_id);
+        std::vector<semantic::SpecializedHirActualIdentity> actuals;
+        std::vector<CompiledSpecializationFailure> failures;
+        auto specialized = compiled_specialization(
+            validated_compiled_, unit_id, actuals, &failures);
+        for (const auto& failure : failures) {
+            report(
+                failure.code,
+                failure.message,
+                compiled_source_span(*compiled_, failure.source));
+        }
+        if (!specialized) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "cannot construct a specialization of '"
+                    + unit->systemverilog->name
+                    + "' for its class static initializers",
+                compiled_source_span(*compiled_, unit->systemverilog->source));
+            return false;
+        }
+        SignalMap signals;
+        ReadOnlySignalSet read_only_signals;
+        StringMap strings;
+        ReadOnlyStringSet read_only_strings;
+        ContainerMap containers;
+        ReadOnlyContainerSet read_only_containers;
+        Lowerer lowerer {
+            design_, signals, read_only_signals, strings,
+            read_only_strings, containers, read_only_containers,
+            diagnostics_,
+        };
+        configure_startup_lowerer(lowerer, *specialized,
+            compiled_frontend_language(unit->language));
+        // The storage of every package the unit depends on.
+        PackageWritableObjects writable;
+        for (const auto dependency : package_dependencies(unit_id, false)) {
+            auto objects = writable_objects_for(dependency);
+            writable.signals.insert(writable.signals.end(),
+                objects.signals.begin(), objects.signals.end());
+            writable.strings.insert(writable.strings.end(),
+                objects.strings.begin(), objects.strings.end());
+            writable.containers.insert(writable.containers.end(),
+                objects.containers.begin(), objects.containers.end());
+            writable.signal_set.insert(
+                objects.signal_set.begin(), objects.signal_set.end());
+            writable.owners.insert(writable.owners.end(),
+                objects.owners.begin(), objects.owners.end());
+        }
+        const auto sort_unique = [](auto& values) {
+            std::ranges::sort(values);
+            values.erase(
+                std::unique(values.begin(), values.end()), values.end());
+        };
+        sort_unique(writable.signals);
+        sort_unique(writable.strings);
+        sort_unique(writable.containers);
+        sort_unique(writable.owners);
+        for (const auto* startup : startups) {
+            if (!lower_class_static_startup(lowerer, *startup,
+                    *unit->systemverilog,
+                    startup->candidate->hierarchy.empty()
+                        ? unit->systemverilog->name
+                        : startup->candidate->hierarchy,
+                    writable, 0U)) {
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -21877,17 +22217,28 @@ bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
             continue;
         }
         const auto& package = *candidates.front();
-        std::vector<const semantic::vhdl::Declaration*> objects;
-        for (const auto id : package.declarations) {
-            const auto member = specialization.find_declaration(id);
-            if (member && member->vhdl != nullptr
-                && (member->vhdl->form == Form::signal
-                    || (member->vhdl->form == Form::variable
-                        && member->vhdl->shared))) {
-                objects.push_back(member->vhdl);
+        // A template's signals and shared variables.
+        const auto package_objects = [&](const semantic::vhdl::Unit& unit) {
+            std::vector<const semantic::vhdl::Declaration*> found;
+            for (const auto id : unit.declarations) {
+                const auto member = specialization.find_declaration(id);
+                if (member && member->vhdl != nullptr
+                    && (member->vhdl->form == Form::signal
+                        || (member->vhdl->form == Form::variable
+                            && member->vhdl->shared))) {
+                    found.push_back(member->vhdl);
+                }
             }
-        }
-        if (objects.empty()) {
+            return found;
+        };
+        const auto objects = package_objects(package);
+        const bool declares_instances = std::ranges::any_of(
+            package.declarations, [&](const semantic::DeclarationId id) {
+                const auto member = specialization.find_declaration(id);
+                return member && member->vhdl != nullptr
+                    && member->vhdl->form == Form::package_instance;
+            });
+        if (objects.empty() && !declares_instances) {
             if (trace) {
                 std::cerr << "[fsim-vhdl-package-objects] no objects\n";
             }
@@ -21953,69 +22304,82 @@ bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
             }
         };
         trace_actuals(instance->vhdl->name, actuals);
+        // The template and static actuals of the package instance `nested`
+        // declared in `owner`, its generic map elaborated in `owner_working`.
+        struct NestedInstance {
+            const semantic::vhdl::Unit* package { };
+            std::vector<semantic::SpecializedHirActualIdentity> actuals;
+        };
+        const auto nested_instance = [&](const semantic::SpecializedHirUnit&
+                                             owner_working,
+                                         const semantic::vhdl::Unit& owner,
+                                         const semantic::DeclarationId
+                                             nested_id)
+            -> std::optional<NestedInstance> {
+            const auto nested = owner_working.find_declaration(nested_id);
+            if (!nested || nested->vhdl == nullptr
+                || nested->vhdl->form != Form::package_instance
+                || !nested->vhdl->package) {
+                return std::nullopt;
+            }
+            const auto nested_templates
+                = compiled_vhdl_package_template_candidates(
+                    nested->vhdl->package->template_name, owner.library);
+            if (nested_templates.size() != 1U) {
+                return std::nullopt;
+            }
+            NestedInstance found { nested_templates.front(), { } };
+            const auto nested_bindings
+                = semantic::resolve_specialized_hir_vhdl_package_associations(
+                    *compiled_, *nested->vhdl, *found.package,
+                    owner_working);
+            if (!nested_bindings) {
+                return std::nullopt;
+            }
+            for (const auto& binding : nested_bindings.bindings) {
+                if (binding.kind
+                        == semantic::SpecializedHirAssociationKind::open
+                    || (binding.kind
+                            == semantic::SpecializedHirAssociationKind::
+                                default_value
+                        && !binding.actual_declaration)) {
+                    continue;
+                }
+                auto actual = compiled_vhdl_specialization_actual(
+                    *compiled_, owner_working, binding);
+                if (binding.identity.empty()
+                    || actual.requires_static_value) {
+                    return std::nullopt;
+                }
+                found.actuals.push_back(std::move(actual.actual));
+            }
+            trace_actuals(nested->vhdl->name, found.actuals);
+            return found;
+        };
+        constexpr std::size_t maximum_nested_depth = 8U;
+        const auto instance_working
+            = specialization.with_local_actual_identities(actuals);
         // A package instantiated in the template's declarative part is
         // elaborated with this instance's generics (IEEE 1076-2008 4.9,
         // 6.5.7.2): its generic map names them (`t => t`), so its own
         // formals take their actuals here, innermost template last.
-        auto working = specialization.with_local_actual_identities(actuals);
+        auto working = instance_working;
         const auto bind_nested_instances = [&](const auto& self,
                                                const semantic::vhdl::Unit&
                                                    owner,
                                                const std::size_t depth)
             -> void {
-            constexpr std::size_t maximum_nested_depth = 8U;
             if (depth >= maximum_nested_depth) {
                 return;
             }
             for (const auto nested_id : owner.declarations) {
-                const auto nested = working.find_declaration(nested_id);
-                if (!nested || nested->vhdl == nullptr
-                    || nested->vhdl->form != Form::package_instance
-                    || !nested->vhdl->package) {
+                const auto nested = nested_instance(working, owner, nested_id);
+                if (!nested) {
                     continue;
                 }
-                const auto nested_templates
-                    = compiled_vhdl_package_template_candidates(
-                        nested->vhdl->package->template_name,
-                        owner.library);
-                if (nested_templates.size() != 1U) {
-                    continue;
-                }
-                const auto& nested_package = *nested_templates.front();
-                const auto nested_bindings
-                    = semantic::resolve_specialized_hir_vhdl_package_associations(
-                        *compiled_, *nested->vhdl, nested_package, working);
-                if (!nested_bindings) {
-                    continue;
-                }
-                std::vector<semantic::SpecializedHirActualIdentity>
-                    nested_actuals;
-                bool nested_static { true };
-                for (const auto& binding : nested_bindings.bindings) {
-                    if (binding.kind
-                            == semantic::SpecializedHirAssociationKind::open
-                        || (binding.kind
-                                == semantic::SpecializedHirAssociationKind::
-                                    default_value
-                            && !binding.actual_declaration)) {
-                        continue;
-                    }
-                    auto actual = compiled_vhdl_specialization_actual(
-                        *compiled_, working, binding);
-                    if (binding.identity.empty()
-                        || actual.requires_static_value) {
-                        nested_static = false;
-                        break;
-                    }
-                    nested_actuals.push_back(std::move(actual.actual));
-                }
-                if (!nested_static) {
-                    continue;
-                }
-                trace_actuals(nested->vhdl->name, nested_actuals);
                 working = working.with_local_actual_identities(
-                    nested_actuals);
-                self(self, nested_package, depth + 1U);
+                    nested->actuals);
+                self(self, *nested->package, depth + 1U);
             }
         };
         bind_nested_instances(bind_nested_instances, package, 0U);
@@ -22044,6 +22408,71 @@ bool HierarchyBuilder::materialize_compiled_vhdl_local_package_objects(
                 container_objects.emplace(
                     vhdl_package_object_key(instance_id, name), container);
             }
+        }
+        // Each instance of the template has its own copies of the package
+        // instances the template declares (IEEE 1076-2008 4.9): their
+        // objects are bound by the instance path, outermost first.
+        const auto materialize_nested
+            = [&](const auto& self, const semantic::vhdl::Unit& owner,
+                  const semantic::SpecializedHirUnit& owner_working,
+                  const std::vector<semantic::DeclarationId>& owner_ids,
+                  const std::string& owner_path,
+                  const std::size_t depth) -> bool {
+            if (depth >= maximum_nested_depth) {
+                return true;
+            }
+            for (const auto nested_id : owner.declarations) {
+                const auto nested
+                    = nested_instance(owner_working, owner, nested_id);
+                if (!nested) {
+                    continue;
+                }
+                const auto nested_working
+                    = owner_working.with_local_actual_identities(
+                        nested->actuals);
+                auto ids = owner_ids;
+                ids.push_back(nested_id);
+                const auto nested_path = owner_path + "."
+                    + nested_working.find_declaration(nested_id)->vhdl->name;
+                SignalMap nested_signals;
+                ReadOnlySignalSet nested_read_only;
+                std::unordered_set<std::string> nested_declared;
+                ContainerMap nested_containers;
+                std::vector<std::pair<std::string, std::string>>
+                    nested_shapes;
+                for (const auto* object : package_objects(*nested->package)) {
+                    if (!materialize_compiled_vhdl_declaration(nested_working,
+                            nested_path, path, nested_signals,
+                            nested_read_only, nested_declared,
+                            nested_containers, nested_shapes,
+                            nested->package->standard,
+                            nested->package->compatibility_profile,
+                            *object)) {
+                        return false;
+                    }
+                }
+                for (const auto& [name, signal] : nested_signals) {
+                    if (name.find('.') == std::string::npos) {
+                        signals.emplace(
+                            vhdl_package_object_key(ids, name), signal);
+                    }
+                }
+                for (const auto& [name, container] : nested_containers) {
+                    if (!name.starts_with(nested_path + ".")) {
+                        container_objects.emplace(
+                            vhdl_package_object_key(ids, name), container);
+                    }
+                }
+                if (!self(self, *nested->package, nested_working, ids,
+                        nested_path, depth + 1U)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        if (!materialize_nested(materialize_nested, package,
+                instance_working, { instance_id }, instance_path, 0U)) {
+            return false;
         }
     }
     return true;
@@ -34417,26 +34846,63 @@ HierarchyBuilder::take_selected_systemverilog_classes()
 }
 
 void HierarchyBuilder::register_generated_class_specializations(
+    const std::string_view path, const semantic::UnitId unit,
     const std::span<const hierarchy_sv_generate_detail::Occurrence>
         occurrences)
 {
-    // A class declared in a loop generate is a distinct class in each
-    // generated scope (IEEE 1800-2017 27.4, 8.2): materialize them before
-    // any process names or calls through them.
+    // Each design element instance and each loop generate iteration has
+    // classes of its own (IEEE 1800-2023 6.22, 8.2, 27.4): materialize them
+    // before any process names or calls through them, so a virtual call
+    // tests each of them.
+    if (!systemverilog_unit_classes_) {
+        auto& found = systemverilog_unit_classes_.emplace();
+        for (const auto& declaration :
+            compiled_->systemverilog_hir.classes()) {
+            const auto* scope
+                = compiled_semantic_scope(*compiled_, declaration.scope);
+            if (!declaration.forward_declaration
+                && !declaration.generate_owner
+                && declaration.parameters.empty() && scope != nullptr
+                && scope->unit.valid()) {
+                found[scope->unit.value()].push_back(
+                    semantic::sv::class_declaration_identity(declaration));
+            }
+        }
+    }
+    const auto classes = systemverilog_unit_classes_->find(unit.value());
+    const auto generated = std::ranges::any_of(occurrences,
+        [](const hierarchy_sv_generate_detail::Occurrence& occurrence) {
+            return occurrence.region != nullptr
+                && !occurrence.region->class_declarations.empty()
+                && occurrence.specialization != nullptr;
+        });
+    if (classes == systemverilog_unit_classes_->end() && !generated) {
+        return;
+    }
+    auto& cache = design_.class_specializations_;
+    if (!cache) {
+        cache = std::make_shared<semantic::sv::ClassSpecializationIndex>(
+            compiled_->semantics, compiled_->systemverilog_hir);
+    }
+    const std::pair<std::string, std::string> instance {
+        std::string { semantic::sv::class_instance_environment },
+        std::string { path },
+    };
+    if (classes != systemverilog_unit_classes_->end()) {
+        for (const auto& declaration : classes->second) {
+            (void)cache->specialize_generated(
+                declaration, std::span { &instance, 1U });
+        }
+    }
     for (const auto& occurrence : occurrences) {
         if (occurrence.region == nullptr
             || occurrence.region->class_declarations.empty()
-            || occurrence.specialization == nullptr
-            || occurrence.specialization->specialization()
-                   .hierarchy_identities.empty()) {
+            || occurrence.specialization == nullptr) {
             continue;
         }
-        auto& cache = design_.class_specializations_;
-        if (!cache) {
-            cache = std::make_shared<semantic::sv::ClassSpecializationIndex>(
-                compiled_->semantics, compiled_->systemverilog_hir);
-        }
-        std::vector<std::pair<std::string, std::string>> environment;
+        std::vector<std::pair<std::string, std::string>> environment {
+            instance
+        };
         for (const auto& named : occurrence.specialization->specialization()
                  .hierarchy_identities) {
             environment.emplace_back(named.name, named.identity);

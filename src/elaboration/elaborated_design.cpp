@@ -912,18 +912,6 @@ ElaboratedDesign::systemc_objects() const noexcept
     return systemc_objects_;
 }
 
-std::span<const SystemVerilogPackageClassInitializerInfo>
-ElaboratedDesign::systemverilog_package_class_initializers() const noexcept
-{
-    return systemverilog_package_class_initializers_;
-}
-
-std::span<const SystemVerilogPackageClassStaticInitializerInfo>
-ElaboratedDesign::systemverilog_package_class_static_initializers() const noexcept
-{
-    return systemverilog_package_class_static_initializers_;
-}
-
 std::optional<runtime::simir::SignalId>
 ElaboratedDesign::find_signal(
     const std::string_view name) const noexcept
@@ -1167,8 +1155,8 @@ void ElaboratedDesign::populate_interpreter(
             process.static_trigger_regions = { };
             // A package static initializer keeps its startup metadata: the
             // static kernel runs it at its startup action.
-            process.initialize = process.startup_phase
-                == runtime::simir::ProcessStartupPhase::package_static_initializer;
+            process.initialize = runtime::simir::startup_initializer_phase(
+                process.startup_phase);
             return process;
         }
         return std::nullopt;
@@ -1227,8 +1215,9 @@ void ElaboratedDesign::populate_interpreter(
                 // instance loses sensitivity and initialization.
                 auto instance = row.instance;
                 instance.static_sensitivity.clear();
-                instance.initialize = instance.startup_phase
-                    == runtime::simir::ProcessStartupPhase::package_static_initializer;
+                instance.initialize
+                    = runtime::simir::startup_initializer_phase(
+                        instance.startup_phase);
                 (void)runtime::simir::InterpreterProgramAccess::add_program(
                     *interpreter, common, std::move(instance));
                 continue;
@@ -1382,8 +1371,6 @@ ElaboratedDesignState ElaboratedDesign::state() const&
         verilog_timing_checks_,
         systemc_instances_, systemc_processes_, systemc_objects_, { }, { },
         { }, code_coverage_inventory_, *driver_inventory,
-        systemverilog_package_class_initializers_,
-        systemverilog_package_class_static_initializers_
     };
     if (process_rows_) {
         result.processes.reserve(process_rows_->rows.size());
@@ -1444,8 +1431,6 @@ detail::ElaboratedDesignProcessAccess::artifact_state(
         design.systemc_instances_, design.systemc_processes_,
         design.systemc_objects_, { }, { }, { },
         design.code_coverage_inventory_, *driver_inventory,
-        design.systemverilog_package_class_initializers_,
-        design.systemverilog_package_class_static_initializers_
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1505,8 +1490,6 @@ detail::ElaboratedDesignProcessAccess::take_artifact_state(
         std::move(design.code_coverage_inventory_),
         computed_inventory ? std::move(*computed_inventory)
                            : std::move(*design.signal_driver_inventory_),
-        std::move(design.systemverilog_package_class_initializers_),
-        std::move(design.systemverilog_package_class_static_initializers_)
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1573,8 +1556,6 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         std::move(systemc_objects_), { }, { }, { },
         std::move(code_coverage_inventory_),
         std::move(driver_inventory_value),
-        std::move(systemverilog_package_class_initializers_),
-        std::move(systemverilog_package_class_static_initializers_)
     };
     result.signal_names.reserve(signal_by_path_.size());
     for (const auto& [path, signal] : signal_by_path_) {
@@ -1667,58 +1648,15 @@ ElaboratedDesign::from_state_with_process_rows(
             return std::nullopt;
         }
     }
-    const auto valid_ids = [](const auto& ids, const std::size_t limit) {
-        std::optional<std::uint32_t> previous;
-        for (const auto id : ids) {
-            if (id >= limit || (previous && id <= *previous)) {
-                return false;
-            }
-            previous = id;
-        }
-        return true;
-    };
     std::unordered_set<std::uint64_t> package_startup_orders;
     for (std::size_t index { }; index < process_count; ++index) {
         const auto process = process_view(index);
-        if (process.startup_phase()
-            != runtime::simir::ProcessStartupPhase::package_static_initializer) {
+        if (!runtime::simir::startup_initializer_phase(process.startup_phase())) {
             continue;
         }
         if (!process.initialize() || process.final()
             || !process.static_sensitivity().empty()
             || !package_startup_orders.insert(process.startup_order()).second) {
-            return std::nullopt;
-        }
-    }
-    for (const auto& initializer : state.systemverilog_package_class_initializers) {
-        if (!initializer.unit.valid() || !initializer.declaration.valid()
-            || !initializer.initializer.valid()
-            || initializer.signal >= state.signals.size()
-            || !package_startup_orders.insert(initializer.startup_order).second
-            || !std::ranges::binary_search(
-                initializer.writable_signal_ids, initializer.signal)
-            || !valid_ids(initializer.writable_signal_ids, state.signals.size())
-            || !valid_ids(initializer.writable_string_object_ids,
-                state.string_objects.size())
-            || !valid_ids(initializer.writable_container_object_ids,
-                state.container_objects.size())) {
-            return std::nullopt;
-        }
-    }
-    for (const auto& initializer : state.systemverilog_package_class_static_initializers) {
-        if (!initializer.unit.valid()
-            || initializer.class_identity.empty()
-            || initializer.specialization_identity.empty()
-            || !initializer.property_declaration.valid()
-            || initializer.property_name.empty()
-            || initializer.canonical_identity.empty()
-            || !initializer.initializer.valid()
-            || !package_startup_orders.insert(initializer.startup_order).second
-            || !valid_ids(initializer.writable_signal_ids, state.signals.size())
-            || !valid_ids(initializer.writable_string_object_ids,
-                state.string_objects.size())
-            || !valid_ids(initializer.writable_container_object_ids,
-                state.container_objects.size())) {
             return std::nullopt;
         }
     }
@@ -2211,10 +2149,6 @@ ElaboratedDesign::from_state_with_process_rows(
     result.systemc_instances_ = std::move(state.systemc_instances);
     result.systemc_processes_ = std::move(state.systemc_processes);
     result.systemc_objects_ = std::move(state.systemc_objects);
-    result.systemverilog_package_class_initializers_
-        = std::move(state.systemverilog_package_class_initializers);
-    result.systemverilog_package_class_static_initializers_
-        = std::move(state.systemverilog_package_class_static_initializers);
     result.code_coverage_inventory_
         = std::move(state.code_coverage_inventory);
     // A trusted restore against the artifact's canonical path table resolves

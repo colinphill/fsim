@@ -196,6 +196,7 @@ runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host
     stub.startup_phase = ProcessStartupPhase::ordinary;
     stub.startup_order = 0U;
     stub.startup_package_owner_id = 0U;
+    stub.startup_writable_package_owner_ids.clear();
     stub.startup_writable_string_object_ids.clear();
     stub.startup_writable_container_object_ids.clear();
     std::vector<Operation> body;
@@ -645,8 +646,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // host's startup order (IEEE 1800-2023 6.21, 26.3): a SystemVerilog
         // behavioral member runs one at its startup action (its body rule
         // is static_kernel_startup_operation).
-        if (view.startup_phase()
-                == ProcessStartupPhase::package_static_initializer
+        if (startup_initializer_phase(view.startup_phase())
             && (!behavioral || vhdl)
             && hit("package_static_initializer")) {
             return first;
@@ -1731,8 +1731,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                 }
             }
             for (std::size_t op = 0U; supported
-                 && view.startup_phase()
-                     == ProcessStartupPhase::package_static_initializer
+                 && startup_initializer_phase(view.startup_phase())
                  && op < count; ++op) {
                 if (!static_kernel_startup_operation(operations[op])) {
                     supported = false;
@@ -2534,8 +2533,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     return writer.process < process_count
                         && candidates[writer.process]
                         && (views[writer.process].final()
-                            || views[writer.process].startup_phase()
-                                == ProcessStartupPhase::package_static_initializer
+                            || startup_initializer_phase(
+                                views[writer.process].startup_phase())
                             || views[writer.process].drive_strength()
                                 != DriveStrength { });
                 })) {
@@ -3813,8 +3812,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     }
                     continue;
                 }
-                if (view.startup_phase()
-                    == ProcessStartupPhase::package_static_initializer) {
+                if (startup_initializer_phase(view.startup_phase())) {
                     continue;
                 }
             }
@@ -3870,8 +3868,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                     != ProcessSchedulingDomain::systemverilog
                 || view.postponed() || view.observed() || view.reactive()
                 || view.final()
-                || view.startup_phase()
-                    == ProcessStartupPhase::package_static_initializer) {
+                || startup_initializer_phase(view.startup_phase())) {
                 continue;
             }
             hosted[index] = 1U;

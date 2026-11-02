@@ -570,7 +570,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         generated_lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_, &systemverilog_interface_types_,
             &systemverilog_instance_specializations_,
-            &systemverilog_interface_exports_);
+            &systemverilog_interface_exports_,
+            &systemverilog_design_element_instances_);
         {
             const auto& disable_labels = systemverilog_disable_labels();
             generated_lowerer.set_disable_labels(
@@ -578,6 +579,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         }
         generated_lowerer.set_systemverilog_program_owner(
             program_owner);
+        generated_lowerer.share_package_storage(lowerer);
         auto generated_concurrent_statements
             = std::span<const semantic::StatementId> { };
         if (unit.kind != semantic::sv::UnitKind::program) {
@@ -819,7 +821,8 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
         generated_materializations,
     const std::vector<DeferredGeneratedSystemVerilogItem>& deferred,
     const std::size_t specialization_index,
-    const std::optional<std::uint32_t> program_owner)
+    const std::optional<std::uint32_t> program_owner,
+    const Lowerer& package_storage)
 {
     for (const auto& item : deferred) {
         if (item.occurrence >= generate_occurrences.size()
@@ -849,13 +852,15 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
         generated_lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_, &systemverilog_interface_types_,
             &systemverilog_instance_specializations_,
-            &systemverilog_interface_exports_);
+            &systemverilog_interface_exports_,
+            &systemverilog_design_element_instances_);
         {
             const auto& disable_labels = systemverilog_disable_labels();
             generated_lowerer.set_disable_labels(
                 &disable_labels.targets, &disable_labels.declared);
         }
         generated_lowerer.set_systemverilog_program_owner(program_owner);
+        generated_lowerer.share_package_storage(package_storage);
         auto& specialization
             = design_.specializations_[specialization_index];
         const auto append_generated = [&] {
@@ -1031,7 +1036,8 @@ void HierarchyBuilder::lower_forward_deferred_systemverilog(
         lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_, &systemverilog_interface_types_,
             &systemverilog_instance_specializations_,
-            &systemverilog_interface_exports_);
+            &systemverilog_interface_exports_,
+            &systemverilog_design_element_instances_);
         lowerer.set_hir_container_declaration_bindings(
             &materialization.container_declaration_bindings);
         {
@@ -1149,8 +1155,7 @@ void HierarchyBuilder::initialize_constant_driven_nets()
     // writes the value the variable already holds.
     for (std::size_t index = 0U; index < design_.process_count(); ++index) {
         const auto view = design_.process_view(index);
-        if (view.startup_phase()
-                == ProcessStartupPhase::package_static_initializer
+        if (startup_initializer_phase(view.startup_phase())
             || view.name().find("$declaration_initializer_") == std::string::npos
             || !(view.language_standard() == "2009"
                 || view.language_standard() == "2012"
