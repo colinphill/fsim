@@ -175,7 +175,9 @@ root they were compiled in, so where an artifact is saved, or where its
 checkout is moved, does not change its bytes. On load, an object inside a
 workspace library (`<root>/.fsim/libraries/<library>/`) resolves its paths
 against that workspace, so a mapped library finds its own sources; any other
-object or library resolves them against the consumer's base directory.
+object or library resolves them against the consumer's base directory. When
+such an object names a file that exists there with other contents than were
+compiled, elaboration warns once per object (`FSIM-ART-0006`).
 
 All numeric binary fields are canonical little-endian. Every artifact is one
 SQLite file (application id `0x4653494D`, container schema 1) whose `meta`

@@ -2,6 +2,7 @@
 #include "../../src/app/application_workspace_store.hpp"
 
 #include "fsim/app/application.hpp"
+#include "fsim/app/artifact_phase.hpp"
 #include "fsim/artifact/coverage_database_codec.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/cli/driver.hpp"
@@ -469,6 +470,54 @@ endmodule
     invoke({ "elaborate", "--no-aot", "--trace-lifecycle", "disabled",
         "--search-library", "support", "consumer_top" });
     assert_output(simulate(), "SHARED=7/7");
+}
+
+// Outside a workspace an object's sources resolve against the consumer's base
+// directory; one that exists there with other contents warns (FSIM-ART-0006).
+void test_object_elaborated_from_another_root()
+{
+    Directory directory;
+    const auto producer = directory.path / "producer";
+    const auto other = directory.path / "other";
+    fs::create_directories(producer);
+    fs::create_directories(other);
+    write_file(producer / "top.sv", "module top; initial $display(\"PRODUCER\"); endmodule\n");
+    write_file(other / "top.sv", "module top; initial $display(\"OTHER\"); endmodule\n");
+    fsim::project::Config config;
+    config.base_directory = producer;
+    config.project.name = "object-other-root";
+    config.project.tops = { { "sv:work.top", "primary" } };
+    config.project.time_resolution = "1ns";
+    config.build.cache_path = directory.path / "cache";
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::system_verilog;
+    sources.standard = "2017";
+    sources.library = "work";
+    sources.files = { producer / "top.sv" };
+    config.source_sets.push_back(std::move(sources));
+    const auto object = directory.path / "top.fsimobj";
+    fsim::diagnostic::Engine compiled;
+    const bool published = fsim::app::compile_artifact(config, object, compiled);
+    if (!published || compiled.has_error())
+        fsim::diagnostic::print_text(std::cerr, compiled);
+    assert(published && !compiled.has_error());
+    config.source_sets.clear();
+    const std::array objects { object };
+    const auto warned = [&](const fs::path& base) {
+        config.base_directory = base;
+        fsim::diagnostic::Engine diagnostics;
+        assert(fsim::app::build_objects(config, objects, diagnostics)
+            && !diagnostics.has_error());
+        return std::ranges::any_of(diagnostics.diagnostics(), [](const auto& item) {
+            return item.code == "FSIM-ART-0006"
+                && item.message.find("--base-directory") != std::string::npos;
+        });
+    };
+    assert(!warned(producer));
+    assert(warned(other));
+    // A missing source is not reported.
+    fs::remove(other / "top.sv");
+    assert(!warned(other));
 }
 
 void test_language_qualification_and_multiple_roots()
@@ -1923,6 +1972,7 @@ int main(const int argc, const char* const* argv)
             test_edited_shared_header_with_one_consumer_recompiled },
         Case { "mapped-library", test_external_library_mapping_and_current_directory },
         Case { "mapped-library-header", test_mapped_library_shares_a_header },
+        Case { "object-other-root", test_object_elaborated_from_another_root },
         Case { "language-tops", test_language_qualification_and_multiple_roots },
         Case { "procedural-coverage", test_module_procedural_coverage },
         Case { "loop-update-coverage", test_procedural_loop_update_coverage },

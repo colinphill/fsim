@@ -4,6 +4,7 @@
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/artifact/object.hpp"
 #include "fsim/library/source_mapping.hpp"
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/payload_checksum.hpp"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <sstream>
 
 namespace fsim::app {
 namespace {
@@ -29,18 +31,41 @@ std::filesystem::path object_source_root(
 // named relative to the consumer's base directory, or absolutely where no
 // relative path exists, so objects of different workspaces name one file
 // alike.
-std::filesystem::path source_root(
+struct SourceRoot {
+  std::filesystem::path path;
+  bool workspace { };
+};
+
+SourceRoot source_root(
     const std::filesystem::path& object, const std::filesystem::path& base) {
   const auto library = std::filesystem::absolute(object).lexically_normal().parent_path();
   const auto libraries = library.parent_path();
   if (libraries.filename() == "libraries"
       && libraries.parent_path().filename() == ".fsim") {
-    return libraries.parent_path().parent_path();
+    return { libraries.parent_path().parent_path(), true };
   }
   std::error_code error;
   auto root = base.empty() ? std::filesystem::current_path(error)
                            : std::filesystem::absolute(base, error);
-  return error ? std::filesystem::path { } : root.lexically_normal();
+  return { error ? std::filesystem::path { } : root.lexically_normal(), false };
+}
+
+// A consumer-supplied root names the compile directory only by agreement.
+// A source found there with other contents than were compiled shows the
+// root is wrong (or the file was edited); a missing source is normal.
+bool source_differs(const std::filesystem::path& path, const std::string_view digest) {
+  std::error_code error;
+  if (!support::native_fs::is_regular_file(path, error) || error) {
+    return false;
+  }
+  auto input = support::native_fs::open_ifstream(path, std::ios::binary);
+  if (!input) {
+    return false;
+  }
+  std::ostringstream contents;
+  contents << input.rdbuf();
+  return (input.good() || input.eof())
+      && support::Sha256::hex(support::Sha256::digest(contents.str())) != digest;
 }
 
 std::filesystem::path consumer_path(const std::filesystem::path& root,
@@ -87,7 +112,9 @@ application_detail::load_object_workspace(
   std::size_t decoded_bundle_count { };
   uvm_identity.add("uvm-provenance-schema", "fsim-uvm-object-v1");
   for (const auto& object : objects) {
-    const auto recorded_root = source_root(object, base_directory);
+    const auto root = source_root(object, base_directory);
+    const auto& recorded_root = root.path;
+    bool warned_root = root.workspace;
     auto metadata = artifact::load_object_metadata(object, diagnostics);
     if (!metadata.has_value()) {
       return std::nullopt;
@@ -218,8 +245,19 @@ application_detail::load_object_workspace(
     source_mappings.reserve(metadata->sources.size());
     for (std::size_t index = 0; index < metadata->sources.size(); ++index) {
       const auto& indexed = metadata->sources[index];
-      auto logical = consumer_path(recorded_root,
-          support::path_from_utf8(indexed.logical_name), base_directory);
+      const auto recorded = support::path_from_utf8(indexed.logical_name);
+      if (!warned_root
+          && source_differs((recorded_root / recorded).lexically_normal(),
+              indexed.checksum)) {
+        warned_root = true;
+        diagnostics.warning("FSIM-ART-0006",
+            "source '" + support::path_to_utf8((recorded_root / recorded).lexically_normal())
+                + "' differs from the one compiled into "
+                + support::path_to_utf8(object)
+                + "; the object names its sources relative to the directory it was"
+                  " compiled in: elaborate there, or pass --base-directory");
+      }
+      auto logical = consumer_path(recorded_root, recorded, base_directory);
       auto [existing, inserted] = known_sources.emplace(
           support::path_to_utf8(logical), indexed.checksum);
       if (!inserted && existing->second != indexed.checksum) {
