@@ -3122,8 +3122,16 @@ ClassSpecializationIndex::specialize_generated(
     return identity ? find(*identity) : std::nullopt;
 }
 
-std::optional<ClassSpecializationId>
-ClassSpecializationIndex::specialize_generated_identity(
+namespace {
+
+struct GeneratedIdentity {
+    std::size_t marker { };
+    std::vector<std::pair<std::string, std::string>> environment;
+};
+
+// The "#gen{...}" suffix of a generated specialization's identity: where it
+// starts and the environment it names.
+std::optional<GeneratedIdentity> split_generated_identity(
     const std::string_view specialization_identity)
 {
     // "<length>:<name>=<value>;" entries as specialize_generated writes
@@ -3186,13 +3194,36 @@ ClassSpecializationIndex::specialize_generated_identity(
         const auto environment = parse(specialization_identity.substr(
             start + marker.size(),
             specialization_identity.size() - start - marker.size() - 1U));
-        if (!environment) {
-            continue;
+        if (environment) {
+            return GeneratedIdentity { start, std::move(*environment) };
         }
-        return specialize_generated(specialization_identity.substr(0U, angle),
-            *environment, specialization_identity.substr(0U, start));
     }
     return std::nullopt;
+}
+
+} // namespace
+
+std::string_view generated_specialization_source(
+    const std::string_view specialization_identity)
+{
+    const auto generated = split_generated_identity(specialization_identity);
+    return generated
+        ? specialization_identity.substr(0U, generated->marker)
+        : specialization_identity;
+}
+
+std::optional<ClassSpecializationId>
+ClassSpecializationIndex::specialize_generated_identity(
+    const std::string_view specialization_identity)
+{
+    const auto generated = split_generated_identity(specialization_identity);
+    if (!generated) {
+        return std::nullopt;
+    }
+    return specialize_generated(
+        specialization_identity.substr(0U, specialization_identity.find('<')),
+        generated->environment,
+        specialization_identity.substr(0U, generated->marker));
 }
 
 std::vector<ClassSpecializationId>

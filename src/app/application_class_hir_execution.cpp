@@ -533,6 +533,15 @@ SystemVerilogClassHirExecution::specialization(
             return nullptr;
         selected = &candidate;
     }
+    if (selected == nullptr && generated_specialization_) {
+        // Making the class may fail; a lookup that cannot make it finds
+        // nothing, as for any unknown identity.
+        try {
+            return generated_specialization_(identity);
+        } catch (...) {
+            return nullptr;
+        }
+    }
     return selected;
 }
 

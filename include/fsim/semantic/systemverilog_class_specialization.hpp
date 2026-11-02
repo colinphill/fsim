@@ -180,6 +180,13 @@ inline constexpr std::string_view class_instance_environment { "$instance" };
         || !specialization.generate_environment.empty();
 }
 
+/// The specialization a generated one (`C<...>#gen{...}`, the class of a
+/// generated scope or design element instance) is made from, whose member
+/// bindings it shares; `specialization_identity` itself when it is not
+/// generated (IEEE 1800-2023 6.22, 27.4).
+[[nodiscard]] std::string_view generated_specialization_source(
+    std::string_view specialization_identity);
+
 struct ClassSpecializationResult {
     std::vector<ClassSpecialization> specializations;
     std::vector<ClassSpecializationError> errors;

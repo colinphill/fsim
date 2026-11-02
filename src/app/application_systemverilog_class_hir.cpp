@@ -612,7 +612,9 @@ std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::property_binding(
         return std::nullopt;
     sv::ConstraintBinding binding;
     binding.kind = sv::ConstraintReferenceKind::property;
-    binding.specialization_identity = specialization.specialization_identity;
+    binding.specialization_identity = std::string {
+        sv::generated_specialization_source(
+            specialization.specialization_identity) };
     binding.canonical_identity = found->owner_identity + "::" + found->name;
     binding.type = class_property_type(found->type, binding_source);
     // An unpacked structure is held as its packed image.
@@ -691,8 +693,9 @@ SystemVerilogHirBuilder::dotted_property_binding(
         if (dot == std::string_view::npos) {
             sv::ConstraintBinding binding;
             binding.kind = sv::ConstraintReferenceKind::property;
-            binding.specialization_identity
-                = specialization.specialization_identity;
+            binding.specialization_identity = std::string {
+                sv::generated_specialization_source(
+                    specialization.specialization_identity) };
             binding.canonical_identity = std::move(identity);
             binding.type = class_property_type(found->type, binding_source);
             return binding;
@@ -727,8 +730,9 @@ SystemVerilogHirBuilder::dotted_property_binding(
                 if (next == std::string_view::npos) {
                     sv::ConstraintBinding binding;
                     binding.kind = sv::ConstraintReferenceKind::property;
-                    binding.specialization_identity
-                        = specialization.specialization_identity;
+                    binding.specialization_identity = std::string {
+                        sv::generated_specialization_source(
+                            specialization.specialization_identity) };
                     binding.canonical_identity = std::move(identity);
                     binding.type
                         = class_property_type(member_type, binding_source);
@@ -794,7 +798,9 @@ std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::parameter_binding(
         return std::nullopt;
     sv::ConstraintBinding binding;
     binding.kind = sv::ConstraintReferenceKind::parameter;
-    binding.specialization_identity = specialization.specialization_identity;
+    binding.specialization_identity = std::string {
+        sv::generated_specialization_source(
+            specialization.specialization_identity) };
     binding.canonical_identity = declaration.canonical_identity
         + "::" + std::string { spelling };
     binding.type = class_property_type(formal->type, binding_source);
@@ -852,7 +858,9 @@ SystemVerilogHirBuilder::unit_parameter_binding(
     }
     sv::ConstraintBinding binding;
     binding.kind = sv::ConstraintReferenceKind::parameter;
-    binding.specialization_identity = specialization.specialization_identity;
+    binding.specialization_identity = std::string {
+        sv::generated_specialization_source(
+            specialization.specialization_identity) };
     binding.canonical_identity = selected->unit + "::" + std::string { spelling };
     binding.type = class_property_type(selected->type, binding_source);
     if (!binding.type.executable_width) {
@@ -902,7 +910,9 @@ SystemVerilogHirBuilder::state_variable_binding(
     }
     sv::ConstraintBinding binding;
     binding.kind = sv::ConstraintReferenceKind::state;
-    binding.specialization_identity = specialization.specialization_identity;
+    binding.specialization_identity = std::string {
+        sv::generated_specialization_source(
+            specialization.specialization_identity) };
     binding.canonical_identity
         = "$state::" + owner + "::" + std::string { spelling };
     binding.type = *selected->type;
@@ -929,7 +939,9 @@ std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::method_binding(
         return std::nullopt;
     sv::ConstraintBinding binding;
     binding.kind = sv::ConstraintReferenceKind::method;
-    binding.specialization_identity = specialization.specialization_identity;
+    binding.specialization_identity = std::string {
+        sv::generated_specialization_source(
+            specialization.specialization_identity) };
     binding.canonical_identity = found->canonical_identity;
     binding.type = class_property_type(found->return_type, binding_source);
     return binding;

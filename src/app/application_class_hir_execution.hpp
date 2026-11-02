@@ -112,6 +112,15 @@ public:
     {
         report_ = std::move(report);
     }
+    // The class of a generated scope or design element instance, made when
+    // a loaded design first names it (IEEE 1800-2023 6.22, 27.4).
+    using GeneratedSpecialization = std::function<
+        const semantic::sv::ClassSpecialization*(std::string_view)>;
+    void set_generated_specialization_service(
+        GeneratedSpecialization generated)
+    {
+        generated_specialization_ = std::move(generated);
+    }
     // String-typed class properties; the read yields nothing and the write
     // returns false when the property is not a string.
     using StringPropertyRead = std::function<std::optional<std::string>(
@@ -480,6 +489,7 @@ private:
         std::span<const std::string> actual_names);
 
     std::span<const semantic::sv::ClassSpecialization> specializations_;
+    GeneratedSpecialization generated_specialization_;
     const semantic::sv::Hir& hir_;
     mutable std::optional<HirLookupIndex> hir_index_;
     const runtime::SystemVerilogClassHeap& heap_;

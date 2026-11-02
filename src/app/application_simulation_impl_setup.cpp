@@ -762,6 +762,10 @@ Simulation::Impl::Impl(
         [this](const runtime::SystemVerilogUvmComponentSnapshot& object) {
             class_owner_parameter_values.erase(object.object);
         });
+    class_hir_execution.set_generated_specialization_service(
+        [this](const std::string_view identity) {
+            return generated_class_specialization(identity);
+        });
     class_hir_execution.set_construct_service(
         [this](const std::string_view class_identity,
             const std::span<const runtime::PackedLogic4> actuals,

@@ -224,7 +224,8 @@ class Lowerer final {
       std::string& error,
       std::span<const runtime::SystemVerilogConstraintVariable>
           solver_variables = {})
-      : specialization_(specialization), variables_(variables),
+      : specialization_(sv::generated_specialization_source(specialization)),
+        variables_(variables),
         container_variables_(container_variables),
         dependencies_(dependencies), error_(error),
         solver_variables_(solver_variables) {}
@@ -2558,7 +2559,7 @@ lower_systemverilog_constraint_expression(
 std::optional<runtime::SystemVerilogConstraintDistribution>
 lower_systemverilog_constraint_distribution(
     const semantic::sv::ConstraintExpression& expression,
-    const std::string_view specialization_identity,
+    const std::string_view requested_specialization,
     const std::map<std::string,
                    runtime::SystemVerilogConstraintVariableId>& variables,
     const std::span<const runtime::SystemVerilogConstraintVariable>
@@ -2566,6 +2567,10 @@ lower_systemverilog_constraint_distribution(
     std::string canonical_identity,
     std::string& error) {
   error.clear();
+  // A generated class shares the member bindings of the specialization it
+  // is made from.
+  const auto specialization_identity
+      = sv::generated_specialization_source(requested_specialization);
   if (expression.kind != semantic::sv::ConstraintExpressionKind::distribution
       || expression.operands.size() < 2U
       || expression.operands.front().kind
@@ -2715,11 +2720,15 @@ std::optional<std::vector<std::pair<
     runtime::SystemVerilogConstraintVariableId>>>
 lower_systemverilog_solve_before(
     const semantic::sv::ConstraintExpression& expression,
-    const std::string_view specialization_identity,
+    const std::string_view requested_specialization,
     const std::map<std::string,
                    runtime::SystemVerilogConstraintVariableId>& variables,
     std::string& error) {
   error.clear();
+  // A generated class shares the member bindings of the specialization it
+  // is made from.
+  const auto specialization_identity
+      = sv::generated_specialization_source(requested_specialization);
   if (expression.kind != semantic::sv::ConstraintExpressionKind::solve_before
       || expression.operands.size() != 2U
       || expression.operands[0].kind

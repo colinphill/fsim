@@ -32,11 +32,10 @@ find_specialization(
   // The class of a generated scope or design element instance has the
   // classes of the specialization it is made from as its bases (IEEE
   // 1800-2023 6.22, 27.4).
-  if (const auto generated = identity.find("#gen{");
-      found == specializations.end()
-      && generated != std::string_view::npos) {
+  if (found == specializations.end()) {
     found = std::ranges::find(
-        specializations, identity.substr(0U, generated),
+        specializations,
+        semantic::sv::generated_specialization_source(identity),
         &semantic::sv::ClassSpecialization::specialization_identity);
   }
   if (found == specializations.end()) {

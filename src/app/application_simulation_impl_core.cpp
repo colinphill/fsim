@@ -2284,6 +2284,9 @@ std::string Simulation::Impl::static_property_specialization(
                 built.compiled_systemverilog_class_specializations,
                 specialization,
                 "uvm_object")) {
+            // The class of a generated scope or design element instance is
+            // registered when its first object is made.
+            ensure_systemverilog_uvm_object_type(specialization, uvm_objects);
             uvm_objects.initialize(handle);
             object_initialized = true;
             std::size_t name_index { };
