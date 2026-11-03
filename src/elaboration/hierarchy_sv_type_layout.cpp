@@ -455,6 +455,237 @@ bool systemverilog_tagged_union_aggregate(
     return unpacked(unpacked, type);
 }
 
+std::optional<runtime::SystemVerilogVpiTypeDescriptor>
+systemverilog_vpi_declared_type(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& reference,
+    const semantic::ScopeId scope)
+{
+    using Descriptor = runtime::SystemVerilogVpiTypeDescriptor;
+    using Kind = runtime::SystemVerilogVpiDescriptorKind;
+    using Category = runtime::SystemVerilogVpiValueCategory;
+    using Form = semantic::sv::TypeForm;
+    const semantic::CompiledDesignResolver resolver { specialization };
+    const auto bound = [&](const std::optional<std::int64_t> value,
+                           const std::optional<semantic::ExpressionId> expression)
+        -> std::optional<std::int64_t> {
+        return expression ? sized_range_bound(specialization, *expression)
+                          : value;
+    };
+    const auto scope_of = [&](const semantic::sv::TypeDefinition& record) {
+        const auto declaration = record.declaration.valid()
+            ? specialization.find_declaration(record.declaration)
+            : std::nullopt;
+        return declaration && declaration->systemverilog != nullptr
+            ? declaration->systemverilog->scope
+            : specialization.scope();
+    };
+    const auto shape = [&](const auto& self,
+                           const semantic::sv::TypeReference& input,
+                           const semantic::ScopeId use_scope,
+                           const unsigned depth) -> std::optional<Descriptor> {
+        if (depth > 32U || input.container_form
+            || !input.unpacked_dimensions.empty() || input.virtual_interface
+            || !input.class_identity.empty() || input.type_of) {
+            return std::nullopt;
+        }
+        if (const auto effective
+            = resolver.effective_systemverilog_type(input, use_scope);
+            effective && *effective != input) {
+            return self(self, *effective, use_scope, depth + 1U);
+        }
+        if (input.packed_over_named_type) {
+            return std::nullopt;
+        }
+        const auto definition = input.target.target.valid()
+            ? specialization.find_type(input.target.target)
+            : std::nullopt;
+        const auto* const record = definition
+            ? definition->systemverilog
+            : nullptr;
+        // A resolved named type's reference carries its flattened width as
+        // its packed range and as the last packed dimension; the dimensions
+        // declared over it come first.
+        std::vector<std::pair<std::int64_t, std::int64_t>> dimensions;
+        auto declared = input.packed_dimensions;
+        if (record != nullptr) {
+            if (!declared.empty()) {
+                declared.pop_back();
+            }
+        } else if (declared.empty() && input.packed_range) {
+            declared.push_back(*input.packed_range);
+        }
+        std::uint64_t repeat = 1U;
+        for (const auto& range : declared) {
+            const auto left = bound(range.left, range.left_expression);
+            const auto right = bound(range.right, range.right_expression);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            dimensions.emplace_back(*left, *right);
+            repeat *= elaboration_detail::index_distance(*left, *right) + 1U;
+        }
+        std::optional<Descriptor> element;
+        if (record != nullptr) {
+            const auto record_scope = scope_of(*record);
+            switch (record->form) {
+            case Form::alias:
+            case Form::type_parameter:
+            case Form::packed_integral:
+                element = self(self, record->base, record_scope, depth + 1U);
+                if (!element) {
+                    return std::nullopt;
+                }
+                break;
+            case Form::packed_structure:
+            case Form::packed_union:
+            case Form::unpacked_structure:
+            case Form::unpacked_union: {
+                Descriptor aggregate;
+                aggregate.kind = record->form == Form::packed_union
+                        || record->form == Form::unpacked_union
+                    ? Kind::Union
+                    : Kind::Struct;
+                aggregate.category = Category::None;
+                aggregate.width = 0U;
+                aggregate.packed = record->form == Form::packed_structure
+                    || record->form == Form::packed_union;
+                aggregate.is_signed = aggregate.packed && record->base.signed_value;
+                for (const auto& member : record->members) {
+                    auto child = self(self, member.type, record_scope, depth + 1U);
+                    if (!child) {
+                        return std::nullopt;
+                    }
+                    aggregate.children.push_back(std::move(*child));
+                    aggregate.member_names.push_back(member.name);
+                }
+                if (aggregate.children.empty()) {
+                    return std::nullopt;
+                }
+                element = std::move(aggregate);
+                break;
+            }
+            case Form::enumeration: {
+                // An enumeration without a base type is an int (6.19).
+                auto base = record->base.target.resolved()
+                        || !record->base.target.spelling.empty()
+                    ? self(self, record->base, record_scope, depth + 1U)
+                    : std::optional<Descriptor> { };
+                if (!base) {
+                    base.emplace();
+                    base->category = Category::Integer2;
+                    base->width = 32U;
+                    base->is_signed = true;
+                }
+                if (base->kind != Kind::Scalar || base->width > 64U) {
+                    return std::nullopt;
+                }
+                base->kind = Kind::Enum;
+                // A literal without a value is the previous one plus one,
+                // the first one 0 (6.19).
+                std::int64_t next = 0;
+                for (const auto& literal : record->enumeration_literals) {
+                    if (literal.value) {
+                        const auto value = specialization
+                            .evaluate_integral_expression(*literal.value);
+                        if (!value) {
+                            return std::nullopt;
+                        }
+                        next = *value;
+                    }
+                    base->enum_literals.push_back({ literal.name,
+                        runtime::PackedLogic4::from_aval_bval(base->width,
+                            static_cast<std::uint64_t>(next), 0U) });
+                    ++next;
+                }
+                element = std::move(base);
+                break;
+            }
+            case Form::string:
+                element.emplace();
+                element->kind = Kind::String;
+                element->category = Category::String;
+                element->width = 0U;
+                break;
+            default:
+                return std::nullopt;
+            }
+        }
+        if (!element) {
+            const auto& spelling = input.target.spelling;
+            if (input.value_form == Form::string || spelling == "string") {
+                if (!dimensions.empty()) {
+                    return std::nullopt;
+                }
+                Descriptor text;
+                text.kind = Kind::String;
+                text.category = Category::String;
+                text.width = 0U;
+                return text;
+            }
+            // An integer atom has its own width; its packed range is the
+            // implicit one (6.11).
+            const std::uint32_t atom = spelling == "byte" ? 8U
+                : spelling == "shortint"                  ? 16U
+                : spelling == "int" || spelling == "integer" ? 32U
+                : spelling == "longint" || spelling == "time" ? 64U
+                                                          : 0U;
+            // An enumeration's base type keeps the enumeration form.
+            if (atom == 0U && input.value_form
+                && *input.value_form != Form::packed_integral
+                && *input.value_form != Form::enumeration) {
+                return std::nullopt;
+            }
+            if (atom == 0U && !spelling.empty() && spelling != "bit"
+                && spelling != "logic" && spelling != "reg"
+                && !semantic::sv::is_builtin_net_kind(spelling)) {
+                return std::nullopt;
+            }
+            Descriptor scalar;
+            scalar.category = spelling == "time" ? Category::Time
+                : atom != 0U
+                ? (spelling == "integer" || input.four_state
+                          ? Category::Integer4
+                          : Category::Integer2)
+                : input.four_state || spelling != "bit"
+                ? Category::Logic4
+                : Category::Bit2;
+            const auto width = atom != 0U ? std::uint64_t { atom } : repeat;
+            if (width > std::numeric_limits<std::uint32_t>::max()) {
+                return std::nullopt;
+            }
+            scalar.width = static_cast<std::uint32_t>(width);
+            scalar.is_signed = input.signed_value;
+            return scalar;
+        }
+        if (dimensions.empty()) {
+            return element;
+        }
+        if (element->kind == Kind::Scalar) {
+            const auto width = std::uint64_t { element->width } * repeat;
+            if (width > std::numeric_limits<std::uint32_t>::max()) {
+                return std::nullopt;
+            }
+            element->width = static_cast<std::uint32_t>(width);
+            return element;
+        }
+        if (element->kind != Kind::Enum && !element->packed) {
+            return std::nullopt;
+        }
+        // A packed array of structures, unions or enumerations (37.18).
+        Descriptor array;
+        array.kind = Kind::PackedArray;
+        array.category = Category::None;
+        array.width = 0U;
+        for (const auto& [left, right] : dimensions) {
+            array.ranges.push_back({ left, right });
+        }
+        array.children.push_back(std::move(*element));
+        return array;
+    };
+    return shape(shape, reference, scope, 0U);
+}
+
 std::optional<ContainerType> systemverilog_container_type(
     const semantic::SpecializedHirUnit& working_specialization,
     const semantic::sv::TypeReference& reference)

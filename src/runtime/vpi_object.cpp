@@ -429,6 +429,9 @@ std::vector<Observer> snapshot_observers(
                 return false;
             }
         } else if (kind != SystemVerilogVpiObjectKind::Port
+            // An unpacked array of nets is a net array (IEEE 1800-2023
+            // 37.16, 37.17).
+            && kind != SystemVerilogVpiObjectKind::Memory
             && type.net_kind != SystemVerilogVpiNetKind::None) {
             return false;
         }

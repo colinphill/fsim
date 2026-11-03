@@ -1,0 +1,19 @@
+#c root defname=@work.top
+#c unit name=work.top:a
+#c unit lib=work
+#c entity name=top
+#c curregion is root=1
+#c v range left=7 right=0 up=0 intrange=1
+#c v numdims=1
+#c color literals=3
+#c std_logic literals=9
+#c v sigkind=1003 forced=0
+#c static v(3)=1003 range=1001 decl undefined=1
+#c v oct=262 hex=B2 dec=178
+#c raw rc=0 elems=8
+#c slice kind=1 bin=1100 hex=C size=4 left=5
+#c alias name=hi
+#c alias bin=1011 target is slice=1
+#c hi(3)=1
+#c format int->hex=B2 int->bin=10110010 bin->hex=C hex->int=255
+#c real left<0=1 right>0=1 val=1.5

@@ -72,6 +72,12 @@ constexpr std::size_t maximum_list_size = 1U << 20U;
 
 [[nodiscard]] bool same_name(std::string_view left, std::string_view right)
 {
+    // An extended identifier is case sensitive (IEEE 1076-2019 15.4.3); a
+    // basic identifier is not (15.4.2).
+    if ((!left.empty() && left.front() == '\\')
+        || (!right.empty() && right.front() == '\\')) {
+        return left == right;
+    }
     return left.size() == right.size()
         && std::ranges::equal(left, right, [](const char a, const char b) {
                return std::tolower(static_cast<unsigned char>(a))
@@ -244,6 +250,9 @@ struct Object final : Handle {
     // running call; the call itself carries a function's result.
     std::optional<std::size_t> call_slot;
     bool call_result { };
+    // An alias declaration: the object it is an alternate name for
+    // (vhpiAliasedName, IEEE 1076-2019 19.4.3).
+    Object* aliased { };
 
     // Type declarations.
     std::unique_ptr<TypeData> type_data;
@@ -767,8 +776,11 @@ private:
                                          vhpiTimeT*) {
             return self(user).not_implemented("vhpi_schedule_transaction", 1);
         };
-        host_.format_value = [](void* user, const vhpiValueT*, vhpiValueT*) {
-            return self(user).not_implemented("vhpi_format_value", 1);
+        host_.format_value = [](void* user, const vhpiValueT* in,
+                                 vhpiValueT* out) {
+            return guarded<int>(user, -1, [&](LiveService& s) {
+                return s.format_value(in, out);
+            });
         };
         host_.create = [](void* user, vhpiClassKindT, vhpiHandleT,
                            vhpiHandleT) {
@@ -1808,6 +1820,9 @@ private:
             found != region.children.end()) {
             return found->second;
         }
+        if (declaration.form == vhdl::DeclarationForm::alias) {
+            return declared_alias(region, declaration, key);
+        }
         auto kind = vhpiConstDeclK;
         switch (declaration.form) {
         case vhdl::DeclarationForm::port:
@@ -1871,6 +1886,153 @@ private:
         }
         region.children.emplace(key, object);
         return object;
+    }
+
+    // An alias of an object, which reads and indexes as the object does and
+    // has the alias's own subtype when that has the same extent (IEEE
+    // 1076-2019 6.6.2, 19.4.3 vhpiAliasedName). An alias of anything but
+    // an object has no VHPI object.
+    [[nodiscard]] Object* declared_alias(Object& region,
+        const vhdl::Declaration& declaration, const std::string& key)
+    {
+        if (!declaration.alias_target
+            || !resolving_aliases_.insert(&declaration).second) {
+            return nullptr;
+        }
+        const auto handle = handle_by_name(
+            std::string { declaration.alias_target->spelling }.c_str(),
+            to_handle(&region));
+        resolving_aliases_.erase(&declaration);
+        if (handle == nullptr) {
+            return nullptr;
+        }
+        auto* target = object_of(handle);
+        // An alias of an element or a slice names that part of the object
+        // (IEEE 1076-2019 6.6.2); its expression keeps the selection.
+        if (target != nullptr && declaration.initializer) {
+            target = aliased_part(*target, *declaration.initializer, 0U);
+        }
+        if (target == nullptr || is_type(*target) || is_region(*target)
+            || target->type == nullptr || target->type->type_data == nullptr) {
+            return nullptr;
+        }
+        auto* const object
+            = make_object(vhpiAliasDeclK, declaration.name, &region);
+        object->declaration = &declaration;
+        object->aliased = target;
+        object->full_name = region.full_name + ":" + object->name;
+        object->full_case_name = region.full_case_name + ":" + object->case_name;
+        object->signal = target->signal;
+        object->constant = target->constant;
+        object->offset = target->offset;
+        object->call_slot = target->call_slot;
+        object->call_result = target->call_result;
+        object->type = target->type;
+        if (declaration.subtype) {
+            auto* const subtype = subtype_object(*declaration.subtype, nullptr);
+            if (subtype != nullptr && subtype->type_data != nullptr
+                && width_of(*subtype) == width_of(*target->type)) {
+                object->type = subtype;
+            }
+        }
+        region.children.emplace(key, object);
+        return object;
+    }
+
+    // The part of an alias's named object that its index or slice name
+    // selects, with literal indexes and bounds.
+    [[nodiscard]] Object* aliased_part(Object& named,
+        const semantic::ExpressionId id, const std::size_t depth)
+    {
+        const auto* const expression = hir_expression(id);
+        if (expression == nullptr || depth > 16U) {
+            return nullptr;
+        }
+        switch (expression->kind) {
+        case vhdl::ExpressionKind::name:
+            return &named;
+        case vhdl::ExpressionKind::slice: {
+            if (expression->operands.size() != 3U) {
+                return nullptr;
+            }
+            auto* const prefix
+                = aliased_part(named, expression->operands[0], depth + 1U);
+            const auto left = integer_literal(expression->operands[1]);
+            const auto right = integer_literal(expression->operands[2]);
+            if (prefix == nullptr || !left || !right) {
+                return nullptr;
+            }
+            return sliced(*prefix,
+                Range { *left, *right, expression->text == "downto" });
+        }
+        case vhdl::ExpressionKind::index: {
+            if (expression->operands.size() < 2U) {
+                return nullptr;
+            }
+            auto* const prefix
+                = aliased_part(named, expression->operands[0], depth + 1U);
+            std::vector<std::int64_t> indexes;
+            for (std::size_t operand = 1U;
+                operand < expression->operands.size(); ++operand) {
+                const auto index
+                    = integer_literal(expression->operands[operand]);
+                if (!index) {
+                    return nullptr;
+                }
+                indexes.push_back(*index);
+            }
+            return prefix == nullptr ? nullptr : indexed(*prefix, indexes);
+        }
+        default:
+            return nullptr;
+        }
+    }
+
+    [[nodiscard]] const vhdl::Expression* hir_expression(
+        const semantic::ExpressionId id) const
+    {
+        const auto& expressions = hir_.expressions();
+        const auto index = static_cast<std::size_t>(id.value());
+        if (index < expressions.size() && expressions[index].id == id) {
+            return &expressions[index];
+        }
+        // Expression ids are shared across languages, so a VHDL
+        // expression's position need not be its id.
+        const auto found
+            = std::ranges::find(expressions, id, &vhdl::Expression::id);
+        return found == expressions.end() ? nullptr : &*found;
+    }
+
+    // An integer literal, optionally negated.
+    [[nodiscard]] std::optional<std::int64_t> integer_literal(
+        const semantic::ExpressionId id) const
+    {
+        const auto* expression = hir_expression(id);
+        bool negative = false;
+        if (expression != nullptr
+            && expression->kind == vhdl::ExpressionKind::unary
+            && expression->text == "-" && expression->operands.size() == 1U) {
+            negative = true;
+            expression = hir_expression(expression->operands.front());
+        }
+        if (expression == nullptr
+            || expression->kind != vhdl::ExpressionKind::integer_literal) {
+            return std::nullopt;
+        }
+        std::string digits;
+        for (const auto character : expression->text) {
+            if (character != '_') {
+                digits.push_back(character);
+            }
+        }
+        std::int64_t value { };
+        const auto* const end = digits.data() + digits.size();
+        if (const auto [last, failure]
+            = std::from_chars(digits.data(), end, value);
+            failure != std::errc { } || last != end) {
+            return std::nullopt;
+        }
+        return negative ? -value : value;
     }
 
     // The value elaboration gave a generic of an instance (IEEE 1076-2019
@@ -1938,19 +2100,8 @@ private:
     literal_value(Object* const type, const semantic::ExpressionId id,
         const std::size_t depth)
     {
-        const auto& expressions = hir_.expressions();
-        const auto find = [&](const semantic::ExpressionId expression)
-            -> const vhdl::Expression* {
-            const auto index = static_cast<std::size_t>(expression.value());
-            if (index < expressions.size()
-                && expressions[index].id == expression) {
-                return &expressions[index];
-            }
-            // Expression ids are shared across languages, so a VHDL
-            // expression's position need not be its id.
-            const auto found = std::ranges::find(
-                expressions, expression, &vhdl::Expression::id);
-            return found == expressions.end() ? nullptr : &*found;
+        const auto find = [&](const semantic::ExpressionId expression) {
+            return hir_expression(expression);
         };
         const auto* expression = find(id);
         if (expression == nullptr || type == nullptr
@@ -2328,6 +2479,99 @@ private:
         return nullptr;
     }
 
+    // `left downto right` or `left to right` with literal bounds.
+    [[nodiscard]] static std::optional<Range> parse_slice(
+        std::string_view text)
+    {
+        const auto skip = [&] {
+            while (!text.empty() && text.front() == ' ') {
+                text.remove_prefix(1U);
+            }
+        };
+        const auto number = [&]() -> std::optional<std::int64_t> {
+            skip();
+            std::int64_t value { };
+            const auto parsed
+                = std::from_chars(text.data(), text.data() + text.size(), value);
+            if (parsed.ec != std::errc { }) {
+                return std::nullopt;
+            }
+            text.remove_prefix(static_cast<std::size_t>(parsed.ptr - text.data()));
+            return value;
+        };
+        const auto left = number();
+        if (!left) {
+            return std::nullopt;
+        }
+        skip();
+        bool descending = false;
+        if (text.size() >= 6U && same_name(text.substr(0U, 6U), "downto")) {
+            descending = true;
+            text.remove_prefix(6U);
+        } else if (text.size() >= 2U && same_name(text.substr(0U, 2U), "to")) {
+            text.remove_prefix(2U);
+        } else {
+            return std::nullopt;
+        }
+        const auto right = number();
+        skip();
+        if (!right || !text.empty()) {
+            return std::nullopt;
+        }
+        return Range { *left, *right, descending };
+    }
+
+    // The slice of a one-dimensional array object whose index range lies
+    // within the object's and runs in the same direction (IEEE 1076-2019
+    // 8.5, 19.4.3 sliceName); its type is an anonymous subtype of the
+    // prefix's type constrained to the slice.
+    [[nodiscard]] Object* sliced(Object& prefix, const Range& slice)
+    {
+        auto* const type = prefix.type;
+        if (type == nullptr || type->type_data == nullptr
+            || type->type_data->storage != Storage::array
+            || type->type_data->dimensions.size() != 1U
+            || type->type_data->element == nullptr) {
+            return nullptr;
+        }
+        const auto& data = *type->type_data;
+        const auto& whole = data.dimensions.front();
+        if (slice.descending != whole.descending) {
+            return nullptr;
+        }
+        const auto left = whole.position(slice.left);
+        const auto right = whole.position(slice.right);
+        if (!left || !right || *left > *right) {
+            return nullptr;
+        }
+        const auto suffix = "(" + std::to_string(slice.left)
+            + (slice.descending ? " downto " : " to ")
+            + std::to_string(slice.right) + ")";
+        if (const auto found = prefix.children.find(suffix);
+            found != prefix.children.end()) {
+            return found->second;
+        }
+        const auto count = static_cast<std::size_t>(whole.length());
+        auto* const object = make_object(vhpiSliceNameK, "", &prefix);
+        object->name = prefix.name + suffix;
+        object->case_name = prefix.case_name + suffix;
+        object->full_name = prefix.full_name + suffix;
+        object->full_case_name = prefix.full_case_name + suffix;
+        object->signal = prefix.signal;
+        object->constant = prefix.constant;
+        object->declaration = prefix.declaration;
+        object->offset = prefix.offset
+            + (count - 1U - static_cast<std::size_t>(*right))
+                * width_of(*data.element);
+        object->position = *left;
+        auto* const subtype = constrained(*type);
+        subtype->type_data->dimensions = { slice };
+        subtype->type_data->unconstrained = false;
+        object->type = subtype;
+        prefix.children.emplace(suffix, object);
+        return object;
+    }
+
     // The element of an array object at one index value per dimension.
     [[nodiscard]] Object* indexed(Object& prefix,
         const std::span<const std::int64_t> indexes)
@@ -2444,6 +2688,16 @@ private:
                 }
                 std::vector<std::int64_t> indexes;
                 auto inner = name.substr(1U, close - 1U);
+                // A slice name `(left downto right)` (IEEE 1076-2019 8.5).
+                if (const auto slice = parse_slice(inner)) {
+                    current = sliced(*current, *slice);
+                    name.remove_prefix(close + 1U);
+                    if (!name.empty()
+                        && (name.front() == '.' || name.front() == ':')) {
+                        name.remove_prefix(1U);
+                    }
+                    continue;
+                }
                 while (true) {
                     while (!inner.empty() && inner.front() == ' ') {
                         inner.remove_prefix(1U);
@@ -2476,7 +2730,10 @@ private:
                 continue;
             }
             const auto split = name.find_first_of(".:(");
-            const auto part = name.substr(0U, split);
+            auto part = name.substr(0U, split);
+            while (!part.empty() && part.back() == ' ') {
+                part.remove_suffix(1U);
+            }
             if (is_region(*current)) {
                 current = find_declared(*current, part);
             } else {
@@ -2533,6 +2790,7 @@ private:
             return nullptr;
         }
         switch (relation) {
+        case DEPRECATED_vhpiValSubtype:
         case vhpiValType:
             // An access or file type's values are of its designated type
             // (IEEE 1076-2019 5.4.1, 5.5.1).
@@ -2545,6 +2803,7 @@ private:
                                                : to_handle(object->type);
             }
             [[fallthrough]];
+        case DEPRECATED_vhpiSubtype:
         case vhpiType:
             return object->type == nullptr ? nullptr : to_handle(object->type);
         case vhpiBaseType: {
@@ -2554,6 +2813,7 @@ private:
             }
             return to_handle(type->type_data->base);
         }
+        case DEPRECATED_vhpiElemSubtype:
         case vhpiElemType: {
             auto* type = is_type(*object) ? object : object->type;
             if (type == nullptr || type->type_data == nullptr) {
@@ -2569,7 +2829,8 @@ private:
         }
         case vhpiPrefix:
             if (object->kind == vhpiSelectedNameK
-                || object->kind == vhpiIndexedNameK) {
+                || object->kind == vhpiIndexedNameK
+                || object->kind == vhpiSliceNameK) {
                 return to_handle(object->parent);
             }
             return nullptr;
@@ -2577,43 +2838,54 @@ private:
             return object->suffix == nullptr ? nullptr
                                              : to_handle(object->suffix);
         case vhpiDesignUnit: {
-            if (!is_region(*object) || object->unit == nullptr) {
-                return nullptr;
-            }
-            const auto found = object->children.find("@unit");
-            if (found != object->children.end()) {
-                return to_handle(found->second);
-            }
-            const auto kind = object->unit->kind == vhdl::UnitKind::package
-                ? vhpiPackDeclK
-                : vhpiArchBodyK;
-            auto* const unit = make_object(kind, object->unit->name, nullptr);
-            unit->full_name = upper(object->unit->library) + "." + unit->name;
-            unit->full_case_name = object->unit->library + "." + unit->case_name;
-            unit->unit = object->unit;
-            unit->entity = object->entity;
-            object->children.emplace("@unit", unit);
-            return to_handle(unit);
+            auto* const unit = design_unit_object(*object);
+            return unit == nullptr ? nullptr : to_handle(unit);
         }
         case vhpiPrimaryUnit: {
             // The entity declaration an architecture body is of (IEEE
             // 1076-2019 19.4.5).
-            if (object->kind != vhpiArchBodyK || object->entity == nullptr) {
-                return nullptr;
-            }
-            const auto found = object->children.find("@primary");
-            if (found != object->children.end()) {
-                return to_handle(found->second);
-            }
+            auto* const entity = primary_unit_object(*object);
+            return entity == nullptr ? nullptr : to_handle(entity);
+        }
+        case vhpiEntityDecl: {
+            // The entity declaration of an architecture body or of an
+            // instance's design unit (IEEE 1076-2019 19.4.2).
+            auto* const unit
+                = is_region(*object) ? design_unit_object(*object) : object;
             auto* const entity
-                = make_object(vhpiEntityDeclK, object->entity->name, nullptr);
-            entity->full_name
-                = upper(object->entity->library) + "." + entity->name;
-            entity->full_case_name
-                = object->entity->library + "." + entity->case_name;
-            entity->unit = object->entity;
-            object->children.emplace("@primary", entity);
-            return to_handle(entity);
+                = unit == nullptr ? nullptr : primary_unit_object(*unit);
+            return entity == nullptr ? nullptr : to_handle(entity);
+        }
+        case vhpiAliasedName:
+            return object->aliased == nullptr ? nullptr
+                                              : to_handle(object->aliased);
+        case vhpiConstraint: {
+            // The first constraint of a type (IEEE 1076-2019 19.4.3).
+            const auto constraints = type_list(vhpiConstraints, object);
+            return constraints.empty() ? nullptr : to_handle(constraints.front());
+        }
+        case DEPRECATED_vhpiDecl: {
+            // The declared object a name denotes a part of.
+            auto* declaration = object;
+            while ((declaration->kind == vhpiIndexedNameK
+                       || declaration->kind == vhpiSelectedNameK
+                       || declaration->kind == vhpiSliceNameK)
+                && declaration->parent != nullptr) {
+                declaration = declaration->parent;
+            }
+            return to_handle(declaration);
+        }
+        case vhpiCurRegion:
+        case vhpiImmRegion: {
+            // The innermost region that contains the object (IEEE 1076-2019
+            // 19.4.2).
+            for (auto* region = object->parent; region != nullptr;
+                 region = region->parent) {
+                if (is_region(*region)) {
+                    return to_handle(region);
+                }
+            }
+            return nullptr;
         }
         case vhpiParamDecl: {
             const auto found = object->children.find("@param");
@@ -2629,6 +2901,50 @@ private:
                 "unsupported relation " + std::to_string(relation));
             return nullptr;
         }
+    }
+
+    // The design unit object of a region (IEEE 1076-2019 19.4.2).
+    [[nodiscard]] Object* design_unit_object(Object& region)
+    {
+        if (!is_region(region) || region.unit == nullptr) {
+            return nullptr;
+        }
+        const auto found = region.children.find("@unit");
+        if (found != region.children.end()) {
+            return found->second;
+        }
+        const auto kind = region.unit->kind == vhdl::UnitKind::package
+            ? vhpiPackDeclK
+            : vhpiArchBodyK;
+        auto* const unit = make_object(kind, region.unit->name, nullptr);
+        unit->full_name = upper(region.unit->library) + "." + unit->name;
+        unit->full_case_name = region.unit->library + "." + unit->case_name;
+        unit->unit = region.unit;
+        unit->entity = region.entity;
+        region.children.emplace("@unit", unit);
+        return unit;
+    }
+
+    // The entity declaration an architecture body object is of.
+    [[nodiscard]] Object* primary_unit_object(Object& architecture)
+    {
+        if (architecture.kind != vhpiArchBodyK
+            || architecture.entity == nullptr) {
+            return nullptr;
+        }
+        const auto found = architecture.children.find("@primary");
+        if (found != architecture.children.end()) {
+            return found->second;
+        }
+        auto* const entity = make_object(
+            vhpiEntityDeclK, architecture.entity->name, nullptr);
+        entity->full_name
+            = upper(architecture.entity->library) + "." + entity->name;
+        entity->full_case_name
+            = architecture.entity->library + "." + entity->case_name;
+        entity->unit = architecture.entity;
+        architecture.children.emplace("@primary", entity);
+        return entity;
     }
 
     [[nodiscard]] Object* tool()
@@ -2665,7 +2981,13 @@ private:
                 return d.form == Form::port || d.form == Form::signal
                     || d.form == Form::generic_constant
                     || d.form == Form::constant || d.form == Form::variable
-                    || d.form == Form::type || d.form == Form::subtype;
+                    || d.form == Form::type || d.form == Form::subtype
+                    || d.form == Form::alias;
+            });
+            break;
+        case vhpiAliasDecls:
+            declarations([](const vhdl::Declaration& d) {
+                return d.form == Form::alias;
             });
             break;
         case vhpiSigDecls:
@@ -3531,12 +3853,16 @@ private:
             }
             break;
         case vhpiConstraints:
-            for (const auto& range : data.dimensions) {
-                list.push_back(range_object(range));
+            for (std::size_t dimension = 0U; dimension < data.dimensions.size();
+                 ++dimension) {
+                list.push_back(range_object(data.dimensions[dimension],
+                    dimension < data.index_types.size()
+                        ? data.index_types[dimension]
+                        : nullptr));
             }
             if (data.dimensions.empty() && data.range
                 && data.storage != Storage::array) {
-                list.push_back(range_object(*data.range));
+                list.push_back(range_object(*data.range, type));
             }
             break;
         case vhpiUnitDecls:
@@ -3556,9 +3882,29 @@ private:
         return list;
     }
 
-    [[nodiscard]] Object* range_object(const Range& range)
+    // A range object; its class follows the type of the range's values
+    // (IEEE 1076-2019 19.4.3).
+    [[nodiscard]] Object* range_object(
+        const Range& range, const Object* const index_type = nullptr)
     {
-        auto* const object = make_object(vhpiIntRangeK, "", nullptr);
+        auto kind = vhpiIntRangeK;
+        if (index_type != nullptr && index_type->type_data != nullptr) {
+            switch (index_type->type_data->storage) {
+            case Storage::enumeration:
+            case Storage::logic9:
+                kind = vhpiEnumRangeK;
+                break;
+            case Storage::physical:
+                kind = vhpiPhysRangeK;
+                break;
+            case Storage::real:
+                kind = vhpiFloatRangeK;
+                break;
+            default:
+                break;
+            }
+        }
+        auto* const object = make_object(kind, "", nullptr);
         object->type_data = std::make_unique<TypeData>();
         object->type_data->range = range;
         return object;
@@ -3613,29 +3959,55 @@ private:
         case vhpiArgcP:
             return static_cast<vhpiIntT>(arguments_.size());
         case vhpiIsUpP:
-            if (object.kind == vhpiIntRangeK && object.type_data) {
-                return object.type_data->range->descending ? 0 : 1;
-            }
-            break;
         case vhpiLeftBoundP:
         case vhpiRightBoundP:
-            if (object.type_data && object.type_data->range) {
-                const auto& range = *object.type_data->range;
+            // The range of a constraint, of a scalar type, or of the first
+            // index of a constrained array (IEEE 1076-2019 19.4.3); the
+            // other dimensions are the ranges of vhpiConstraints.
+            if (const auto* const range = range_for(object)) {
+                if (property == vhpiIsUpP) {
+                    return range->descending ? 0 : 1;
+                }
                 return static_cast<vhpiIntT>(
-                    property == vhpiLeftBoundP ? range.left : range.right);
+                    property == vhpiLeftBoundP ? range->left : range->right);
             }
+            break;
+        case vhpiStaticnessP:
+            if (const auto value = staticness(object)) {
+                return *value;
+            }
+            break;
+        case vhpiNumLiteralsP:
             if (type != nullptr && type->type_data
-                && !type->type_data->dimensions.empty()) {
-                const auto& range = type->type_data->dimensions.front();
-                return static_cast<vhpiIntT>(
-                    property == vhpiLeftBoundP ? range.left : range.right);
+                && (type->type_data->storage == Storage::enumeration
+                    || type->type_data->storage == Storage::logic9)) {
+                return static_cast<vhpiIntT>(type->type_data->literals.size());
+            }
+            break;
+        case vhpiSigKindP: {
+            // A guarded signal is a bus or a register (IEEE 1076-2019 6.4.2.3).
+            const auto* const declaration = object.aliased != nullptr
+                ? object.aliased->declaration
+                : object.declaration;
+            if (declaration != nullptr
+                && (declaration->form == vhdl::DeclarationForm::signal
+                    || declaration->form == vhdl::DeclarationForm::port)) {
+                return declaration->guarded_kind == 1U ? vhpiBus
+                    : declaration->guarded_kind == 2U  ? vhpiRegister
+                                                       : vhpiNormal;
+            }
+            break;
+        }
+        case vhpiIsForcedP:
+            if (object.signal) {
+                return simulation_.signal_is_forced(*object.signal) ? 1 : 0;
             }
             break;
         case vhpiSizeP:
             if (type != nullptr && type->type_data) {
                 return static_cast<vhpiIntT>(element_count(*type));
             }
-            if (object.kind == vhpiIntRangeK && object.type_data) {
+            if (is_range(object) && object.type_data->range) {
                 return static_cast<vhpiIntT>(object.type_data->range->length());
             }
             break;
@@ -3722,13 +4094,13 @@ private:
             }
             break;
         case vhpiIsNullP:
-            if (object.kind == vhpiIntRangeK && object.type_data
+            if (is_range(object) && object.type_data
                 && object.type_data->range) {
                 return object.type_data->range->length() == 0 ? 1 : 0;
             }
             break;
         case vhpiIsDiscreteP:
-            if (object.kind == vhpiIntRangeK) {
+            if (object.kind == vhpiIntRangeK || object.kind == vhpiEnumRangeK) {
                 return 1;
             }
             if (type != nullptr && type->type_data) {
@@ -3746,6 +4118,79 @@ private:
         error(vhpiError, "unsupported property " + std::to_string(property)
                 + " of " + object.full_name);
         return vhpiUndefined;
+    }
+
+    [[nodiscard]] static bool is_range(const Object& object) noexcept
+    {
+        return object.kind == vhpiIntRangeK || object.kind == vhpiEnumRangeK
+            || object.kind == vhpiPhysRangeK || object.kind == vhpiFloatRangeK;
+    }
+
+    // The range a bound property reads: a range object's, a scalar type's,
+    // or the first index range of an array object's type.
+    [[nodiscard]] static const Range* range_for(const Object& object) noexcept
+    {
+        if (object.type_data != nullptr && object.type_data->range) {
+            return &*object.type_data->range;
+        }
+        const auto* const type = object.type_data != nullptr
+            ? &object
+            : object.type;
+        if (type != nullptr && type->type_data != nullptr
+            && !type->type_data->dimensions.empty()) {
+            return &type->type_data->dimensions.front();
+        }
+        return nullptr;
+    }
+
+    // The staticness of an expression or range (IEEE 1076-2019 9.4; the
+    // property belongs to the expr and range classes, 19.13, 19.16): a
+    // range or literal of the elaborated design is locally static, and a
+    // name has the staticness of the object it denotes as a primary: a
+    // constant of a locally static value is locally static, another
+    // constant or a generic globally static, a signal or variable dynamic.
+    // A declaration is not an expression and has no staticness.
+    [[nodiscard]] static std::optional<vhpiIntT> staticness(
+        const Object& object)
+    {
+        if (is_range(object) || object.kind == vhpiEnumLiteralK) {
+            return vhpiLocallyStatic;
+        }
+        switch (object.kind) {
+        case vhpiIndexedNameK:
+        case vhpiSelectedNameK:
+        case vhpiSliceNameK:
+            return object.parent != nullptr ? primary_staticness(*object.parent)
+                                            : std::nullopt;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    [[nodiscard]] static std::optional<vhpiIntT> primary_staticness(
+        const Object& object)
+    {
+        switch (object.kind) {
+        case vhpiConstDeclK:
+            return object.constant ? vhpiLocallyStatic : vhpiGloballyStatic;
+        case vhpiGenericDeclK:
+            return vhpiGloballyStatic;
+        case vhpiSigDeclK:
+        case vhpiPortDeclK:
+        case vhpiVarDeclK:
+            return vhpiDynamic;
+        case vhpiIndexedNameK:
+        case vhpiSelectedNameK:
+        case vhpiSliceNameK:
+            return object.parent != nullptr ? primary_staticness(*object.parent)
+                                            : std::nullopt;
+        case vhpiAliasDeclK:
+            return object.aliased != nullptr
+                ? primary_staticness(*object.aliased)
+                : std::nullopt;
+        default:
+            return std::nullopt;
+        }
     }
 
     // The number of scalar subelements: one for a scalar, the product of
@@ -3826,8 +4271,29 @@ private:
             scratch = object.case_name;
             break;
         case vhpiLibLogicalNameP:
-            scratch = object.type_data ? object.type_data->library : "WORK";
+            // A design unit's library (IEEE 1076-2019 19.4.5).
+            if (object.unit != nullptr && is_design_unit(object)) {
+                scratch = upper(object.unit->library);
+            } else {
+                scratch = object.type_data ? object.type_data->library : "WORK";
+            }
             break;
+        case vhpiUnitNameP:
+            // `library.unit[:body]` (IEEE 1076-2019 19.4.5).
+            if (object.unit == nullptr || !is_design_unit(object)) {
+                error(vhpiError, "vhpiUnitNameP needs a design unit");
+                return nullptr;
+            }
+            scratch = unit_name(*object.unit);
+            break;
+        case vhpiDefNameP:
+            // `@unit{.scope}[.name]` (IEEE 1076-2019 19.4.6).
+            if (const auto name = def_name(object)) {
+                scratch = *name;
+                break;
+            }
+            error(vhpiError, "no definition name for " + object.full_name);
+            return nullptr;
         default:
             error(vhpiError, "unsupported string property "
                     + std::to_string(property));
@@ -3840,9 +4306,113 @@ private:
         return reinterpret_cast<const vhpiCharT*>(text->c_str());
     }
 
+    [[nodiscard]] static bool is_design_unit(const Object& object) noexcept
+    {
+        return object.kind == vhpiArchBodyK || object.kind == vhpiEntityDeclK
+            || object.kind == vhpiPackDeclK;
+    }
+
+    // The UnitName of a design unit: `library.unit`, and for an
+    // architecture body `library.entity:architecture` (IEEE 1076-2019
+    // 19.4.5).
+    [[nodiscard]] static std::string unit_name(const vhdl::Unit& unit)
+    {
+        const auto library = upper(unit.library);
+        if (unit.kind == vhdl::UnitKind::architecture) {
+            return library + "." + unit.primary_name + ":" + unit.name;
+        }
+        return library + "." + unit.name;
+    }
+
+    // The DefName of a region, declaration or predefined type: the unit
+    // name of the declaring design unit, the labels of the enclosing
+    // generate and block statements, then the object's own name (IEEE
+    // 1076-2019 19.4.6).
+    [[nodiscard]] static std::optional<std::string> def_name(
+        const Object& object)
+    {
+        const auto label = [](const Object& scope) {
+            return scope.generate != nullptr ? scope.generate->label
+                                             : scope.case_name;
+        };
+        if (is_type(object)) {
+            const auto& data = *object.type_data;
+            if (data.package.empty()) {
+                return std::nullopt;
+            }
+            return "@" + data.library + "." + data.package + "." + object.name;
+        }
+        if (object.kind == vhpiRootInstK) {
+            return object.entity != nullptr
+                ? std::optional<std::string> { "@" + unit_name(*object.entity) }
+                : std::nullopt;
+        }
+        if (object.kind == vhpiPackInstK) {
+            return object.unit != nullptr
+                ? std::optional<std::string> { "@" + unit_name(*object.unit) }
+                : std::nullopt;
+        }
+        // The labels from the enclosing instance down to the object.
+        std::vector<std::string> scopes;
+        const Object* region = nullptr;
+        switch (object.kind) {
+        case vhpiCompInstStmtK:
+        case vhpiBlockStmtK:
+        case vhpiForGenerateK:
+        case vhpiIfGenerateK:
+            scopes.push_back(label(object));
+            region = object.parent;
+            break;
+        case vhpiSigDeclK:
+        case vhpiPortDeclK:
+        case vhpiGenericDeclK:
+        case vhpiConstDeclK:
+        case vhpiVarDeclK:
+        case vhpiAliasDeclK:
+            scopes.push_back(object.name);
+            region = object.parent;
+            break;
+        default:
+            return std::nullopt;
+        }
+        while (region != nullptr && region->generate != nullptr) {
+            scopes.push_back(label(*region));
+            region = region->parent;
+        }
+        if (region == nullptr || region->unit == nullptr) {
+            return std::nullopt;
+        }
+        const vhdl::Unit* unit = region->unit;
+        // The generics and ports are the entity's declarations.
+        if (object.declaration != nullptr && region->entity != nullptr
+            && std::ranges::any_of(region->entity->declarations,
+                [&](const auto id) {
+                    return id.value() == object.declaration->id.value();
+                })) {
+            unit = region->entity;
+        }
+        auto result = "@" + unit_name(*unit);
+        for (auto name = scopes.rbegin(); name != scopes.rend(); ++name) {
+            result += "." + *name;
+        }
+        return result;
+    }
+
     [[nodiscard]] static std::string kind_name(const vhpiClassKindT kind)
     {
         switch (kind) {
+        case vhpiAliasDeclK:
+            return "vhpiAliasDeclK";
+        case vhpiSliceNameK:
+            return "vhpiSliceNameK";
+        case vhpiIntRangeK:
+            return "vhpiIntRangeK";
+        case vhpiEnumRangeK:
+            return "vhpiEnumRangeK";
+        case vhpiPhysRangeK:
+            return "vhpiPhysRangeK";
+        case vhpiFloatRangeK:
+            return "vhpiFloatRangeK";
         case vhpiRootInstK:
             return "vhpiRootInstK";
         case vhpiCompInstStmtK:
@@ -3886,6 +4456,38 @@ private:
         auto* const object = object_of(handle);
         if (object == nullptr) {
             return 0.0;
+        }
+        switch (property) {
+        case vhpiFloatLeftBoundP:
+        case vhpiFloatRightBoundP: {
+            // The bounds of a real type or subtype, or of a real range
+            // (IEEE 1076-2019 19.4.3); the predefined REAL spans the
+            // representable doubles.
+            const auto* const type = is_type(*object) ? object : object->type;
+            if (type == nullptr || type->type_data == nullptr
+                || type->type_data->storage != Storage::real) {
+                break;
+            }
+            const auto& data = *type->type_data;
+            const auto largest = std::numeric_limits<double>::max();
+            if (data.range) {
+                return static_cast<double>(
+                    property == vhpiFloatLeftBoundP ? data.range->left
+                                                    : data.range->right);
+            }
+            return property == vhpiFloatLeftBoundP ? -largest : largest;
+        }
+        case vhpiRealValP: {
+            // The value of a real object (IEEE 1076-2019 19.4.3).
+            vhpiValueT value { };
+            value.format = vhpiRealVal;
+            if (read_value(*object, value) == 0) {
+                return value.value.real;
+            }
+            return 0.0;
+        }
+        default:
+            break;
         }
         error(vhpiError, "unsupported real property "
                 + std::to_string(property) + " of " + object->full_name);
@@ -4127,6 +4729,100 @@ private:
         return text;
     }
 
+    // The value of a vector of BIT or STD_ULOGIC elements, leftmost
+    // first, as binary digit characters (IEEE 1076-2019 22.2.8).
+    [[nodiscard]] static std::optional<std::string> logic_chars(
+        const TypeData& element, const PackedLogic4& bits,
+        const std::size_t count, const std::size_t element_width)
+    {
+        if (element_width != 1U
+            || !(element.storage == Storage::logic9
+                || (element.storage == Storage::enumeration
+                    && element.literals.size() == 2U))) {
+            return std::nullopt;
+        }
+        std::string chars;
+        for (std::size_t position = 0U; position < count; ++position) {
+            const auto offset = count - 1U - position;
+            if (element.storage == Storage::logic9) {
+                chars.push_back(runtime::to_char(logic9_at(bits, offset)));
+            } else {
+                chars.push_back(
+                    scalar_at(element, bits, offset) != 0 ? '1' : '0');
+            }
+        }
+        return chars;
+    }
+
+    // The value of a vector in the octal, decimal or hexadecimal string
+    // format. A digit whose bits are not all 0 or 1 reads as the common
+    // character of its bits, or X when they differ; a decimal string needs
+    // known bits and at most 64 of them.
+    [[nodiscard]] static std::optional<std::string> vector_text(
+        const TypeData& element, const PackedLogic4& bits,
+        const std::size_t count, const std::size_t element_width,
+        const vhpiFormatT format)
+    {
+        const auto chars = logic_chars(element, bits, count, element_width);
+        if (!chars) {
+            return std::nullopt;
+        }
+        return radix_text(*chars, format);
+    }
+
+    // `chars`, binary digit characters, in an octal, decimal or hexadecimal
+    // string.
+    [[nodiscard]] static std::optional<std::string> radix_text(
+        const std::string_view chars, const vhpiFormatT format)
+    {
+        const auto known = [](const char c) {
+            return c == '0' || c == '1' || c == 'L' || c == 'H';
+        };
+        const auto bit = [](const char c) {
+            return c == '1' || c == 'H' ? 1U : 0U;
+        };
+        if (format == vhpiDecStrVal) {
+            if (chars.size() > 64U || !std::ranges::all_of(chars, known)) {
+                return std::nullopt;
+            }
+            std::uint64_t number { };
+            for (const auto c : chars) {
+                number = (number << 1U) | bit(c);
+            }
+            std::array<char, 24> digits { };
+            const auto result = std::to_chars(
+                digits.data(), digits.data() + digits.size(), number);
+            return std::string { digits.data(), result.ptr };
+        }
+        const std::size_t group = format == vhpiOctStrVal ? 3U : 4U;
+        const std::size_t groups = (chars.size() + group - 1U) / group;
+        std::string text;
+        for (std::size_t index = 0U; index < groups; ++index) {
+            // The digit's bits, the first group padded with zero bits.
+            std::string digit;
+            const auto first = index * group;
+            const auto pad = groups * group - chars.size();
+            for (std::size_t offset = 0U; offset < group; ++offset) {
+                const auto place = first + offset;
+                digit.push_back(place < pad ? '0' : chars[place - pad]);
+            }
+            if (std::ranges::all_of(digit, known)) {
+                unsigned number { };
+                for (const auto c : digit) {
+                    number = (number << 1U) | bit(c);
+                }
+                text.push_back("0123456789ABCDEF"[number]);
+            } else if (std::ranges::all_of(digit, [&](const char c) {
+                           return c == digit.front();
+                       })) {
+                text.push_back(digit.front());
+            } else {
+                text.push_back('X');
+            }
+        }
+        return text;
+    }
+
     [[nodiscard]] int read_value(const Object& object, vhpiValueT& value)
     {
         if (object.type == nullptr || object.type->type_data == nullptr) {
@@ -4142,6 +4838,24 @@ private:
         const auto& data = *type.type_data;
         if (value.format == vhpiObjTypeVal) {
             value.format = object_format(type);
+        }
+        // The implementation-defined internal representation (IEEE
+        // 1076-2019 22.2.8): one byte per scalar bit, the least
+        // significant first, holding the bit's logic code.
+        if (value.format == vhpiRawDataVal) {
+            const auto size = bits->width();
+            value.numElems = static_cast<int32_t>(size);
+            if (value.bufSize < size || value.value.ptr == nullptr) {
+                return static_cast<int>(size);
+            }
+            auto* const bytes = static_cast<std::uint8_t*>(value.value.ptr);
+            for (std::size_t bit = 0U; bit < size; ++bit) {
+                bytes[bit] = bits->is_logic9()
+                    ? static_cast<std::uint8_t>(bits->get_logic9(bit))
+                    : static_cast<std::uint8_t>(
+                          bits->get(bit) == Logic4::one ? 1U : 0U);
+            }
+            return 0;
         }
         const auto store_scalar = [&](const TypeData& scalar,
                                       const std::size_t offset,
@@ -4241,6 +4955,46 @@ private:
             value.value.str[count] = 0;
             return 0;
         }
+        case vhpiOctStrVal:
+        case vhpiDecStrVal:
+        case vhpiHexStrVal: {
+            // A vector of BIT or STD_ULOGIC read as one number (IEEE
+            // 1076-2019 22.2.8).
+            const auto text = vector_text(element, *bits, count,
+                element_width, value.format);
+            if (!text) {
+                error(vhpiError, "unsupported value format "
+                        + std::to_string(value.format));
+                return -1;
+            }
+            const auto size = text->size() + 1U;
+            value.numElems = static_cast<int32_t>(text->size());
+            if (value.bufSize < size || value.value.str == nullptr) {
+                return static_cast<int>(size);
+            }
+            std::memcpy(value.value.str, text->c_str(), size);
+            return 0;
+        }
+        case vhpiPhysVecVal:
+        case vhpiTimeVecVal: {
+            const auto size = count * sizeof(vhpiPhysT);
+            if (!need(size)) {
+                return static_cast<int>(size);
+            }
+            for (std::size_t position = 0U; position < count; ++position) {
+                const auto scalar
+                    = scalar_at(element, *bits, offset_of(position));
+                const vhpiPhysT physical { static_cast<int32_t>(scalar >> 32U),
+                    static_cast<uint32_t>(scalar) };
+                if (value.format == vhpiPhysVecVal) {
+                    value.value.physs[position] = physical;
+                } else {
+                    value.value.times[position]
+                        = vhpiTimeT { physical.high, physical.low };
+                }
+            }
+            return 0;
+        }
         case vhpiLogicVecVal:
         case vhpiEnumVecVal: {
             const auto size = count * sizeof(vhpiEnumT);
@@ -4297,6 +5051,329 @@ private:
                     + std::to_string(value.format));
             return -1;
         }
+    }
+
+    // --- vhpi_format_value (IEEE 1076-2019 23.9) ---------------------------------
+
+    // A value in an intermediate form: a position number, and/or binary
+    // digit characters, leftmost first.
+    struct Canonical {
+        std::optional<std::int64_t> number;
+        std::string chars;
+    };
+
+    [[nodiscard]] static std::optional<std::int64_t> unit_position(
+        const vhpiPhysT& unit) noexcept
+    {
+        const auto position = (static_cast<std::int64_t>(unit.high) << 32)
+            | static_cast<std::int64_t>(unit.low);
+        return position > 0 ? std::optional<std::int64_t> { position }
+                            : std::nullopt;
+    }
+
+    [[nodiscard]] static std::optional<int> logic_code(const char character)
+    {
+        for (int code = 0; code < 9; ++code) {
+            if (runtime::to_char(static_cast<Logic9>(code)) == character) {
+                return code;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // The unsigned value of binary digit characters.
+    [[nodiscard]] static std::optional<std::int64_t> binary_value(
+        const std::string_view chars)
+    {
+        if (chars.empty() || chars.size() > 62U
+            || !std::ranges::all_of(chars,
+                [](const char c) { return c == '0' || c == '1'; })) {
+            return std::nullopt;
+        }
+        std::int64_t number { };
+        for (const auto c : chars) {
+            number = (number << 1) | (c == '1' ? 1 : 0);
+        }
+        return number;
+    }
+
+    [[nodiscard]] static std::optional<std::string> binary_chars(
+        const std::int64_t number)
+    {
+        if (number < 0) {
+            return std::nullopt;
+        }
+        std::array<char, 72> digits { };
+        const auto result = std::to_chars(
+            digits.data(), digits.data() + digits.size(), number, 2);
+        return std::string { digits.data(), result.ptr };
+    }
+
+    // The input value structure of vhpi_format_value as a Canonical.
+    [[nodiscard]] static std::optional<Canonical> canonical_value(
+        const vhpiValueT& in)
+    {
+        Canonical result;
+        const auto count = in.numElems > 0
+            ? static_cast<std::size_t>(in.numElems)
+            : std::size_t { 0 };
+        switch (in.format) {
+        case vhpiIntVal:
+        case vhpiLongIntVal:
+        case vhpiEnumVal:
+        case vhpiSmallEnumVal:
+        case vhpiCharVal:
+            result.number = scalar_of(in);
+            return result;
+        case vhpiLogicVal: {
+            const auto code = static_cast<int>(in.value.enumv);
+            if (code < 0 || code > 8) {
+                return std::nullopt;
+            }
+            result.number = code;
+            result.chars = std::string(
+                1U, runtime::to_char(static_cast<Logic9>(code)));
+            return result;
+        }
+        case vhpiPhysVal:
+        case vhpiTimeVal:
+            result.number = scalar_of(in);
+            if (const auto scale = unit_position(in.unit)) {
+                *result.number *= *scale;
+            }
+            return result;
+        case vhpiBinStrVal:
+        case vhpiOctStrVal:
+        case vhpiDecStrVal:
+        case vhpiHexStrVal: {
+            if (in.value.str == nullptr) {
+                return std::nullopt;
+            }
+            const std::string_view text {
+                reinterpret_cast<const char*>(in.value.str) };
+            if (text.empty()) {
+                return std::nullopt;
+            }
+            if (in.format == vhpiBinStrVal) {
+                result.chars = std::string { text };
+                return result;
+            }
+            const int base = in.format == vhpiOctStrVal ? 8
+                : in.format == vhpiHexStrVal            ? 16
+                                                        : 10;
+            std::int64_t number { };
+            const auto parsed = std::from_chars(
+                text.data(), text.data() + text.size(), number, base);
+            if (parsed.ec != std::errc { }
+                || parsed.ptr != text.data() + text.size()) {
+                return std::nullopt;
+            }
+            result.number = number;
+            return result;
+        }
+        case vhpiLogicVecVal:
+        case vhpiEnumVecVal:
+        case vhpiSmallEnumVecVal: {
+            if (in.value.enumvs == nullptr || count == 0U) {
+                return std::nullopt;
+            }
+            for (std::size_t index = 0U; index < count; ++index) {
+                const auto code = in.format == vhpiSmallEnumVecVal
+                    ? static_cast<std::uint32_t>(in.value.smallenumvs[index])
+                    : in.value.enumvs[index];
+                if (in.format == vhpiLogicVecVal) {
+                    if (code > 8U) {
+                        return std::nullopt;
+                    }
+                    result.chars.push_back(runtime::to_char(
+                        static_cast<Logic9>(code)));
+                } else if (code > 1U) {
+                    return std::nullopt;
+                } else {
+                    result.chars.push_back(code == 1U ? '1' : '0');
+                }
+            }
+            return result;
+        }
+        default:
+            return std::nullopt;
+        }
+    }
+
+    // Write `value` in the format of `out`; the return value follows 23.9.
+    [[nodiscard]] int store_formatted(const Canonical& value, vhpiValueT& out)
+    {
+        const auto number = [&]() -> std::optional<std::int64_t> {
+            return value.number ? value.number : binary_value(value.chars);
+        };
+        const auto fail = [&](const char* const reason) {
+            error(vhpiError, std::string { "vhpi_format_value: " } + reason);
+            return -1;
+        };
+        // A string or vector result needs a buffer of `size` bytes.
+        const auto fits = [&](const std::size_t size, const std::size_t elems,
+                              const void* const buffer) {
+            out.numElems = static_cast<int32_t>(elems);
+            return buffer != nullptr && out.bufSize >= size;
+        };
+        switch (out.format) {
+        case vhpiIntVal:
+        case vhpiLongIntVal:
+        case vhpiEnumVal:
+        case vhpiSmallEnumVal:
+        case vhpiCharVal:
+        case vhpiLogicVal:
+        case vhpiPhysVal:
+        case vhpiTimeVal: {
+            std::optional<std::int64_t> position = number();
+            if (out.format == vhpiLogicVal && !value.number
+                && value.chars.size() == 1U) {
+                if (const auto code = logic_code(value.chars.front())) {
+                    position = *code;
+                }
+            }
+            if (!position) {
+                return fail("the value has no numeric form");
+            }
+            if (out.format == vhpiPhysVal || out.format == vhpiTimeVal) {
+                if (const auto scale = unit_position(out.unit)) {
+                    position = *position / *scale;
+                }
+                out.value.phys = vhpiPhysT {
+                    static_cast<int32_t>(*position >> 32U),
+                    static_cast<uint32_t>(*position) };
+                return 0;
+            }
+            const auto low = out.format == vhpiIntVal
+                ? std::int64_t { std::numeric_limits<std::int32_t>::min() }
+                : out.format == vhpiLongIntVal
+                ? std::numeric_limits<std::int64_t>::min()
+                : std::int64_t { 0 };
+            const auto high = out.format == vhpiIntVal
+                ? std::int64_t { std::numeric_limits<std::int32_t>::max() }
+                : out.format == vhpiLongIntVal
+                ? std::numeric_limits<std::int64_t>::max()
+                : out.format == vhpiSmallEnumVal || out.format == vhpiCharVal
+                ? std::int64_t { 255 }
+                : out.format == vhpiLogicVal
+                ? std::int64_t { 8 }
+                : std::int64_t { std::numeric_limits<std::int32_t>::max() };
+            if (*position < low || *position > high) {
+                return fail("the value is outside the range of the format");
+            }
+            switch (out.format) {
+            case vhpiIntVal:
+                out.value.intg = static_cast<vhpiIntT>(*position);
+                break;
+            case vhpiLongIntVal:
+                out.value.longintg = *position;
+                break;
+            case vhpiSmallEnumVal:
+                out.value.smallenumv = static_cast<vhpiSmallEnumT>(*position);
+                break;
+            case vhpiCharVal:
+                out.value.ch = static_cast<vhpiCharT>(*position);
+                break;
+            default:
+                out.value.enumv = static_cast<vhpiEnumT>(*position);
+                break;
+            }
+            return 0;
+        }
+        case vhpiBinStrVal:
+        case vhpiOctStrVal:
+        case vhpiDecStrVal:
+        case vhpiHexStrVal: {
+            std::optional<std::string> text;
+            if (out.format == vhpiDecStrVal && value.number) {
+                text = std::to_string(*value.number);
+            } else {
+                auto chars = value.chars;
+                if (chars.empty() && value.number) {
+                    if (const auto binary = binary_chars(*value.number)) {
+                        chars = *binary;
+                    }
+                }
+                if (chars.empty()) {
+                    return fail("the value has no digit form");
+                }
+                text = out.format == vhpiBinStrVal
+                    ? std::optional<std::string> { chars }
+                    : radix_text(chars, out.format);
+            }
+            if (!text) {
+                return fail("the value cannot be shown in that radix");
+            }
+            const auto size = text->size() + 1U;
+            if (!fits(size, text->size(), out.value.str)) {
+                return static_cast<int>(size);
+            }
+            std::memcpy(out.value.str, text->c_str(), size);
+            return 0;
+        }
+        case vhpiLogicVecVal:
+        case vhpiEnumVecVal:
+        case vhpiSmallEnumVecVal: {
+            auto chars = value.chars;
+            if (chars.empty() && value.number) {
+                if (const auto binary = binary_chars(*value.number)) {
+                    chars = *binary;
+                }
+            }
+            if (chars.empty()) {
+                return fail("the value has no vector form");
+            }
+            const auto small = out.format == vhpiSmallEnumVecVal;
+            const auto size
+                = chars.size() * (small ? sizeof(vhpiSmallEnumT) : sizeof(vhpiEnumT));
+            if (!fits(size, chars.size(), out.value.enumvs)) {
+                return static_cast<int>(size);
+            }
+            for (std::size_t index = 0U; index < chars.size(); ++index) {
+                int code = 0;
+                if (out.format == vhpiLogicVecVal) {
+                    const auto found = logic_code(chars[index]);
+                    if (!found) {
+                        return fail("not a logic character");
+                    }
+                    code = *found;
+                } else if (chars[index] == '0' || chars[index] == '1') {
+                    code = chars[index] == '1' ? 1 : 0;
+                } else {
+                    return fail("not a bit");
+                }
+                if (small) {
+                    out.value.smallenumvs[index]
+                        = static_cast<vhpiSmallEnumT>(code);
+                } else {
+                    out.value.enumvs[index] = static_cast<vhpiEnumT>(code);
+                }
+            }
+            return 0;
+        }
+        default:
+            return fail("unsupported output format");
+        }
+    }
+
+    // Convert the value of `in` to the format of `out` (IEEE 1076-2019
+    // 23.9); the conversions are among the scalar, string and logic vector
+    // formats.
+    [[nodiscard]] int format_value(const vhpiValueT* const in,
+        vhpiValueT* const out)
+    {
+        if (in == nullptr || out == nullptr) {
+            error(vhpiError, "vhpi_format_value: missing value structure");
+            return -1;
+        }
+        const auto value = canonical_value(*in);
+        if (!value) {
+            error(vhpiError,
+                "vhpi_format_value: unsupported input format "
+                    + std::to_string(in->format));
+            return -1;
+        }
+        return store_formatted(*value, *out);
     }
 
     [[nodiscard]] int get_value(const vhpiHandleT handle, vhpiValueT* const value)
@@ -4859,6 +5936,7 @@ private:
     std::unordered_map<std::uint32_t, Object*> declared_types_;
     std::unordered_map<std::uint32_t, Object*> defined_types_;
     std::vector<Object*> argvs_;
+    std::set<const vhdl::Declaration*> resolving_aliases_;
     std::map<std::string, Object*, std::less<>> packages_;
     std::unordered_map<std::uint32_t, const vhdl::Unit*> declaration_units_;
     std::unordered_map<std::uint32_t, const elaboration::SignalInfo*>

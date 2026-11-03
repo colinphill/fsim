@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/runtime/simir_container_value.hpp"
+#include "fsim/runtime/vpi_types.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 
@@ -47,5 +48,14 @@ systemverilog_constant_container_initializer(
     const runtime::simir::ContainerType& type,
     semantic::ExpressionId initializer,
     const semantic::sv::TypeReference* element_type);
+
+// The declared type of a SystemVerilog data type as VPI describes it: a
+// structure, union, enumeration, packed array of them, string or integral
+// vector, following typedefs and type parameters (IEEE 1800-2023 37.17,
+// 37.18, 37.26). Nullopt for any other type or a bound that is not constant.
+[[nodiscard]] std::optional<runtime::SystemVerilogVpiTypeDescriptor>
+systemverilog_vpi_declared_type(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& reference, semantic::ScopeId scope);
 
 } // namespace fsim::elaboration::hierarchy_sv_type_layout_detail

@@ -175,6 +175,7 @@ struct SystemVerilogVpiPublishedDesign {
         container_categories;
     std::map<runtime::simir::ContainerObjectId, SystemVerilogVpiLiveMemory>
         live_memories;
+    std::vector<runtime::SystemVerilogVpiPort> ports;
 };
 
 // The word of a live memory at `ordinal`, created under its memory with the

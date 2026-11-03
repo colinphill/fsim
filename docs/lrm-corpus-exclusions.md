@@ -11,7 +11,7 @@ Exclusions never count as closures.
 | suite | not run | out of scope |
 |---|---:|---:|
 | sv-tests | 0 | 2 |
-| verilator | 63 | 296 |
+| verilator | 63 | 297 |
 | ivtest | 7 | 301 |
 | vests | 2 | 0 |
 | nvc | 225 | 0 |
@@ -370,6 +370,7 @@ Exclusions never count as closures.
 | `t_vpi_force` | not run | needs the Verilator C++ model API |
 | `t_vpi_forceable_bad` | not run | needs the Verilator C++ model API |
 | `t_vpi_forceable_var` | out of scope | expects integer, byte, shortint, int and longint variables to report vpiReg; they are vpiIntegerVar, vpiByteVar, vpiShortIntVar, vpiIntVar and vpiLongIntVar objects (IEEE 1800-2023 37.17) |
+| `t_vpi_get` | out of scope | expects vpi_handle_by_name of a port's name to return the port with vpiType vpiPort; a port has no vpiFullName (IEEE 1800-2023 37.14), so the name denotes the formal's net or variable (37.16, 37.17, 38.13), which has no vpiDirection |
 | `t_vpi_module` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |
 | `t_vpi_module_dpi` | out of scope | expects vpiName to keep an escaped identifier's backslash and trailing space (\mod.a ); neither is part of the identifier (IEEE 1800-2023 5.6.1) |
 | `t_vpi_multidim` | out of scope | expects vpi_get_value(vpiStringVal) to render a zero byte as a space; IEEE 1800-2023 38.15 maps each 8-bit group to an ASCII character and leaves NUL unspecified |

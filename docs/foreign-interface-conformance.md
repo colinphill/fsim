@@ -97,16 +97,17 @@ Files: `vpi` = `src/app/application_vpi_foreign.cpp`, `vpi-cb` =
 | Diagram | Clause | Status | Notes |
 | --- | --- | --- | --- |
 | modules, scopes, `vpiInternalScope` | 37.5, 37.12 | partial | `vpiModule` also matches interfaces and programs; module properties `vpiDefFile`, `vpiTop`, `vpiLibrary`, `vpiCell` missing |
-| interfaces, modports | 37.6, 37.7 | partial / missing | |
-| instance arrays | 37.11 | missing | gate A-G2 |
-| ports, IODecl, high/low connections | 37.13, 37.14 | partial | ports are typed as nets or regs |
-| nets, variables, var selects | 37.16–37.19 | partial | struct, union, enum and packed-array kinds; `vpiNetArray`; `vpiBit` iteration; `vpiVarSelect` |
+| interfaces, modports, ref objects | 37.6, 37.7, 37.15 | partial | done: `vpiModport` objects under each interface instance with `vpiInterface`, their members as `vpiIODecl` with `vpiDirection` and `vpiExpr`; an interface port's `vpiLowConn` is a `vpiRefObj` whose `vpiActual` is the interface or modport, found by name and through it (`top.u.b.data`) (`fsim.foreign.vpi-model`). Missing: `vpiInterfaceTfDecl`, clocking modport members, virtual interfaces (gate A-G5) |
+| instance arrays | 37.11 | partial | done: `vpiModuleArray`, `vpiInterfaceArray`, `vpiProgramArray` beside their elements, `vpiSize`, element iteration, `vpi_handle_by_index` (`fsim.foreign.vpi-model`). Missing: `vpiRange` and the `vpiListOp` connection expression, primitive arrays |
+| ports, IODecl, high/low connections | 37.13, 37.14 | partial | done: `vpiPort` objects in port order with `vpiPortIndex`, `vpiDirection`, `vpiPortType`, `vpiSize`, `vpiConnByName`, `vpiLowConn` (the formal's net or variable), `vpiHighConn` for a simple-name actual, `vpiPorts` and `vpiPortInst` from nets and variables; a formal's net or variable has no `vpiDirection` (`fsim.foreign.vpi-model`). Missing: port bits, `vpiHighConn` expressions (gate A-G5), interface ports' `vpiRefObj` low connection, IODecl |
+| nets, variables, var selects | 37.16–37.19 | partial | done: struct, union, enum and packed-array var/net kinds, `vpiMember`, `vpiElement` one dimension at a time, `vpiPacked`, `vpiStructUnionMember`, `vpiPackedArrayMember`, member paths in `vpi_handle_by_name`, `vpiNetArray` with `vpiNet` words, `vpiReg` only for logic vars (`fsim.foreign.vpi-model`). `vpiBit` iteration of logic and bit vectors, left to right. Missing: `vpiVarSelect`; string vars (gate A-G7: strings have no change hook, so they come with the direct kernel reads that replace the mirror) |
 | memories, ranges | 37.20, 37.22 | done | |
 | drivers and loads | 37.21 | missing | gate A-G2 |
-| typespecs, nettypes, interconnects | 37.23–37.26 | missing | gate A-G2 |
+| typespecs, nettypes, interconnects | 37.23–37.25 | missing | gate A-G2 |
+| structures and unions | 37.26 | done | unpacked: `vpiSize` is the member count, no value; packed: a vector of its bits (`fsim.foreign.vpi-model`) |
 | named events, parameters | 37.27, 37.28 | partial | arrays, `vpiLocalParam`, typespec missing |
 | classes, constraints, virtual interfaces | 37.29–37.33 | missing | gate A-G5 |
-| primitives, UDPs | 37.34–37.38 | missing | gate A-G2 |
+| primitives, UDPs | 37.34–37.38 | missing | gate A-G5: the parser lowers gate instances to continuous assignments, so primitives need a primitive record from the frontend, published with the continuous-assignment and expression objects |
 | module paths | 37.39 | done | |
 | timing checks | 37.40 | missing | gate A-G5 |
 | task and function declarations and calls | 37.41, 37.42 | partial | |
@@ -114,13 +115,13 @@ Files: `vpi` = `src/app/application_vpi_foreign.cpp`, `vpi-cb` =
 | assertions | 37.49–37.57 | missing | gate A-G5 |
 | expressions, statements | 37.58–37.79 | missing | gate A-G5 |
 | callback object | 37.80 | partial | |
-| generates | 37.85 | partial | `vpiGenScopeArray` and `vpiGenVar` missing |
+| generates | 37.85 | partial | done: `vpiGenScopeArray` by name and by `vpiGenScopeArray` iteration (not a `vpiInternalScope`), `vpiSize`, `vpiGenScope` element iteration, `vpi_handle_by_index` (`fsim.foreign.vpi-model`). Missing: `vpiGenVar`, `vpiImplicitDecl`, `vpiArrayMember` on elements |
 
 ## VHPI functions (IEEE 1076-2019 23)
 
 | Function | Clause | Status | Notes |
 | --- | --- | --- | --- |
-| not-implemented functions | 17.3 | done | `vhpi_schedule_transaction`, `vhpi_format_value`, `vhpi_create`, `vhpi_get_data`, `vhpi_put_data`, `vhpi_protected_call` raise an error until implemented |
+| not-implemented functions | 17.3 | done | `vhpi_schedule_transaction`, `vhpi_create`, `vhpi_get_data`, `vhpi_put_data`, `vhpi_protected_call` raise an error until implemented |
 | capability sets (`vhpiCapabilitiesP`) | 17.3 | done | claims `vhpiProvidesHierarchy` and `vhpiProvidesForeignModel` only |
 | `vhpi_assert` | 23.2 | done | |
 | `vhpi_check_error` | 23.3 | partial | |
@@ -131,10 +132,11 @@ Files: `vpi` = `src/app/application_vpi_foreign.cpp`, `vpi-cb` =
 | `vhpi_get_cb_info` | 23.11 | done | |
 | `vhpi_get_foreignf_info` | 23.13 | done | |
 | `vhpi_get_next_time` | 23.14 | done | returns Tn; `vhpiNoActivity` and TIME'HIGH when nothing remains; an error outside the simulation phase |
-| `vhpi_get_phys` / `vhpi_get_real` | 23.15, 23.16 | partial / missing | |
-| `vhpi_get_str` | 23.17 | partial | |
+| `vhpi_get_phys` / `vhpi_get_real` | 23.15, 23.16 | partial / partial | `vhpi_get_real`: `vhpiFloatLeftBoundP`, `vhpiFloatRightBoundP` (the predefined REAL spans the doubles; user real types are not distinguished from integer types in the model), `vhpiRealValP` |
+| `vhpi_format_value` | 23.9 | done | scalar formats (integer, enumeration, logic, character, physical and time with `unit`), `vhpiBinStrVal`/`vhpiOctStrVal`/`vhpiDecStrVal`/`vhpiHexStrVal` and the logic and bit vector formats convert among each other; other conversions are errors |
+| `vhpi_get_str` | 23.17 | partial | adds `vhpiDefNameP`, `vhpiUnitNameP`, design-unit `vhpiLibLogicalNameP`; `vhpiFileNameP`, `vhpiLibPhysicalNameP` missing (no source-file model reaches the service) |
 | `vhpi_get_time` | 23.18 | partial | the cycle count counts only cycles with a change |
-| `vhpi_get_value` | 23.19 | partial | returns the required size when the buffer is too small; `vhpiRawDataVal`, `vhpiPtrVal`, time and physical vectors missing |
+| `vhpi_get_value` | 23.19 | partial | returns the required size when the buffer is too small; `vhpiPtrVal` missing; `vhpiRawDataVal` is one byte per bit; time and physical vectors read |
 | `vhpi_handle` / `vhpi_handle_by_index` / `vhpi_handle_by_name` / `vhpi_iterator` / `vhpi_scan` | 23.20–23.24, 23.31 | partial | relation gaps in gate A-G2 |
 | `vhpi_is_printable` / `vhpi_printf` | 23.25, 23.27 | done | |
 | `vhpi_put_value` | 23.28 | partial | signals only; variables and drivers in gate A-G2 |
@@ -150,7 +152,9 @@ Files: `vpi` = `src/app/application_vpi_foreign.cpp`, `vpi-cb` =
 | native formats and `vhpiObjTypeVal` | 22.4 | done | |
 | `vhpiBinStrVal` / `vhpiOctStrVal` / `vhpiDecStrVal` / `vhpiHexStrVal` on scalars | 22.2.8 | done | the position number in that radix |
 | `vhpiBinStrVal` on STD_ULOGIC | 22.2.8, 22.4 | choice | reads as the logic character ('U', 'X', '0', '1', ...), as for logic arrays; the format is optional (22.4), and VHPI programs such as cocotb compare it against "0" and "1" |
-| `vhpiRawDataVal` | 22.4 | missing | required by 22.4; gate A-G2 |
+| `vhpiOctStrVal` / `vhpiDecStrVal` / `vhpiHexStrVal` on vectors | 22.2.8 | done | BIT and STD_ULOGIC vectors: right-aligned digit groups; an unknown bit group reads as its common character or X; decimal needs known bits and at most 64 of them |
+| `vhpiRawDataVal` | 22.4 | done | implementation-defined: one byte per bit, least significant first, holding the logic code |
+| `vhpiTimeVecVal` / `vhpiPhysVecVal` | 22.2.8 | done | one-dimensional arrays of time or physical values |
 | `vhpiDeposit` | 22.5.3 | done | immediate, without propagation; not a value-change trigger (21.3.2.2 NOTE 1) |
 | `vhpiDepositPropagate` | 22.5.3 | done | applied in the next signal-update phase |
 | `vhpiForce` | 22.5.3 | done | immediate; not a value-change trigger |
@@ -185,10 +189,17 @@ Files: `vpi` = `src/app/application_vpi_foreign.cpp`, `vpi-cb` =
 | Item | Status | Notes |
 | --- | --- | --- |
 | `rootInst`, `compInstStmt`, block and for/if generates, `packInst`, `tool`, `argv` | done | the first VHDL root only; Verilog children are empty regions (gate A-G3) |
-| case generates, aliases, subprogram, component, attribute, file and group declarations | missing | gate A-G2 |
+| `aliasDecl` | done | `vhpiAliasDecls` and `vhpiDecls` list aliases of objects; the value, indexes and sub-names read through the target; `vhpiAliasedName` |
+| case generates, subprogram, component, attribute, file and group declarations | missing | the case generate statement has no class in Annex B of the header, so a selected generate is an `ifGenerate`; gate A-G2 |
+| `sliceName` | done | `vhpi_handle_by_name` with `name(left downto right)` or `(left to right)` of one-dimensional arrays; null or opposite-direction slices are not found |
 | processes and statements | missing | gate A-G5 |
 | drivers, contributors, loads, simNets, basic signals | missing | gate A-G2 |
-| selected and indexed names | done | slice names missing |
+| selected and indexed names | done | |
 | properties `Name`, `CaseName`, `FullName`, `FullCaseName`, `KindStr`, `Kind`, `Size`, `NumDimensions`, `IsScalar`, `IsComposite`, `IsUnconstrained`, `ResolutionLimit`, `Argc`, `Position`, `Mode`, `GenerateIndex`, `IsNull`, `IsDiscrete`, `IsGuarded`, `BaseIndex` | done | |
-| properties `LeftBound`, `RightBound`, `IsUp`, `ToolVersion` | partial | first dimension only; `IsUp` on integer ranges only; `ToolVersion` is the fsim release version |
-| properties `Staticness`, `FileName`, `LineNo`, `LineOffset`, `DefName`, `UnitName`, `SigKind`, `IsForced`, `NumLiterals`, `ForeignKind` | missing | gate A-G2 |
+| properties `LeftBound`, `RightBound`, `IsUp` | done | every range object (`vhpiConstraints` gives one per dimension; int, enum, phys and float range classes follow the index type), scalar types, and the first dimension of an array object |
+| property `ToolVersion` | partial | the fsim release version |
+| properties `Staticness`, `SigKind`, `IsForced`, `NumLiterals` | done | `Staticness`: ranges and literals locally static, generics and constants without literal value globally static, signals and ports globally static (static names), variables dynamic, names as their prefix; `IsForced` is the whole signal's force state |
+| properties `DefName`, `UnitName` | done | `@unit{.scope}.name` for instances, generates, objects and predefined types; user-declared types have none |
+| properties `FileName`, `LineNo`, `LineOffset`, `ForeignKind` | missing | the HIR the service sees carries no source positions |
+| relations `vhpiEntityDecl`, `vhpiCurRegion`, `vhpiImmRegion`, `vhpiConstraint`, `vhpiAliasedName`, and the deprecated `vhpiSubtype`, `vhpiElemSubtype`, `vhpiValSubtype`, `vhpiDecl` | done | the deprecated ones are the same as `vhpiType`, `vhpiElemType`, `vhpiValType` and the declared object of a name |
+| extended identifiers in `vhpi_handle_by_name` | done | compared case sensitively; basic identifiers stay case insensitive (15.4.2, 15.4.3) |

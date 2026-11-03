@@ -851,6 +851,9 @@ public:
     /// Registry handles that publish `signal` (a net, port, or alias of it).
     [[nodiscard]] std::vector<fsim_vpi_handle_v1> vpi_signal_object_handles(
         runtime::simir::SignalId signal) const;
+    /// The ports of the published instances, each instance's in port order.
+    [[nodiscard]] const std::vector<runtime::SystemVerilogVpiPort>&
+    systemverilog_vpi_ports() const noexcept;
     /// Live delay table of the elaborated Verilog module path `path`, in
     /// scheduler ticks (IEEE 1800-2023 38.11).
     [[nodiscard]] std::vector<runtime::SimulationTick>

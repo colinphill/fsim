@@ -1,0 +1,68 @@
+#c pr type=vpiStructVar name=pr full=top.pr size=8 vector=1 packed=1
+#c pr[0] type=vpiReg name=hi full=top.pr.hi parent=pr su=1 pa=0
+#c pr[1] type=vpiReg name=lo full=top.pr.lo parent=pr su=1 pa=0
+#c pr count=2
+#c pr hex=a5
+#c pr.hi hex=a
+#c pr.lo hex=5
+#c rc type=vpiStructVar name=rc full=top.rc size=2 vector=0 packed=0
+#c rc[0] type=vpiIntVar name=a full=top.rc.a parent=rc su=1 pa=0
+#c rc[1] type=vpiReg name=b full=top.rc.b parent=rc su=1 pa=0
+#c rc count=2
+#c rc.a int=7
+#c rc.b hex=3c
+#c un type=vpiUnionVar name=un full=top.un size=8 vector=1 packed=1
+#c un[0] type=vpiReg name=raw full=top.un.raw parent=un su=1 pa=0
+#c un[1] type=vpiStructVar name=p full=top.un.p parent=un su=1 pa=0
+#c un count=2
+#c un.p type=vpiStructVar name=p full=top.un.p size=8 vector=1 packed=1
+#c un.p.hi hex=9
+#c st type=vpiEnumVar name=st full=top.st size=2 vector=1 packed=-1
+#c st int=2
+#c pa type=vpiPackedArrayVar name=pa full=top.pa size=16 vector=1 packed=1
+#c pa[0] type=vpiStructVar name=pa[1] full=top.pa[1] parent=pa su=0 pa=1
+#c pa[1] type=vpiStructVar name=pa[0] full=top.pa[0] parent=pa su=0 pa=1
+#c pa count=2
+#c pa[1] type=vpiStructVar name=pa[1] full=top.pa[1] size=8 vector=1 packed=1
+#c pa[1] hex=12
+#c pa[0].lo hex=4
+#c pk type=vpiReg name=pk full=top.pk size=32 vector=1 packed=-1
+#c ra type=vpiRegArray name=ra full=top.ra size=2 vector=0 packed=-1
+#c ra[1] type=vpiReg name=ra[1] full=top.ra[1] size=8 vector=1 packed=-1
+#c ra[1] hex=5a
+#c wa type=vpiNetArray name=wa full=top.wa size=2 vector=0 packed=-1
+#c wa[1] type=vpiNet name=wa[1] full=top.wa[1] size=8 vector=1 packed=-1
+#c wa[1] hex=22
+#c reg pk=1 pr=0 variables pr=1 rc=1 st=1 pa=1
+#c netarray wa=1 regarray ra=1 wa=0
+#c port a type=vpiPort index=0 dir=1 size=4 byname=1 low=top.u0.a high=top.la full=-
+#c port y type=vpiPort index=1 dir=2 size=1 byname=1 low=top.u0.y high=top.ly full=-
+#c port z type=vpiPort index=2 dir=3 size=1 byname=1 low=top.u0.z high=- full=-
+#c u0.a type=vpiNet dir=-1 ports=a
+#c la portinst=a
+#c ua[0] port a byname=0 high=top.la
+#c ua[0] port y byname=0 high=-
+#c ua[0] port z byname=0 high=top.lz
+#c g type=vpiGenScopeArray full=top.g size=3
+#c g element top.g[0]
+#c g element top.g[1]
+#c g element top.g[2]
+#c g[1] top.g[1]
+#c ua type=vpiModuleArray size=2
+#c ua element top.ua[1]
+#c ua element top.ua[0]
+#c la bit la[3] type=vpiRegBit value=0
+#c la bit la[2] type=vpiRegBit value=1
+#c la bit la[1] type=vpiRegBit value=1
+#c la bit la[0] type=vpiRegBit value=1
+#c scopes g=0 g[0]=1 genarray g=1 modulearray ua=1
+#c modport src type=vpiModport interface=top.bus
+#c io data type=vpiIODecl dir=2 expr=top.bus.data
+#c io valid type=vpiIODecl dir=2 expr=top.bus.valid
+#c modport dst type=vpiModport interface=top.bus
+#c io data type=vpiIODecl dir=1 expr=top.bus.data
+#c io valid type=vpiIODecl dir=1 expr=top.bus.valid
+#c us port b porttype=2 high=top.bus low=vpiRefObj lowfull=top.us.b actual=vpiModport:dst
+#c us.b type=vpiRefObj
+#c us.b.data full=top.bus.data
+#c us.b.data hex=3c

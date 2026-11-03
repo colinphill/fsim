@@ -2115,9 +2115,15 @@ tests/fixtures/compliance/vhdl_unconstrained_constant_custom_index_range_directi
 tests/fixtures/compliance/vhdl_unconstrained_constants.vhd
 tests/fixtures/compliance/vhdl_unconstrained_function_result_procedure_batch58.vhd
 tests/fixtures/compliance/vhdl_user_attribute_subtype_context_20261013.vhd
+tests/fixtures/foreign/foreign_vhpi_model.expected
+tests/fixtures/foreign/foreign_vhpi_model.expected.license
+tests/fixtures/foreign/foreign_vhpi_model.vhd
 tests/fixtures/foreign/foreign_vhpi_runtime.expected
 tests/fixtures/foreign/foreign_vhpi_runtime.expected.license
 tests/fixtures/foreign/foreign_vhpi_runtime.vhd
+tests/fixtures/foreign/foreign_vpi_model.expected
+tests/fixtures/foreign/foreign_vpi_model.expected.license
+tests/fixtures/foreign/foreign_vpi_model.sv
 tests/fixtures/foreign/foreign_vpi_runtime.expected
 tests/fixtures/foreign/foreign_vpi_runtime.expected.license
 tests/fixtures/foreign/foreign_vpi_runtime.sv
@@ -2397,7 +2403,9 @@ tests/runtime/coverage_line_state_test.cpp
 tests/runtime/dpi_bad_abi_plugin.cpp
 tests/runtime/dpi_test_plugin.cpp
 tests/runtime/dpi_test_plugin_c.c
+tests/runtime/foreign_vhpi_model_plugin.c
 tests/runtime/foreign_vhpi_runtime_plugin.c
+tests/runtime/foreign_vpi_model_plugin.c
 tests/runtime/foreign_vpi_runtime_plugin.c
 tests/runtime/fst_change_encoder_tests.cpp
 tests/runtime/fst_compression_tests.cpp

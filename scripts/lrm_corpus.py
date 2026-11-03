@@ -1261,6 +1261,10 @@ VERILATOR_NONSTANDARD = {
         "dpic_final C++ linkage, so no C function implements it (IEEE "
         "1800-2023 35.5.1 links imports by their C name)"
        for name in ("t_dpi_context", "t_dpi_context_noopt")},
+    "t_vpi_get": "expects vpi_handle_by_name of a port's name to return the "
+        "port with vpiType vpiPort; a port has no vpiFullName (IEEE 1800-2023 "
+        "37.14), so the name denotes the formal's net or variable (37.16, "
+        "37.17, 38.13), which has no vpiDirection",
     "t_vpi_const_type": "reads the integer property vpiConstType with "
         "vpi_get_str, which IEEE 1800-2023 38.12 defines for string "
         "properties only",

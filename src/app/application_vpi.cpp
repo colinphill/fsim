@@ -5,6 +5,7 @@
 #include "fsim/runtime/vpi_type_descriptor.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <atomic>
 #include <bit>
 #include <cctype>
@@ -1890,6 +1891,41 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 project.design_ir.path(object.path)));
     }
     std::vector<const semantic::design::Object*> vpi_objects;
+    // An interface port's formal is a reference object, published with the
+    // ports (IEEE 1800-2023 37.15), not the net that holds its binding.
+    std::set<std::string, std::less<>> interface_formal_paths;
+    for (const auto& instance : project.design_ir.instances()) {
+        const auto unit = std::ranges::find(project.systemverilog_hir.units(),
+            project.design_ir.specializations()
+                .at(instance.specialization.value())
+                .unit,
+            &semantic::sv::Unit::id);
+        if (unit == project.systemverilog_hir.units().end()) {
+            continue;
+        }
+        for (const auto declaration_id : unit->declarations) {
+            const auto* const declaration
+                = project.systemverilog_hir.find_declaration(declaration_id);
+            if (declaration != nullptr
+                && declaration->form == semantic::sv::DeclarationForm::port
+                && !declaration->interface_type.empty()) {
+                interface_formal_paths.insert(
+                    std::string { project.design_ir.path(instance.path) }
+                    + "." + declaration->name);
+            }
+        }
+    }
+    // The formal itself or a name through it (23.3.3.4), which denotes the
+    // actual interface's object.
+    const auto through_interface_formal = [&](const std::string_view path) {
+        auto formal = interface_formal_paths.upper_bound(path);
+        if (formal == interface_formal_paths.begin()) {
+            return false;
+        }
+        --formal;
+        return path == *formal
+            || (path.starts_with(*formal) && path[formal->size()] == '.');
+    };
     for (const auto& object : project.design_ir.objects()) {
         if (!relevant_specializations.contains(object.specialization.value())
             || object.kind != semantic::design::ObjectKind::signal
@@ -1903,7 +1939,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             specialization.instance.value());
         const auto path = vpi_occurrence_path(instance,
             project.design_ir.path(object.path));
-        if (function_scope_paths.contains(path)) {
+        if (function_scope_paths.contains(path)
+            || through_interface_formal(project.design_ir.path(object.path))) {
             continue;
         }
         // An alias named outside every instance, such as a compilation-unit
@@ -2101,6 +2138,13 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         apply_vpi_specialization_provenance(
             *descriptor.type, project, specialization);
         apply_vpi_source(*descriptor.type, project, object.source);
+        // The declared structure, union, enumeration or packed array type
+        // (IEEE 1800-2023 37.17, 37.18, 37.26).
+        if (const auto& declared = signal_info.vpi_declared_type; declared
+            && runtime::systemverilog_vpi_declared_bits(*declared)
+                == value.width()) {
+            descriptor.type->declared = declared;
+        }
         const auto handle = create_checked(
             *result.registry, std::move(descriptor), path);
         if (category != runtime::SystemVerilogVpiValueCategory::Event) {
@@ -2223,11 +2267,17 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             }
         }
 
+        // An array of nets is a net array, its words nets; each word has
+        // the array's element type (IEEE 1800-2023 23.2.2.3, 37.16, 37.17).
+        const auto net_array = info.net;
         runtime::SystemVerilogVpiObjectDescriptor descriptor;
         descriptor.kind = runtime::SystemVerilogVpiObjectKind::Memory;
         descriptor.parent = parent;
         descriptor.name = vpi_identifier(object.name);
         descriptor.type = memory_type(specialization.language, type);
+        if (net_array) {
+            descriptor.type->net_kind = runtime::SystemVerilogVpiNetKind::Wire;
+        }
         descriptor.type->language
             = vpi_profile_language(project, specialization);
         apply_vpi_specialization_provenance(
@@ -2253,6 +2303,14 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         apply_vpi_specialization_provenance(
             word_type, project, specialization);
         apply_vpi_source(word_type, project, object.source);
+        if (net_array) {
+            word_type.net_kind = runtime::SystemVerilogVpiNetKind::Wire;
+        }
+        if (const auto& declared = info.vpi_element_type; declared
+            && runtime::systemverilog_vpi_declared_bits(*declared)
+                == word_type.width) {
+            word_type.declared = declared;
+        }
         std::vector<fsim_vpi_handle_v1> live_words;
         const auto word_count
             = runtime::simir::container_value_size(value);
@@ -2274,7 +2332,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                     specialization.language, *element_signal_info);
             }
             runtime::SystemVerilogVpiObjectDescriptor word;
-            word.kind = runtime::SystemVerilogVpiObjectKind::Variable;
+            word.kind = net_array ? runtime::SystemVerilogVpiObjectKind::Net
+                                  : runtime::SystemVerilogVpiObjectKind::Variable;
             word.parent = memory;
             word.name = word_name;
             word.type = word_type;
@@ -2528,6 +2587,288 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         result.drivers[signal].push_back(
             { handle, process.runtime_index, strength });
     }
+
+    // The modports of each interface instance, and their members as I/O
+    // declarations (IEEE 1800-2023 37.7).
+    std::vector<runtime::SystemVerilogVpiPort> modport_members;
+    for (const auto& instance : project.design_ir.instances()) {
+        const auto published = instances.find(instance.id.value());
+        if (published == instances.end()) {
+            continue;
+        }
+        const auto interface = result.registry->lookup(published->second);
+        if (!interface
+            || interface.value->kind
+                != runtime::SystemVerilogVpiObjectKind::Interface) {
+            continue;
+        }
+        const auto& specialization = project.design_ir.specializations().at(
+            instance.specialization.value());
+        const auto unit = std::ranges::find(project.systemverilog_hir.units(),
+            specialization.unit, &semantic::sv::Unit::id);
+        if (unit == project.systemverilog_hir.units().end()) {
+            continue;
+        }
+        const std::string interface_path {
+            project.design_ir.path(instance.path) };
+        for (const auto& modport : unit->modports) {
+            runtime::SystemVerilogVpiObjectDescriptor descriptor;
+            descriptor.kind = runtime::SystemVerilogVpiObjectKind::Modport;
+            descriptor.parent = published->second;
+            descriptor.name = vpi_identifier(modport.name);
+            descriptor.type = interface.value->type;
+            const auto path = interface_path + "." + modport.name;
+            if (result.registry->find(path)) {
+                continue;
+            }
+            const auto handle = create_checked(
+                *result.registry, std::move(descriptor), path);
+            std::uint32_t index = 0U;
+            for (const auto& member : modport.members) {
+                if (member.kind != semantic::sv::ModportMemberKind::signal) {
+                    continue;
+                }
+                runtime::SystemVerilogVpiPort declaration;
+                declaration.instance = handle;
+                declaration.io_declaration = true;
+                declaration.name = vpi_identifier(
+                    member.alias.empty() ? member.name.spelling : member.alias);
+                declaration.index = index++;
+                switch (member.direction) {
+                case semantic::sv::Direction::input:
+                    declaration.direction
+                        = runtime::SystemVerilogVpiDirection::Input;
+                    break;
+                case semantic::sv::Direction::output:
+                    declaration.direction
+                        = runtime::SystemVerilogVpiDirection::Output;
+                    break;
+                case semantic::sv::Direction::ref:
+                    declaration.ref = true;
+                    declaration.direction
+                        = runtime::SystemVerilogVpiDirection::Inout;
+                    break;
+                case semantic::sv::Direction::inout:
+                case semantic::sv::Direction::unknown:
+                    declaration.direction
+                        = runtime::SystemVerilogVpiDirection::Inout;
+                    break;
+                }
+                if (const auto object = result.registry->find(
+                        interface_path + "." + member.name.spelling)) {
+                    declaration.low_conn = object.value->handle;
+                }
+                modport_members.push_back(std::move(declaration));
+            }
+        }
+    }
+
+    // Arrays of generate scopes and of instances (IEEE 1800-2023 37.11,
+    // 37.85): the elements `name[i]` share an array object `name` beside
+    // them in their scope.
+    std::map<std::string,
+        std::pair<fsim_vpi_handle_v1, runtime::SystemVerilogVpiObjectKind>,
+        std::less<>>
+        element_arrays;
+    const auto collect_array = [&](const std::string& path,
+                                   const fsim_vpi_handle_v1 handle) {
+        const auto dot = path.rfind('.');
+        const auto open = path.find('[', dot == std::string::npos ? 0U : dot);
+        if (path.empty() || path.back() != ']' || open == std::string::npos
+            || open == 0U || (dot != std::string::npos && open == dot + 1U)) {
+            return;
+        }
+        const auto element = result.registry->lookup(handle);
+        if (!element) {
+            return;
+        }
+        using Kind = runtime::SystemVerilogVpiObjectKind;
+        Kind kind { };
+        switch (element.value->kind) {
+        case Kind::GenerateScope:
+            kind = Kind::GenerateScopeArray;
+            break;
+        case Kind::Module:
+            kind = Kind::ModuleArray;
+            break;
+        case Kind::Interface:
+            kind = Kind::InterfaceArray;
+            break;
+        case Kind::Program:
+            kind = Kind::ProgramArray;
+            break;
+        default:
+            return;
+        }
+        element_arrays.try_emplace(path.substr(0U, open), handle, kind);
+    };
+    for (const auto& [path, handle] : published_scopes) {
+        collect_array(path, handle);
+    }
+    for (const auto& [path, handle] : instance_paths) {
+        collect_array(path, handle);
+    }
+    for (const auto& [path, element] : element_arrays) {
+        const auto object = result.registry->lookup(element.first);
+        if (!object || result.registry->find(path)) {
+            continue;
+        }
+        runtime::SystemVerilogVpiObjectDescriptor descriptor;
+        descriptor.kind = element.second;
+        descriptor.parent = object.value->parent;
+        const auto dot = path.rfind('.');
+        descriptor.name
+            = dot == std::string::npos ? path : path.substr(dot + 1U);
+        descriptor.type = object.value->type;
+        (void)create_checked(*result.registry, std::move(descriptor), path);
+    }
+
+    // The ports of each instance, in declaration order (IEEE 1800-2023
+    // 37.14): the formal's object is the low connection, and the object a
+    // simple-name actual denotes, found from the instantiating scope
+    // outward, is the high connection.
+    std::unordered_map<std::uint32_t, const semantic::sv::Instance*>
+        hir_instances;
+    for (const auto& record : project.systemverilog_hir.instances()) {
+        hir_instances.emplace(record.id.value(), &record);
+    }
+    const auto find_object = [&](const std::string& path) {
+        const auto found = result.registry->find(path);
+        return found ? found.value->handle : fsim_vpi_handle_v1 { };
+    };
+    for (const auto& instance : project.design_ir.instances()) {
+        const auto published = instances.find(instance.id.value());
+        if (published == instances.end()
+            || package_initializer_instances.contains(instance.id.value())) {
+            continue;
+        }
+        const auto& specialization = project.design_ir.specializations().at(
+            instance.specialization.value());
+        const auto unit = std::ranges::find(project.systemverilog_hir.units(),
+            specialization.unit, &semantic::sv::Unit::id);
+        if (unit == project.systemverilog_hir.units().end()) {
+            continue;
+        }
+        const std::string instance_path {
+            project.design_ir.path(instance.path) };
+        const semantic::sv::Instance* record = nullptr;
+        if (instance.source_instance) {
+            if (const auto found
+                = hir_instances.find(instance.source_instance->value());
+                found != hir_instances.end()) {
+                record = found->second;
+            }
+        }
+        const auto scope_end = instance_path.rfind('.');
+        const auto actual_object = [&](const std::string& name) {
+            auto scope = scope_end == std::string::npos
+                ? std::string { }
+                : instance_path.substr(0U, scope_end);
+            while (!scope.empty()) {
+                if (const auto handle = find_object(scope + "." + name)) {
+                    return handle;
+                }
+                const auto separator = scope.rfind('.');
+                if (separator == std::string::npos) {
+                    break;
+                }
+                scope.resize(separator);
+            }
+            return fsim_vpi_handle_v1 { };
+        };
+        std::uint32_t index = 0U;
+        for (const auto declaration_id : unit->declarations) {
+            const auto* const declaration
+                = project.systemverilog_hir.find_declaration(declaration_id);
+            if (declaration == nullptr
+                || declaration->form != semantic::sv::DeclarationForm::port) {
+                continue;
+            }
+            runtime::SystemVerilogVpiPort port;
+            port.instance = published->second;
+            port.name = vpi_identifier(declaration->name);
+            port.index = index;
+            switch (declaration->direction) {
+            case semantic::sv::Direction::input:
+                port.direction = runtime::SystemVerilogVpiDirection::Input;
+                break;
+            case semantic::sv::Direction::output:
+                port.direction = runtime::SystemVerilogVpiDirection::Output;
+                break;
+            case semantic::sv::Direction::ref:
+                port.ref = true;
+                port.direction = runtime::SystemVerilogVpiDirection::Inout;
+                break;
+            case semantic::sv::Direction::inout:
+            case semantic::sv::Direction::unknown:
+                port.direction = runtime::SystemVerilogVpiDirection::Inout;
+                break;
+            }
+            port.interface_port = !declaration->interface_type.empty();
+            port.modport_port
+                = port.interface_port && !declaration->modport.empty();
+            if (!port.interface_port) {
+                port.low_conn
+                    = find_object(instance_path + "." + declaration->name);
+            }
+            // The actual: associated by name, by `.*`, or by position.
+            const semantic::sv::ActualAssociation* actual = nullptr;
+            bool wildcard = false;
+            if (record != nullptr) {
+                std::uint32_t position = 0U;
+                for (const auto& association : record->ports) {
+                    if (!association.formal) {
+                        if (position++ == index) {
+                            actual = &association;
+                        }
+                    } else if (*association.formal == "*") {
+                        wildcard = true;
+                    } else if (*association.formal == declaration->name) {
+                        actual = &association;
+                        port.connected_by_name = true;
+                    }
+                }
+            }
+            std::optional<std::string> actual_name;
+            if (actual != nullptr
+                && actual->kind == semantic::sv::ActualKind::expression) {
+                const auto* const expression = actual->expression
+                    ? project.systemverilog_hir.find_expression(
+                          *actual->expression)
+                    : nullptr;
+                if (expression != nullptr
+                    && expression->kind == semantic::sv::ExpressionKind::name) {
+                    actual_name = expression->text;
+                } else if (!actual->expression && actual->formal) {
+                    actual_name = *actual->formal;
+                }
+            } else if (actual == nullptr && wildcard) {
+                actual_name = declaration->name;
+                port.connected_by_name = true;
+            }
+            if (actual_name) {
+                port.high_conn = actual_object(*actual_name);
+            }
+            // The interface or modport an interface port refers to
+            // (IEEE 1800-2023 37.15).
+            if (port.interface_port && port.high_conn != 0U) {
+                port.actual = port.high_conn;
+                const auto target = result.registry->lookup(port.high_conn);
+                if (port.modport_port && target
+                    && target.value->kind
+                        == runtime::SystemVerilogVpiObjectKind::Interface) {
+                    if (const auto modport = result.registry->find(
+                            target.value->full_name + "."
+                            + declaration->modport)) {
+                        port.actual = modport.value->handle;
+                    }
+                }
+            }
+            result.ports.push_back(std::move(port));
+            ++index;
+        }
+    }
+    std::ranges::move(modport_members, std::back_inserter(result.ports));
     return result;
 }
 

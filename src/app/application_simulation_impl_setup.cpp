@@ -1872,6 +1872,7 @@ Simulation::Impl::Impl(
             = make_systemverilog_vpi_design(built, *interpreter);
         vpi_registry = std::move(published_vpi.registry);
         vpi_signal_handles = std::move(published_vpi.signals);
+        vpi_ports = std::move(published_vpi.ports);
         vpi_handle_signals = std::move(published_vpi.handles);
         vpi_driver_bindings = std::move(published_vpi.drivers);
         vpi_event_handles = std::move(published_vpi.events);

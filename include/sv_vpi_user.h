@@ -100,6 +100,7 @@ extern "C" {
 #define vpiSequenceTypespec                   696
 #define vpiPropertyTypespec                   697
 #define vpiEventTypespec                      698
+#define vpiInterfaceTypespec                  906
 
 #define vpiClockingBlock                      650
 #define vpiClockingIODecl                     651
@@ -162,16 +163,28 @@ extern "C" {
 #define vpiIntegerNet                         681
 #define vpiLogicNet                           vpiNet
 #define vpiTimeNet                            682
+#define vpiUnionNet                           525
+#define vpiShortRealNet                       526
+#define vpiRealNet                            527
+#define vpiByteNet                            528
+#define vpiShortIntNet                        529
+#define vpiIntNet                             530
+#define vpiLongIntNet                         531
+#define vpiBitNet                             532
+#define vpiInterconnectNet                    533
+#define vpiInterconnectArray                  534
 #define vpiStructNet                          683
 #define vpiBreak                              684
 #define vpiContinue                           685
 #define vpiPackedArrayNet                     693
+#define vpiNettypeDecl                        523
 #define vpiConstraintExpr                     747
 #define vpiElseConst                          748
 #define vpiImplication                        749
 #define vpiConstrIf                           738
 #define vpiConstrIfElse                       739
 #define vpiConstrForEach                      736
+#define vpiSoftDisable                        733
 #define vpiLetDecl                            903
 #define vpiLetExpr                            904
 
@@ -184,6 +197,8 @@ extern "C" {
 #define vpiIndexTypespec                      702
 #define vpiBaseTypespec                       703
 #define vpiElemTypespec                       704
+
+#define vpiNetTypedefAlias                    705
 
 #define vpiInputSkew                          706
 #define vpiOutputSkew                         707
@@ -217,7 +232,8 @@ extern "C" {
 #define vpiMessages                           735
 #define vpiLoopVars                           737
 
-#define vpiConcurrentAssertions               740
+#define vpiConcurrentAssertion                740
+#define vpiConcurrentAssertions               vpiConcurrentAssertion
 #define vpiMatchItem                          741
 #define vpiMember                             742
 #define vpiElement                            743
@@ -303,7 +319,7 @@ extern "C" {
 #define vpiMethod                             645
 #define vpiIsClockInferred                    649
 #define vpiIsDeferred                         657
-#define vpiIsFinal                            658
+#define vpiIsFinal                            670
 #define vpiIsCoverSequence                    659
 #define vpiQualifier                          650
 #define vpiNoQualifier                     0
@@ -347,6 +363,7 @@ extern "C" {
 #define vpiDPI                             1
 #define vpiDPIC                            2
 #define vpiDPICIdentifier                     668
+#define vpiIsModPort                          669
 
 /******************************** Operators *******************************/
 #define vpiImplyOp                        50 /* -> implication operator */

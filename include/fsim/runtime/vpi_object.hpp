@@ -267,6 +267,29 @@ struct SystemVerilogVpiSourceLocation {
     std::uint32_t column { };
 };
 
+/// A port of an instance (IEEE 1800-2023 37.14). The low connection is
+/// the formal's net or variable; the high connection is the object a
+/// simple-name actual denotes in the instantiating scope (0 when the port
+/// is unconnected or its actual is another expression). An interface
+/// port's low connection is a reference object whose actual is the
+/// interface instance or modport (37.15). A modport member is recorded the
+/// same way as an I/O declaration of its modport, with the interface
+/// member as its expression in `low_conn` (37.7).
+struct SystemVerilogVpiPort {
+    fsim_vpi_handle_v1 instance { };
+    std::string name;
+    std::uint32_t index { };
+    SystemVerilogVpiDirection direction { SystemVerilogVpiDirection::None };
+    bool ref { };
+    bool interface_port { };
+    bool modport_port { };
+    bool connected_by_name { };
+    bool io_declaration { };
+    fsim_vpi_handle_v1 low_conn { };
+    fsim_vpi_handle_v1 high_conn { };
+    fsim_vpi_handle_v1 actual { };
+};
+
 struct SystemVerilogVpiObjectDescriptor {
     SystemVerilogVpiObjectKind kind { SystemVerilogVpiObjectKind::Root };
     fsim_vpi_handle_v1 parent { };

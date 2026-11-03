@@ -416,4 +416,37 @@ SystemVerilogVpiDescriptorResult validate_systemverilog_vpi_descriptor(
     return { layout, { } };
 }
 
+std::uint64_t systemverilog_vpi_declared_bits(
+    const SystemVerilogVpiTypeDescriptor& descriptor) noexcept
+{
+    switch (descriptor.kind) {
+    case SystemVerilogVpiDescriptorKind::Scalar:
+    case SystemVerilogVpiDescriptorKind::Enum:
+        return descriptor.width;
+    case SystemVerilogVpiDescriptorKind::Struct:
+    case SystemVerilogVpiDescriptorKind::Union: {
+        std::uint64_t bits = 0U;
+        for (const auto& member : descriptor.children) {
+            const auto member_bits = systemverilog_vpi_declared_bits(member);
+            bits = descriptor.kind == SystemVerilogVpiDescriptorKind::Struct
+                ? bits + member_bits
+                : std::max(bits, member_bits);
+        }
+        return bits;
+    }
+    case SystemVerilogVpiDescriptorKind::PackedArray: {
+        if (descriptor.children.size() != 1U) {
+            return 0U;
+        }
+        auto bits = systemverilog_vpi_declared_bits(descriptor.children.front());
+        for (const auto& range : descriptor.ranges) {
+            bits *= support::index_distance(range.left, range.right) + 1U;
+        }
+        return bits;
+    }
+    default:
+        return 0U;
+    }
+}
+
 } // namespace fsim::runtime

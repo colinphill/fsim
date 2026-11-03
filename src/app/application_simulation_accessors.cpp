@@ -35,6 +35,12 @@ std::vector<fsim_vpi_handle_v1> Simulation::vpi_signal_object_handles(
         : found->second;
 }
 
+const std::vector<runtime::SystemVerilogVpiPort>&
+Simulation::systemverilog_vpi_ports() const noexcept
+{
+    return impl_->vpi_ports;
+}
+
 std::vector<runtime::SimulationTick> Simulation::verilog_module_path_delays(
     const std::uint32_t path) const
 {

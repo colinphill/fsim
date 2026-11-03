@@ -984,16 +984,35 @@ foreach(FSIM_FOREIGN_INTERFACE IN ITEMS vpi vhpi)
     fsim_foreign_${FSIM_FOREIGN_INTERFACE}_runtime_plugin
     PRIVATE "${PROJECT_SOURCE_DIR}/include")
 endforeach()
+# The VHPI information-model plug-in (IEEE 1076-2019 19, 22.2, 23.9) and the
+# VPI data-model plug-in (IEEE 1800-2023 37.16-37.18, 37.26).
+foreach(FSIM_FOREIGN_INTERFACE IN ITEMS vpi vhpi)
+  add_library(
+    fsim_foreign_${FSIM_FOREIGN_INTERFACE}_model_plugin SHARED
+    foreign_${FSIM_FOREIGN_INTERFACE}_model_plugin.c)
+  fsim_configure_library(fsim_foreign_${FSIM_FOREIGN_INTERFACE}_model_plugin)
+  target_link_libraries(
+    fsim_foreign_${FSIM_FOREIGN_INTERFACE}_model_plugin PRIVATE fsim_tf)
+  target_include_directories(
+    fsim_foreign_${FSIM_FOREIGN_INTERFACE}_model_plugin
+    PRIVATE "${PROJECT_SOURCE_DIR}/include")
+endforeach()
 set(FSIM_FOREIGN_FIXTURES "${PROJECT_SOURCE_DIR}/tests/fixtures/foreign")
+# An optional sixth argument names the plug-in target.
 function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
     FSIM_SOURCE FSIM_EXPECTED FSIM_SIMULATE_ARGS)
+  if(ARGC GREATER 5)
+    set(FSIM_PLUGIN_TARGET "${ARGV5}")
+  else()
+    set(FSIM_PLUGIN_TARGET "fsim_foreign_${FSIM_INTERFACE}_runtime_plugin")
+  endif()
   foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     add_test(
       NAME fsim.foreign.${FSIM_NAME}.${FSIM_ENGINE}
       COMMAND
         "${CMAKE_COMMAND}"
         "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
-        "-DFSIM_PLUGIN=$<TARGET_FILE:fsim_foreign_${FSIM_INTERFACE}_runtime_plugin>"
+        "-DFSIM_PLUGIN=$<TARGET_FILE:${FSIM_PLUGIN_TARGET}>"
         "-DFSIM_INTERFACE=${FSIM_INTERFACE}"
         "-DFSIM_SOURCE=${FSIM_FOREIGN_FIXTURES}/${FSIM_SOURCE}"
         "-DFSIM_TOP=top"
@@ -1014,3 +1033,9 @@ fsim_add_foreign_conformance_test(
   foreign_vpi_runtime_duration.expected "--duration 30")
 fsim_add_foreign_conformance_test(
   vhpi-runtime vhpi foreign_vhpi_runtime.vhd foreign_vhpi_runtime.expected "")
+fsim_add_foreign_conformance_test(
+  vhpi-model vhpi foreign_vhpi_model.vhd foreign_vhpi_model.expected ""
+  fsim_foreign_vhpi_model_plugin)
+fsim_add_foreign_conformance_test(
+  vpi-model vpi foreign_vpi_model.sv foreign_vpi_model.expected ""
+  fsim_foreign_vpi_model_plugin)

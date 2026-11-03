@@ -5,6 +5,7 @@
 #include "fsim/frontend/design.hpp"
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_driver_inventory.hpp"
+#include "fsim/runtime/vpi_types.hpp"
 #include "fsim/semantic/compiled_design.hpp"
 #include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/systemc_abi.h"
@@ -487,6 +488,11 @@ struct SignalInfo {
     runtime::simir::ResolutionKind resolution {
         runtime::simir::ResolutionKind::none
     };
+    // The declared SystemVerilog type of a structure, union, enumeration or
+    // packed array of them, as VPI describes it (IEEE 1800-2023 37.17,
+    // 37.18, 37.26); empty for every other signal.
+    std::shared_ptr<const runtime::SystemVerilogVpiTypeDescriptor>
+        vpi_declared_type { };
 };
 
 /// One explicit cross-language scalar or vector boundary conversion.
@@ -551,6 +557,12 @@ struct ContainerObjectInfo {
         frontend::PortDirection::Unknown
     };
     std::optional<runtime::simir::ContainerSliceAlias> slice_alias;
+    // A SystemVerilog unpacked array of nets, and the declared type of its
+    // elements when VPI describes it as a structure, union, enumeration or
+    // packed array of them (IEEE 1800-2023 37.17, 37.18).
+    bool net { };
+    std::shared_ptr<const runtime::SystemVerilogVpiTypeDescriptor>
+        vpi_element_type { };
 };
 
 using VhdlProtectedObjectId = std::uint32_t;

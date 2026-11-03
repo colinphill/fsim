@@ -49,4 +49,10 @@ struct SystemVerilogVpiDescriptorResult {
 validate_systemverilog_vpi_descriptor(
     const SystemVerilogVpiTypeDescriptor& descriptor);
 
+// The bits of a declared type stored as one packed value: a structure
+// sums its members, a union takes its widest, a packed array repeats its
+// element (IEEE 1800-2023 7.2.1, 7.3.1, 7.4.1); zero for other kinds.
+[[nodiscard]] std::uint64_t systemverilog_vpi_declared_bits(
+    const SystemVerilogVpiTypeDescriptor& descriptor) noexcept;
+
 }  // namespace fsim::runtime

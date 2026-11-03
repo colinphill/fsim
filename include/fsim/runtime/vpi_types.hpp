@@ -112,6 +112,8 @@ struct SystemVerilogVpiTypeDescriptor {
     std::vector<SystemVerilogVpiTypeDescriptor> children;
     std::vector<std::string> member_names;
     std::vector<SystemVerilogVpiEnumLiteral> enum_literals;
+    // A packed structure or union (IEEE 1800-2023 7.2.1, 7.3.1).
+    bool packed { };
 
     friend bool operator==(
         const SystemVerilogVpiTypeDescriptor&,
@@ -147,6 +149,11 @@ struct SystemVerilogVpiTypeInfo {
     // A `celldefine module instance (IEEE 1800-2023 37.10 vpiCellInstance).
     bool is_cell { };
     std::shared_ptr<const SystemVerilogVpiTypeDescriptor> descriptor;
+    // The declared data type of a variable or net stored as one packed
+    // value: a structure, union or enumeration, or a packed array of them
+    // (IEEE 1800-2023 37.17, 37.18, 37.26). It gives the object's VPI type
+    // and members; `descriptor` stays the storage shape.
+    std::shared_ptr<const SystemVerilogVpiTypeDescriptor> declared;
     std::optional<SystemVerilogVpiDriverRange> driver_range;
     std::optional<std::uint32_t> semantic_unit_id;
     std::optional<std::uint32_t> source_id;

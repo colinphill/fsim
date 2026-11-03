@@ -7,6 +7,7 @@
 #include "fsim/platform/dynamic_library.hpp"
 #include "fsim/runtime/vpi_bridge.h"
 #include "fsim/runtime/vpi_system.hpp"
+#include "fsim/runtime/vpi_type_descriptor.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/version.hpp"
 
@@ -25,6 +26,7 @@
 #include <deque>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
@@ -56,6 +58,8 @@ enum class Tag : std::uint64_t {
     subarray = 10,
     modpath = 11,
     pathterm = 12,
+    port = 13,
+    reference = 14,
 };
 constexpr std::uint64_t serial_mask = (std::uint64_t { 1 } << 48U) - 1U;
 
@@ -1066,6 +1070,15 @@ private:
         bool element { };
         std::string suffix;
         std::vector<std::pair<std::int64_t, std::int64_t>> dimensions;
+        // A member of a structure or union, or an element of a packed
+        // array of them (IEEE 1800-2023 37.18, 37.26): its own name, the
+        // object it belongs to, its declared type, and whether it is part
+        // of a net.
+        std::string name;
+        fsim_vpi_handle_v1 owner { };
+        std::shared_ptr<const runtime::SystemVerilogVpiTypeDescriptor> declared;
+        bool net { };
+        bool member { };
     };
     // A subarray of a multidimensional unpacked array, after `depth`
     // indexes: an array of the remaining dimensions (IEEE 1800-2023 7.4.5,
@@ -1106,6 +1119,132 @@ private:
             return std::nullopt;
         }
         return static_cast<std::uint32_t>(serial_of(handle));
+    }
+
+    [[nodiscard]] static bool array_kind(const SystemVerilogVpiObjectKind kind)
+    {
+        return kind == SystemVerilogVpiObjectKind::GenerateScopeArray
+            || kind == SystemVerilogVpiObjectKind::ModuleArray
+            || kind == SystemVerilogVpiObjectKind::InterfaceArray
+            || kind == SystemVerilogVpiObjectKind::ProgramArray;
+    }
+
+    // The elements `name[i]...` of an array, which are published beside it
+    // in its scope.
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> array_elements(
+        const runtime::SystemVerilogVpiObjectInfo& array)
+    {
+        std::vector<fsim_vpi_handle_v1> elements;
+        const auto prefix = array.name + "[";
+        for (const auto handle :
+            drain(registry_.iterate_children(array.parent))) {
+            const auto object = info(handle);
+            if (object && object->handle != array.handle
+                && !array_kind(object->kind)
+                && object->name.starts_with(prefix)) {
+                elements.push_back(handle);
+            }
+        }
+        return elements;
+    }
+
+    // A port of an instance (IEEE 1800-2023 37.14), or an I/O declaration
+    // of a modport (37.7).
+    [[nodiscard]] const runtime::SystemVerilogVpiPort* port_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto& ports = simulation_.systemverilog_vpi_ports();
+        if (!owned(handle) || tag_of(handle) != Tag::port
+            || serial_of(handle) >= ports.size()) {
+            return nullptr;
+        }
+        return &ports[serial_of(handle)];
+    }
+
+    // The reference object of an interface port (IEEE 1800-2023 37.15),
+    // identified by its port.
+    [[nodiscard]] const runtime::SystemVerilogVpiPort* reference_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto& ports = simulation_.systemverilog_vpi_ports();
+        if (!owned(handle) || tag_of(handle) != Tag::reference
+            || serial_of(handle) >= ports.size()
+            || !ports[serial_of(handle)].interface_port) {
+            return nullptr;
+        }
+        return &ports[serial_of(handle)];
+    }
+
+    [[nodiscard]] std::string reference_full_name(
+        const runtime::SystemVerilogVpiPort& port)
+    {
+        const auto instance = info(port.instance);
+        return instance ? instance->full_name + "." + port.name : port.name;
+    }
+
+    // An interface port's name, or a name through it, resolved to the
+    // reference object or to the object of its actual (IEEE 1800-2023
+    // 37.15, 23.3.3.4).
+    [[nodiscard]] fsim_vpi_handle_v1 find_reference_path(
+        const std::string& name, const std::size_t depth = 0U)
+    {
+        const auto& ports = simulation_.systemverilog_vpi_ports();
+        for (std::size_t index = 0U; index < ports.size() && depth < 16U;
+             ++index) {
+            const auto& port = ports[index];
+            if (!port.interface_port || port.io_declaration) {
+                continue;
+            }
+            const auto full = reference_full_name(port);
+            if (name == full) {
+                return tagged(Tag::reference, index);
+            }
+            if (port.actual == 0U || !name.starts_with(full + ".")) {
+                continue;
+            }
+            auto actual = info(port.actual);
+            if (actual && actual->kind == SystemVerilogVpiObjectKind::Modport) {
+                actual = info(actual->parent);
+            }
+            if (!actual) {
+                return 0U;
+            }
+            const auto through
+                = actual->full_name + name.substr(full.size());
+            if (const auto found = registry_.find(through);
+                found && found.value) {
+                return found.value->handle;
+            }
+            if (const auto member = find_declared_path(through)) {
+                return member;
+            }
+            return find_reference_path(through, depth + 1U);
+        }
+        return 0U;
+    }
+
+    // The ports of an instance in port order, the ports whose low
+    // connection is `object` (vpiPorts), or those whose high connection it
+    // is (vpiPortInst) (IEEE 1800-2023 37.14, 37.16, 37.17).
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> ports_of(
+        const PLI_INT32 relation, const fsim_vpi_handle_v1 object) const
+    {
+        std::vector<fsim_vpi_handle_v1> found;
+        const auto& ports = simulation_.systemverilog_vpi_ports();
+        for (std::size_t index = 0U; index < ports.size(); ++index) {
+            const auto& port = ports[index];
+            if (port.io_declaration != (relation == vpiIODecl)) {
+                continue;
+            }
+            const auto end = relation == vpiPort || relation == vpiIODecl
+                ? port.instance
+                : relation == vpiPorts ? port.low_conn
+                                       : port.high_conn;
+            if (end != 0U && end == object) {
+                found.push_back(tagged(Tag::port, index));
+            }
+        }
+        return found;
     }
 
     [[nodiscard]] static fsim_vpi_handle_v1 pathterm_handle(
@@ -1489,7 +1628,8 @@ private:
             return 0U;
         }
         Select select { parent, static_cast<std::uint32_t>(*low),
-            static_cast<std::uint32_t>(*high - *low + 1), left, right, bit, false, { }, { } };
+            static_cast<std::uint32_t>(*high - *low + 1), left, right, bit, false, { }, { },
+            { }, { }, { }, false, false };
         for (std::size_t index = 0U; index < selects_.size(); ++index) {
             const auto& known = selects_[index];
             if (known.parent == parent && known.offset == select.offset
@@ -1577,6 +1717,337 @@ private:
         }
         selects_.push_back(std::move(select));
         return tagged(Tag::select, selects_.size() - 1U);
+    }
+
+    // --- declared types -----------------------------------------------
+
+    using Declared = std::shared_ptr<const runtime::SystemVerilogVpiTypeDescriptor>;
+
+    // The declared type of an object, or of a member or element select.
+    [[nodiscard]] Declared declared_of(const fsim_vpi_handle_v1 handle) const
+    {
+        if (const auto* select = select_of(handle)) {
+            return select->declared;
+        }
+        const auto object = info(handle);
+        return object && object->type ? object->type->declared : nullptr;
+    }
+
+    [[nodiscard]] static bool net_object(
+        const runtime::SystemVerilogVpiObjectInfo& object)
+    {
+        return object.kind == SystemVerilogVpiObjectKind::Net
+            || (object.kind == SystemVerilogVpiObjectKind::Port && object.type
+                && object.type->net_kind != runtime::SystemVerilogVpiNetKind::None);
+    }
+
+    // The vpiType of a net or variable of a declared type (IEEE 1800-2023
+    // 37.16, 37.17, 37.18).
+    [[nodiscard]] static PLI_INT32 declared_type(
+        const runtime::SystemVerilogVpiTypeDescriptor& type, const bool net)
+    {
+        using Kind = runtime::SystemVerilogVpiDescriptorKind;
+        using Category = runtime::SystemVerilogVpiValueCategory;
+        switch (type.kind) {
+        case Kind::Struct:
+            return net ? vpiStructNet : vpiStructVar;
+        case Kind::Union:
+            return net ? vpiUnionNet : vpiUnionVar;
+        case Kind::Enum:
+            return net ? vpiEnumNet : vpiEnumVar;
+        case Kind::PackedArray:
+            return net ? vpiPackedArrayNet : vpiPackedArrayVar;
+        case Kind::String:
+            return vpiStringVar;
+        default:
+            break;
+        }
+        switch (type.category) {
+        case Category::Integer4:
+            return net ? vpiIntegerNet : vpiIntegerVar;
+        case Category::Integer2:
+            switch (type.width) {
+            case 8U:
+                return net ? vpiByteNet : vpiByteVar;
+            case 16U:
+                return net ? vpiShortIntNet : vpiShortIntVar;
+            case 64U:
+                return net ? vpiLongIntNet : vpiLongIntVar;
+            default:
+                return net ? vpiIntNet : vpiIntVar;
+            }
+        case Category::Bit2:
+            return net ? vpiBitNet : vpiBitVar;
+        case Category::Real:
+            return net ? vpiRealNet : vpiRealVar;
+        case Category::ShortReal:
+            return net ? vpiShortRealNet : vpiShortRealVar;
+        default:
+            return net ? vpiNet : vpiReg;
+        }
+    }
+
+    // The properties a declared type decides (IEEE 1800-2023 37.17
+    // details 9, 17 and 20; 37.18 details 1, 2, 4 and 5).
+    [[nodiscard]] static std::optional<std::int64_t> declared_property(
+        const runtime::SystemVerilogVpiTypeDescriptor& type,
+        const PLI_INT32 property, const bool member, const bool element)
+    {
+        using Kind = runtime::SystemVerilogVpiDescriptorKind;
+        const bool aggregate = type.kind == Kind::Struct || type.kind == Kind::Union;
+        const bool array = type.kind == Kind::PackedArray;
+        const auto bits = runtime::systemverilog_vpi_declared_bits(type);
+        const bool integer_atom = type.category
+                == runtime::SystemVerilogVpiValueCategory::Integer2
+            || type.category == runtime::SystemVerilogVpiValueCategory::Integer4;
+        const bool vector = aggregate ? type.packed
+            : array || integer_atom || bits > 1U;
+        switch (property) {
+        case vpiPacked:
+            if (aggregate) {
+                return type.packed ? 1 : 0;
+            }
+            // A packed array and its elements are packed (37.18 detail
+            // 1); vpiPacked is no property of another enum var (37.17).
+            if (array || (type.kind == Kind::Enum && element)) {
+                return 1;
+            }
+            return std::nullopt;
+        case vpiVector:
+            return vector ? 1 : 0;
+        case vpiScalar:
+            return !vector && !aggregate && bits == 1U ? 1 : 0;
+        case vpiSize:
+            return aggregate && !type.packed
+                ? static_cast<std::int64_t>(type.children.size())
+                : static_cast<std::int64_t>(bits);
+        case vpiSigned:
+            return aggregate || array ? 0 : (type.is_signed ? 1 : 0);
+        case vpiStructUnionMember:
+            return member ? 1 : 0;
+        case vpiPackedArrayMember:
+            return element ? 1 : 0;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    // The stored object, offset, name suffix and net-ness an object or
+    // select of a declared type lies in.
+    struct DeclaredPlace {
+        fsim_vpi_handle_v1 root { };
+        std::uint64_t offset { };
+        std::string suffix;
+        std::string name;
+        bool net { };
+    };
+
+    [[nodiscard]] std::optional<DeclaredPlace> declared_place(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (const auto* select = select_of(handle)) {
+            return DeclaredPlace { select->parent, select->offset,
+                select->suffix, select->name, select->net };
+        }
+        const auto object = info(handle);
+        if (!object) {
+            return std::nullopt;
+        }
+        return DeclaredPlace { handle, 0U, { },
+            std::string { unescaped(object->name) }, net_object(*object) };
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 make_declared_select(
+        const DeclaredPlace& place, const std::uint64_t offset,
+        const std::uint64_t bits, const std::string& step,
+        const std::string& name, const fsim_vpi_handle_v1 owner,
+        Declared declared, const bool member)
+    {
+        if (bits == 0U
+            || offset + bits > std::numeric_limits<std::uint32_t>::max()) {
+            return 0U;
+        }
+        const auto suffix = place.suffix + step;
+        for (std::size_t known = 0U; known < selects_.size(); ++known) {
+            if (selects_[known].parent == place.root
+                && selects_[known].suffix == suffix) {
+                return tagged(Tag::select, known);
+            }
+        }
+        Select select;
+        select.parent = place.root;
+        select.offset = static_cast<std::uint32_t>(offset);
+        select.width = static_cast<std::uint32_t>(bits);
+        select.left = static_cast<std::int64_t>(bits) - 1;
+        select.right = 0;
+        select.bit = declared == nullptr && bits == 1U;
+        select.suffix = suffix;
+        select.name = name;
+        select.owner = owner;
+        select.declared = std::move(declared);
+        select.net = place.net;
+        select.member = member;
+        selects_.push_back(std::move(select));
+        return tagged(Tag::select, selects_.size() - 1U);
+    }
+
+    // The members of a structure or union, its first member the most
+    // significant (IEEE 1800-2023 7.2.1, 7.3.1, 37.26).
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> members_of(
+        const fsim_vpi_handle_v1 owner)
+    {
+        using Kind = runtime::SystemVerilogVpiDescriptorKind;
+        std::vector<fsim_vpi_handle_v1> members;
+        const auto type = declared_of(owner);
+        const auto place = declared_place(owner);
+        if (!type || !place
+            || (type->kind != Kind::Struct && type->kind != Kind::Union)
+            || type->children.size() != type->member_names.size()) {
+            return members;
+        }
+        auto above = runtime::systemverilog_vpi_declared_bits(*type);
+        for (std::size_t index = 0U; index < type->children.size(); ++index) {
+            const auto& child = type->children[index];
+            const auto bits = runtime::systemverilog_vpi_declared_bits(child);
+            if (type->kind == Kind::Struct) {
+                above -= std::min(above, bits);
+            }
+            const auto at = type->kind == Kind::Struct ? above : 0U;
+            const auto& name = type->member_names[index];
+            members.push_back(make_declared_select(*place, place->offset + at,
+                bits, "." + name, name, owner, Declared { type, &child }, true));
+        }
+        return members;
+    }
+
+    // The element at `index` of a packed array of a declared type, one
+    // dimension at a time; its parent is the largest containing packed
+    // array (IEEE 1800-2023 37.17 detail 26, 37.18 detail 3).
+    [[nodiscard]] fsim_vpi_handle_v1 packed_element(
+        const fsim_vpi_handle_v1 owner, const std::int64_t index)
+    {
+        using Kind = runtime::SystemVerilogVpiDescriptorKind;
+        const auto type = declared_of(owner);
+        const auto place = declared_place(owner);
+        if (!type || !place || type->kind != Kind::PackedArray
+            || type->ranges.empty() || type->children.size() != 1U) {
+            return 0U;
+        }
+        const auto at = position(
+            { type->ranges.front().left, type->ranges.front().right }, index);
+        if (!at) {
+            return 0U;
+        }
+        Declared element;
+        if (type->ranges.size() == 1U) {
+            element = Declared { type, &type->children.front() };
+        } else {
+            auto rest = *type;
+            rest.ranges.erase(rest.ranges.begin());
+            element = std::make_shared<const runtime::SystemVerilogVpiTypeDescriptor>(
+                std::move(rest));
+        }
+        const auto bits = runtime::systemverilog_vpi_declared_bits(*element);
+        auto parent = owner;
+        if (const auto* select = select_of(owner);
+            select != nullptr && !select->member && select->declared) {
+            parent = select->owner;
+        }
+        const auto step = "[" + std::to_string(index) + "]";
+        return make_declared_select(*place, place->offset + *at * bits, bits,
+            step, place->name + step, parent, std::move(element), false);
+    }
+
+    // The element of a declared-type object at `index`: a packed array's
+    // element, or a bit of a member vector.
+    [[nodiscard]] fsim_vpi_handle_v1 declared_index(
+        const fsim_vpi_handle_v1 owner, const std::int64_t index)
+    {
+        using Kind = runtime::SystemVerilogVpiDescriptorKind;
+        const auto type = declared_of(owner);
+        if (!type) {
+            return 0U;
+        }
+        if (type->kind == Kind::PackedArray) {
+            return packed_element(owner, index);
+        }
+        const auto place = declared_place(owner);
+        const auto bits = runtime::systemverilog_vpi_declared_bits(*type);
+        if (!place || type->kind == Kind::Struct || type->kind == Kind::Union
+            || index < 0 || static_cast<std::uint64_t>(index) >= bits) {
+            return 0U;
+        }
+        const auto step = "[" + std::to_string(index) + "]";
+        return make_declared_select(*place,
+            place->offset + static_cast<std::uint64_t>(index), 1U, step,
+            place->name + step, owner, nullptr, false);
+    }
+
+    // A member or element of a declared-type object named after it, such
+    // as `top.pkt.dst.tile` or `top.arr[1].hi` (IEEE 1800-2023 37.17
+    // detail 28).
+    [[nodiscard]] fsim_vpi_handle_v1 find_declared_path(const std::string& name)
+    {
+        for (auto split = name.size(); split > 1U;) {
+            split = name.find_last_of(".[", split - 1U);
+            if (split == std::string::npos || split == 0U) {
+                return 0U;
+            }
+            const auto found = registry_.find(name.substr(0U, split));
+            if (!found || !found.value) {
+                continue;
+            }
+            if (!found.value->type || !found.value->type->declared) {
+                return 0U;
+            }
+            auto handle = found.value->handle;
+            auto rest = std::string_view { name }.substr(split);
+            while (!rest.empty() && handle != 0U) {
+                if (rest.front() == '.') {
+                    const auto end = rest.find_first_of(".[", 1U);
+                    const auto wanted = rest.substr(1U,
+                        end == std::string_view::npos ? std::string_view::npos
+                                                      : end - 1U);
+                    fsim_vpi_handle_v1 next = 0U;
+                    for (const auto candidate : members_of(handle)) {
+                        if (const auto* member = select_of(candidate);
+                            member != nullptr && member->name == wanted) {
+                            next = candidate;
+                            break;
+                        }
+                    }
+                    handle = next;
+                    rest = end == std::string_view::npos ? std::string_view { }
+                                                         : rest.substr(end);
+                    continue;
+                }
+                const auto close = rest.find(']');
+                std::int64_t index { };
+                const auto digits = rest.substr(1U,
+                    close == std::string_view::npos ? 0U : close - 1U);
+                const auto parsed = std::from_chars(
+                    digits.data(), digits.data() + digits.size(), index);
+                if (close == std::string_view::npos || digits.empty()
+                    || parsed.ec != std::errc { }
+                    || parsed.ptr != digits.data() + digits.size()) {
+                    return 0U;
+                }
+                handle = declared_index(handle, index);
+                rest = rest.substr(close + 1U);
+            }
+            return handle;
+        }
+        return 0U;
+    }
+
+    // An unpacked structure or union has no value of its own (IEEE
+    // 1800-2023 37.17 detail 11).
+    [[nodiscard]] bool valueless(const fsim_vpi_handle_v1 handle) const
+    {
+        using Kind = runtime::SystemVerilogVpiDescriptorKind;
+        const auto type = declared_of(handle);
+        return type && (type->kind == Kind::Struct || type->kind == Kind::Union)
+            && !type->packed;
     }
 
     [[nodiscard]] const SubArray* subarray_of(const fsim_vpi_handle_v1 handle) const
@@ -2093,7 +2564,19 @@ private:
             data.time = &time;
         }
         // The new value of the change that triggered the callback; an event
-        // statement has no value (IEEE 1800-2023 38.36.1).
+        // statement has no value (IEEE 1800-2023 38.36.1), while a named
+        // event is an object and gets the registered value structure with
+        // vpiSuppressVal, since it has no value to report.
+        if (event && stored.has_value
+            && event->kind == runtime::SystemVerilogVpiCallbackKind::ValueChange
+            && event->object && !event->value) {
+            const auto object = info(*event->object);
+            if (object
+                && object->kind == runtime::SystemVerilogVpiObjectKind::NamedEvent) {
+                value.format = vpiSuppressVal;
+                data.value = &value;
+            }
+        }
         if (event && stored.has_value
             && event->kind == runtime::SystemVerilogVpiCallbackKind::ValueChange
             && event->object && event->value) {
@@ -2217,6 +2700,16 @@ private:
             return vpiPackage;
         case SystemVerilogVpiObjectKind::GenerateScope:
             return vpiGenScope;
+        case SystemVerilogVpiObjectKind::GenerateScopeArray:
+            return vpiGenScopeArray;
+        case SystemVerilogVpiObjectKind::Modport:
+            return vpiModport;
+        case SystemVerilogVpiObjectKind::ModuleArray:
+            return vpiModuleArray;
+        case SystemVerilogVpiObjectKind::InterfaceArray:
+            return vpiInterfaceArray;
+        case SystemVerilogVpiObjectKind::ProgramArray:
+            return vpiProgramArray;
         case SystemVerilogVpiObjectKind::Begin:
             return vpiNamedBegin;
         case SystemVerilogVpiObjectKind::Fork:
@@ -2226,14 +2719,23 @@ private:
         case SystemVerilogVpiObjectKind::Function:
             return vpiFunction;
         case SystemVerilogVpiObjectKind::Net:
+            if (object.type && object.type->declared) {
+                return declared_type(*object.type->declared, true);
+            }
             return vpiNet;
         case SystemVerilogVpiObjectKind::Port:
+            if (object.type && object.type->declared) {
+                return declared_type(*object.type->declared, net_object(object));
+            }
             return object.type
                     && object.type->net_kind
                         != runtime::SystemVerilogVpiNetKind::None
                 ? vpiNet
                 : variable_type();
         case SystemVerilogVpiObjectKind::Variable:
+            if (object.type && object.type->declared) {
+                return declared_type(*object.type->declared, false);
+            }
             return variable_type();
         case SystemVerilogVpiObjectKind::Parameter:
             return vpiParameter;
@@ -2241,7 +2743,11 @@ private:
         // of their own type; vpiMemory and vpiMemoryWord remain only as
         // iteration relations (IEEE 1800-2023 37.17 detail 4, 37.20).
         case SystemVerilogVpiObjectKind::Memory:
-            return vpiRegArray;
+            return net_object(object) || (object.type
+                       && object.type->net_kind
+                           != runtime::SystemVerilogVpiNetKind::None)
+                ? vpiNetArray
+                : vpiRegArray;
         case SystemVerilogVpiObjectKind::NamedEvent:
             return vpiNamedEvent;
         case SystemVerilogVpiObjectKind::Constant:
@@ -2268,6 +2774,12 @@ private:
             return memory ? object_type(*memory) : vpiUndefined;
         }
         if (const auto* select = select_of(handle)) {
+            if (select->declared) {
+                return declared_type(*select->declared, select->net);
+            }
+            if (select->bit && select->owner != 0U) {
+                return select->net ? vpiNetBit : vpiRegBit;
+            }
             if (select->element) {
                 const auto parent = info(select->parent);
                 return parent ? object_type(*parent) : vpiUndefined;
@@ -2288,6 +2800,12 @@ private:
         }
         if (modpath_of(handle)) {
             return vpiModPath;
+        }
+        if (const auto* port = port_of(handle)) {
+            return port->io_declaration ? vpiIODecl : vpiPort;
+        }
+        if (reference_of(handle) != nullptr) {
+            return vpiRefObj;
         }
         if (pathterm_of(handle)) {
             return vpiPathTerm;
@@ -2381,7 +2899,9 @@ private:
             return scope_kind(object.kind);
         case vpiMemory:
         case vpiRegArray:
-            return object.kind == SystemVerilogVpiObjectKind::Memory;
+            return actual == vpiRegArray;
+        case vpiNetArray:
+            return actual == vpiNetArray;
         case vpiMemoryWord:
             if (const auto parent = info(object.parent)) {
                 return parent->kind == SystemVerilogVpiObjectKind::Memory;
@@ -2393,20 +2913,32 @@ private:
                 || actual == vpiRealVar || actual == vpiTimeVar
                 || actual == vpiIntVar || actual == vpiByteVar
                 || actual == vpiShortIntVar || actual == vpiLongIntVar
-                || actual == vpiBitVar || actual == vpiStringVar;
+                || actual == vpiBitVar || actual == vpiStringVar
+                || actual == vpiStructVar || actual == vpiUnionVar
+                || actual == vpiEnumVar || actual == vpiPackedArrayVar
+                || actual == vpiShortRealVar;
         // The words of an unpacked array iterate as vpiReg whatever their
         // element type (int, bit, real words included).
         case vpiReg:
             if (const auto parent = info(object.parent)) {
                 if (parent->kind == SystemVerilogVpiObjectKind::Memory) {
-                    return true;
+                    return object_type(*parent) == vpiRegArray;
                 }
             }
             return actual == vpiReg;
+        // Every net data type iterates as a net (IEEE 1800-2023 37.16).
         case vpiNet:
-            return actual == vpiNet;
+            return actual == vpiNet || actual == vpiStructNet
+                || actual == vpiUnionNet || actual == vpiEnumNet
+                || actual == vpiPackedArrayNet || actual == vpiIntegerNet
+                || actual == vpiIntNet || actual == vpiByteNet
+                || actual == vpiShortIntNet || actual == vpiLongIntNet
+                || actual == vpiBitNet || actual == vpiRealNet
+                || actual == vpiShortRealNet;
+        // Ports are their own objects, not the formals' nets and variables
+        // (IEEE 1800-2023 37.14).
         case vpiPort:
-            return object.kind == SystemVerilogVpiObjectKind::Port;
+            return false;
         default:
             return actual == type;
         }
@@ -2477,6 +3009,76 @@ private:
                     }
                 }
             }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
+        // The elements of a generate scope array or an instance array
+        // (IEEE 1800-2023 37.11, 37.85).
+        if (const auto array = reference != 0U && !owned(reference)
+                ? info(reference)
+                : std::nullopt;
+            array && array_kind(array->kind)) {
+            for (const auto element : array_elements(*array)) {
+                if (const auto object = info(element);
+                    object && matches(type, *object)) {
+                    objects.push_back(element);
+                }
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
+        // The bits of a logic or bit vector, left to right (IEEE 1800-2023
+        // 37.16 detail 3, 37.17).
+        if (type == vpiBit && reference != 0U && !owned(reference)) {
+            const auto object = info(reference);
+            const auto range = declared_range(reference);
+            if (object && range && object->type && !object->type->declared
+                && (object->kind == SystemVerilogVpiObjectKind::Net
+                    || object->kind == SystemVerilogVpiObjectKind::Variable
+                    || object->kind == SystemVerilogVpiObjectKind::Port)
+                && (object->type->category
+                        == runtime::SystemVerilogVpiValueCategory::Logic4
+                    || object->type->category
+                        == runtime::SystemVerilogVpiValueCategory::Bit2)) {
+                const auto [left, right] = *range;
+                for (auto index = left;; index += left <= right ? 1 : -1) {
+                    objects.push_back(make_select(reference, index, index, true));
+                    if (index == right) {
+                        break;
+                    }
+                }
+                std::erase(objects, fsim_vpi_handle_v1 { 0U });
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
+        // An instance's ports, and the ports a net or variable connects
+        // (IEEE 1800-2023 37.14, 37.16). A port's bits are not published.
+        if (type == vpiPort || type == vpiPorts || type == vpiPortInst
+            || type == vpiIODecl) {
+            if (reference != 0U && !owned(reference)) {
+                objects = ports_of(type, reference);
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
+        if (port_of(reference) != nullptr || reference_of(reference) != nullptr) {
+            return succeed(result, make_iterator(std::move(objects)));
+        }
+        // The members of a structure or union, the elements of a packed
+        // array of them (IEEE 1800-2023 37.18, 37.26).
+        if (type == vpiMember || type == vpiElement) {
+            const auto declared = reference != 0U ? declared_of(reference) : nullptr;
+            if (declared && type == vpiMember) {
+                objects = members_of(reference);
+            } else if (declared
+                && declared->kind == runtime::SystemVerilogVpiDescriptorKind::PackedArray
+                && !declared->ranges.empty()) {
+                const auto [left, right] = declared->ranges.front();
+                for (auto index = left;; index += left <= right ? 1 : -1) {
+                    objects.push_back(packed_element(reference, index));
+                    if (index == right) {
+                        break;
+                    }
+                }
+            }
+            std::erase(objects, fsim_vpi_handle_v1 { 0U });
             return succeed(result, make_iterator(std::move(objects)));
         }
         // The dimensions of an array or vector (IEEE 1800-2023 37.17).
@@ -2653,6 +3255,42 @@ private:
                 return succeed(result);
             }
         }
+        if (const auto* port = port_of(reference)) {
+            if (port->io_declaration) {
+                switch (type) {
+                case vpiParent:
+                case vpiModport:
+                    return succeed(result, port->instance);
+                case vpiExpr:
+                    return succeed(result, port->low_conn);
+                default:
+                    return succeed(result);
+                }
+            }
+            switch (type) {
+            case vpiParent:
+            case vpiModule:
+                return succeed(result, port->instance);
+            case vpiLowConn:
+                return succeed(result, port->interface_port
+                        ? tagged(Tag::reference, serial_of(reference))
+                        : port->low_conn);
+            case vpiHighConn:
+                return succeed(result, port->high_conn);
+            default:
+                return succeed(result);
+            }
+        }
+        if (const auto* port = reference_of(reference)) {
+            switch (type) {
+            case vpiParent:
+                return succeed(result, port->instance);
+            case vpiActual:
+                return succeed(result, port->actual);
+            default:
+                return succeed(result);
+            }
+        }
         if (const auto term = pathterm_of(reference)) {
             return succeed(result,
                 type == vpiExpr ? pathterm_object(*term)
@@ -2664,6 +3302,13 @@ private:
                 type == vpiModule || type == vpiScope || type == vpiParent
                     ? path_instance(*path)
                     : 0U);
+        }
+        if (const auto object = reference != 0U && !owned(reference)
+                ? info(reference)
+                : std::nullopt;
+            object && object->kind == SystemVerilogVpiObjectKind::Modport
+            && (type == vpiInterface || type == vpiParent)) {
+            return succeed(result, object->parent);
         }
         if (const auto* subarray = subarray_of(reference)) {
             const auto copy = *subarray;
@@ -2691,7 +3336,8 @@ private:
         if (const auto* select = select_of(reference)) {
             switch (type) {
             case vpiParent:
-                return succeed(result, select->parent);
+                return succeed(result,
+                    select->owner != 0U ? select->owner : select->parent);
             case vpiIndex:
                 return succeed(result,
                     select->bit ? make_constant(select->left) : 0U);
@@ -2876,18 +3522,33 @@ private:
             = hierarchical_name({ request.text, request.text_size });
         if (request.handle == 0U) {
             const auto found = registry_.find(name);
-            return succeed(result, found && found.value ? found.value->handle : 0U);
+            if (found && found.value) {
+                return succeed(result, found.value->handle);
+            }
+            if (const auto member = find_declared_path(name)) {
+                return succeed(result, member);
+            }
+            return succeed(result, find_reference_path(name));
         }
         const auto scope = info(resolve(request.handle));
         if (!scope) {
             return succeed(result);
         }
-        auto found = registry_.find(scope->full_name
-            + (scope->full_name.ends_with("::") ? "" : ".") + name);
-        if (!found || !found.value) {
-            found = registry_.find(name);
+        const auto scoped = scope->full_name
+            + (scope->full_name.ends_with("::") ? "" : ".") + name;
+        auto found = registry_.find(scoped);
+        if (found && found.value) {
+            return succeed(result, found.value->handle);
         }
-        return succeed(result, found && found.value ? found.value->handle : 0U);
+        if (const auto member = find_declared_path(scoped)) {
+            return succeed(result, member);
+        }
+        if (const auto through = find_reference_path(scoped)) {
+            return succeed(result, through);
+        }
+        found = registry_.find(name);
+        return succeed(result, found && found.value ? found.value->handle
+                                                    : find_declared_path(name));
     }
 
     fsim_vpi_status_v1 handle_by_index(const fsim_vpi_service_request_v1& request,
@@ -2901,6 +3562,9 @@ private:
                 copy.name, copy.full_name, index));
         }
         if (const auto* select = select_of(reference)) {
+            if (select->declared) {
+                return succeed(result, declared_index(reference, index));
+            }
             if (!select->element) {
                 return succeed(result);
             }
@@ -2916,6 +3580,11 @@ private:
             object->full_name + "[" + std::to_string(index) + "]");
         if (found && found.value) {
             return succeed(result, found.value->handle);
+        }
+        if (object->type && object->type->declared
+            && object->type->declared->kind
+                == runtime::SystemVerilogVpiDescriptorKind::PackedArray) {
+            return succeed(result, packed_element(reference, index));
         }
         if (object->kind == SystemVerilogVpiObjectKind::Memory) {
             return succeed(result, index_array(reference, 0U, object->name,
@@ -2949,6 +3618,55 @@ private:
         }
         const auto found = registry_.find(name);
         return succeed(result, found && found.value ? found.value->handle : 0U);
+    }
+
+    // The properties of a port (IEEE 1800-2023 37.14). Its size, scalar and
+    // vector follow the formal; a port without a low connection has size 0.
+    fsim_vpi_status_v1 port_property(const runtime::SystemVerilogVpiPort& port,
+        const PLI_INT32 property, fsim_vpi_service_result_v1& result)
+    {
+        const auto integer = [&](const std::int64_t value) {
+            return succeed(result, 0U, static_cast<std::uint64_t>(value));
+        };
+        const auto size = [&]() -> std::int64_t {
+            const auto object = info(port.low_conn);
+            if (!object || !object->type) {
+                return 0;
+            }
+            if (const auto& declared = object->type->declared) {
+                return static_cast<std::int64_t>(
+                    runtime::systemverilog_vpi_declared_bits(*declared));
+            }
+            return static_cast<std::int64_t>(object->type->width);
+        };
+        switch (property) {
+        case vpiPortIndex:
+            return integer(port.index);
+        case vpiDirection:
+            return integer(port.ref ? vpiRef
+                    : port.direction == runtime::SystemVerilogVpiDirection::Input
+                    ? vpiInput
+                    : port.direction == runtime::SystemVerilogVpiDirection::Output
+                    ? vpiOutput
+                    : vpiInout);
+        case vpiPortType:
+            return integer(port.modport_port ? vpiModportPort
+                    : port.interface_port    ? vpiInterfacePort
+                                             : vpiPort);
+        case vpiConnByName:
+            return integer(port.connected_by_name ? 1 : 0);
+        case vpiExplicitName:
+            return integer(0);
+        case vpiSize:
+            return integer(size());
+        case vpiScalar:
+            return integer(size() == 1 ? 1 : 0);
+        case vpiVector:
+            return integer(size() > 1 ? 1 : 0);
+        default:
+            return succeed(result, 0U, static_cast<std::uint64_t>(
+                static_cast<std::int64_t>(vpiUndefined)));
+        }
     }
 
     fsim_vpi_status_v1 property(const fsim_vpi_service_request_v1& request,
@@ -2988,6 +3706,15 @@ private:
                         == runtime::SystemVerilogVpiScheduledWriteStatus::Pending
                 ? 1
                 : 0);
+        }
+        if (const auto* port = port_of(request.handle)) {
+            return port_property(*port, property, result);
+        }
+        if (reference_of(request.handle) != nullptr) {
+            return property == vpiGeneric
+                ? succeed(result, 0U, 0U)
+                : succeed(result, 0U, static_cast<std::uint64_t>(
+                      static_cast<std::int64_t>(vpiUndefined)));
         }
         if (const auto* range = range_of(request.handle)) {
             return property == vpiSize
@@ -3058,6 +3785,12 @@ private:
             }
         }
         if (const auto* select = select_of(resolve(request.handle))) {
+            if (select->declared) {
+                if (const auto answer = declared_property(*select->declared,
+                        property, select->member, !select->member)) {
+                    return integer(*answer);
+                }
+            }
             switch (property) {
             case vpiSize:
                 return integer(select->width);
@@ -3088,6 +3821,12 @@ private:
             return succeed(result, 0U, undefined);
         }
         const auto width = object->type ? object->type->width : 0U;
+        if (object->type && object->type->declared) {
+            if (const auto answer = declared_property(
+                    *object->type->declared, property, false, false)) {
+                return integer(*answer);
+            }
+        }
         switch (property) {
         case vpiConstType:
             // A parameter's constant type follows its value's type
@@ -3115,6 +3854,10 @@ private:
             if (object->kind == SystemVerilogVpiObjectKind::Memory) {
                 return integer(object->live_children);
             }
+            if (array_kind(object->kind)) {
+                return integer(static_cast<std::int64_t>(
+                    array_elements(*object).size()));
+            }
             return integer(width);
         case vpiSigned:
             return integer(object->type && object->type->is_signed ? 1 : 0);
@@ -3135,7 +3878,10 @@ private:
                     ? 1
                     : 0);
         case vpiDirection:
-            if (!object->type) {
+            // A formal's net or variable has no direction; its port has
+            // (IEEE 1800-2023 37.14, 37.16, 37.17).
+            if (!object->type
+                || object->kind == SystemVerilogVpiObjectKind::Port) {
                 return succeed(result, 0U, undefined);
             }
             switch (object->type->direction) {
@@ -3181,81 +3927,437 @@ private:
         }
     }
 
+    // The name of an object type: its macro in vpi_user.h or
+    // sv_vpi_user.h (IEEE 1800-2023 37.3.2, Annex K, Annex M).
     [[nodiscard]] static const char* type_name(const PLI_INT32 type)
     {
         switch (type) {
-        case vpiModule:
-            return "vpiModule";
-        case vpiNet:
-            return "vpiNet";
-        case vpiReg:
-            return "vpiReg";
+        case vpiAlways:
+            return "vpiAlways";
+        case vpiAssignStmt:
+            return "vpiAssignStmt";
+        case vpiAssignment:
+            return "vpiAssignment";
+        case vpiBegin:
+            return "vpiBegin";
+        case vpiCase:
+            return "vpiCase";
+        case vpiCaseItem:
+            return "vpiCaseItem";
+        case vpiConstant:
+            return "vpiConstant";
+        case vpiContAssign:
+            return "vpiContAssign";
+        case vpiDeassign:
+            return "vpiDeassign";
+        case vpiDefParam:
+            return "vpiDefParam";
+        case vpiDelayControl:
+            return "vpiDelayControl";
+        case vpiDisable:
+            return "vpiDisable";
+        case vpiEventControl:
+            return "vpiEventControl";
+        case vpiEventStmt:
+            return "vpiEventStmt";
+        case vpiFor:
+            return "vpiFor";
+        case vpiForce:
+            return "vpiForce";
+        case vpiForever:
+            return "vpiForever";
+        case vpiFork:
+            return "vpiFork";
+        case vpiFuncCall:
+            return "vpiFuncCall";
+        case vpiFunction:
+            return "vpiFunction";
+        case vpiGate:
+            return "vpiGate";
+        case vpiIf:
+            return "vpiIf";
+        case vpiIfElse:
+            return "vpiIfElse";
+        case vpiInitial:
+            return "vpiInitial";
         case vpiIntegerVar:
             return "vpiIntegerVar";
-        case vpiRealVar:
-            return "vpiRealVar";
-        case vpiTimeVar:
-            return "vpiTimeVar";
-        case vpiParameter:
-            return "vpiParameter";
+        case vpiInterModPath:
+            return "vpiInterModPath";
+        case vpiIterator:
+            return "vpiIterator";
+        case vpiIODecl:
+            return "vpiIODecl";
         case vpiMemory:
             return "vpiMemory";
         case vpiMemoryWord:
             return "vpiMemoryWord";
-        case vpiRegArray:
-            return "vpiRegArray";
-        case vpiRange:
-            return "vpiRange";
-        case vpiNamedEvent:
-            return "vpiNamedEvent";
+        case vpiModPath:
+            return "vpiModPath";
+        case vpiModule:
+            return "vpiModule";
         case vpiNamedBegin:
             return "vpiNamedBegin";
+        case vpiNamedEvent:
+            return "vpiNamedEvent";
         case vpiNamedFork:
             return "vpiNamedFork";
-        case vpiGenScope:
-            return "vpiGenScope";
-        case vpiTask:
-            return "vpiTask";
-        case vpiFunction:
-            return "vpiFunction";
-        case vpiConstant:
-            return "vpiConstant";
+        case vpiNet:
+            return "vpiNet";
+        case vpiNetBit:
+            return "vpiNetBit";
+        case vpiNullStmt:
+            return "vpiNullStmt";
         case vpiOperation:
             return "vpiOperation";
-        case vpiSysTaskCall:
-            return "vpiSysTaskCall";
-        case vpiSysFuncCall:
-            return "vpiSysFuncCall";
+        case vpiParamAssign:
+            return "vpiParamAssign";
+        case vpiParameter:
+            return "vpiParameter";
+        case vpiPartSelect:
+            return "vpiPartSelect";
+        case vpiPathTerm:
+            return "vpiPathTerm";
         case vpiPort:
             return "vpiPort";
-        case vpiIterator:
-            return "vpiIterator";
-        case vpiIntVar:
-            return "vpiIntVar";
-        case vpiShortIntVar:
-            return "vpiShortIntVar";
-        case vpiLongIntVar:
-            return "vpiLongIntVar";
-        case vpiByteVar:
-            return "vpiByteVar";
-        case vpiBitVar:
-            return "vpiBitVar";
-        case vpiStringVar:
-            return "vpiStringVar";
-        case vpiEnumVar:
-            return "vpiEnumVar";
-        case vpiStructVar:
-            return "vpiStructVar";
+        case vpiPortBit:
+            return "vpiPortBit";
+        case vpiPrimTerm:
+            return "vpiPrimTerm";
+        case vpiRealVar:
+            return "vpiRealVar";
+        case vpiReg:
+            return "vpiReg";
+        case vpiRegBit:
+            return "vpiRegBit";
+        case vpiRelease:
+            return "vpiRelease";
+        case vpiRepeat:
+            return "vpiRepeat";
+        case vpiRepeatControl:
+            return "vpiRepeatControl";
+        case vpiSchedEvent:
+            return "vpiSchedEvent";
+        case vpiSpecParam:
+            return "vpiSpecParam";
+        case vpiSwitch:
+            return "vpiSwitch";
+        case vpiSysFuncCall:
+            return "vpiSysFuncCall";
+        case vpiSysTaskCall:
+            return "vpiSysTaskCall";
+        case vpiTableEntry:
+            return "vpiTableEntry";
+        case vpiTask:
+            return "vpiTask";
+        case vpiTaskCall:
+            return "vpiTaskCall";
+        case vpiTchk:
+            return "vpiTchk";
+        case vpiTchkTerm:
+            return "vpiTchkTerm";
+        case vpiTimeVar:
+            return "vpiTimeVar";
+        case vpiTimeQueue:
+            return "vpiTimeQueue";
+        case vpiUdp:
+            return "vpiUdp";
+        case vpiUdpDefn:
+            return "vpiUdpDefn";
+        case vpiUserSystf:
+            return "vpiUserSystf";
+        case vpiVarSelect:
+            return "vpiVarSelect";
+        case vpiWait:
+            return "vpiWait";
+        case vpiWhile:
+            return "vpiWhile";
+        case vpiAttribute:
+            return "vpiAttribute";
+        case vpiBitSelect:
+            return "vpiBitSelect";
+        case vpiCallback:
+            return "vpiCallback";
+        case vpiDelayTerm:
+            return "vpiDelayTerm";
+        case vpiDelayDevice:
+            return "vpiDelayDevice";
+        case vpiFrame:
+            return "vpiFrame";
+        case vpiGateArray:
+            return "vpiGateArray";
+        case vpiModuleArray:
+            return "vpiModuleArray";
+        case vpiPrimitiveArray:
+            return "vpiPrimitiveArray";
+        case vpiNetArray:
+            return "vpiNetArray";
+        case vpiRange:
+            return "vpiRange";
+        case vpiRegArray:
+            return "vpiRegArray";
+        case vpiSwitchArray:
+            return "vpiSwitchArray";
+        case vpiUdpArray:
+            return "vpiUdpArray";
+        case vpiContAssignBit:
+            return "vpiContAssignBit";
+        case vpiNamedEventArray:
+            return "vpiNamedEventArray";
+        case vpiIndexedPartSelect:
+            return "vpiIndexedPartSelect";
+        case vpiGenScopeArray:
+            return "vpiGenScopeArray";
+        case vpiGenScope:
+            return "vpiGenScope";
+        case vpiGenVar:
+            return "vpiGenVar";
         case vpiPackage:
             return "vpiPackage";
         case vpiInterface:
             return "vpiInterface";
         case vpiProgram:
             return "vpiProgram";
-        case vpiNetBit:
-            return "vpiNetBit";
-        case vpiRegBit:
-            return "vpiRegBit";
+        case vpiInterfaceArray:
+            return "vpiInterfaceArray";
+        case vpiProgramArray:
+            return "vpiProgramArray";
+        case vpiTypespec:
+            return "vpiTypespec";
+        case vpiModport:
+            return "vpiModport";
+        case vpiInterfaceTfDecl:
+            return "vpiInterfaceTfDecl";
+        case vpiRefObj:
+            return "vpiRefObj";
+        case vpiTypeParameter:
+            return "vpiTypeParameter";
+        case vpiLongIntVar:
+            return "vpiLongIntVar";
+        case vpiShortIntVar:
+            return "vpiShortIntVar";
+        case vpiIntVar:
+            return "vpiIntVar";
+        case vpiShortRealVar:
+            return "vpiShortRealVar";
+        case vpiByteVar:
+            return "vpiByteVar";
+        case vpiClassVar:
+            return "vpiClassVar";
+        case vpiStringVar:
+            return "vpiStringVar";
+        case vpiEnumVar:
+            return "vpiEnumVar";
+        case vpiStructVar:
+            return "vpiStructVar";
+        case vpiUnionVar:
+            return "vpiUnionVar";
+        case vpiBitVar:
+            return "vpiBitVar";
+        case vpiClassObj:
+            return "vpiClassObj";
+        case vpiChandleVar:
+            return "vpiChandleVar";
+        case vpiPackedArrayVar:
+            return "vpiPackedArrayVar";
+        case vpiVirtualInterfaceVar:
+            return "vpiVirtualInterfaceVar";
+        case vpiLongIntTypespec:
+            return "vpiLongIntTypespec";
+        case vpiShortRealTypespec:
+            return "vpiShortRealTypespec";
+        case vpiByteTypespec:
+            return "vpiByteTypespec";
+        case vpiShortIntTypespec:
+            return "vpiShortIntTypespec";
+        case vpiIntTypespec:
+            return "vpiIntTypespec";
+        case vpiClassTypespec:
+            return "vpiClassTypespec";
+        case vpiStringTypespec:
+            return "vpiStringTypespec";
+        case vpiChandleTypespec:
+            return "vpiChandleTypespec";
+        case vpiEnumTypespec:
+            return "vpiEnumTypespec";
+        case vpiEnumConst:
+            return "vpiEnumConst";
+        case vpiIntegerTypespec:
+            return "vpiIntegerTypespec";
+        case vpiTimeTypespec:
+            return "vpiTimeTypespec";
+        case vpiRealTypespec:
+            return "vpiRealTypespec";
+        case vpiStructTypespec:
+            return "vpiStructTypespec";
+        case vpiUnionTypespec:
+            return "vpiUnionTypespec";
+        case vpiBitTypespec:
+            return "vpiBitTypespec";
+        case vpiLogicTypespec:
+            return "vpiLogicTypespec";
+        case vpiArrayTypespec:
+            return "vpiArrayTypespec";
+        case vpiVoidTypespec:
+            return "vpiVoidTypespec";
+        case vpiTypespecMember:
+            return "vpiTypespecMember";
+        case vpiPackedArrayTypespec:
+            return "vpiPackedArrayTypespec";
+        case vpiSequenceTypespec:
+            return "vpiSequenceTypespec";
+        case vpiPropertyTypespec:
+            return "vpiPropertyTypespec";
+        case vpiEventTypespec:
+            return "vpiEventTypespec";
+        case vpiInterfaceTypespec:
+            return "vpiInterfaceTypespec";
+        case vpiClockingBlock:
+            return "vpiClockingBlock";
+        case vpiClockingIODecl:
+            return "vpiClockingIODecl";
+        case vpiClassDefn:
+            return "vpiClassDefn";
+        case vpiConstraint:
+            return "vpiConstraint";
+        case vpiConstraintOrdering:
+            return "vpiConstraintOrdering";
+        case vpiDistItem:
+            return "vpiDistItem";
+        case vpiAliasStmt:
+            return "vpiAliasStmt";
+        case vpiThread:
+            return "vpiThread";
+        case vpiMethodFuncCall:
+            return "vpiMethodFuncCall";
+        case vpiMethodTaskCall:
+            return "vpiMethodTaskCall";
+        case vpiAssert:
+            return "vpiAssert";
+        case vpiAssume:
+            return "vpiAssume";
+        case vpiCover:
+            return "vpiCover";
+        case vpiRestrict:
+            return "vpiRestrict";
+        case vpiDisableCondition:
+            return "vpiDisableCondition";
+        case vpiClockingEvent:
+            return "vpiClockingEvent";
+        case vpiPropertyDecl:
+            return "vpiPropertyDecl";
+        case vpiPropertySpec:
+            return "vpiPropertySpec";
+        case vpiPropertyExpr:
+            return "vpiPropertyExpr";
+        case vpiMulticlockSequenceExpr:
+            return "vpiMulticlockSequenceExpr";
+        case vpiClockedSeq:
+            return "vpiClockedSeq";
+        case vpiClockedProp:
+            return "vpiClockedProp";
+        case vpiPropertyInst:
+            return "vpiPropertyInst";
+        case vpiSequenceDecl:
+            return "vpiSequenceDecl";
+        case vpiCaseProperty:
+            return "vpiCaseProperty";
+        case vpiCasePropertyItem:
+            return "vpiCasePropertyItem";
+        case vpiSequenceInst:
+            return "vpiSequenceInst";
+        case vpiImmediateAssert:
+            return "vpiImmediateAssert";
+        case vpiImmediateAssume:
+            return "vpiImmediateAssume";
+        case vpiImmediateCover:
+            return "vpiImmediateCover";
+        case vpiReturn:
+            return "vpiReturn";
+        case vpiAnyPattern:
+            return "vpiAnyPattern";
+        case vpiTaggedPattern:
+            return "vpiTaggedPattern";
+        case vpiStructPattern:
+            return "vpiStructPattern";
+        case vpiDoWhile:
+            return "vpiDoWhile";
+        case vpiOrderedWait:
+            return "vpiOrderedWait";
+        case vpiWaitFork:
+            return "vpiWaitFork";
+        case vpiDisableFork:
+            return "vpiDisableFork";
+        case vpiExpectStmt:
+            return "vpiExpectStmt";
+        case vpiForeachStmt:
+            return "vpiForeachStmt";
+        case vpiReturnStmt:
+            return "vpiReturnStmt";
+        case vpiFinal:
+            return "vpiFinal";
+        case vpiExtends:
+            return "vpiExtends";
+        case vpiDistribution:
+            return "vpiDistribution";
+        case vpiSeqFormalDecl:
+            return "vpiSeqFormalDecl";
+        case vpiPropFormalDecl:
+            return "vpiPropFormalDecl";
+        case vpiEnumNet:
+            return "vpiEnumNet";
+        case vpiIntegerNet:
+            return "vpiIntegerNet";
+        case vpiTimeNet:
+            return "vpiTimeNet";
+        case vpiUnionNet:
+            return "vpiUnionNet";
+        case vpiShortRealNet:
+            return "vpiShortRealNet";
+        case vpiRealNet:
+            return "vpiRealNet";
+        case vpiByteNet:
+            return "vpiByteNet";
+        case vpiShortIntNet:
+            return "vpiShortIntNet";
+        case vpiIntNet:
+            return "vpiIntNet";
+        case vpiLongIntNet:
+            return "vpiLongIntNet";
+        case vpiBitNet:
+            return "vpiBitNet";
+        case vpiInterconnectNet:
+            return "vpiInterconnectNet";
+        case vpiInterconnectArray:
+            return "vpiInterconnectArray";
+        case vpiStructNet:
+            return "vpiStructNet";
+        case vpiBreak:
+            return "vpiBreak";
+        case vpiContinue:
+            return "vpiContinue";
+        case vpiPackedArrayNet:
+            return "vpiPackedArrayNet";
+        case vpiNettypeDecl:
+            return "vpiNettypeDecl";
+        case vpiConstraintExpr:
+            return "vpiConstraintExpr";
+        case vpiElseConst:
+            return "vpiElseConst";
+        case vpiImplication:
+            return "vpiImplication";
+        case vpiConstrIf:
+            return "vpiConstrIf";
+        case vpiConstrIfElse:
+            return "vpiConstrIfElse";
+        case vpiConstrForEach:
+            return "vpiConstrForEach";
+        case vpiSoftDisable:
+            return "vpiSoftDisable";
+        case vpiLetDecl:
+            return "vpiLetDecl";
+        case vpiLetExpr:
+            return "vpiLetExpr";
         default:
             return nullptr;
         }
@@ -3271,6 +4373,16 @@ private:
         if (property == vpiType) {
             const auto* const name = type_name(handle_type(request.handle));
             return name == nullptr ? FSIM_VPI_STATUS_NOT_FOUND : text(name);
+        }
+        // A port is named but has no full name (IEEE 1800-2023 37.14).
+        if (const auto* port = port_of(request.handle)) {
+            return property == vpiName ? text(port->name)
+                                       : FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        if (const auto* port = reference_of(request.handle)) {
+            return property == vpiName ? text(port->name)
+                : property == vpiFullName ? text(reference_full_name(*port))
+                                          : FSIM_VPI_STATUS_NOT_FOUND;
         }
         if (const auto* site = call_of(request.handle)) {
             switch (property) {
@@ -3304,6 +4416,12 @@ private:
             const auto parent = info(select->parent);
             if (!parent || (property != vpiName && property != vpiFullName)) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            // A member is named alone; its full name carries its prefixes
+            // (IEEE 1800-2023 37.17 detail 28).
+            if (!select->name.empty()) {
+                return text(property == vpiName ? select->name
+                                                : parent->full_name + select->suffix);
             }
             const auto suffix = !select->suffix.empty() ? select->suffix
                 : select->bit
@@ -3540,7 +4658,9 @@ private:
         if (out == nullptr) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
-        const auto value = object_value(request.handle);
+        const auto value = valueless(resolve(request.handle))
+            ? std::nullopt
+            : object_value(request.handle);
         if (!value || !write_value(*value, *out)) {
             // A value that cannot be read leaves no stale data in the
             // caller's structure.
@@ -3725,6 +4845,12 @@ private:
         }
         auto object = resolve(request.handle);
         const auto requested = object;
+        if (valueless(object)) {
+            error_message_ = "vpi_put_value: an unpacked structure or union "
+                             "has no value (IEEE 1800-2023 37.17)";
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
         // A value the write derives from the target's current one: a
         // select's bits merged into its parent, or a toggled event.
         std::optional<Value> prepared;

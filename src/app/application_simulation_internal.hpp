@@ -678,6 +678,8 @@ struct Simulation::Impl {
 
     std::map<SignalId, std::vector<fsim_vpi_handle_v1>> vpi_signal_handles;
 
+    std::vector<runtime::SystemVerilogVpiPort> vpi_ports;
+
     std::map<fsim_vpi_handle_v1, SignalId> vpi_handle_signals;
 
     std::map<fsim_vpi_handle_v1,

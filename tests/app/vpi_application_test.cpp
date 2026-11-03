@@ -393,8 +393,9 @@ endmodule
         = simulation.find_signal("element_net_memory_vpi.words");
     assert(memory && word_three && word_two && aggregate_signal
         && memory.value->kind == SystemVerilogVpiObjectKind::Memory
-        && word_three.value->kind == SystemVerilogVpiObjectKind::Variable
-        && word_two.value->kind == SystemVerilogVpiObjectKind::Variable
+        // The words of a net array are nets (IEEE 1800-2023 37.16).
+        && word_three.value->kind == SystemVerilogVpiObjectKind::Net
+        && word_two.value->kind == SystemVerilogVpiObjectKind::Net
         && word_three.value->parent == memory.value->handle
         && word_two.value->parent == memory.value->handle);
     const auto memory_type = registry.type_info(memory.value->handle);
