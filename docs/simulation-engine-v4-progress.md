@@ -138,6 +138,48 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-02: Project mode removed; SystemVerilog package-first compile (`709826c0`, `a12b517f`, sweeps `v4c69c`, `v4c69ca`)
+
+Plan: `~/.claude/plans/remove-project-mode.md` (owner, 11-02).
+
+**What landed:**
+- **Workspace mode only (`709826c0`):** `fsim.toml`, its reader and the FSIM-PROJ-* diagnostics are gone.
+  - Settings come from workspace and user `fsim.tcl` scripts (`fsim::config set key value`); `--no-config` skips them.
+  - Coverage hints, exclusions and bindings are editable keyed records.
+  - Snapshots record their settings, and simulate warns when they differ.
+  - C API v2 adds `fsim_session_open_snapshot`.
+  - Examples, docs and the manifest-reading tests are ported.
+- **Catalog schema 4** records VHDL analysis order, so a bare VHDL top takes the latest-analysed architecture. SDF reopen re-applies kept SDF. The unused startup callback and the `tcl9.0` install are gone.
+- **SystemVerilog:**
+  - Constraints in module-declared classes read the instance's parameters.
+  - Compile grouping is per file: leading files that pass no state on compile on their own, and package files no longer pass state. Joint and separate compiles of the same files give the same design key.
+  - Parser and library lookups share one package member table (value, type, unpacked type, class). It covers type actuals, procedural declarations, stream slice types, `pkg::cls h = new`, imported unpacked-typedef parameters and re-exports.
+  - Packed dimensions over named types (IEEE 1800-2023 7.4.1) compose over typedefs, over type parameters per specialization (`T [N-1:0]`), and in type actuals, including over a parent's type parameter (`#(U [1:0])`).
+  - A non-packed element (`int`, `integer`, a class, an `int` typedef) gives FSIM-SV-SEM-424 at compile or FSIM-ELAB-SVTYPEPARAM-005 at elaboration. Before this, a typedef of `int` with packed dimensions failed to parse (FSIM-SV-PARSE-001).
+  - New tests: compliance fixture `sv_package_typedef_packed_arrays_20261102` (package compiled first), and workspace-application case `package-first-compile`.
+- **UVM compile fix (`a12b517f`):** `709826c0` let the type-actual pass take the instance list after the lookup indexes were refreshed. That staled the indexes, so every later name binding scanned linearly and the UVM library compile ran for over ten minutes. Now 4.4 s (v4c68b 4.8 s). ctest missed it: the UVM application tests are only registered when `FSIM_UVM_*_SOURCE_DIR` is configured, which this build tree does not do.
+
+**Gate:**
+- ct4 on `709826c0`: one failure in all four variants, workspace-objects. Its synthetic `$unit` carrier now needs a macro to stay in one compile group (test fixed). A strict-only SystemC matrix failure (missing temporary source) passed on rerun with its two dependents.
+- `a12b517f`: full normal ctest 1099/1099.
+- Sweeps `v4c69`/`v4c69a` and `v4c69b` are void: the archive was frozen with a relative path, then the slow UVM compile was found.
+- Normal sweep `v4c69c` (frozen `a12b517f`): 0 losses against `v4c68b`.
+- AOT sweep `v4c69ca`: 0 losses against `v4c68ba`.
+- Census tables identical to `v4c68b`/`v4c68ba`.
+- vgate: identical (kept 5637 and 3358). It ran in a fresh directory, because the old work directories hold catalog-3 workspaces that schema 4 rejects.
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+| Suite | v4c68b passed / in scope | v4c69c passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2638 / 2638 | 2638 / 2638 | 273 |
+| nvc | 1259 / 1259 | 1259 / 1259 | 223 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
+**Next:** D6 campaign on `a12b517f`.
+
 ### 2026-11-02: Class statics per instance, generic-package fixes, Windows paths (`b259b1d6`, `58c40e58`, `ff0466c4`, sweeps `v4c68b`, `v4c68ba`)
 
 **What landed:**
