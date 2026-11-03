@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 // VPI data-model conformance plug-in: structures, unions, enumerations,
 // packed arrays, net arrays, ports, generate scope arrays and instance
-// arrays (IEEE 1800-2023 37.11, 37.14, 37.16-37.18, 37.26, 37.85).
+// arrays, typespecs, definitions and parameters (IEEE 1800-2023 37.10,
+// 37.11, 37.14, 37.16-37.18, 37.25, 37.26, 37.28, 37.85).
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
 #include "vpi_user.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static const char* text(const char* value)
@@ -151,6 +153,181 @@ static const char* name_of(vpiHandle object)
     return object != NULL ? text(vpi_get_str(vpiName, object)) : "-";
 }
 
+// The ranges of a typespec, leftmost first (37.22, 37.25 detail 10).
+static void range_text(vpiHandle typespec, char* out, size_t size)
+{
+    vpiHandle iterator = vpi_iterate(vpiRange, typespec);
+    vpiHandle range;
+    size_t used = 0U;
+    out[0] = '\0';
+    while (iterator != NULL && (range = vpi_scan(iterator)) != NULL) {
+        vpiHandle left = vpi_handle(vpiLeftRange, range);
+        vpiHandle right = vpi_handle(vpiRightRange, range);
+        s_vpi_value l = { vpiIntVal, { 0 } };
+        s_vpi_value r = { vpiIntVal, { 0 } };
+        if (left == NULL || right == NULL) {
+            used += (size_t)snprintf(out + used, size - used, "[]");
+        } else {
+            vpi_get_value(left, &l);
+            vpi_get_value(right, &r);
+            used += (size_t)snprintf(out + used, size - used, "[%d:%d]",
+                (int)l.value.integer, (int)r.value.integer);
+        }
+        if (used >= size) {
+            break;
+        }
+    }
+}
+
+// A typespec unwound through vpiElemTypespec (37.25 detail 8).
+static void typespec_chain(const char* label, vpiHandle typespec)
+{
+    int level = 0;
+    while (typespec != NULL && level < 8) {
+        char ranges[128];
+        vpiHandle alias = vpi_handle(vpiTypedefAlias, typespec);
+        range_text(typespec, ranges, sizeof ranges);
+        vpi_printf("#c ts %s.%d type=%s name=%s ranges=%s alias=%s:%s\n",
+            label, level, text(vpi_get_str(vpiType, typespec)),
+            text(vpi_get_str(vpiName, typespec)), ranges[0] ? ranges : "-",
+            alias != NULL ? text(vpi_get_str(vpiType, alias)) : "-",
+            alias != NULL ? text(vpi_get_str(vpiName, alias)) : "-");
+        typespec = vpi_handle(vpiElemTypespec, typespec);
+        ++level;
+    }
+}
+
+// Typespecs, typespec members and enumeration constants (37.25).
+static void typespecs(void)
+{
+    static char* names[] = { "top.c", "top.t", "top.arr",
+        "top.pk", "top.iv", "top.q", "top.la", "top.ly", "top.wa", "top.rc",
+        "top.p2v" };
+    vpiHandle typespec;
+    vpiHandle iterator;
+    vpiHandle object;
+    for (size_t index = 0U; index < sizeof names / sizeof names[0]; ++index) {
+        typespec = vpi_handle(vpiTypespec, vpi_handle_by_name(names[index], NULL));
+        typespec_chain(names[index] + 4, typespec);
+    }
+    typespec = vpi_handle(vpiTypespec, vpi_handle_by_name("top.c", NULL));
+    object = vpi_handle(vpiBaseTypespec, typespec);
+    vpi_printf("#c c base=%s signed=%d\n",
+        object != NULL ? text(vpi_get_str(vpiType, object)) : "-",
+        (int)vpi_get(vpiSigned, object));
+    iterator = vpi_iterate(vpiEnumConst, typespec);
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        s_vpi_value value = { vpiIntVal, { 0 } };
+        vpi_get_value(object, &value);
+        vpi_printf("#c c const %s type=%s size=%d value=%d\n",
+            text(vpi_get_str(vpiName, object)),
+            text(vpi_get_str(vpiType, object)), (int)vpi_get(vpiSize, object),
+            (int)value.value.integer);
+    }
+    typespec = vpi_handle(vpiTypespec, vpi_handle_by_name("top.rc", NULL));
+    vpi_printf("#c rc packed=%d\n", (int)vpi_get(vpiPacked, typespec));
+    iterator = vpi_iterate(vpiTypespecMember, typespec);
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        vpiHandle member = vpi_handle(vpiTypespec, object);
+        vpi_printf("#c rc member %s type=%s typespec=%s rand=%d\n",
+            text(vpi_get_str(vpiName, object)),
+            text(vpi_get_str(vpiType, object)),
+            text(vpi_get_str(vpiType, member)),
+            (int)vpi_get(vpiRandType, object));
+    }
+    typespec = vpi_handle(vpiTypespec, vpi_handle_by_name("top.q", NULL));
+    vpi_printf("#c q arraytype=%d\n", (int)vpi_get(vpiArrayType, typespec));
+    // A member's typespec is its structure's member's (37.26).
+    iterator = vpi_iterate(vpiMember, vpi_handle_by_name("top.pr", NULL));
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        typespec_chain(text(vpi_get_str(vpiName, object)),
+            vpi_handle(vpiTypespec, object));
+    }
+}
+
+// Where an instance's definition is (37.10) and parameters (37.28).
+static void definitions(void)
+{
+    static char* names[] = { "top", "top.u0", "top.ua[1]", "top.bus" };
+    vpiHandle iterator;
+    vpiHandle object;
+    for (size_t index = 0U; index < sizeof names / sizeof names[0]; ++index) {
+        const char* file;
+        const char* base;
+        object = vpi_handle_by_name(names[index], NULL);
+        file = vpi_get_str(vpiDefFile, object);
+        base = file != NULL ? strrchr(file, '/') : NULL;
+        vpi_printf("#c def %s file=%s line=%d library=%s cell=%s name=%s\n",
+            names[index], base != NULL ? base + 1 : text(file),
+            (int)vpi_get(vpiDefLineNo, object),
+            text(vpi_get_str(vpiLibrary, object)),
+            text(vpi_get_str(vpiCell, object)),
+            text(vpi_get_str(vpiDefName, object)));
+    }
+    iterator = vpi_iterate(vpiParameter, vpi_handle_by_name("top", NULL));
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        s_vpi_value value = { vpiIntVal, { 0 } };
+        vpi_get_value(object, &value);
+        vpi_printf("#c param %s type=%s local=%d typespec=%s size=%d "
+                   "value=%d\n",
+            text(vpi_get_str(vpiName, object)),
+            text(vpi_get_str(vpiType, object)),
+            (int)vpi_get(vpiLocalParam, object),
+            text(vpi_get_str(vpiType, vpi_handle(vpiTypespec, object))),
+            (int)vpi_get(vpiSize, object), (int)value.value.integer);
+    }
+    object = vpi_handle_by_name("top.la", NULL);
+    vpi_printf("#c la local=%d\n", (int)vpi_get(vpiLocalParam, object));
+    vpi_printf("#c top top=%d member=%d u0 top=%d member=%d ua[1] member=%d\n",
+        (int)vpi_get(vpiTop, vpi_handle_by_name("top", NULL)),
+        (int)vpi_get(vpiArrayMember, vpi_handle_by_name("top", NULL)),
+        (int)vpi_get(vpiTop, vpi_handle_by_name("top.u0", NULL)),
+        (int)vpi_get(vpiArrayMember, vpi_handle_by_name("top.u0", NULL)),
+        (int)vpi_get(vpiArrayMember, vpi_handle_by_name("top.ua[1]", NULL)));
+    // An instance array's dimension (37.11).
+    object = vpi_handle_by_name("top.ua", NULL);
+    {
+        char ranges[64];
+        s_vpi_value left = { vpiIntVal, { 0 } };
+        range_text(object, ranges, sizeof ranges);
+        vpi_get_value(vpi_handle(vpiLeftRange, object), &left);
+        vpi_printf("#c ua ranges=%s left=%d\n", ranges,
+            (int)left.value.integer);
+    }
+    object = vpi_handle_by_name("top", NULL);
+    vpi_printf("#c top nettype=%d unconn=%d delaymode=%d protected=%d\n",
+        (int)vpi_get(vpiDefNetType, object),
+        (int)vpi_get(vpiUnconnDrive, object),
+        (int)vpi_get(vpiDefDelayMode, object),
+        (int)vpi_get(vpiProtected, object));
+    vpi_printf("#c nettype lz=%d tn=%d implicit lz=%d imp=%d\n",
+        (int)vpi_get(vpiNetType, vpi_handle_by_name("top.lz", NULL)),
+        (int)vpi_get(vpiNetType, vpi_handle_by_name("top.tn", NULL)),
+        (int)vpi_get(vpiImplicitDecl, vpi_handle_by_name("top.lz", NULL)),
+        (int)vpi_get(vpiImplicitDecl, vpi_handle_by_name("top.imp", NULL)));
+    // Generate scopes: the implicit name, and a genvar's local parameter
+    // (37.85 details 2, 3).
+    {
+        static char* scopes[] = { "top.g[1]", "top.genblk2" };
+        for (size_t index = 0U; index < sizeof scopes / sizeof scopes[0];
+             ++index) {
+            object = vpi_handle_by_name(scopes[index], NULL);
+            vpi_printf("#c scope %s found=%d implicit=%d member=%d\n",
+                scopes[index], object != NULL ? 1 : 0,
+                (int)vpi_get(vpiImplicitDecl, object),
+                (int)vpi_get(vpiArrayMember, object));
+        }
+    }
+    iterator = vpi_iterate(vpiParameter, vpi_handle_by_name("top.g[1]", NULL));
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        s_vpi_value value = { vpiIntVal, { 0 } };
+        vpi_get_value(object, &value);
+        vpi_printf("#c g[1] param %s local=%d value=%d\n",
+            text(vpi_get_str(vpiName, object)),
+            (int)vpi_get(vpiLocalParam, object), (int)value.value.integer);
+    }
+}
+
 // Modports and an interface port's reference object (37.7, 37.15).
 static void interfaces(void)
 {
@@ -250,6 +427,8 @@ static void hierarchy(void)
         in_scope(vpiInternalScope, "g"), in_scope(vpiInternalScope, "g[0]"),
         in_scope(vpiGenScopeArray, "g"), in_scope(vpiModuleArray, "ua"));
     interfaces();
+    typespecs();
+    definitions();
 }
 
 static PLI_INT32 start(p_cb_data data)

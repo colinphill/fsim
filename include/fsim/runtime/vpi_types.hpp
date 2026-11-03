@@ -52,6 +52,13 @@ enum class SystemVerilogVpiNetKind {
     TriOr,
 };
 
+// The `unconnected_drive in effect for a module (IEEE 1800-2023 22.9).
+enum class SystemVerilogVpiUnconnectedDrive {
+    None,
+    Pull0,
+    Pull1,
+};
+
 enum class SystemVerilogVpiDirection {
     None,
     Input,
@@ -120,6 +127,62 @@ struct SystemVerilogVpiTypeDescriptor {
         const SystemVerilogVpiTypeDescriptor&) = default;
 };
 
+// The vpiType of a typespec (IEEE 1800-2023 37.25).
+enum class SystemVerilogVpiTypespecKind {
+    Logic,
+    Bit,
+    Byte,
+    ShortInt,
+    Int,
+    LongInt,
+    Integer,
+    Time,
+    Real,
+    ShortReal,
+    String,
+    Event,
+    Chandle,
+    Enum,
+    Struct,
+    Union,
+    PackedArray,
+    Array,
+    Class,
+};
+
+// The vpiArrayType of an array typespec (IEEE 1800-2023 37.25).
+enum class SystemVerilogVpiArrayKind {
+    Static,
+    Dynamic,
+    Associative,
+    Queue,
+};
+
+// The data type of a declaration, one typedef level per node (IEEE
+// 1800-2023 37.25): `ranges` are this level's dimensions, leftmost first,
+// and `element` (at most one) is what they repeat, or an enumeration's base
+// type. `name` is the typedef's, empty for a built-in or inline type, and
+// `alias` (at most one) is the type a typedef of a typedef or of a built-in
+// type names (vpiTypedefAlias).
+struct SystemVerilogVpiTypespec {
+    SystemVerilogVpiTypespecKind kind { SystemVerilogVpiTypespecKind::Logic };
+    std::string name;
+    bool is_signed { };
+    bool packed { };
+    bool tagged { };
+    SystemVerilogVpiArrayKind array_kind { SystemVerilogVpiArrayKind::Static };
+    std::vector<SystemVerilogVpiRange> ranges;
+    std::vector<SystemVerilogVpiTypespec> element;
+    std::vector<SystemVerilogVpiTypespec> alias;
+    std::vector<std::string> member_names;
+    std::vector<SystemVerilogVpiTypespec> members;
+    std::vector<SystemVerilogVpiEnumLiteral> enum_constants;
+
+    friend bool operator==(
+        const SystemVerilogVpiTypespec&,
+        const SystemVerilogVpiTypespec&) = default;
+};
+
 struct SystemVerilogVpiDriverRange {
     std::uint32_t offset { };
     std::uint32_t width { };
@@ -148,12 +211,16 @@ struct SystemVerilogVpiTypeInfo {
     bool string_literal { };
     // A `celldefine module instance (IEEE 1800-2023 37.10 vpiCellInstance).
     bool is_cell { };
+    // A local parameter (IEEE 1800-2023 6.20.4, 37.28 vpiLocalParam).
+    bool local_parameter { };
     std::shared_ptr<const SystemVerilogVpiTypeDescriptor> descriptor;
     // The declared data type of a variable or net stored as one packed
     // value: a structure, union or enumeration, or a packed array of them
     // (IEEE 1800-2023 37.17, 37.18, 37.26). It gives the object's VPI type
     // and members; `descriptor` stays the storage shape.
     std::shared_ptr<const SystemVerilogVpiTypeDescriptor> declared;
+    // The declaration's typespec (IEEE 1800-2023 37.25 vpiTypespec).
+    std::shared_ptr<const SystemVerilogVpiTypespec> typespec;
     std::optional<SystemVerilogVpiDriverRange> driver_range;
     std::optional<std::uint32_t> semantic_unit_id;
     std::optional<std::uint32_t> source_id;
@@ -161,6 +228,23 @@ struct SystemVerilogVpiTypeInfo {
     std::string source_path;
     std::uint32_t source_line { };
     std::uint32_t source_column { };
+    // Where an instance's module, interface or program is defined (IEEE
+    // 1800-2023 37.10 vpiDefFile, vpiDefLineNo).
+    std::string definition_path;
+    std::uint32_t definition_line { };
+    // An instance's `default_nettype, None for `default_nettype none, and
+    // `unconnected_drive where its definition is (IEEE 1800-2023 22.8,
+    // 22.9, 37.10 vpiDefNetType, vpiUnconnDrive).
+    SystemVerilogVpiNetKind default_net_kind { SystemVerilogVpiNetKind::Wire };
+    SystemVerilogVpiUnconnectedDrive unconnected_drive {
+        SystemVerilogVpiUnconnectedDrive::None
+    };
+    // An instance's generate blocks named by the implicit-name rule, as
+    // '.'-separated block paths (IEEE 1800-2023 27.6, 37.85 detail 2).
+    std::vector<std::string> implicit_generate_scopes;
+    // An instance's implicitly declared nets (IEEE 1800-2023 6.10, 37.16
+    // vpiImplicitDecl).
+    std::vector<std::string> implicit_nets;
     std::string standard;
     std::string compatibility_profile;
 };

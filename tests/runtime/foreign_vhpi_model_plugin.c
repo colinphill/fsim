@@ -24,6 +24,26 @@ static void show(const char* label, const vhpiCharT* text)
     printf("#c %s=%s\n", label, buffer);
 }
 
+// A string property lower-cased into one of two buffers, or "-".
+static const char* text_property(vhpiHandleT object, vhpiStrPropertyT property)
+{
+    static char buffers[2][128];
+    static int next;
+    const vhpiCharT* value = vhpi_get_str(property, object);
+    char* buffer = buffers[next];
+    size_t index;
+    next = 1 - next;
+    if (value == NULL) {
+        return "-";
+    }
+    for (index = 0U; value[index] != 0 && index + 1U < sizeof buffers[0];
+         ++index) {
+        buffer[index] = (char)tolower(value[index]);
+    }
+    buffer[index] = 0;
+    return buffer;
+}
+
 static const char* text(vhpiHandleT object, vhpiFormatT format)
 {
     static char buffer[80];
@@ -178,6 +198,20 @@ static void start(const vhpiCbDataT* data)
                                                 type) < 0.0,
         vhpi_get_real(vhpiFloatRightBoundP, type) > 0.0);
     printf(" val=%g\n", vhpi_get_real(vhpiRealValP, r));
+
+    // Declaration classes and where objects are (19.4, Figure 14).
+    iterator = vhpi_iterator(vhpiDecls, root);
+    while (iterator != NULL && (k = vhpi_scan(iterator)) != NULL) {
+        const vhpiCharT* file = vhpi_get_str(vhpiFileNameP, k);
+        const char* base = file != NULL ? strrchr((const char*)file, '/') : NULL;
+        printf("#c decl %s %s line=%d file=%s\n",
+            text_property(k, vhpiKindStrP), text_property(k, vhpiNameP),
+            (int)vhpi_get(vhpiLineNoP, k),
+            base != NULL ? base + 1 : (file != NULL ? (const char*)file : "-"));
+    }
+    printf("#c root kind=%s line=%d unit line=%d\n",
+        text_property(root, vhpiKindStrP), (int)vhpi_get(vhpiLineNoP, root),
+        (int)vhpi_get(vhpiLineNoP, unit));
     fflush(stdout);
 }
 

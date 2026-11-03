@@ -1473,6 +1473,24 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 &semantic::sv::Unit::id);
             unit != project.systemverilog_hir.units().end()) {
             scope_type.is_cell = unit->compilation.cell;
+            runtime::SystemVerilogVpiTypeInfo definition;
+            apply_vpi_source(definition, project, unit->source);
+            scope_type.definition_path = std::move(definition.source_path);
+            scope_type.definition_line = definition.source_line;
+            const auto& nettype = unit->compilation.default_nettype;
+            scope_type.default_net_kind = nettype.empty()
+                ? runtime::SystemVerilogVpiNetKind::Wire
+                : vpi_net_kind(nettype);
+            scope_type.unconnected_drive = unit->unconnected_drive
+                    == semantic::sv::UnconnectedDrive::pull_zero
+                ? runtime::SystemVerilogVpiUnconnectedDrive::Pull0
+                : unit->unconnected_drive
+                    == semantic::sv::UnconnectedDrive::pull_one
+                ? runtime::SystemVerilogVpiUnconnectedDrive::Pull1
+                : runtime::SystemVerilogVpiUnconnectedDrive::None;
+            scope_type.implicit_generate_scopes
+                = unit->implicit_generate_scopes;
+            scope_type.implicit_nets = unit->implicit_nets;
         }
         apply_vpi_unit_provenance(scope_type, project, unit_identity);
         descriptor.type = scope_type;
@@ -1808,6 +1826,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             descriptor.parent = owner->second;
             descriptor.name = parameter.name;
             descriptor.type = std::move(decoded->type);
+            descriptor.type->local_parameter = declaration->form
+                == semantic::sv::DeclarationForm::local_parameter;
             descriptor.type->language
                 = vpi_profile_language(project, specialization);
             apply_vpi_specialization_provenance(
@@ -2145,6 +2165,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 == value.width()) {
             descriptor.type->declared = declared;
         }
+        descriptor.type->typespec = signal_info.vpi_typespec;
         const auto handle = create_checked(
             *result.registry, std::move(descriptor), path);
         if (category != runtime::SystemVerilogVpiValueCategory::Event) {
@@ -2283,6 +2304,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         apply_vpi_specialization_provenance(
             *descriptor.type, project, specialization);
         apply_vpi_source(*descriptor.type, project, object.source);
+        descriptor.type->typespec = info.vpi_typespec;
         const auto memory = create_checked(
             *result.registry, std::move(descriptor), path);
         objects.emplace(object.id.value(), memory);

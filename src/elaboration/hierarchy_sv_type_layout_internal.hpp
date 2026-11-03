@@ -58,4 +58,12 @@ systemverilog_vpi_declared_type(
     const semantic::SpecializedHirUnit& specialization,
     const semantic::sv::TypeReference& reference, semantic::ScopeId scope);
 
+// The typespec of a SystemVerilog data type, one node per typedef level
+// (IEEE 1800-2023 37.25). Nullopt for a type VPI gives no typespec here,
+// such as a virtual interface, or a bound that is not constant.
+[[nodiscard]] std::optional<runtime::SystemVerilogVpiTypespec>
+systemverilog_vpi_typespec(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& reference, semantic::ScopeId scope);
+
 } // namespace fsim::elaboration::hierarchy_sv_type_layout_detail

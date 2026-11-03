@@ -113,6 +113,7 @@ struct GenerateNameState {
 void VerilogParser::normalize_systemverilog_generate_names(
     DesignUnit& unit) {
   using ExplicitName = std::pair<std::string, SourceSpan>;
+  unit.implicit_generate_scopes.clear();
 
   std::function<void(const GenerateRegion&, std::vector<ExplicitName>&)>
       collect_scheme_names;
@@ -150,17 +151,19 @@ void VerilogParser::normalize_systemverilog_generate_names(
       normalize_region;
   std::function<void(GenerateBody&)>
       normalize_body;
+  std::vector<std::string> block_path;
 
+  // Returns whether the scope is named by the implicit-name rule.
   const auto resolve_scope =
       [](std::string& scope, GenerateNameState& state) {
         const auto ordinal = implicit_ordinal(scope);
         if (!ordinal) {
-          return;
+          return false;
         }
         if (const auto found = state.implicit_names.find(scope);
             found != state.implicit_names.end()) {
           scope = found->second;
-          return;
+          return true;
         }
         const auto digits = std::to_string(*ordinal);
         std::size_t leading_zeros = 0;
@@ -172,6 +175,7 @@ void VerilogParser::normalize_systemverilog_generate_names(
         state.occupied.insert(candidate);
         state.implicit_names.emplace(scope, candidate);
         scope = std::move(candidate);
+        return true;
       };
 
   normalize_body = [&](GenerateBody& body) {
@@ -190,8 +194,17 @@ void VerilogParser::normalize_systemverilog_generate_names(
           }
           return;
         }
-        resolve_scope(scope, state);
+        const bool implicit = resolve_scope(scope, state);
+        block_path.push_back(scope);
+        if (implicit) {
+          std::string path;
+          for (const auto& block : block_path) {
+            path += path.empty() ? block : "." + block;
+          }
+          unit.implicit_generate_scopes.push_back(std::move(path));
+        }
         normalize_body(body);
+        block_path.pop_back();
       };
 
   normalize_region =

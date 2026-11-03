@@ -29,6 +29,18 @@ using namespace hierarchy_sv_parameters_detail;
 
 namespace {
 
+// A built-in data type or net type, named by its keyword.
+[[nodiscard]] bool builtin_type_spelling(const std::string_view spelling)
+{
+    return spelling.empty() || spelling == "logic" || spelling == "bit"
+        || spelling == "reg" || spelling == "byte" || spelling == "shortint"
+        || spelling == "int" || spelling == "longint" || spelling == "integer"
+        || spelling == "time" || spelling == "real" || spelling == "shortreal"
+        || spelling == "realtime" || spelling == "string"
+        || spelling == "event" || spelling == "chandle"
+        || semantic::sv::is_builtin_net_kind(spelling);
+}
+
 // The declared type of a structure, union, enumeration or packed array of
 // them as VPI describes it; null for every other type. Builtin types are
 // skipped without a lookup.
@@ -39,16 +51,7 @@ vpi_declared_aggregate(const semantic::SpecializedHirUnit& specialization,
 {
     using Kind = runtime::SystemVerilogVpiDescriptorKind;
     const auto& spelling = type.target.spelling;
-    if (!type.target.target.valid()
-        && (spelling.empty() || spelling == "logic" || spelling == "bit"
-            || spelling == "reg" || spelling == "byte"
-            || spelling == "shortint" || spelling == "int"
-            || spelling == "longint" || spelling == "integer"
-            || spelling == "time" || spelling == "real"
-            || spelling == "shortreal" || spelling == "realtime"
-            || spelling == "string" || spelling == "event"
-            || spelling == "chandle"
-            || semantic::sv::is_builtin_net_kind(spelling))) {
+    if (!type.target.target.valid() && builtin_type_spelling(spelling)) {
         return nullptr;
     }
     auto declared = hierarchy_sv_type_layout_detail::
@@ -65,6 +68,28 @@ vpi_declared_aggregate(const semantic::SpecializedHirUnit& specialization,
     }
     return std::make_shared<const runtime::SystemVerilogVpiTypeDescriptor>(
         std::move(*declared));
+}
+
+// The typespec of a declaration that names a type, has several packed
+// dimensions or is an array (IEEE 1800-2023 37.25); VPI derives a
+// built-in vector's typespec from the object, so those are skipped
+// without a lookup.
+std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::Declaration& declaration,
+    const semantic::sv::TypeReference& type)
+{
+    if (!type.target.target.valid()
+        && builtin_type_spelling(type.target.spelling)
+        && type.packed_dimensions.size() <= 1U
+        && type.unpacked_dimensions.empty() && !type.container_form) {
+        return nullptr;
+    }
+    auto typespec = hierarchy_sv_type_layout_detail::systemverilog_vpi_typespec(
+        specialization, type, declaration.scope);
+    return typespec ? std::make_shared<const runtime::SystemVerilogVpiTypespec>(
+                          std::move(*typespec))
+                    : nullptr;
 }
 
 
@@ -1992,6 +2017,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             recorded.vpi_element_type = vpi_declared_aggregate(
                 working_specialization, declaration, element,
                 type->element_width);
+            recorded.vpi_typespec = vpi_typespec(
+                working_specialization, declaration, *declaration.type);
         }
         // The packed dimensions of the elements, for selects within an
         // element named from another scope (IEEE 1800-2017 7.4.5, 23.6).
@@ -2210,6 +2237,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     working_specialization, declaration, *declaration.type,
                     info.width);
             }
+            info.vpi_typespec = vpi_typespec(
+                working_specialization, declaration, *declaration.type);
             const auto initial_value = net_bridge
                 ? net_initial_for(domain, net_type)
                 : domain == frontend::ValueDomain::Logic4
@@ -2496,6 +2525,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     }
     info.vpi_declared_type = vpi_declared_aggregate(
         working_specialization, declaration, *declaration.type, info.width);
+    info.vpi_typespec = vpi_typespec(
+        working_specialization, declaration, *declaration.type);
     info.is_port = declaration.form == Form::port;
     info.direction = direction;
     info.declaration_span = compiled_source_span(

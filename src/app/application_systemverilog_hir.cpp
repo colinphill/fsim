@@ -1445,6 +1445,8 @@ namespace systemverilog_hir_detail {
             input.default_nettype,
             input.is_cell
         };
+        output.implicit_generate_scopes = input.implicit_generate_scopes;
+        output.implicit_nets = input.implicit_nets;
         if (input.systemverilog_configuration) {
             const auto& input_configuration
                 = *input.systemverilog_configuration;

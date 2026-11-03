@@ -493,6 +493,10 @@ struct SignalInfo {
     // 37.18, 37.26); empty for every other signal.
     std::shared_ptr<const runtime::SystemVerilogVpiTypeDescriptor>
         vpi_declared_type { };
+    // The declaration's typespec as VPI describes it (IEEE 1800-2023
+    // 37.25); empty when its type has no typespec model.
+    std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
+        vpi_typespec { };
 };
 
 /// One explicit cross-language scalar or vector boundary conversion.
@@ -563,6 +567,9 @@ struct ContainerObjectInfo {
     bool net { };
     std::shared_ptr<const runtime::SystemVerilogVpiTypeDescriptor>
         vpi_element_type { };
+    // The array's typespec (IEEE 1800-2023 37.25).
+    std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
+        vpi_typespec { };
 };
 
 using VhdlProtectedObjectId = std::uint32_t;

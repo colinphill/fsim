@@ -2248,6 +2248,11 @@ struct Unit {
     std::optional<std::vector<std::optional<std::string>>> port_slots;
     // FSM coverage hints of a module.
     std::vector<FsmPragma> fsm_pragmas;
+    // The generate blocks named by the implicit-name rule (IEEE 1800-2023
+    // 27.6), as '.'-separated block paths from the unit.
+    std::vector<std::string> implicit_generate_scopes;
+    // The nets declared implicitly in the unit (IEEE 1800-2023 6.10).
+    std::vector<std::string> implicit_nets;
 };
 
 /// Owning SystemVerilog semantic HIR, including opaque class-handle operations.

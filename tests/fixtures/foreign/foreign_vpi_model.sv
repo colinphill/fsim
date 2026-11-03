@@ -1,10 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 // Design for the VPI data-model plug-in (IEEE 1800-2023 37.7, 37.11,
-// 37.14, 37.15, 37.16-37.18, 37.26, 37.85).
+// 37.10, 37.14, 37.15, 37.16-37.18, 37.25, 37.26, 37.28, 37.85).
 typedef struct packed { logic [3:0] hi; logic [3:0] lo; } pair_t;
 typedef struct { int a; logic [7:0] b; } rec_t;
 typedef union packed { logic [7:0] raw; pair_t p; } word_t;
 typedef enum logic [1:0] { IDLE, RUN = 2, DONE } state_t;
+// The typedefs of IEEE 1800-2023 37.25 details 1, 6 and 8.
+typedef enum bit [0:2] { red, yellow, blue } primary_colors;
+typedef primary_colors colors;
+typedef time my_time;
+typedef struct packed { int i1; bit bvec; } elem_t;
+typedef elem_t [1:3] parrtype;
+typedef parrtype [2:1] parrtype2;
+typedef parrtype2 unparrtype [6:4];
 
 module leaf(input logic [3:0] a, output logic y, inout wire z);
   assign y = ^a;
@@ -21,6 +29,9 @@ module sink(bus_if.dst b);
 endmodule
 
 module top;
+  parameter int P = 5;
+  localparam int LP = P + 1;
+  parameter logic [7:0] PV = 8'h3c;
   pair_t pr = 8'hA5;
   rec_t rc = '{a: 7, b: 8'h3C};
   word_t un = 8'h96;
@@ -39,9 +50,22 @@ module top;
   bus_if bus();
   assign bus.data = 8'h3C;
   sink us(.b(bus));
+  colors c = yellow;
+  my_time t;
+  unparrtype arr [3:0];
+  parrtype2 p2v;
+  int iv;
+  int q [$];
   for (genvar i = 0; i < 3; i++) begin : g
     logic [i:0] v;
   end
+  // An unnamed generate block takes an implicit name (27.6, 37.85).
+  if (P > 0) begin
+    logic gw;
+  end
+  tri tn;
+  // An implicitly declared net (6.10).
+  assign imp = la[0];
   initial begin
     ra[1] = 8'h5A;
     #2 $finish;

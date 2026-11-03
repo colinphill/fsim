@@ -1607,6 +1607,11 @@ struct DesignUnit {
     // Verilog/SystemVerilog compilation-directive state at unit declaration.
     std::string default_nettype;
     bool is_cell { };
+    // The generate blocks named by the implicit-name rule (IEEE 1800-2023
+    // 27.6), as '.'-separated block paths from the unit.
+    std::vector<std::string> implicit_generate_scopes;
+    // The nets declared implicitly in the unit (IEEE 1800-2023 6.10).
+    std::vector<std::string> implicit_nets;
     // Extern module/interface/program declarations are prototypes and never
     // participate in top or instance target selection until matched to a body.
     bool systemverilog_extern { };

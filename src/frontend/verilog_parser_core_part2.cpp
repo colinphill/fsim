@@ -784,6 +784,7 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
         PortDirection::Unknown,
         false,
         reference.span});
+    unit.implicit_nets.push_back(reference.name);
     known.insert(reference.name);
   }
   // A unit enclosing nested units lends them its declarations (23.4).

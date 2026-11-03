@@ -8,6 +8,7 @@
 #include "fsim/runtime/vpi_bridge.h"
 #include "fsim/runtime/vpi_system.hpp"
 #include "fsim/runtime/vpi_type_descriptor.hpp"
+#include "fsim/support/index_distance.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/version.hpp"
 
@@ -60,6 +61,9 @@ enum class Tag : std::uint64_t {
     pathterm = 12,
     port = 13,
     reference = 14,
+    typespec = 15,
+    typespec_member = 16,
+    enum_const = 17,
 };
 constexpr std::uint64_t serial_mask = (std::uint64_t { 1 } << 48U) - 1U;
 
@@ -1100,6 +1104,22 @@ private:
         fsim_vpi_handle_v1 parent { };
         std::int64_t left { };
         std::int64_t right { };
+        // The dimension of a dynamic array, queue or associative array
+        // (IEEE 1800-2023 37.22): no bounds.
+        bool empty { };
+    };
+    // A typespec: one typedef level and the leading dimensions that
+    // vpiElemTypespec has removed (IEEE 1800-2023 37.25 detail 8).
+    struct TypespecLevel {
+        const runtime::SystemVerilogVpiTypespec* node { };
+        std::size_t dropped { };
+    };
+    // A member of a structure or union typespec, or a constant of an
+    // enumeration typespec (IEEE 1800-2023 37.25).
+    struct TypespecPart {
+        const runtime::SystemVerilogVpiTypespec* owner { };
+        std::size_t index { };
+        fsim_vpi_handle_v1 parent { };
     };
 
     // --- module paths (IEEE 1800-2023 37.39, 38.10, 38.32) ---------------
@@ -1119,6 +1139,50 @@ private:
             return std::nullopt;
         }
         return static_cast<std::uint32_t>(serial_of(handle));
+    }
+
+    // The vpiNetType constant of a net kind (IEEE 1800-2023 37.16).
+    [[nodiscard]] static std::int64_t net_type(
+        const runtime::SystemVerilogVpiNetKind kind)
+    {
+        switch (kind) {
+        case runtime::SystemVerilogVpiNetKind::Wire:
+            return vpiWire;
+        case runtime::SystemVerilogVpiNetKind::Tri:
+            return vpiTri;
+        case runtime::SystemVerilogVpiNetKind::Wand:
+            return vpiWand;
+        case runtime::SystemVerilogVpiNetKind::Wor:
+            return vpiWor;
+        case runtime::SystemVerilogVpiNetKind::Tri0:
+            return vpiTri0;
+        case runtime::SystemVerilogVpiNetKind::Tri1:
+            return vpiTri1;
+        case runtime::SystemVerilogVpiNetKind::Supply0:
+            return vpiSupply0;
+        case runtime::SystemVerilogVpiNetKind::Supply1:
+            return vpiSupply1;
+        case runtime::SystemVerilogVpiNetKind::Uwire:
+            return vpiUwire;
+        case runtime::SystemVerilogVpiNetKind::TriReg:
+            return vpiTriReg;
+        case runtime::SystemVerilogVpiNetKind::TriAnd:
+            return vpiTriAnd;
+        case runtime::SystemVerilogVpiNetKind::TriOr:
+            return vpiTriOr;
+        case runtime::SystemVerilogVpiNetKind::None:
+            break;
+        }
+        return vpiNone;
+    }
+
+    // A module, interface or program instance (IEEE 1800-2023 37.10).
+    [[nodiscard]] static bool instance_kind(const SystemVerilogVpiObjectKind kind)
+    {
+        return kind == SystemVerilogVpiObjectKind::Root
+            || kind == SystemVerilogVpiObjectKind::Module
+            || kind == SystemVerilogVpiObjectKind::Interface
+            || kind == SystemVerilogVpiObjectKind::Program;
     }
 
     [[nodiscard]] static bool array_kind(const SystemVerilogVpiObjectKind kind)
@@ -1146,6 +1210,101 @@ private:
             }
         }
         return elements;
+    }
+
+    // An instance array's dimensions, leftmost first: its elements are
+    // published in declaration order, so the first and the last element
+    // hold each dimension's left and right bounds (IEEE 1800-2023 37.11).
+    [[nodiscard]] std::vector<std::pair<std::int64_t, std::int64_t>>
+    instance_array_ranges(const runtime::SystemVerilogVpiObjectInfo& array)
+    {
+        std::vector<std::pair<std::int64_t, std::int64_t>> ranges;
+        if (array.kind == SystemVerilogVpiObjectKind::GenerateScopeArray) {
+            return ranges;
+        }
+        const auto elements = array_elements(array);
+        const auto indexes = [&](const fsim_vpi_handle_v1 handle) {
+            std::vector<std::int64_t> result;
+            const auto object = info(handle);
+            if (!object) {
+                return result;
+            }
+            auto rest = std::string_view { object->name }.substr(
+                array.name.size());
+            while (rest.starts_with('[')) {
+                std::int64_t index { };
+                const auto parsed = std::from_chars(
+                    rest.data() + 1, rest.data() + rest.size(), index);
+                if (parsed.ec != std::errc { } || parsed.ptr == rest.end()
+                    || *parsed.ptr != ']') {
+                    return std::vector<std::int64_t> { };
+                }
+                result.push_back(index);
+                rest.remove_prefix(
+                    static_cast<std::size_t>(parsed.ptr - rest.data()) + 1U);
+            }
+            return result;
+        };
+        if (elements.empty()) {
+            return ranges;
+        }
+        const auto first = indexes(elements.front());
+        const auto last = indexes(elements.back());
+        if (first.empty() || first.size() != last.size()) {
+            return ranges;
+        }
+        for (std::size_t dimension = 0U; dimension < first.size();
+             ++dimension) {
+            ranges.emplace_back(first[dimension], last[dimension]);
+        }
+        return ranges;
+    }
+
+    // The instance array an instance is an element of (IEEE 1800-2023
+    // 37.10 vpiArrayMember).
+    [[nodiscard]] bool instance_array_member(
+        const runtime::SystemVerilogVpiObjectInfo& object)
+    {
+        const auto bracket = object.name.find('[');
+        if (bracket == std::string::npos) {
+            return false;
+        }
+        const auto name = std::string_view { object.name }.substr(0U, bracket);
+        for (const auto handle :
+            drain(registry_.iterate_children(object.parent))) {
+            if (const auto sibling = info(handle); sibling
+                && array_kind(sibling->kind) && sibling->name == name) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Whether a generate scope's block path from its instance is one the
+    // implicit-name rule named (IEEE 1800-2023 27.6).
+    [[nodiscard]] bool implicit_generate_scope(
+        const runtime::SystemVerilogVpiObjectInfo& scope) const
+    {
+        std::vector<std::string> blocks;
+        auto current = std::optional { scope };
+        while (current
+            && current->kind == SystemVerilogVpiObjectKind::GenerateScope) {
+            blocks.push_back(current->name.substr(0U, current->name.find('[')));
+            current = current->parent == 0U ? std::nullopt
+                                            : info(current->parent);
+        }
+        if (!current || !instance_kind(current->kind) || !current->type) {
+            return false;
+        }
+        std::string path;
+        for (auto block = blocks.rbegin(); block != blocks.rend(); ++block) {
+            if (!path.empty()) {
+                path.push_back('.');
+            }
+            path.append(*block);
+        }
+        return std::ranges::find(current->type->implicit_generate_scopes, path)
+            != current->type->implicit_generate_scopes.end();
     }
 
     // A port of an instance (IEEE 1800-2023 37.14), or an I/O declaration
@@ -1221,6 +1380,469 @@ private:
             return find_reference_path(through, depth + 1U);
         }
         return 0U;
+    }
+
+    // --- typespecs (IEEE 1800-2023 37.25) --------------------------------
+
+    using Typespec = runtime::SystemVerilogVpiTypespec;
+    using TypespecKind = runtime::SystemVerilogVpiTypespecKind;
+
+    [[nodiscard]] fsim_vpi_handle_v1 make_typespec(const TypespecLevel level)
+    {
+        const auto key = std::pair { static_cast<const void*>(level.node),
+            level.dropped };
+        if (const auto found = typespec_index_.find(key);
+            found != typespec_index_.end()) {
+            return tagged(Tag::typespec, found->second);
+        }
+        typespecs_.push_back(level);
+        typespec_index_.emplace(key, typespecs_.size() - 1U);
+        return tagged(Tag::typespec, typespecs_.size() - 1U);
+    }
+
+    [[nodiscard]] const TypespecLevel* typespec_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::typespec
+            || serial_of(handle) >= typespecs_.size()) {
+            return nullptr;
+        }
+        return &typespecs_[serial_of(handle)];
+    }
+
+    [[nodiscard]] const TypespecPart* typespec_part_of(
+        const fsim_vpi_handle_v1 handle, const Tag tag) const
+    {
+        const auto& parts
+            = tag == Tag::typespec_member ? typespec_members_ : enum_constants_;
+        if (!owned(handle) || tag_of(handle) != tag
+            || serial_of(handle) >= parts.size()) {
+            return nullptr;
+        }
+        return &parts[serial_of(handle)];
+    }
+
+    // The typespec of a value stored as `descriptor`, for an object
+    // elaboration gave none: a built-in type has no typedef to name
+    // (37.25 detail 1).
+    [[nodiscard]] static Typespec derived_typespec(
+        const runtime::SystemVerilogVpiTypeDescriptor& descriptor)
+    {
+        using DescriptorKind = runtime::SystemVerilogVpiDescriptorKind;
+        using Category = runtime::SystemVerilogVpiValueCategory;
+        Typespec result;
+        result.is_signed = descriptor.is_signed;
+        switch (descriptor.kind) {
+        case DescriptorKind::UnpackedArray:
+        case DescriptorKind::DynamicArray:
+        case DescriptorKind::Queue:
+        case DescriptorKind::AssociativeArray:
+            result.kind = TypespecKind::Array;
+            result.is_signed = false;
+            result.array_kind = descriptor.kind == DescriptorKind::DynamicArray
+                ? runtime::SystemVerilogVpiArrayKind::Dynamic
+                : descriptor.kind == DescriptorKind::Queue
+                ? runtime::SystemVerilogVpiArrayKind::Queue
+                : descriptor.kind == DescriptorKind::AssociativeArray
+                ? runtime::SystemVerilogVpiArrayKind::Associative
+                : runtime::SystemVerilogVpiArrayKind::Static;
+            if (descriptor.kind == DescriptorKind::UnpackedArray) {
+                result.ranges = descriptor.ranges;
+            }
+            if (!descriptor.children.empty()) {
+                result.element.push_back(
+                    derived_typespec(descriptor.children.front()));
+            }
+            return result;
+        case DescriptorKind::Struct:
+        case DescriptorKind::Union:
+            result.kind = descriptor.kind == DescriptorKind::Struct
+                ? TypespecKind::Struct
+                : TypespecKind::Union;
+            result.packed = descriptor.packed;
+            for (std::size_t index = 0U; index < descriptor.children.size();
+                 ++index) {
+                result.members.push_back(
+                    derived_typespec(descriptor.children[index]));
+                result.member_names.push_back(
+                    index < descriptor.member_names.size()
+                        ? descriptor.member_names[index]
+                        : std::string { });
+            }
+            return result;
+        case DescriptorKind::Enum: {
+            result.kind = TypespecKind::Enum;
+            auto base = descriptor;
+            base.kind = DescriptorKind::Scalar;
+            base.enum_literals.clear();
+            result.element.push_back(derived_typespec(base));
+            for (const auto& literal : descriptor.enum_literals) {
+                result.enum_constants.push_back(literal);
+            }
+            return result;
+        }
+        case DescriptorKind::PackedArray:
+            // A vector of a built-in type stores its bits as a packed
+            // array; its typespec is the type's own (37.25).
+            if (descriptor.children.size() == 1U
+                && descriptor.children.front().kind == DescriptorKind::Scalar) {
+                auto scalar = descriptor.children.front();
+                std::uint64_t width = scalar.width;
+                for (const auto& range : descriptor.ranges) {
+                    width *= support::index_distance(range.left, range.right)
+                        + 1U;
+                }
+                if (descriptor.category
+                    != runtime::SystemVerilogVpiValueCategory::None) {
+                    scalar.category = descriptor.category;
+                }
+                scalar.width = static_cast<std::uint32_t>(width);
+                scalar.is_signed = descriptor.is_signed || scalar.is_signed;
+                auto vector = derived_typespec(scalar);
+                if (vector.kind == TypespecKind::Logic
+                    || vector.kind == TypespecKind::Bit) {
+                    vector.ranges = descriptor.ranges;
+                }
+                return vector;
+            }
+            result.kind = TypespecKind::PackedArray;
+            result.ranges = descriptor.ranges;
+            if (!descriptor.children.empty()) {
+                result.element.push_back(
+                    derived_typespec(descriptor.children.front()));
+            }
+            return result;
+        case DescriptorKind::String:
+            result.kind = TypespecKind::String;
+            result.is_signed = false;
+            return result;
+        case DescriptorKind::Class:
+        case DescriptorKind::ClassHandle:
+            result.kind = TypespecKind::Class;
+            result.name = descriptor.nominal_name;
+            return result;
+        case DescriptorKind::Scalar:
+            break;
+        }
+        switch (descriptor.category) {
+        case Category::Real:
+            result.kind = TypespecKind::Real;
+            return result;
+        case Category::ShortReal:
+            result.kind = TypespecKind::ShortReal;
+            return result;
+        case Category::Time:
+            result.kind = TypespecKind::Time;
+            return result;
+        case Category::String:
+            result.kind = TypespecKind::String;
+            return result;
+        case Category::Event:
+            result.kind = TypespecKind::Event;
+            return result;
+        case Category::Integer4:
+            if (descriptor.width == 32U) {
+                result.kind = TypespecKind::Integer;
+                return result;
+            }
+            break;
+        case Category::Integer2:
+            result.kind = descriptor.width == 8U ? TypespecKind::Byte
+                : descriptor.width == 16U        ? TypespecKind::ShortInt
+                : descriptor.width == 64U        ? TypespecKind::LongInt
+                                                 : TypespecKind::Int;
+            return result;
+        default:
+            break;
+        }
+        result.kind = descriptor.category == Category::Bit2 ? TypespecKind::Bit
+                                                            : TypespecKind::Logic;
+        if (descriptor.width > 1U) {
+            result.ranges.push_back(
+                { std::int64_t { descriptor.width } - 1, 0 });
+        }
+        return result;
+    }
+
+    // The typespec of a net, variable, array, array word, member or
+    // parameter (IEEE 1800-2023 37.16, 37.17, 37.25, 37.26).
+    [[nodiscard]] std::optional<TypespecLevel> object_typespec(
+        const fsim_vpi_handle_v1 handle, const std::size_t depth = 0U)
+    {
+        // A member's typespec is its structure's member's (37.26), an
+        // element's its packed array's element's (37.18).
+        if (const auto* select = select_of(handle);
+            select != nullptr && select->declared && select->owner != 0U) {
+            const auto copy = *select;
+            const auto owner = depth > 16U
+                ? std::nullopt
+                : object_typespec(copy.owner, depth + 1U);
+            if (!owner) {
+                return std::nullopt;
+            }
+            if (!copy.member) {
+                return element_typespec(*owner);
+            }
+            const auto* node = owner->node;
+            for (std::size_t index = 0U; index < node->member_names.size();
+                 ++index) {
+                if (node->member_names[index] == copy.name) {
+                    return TypespecLevel { &node->members[index], 0U };
+                }
+            }
+            return std::nullopt;
+        }
+        const auto object = info(handle);
+        if (!object || !object->type || depth > 16U
+            || (object->kind != SystemVerilogVpiObjectKind::Net
+                && object->kind != SystemVerilogVpiObjectKind::Variable
+                && object->kind != SystemVerilogVpiObjectKind::Port
+                && object->kind != SystemVerilogVpiObjectKind::Parameter
+                && object->kind != SystemVerilogVpiObjectKind::Memory
+                && object->kind != SystemVerilogVpiObjectKind::StructureMember
+                && object->kind != SystemVerilogVpiObjectKind::NamedEvent
+                && object->kind != SystemVerilogVpiObjectKind::ClassProperty)) {
+            return std::nullopt;
+        }
+        if (object->type->typespec) {
+            return TypespecLevel { object->type->typespec.get(), 0U };
+        }
+        // An array word's typespec is its array's element's (37.17).
+        if (const auto parent = info(object->parent);
+            parent && parent->kind == SystemVerilogVpiObjectKind::Memory) {
+            // A word is indexed through every unpacked dimension.
+            auto element = object_typespec(object->parent, depth + 1U);
+            while (element && element->node->kind == TypespecKind::Array) {
+                element = element_typespec(*element);
+            }
+            if (element) {
+                return element;
+            }
+        }
+        auto& derived = derived_typespecs_[handle];
+        if (!derived) {
+            // An array is described by its stored shape, any other object
+            // by its value category, which tells an int from a bit vector.
+            Typespec typespec;
+            if (object->type->declared) {
+                typespec = derived_typespec(*object->type->declared);
+            } else if (object->kind == SystemVerilogVpiObjectKind::Memory
+                && object->type->descriptor) {
+                typespec = derived_typespec(*object->type->descriptor);
+                typespec.kind = TypespecKind::Array;
+            } else {
+                runtime::SystemVerilogVpiTypeDescriptor scalar;
+                scalar.category = object->type->category;
+                scalar.width = object->type->width;
+                scalar.is_signed = object->type->is_signed;
+                typespec = derived_typespec(scalar);
+            }
+            // A vector keeps its declared bounds (37.22).
+            if (object->kind != SystemVerilogVpiObjectKind::Memory
+                && (typespec.kind == TypespecKind::Logic
+                           || typespec.kind == TypespecKind::Bit)
+                && object->type->width > 1U) {
+                typespec.ranges.clear();
+                for (const auto& [left, right] : dimension_ranges(handle)) {
+                    typespec.ranges.push_back({ left, right });
+                }
+            }
+            derived = std::make_shared<const Typespec>(std::move(typespec));
+        }
+        return TypespecLevel { derived.get(), 0U };
+    }
+
+    // The ranges of a typespec, leftmost first, through the named levels
+    // its dimensions continue into (37.25 details 8-10).
+    [[nodiscard]] static std::vector<runtime::SystemVerilogVpiRange>
+    typespec_ranges(const TypespecLevel level, bool& empty)
+    {
+        std::vector<runtime::SystemVerilogVpiRange> result;
+        const auto* node = level.node;
+        auto dropped = level.dropped;
+        empty = node->kind == TypespecKind::Array
+            && node->array_kind != runtime::SystemVerilogVpiArrayKind::Static;
+        while (node != nullptr) {
+            result.insert(result.end(),
+                node->ranges.begin()
+                    + static_cast<std::ptrdiff_t>(
+                        std::min(dropped, node->ranges.size())),
+                node->ranges.end());
+            if (node->element.empty()
+                || node->kind == TypespecKind::Enum) {
+                break;
+            }
+            const auto& next = node->element.front();
+            const bool continues = node->kind == TypespecKind::Array
+                ? next.kind == TypespecKind::Array
+                    && next.array_kind
+                        == runtime::SystemVerilogVpiArrayKind::Static
+                    && node->array_kind
+                        == runtime::SystemVerilogVpiArrayKind::Static
+                : node->kind == TypespecKind::PackedArray
+                    && (next.kind == TypespecKind::PackedArray
+                        || next.kind == TypespecKind::Logic
+                        || next.kind == TypespecKind::Bit);
+            if (!continues) {
+                break;
+            }
+            node = &next;
+            dropped = 0U;
+        }
+        return result;
+    }
+
+    // vpiElemTypespec: the typespec with its leftmost dimension removed
+    // (37.25 detail 8).
+    [[nodiscard]] static std::optional<TypespecLevel> element_typespec(
+        const TypespecLevel level)
+    {
+        const auto* node = level.node;
+        switch (node->kind) {
+        case TypespecKind::Array:
+        case TypespecKind::PackedArray:
+            if (level.dropped + 1U < node->ranges.size()) {
+                return TypespecLevel { node, level.dropped + 1U };
+            }
+            if (node->element.empty()) {
+                return std::nullopt;
+            }
+            return TypespecLevel { &node->element.front(), 0U };
+        case TypespecKind::Logic:
+        case TypespecKind::Bit:
+            if (level.dropped < node->ranges.size()) {
+                return TypespecLevel { node, level.dropped + 1U };
+            }
+            return std::nullopt;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    [[nodiscard]] static PLI_INT32 typespec_type(const Typespec& node)
+    {
+        switch (node.kind) {
+        case TypespecKind::Logic:
+            return vpiLogicTypespec;
+        case TypespecKind::Bit:
+            return vpiBitTypespec;
+        case TypespecKind::Byte:
+            return vpiByteTypespec;
+        case TypespecKind::ShortInt:
+            return vpiShortIntTypespec;
+        case TypespecKind::Int:
+            return vpiIntTypespec;
+        case TypespecKind::LongInt:
+            return vpiLongIntTypespec;
+        case TypespecKind::Integer:
+            return vpiIntegerTypespec;
+        case TypespecKind::Time:
+            return vpiTimeTypespec;
+        case TypespecKind::Real:
+            return vpiRealTypespec;
+        case TypespecKind::ShortReal:
+            return vpiShortRealTypespec;
+        case TypespecKind::String:
+            return vpiStringTypespec;
+        case TypespecKind::Event:
+            return vpiEventTypespec;
+        case TypespecKind::Chandle:
+            return vpiChandleTypespec;
+        case TypespecKind::Enum:
+            return vpiEnumTypespec;
+        case TypespecKind::Struct:
+            return vpiStructTypespec;
+        case TypespecKind::Union:
+            return vpiUnionTypespec;
+        case TypespecKind::PackedArray:
+            return vpiPackedArrayTypespec;
+        case TypespecKind::Array:
+            return vpiArrayTypespec;
+        case TypespecKind::Class:
+            return vpiClassTypespec;
+        }
+        return vpiUndefined;
+    }
+
+    // The bits of an enumeration constant's value.
+    [[nodiscard]] static std::int64_t enum_constant_width(const Typespec& node)
+    {
+        return node.enum_constants.empty()
+            ? 0
+            : static_cast<std::int64_t>(node.enum_constants.front().value.width());
+    }
+
+    fsim_vpi_status_v1 typespec_relation(const TypespecLevel level,
+        const fsim_vpi_handle_v1 self, const PLI_INT32 type,
+        fsim_vpi_service_result_v1& result)
+    {
+        const auto& node = *level.node;
+        switch (type) {
+        case vpiElemTypespec:
+            if (const auto element = element_typespec(level)) {
+                return succeed(result, make_typespec(*element));
+            }
+            return succeed(result);
+        case vpiBaseTypespec:
+            return succeed(result,
+                node.kind == TypespecKind::Enum && !node.element.empty()
+                    ? make_typespec({ &node.element.front(), 0U })
+                    : 0U);
+        case vpiTypedefAlias:
+            return succeed(result,
+                level.dropped == 0U && !node.alias.empty()
+                    ? make_typespec({ &node.alias.front(), 0U })
+                    : 0U);
+        case vpiLeftRange:
+        case vpiRightRange: {
+            bool empty = false;
+            const auto ranges = typespec_ranges(level, empty);
+            if (ranges.empty() || empty) {
+                return succeed(result);
+            }
+            return succeed(result,
+                make_constant(type == vpiLeftRange ? ranges.front().left
+                                                   : ranges.front().right));
+        }
+        default:
+            static_cast<void>(self);
+            return succeed(result);
+        }
+    }
+
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> typespec_iteration(
+        const TypespecLevel level, const fsim_vpi_handle_v1 self,
+        const PLI_INT32 type)
+    {
+        std::vector<fsim_vpi_handle_v1> objects;
+        const auto& node = *level.node;
+        if (type == vpiRange) {
+            bool empty = false;
+            if (const auto ranges = typespec_ranges(level, empty);
+                empty || !ranges.empty()) {
+                if (empty) {
+                    ranges_.push_back({ self, 0, 0, true });
+                    objects.push_back(tagged(Tag::range, ranges_.size() - 1U));
+                }
+                for (const auto& range : ranges) {
+                    objects.push_back(make_range(self, range.left, range.right));
+                }
+            }
+        } else if (type == vpiTypespecMember) {
+            for (std::size_t index = 0U; index < node.members.size(); ++index) {
+                typespec_members_.push_back({ &node, index, self });
+                objects.push_back(
+                    tagged(Tag::typespec_member, typespec_members_.size() - 1U));
+            }
+        } else if (type == vpiEnumConst) {
+            for (std::size_t index = 0U; index < node.enum_constants.size();
+                 ++index) {
+                enum_constants_.push_back({ &node, index, self });
+                objects.push_back(
+                    tagged(Tag::enum_const, enum_constants_.size() - 1U));
+            }
+        }
+        return objects;
     }
 
     // The ports of an instance in port order, the ports whose low
@@ -2807,6 +3429,15 @@ private:
         if (reference_of(handle) != nullptr) {
             return vpiRefObj;
         }
+        if (const auto* level = typespec_of(handle)) {
+            return typespec_type(*level->node);
+        }
+        if (typespec_part_of(handle, Tag::typespec_member) != nullptr) {
+            return vpiTypespecMember;
+        }
+        if (typespec_part_of(handle, Tag::enum_const) != nullptr) {
+            return vpiEnumConst;
+        }
         if (pathterm_of(handle)) {
             return vpiPathTerm;
         }
@@ -2979,6 +3610,11 @@ private:
         const auto type = static_cast<PLI_INT32>(request.argument);
         const auto reference = resolve(request.handle);
         std::vector<fsim_vpi_handle_v1> objects;
+        if (const auto* level = typespec_of(reference)) {
+            const auto copy = *level;
+            return succeed(result,
+                make_iterator(typespec_iteration(copy, reference, type)));
+        }
         if (const auto* site = call_of(reference)) {
             if (type == vpiArgument) {
                 const auto index = static_cast<std::uint64_t>(
@@ -3017,6 +3653,12 @@ private:
                 ? info(reference)
                 : std::nullopt;
             array && array_kind(array->kind)) {
+            if (type == vpiRange) {
+                for (const auto& [left, right] : instance_array_ranges(*array)) {
+                    objects.push_back(make_range(reference, left, right));
+                }
+                return succeed(result, make_iterator(std::move(objects)));
+            }
             for (const auto element : array_elements(*array)) {
                 if (const auto object = info(element);
                     object && matches(type, *object)) {
@@ -3242,15 +3884,39 @@ private:
             return succeed(result);
         }
         const auto reference = resolve(request.handle);
+        // Typespecs, their members and enumeration constants (IEEE
+        // 1800-2023 37.25).
+        if (const auto* level = typespec_of(reference)) {
+            return typespec_relation(*level, reference, type, result);
+        }
+        if (const auto* member
+            = typespec_part_of(reference, Tag::typespec_member)) {
+            const auto part = *member;
+            return succeed(result, type == vpiTypespec
+                    ? make_typespec({ &part.owner->members[part.index], 0U })
+                    : type == vpiParent ? part.parent
+                                        : 0U);
+        }
+        if (const auto* constant
+            = typespec_part_of(reference, Tag::enum_const)) {
+            return succeed(result, type == vpiParent ? constant->parent : 0U);
+        }
+        if (type == vpiTypespec
+            && (!owned(reference) || select_of(reference) != nullptr)) {
+            const auto level = object_typespec(reference);
+            return succeed(result, level ? make_typespec(*level) : 0U);
+        }
         if (const auto* range = range_of(reference)) {
             const auto bounds = *range;
             switch (type) {
             case vpiParent:
                 return succeed(result, bounds.parent);
             case vpiLeftRange:
-                return succeed(result, make_constant(bounds.left));
+                return succeed(result,
+                    bounds.empty ? 0U : make_constant(bounds.left));
             case vpiRightRange:
-                return succeed(result, make_constant(bounds.right));
+                return succeed(result,
+                    bounds.empty ? 0U : make_constant(bounds.right));
             default:
                 return succeed(result);
             }
@@ -3372,6 +4038,15 @@ private:
         // 37.17 to 37.19).
         case vpiLeftRange:
         case vpiRightRange: {
+            if (array_kind(object->kind)) {
+                const auto ranges = instance_array_ranges(*object);
+                if (ranges.empty()) {
+                    return succeed(result);
+                }
+                return succeed(result, make_constant(type == vpiLeftRange
+                        ? ranges.front().first
+                        : ranges.front().second));
+            }
             const auto range = declared_range(reference);
             if (!range) {
                 return succeed(result);
@@ -3692,6 +4367,57 @@ private:
         if (property == vpiType) {
             return integer(handle_type(request.handle));
         }
+        if (const auto* level = typespec_of(request.handle)) {
+            const auto& node = *level->node;
+            bool empty = false;
+            switch (property) {
+            case vpiSigned:
+                return integer(node.is_signed ? 1 : 0);
+            case vpiPacked:
+                return node.kind == TypespecKind::Struct
+                        || node.kind == TypespecKind::Union
+                    ? integer(node.packed ? 1 : 0)
+                    : succeed(result, 0U, undefined);
+            case vpiTagged:
+                return node.kind == TypespecKind::Union
+                    ? integer(node.tagged ? 1 : 0)
+                    : succeed(result, 0U, undefined);
+            case vpiVector:
+                return integer(node.kind == TypespecKind::PackedArray
+                        || ((node.kind == TypespecKind::Logic
+                                || node.kind == TypespecKind::Bit)
+                            && !typespec_ranges(*level, empty).empty())
+                        ? 1
+                        : 0);
+            case vpiArrayType:
+                if (node.kind != TypespecKind::Array) {
+                    return succeed(result, 0U, undefined);
+                }
+                switch (node.array_kind) {
+                case runtime::SystemVerilogVpiArrayKind::Static:
+                    return integer(vpiStaticArray);
+                case runtime::SystemVerilogVpiArrayKind::Dynamic:
+                    return integer(vpiDynamicArray);
+                case runtime::SystemVerilogVpiArrayKind::Associative:
+                    return integer(vpiAssocArray);
+                case runtime::SystemVerilogVpiArrayKind::Queue:
+                    return integer(vpiQueueArray);
+                }
+                return succeed(result, 0U, undefined);
+            default:
+                return succeed(result, 0U, undefined);
+            }
+        }
+        if (typespec_part_of(request.handle, Tag::typespec_member) != nullptr) {
+            return property == vpiRandType ? integer(vpiNotRand)
+                                           : succeed(result, 0U, undefined);
+        }
+        if (const auto* constant
+            = typespec_part_of(request.handle, Tag::enum_const)) {
+            return property == vpiSize
+                ? integer(enum_constant_width(*constant->owner))
+                : succeed(result, 0U, undefined);
+        }
         // A scheduled event reports whether it is still queued
         // (IEEE 1800-2023 38.34).
         if (owned(request.handle)
@@ -3869,8 +4595,81 @@ private:
             return integer(object->source ? object->source->line : 0);
         case vpiTopModule:
             return integer(object->parent == 0U ? 1 : 0);
+        case vpiDefLineNo:
+            if (!instance_kind(object->kind) || !object->type
+                || object->type->definition_line == 0U) {
+                return succeed(result, 0U, undefined);
+            }
+            return integer(object->type->definition_line);
         case vpiCellInstance:
             return integer(object->type && object->type->is_cell ? 1 : 0);
+        // A top-level instance, and an element of an instance array (IEEE
+        // 1800-2023 37.10).
+        case vpiTop:
+            return instance_kind(object->kind)
+                ? integer(object->parent == 0U ? 1 : 0)
+                : succeed(result, 0U, undefined);
+        case vpiArrayMember:
+            return instance_kind(object->kind)
+                    || object->kind == SystemVerilogVpiObjectKind::GenerateScope
+                ? integer(instance_array_member(*object) ? 1 : 0)
+                : succeed(result, 0U, undefined);
+        // The directive state where an instance's definition is (IEEE
+        // 1800-2023 22.8, 22.9, 37.10); there are no delay modes or
+        // decryption, so no delay mode and nothing protected.
+        case vpiDefNetType:
+            if (!instance_kind(object->kind) || !object->type) {
+                return succeed(result, 0U, undefined);
+            }
+            return integer(object->type->default_net_kind
+                    == runtime::SystemVerilogVpiNetKind::None
+                ? vpiNone
+                : net_type(object->type->default_net_kind));
+        case vpiUnconnDrive:
+            if (!instance_kind(object->kind) || !object->type) {
+                return succeed(result, 0U, undefined);
+            }
+            switch (object->type->unconnected_drive) {
+            case runtime::SystemVerilogVpiUnconnectedDrive::Pull0:
+                return integer(vpiPull0);
+            case runtime::SystemVerilogVpiUnconnectedDrive::Pull1:
+                return integer(vpiPull1);
+            case runtime::SystemVerilogVpiUnconnectedDrive::None:
+                break;
+            }
+            return integer(vpiHighZ);
+        case vpiDefDelayMode:
+            return instance_kind(object->kind)
+                ? integer(vpiDelayModeNone)
+                : succeed(result, 0U, undefined);
+        case vpiProtected:
+            return instance_kind(object->kind)
+                    || object->kind == SystemVerilogVpiObjectKind::GenerateScope
+                ? integer(0)
+                : succeed(result, 0U, undefined);
+        // A generate block named by the implicit-name rule (IEEE 1800-2023
+        // 27.6, 37.85 detail 2).
+        case vpiImplicitDecl:
+            if (object->kind == SystemVerilogVpiObjectKind::GenerateScope) {
+                return integer(implicit_generate_scope(*object) ? 1 : 0);
+            }
+            if (object->kind == SystemVerilogVpiObjectKind::Net) {
+                const auto parent = info(object->parent);
+                return integer(parent && instance_kind(parent->kind)
+                            && parent->type
+                            && std::ranges::find(parent->type->implicit_nets,
+                                   object->name)
+                                != parent->type->implicit_nets.end()
+                        ? 1
+                        : 0);
+            }
+            return succeed(result, 0U, undefined);
+        case vpiLocalParam:
+            if (object->kind != SystemVerilogVpiObjectKind::Parameter) {
+                return succeed(result, 0U, undefined);
+            }
+            return integer(
+                object->type && object->type->local_parameter ? 1 : 0);
         case vpiAutomatic:
             return integer(object->type
                         && object->type->lifetime
@@ -3899,7 +4698,7 @@ private:
             return object->type
                     && object->type->net_kind
                         != runtime::SystemVerilogVpiNetKind::None
-                ? integer(static_cast<std::int64_t>(object->type->net_kind))
+                ? integer(net_type(object->type->net_kind))
                 : succeed(result, 0U, undefined);
         case vpiArray:
             return integer(object->kind == SystemVerilogVpiObjectKind::Memory
@@ -4374,6 +5173,28 @@ private:
             const auto* const name = type_name(handle_type(request.handle));
             return name == nullptr ? FSIM_VPI_STATUS_NOT_FOUND : text(name);
         }
+        // A typespec is named by its typedef (IEEE 1800-2023 37.25 detail
+        // 1); a member and an enumeration constant by their own names.
+        if (const auto* level = typespec_of(request.handle)) {
+            return property == vpiName && level->dropped == 0U
+                    && !level->node->name.empty()
+                ? text(level->node->name)
+                : FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        if (const auto* member
+            = typespec_part_of(request.handle, Tag::typespec_member)) {
+            return property == vpiName
+                ? text(member->owner->member_names[member->index])
+                : FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        if (const auto* constant
+            = typespec_part_of(request.handle, Tag::enum_const)) {
+            const auto& literal = constant->owner->enum_constants[constant->index];
+            if (property == vpiName) {
+                return text(literal.name);
+            }
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
         // A port is named but has no full name (IEEE 1800-2023 37.14).
         if (const auto* port = port_of(request.handle)) {
             return property == vpiName ? text(port->name)
@@ -4460,6 +5281,31 @@ private:
         case vpiFile:
             return object->source ? text(object->source->file)
                                   : FSIM_VPI_STATUS_NOT_FOUND;
+        // Where the instance's definition is, and its library; without a
+        // configuration its cell is its definition (IEEE 1800-2023 33.4,
+        // 37.10).
+        case vpiDefFile:
+            return instance_kind(object->kind) && object->type
+                    && !object->type->definition_path.empty()
+                ? text(object->type->definition_path)
+                : FSIM_VPI_STATUS_NOT_FOUND;
+        case vpiLibrary:
+        case vpiCell: {
+            if (!instance_kind(object->kind) || !object->type
+                || object->type->semantic_unit.empty()) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            auto unit = std::string_view { object->type->semantic_unit };
+            const auto separator = unit.find("::");
+            if (separator == std::string_view::npos) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            if (property == vpiLibrary) {
+                return text(std::string { unit.substr(0U, separator) });
+            }
+            unit.remove_prefix(separator + 2U);
+            return text(std::string { unit.substr(0U, unit.find('(')) });
+        }
         case vpiDefName: {
             if (!object->type || object->type->semantic_unit.empty()) {
                 return text(object->name);
@@ -4512,6 +5358,15 @@ private:
         }
         if (const auto* constant = constant_of(handle)) {
             return constant->value;
+        }
+        if (const auto* constant = typespec_part_of(handle, Tag::enum_const)) {
+            Value value;
+            value.bits
+                = constant->owner->enum_constants[constant->index].value;
+            if (!constant->owner->element.empty()) {
+                value.is_signed = constant->owner->element.front().is_signed;
+            }
+            return value;
         }
         if (owned(handle)) {
             return std::nullopt;
@@ -5407,6 +6262,13 @@ private:
     std::vector<Constant> constants_;
     std::vector<Range> ranges_;
     std::vector<SubArray> subarrays_;
+    std::vector<TypespecLevel> typespecs_;
+    std::map<std::pair<const void*, std::size_t>, std::size_t> typespec_index_;
+    std::vector<TypespecPart> typespec_members_;
+    std::vector<TypespecPart> enum_constants_;
+    std::map<fsim_vpi_handle_v1,
+        std::shared_ptr<const runtime::SystemVerilogVpiTypespec>>
+        derived_typespecs_;
     // vpi_put_delays tables awaiting the next scheduler safe point, and the
     // safe-point hook that applies them.
     std::map<std::uint32_t, std::vector<runtime::SimulationTick>> queued_path_delays_;

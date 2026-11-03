@@ -10,10 +10,12 @@
 #include <bit>
 #include <cstdint>
 #include <exception>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 
 namespace fsim::elaboration::hierarchy_sv_type_layout_detail {
 using namespace runtime::simir;
@@ -684,6 +686,470 @@ systemverilog_vpi_declared_type(
         return array;
     };
     return shape(shape, reference, scope, 0U);
+}
+
+std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& reference, const semantic::ScopeId scope)
+{
+    using Typespec = runtime::SystemVerilogVpiTypespec;
+    using Kind = runtime::SystemVerilogVpiTypespecKind;
+    using ArrayKind = runtime::SystemVerilogVpiArrayKind;
+    using Form = semantic::sv::TypeForm;
+    const semantic::CompiledDesignResolver resolver { specialization };
+    const auto range_of = [&](const semantic::sv::PackedRange& range)
+        -> std::optional<runtime::SystemVerilogVpiRange> {
+        const auto left = range.left_expression
+            ? sized_range_bound(specialization, *range.left_expression)
+            : range.left;
+        const auto right = range.right_expression
+            ? sized_range_bound(specialization, *range.right_expression)
+            : range.right;
+        if (!left || !right) {
+            return std::nullopt;
+        }
+        return runtime::SystemVerilogVpiRange { *left, *right };
+    };
+    const auto scope_of = [&](const semantic::sv::TypeDefinition& record) {
+        const auto declaration = record.declaration.valid()
+            ? specialization.find_declaration(record.declaration)
+            : std::nullopt;
+        return declaration && declaration->systemverilog != nullptr
+            ? declaration->systemverilog->scope
+            : specialization.scope();
+    };
+    // The bits of an integral or packed typespec.
+    const auto bits = [](const auto& self, const Typespec& type) -> std::uint64_t {
+        switch (type.kind) {
+        case Kind::Struct:
+        case Kind::Union: {
+            std::uint64_t result = 0U;
+            for (const auto& member : type.members) {
+                const auto member_bits = self(self, member);
+                result = type.kind == Kind::Struct
+                    ? result + member_bits
+                    : std::max(result, member_bits);
+            }
+            return result;
+        }
+        case Kind::Enum:
+            return type.element.empty() ? 32U : self(self, type.element.front());
+        case Kind::PackedArray: {
+            auto result = type.element.empty() ? 0U
+                                               : self(self, type.element.front());
+            for (const auto& range : type.ranges) {
+                result *= elaboration_detail::index_distance(
+                              range.left, range.right)
+                    + 1U;
+            }
+            return result;
+        }
+        case Kind::Byte:
+            return 8U;
+        case Kind::ShortInt:
+            return 16U;
+        case Kind::Int:
+        case Kind::Integer:
+            return 32U;
+        case Kind::LongInt:
+        case Kind::Time:
+            return 64U;
+        case Kind::Logic:
+        case Kind::Bit: {
+            std::uint64_t result = 1U;
+            for (const auto& range : type.ranges) {
+                result *= elaboration_detail::index_distance(
+                              range.left, range.right)
+                    + 1U;
+            }
+            return result;
+        }
+        default:
+            return 0U;
+        }
+    };
+    // Binding composes a typedef's own dimensions into the reference that
+    // names it; they belong to the named level.
+    const auto drop_named = [](std::vector<runtime::SystemVerilogVpiRange>& ranges,
+                                const Typespec& named) {
+        if (named.name.empty() || named.ranges.empty()
+            || named.ranges.size() > ranges.size()
+            || !std::equal(named.ranges.begin(), named.ranges.end(),
+                ranges.end()
+                    - static_cast<std::ptrdiff_t>(named.ranges.size()))) {
+            return;
+        }
+        ranges.resize(ranges.size() - named.ranges.size());
+    };
+    const auto build = [&](const auto& self,
+                           const semantic::sv::TypeReference& input,
+                           const semantic::ScopeId use_scope,
+                           const unsigned depth) -> std::optional<Typespec> {
+        if (depth > 32U || input.virtual_interface || input.type_of) {
+            return std::nullopt;
+        }
+        // An unpacked dimension, leftmost first, or a dynamic array, queue
+        // or associative array (IEEE 1800-2023 7.4, 7.5, 7.8, 7.10).
+        if (input.container_form || !input.unpacked_dimensions.empty()) {
+            Typespec array;
+            array.kind = Kind::Array;
+            auto element = input;
+            if (input.container_form) {
+                array.array_kind
+                    = *input.container_form == Form::dynamic_array
+                    ? ArrayKind::Dynamic
+                    : *input.container_form == Form::queue ? ArrayKind::Queue
+                    : *input.container_form == Form::associative_array
+                    ? ArrayKind::Associative
+                    : ArrayKind::Static;
+                if (array.array_kind != ArrayKind::Static) {
+                    if (!input.container_element_types.empty()) {
+                        element = input.container_element_types.front();
+                    } else {
+                        element.container_form.reset();
+                    }
+                    auto inner = self(self, element, use_scope, depth + 1U);
+                    if (!inner) {
+                        return std::nullopt;
+                    }
+                    array.element.push_back(std::move(*inner));
+                    return array;
+                }
+                element.container_form.reset();
+            }
+            for (const auto& range : input.unpacked_dimensions) {
+                const auto bounds = range_of(range);
+                if (!bounds) {
+                    return std::nullopt;
+                }
+                array.ranges.push_back(*bounds);
+            }
+            element.unpacked_dimensions.clear();
+            auto inner = self(self, element, use_scope, depth + 1U);
+            if (!inner) {
+                return std::nullopt;
+            }
+            if (inner->kind == Kind::Array) {
+                drop_named(array.ranges, *inner);
+                if (array.ranges.empty()) {
+                    return inner;
+                }
+            }
+            array.element.push_back(std::move(*inner));
+            return array;
+        }
+        const auto definition = input.target.target.valid()
+            ? specialization.find_type(input.target.target)
+            : std::nullopt;
+        const auto* const record = definition
+            ? definition->systemverilog
+            : nullptr;
+        // A bound typedef is followed through its own record, which keeps
+        // its name; the effective type, which expands it, is only for an
+        // unbound name or a type parameter.
+        if (record == nullptr || record->form == Form::type_parameter) {
+            if (const auto effective
+                = resolver.effective_systemverilog_type(input, use_scope);
+                effective && *effective != input) {
+                return self(self, *effective, use_scope, depth + 1U);
+            }
+        }
+        // A resolved named type's reference carries its flattened width as
+        // its last packed dimension; the dimensions declared over it come
+        // first. Dimensions declared over a named type whose shape is
+        // selected later are all its own (7.4.1).
+        auto declared = input.packed_dimensions;
+        if (input.packed_over_named_type) {
+            if (declared.empty() && input.packed_range) {
+                declared.push_back(*input.packed_range);
+            }
+        } else if (record != nullptr) {
+            if (!declared.empty()) {
+                declared.pop_back();
+            }
+        } else if (declared.empty() && input.packed_range) {
+            declared.push_back(*input.packed_range);
+        }
+        std::vector<runtime::SystemVerilogVpiRange> dimensions;
+        for (const auto& range : declared) {
+            const auto bounds = range_of(range);
+            if (!bounds) {
+                return std::nullopt;
+            }
+            dimensions.push_back(*bounds);
+        }
+        if (record == nullptr) {
+            const auto& spelling = input.target.spelling;
+            if (!input.class_identity.empty()) {
+                Typespec handle;
+                handle.kind = Kind::Class;
+                handle.name = spelling;
+                return handle;
+            }
+            Typespec builtin;
+            builtin.is_signed = input.signed_value;
+            if (input.value_form == Form::string || spelling == "string") {
+                builtin.kind = Kind::String;
+                builtin.is_signed = false;
+                return builtin;
+            }
+            if (input.value_form && *input.value_form != Form::packed_integral
+                && *input.value_form != Form::enumeration) {
+                return std::nullopt;
+            }
+            static constexpr std::pair<std::string_view, Kind> atoms[] {
+                { "byte", Kind::Byte }, { "shortint", Kind::ShortInt },
+                { "int", Kind::Int }, { "longint", Kind::LongInt },
+                { "integer", Kind::Integer }, { "time", Kind::Time },
+                { "real", Kind::Real }, { "realtime", Kind::Real },
+                { "shortreal", Kind::ShortReal }, { "event", Kind::Event },
+                { "chandle", Kind::Chandle },
+            };
+            if (const auto* const atom = std::ranges::find(
+                    atoms, spelling, &std::pair<std::string_view, Kind>::first);
+                atom != std::end(atoms)) {
+                // An integer atom's packed range is its implicit one (6.11).
+                builtin.kind = atom->second;
+                return builtin;
+            }
+            if (!spelling.empty() && spelling != "bit" && spelling != "logic"
+                && spelling != "reg"
+                && !semantic::sv::is_builtin_net_kind(spelling)) {
+                return std::nullopt;
+            }
+            builtin.kind = spelling == "bit" ? Kind::Bit : Kind::Logic;
+            builtin.ranges = std::move(dimensions);
+            return builtin;
+        }
+        const auto record_scope = scope_of(*record);
+        std::optional<Typespec> named;
+        // A typedef of an unpacked array (7.4.2), or of packed dimensions
+        // over a named structure or union (7.4.1): an array named by it.
+        // A typedef of a structure or union that its own declaration
+        // defines names an anonymous record (37.25 detail 5).
+        const auto base_definition = record->base.target.target.valid()
+                && record->base.target.target != record->id
+            ? specialization.find_type(record->base.target.target)
+            : std::nullopt;
+        // Binding points a typedef of dimensions over a named structure at
+        // that structure's own record; its declared range then spans more
+        // than the structure's width.
+        const bool dimensions_over_named
+            = (record->form == Form::packed_structure
+                  || record->form == Form::packed_union)
+            && base_definition && base_definition->systemverilog != nullptr
+            && (record->base.packed_range
+                || !record->base.packed_dimensions.empty());
+        if (record->container || dimensions_over_named) {
+            Typespec array;
+            auto element = record->base;
+            if (record->container) {
+                array.kind = Kind::Array;
+                const auto form = record->container->form;
+                array.array_kind = form == Form::dynamic_array
+                    ? ArrayKind::Dynamic
+                    : form == Form::queue           ? ArrayKind::Queue
+                    : form == Form::associative_array ? ArrayKind::Associative
+                                                      : ArrayKind::Static;
+                for (const auto& range : record->container->static_dimensions) {
+                    const auto bounds = range_of(range);
+                    if (!bounds) {
+                        return std::nullopt;
+                    }
+                    array.ranges.push_back(*bounds);
+                }
+                element.container_form.reset();
+                element.unpacked_dimensions.clear();
+            } else {
+                array.kind = Kind::PackedArray;
+                auto own = record->base.packed_dimensions;
+                if (own.empty() && record->base.packed_range) {
+                    own.push_back(*record->base.packed_range);
+                }
+                for (const auto& range : own) {
+                    const auto bounds = range_of(range);
+                    if (!bounds) {
+                        return std::nullopt;
+                    }
+                    array.ranges.push_back(*bounds);
+                }
+                element.packed_dimensions.clear();
+                element.packed_range.reset();
+                element.packed_over_named_type = false;
+            }
+            auto inner = self(self, element, record_scope, depth + 1U);
+            if (!inner) {
+                return std::nullopt;
+            }
+            // The last range may be the flattened width of all of them.
+            if (array.kind == Kind::PackedArray && !array.ranges.empty()) {
+                std::uint64_t outer = 1U;
+                for (std::size_t index = 0U; index + 1U < array.ranges.size();
+                     ++index) {
+                    outer *= elaboration_detail::index_distance(
+                                 array.ranges[index].left,
+                                 array.ranges[index].right)
+                        + 1U;
+                }
+                const auto last = elaboration_detail::index_distance(
+                                      array.ranges.back().left,
+                                      array.ranges.back().right)
+                    + 1U;
+                if (last == bits(bits, *inner)
+                    || last == outer * bits(bits, *inner)) {
+                    array.ranges.pop_back();
+                }
+            }
+            if (array.ranges.empty() && array.kind == Kind::PackedArray) {
+                // A typedef of another named type is an alias of it; one of
+                // the structure its own declaration defines is that type.
+                auto aliased = std::move(*inner);
+                named = aliased;
+                named->alias.clear();
+                if (!base_definition->systemverilog->name.starts_with('@')) {
+                    named->alias.push_back(std::move(aliased));
+                }
+                named->name = record->name;
+                named->ranges.clear();
+                drop_named(dimensions, *named);
+                if (dimensions.empty()) {
+                    return named;
+                }
+                Typespec over;
+                over.kind = Kind::PackedArray;
+                over.ranges = std::move(dimensions);
+                over.element.push_back(std::move(*named));
+                return over;
+            }
+            array.element.push_back(std::move(*inner));
+            array.name = record->name;
+            named = std::move(array);
+        } else {
+    switch (record->form) {
+            case Form::alias:
+            case Form::type_parameter:
+            case Form::packed_integral:
+            case Form::static_array:
+            case Form::dynamic_array:
+            case Form::queue:
+            case Form::associative_array:
+            case Form::string: {
+                named = self(self, record->base, record_scope, depth + 1U);
+                if (!named) {
+                    return std::nullopt;
+                }
+                // A type parameter's typespec is its actual (37.25 detail 11).
+                if (record->form == Form::type_parameter) {
+                    break;
+                }
+                // A typedef of a named type, or of a built-in type without
+                // dimensions, is an alias of it (37.25 details 1, 6).
+                if (!named->name.empty()
+                    || (named->ranges.empty() && named->kind != Kind::Array
+                        && named->kind != Kind::PackedArray
+                        && named->kind != Kind::Struct
+                        && named->kind != Kind::Union
+                        && named->kind != Kind::Enum)) {
+                    auto aliased = *named;
+                    named->alias.clear();
+                    named->alias.push_back(std::move(aliased));
+                }
+                named->name = record->name;
+                break;
+            }
+            case Form::packed_structure:
+            case Form::packed_union:
+            case Form::unpacked_structure:
+            case Form::unpacked_union:
+            case Form::tagged_union: {
+                Typespec aggregate;
+                aggregate.kind = record->form == Form::packed_structure
+                        || record->form == Form::unpacked_structure
+                    ? Kind::Struct
+                    : Kind::Union;
+                aggregate.packed = record->form == Form::packed_structure
+                    || record->form == Form::packed_union;
+                aggregate.tagged = record->form == Form::tagged_union;
+                aggregate.is_signed = aggregate.packed && record->base.signed_value;
+                for (const auto& member : record->members) {
+                    auto child = self(self, member.type, record_scope, depth + 1U);
+                    if (!child) {
+                        return std::nullopt;
+                    }
+                    aggregate.members.push_back(std::move(*child));
+                    aggregate.member_names.push_back(member.name);
+                }
+                if (!record->name.starts_with('@')) {
+                    aggregate.name = record->name;
+                }
+                named = std::move(aggregate);
+                break;
+            }
+            case Form::enumeration: {
+                Typespec enumeration;
+                enumeration.kind = Kind::Enum;
+                // An enumeration without a base type is an int (6.19).
+                auto base = record->base.target.resolved()
+                        || !record->base.target.spelling.empty()
+                    ? self(self, record->base, record_scope, depth + 1U)
+                    : std::optional<Typespec> { };
+                if (!base) {
+                    base.emplace();
+                    base->kind = Kind::Int;
+                    base->is_signed = true;
+                }
+                const auto width = bits(bits, *base);
+                if (width == 0U || width > 64U) {
+                    return std::nullopt;
+                }
+                // A literal without a value is the previous one plus one, the
+                // first one 0 (6.19).
+                std::int64_t next = 0;
+                for (const auto& literal : record->enumeration_literals) {
+                    if (literal.value) {
+                        const auto value = specialization
+                            .evaluate_integral_expression(*literal.value);
+                        if (!value) {
+                            return std::nullopt;
+                        }
+                        next = *value;
+                    }
+                    enumeration.enum_constants.push_back({ literal.name,
+                        runtime::PackedLogic4::from_aval_bval(
+                            static_cast<std::uint32_t>(width),
+                            static_cast<std::uint64_t>(next), 0U) });
+                    ++next;
+                }
+                enumeration.element.push_back(std::move(*base));
+                if (!record->name.starts_with('@')) {
+                    enumeration.name = record->name;
+                }
+                named = std::move(enumeration);
+                break;
+            }
+            case Form::class_handle: {
+                Typespec handle;
+                handle.kind = Kind::Class;
+                handle.name = record->name;
+                named = std::move(handle);
+                break;
+            }
+            default:
+                return std::nullopt;
+            }
+        }
+        drop_named(dimensions, *named);
+        if (dimensions.empty()) {
+            return named;
+        }
+        // Packed dimensions over a named type (7.4.1).
+        Typespec array;
+        array.kind = Kind::PackedArray;
+        array.ranges = std::move(dimensions);
+        array.element.push_back(std::move(*named));
+        return array;
+    };
+    return build(build, reference, scope, 0U);
 }
 
 std::optional<ContainerType> systemverilog_container_type(

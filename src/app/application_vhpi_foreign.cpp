@@ -246,6 +246,10 @@ struct Object final : Handle {
     Object* suffix { };
     // Enumeration literals and physical units: their position or scale.
     std::int64_t position { };
+    // Where a component instantiation statement is (vhpiFileNameP,
+    // vhpiLineNoP); other objects take it from their declaration,
+    // statement or design unit.
+    std::optional<semantic::SourceSpanId> source;
     // A formal of a foreign subprogram call: its actual's position in the
     // running call; the call itself carries a function's result.
     std::optional<std::size_t> call_slot;
@@ -1579,6 +1583,9 @@ private:
         object->unit = unit;
         object->entity = entity;
         object->specialization = &specialization;
+        if (parent != nullptr) {
+            object->source = instance.source;
+        }
         if (parent == nullptr) {
             object->full_name = ":" + object->name;
             object->full_case_name = ":" + object->case_name;
@@ -1815,6 +1822,9 @@ private:
     [[nodiscard]] Object* declared(Object& region,
         const vhdl::Declaration& declaration)
     {
+        if (const auto kind = item_kind(declaration.form)) {
+            return declared_item(region, declaration, *kind);
+        }
         const auto key = lower(declaration.name);
         if (const auto found = region.children.find(key);
             found != region.children.end()) {
@@ -1886,6 +1896,92 @@ private:
         }
         region.children.emplace(key, object);
         return object;
+    }
+
+    // The class of a file, subprogram, component, attribute or group
+    // declaration, or of an attribute specification (IEEE 1076-2019 19.4,
+    // Figure 14).
+    [[nodiscard]] static std::optional<vhpiClassKindT> item_kind(
+        const vhdl::DeclarationForm form)
+    {
+        switch (form) {
+        case vhdl::DeclarationForm::file:
+            return vhpiFileDeclK;
+        case vhdl::DeclarationForm::function:
+            return vhpiFuncDeclK;
+        case vhdl::DeclarationForm::procedure:
+            return vhpiProcDeclK;
+        case vhdl::DeclarationForm::component:
+            return vhpiCompDeclK;
+        case vhdl::DeclarationForm::attribute_declaration:
+            return vhpiAttrDeclK;
+        case vhdl::DeclarationForm::attribute_specification:
+            return vhpiAttrSpecK;
+        case vhdl::DeclarationForm::group_template:
+            return vhpiGroupTempDeclK;
+        case vhdl::DeclarationForm::group_instance:
+            return vhpiGroupDeclK;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    // One object per such declaration: subprograms overload and attribute
+    // specifications repeat names, so these are keyed by declaration.
+    [[nodiscard]] Object* declared_item(Object& region,
+        const vhdl::Declaration& declaration, const vhpiClassKindT kind)
+    {
+        const auto key = "@item:"
+            + std::to_string(reinterpret_cast<std::uintptr_t>(&declaration));
+        if (const auto found = region.children.find(key);
+            found != region.children.end()) {
+            return found->second;
+        }
+        auto* const object = make_object(kind, declaration.name, &region);
+        object->declaration = &declaration;
+        object->full_name = region.full_name + ":" + object->name;
+        object->full_case_name = region.full_case_name + ":" + object->case_name;
+        if (kind == vhpiFileDeclK && declaration.subtype) {
+            object->type = subtype_object(*declaration.subtype, nullptr);
+        }
+        region.children.emplace(key, object);
+        return object;
+    }
+
+    // Where an object is: its own statement, its declaration, its block or
+    // generate statement, or its design unit (IEEE 1076-2019 Figure 14).
+    [[nodiscard]] std::optional<std::pair<std::string, std::uint32_t>>
+    source_location(const Object& object) const
+    {
+        auto source = object.source;
+        if (!source && object.declaration != nullptr) {
+            source = object.declaration->source;
+        }
+        if (!source && object.generate != nullptr) {
+            source = object.generate->source;
+        }
+        if (!source && object.unit != nullptr
+            && (is_design_unit(object) || object.kind == vhpiRootInstK
+                || object.kind == vhpiPackInstK)) {
+            source = object.unit->source;
+        }
+        const auto& semantics = simulation_.semantics();
+        if (!source || !source->valid()
+            || source->value() >= semantics.source_spans().size()) {
+            return std::nullopt;
+        }
+        const auto& span = semantics.source_spans().at(source->value());
+        if (!span.logical_name.empty()) {
+            return std::pair { span.logical_name, span.begin.line };
+        }
+        if (span.file.valid()
+            && span.file.value() < semantics.source_files().size()) {
+            return std::pair {
+                semantics.source_files().at(span.file.value()).physical_name,
+                span.begin.line
+            };
+        }
+        return std::nullopt;
     }
 
     // An alias of an object, which reads and indexes as the object does and
@@ -2982,7 +3078,7 @@ private:
                     || d.form == Form::generic_constant
                     || d.form == Form::constant || d.form == Form::variable
                     || d.form == Form::type || d.form == Form::subtype
-                    || d.form == Form::alias;
+                    || d.form == Form::alias || item_kind(d.form);
             });
             break;
         case vhpiAliasDecls:
@@ -3958,6 +4054,11 @@ private:
             return vhpiProvidesHierarchy | vhpiProvidesForeignModel;
         case vhpiArgcP:
             return static_cast<vhpiIntT>(arguments_.size());
+        case vhpiLineNoP:
+            if (const auto location = source_location(object)) {
+                return static_cast<vhpiIntT>(location->second);
+            }
+            return vhpiUndefined;
         case vhpiIsUpP:
         case vhpiLeftBoundP:
         case vhpiRightBoundP:
@@ -4264,6 +4365,12 @@ private:
         case vhpiKindStrP:
             scratch = kind_name(object.kind);
             break;
+        case vhpiFileNameP:
+            if (const auto location = source_location(object)) {
+                scratch = location->first;
+                break;
+            }
+            return nullptr;
         case vhpiToolVersionP:
             scratch = std::string { fsim::version };
             break;
@@ -4401,50 +4508,236 @@ private:
     [[nodiscard]] static std::string kind_name(const vhpiClassKindT kind)
     {
         switch (kind) {
+        case vhpiAccessTypeDeclK:
+            return "vhpiAccessTypeDeclK";
+        case vhpiAggregateK:
+            return "vhpiAggregateK";
         case vhpiAliasDeclK:
             return "vhpiAliasDeclK";
-        case vhpiSliceNameK:
-            return "vhpiSliceNameK";
-        case vhpiIntRangeK:
-            return "vhpiIntRangeK";
-        case vhpiEnumRangeK:
-            return "vhpiEnumRangeK";
-        case vhpiPhysRangeK:
-            return "vhpiPhysRangeK";
-        case vhpiFloatRangeK:
-            return "vhpiFloatRangeK";
-        case vhpiRootInstK:
-            return "vhpiRootInstK";
-        case vhpiCompInstStmtK:
-            return "vhpiCompInstStmtK";
-        case vhpiSigDeclK:
-            return "vhpiSigDeclK";
-        case vhpiPortDeclK:
-            return "vhpiPortDeclK";
-        case vhpiGenericDeclK:
-            return "vhpiGenericDeclK";
-        case vhpiConstDeclK:
-            return "vhpiConstDeclK";
-        case vhpiVarDeclK:
-            return "vhpiVarDeclK";
-        case vhpiIndexedNameK:
-            return "vhpiIndexedNameK";
-        case vhpiSelectedNameK:
-            return "vhpiSelectedNameK";
-        case vhpiIntTypeDeclK:
-            return "vhpiIntTypeDeclK";
-        case vhpiEnumTypeDeclK:
-            return "vhpiEnumTypeDeclK";
+        case vhpiAllK:
+            return "vhpiAllK";
+        case vhpiAllocatorK:
+            return "vhpiAllocatorK";
+        case vhpiAnyCollectionK:
+            return "vhpiAnyCollectionK";
+        case vhpiArchBodyK:
+            return "vhpiArchBodyK";
+        case vhpiArgvK:
+            return "vhpiArgvK";
         case vhpiArrayTypeDeclK:
             return "vhpiArrayTypeDeclK";
-        case vhpiRecordTypeDeclK:
-            return "vhpiRecordTypeDeclK";
-        case vhpiSubtypeDeclK:
-            return "vhpiSubtypeDeclK";
-        case vhpiPhysTypeDeclK:
-            return "vhpiPhysTypeDeclK";
+        case vhpiAssocElemK:
+            return "vhpiAssocElemK";
+        case vhpiAttrDeclK:
+            return "vhpiAttrDeclK";
+        case vhpiAttrSpecK:
+            return "vhpiAttrSpecK";
+        case vhpiBitStringLiteralK:
+            return "vhpiBitStringLiteralK";
+        case vhpiBlockConfigK:
+            return "vhpiBlockConfigK";
+        case vhpiBlockStmtK:
+            return "vhpiBlockStmtK";
+        case vhpiBranchK:
+            return "vhpiBranchK";
+        case vhpiCallbackK:
+            return "vhpiCallbackK";
+        case vhpiCaseStmtK:
+            return "vhpiCaseStmtK";
+        case vhpiCharLiteralK:
+            return "vhpiCharLiteralK";
+        case vhpiCompConfigK:
+            return "vhpiCompConfigK";
+        case vhpiCompDeclK:
+            return "vhpiCompDeclK";
+        case vhpiCompInstStmtK:
+            return "vhpiCompInstStmtK";
+        case vhpiCondSigAssignStmtK:
+            return "vhpiCondSigAssignStmtK";
+        case vhpiCondWaveformK:
+            return "vhpiCondWaveformK";
+        case vhpiConfigDeclK:
+            return "vhpiConfigDeclK";
+        case vhpiConstDeclK:
+            return "vhpiConstDeclK";
+        case vhpiConstParamDeclK:
+            return "vhpiConstParamDeclK";
+        case vhpiConvFuncK:
+            return "vhpiConvFuncK";
+        case vhpiDerefObjK:
+            return "vhpiDerefObjK";
+        case vhpiDisconnectSpecK:
+            return "vhpiDisconnectSpecK";
+        case vhpiDriverK:
+            return "vhpiDriverK";
+        case vhpiDriverCollectionK:
+            return "vhpiDriverCollectionK";
+        case vhpiElemAssocK:
+            return "vhpiElemAssocK";
+        case vhpiElemDeclK:
+            return "vhpiElemDeclK";
+        case vhpiEntityClassEntryK:
+            return "vhpiEntityClassEntryK";
+        case vhpiEntityDeclK:
+            return "vhpiEntityDeclK";
+        case vhpiEnumLiteralK:
+            return "vhpiEnumLiteralK";
+        case vhpiEnumRangeK:
+            return "vhpiEnumRangeK";
+        case vhpiEnumTypeDeclK:
+            return "vhpiEnumTypeDeclK";
+        case vhpiExitStmtK:
+            return "vhpiExitStmtK";
+        case vhpiFileDeclK:
+            return "vhpiFileDeclK";
+        case vhpiFileParamDeclK:
+            return "vhpiFileParamDeclK";
+        case vhpiFileTypeDeclK:
+            return "vhpiFileTypeDeclK";
+        case vhpiFloatRangeK:
+            return "vhpiFloatRangeK";
         case vhpiFloatTypeDeclK:
             return "vhpiFloatTypeDeclK";
+        case vhpiForGenerateK:
+            return "vhpiForGenerateK";
+        case vhpiForLoopK:
+            return "vhpiForLoopK";
+        case vhpiForeignfK:
+            return "vhpiForeignfK";
+        case vhpiFuncCallK:
+            return "vhpiFuncCallK";
+        case vhpiFuncDeclK:
+            return "vhpiFuncDeclK";
+        case vhpiGenericDeclK:
+            return "vhpiGenericDeclK";
+        case vhpiGroupDeclK:
+            return "vhpiGroupDeclK";
+        case vhpiGroupTempDeclK:
+            return "vhpiGroupTempDeclK";
+        case vhpiIfGenerateK:
+            return "vhpiIfGenerateK";
+        case vhpiIfStmtK:
+            return "vhpiIfStmtK";
+        case vhpiInPortK:
+            return "vhpiInPortK";
+        case vhpiIndexedNameK:
+            return "vhpiIndexedNameK";
+        case vhpiIntLiteralK:
+            return "vhpiIntLiteralK";
+        case vhpiIntRangeK:
+            return "vhpiIntRangeK";
+        case vhpiIntTypeDeclK:
+            return "vhpiIntTypeDeclK";
+        case vhpiIteratorK:
+            return "vhpiIteratorK";
+        case vhpiLibraryDeclK:
+            return "vhpiLibraryDeclK";
+        case vhpiNextStmtK:
+            return "vhpiNextStmtK";
+        case vhpiNullLiteralK:
+            return "vhpiNullLiteralK";
+        case vhpiNullStmtK:
+            return "vhpiNullStmtK";
+        case vhpiOthersK:
+            return "vhpiOthersK";
+        case vhpiOutPortK:
+            return "vhpiOutPortK";
+        case vhpiPackBodyK:
+            return "vhpiPackBodyK";
+        case vhpiPackDeclK:
+            return "vhpiPackDeclK";
+        case vhpiPackInstK:
+            return "vhpiPackInstK";
+        case vhpiParamAttrNameK:
+            return "vhpiParamAttrNameK";
+        case vhpiPhysLiteralK:
+            return "vhpiPhysLiteralK";
+        case vhpiPhysRangeK:
+            return "vhpiPhysRangeK";
+        case vhpiPhysTypeDeclK:
+            return "vhpiPhysTypeDeclK";
+        case vhpiPortDeclK:
+            return "vhpiPortDeclK";
+        case vhpiProcDeclK:
+            return "vhpiProcDeclK";
+        case vhpiProcessStmtK:
+            return "vhpiProcessStmtK";
+        case vhpiProtectedTypeBodyK:
+            return "vhpiProtectedTypeBodyK";
+        case vhpiProtectedTypeDeclK:
+            return "vhpiProtectedTypeDeclK";
+        case vhpiRealLiteralK:
+            return "vhpiRealLiteralK";
+        case vhpiRecordTypeDeclK:
+            return "vhpiRecordTypeDeclK";
+        case vhpiReportStmtK:
+            return "vhpiReportStmtK";
+        case vhpiReturnStmtK:
+            return "vhpiReturnStmtK";
+        case vhpiRootInstK:
+            return "vhpiRootInstK";
+        case vhpiSelectSigAssignStmtK:
+            return "vhpiSelectSigAssignStmtK";
+        case vhpiSelectWaveformK:
+            return "vhpiSelectWaveformK";
+        case vhpiSelectedNameK:
+            return "vhpiSelectedNameK";
+        case vhpiSigDeclK:
+            return "vhpiSigDeclK";
+        case vhpiSigParamDeclK:
+            return "vhpiSigParamDeclK";
+        case vhpiSimpAttrNameK:
+            return "vhpiSimpAttrNameK";
+        case vhpiSimpleSigAssignStmtK:
+            return "vhpiSimpleSigAssignStmtK";
+        case vhpiSliceNameK:
+            return "vhpiSliceNameK";
+        case vhpiStringLiteralK:
+            return "vhpiStringLiteralK";
+        case vhpiSubpBodyK:
+            return "vhpiSubpBodyK";
+        case vhpiSubtypeDeclK:
+            return "vhpiSubtypeDeclK";
+        case vhpiToolK:
+            return "vhpiToolK";
+        case vhpiTransactionK:
+            return "vhpiTransactionK";
+        case vhpiTypeConvK:
+            return "vhpiTypeConvK";
+        case vhpiUnitDeclK:
+            return "vhpiUnitDeclK";
+        case vhpiUserAttrNameK:
+            return "vhpiUserAttrNameK";
+        case vhpiVarAssignStmtK:
+            return "vhpiVarAssignStmtK";
+        case vhpiVarDeclK:
+            return "vhpiVarDeclK";
+        case vhpiVarParamDeclK:
+            return "vhpiVarParamDeclK";
+        case vhpiWaitStmtK:
+            return "vhpiWaitStmtK";
+        case vhpiWaveformElemK:
+            return "vhpiWaveformElemK";
+        case vhpiWhileLoopK:
+            return "vhpiWhileLoopK";
+        case vhpiQualifiedExprK:
+            return "vhpiQualifiedExprK";
+        case vhpiUseClauseK:
+            return "vhpiUseClauseK";
+        case vhpiConcAssertStmtK:
+            return "vhpiConcAssertStmtK";
+        case vhpiConcProcCallStmtK:
+            return "vhpiConcProcCallStmtK";
+        case vhpiForeverLoopK:
+            return "vhpiForeverLoopK";
+        case vhpiSeqAssertStmtK:
+            return "vhpiSeqAssertStmtK";
+        case vhpiSeqProcCallStmtK:
+            return "vhpiSeqProcCallStmtK";
+        case vhpiSeqSigAssignStmtK:
+            return "vhpiSeqSigAssignStmtK";
+        case vhpiProtectedTypeInstK:
+            return "vhpiProtectedTypeInstK";
         default:
             return "vhpiUndefined";
         }

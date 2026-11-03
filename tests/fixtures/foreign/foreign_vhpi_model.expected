@@ -17,3 +17,18 @@
 #c hi(3)=1
 #c format int->hex=B2 int->bin=10110010 bin->hex=C hex->int=255
 #c real left<0=1 right>0=1 val=1.5
+#c decl vhpienumtypedeclk color line=9 file=foreign_vhpi_model.vhd
+#c decl vhpiconstdeclk k line=10 file=foreign_vhpi_model.vhd
+#c decl vhpisigdeclk v line=11 file=foreign_vhpi_model.vhd
+#c decl vhpisigdeclk c line=12 file=foreign_vhpi_model.vhd
+#c decl vhpisigdeclk r line=13 file=foreign_vhpi_model.vhd
+#c decl vhpialiasdeclk hi line=14 file=foreign_vhpi_model.vhd
+#c decl vhpifuncdeclk twice line=16 file=foreign_vhpi_model.vhd
+#c decl vhpifuncdeclk twice line=20 file=foreign_vhpi_model.vhd
+#c decl vhpiprocdeclk nop line=24 file=foreign_vhpi_model.vhd
+#c decl vhpicompdeclk leaf line=27 file=foreign_vhpi_model.vhd
+#c decl vhpiattrdeclk note line=30 file=foreign_vhpi_model.vhd
+#c decl vhpiattrspeck note line=31 file=foreign_vhpi_model.vhd
+#c decl vhpigrouptempdeclk pair line=32 file=foreign_vhpi_model.vhd
+#c decl vhpigroupdeclk vr line=33 file=foreign_vhpi_model.vhd
+#c root kind=vhpirootinstk line=8 unit line=8
