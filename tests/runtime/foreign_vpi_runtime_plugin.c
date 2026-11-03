@@ -7,6 +7,14 @@
 #include <signal.h>
 #include <string.h>
 
+// The signal the cbSignal case traps: SIGUSR1 where it exists; Windows has
+// only the C standard signals.
+#if defined(SIGUSR1)
+#define TRAPPED_SIGNAL SIGUSR1
+#else
+#define TRAPPED_SIGNAL SIGTERM
+#endif
+
 static vpiHandle clk;
 static vpiHandle d;
 static vpiHandle q;
@@ -142,7 +150,7 @@ static PLI_INT32 pli_error(p_cb_data data)
 // (IEEE 1800-2023 38.36.3).
 static PLI_INT32 on_signal(p_cb_data data)
 {
-    vpi_printf("#c %llu signal trapped=%d\n", now(), data->index == SIGUSR1);
+    vpi_printf("#c %llu signal trapped=%d\n", now(), data->index == TRAPPED_SIGNAL);
     return 0;
 }
 
@@ -150,7 +158,7 @@ static PLI_INT32 raise_signal(p_cb_data data)
 {
     (void)data;
     vpi_printf("#c %llu raise signal\n", now());
-    (void)raise(SIGUSR1);
+    (void)raise(TRAPPED_SIGNAL);
     return 0;
 }
 
@@ -196,7 +204,7 @@ static PLI_INT32 start(p_cb_data data)
         memset(&trap, 0, sizeof trap);
         trap.reason = cbSignal;
         trap.cb_rtn = on_signal;
-        trap.index = SIGUSR1;
+        trap.index = TRAPPED_SIGNAL;
         (void)vpi_register_cb(&trap);
     }
     (void)register_cb(cbAfterDelay, NULL, raise_signal, 7U, vpiSuppressVal);

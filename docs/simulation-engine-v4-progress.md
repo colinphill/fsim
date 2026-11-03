@@ -138,6 +138,56 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-03: VPI/VHPI statement models, statement callbacks and the assertion API, cocotb plan A-G4 part 2 and A-G5 parts 1–4 (`b1623cba`, sweeps `ag5g`, `ag5ga`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md`. Inventory rows are in `docs/foreign-interface-conformance.md`.
+
+**What landed (`b1623cba`):**
+- **A-G4 part 2:**
+  - VHPI `vhpiCbForce`, `vhpiCbRelease` and `vhpiCbTransaction` are delivered at the update safe point.
+  - `cbUnresolvedSystf` runs at elaboration and at simulate (`fsim.foreign.vpi-unresolved`).
+- **VPI static design access (IEEE 1800-2023 37.43–37.79):**
+  - Processes, continuous assignments, statements and expressions are built from the HIR.
+  - `cbForce`, `cbRelease`, `cbAssign` and `cbDeassign` carry the statement as their object (`fsim.foreign.vpi-statements`).
+- **VHPI processes and statements (IEEE 1076-2019 19.4.2, 19.11):**
+  - Process and statement classes, sequential statements, branches, waveforms and choices.
+  - A for-generate with no signal of its own is now found from its processes. It was also missing from `vhpiInternalRegions`.
+  - New test `fsim.foreign.vhpi-statements`.
+- **VPI assertions (37.49–37.57, 39):**
+  - Assertion objects, `vpiAssertion` iteration and lookup by label, `vpi_register_assertion_cb`, and the assertion system callbacks.
+  - The `vpi_control` operations of 39.5, including lock, with per-assertion action control.
+  - A `disable iff` publishes the disabled outcome (`fsim.foreign.vpi-assertions`).
+  - Still open: attempt start times (`cbAssertionStart`, `attemptStartTime`, kill by attempt, `failExpr`) and stepping.
+- **ct4 fix:** the SystemC private-directory sweep now claims an abandoned directory by renaming it before removing it. `fsim.systemc.incremental` had failed under full ctest load when two processes swept at once.
+
+**Uncommitted when the gate ran, committed with this note:**
+- `lrm_corpus.py compare` now reports excluded cases that newly crash or time out ("EXCLUDED CRASH/TIMEOUT", exit 1), and lists the ones that still do as information.
+  - Excluded cases still run, but the sweep counted them only as skips. The A-G1 gate showed the risk: `vpi_value_change_cb1-4` crashed and the sweep reported nothing.
+  - `run_case` keeps the status the case had before it was excluded (`excluded_status`). Older results fall back to the detail text.
+  - The eight that crash or time out now are all on the test side: `vpi_myscope` and `vpi_nextsimtime_cb3`/`cb4` assert on a NULL handle that the LRM requires, `t_vpi_const_type` and `t_vpi_escape` dereference such a NULL, and `t_timing_timescale`, `t_tri_eqcase_input` and `t_virtual_interface_method` do not terminate.
+- The VPI runtime test plug-in traps `SIGTERM` where `SIGUSR1` does not exist (Windows).
+
+**Gate:**
+- ct4: 1121/1121 in all four variants.
+- Sweep `ag5g` (frozen `b1623cba`, archive `ag5`): 0 losses against `ag4g`, and no excluded case newly crashing.
+- Sweep `ag5ga`: 0 losses against `ag4ga`. `ivtest/pow_reg_signed` passes again; it had timed out under load in `ag4ga`.
+- Census: 0 losses in both modes.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+| Suite | ag4g passed / in scope | ag5g passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2636 / 2636 | 2636 / 2636 | 275 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
+**Next:**
+- The owner decided on 2026-11-03 that the callbacks that need kernel probes are opt-in through `simulate --foreign-probes` (config key `simulate.foreign_probes`). They are `cbStmt`, `cbDisable`, the frame and thread callbacks, and VHPI `vhpiCbStmt`, `SubpCall`/`SubpReturn` and `Resume`/`Suspend`. Without the option, registering one returns NULL with an error that names it. The option builds the kernel with its debug points, as `--engine debug` does.
+- Then: assertion attempt start times, immediate and deferred assertion objects, VHPI expression objects, `vhpi_create` and `vhpi_protected_call`, and A-G5 part 5 (classes, frames, threads, primitives, timing checks).
+
 ### 2026-11-03: VPI/VHPI cross-language visibility and callback reasons, cocotb plan gates A-G3 and A-G4 part 1 (`ba15706e`, sweeps `ag4g`, `ag4ga`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md`. Inventory rows are in `docs/foreign-interface-conformance.md`.

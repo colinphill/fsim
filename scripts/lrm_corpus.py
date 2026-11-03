@@ -3247,6 +3247,9 @@ def run_case(case: Case, fsim: Path, workdir: Path, engine: str, default_timeout
     record = run_case_once(case, fsim, workdir, engine, default_timeout, keep,
                            chain_outputs)
     if case.out_of_scope and record.get("status") not in ("pass", "skip"):
+        # The run's own outcome stays visible, so `compare` can tell an
+        # excluded case that crashes or times out from one that differs.
+        record["excluded_status"] = record["status"]
         record["detail"] = f"{case.out_of_scope} ({record.get('detail', '')})"
         record["status"] = "skip"
     return record
@@ -3615,13 +3618,42 @@ def command_compare(args) -> int:
              and before.get(k, {}).get("status") not in (None, "pass")]
     broken = [k for k in after if after[k]["status"] != "pass"
               and before.get(k, {}).get("status") == "pass"]
-    print(f"newly passing: {len(fixed)}  newly failing: {len(broken)}")
+    # An excluded case is still run; its own outcome is a crash, a timeout
+    # or a failure. Results from before `excluded_status` was recorded give
+    # it only in the detail.
+    def excluded(record: dict | None) -> str | None:
+        if not record or record.get("status") != "skip":
+            return None
+        if "excluded_status" in record:
+            return record["excluded_status"]
+        detail = record.get("detail", "")
+        if not detail.startswith("out of scope") or not detail.endswith(")"):
+            return None
+        inner = detail[detail.rfind(" (") + 2:-1]
+        return ("timeout" if inner.endswith("timed out")
+                else "crash" if " exited with " in inner
+                and inner.rsplit(" ", 1)[-1].lstrip("-").isdigit()
+                and (int(inner.rsplit(" ", 1)[-1]) < 0
+                     or int(inner.rsplit(" ", 1)[-1]) >= 126)
+                else "fail")
+    abnormal = ("crash", "timeout")
+    excluded_broken = [k for k in after if excluded(after[k]) in abnormal
+                       and excluded(before.get(k)) not in abnormal]
+    excluded_still = [k for k in after if excluded(after[k]) in abnormal
+                      and excluded(before.get(k)) in abnormal]
+    print(f"newly passing: {len(fixed)}  newly failing: {len(broken)}  "
+          f"excluded newly crashing: {len(excluded_broken)}")
     for key in broken:
         print(f"  REGRESSION {key[0]}/{key[1]}: {after[key].get('detail')}")
+    for key in excluded_broken:
+        print(f"  EXCLUDED {excluded(after[key]).upper()} {key[0]}/{key[1]}: "
+              f"{after[key].get('detail')}")
+    for key in excluded_still:
+        print(f"  excluded, still {excluded(after[key])} {key[0]}/{key[1]}")
     if args.verbose:
         for key in fixed:
             print(f"  fixed {key[0]}/{key[1]}")
-    return 1 if broken else 0
+    return 1 if broken or excluded_broken else 0
 
 
 def main(argv: list[str] | None = None) -> int:
