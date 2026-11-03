@@ -145,6 +145,7 @@ bool publish_workspace_object(
   }
   metadata.code_coverage = coverage_identity.identity;
   metadata.defines = source_set.defines;
+  metadata.default_timescale = source_set.default_timescale;
   metadata.vhdl_package_dependencies =
       application_detail::vhdl_package_dependencies(checked);
   const auto object_reference = [&](const std::filesystem::path& path) {

@@ -13,11 +13,14 @@
 namespace fsim::frontend {
 
 inline constexpr std::string_view verilog_preprocessor_cache_version =
-    "fsim-verilog-preprocessor-v11-rescan-before-token-paste";
+    "fsim-verilog-preprocessor-v12-default-timescale";
 
 struct PreprocessorOptions {
   std::vector<std::filesystem::path> include_directories;
   std::vector<std::string> defines;
+  // "UNIT/PRECISION": a `timescale directive in effect from the start of the
+  // compilation unit, for the design elements no `timescale applies to.
+  std::string default_timescale;
   std::optional<StandardRevision> standard_revision;
   std::size_t maximum_include_depth{64};
   std::size_t maximum_macro_expansion_depth{256};

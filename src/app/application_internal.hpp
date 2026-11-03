@@ -621,6 +621,7 @@ struct ParseGroup {
     std::vector<ParseInput> inputs;
     std::vector<std::filesystem::path> include_directories;
     std::vector<std::string> defines;
+    std::string default_timescale;
     std::filesystem::path base_directory;
     frontend::SystemVerilogPackageMemberLookup package_member_lookup;
 };

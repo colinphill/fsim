@@ -713,7 +713,7 @@ public:
             return;
         }
         finished_ = true;
-        if (!simulation_ended_) {
+        if (!simulation_ended_ && !finishing_) {
             end_of_simulation();
         }
         phase_ = vhpiTerminationPhase;
@@ -2858,10 +2858,22 @@ private:
     {
         switch (command) {
         case vhpiStop:
-        case vhpiFinish:
             stopping_ = true;
             simulation_.request_stop();
             return 0;
+        case vhpiFinish: {
+            // The tool enters its termination phase, without
+            // vhpiCbEndOfSimulation callbacks (IEEE 1076-2019 23.5).
+            runtime::SystemVerilogVpiControlRequest finish;
+            finish.operation = runtime::SystemVerilogVpiControlOperation::Finish;
+            if (!simulation_.systemverilog_vpi_control().submit(finish)) {
+                error(vhpiError, "cannot finish the simulation");
+                return 1;
+            }
+            stopping_ = true;
+            finishing_ = true;
+            return 0;
+        }
         default:
             error(vhpiError, "unsupported simulation control");
             return 1;
@@ -11431,6 +11443,8 @@ private:
     vhpiSeverityT error_severity_ { vhpiNote };
     std::string error_message_;
     bool stopping_ { };
+    // vhpi_control(vhpiFinish) was called.
+    bool finishing_ { };
     bool failed_ { };
     bool finished_ { };
     bool simulation_ended_ { };

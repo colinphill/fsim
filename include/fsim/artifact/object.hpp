@@ -15,7 +15,7 @@
 
 namespace fsim::artifact {
 
-inline constexpr std::uint32_t kObjectFormatVersion = 10;
+inline constexpr std::uint32_t kObjectFormatVersion = 11;
 inline constexpr std::string_view kObjectArtifactKind = "fsim-object";
 inline constexpr std::string_view kObjectMetadataFilename = "fsim-object.bin";
 
@@ -53,6 +53,8 @@ struct ObjectMetadata {
   std::string trace_archive;
   CodeCoverageArtifactIdentity code_coverage;
   std::vector<std::string> defines;
+  // The compile's default `timescale ("1ns/1ps"), empty for none.
+  std::string default_timescale;
   std::vector<std::filesystem::path> include_roots;
   std::vector<library::VhdlPackageDependency> vhdl_package_dependencies;
   std::vector<library::SourceIndexEntry> sources;

@@ -129,6 +129,9 @@ struct SourceSet {
   std::vector<std::filesystem::path> files;
   std::vector<std::filesystem::path> include_directories;
   std::vector<std::string> defines;
+  // `timescale for Verilog and SystemVerilog design elements that none
+  // applies to ("1ns/1ps"); empty keeps the tool default.
+  std::string default_timescale;
   std::string compilation_unit{"file"};
   SystemVerilogUvmRelease uvm_release{SystemVerilogUvmRelease::none};
 };

@@ -100,6 +100,10 @@ enum class ConfigChange : std::uint8_t {
 // diagnostic text of the first problem, or nothing.
 [[nodiscard]] std::optional<std::string> validate_time_resolution(
     std::string_view value);
+// UNIT/PRECISION of a `timescale (IEEE 1800-2023 22.7): each 1, 10 or 100
+// followed by s, ms, us, ns, ps or fs, the precision no coarser than the unit.
+[[nodiscard]] std::optional<std::string> validate_default_timescale(
+    std::string_view value);
 [[nodiscard]] std::optional<std::string> validate_fsm_hint(
     const CoverageFsmHintEntry& hint);
 [[nodiscard]] std::optional<std::string> validate_exclusion(

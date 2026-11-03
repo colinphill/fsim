@@ -273,6 +273,9 @@ std::string make_cache_key(
         for (const auto& define : set.defines) {
             key.add("define", define);
         }
+        if (!set.default_timescale.empty()) {
+            key.add("default-timescale", set.default_timescale);
+        }
         for (const auto& include : set.include_directories) {
             key.add(
                 "include",
@@ -1023,6 +1026,11 @@ make_specialization_cache_keys(
             settings->source_set->compilation_unit);
         for (const auto& define : settings->source_set->defines) {
             key.add("define", define);
+        }
+        if (!settings->source_set->default_timescale.empty()) {
+            key.add(
+                "default-timescale",
+                settings->source_set->default_timescale);
         }
         for (const auto& include :
             settings->source_set->include_directories) {

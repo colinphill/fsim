@@ -17,7 +17,7 @@ static_assert(FSIM_TF_INTERFACE_ABI_VERSION == 3U);
 static_assert(FSIM_TF_REGISTRATION_TABLE_ABI_VERSION == 3U);
 static_assert(FSIM_SVDPI_CONTEXT_ABI_VERSION == 3U);
 static_assert(FSIM_ACC_STANDARD_QUERY_ABI_VERSION == 3U);
-static_assert(fsim::artifact::kObjectFormatVersion == 10);
+static_assert(fsim::artifact::kObjectFormatVersion == 11);
 static_assert(fsim::library::kFormatVersion == 8);
 static_assert(fsim::library::kPortableSchemaVersion == 16);
 static_assert(fsim::library::kCompiledHirSchemaVersion == 3);

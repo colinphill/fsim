@@ -77,6 +77,7 @@ namespace {
                 return finish_compilation_unit(fallback);
             }
             define_command_line_macros();
+            emit_default_timescale();
             for (const auto& root : roots) {
                 process_root(normalized_path(root));
             }
@@ -95,6 +96,7 @@ namespace {
                     finish_compilation_unit(root));
             }
             define_command_line_macros();
+            emit_default_timescale();
             const auto name = fsim::support::path_to_utf8(root);
             source_snapshots_.emplace(name, std::move(source.text));
             inputs_.push_back(
@@ -380,6 +382,31 @@ namespace {
                     }
                 }
             }
+        }
+
+        // The default time unit and precision are the tool's (IEEE
+        // 1800-2023 3.14.2.3): the requested default is a `timescale
+        // directive ahead of the first root, which the unit's own
+        // directives replace (22.7).
+        void emit_default_timescale()
+        {
+            if (options_.default_timescale.empty()) {
+                return;
+            }
+            const auto name
+                = "<command-line:--timescale " + options_.default_timescale + ">";
+            auto lexed = lex(SourceText { name,
+                                 "`timescale " + options_.default_timescale + "\n" },
+                language_);
+            for (auto& diagnostic : lexed.diagnostics) {
+                diagnostics_.push_back(std::move(diagnostic));
+            }
+            if (!lexed.tokens.empty()) {
+                lexed.tokens.pop_back();
+            }
+            output_.insert(output_.end(),
+                std::make_move_iterator(lexed.tokens.begin()),
+                std::make_move_iterator(lexed.tokens.end()));
         }
 
         void define_command_line_macros()

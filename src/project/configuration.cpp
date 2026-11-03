@@ -169,6 +169,11 @@ std::optional<std::string> valid_trace_compression(
     return "trace compression must be 'auto', 'none', or 'deterministic'";
 }
 
+std::optional<std::string> valid_timescale(const std::string_view value)
+{
+    return validate_default_timescale(value);
+}
+
 std::optional<std::string> valid_nonempty(const std::string_view value)
 {
     if (!value.empty()) {
@@ -219,9 +224,16 @@ constexpr std::array kKeys {
     KeyRule { { "compile.sv.standard", text, "2017",
         "SystemVerilog standard" },
         valid_standard<Language::system_verilog> },
+    KeyRule { { "compile.sv.timescale", text, "",
+        "SystemVerilog default timescale (UNIT/PRECISION)" },
+        valid_timescale },
     KeyRule { { "compile.sv.uvm_release", text, "none",
         "governed UVM release SystemVerilog sources compile against" },
         valid_uvm_release },
+    KeyRule { { "compile.timescale", text, "",
+        "default timescale (UNIT/PRECISION, 1ns/1ps) of Verilog and SystemVerilog "
+        "design elements no `timescale applies to" },
+        valid_timescale },
     KeyRule { { "compile.verilog.compatibility", list, "",
         "Verilog compatibility switches" },
         valid_compatibility },
@@ -237,6 +249,9 @@ constexpr std::array kKeys {
     KeyRule { { "compile.verilog.standard", text, "2005",
         "Verilog standard" },
         valid_standard<Language::verilog> },
+    KeyRule { { "compile.verilog.timescale", text, "",
+        "Verilog default timescale (UNIT/PRECISION)" },
+        valid_timescale },
     KeyRule { { "compile.vhdl.compatibility", text, "",
         "VHDL compatibility profile" },
         valid_vhdl_compatibility },
@@ -489,6 +504,47 @@ std::optional<std::string> validate_time_resolution(
     }
     return "time resolution must be 'auto' or a nonzero integer followed by "
            "fs, ps, ns, us, ms, or s";
+}
+
+std::optional<std::string> validate_default_timescale(
+    const std::string_view value)
+{
+    // The power of ten of one time literal, or nothing.
+    const auto exponent = [](const std::string_view text) -> std::optional<int> {
+        constexpr std::array<std::pair<std::string_view, int>, 6> units { {
+            { "s", 0 }, { "ms", -3 }, { "us", -6 },
+            { "ns", -9 }, { "ps", -12 }, { "fs", -15 } } };
+        constexpr std::array<std::pair<std::string_view, int>, 3> magnitudes { {
+            { "100", 2 }, { "10", 1 }, { "1", 0 } } };
+        for (const auto& [magnitude, magnitude_exponent] : magnitudes) {
+            if (!text.starts_with(magnitude)) {
+                continue;
+            }
+            for (const auto& [unit, unit_exponent] : units) {
+                if (text.substr(magnitude.size()) == unit) {
+                    return magnitude_exponent + unit_exponent;
+                }
+            }
+            return std::nullopt;
+        }
+        return std::nullopt;
+    };
+    const auto separator = value.find('/');
+    if (separator != std::string_view::npos) {
+        const auto unit = exponent(value.substr(0U, separator));
+        const auto precision = exponent(value.substr(separator + 1U));
+        if (unit && precision) {
+            if (*precision > *unit) {
+                return "the timescale precision '"
+                    + std::string { value.substr(separator + 1U) }
+                    + "' is coarser than its unit";
+            }
+            return std::nullopt;
+        }
+    }
+    return "a timescale is UNIT/PRECISION, each 1, 10, or 100 followed by "
+           "s, ms, us, ns, ps, or fs (1ns/1ps), not '"
+        + std::string { value } + "'";
 }
 
 std::optional<std::string> validate_fsm_hint(const CoverageFsmHintEntry& hint)

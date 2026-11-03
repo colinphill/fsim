@@ -454,9 +454,9 @@ end architecture;
         [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ART-0001"
                 && diagnostic.message
-                == "unsupported .fsimobj identity: found format 11, "
+                == "unsupported .fsimobj identity: found format 12, "
                    "portable-unit schema 16, and compiled-HIR schema 3; "
-                   "required format 10, portable-unit schema 16, and "
+                   "required format 11, portable-unit schema 16, and "
                    "compiled-HIR schema 3; regenerate .fsimobj with this "
                    "fsim build";
         }));

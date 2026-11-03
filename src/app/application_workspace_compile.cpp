@@ -623,6 +623,7 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
         frontend::PreprocessorOptions options;
         options.include_directories = sources.include_directories;
         options.defines = sources.defines;
+        options.default_timescale = sources.default_timescale;
         const auto result = frontend::preprocess_verilog_compilation_unit(
             sources.files,
             sources.language == project::Language::verilog

@@ -201,10 +201,23 @@ void test_time_values()
         check(fsim::project::validate_time_resolution(value).has_value(),
             std::string { "an invalid time resolution is rejected: " } + value);
     }
+    check(!fsim::project::validate_default_timescale("1ns/1ps")
+            && !fsim::project::validate_default_timescale("100us/10ns")
+            && !fsim::project::validate_default_timescale("1s/1s"),
+        "UNIT/PRECISION timescales are accepted");
+    for (const auto* value :
+        { "1ns", "1ps/1ns", "2ns/1ps", "1ns/", "1 ns/1 ps", "1min/1s" }) {
+        check(fsim::project::validate_default_timescale(value).has_value(),
+            std::string { "an invalid timescale is rejected: " } + value);
+    }
     fsim::project::Configuration config;
     check(rejected_with(
               config, "elaborate.time_resolution", "0ns", "nonzero integer"),
         "zero time resolution is rejected");
+    check(!set_value(config, "compile.timescale", "1ns/1ps")
+            && rejected_with(config, "compile.sv.timescale", "1ps/1ns",
+                "coarser than its unit"),
+        "a configured timescale is validated");
     check(!set_value(config, "simulate.duration", "10us")
             && rejected_with(config, "simulate.duration", "10", "fs, ps"),
         "a duration needs a unit");

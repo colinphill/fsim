@@ -578,6 +578,7 @@ ParsedSnapshot parse_group_snapshot(const ParseGroup& group)  {
     frontend::PreprocessorOptions options;
     options.include_directories = group.include_directories;
     options.defines = group.defines;
+    options.default_timescale = group.default_timescale;
     options.standard_revision = group.standard_revision;
     std::vector<std::filesystem::path> paths;
     paths.reserve(group.inputs.size());

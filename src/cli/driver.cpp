@@ -480,6 +480,9 @@ namespace {
 
     void apply_overrides(const Invocation& invocation, project::Config& config)
     {
+        if (invocation.time_resolution.has_value()) {
+            config.project.time_resolution = *invocation.time_resolution;
+        }
         if (!invocation.generics.empty()) {
             config.project.generics = invocation.generics;
         }
@@ -612,6 +615,9 @@ namespace {
             << "                           Add a library to compile/elaborate searches; repeatable\n"
             << "  -I, --include PATH       Add a direct-source include directory\n"
             << "  -D, --define NAME[=VAL]  Add a direct-source preprocessor definition\n"
+            << "      --timescale UNIT/PRECISION\n"
+            << "                           Verilog/SystemVerilog timescale of design\n"
+            << "                           elements no `timescale applies to (1ns/1ps)\n"
             << "      --preprocess-only    compile: run the Verilog preprocessor and stop\n"
             << "      --dpi-header PATH    compile: write the DPI-C import/export C prototypes\n"
             << "      --verbosity quiet|normal|verbose\n"
@@ -628,6 +634,9 @@ namespace {
             << "                           Accepted for compatibility; ignored\n"
             << "\n"
             << "Elaboration and simulation options:\n"
+            << "      --generic NAME=VALUE Set a top-level generic or parameter; repeatable\n"
+            << "      --time-resolution auto|TIME\n"
+            << "                           elaborate: simulation time resolution (1fs, 1ps)\n"
             << "  -O, --optimization O0..O3\n"
             << "  -j, --jobs COUNT\n"
             << "      --code-coverage      Enable statement, branch, condition, toggle,\n"
@@ -894,6 +903,8 @@ namespace {
             "--include",
             "-D",
             "--define",
+            "--timescale",
+            "--time-resolution",
             "-O",
             "--optimization",
             "-j",
@@ -1361,6 +1372,30 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 invocation.defines.emplace_back(*value);
+            } else if (is_option(argument, "", "--timescale")) {
+                const auto value = take_value(
+                    index, argc, argv, argument, "--timescale", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                if (const auto problem
+                    = project::validate_default_timescale(*value)) {
+                    argument_error(diagnostics, "--timescale: " + *problem);
+                    return std::nullopt;
+                }
+                invocation.default_timescale = std::string { *value };
+            } else if (is_option(argument, "", "--time-resolution")) {
+                const auto value = take_value(index, argc, argv, argument,
+                    "--time-resolution", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                if (const auto problem
+                    = project::validate_time_resolution(*value)) {
+                    argument_error(diagnostics, "--time-resolution: " + *problem);
+                    return std::nullopt;
+                }
+                invocation.time_resolution = std::string { *value };
             } else if (
                 argument == "-O" || is_option(argument, "", "--optimization") || (argument.size() == 3 && argument.starts_with("-O"))) {
                 std::optional<std::string_view> value;
@@ -1982,6 +2017,15 @@ std::optional<Invocation> parse_arguments(
             "--include and --define require source compilation or checking");
         return std::nullopt;
     }
+    if (invocation.default_timescale.has_value() && !source_command) {
+        argument_error(diagnostics,
+            "--timescale requires source compilation or checking");
+        return std::nullopt;
+    }
+    if (invocation.time_resolution.has_value() && !elaborate) {
+        argument_error(diagnostics, "--time-resolution requires elaborate");
+        return std::nullopt;
+    }
     if (!invocation.search_libraries.empty()
         && invocation.command != Command::compile && !elaborate) {
         argument_error(diagnostics,
@@ -2277,6 +2321,11 @@ std::optional<project::SourceSet> make_source_set(const Invocation& invocation,
         if (const auto* values = configured("defines")) {
             source_set.defines = *values;
         }
+        if (invocation.default_timescale) {
+            source_set.default_timescale = *invocation.default_timescale;
+        } else if (const auto* values = configured("timescale")) {
+            source_set.default_timescale = values->front();
+        }
     }
     include_directories.insert(include_directories.end(),
         invocation.include_directories.begin(),
@@ -2564,11 +2613,13 @@ namespace {
                 config = make_workspace_config(*invocation, diagnostics);
             }
             if (config.has_value()) {
-                apply_overrides(*invocation, *config);
+                // The command's options win over the configured elaboration
+                // settings (elaborate.time_resolution).
                 if (invocation->configuration
                     && invocation->command == Command::elaborate) {
                     invocation->configuration->apply_elaboration_settings(*config);
                 }
+                apply_overrides(*invocation, *config);
             }
             if (!config.has_value() || diagnostics.has_error()) {
                 print_diagnostics(error, diagnostics, invocation->diagnostic_format,

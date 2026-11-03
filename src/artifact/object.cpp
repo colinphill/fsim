@@ -316,7 +316,7 @@ std::optional<std::vector<ObjectSourceCoverage>> read_source_coverage(
 
 std::string compilation_digest(const ObjectMetadata& metadata) {
   Writer writer;
-  writer.string("fsim-object-compilation-v10-compiled-hir");
+  writer.string("fsim-object-compilation-v11-default-timescale");
   writer.u32(metadata.compiled_hir_schema);
   writer.path(metadata.compiled_hir_artifact);
   writer.string(metadata.compiled_hir_checksum);
@@ -334,6 +334,7 @@ std::string compilation_digest(const ObjectMetadata& metadata) {
   writer.sequence(metadata.defines, [&](const auto& item) {
     writer.string(item);
   });
+  writer.string(metadata.default_timescale);
   writer.sequence(metadata.vhdl_package_dependencies, [&](const auto& item) {
     writer.string(item.standard);
     writer.string(item.predefined_environment);
@@ -561,6 +562,7 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
   writer.sequence(metadata.defines, [&](const auto& item) {
     writer.string(item);
   });
+  writer.string(metadata.default_timescale);
   writer.sequence(metadata.include_roots, [&](const auto& item) {
     writer.path(item);
   });
@@ -694,6 +696,12 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
     }
     metadata.defines.push_back(std::move(*value));
   }
+  auto default_timescale = canonical.string();
+  if (!default_timescale.has_value()) {
+    error(diagnostics, kSchemaCode, "truncated object default timescale", source_name);
+    return std::nullopt;
+  }
+  metadata.default_timescale = std::move(*default_timescale);
   const auto include_count = canonical.count();
   if (!include_count.has_value()) {
     error(diagnostics, kSchemaCode, "invalid object include-root count", source_name);

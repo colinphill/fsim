@@ -80,6 +80,8 @@ std::size_t object_unit_name_form_offset(
     offset = skip_string(bytes, offset);
     offset = skip_string(bytes, offset);
     offset = skip_string_sequence(bytes, offset, 1U);
+    // The default timescale.
+    offset = skip_string(bytes, offset);
     offset = skip_string_sequence(bytes, offset, 1U);
     offset = skip_string_sequence(bytes, offset, 5U);
     offset = skip_string_sequence(bytes, offset, 6U);
@@ -103,7 +105,7 @@ std::size_t object_unit_name_form_offset(
 }  // namespace
 
 int main() {
-    static_assert(fsim::artifact::kObjectFormatVersion == 10U);
+    static_assert(fsim::artifact::kObjectFormatVersion == 11U);
     static_assert(fsim::library::kPortableSchemaVersion == 16U);
     static_assert(fsim::library::kCompiledHirSchemaVersion == 3U);
     const std::string source_bytes = "module child; endmodule\n";
@@ -207,7 +209,7 @@ int main() {
         assert(!fsim::artifact::deserialize_object_metadata(
             bytes, source, diagnostics));
         const auto expected = "unsupported .fsimobj identity: found " + found
-            + "; required format 10, portable-unit schema 16, and compiled-HIR "
+            + "; required format 11, portable-unit schema 16, and compiled-HIR "
               "schema 3; regenerate "
               ".fsimobj with this fsim build";
         assert(std::ranges::any_of(
@@ -242,14 +244,14 @@ int main() {
         future_format, 8U, fsim::artifact::kObjectFormatVersion + 1U);
     expect_identity_rejection(
         std::move(future_format), "future-format",
-        "format 11, portable-unit schema 16, and compiled-HIR schema 3");
+        "format 12, portable-unit schema 16, and compiled-HIR schema 3");
     for (std::uint32_t schema = 0;
         schema < fsim::library::kPortableSchemaVersion; ++schema) {
         auto noncurrent_header = encoded.substr(0, 20U);
         store_u32(noncurrent_header, 12U, schema);
         expect_identity_rejection(
             std::move(noncurrent_header), "stale-portable-schema",
-            "format 10, portable-unit schema " + std::to_string(schema)
+            "format 11, portable-unit schema " + std::to_string(schema)
                 + ", and compiled-HIR schema 3");
     }
     auto future_portable_schema = encoded.substr(0, 20U);
@@ -258,28 +260,28 @@ int main() {
         fsim::library::kPortableSchemaVersion + 1U);
     expect_identity_rejection(
         std::move(future_portable_schema), "future-portable-schema",
-        "format 10, portable-unit schema 17, and compiled-HIR schema 3");
+        "format 11, portable-unit schema 17, and compiled-HIR schema 3");
     auto stale_compiled_hir_schema = encoded.substr(0, 20U);
     store_u32(stale_compiled_hir_schema, 16U, 0U);
     expect_identity_rejection(
         std::move(stale_compiled_hir_schema), "stale-compiled-hir-schema",
-        "format 10, portable-unit schema 16, and compiled-HIR schema 0");
+        "format 11, portable-unit schema 16, and compiled-HIR schema 0");
     auto prior_compiled_hir_schema = encoded.substr(0, 20U);
     store_u32(prior_compiled_hir_schema, 16U, 1U);
     expect_identity_rejection(
         std::move(prior_compiled_hir_schema), "prior-compiled-hir-schema",
-        "format 10, portable-unit schema 16, and compiled-HIR schema 1");
+        "format 11, portable-unit schema 16, and compiled-HIR schema 1");
     auto prior_compiled_hir_schema_v2 = encoded.substr(0, 20U);
     store_u32(prior_compiled_hir_schema_v2, 16U, 2U);
     expect_identity_rejection(
         std::move(prior_compiled_hir_schema_v2),
         "prior-compiled-hir-schema-v2",
-        "format 10, portable-unit schema 16, and compiled-HIR schema 2");
+        "format 11, portable-unit schema 16, and compiled-HIR schema 2");
     auto future_compiled_hir_schema = encoded.substr(0, 20U);
     store_u32(future_compiled_hir_schema, 16U, 4U);
     expect_identity_rejection(
         std::move(future_compiled_hir_schema), "future-compiled-hir-schema",
-        "format 10, portable-unit schema 16, and compiled-HIR schema 4");
+        "format 11, portable-unit schema 16, and compiled-HIR schema 4");
     expect_metadata_rejection(encoded.substr(0, 19U), "truncated-header");
     auto oversized_root = encoded;
     store_u64(oversized_root, 20U, UINT64_MAX);

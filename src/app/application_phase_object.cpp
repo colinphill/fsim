@@ -238,6 +238,8 @@ application_detail::load_object_workspace(
     provenance.source_settings.compilation_unit = metadata->compilation_unit;
     provenance.source_settings.uvm_release = *object_release;
     provenance.source_settings.defines = metadata->defines;
+    provenance.source_settings.default_timescale =
+        metadata->default_timescale;
 
     // Sources keep the workspace-relative path they were compiled from. Two
     // objects compiled from different contents of one path (a file edited

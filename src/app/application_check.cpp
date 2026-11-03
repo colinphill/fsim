@@ -391,6 +391,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
             group.defines.end(),
             source_set.defines.begin(),
             source_set.defines.end());
+        group.default_timescale = source_set.default_timescale;
         for (const auto& file : source_set.files) {
             group.inputs.push_back(
                 { file, language, vhdl_standard, standard_revision,
@@ -409,6 +410,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
             group.base_directory = config.base_directory;
             group.include_directories = source_set.include_directories;
             group.defines = source_set.defines;
+            group.default_timescale = source_set.default_timescale;
             group.inputs.push_back(
                 { file, language, vhdl_standard, standard_revision,
                     source_set.standard, source_set.library, hdl_source_count++ });
@@ -425,7 +427,8 @@ static std::optional<CompilationWorkspace> check_project_impl(
         groups.push_back(std::move(group));
     } else {
         const auto key = std::to_string(static_cast<unsigned>(language))
-            + '\n' + source_set.standard + '\n' + compatibility_profile;
+            + '\n' + source_set.standard + '\n' + compatibility_profile
+            + '\n' + source_set.default_timescale;
         auto found = combined_groups.find(key);
         if (found == combined_groups.end()) {
             const auto index = groups.size();

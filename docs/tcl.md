@@ -152,12 +152,15 @@ to apply them.
 | `compile.sv.defines` | list |  | SystemVerilog preprocessor defines |
 | `compile.sv.include_directories` | list |  | SystemVerilog include directories |
 | `compile.sv.standard` | text | `2017` | SystemVerilog standard |
+| `compile.sv.timescale` | text |  | SystemVerilog default timescale (UNIT/PRECISION) |
 | `compile.sv.uvm_release` | text | `none` | governed UVM release SystemVerilog sources compile against |
+| `compile.timescale` | text |  | default timescale (UNIT/PRECISION, 1ns/1ps) of Verilog and SystemVerilog design elements no `timescale applies to |
 | `compile.verilog.compatibility` | list |  | Verilog compatibility switches |
 | `compile.verilog.compilation_unit` | text | `source-set` | Verilog compilation unit |
 | `compile.verilog.defines` | list |  | Verilog preprocessor defines |
 | `compile.verilog.include_directories` | list |  | Verilog include directories |
 | `compile.verilog.standard` | text | `2005` | Verilog standard |
+| `compile.verilog.timescale` | text |  | Verilog default timescale (UNIT/PRECISION) |
 | `compile.vhdl.compatibility` | text |  | VHDL compatibility profile |
 | `compile.vhdl.compilation_unit` | text | `file` | VHDL compilation unit |
 | `compile.vhdl.standard` | text | `2008` | VHDL standard |

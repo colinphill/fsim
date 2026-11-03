@@ -101,6 +101,11 @@ struct Invocation {
   std::vector<project::LibraryMapping> library_exports;
   std::vector<std::filesystem::path> include_directories;
   std::vector<std::string> defines;
+  // `timescale for Verilog and SystemVerilog design elements that none
+  // applies to (compile --timescale UNIT/PRECISION).
+  std::optional<std::string> default_timescale;
+  // elaborate --time-resolution (elaborate.time_resolution).
+  std::optional<std::string> time_resolution;
   std::optional<std::filesystem::path> artifact_output;
   std::vector<std::filesystem::path> objects;
   std::vector<std::filesystem::path> systemc_plugins;

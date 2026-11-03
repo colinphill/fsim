@@ -84,7 +84,7 @@ function(fsim_require_portable_object_tokens path)
 endfunction()
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
-  "kObjectFormatVersion = 10"
+  "kObjectFormatVersion = 11"
   "kObjectMetadataFilename = \"fsim-object.bin\""
   "portable_schema{library::kPortableSchemaVersion}"
   "compiled_hir_schema{library::kCompiledHirSchemaVersion}"
@@ -105,7 +105,7 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_CODEC}"
   "writer.u32(kObjectFormatVersion)"
   "writer.u32(library::kPortableSchemaVersion)"
   "writer.u32(library::kCompiledHirSchemaVersion)"
-  "fsim-object-compilation-v10-compiled-hir"
+  "fsim-object-compilation-v11-default-timescale"
   "unsupported_artifact_identity("
   "\".fsimobj\""
   "portable-unit schema"
@@ -127,7 +127,7 @@ fsim_require_portable_object_tokens("${FSIM_BUNDLE_CODEC}"
   "compiled HIR bundle is structurally invalid")
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
-  "kObjectFormatVersion == 10U"
+  "kObjectFormatVersion == 11U"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
   "kPortableSchemaVersion == 16U"
