@@ -178,7 +178,24 @@ Plan: `~/.claude/plans/remove-project-mode.md` (owner, 11-02).
 | vests | 3663 / 3663 | 3663 / 3663 | 2 |
 | vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
 
-**Next:** D6 campaign on `a12b517f`.
+**D6 campaign `v4c69cq`** (3 samples):
+
+| Measure | v4c68bq | v4c69cq |
+|---|---:|---:|
+| Geomean e2e (× xsim) | 3.81× | 3.70× |
+| Minimum simulate (× xsim) | 3.52× (mixed_codec) | **2.77× (original_codec)** |
+| original_codec simulate, fsim / xsim | 1.93 s / 7.75 s | 2.63 s / 7.29 s |
+
+The every-simulate ≥ 3× floor is **not met** in this campaign. The e2e floor (3.5×) holds. Only original_codec moved: 1.93 s to 2.63 s simulate in all three samples. Every other case was the same or faster (mixed_codec 1.93 s to 1.83 s).
+
+Paired checks show the commit is not the cause:
+- original_codec-only campaigns under the same protocol, run back to back:
+  - `v4c69cq-oc`: 3.18 s simulate;
+  - `v4c68bq-oc` (the baseline binary): 3.23 s;
+  - `v4c69cq-oc2`: 3.18 s.
+- Direct alternating simulates, 3 each: v4c68b 2.76/2.82/2.78 s, v4c69c 2.86/2.85/2.75 s.
+
+So the baseline binary is as slow as v4c69c on this host now, and slower than its own gate measurement (1.93 s). The floor needs a re-measure on a quiet host before this gate counts as closed.
 
 ### 2026-11-02: Class statics per instance, generic-package fixes, Windows paths (`b259b1d6`, `58c40e58`, `ff0466c4`, sweeps `v4c68b`, `v4c68ba`)
 
