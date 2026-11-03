@@ -9,19 +9,27 @@
 #c pli error=1 severity=3
 #c not implemented error=1
 #c 5000000 clk=1 next=5000000
+#c 5000000 transaction :top:t=0
 #c 10000000 clk=0 next=10000000
 #c 10000000 d=0 after deposit-propagate
 #c 10000000 d changed to 1
 #c 12000000 d=0 after deposit n=5 bin=101 dec=5 hex=5
+#c 12000000 force :top:p=1
 #c 12000000 interrupt
 #c 15000000 clk=1 next=15000000
 #c 15000000 timeout clk=1 n=5
+#c 15000000 release :top:p=0
+#c 15000000 transaction :top:t=0
 #c pli error=1 severity=3
 #c 15000000 start of postponed n=10 put rejected=1
+#c 17000000 force :top:f=1010
+#c 17000000 element force :top:f(1)=1
 #c 20000000 clk=0 next=20000000
 #c 20000000 d=0 after deposit-propagate
 #c 20000000 d changed to 1
+#c 23000000 release :top:f=0000
 #c 25000000 clk=1 next=25000000
+#c 25000000 transaction :top:t=0
 #c 30000000 clk=0 next=30000000
 #c 30000000 d=1 after deposit-propagate
 #c 30000000 quiescence

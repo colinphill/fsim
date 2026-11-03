@@ -27,7 +27,19 @@ class DpiForeignService;
 /// registration-only host and report the system tasks and functions they
 /// register (IEEE 1800-2023 38.36). Elaboration lowers calls of these names
 /// to foreign call boundaries.
-[[nodiscard]] std::optional<std::vector<elaboration::UserSystemTask>>
+class VpiElaborationModules {
+public:
+    virtual ~VpiElaborationModules() = default;
+    [[nodiscard]] virtual std::span<const elaboration::UserSystemTask>
+    tasks() const noexcept = 0;
+    /// Run the cbUnresolvedSystf callbacks for a `$name` elaboration does
+    /// not know (IEEE 1800-2023 38.36.2); true when they registered it.
+    [[nodiscard]] virtual bool resolve(const std::string& name) = 0;
+};
+
+/// The modules stay loaded until the result is destroyed, so their
+/// callbacks can run while elaboration resolves system calls.
+[[nodiscard]] std::unique_ptr<VpiElaborationModules>
 register_vpi_user_system_tasks(
     std::span<const std::string> modules,
     diagnostic::Engine& diagnostics);

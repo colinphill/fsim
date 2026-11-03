@@ -791,16 +791,15 @@ std::optional<BuiltProject> build_checked_project(
         elaboration_roots.push_back(
             { top.target, top.alias, config.project.generics });
     }
-    std::vector<elaboration::UserSystemTask> user_system_tasks;
+    std::unique_ptr<VpiElaborationModules> vpi_modules;
     if (!config.elaboration.vpi_modules.empty()) {
-        auto registered = register_vpi_user_system_tasks(
+        vpi_modules = register_vpi_user_system_tasks(
             config.elaboration.vpi_modules, diagnostics);
-        if (!registered) {
+        if (!vpi_modules) {
             return std::nullopt;
         }
-        user_system_tasks = std::move(*registered);
     }
-    auto elaborated = [&] {
+    const auto elaborate_design = [&] {
         ScopedPhaseProfile elaboration_phase { "elaboration" };
         // Finalize's per-process passes run on the --jobs threads.
         const support::ParallelJobsScope jobs { config.build.jobs };
@@ -812,8 +811,27 @@ std::optional<BuiltProject> build_checked_project(
             systemc_provider.get(),
             config.elaboration.search_libraries,
             coverage_context ? &*coverage_context : nullptr,
-            user_system_tasks);
-    }();
+            vpi_modules ? vpi_modules->tasks()
+                        : std::span<const elaboration::UserSystemTask> { });
+    };
+    auto elaborated = elaborate_design();
+    // A system call elaboration does not know goes to the modules'
+    // cbUnresolvedSystf callbacks, which may register it; elaboration then
+    // runs again with it (IEEE 1800-2023 38.36.2).
+    if (vpi_modules && !elaborated.design) {
+        std::set<std::string> asked;
+        bool registered = false;
+        for (const auto& input : elaborated.diagnostics) {
+            if (!input.system_call.empty()
+                && asked.insert(input.system_call).second) {
+                registered = vpi_modules->resolve(input.system_call)
+                    || registered;
+            }
+        }
+        if (registered) {
+            elaborated = elaborate_design();
+        }
+    }
     for (const auto& input : elaborated.messages) {
         application_detail::import_diagnostic(diagnostics, input);
     }

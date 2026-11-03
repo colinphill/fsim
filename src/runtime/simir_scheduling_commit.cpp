@@ -1231,6 +1231,7 @@ void Interpreter::Impl::force_slice_from_process(const ProcessId process,
             force_slice(signal_id, std::move(forced), at);
         }
     };
+    const auto forced_width = value.width();
     if (processes.scheduling_domain(process)
         == ProcessSchedulingDomain::systemverilog) {
         if (driving_value) {
@@ -1239,13 +1240,20 @@ void Interpreter::Impl::force_slice_from_process(const ProcessId process,
             force_slice(signal_id, std::move(value), offset,
                 capture_signal_change_origin(process), port_segment);
         }
+        if (force_statement_hook) {
+            force_statement_hook(
+                process, signal_id, offset, forced_width, false);
+        }
         return;
     }
     // A VHDL force only schedules; the drivers take it in this cycle's
     // update (IEEE 1076-2019 10.5.2.1, 14.7.5.3 c).
     const auto width = get_signal(signal_id).initial_value.width();
-    if (offset > width || value.width() > width - offset) {
+    if (offset > width || forced_width > width - offset) {
         throw std::invalid_argument { "SimIR force slice is out of range" };
+    }
+    if (force_statement_hook) {
+        force_statement_hook(process, signal_id, offset, forced_width, false);
     }
     scheduler.schedule(SchedulerPhase::update, process,
         [apply, offset, value = std::move(value)](Scheduler&) mutable {
@@ -1274,11 +1282,17 @@ void Interpreter::Impl::release_slice_from_process(const ProcessId process,
             release_slice(signal_id, offset, width,
                 capture_signal_change_origin(process), port_segment);
         }
+        if (force_statement_hook) {
+            force_statement_hook(process, signal_id, offset, width, true);
+        }
         return;
     }
     const auto signal_width = get_signal(signal_id).initial_value.width();
     if (offset > signal_width || width > signal_width - offset) {
         throw std::invalid_argument { "SimIR release slice is out of range" };
+    }
+    if (force_statement_hook) {
+        force_statement_hook(process, signal_id, offset, width, true);
     }
     scheduler.schedule(SchedulerPhase::update, process,
         [apply](Scheduler&) { apply(); });

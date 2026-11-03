@@ -1691,6 +1691,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     StoredSignalChangeHook stored_signal_change_hook;
     DriverChangeHook driver_change_hook;
     EventTriggerHook event_trigger_hook;
+    ForceStatementHook force_statement_hook;
+    SignalTransactionHook signal_transaction_hook;
     ContainerObjectChangeHook container_object_change_hook;
     ContainerElementChangeHook container_element_change_hook;
     ScalarSignalChangeHook scalar_signal_change_hook;

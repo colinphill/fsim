@@ -2008,17 +2008,14 @@ Simulation::Impl::Impl(
                             selected.begin(), selected.end());
                     }
                     return true;
-                case runtime::SystemVerilogVpiAssertionControlOperation::Kill:
+                // Killing one assertion's attempts leaves it enabled; the
+                // system kill also stops new attempts (IEEE 1800-2023
+                // 39.5).
+                case runtime::SystemVerilogVpiAssertionControlOperation::Kill: {
                     if (!object) {
                         concurrent_assertions_enabled = false;
                         disabled_vpi_assertion_processes.clear();
                         enabled_vpi_assertion_processes.clear();
-                    } else {
-                        for (const auto process : selected) {
-                            enabled_vpi_assertion_processes.erase(process);
-                        }
-                        disabled_vpi_assertion_processes.insert(
-                            selected.begin(), selected.end());
                     }
                     const std::vector<runtime::simir::ProcessId>
                         selected_processes { selected.begin(), selected.end() };
@@ -2032,7 +2029,64 @@ Simulation::Impl::Impl(
                         });
                     return true;
                 }
-                return false;
+                default:
+                    break;
+                }
+                // The action controls: a pass action covers vacuous and
+                // nonvacuous successes (IEEE 1800-2023 39.5).
+                using Operation
+                    = runtime::SystemVerilogVpiAssertionControlOperation;
+                std::optional<bool> pass;
+                std::optional<bool> vacuous;
+                std::optional<bool> failure;
+                switch (operation) {
+                case Operation::EnablePassAction:
+                    pass = vacuous = true;
+                    break;
+                case Operation::DisablePassAction:
+                    pass = vacuous = false;
+                    break;
+                case Operation::EnableFailAction:
+                    failure = true;
+                    break;
+                case Operation::DisableFailAction:
+                    failure = false;
+                    break;
+                case Operation::EnableNonvacuousAction:
+                    pass = true;
+                    break;
+                case Operation::DisableVacuousAction:
+                    vacuous = false;
+                    break;
+                default:
+                    return false;
+                }
+                if (!object) {
+                    concurrent_assertion_action_overrides.clear();
+                    concurrent_assertion_pass_actions_enabled
+                        = pass.value_or(concurrent_assertion_pass_actions_enabled);
+                    concurrent_assertion_vacuous_actions_enabled
+                        = vacuous.value_or(
+                            concurrent_assertion_vacuous_actions_enabled);
+                    concurrent_assertion_failure_actions_enabled
+                        = failure.value_or(
+                            concurrent_assertion_failure_actions_enabled);
+                    return true;
+                }
+                for (const auto process : selected) {
+                    auto& settings
+                        = concurrent_assertion_action_overrides[process];
+                    if (pass) {
+                        settings[0] = pass;
+                    }
+                    if (vacuous) {
+                        settings[1] = vacuous;
+                    }
+                    if (failure) {
+                        settings[2] = failure;
+                    }
+                }
+                return true;
             });
     configure_standard_vpi_coverage();
     vpi_systems
@@ -2490,7 +2544,15 @@ Simulation::Impl::Impl(
                         interpreter->kill_sva_monitors(processes);
                         pending_concurrent_assertions.clear();
                     }
-                } else if (control == "assertpasson") {
+                }
+                // A system task sets the actions of every assertion.
+                if (control.starts_with("assertpass")
+                    || control.starts_with("assertfail")
+                    || control == "assertnonvacuouson"
+                    || control == "assertvacuousoff") {
+                    concurrent_assertion_action_overrides.clear();
+                }
+                if (control == "assertpasson") {
                     concurrent_assertion_pass_actions_enabled = true;
                     concurrent_assertion_vacuous_actions_enabled = true;
                 } else if (control == "assertpassoff") {
@@ -2569,16 +2631,43 @@ Simulation::Impl::Impl(
                                 return item.second.design_process
                                     == coverage_key;
                             });
+                        // The attempt ends in the disabled state (IEEE
+                        // 1800-2023 16.12, 39.4.2).
+                        if (vpi_assertions && vpi_callbacks
+                            && vpi_callbacks->has_registrations()) {
+                            const auto occurrence = std::ranges::find_if(
+                                built.design_ir.processes(),
+                                [&](const auto& item) {
+                                    return item.runtime_index == coverage_key;
+                                });
+                            if (occurrence != built.design_ir.processes().end()) {
+                                const auto kind = payload.substr(
+                                    slot_end + 1U, kind_end - slot_end - 1U);
+                                ConcurrentAssertionEvent event;
+                                event.name = std::string {
+                                    payload.substr(outcome_end + 1U) };
+                                event.process = occurrence->name;
+                                event.kind = kind == "assumption"
+                                    ? ConcurrentAssertionCoverageKind::assumption
+                                    : kind == "cover"
+                                    ? ConcurrentAssertionCoverageKind::cover
+                                    : kind == "restriction"
+                                    ? ConcurrentAssertionCoverageKind::restriction
+                                    : ConcurrentAssertionCoverageKind::assertion;
+                                event.outcome
+                                    = ConcurrentAssertionOutcome::disabled;
+                                event.time = time;
+                                event.delta = delta;
+                                publish_vpi_assertion(event);
+                            }
+                        }
                         return;
                     }
                     pending_concurrent_assertions.erase(
                         interpreter->dynamic_process_root(process));
                     concurrent_assertion_actions_suppressed[process]
-                        = outcome == "pass"
-                        ? !concurrent_assertion_pass_actions_enabled
-                        : outcome == "vacuous"
-                        ? !concurrent_assertion_vacuous_actions_enabled
-                        : !concurrent_assertion_failure_actions_enabled;
+                        = !concurrent_assertion_action_enabled(
+                            coverage_key, outcome);
                     std::uint32_t slot { };
                     const auto slot_text = payload.substr(0, slot_end);
                     std::from_chars(
@@ -3009,9 +3098,8 @@ void Simulation::Impl::finish_concurrent_assertions(
         event.outcome = pending.vacuous
             ? ConcurrentAssertionOutcome::vacuous
             : ConcurrentAssertionOutcome::failure;
-        event.action_suppressed = pending.vacuous
-            ? !concurrent_assertion_vacuous_actions_enabled
-            : !concurrent_assertion_failure_actions_enabled;
+        event.action_suppressed = !concurrent_assertion_action_enabled(
+            pending.design_process, pending.vacuous ? "vacuous" : "failure");
         concurrent_assertion_events.push_back(event);
         publish_vpi_assertion(concurrent_assertion_events.back());
         if (concurrent_assertion_hook) {
@@ -3034,4 +3122,22 @@ void Simulation::Impl::finish_concurrent_assertions(
     }
     pending_concurrent_assertions.clear();
 }
+bool Simulation::Impl::concurrent_assertion_action_enabled(
+    const runtime::simir::ProcessId design_process,
+    const std::string_view outcome) const
+{
+    const std::size_t which = outcome == "pass" ? 0U
+        : outcome == "vacuous"                  ? 1U
+                                                : 2U;
+    if (const auto found
+        = concurrent_assertion_action_overrides.find(design_process);
+        found != concurrent_assertion_action_overrides.end()
+        && found->second[which]) {
+        return *found->second[which];
+    }
+    return which == 0U ? concurrent_assertion_pass_actions_enabled
+        : which == 1U  ? concurrent_assertion_vacuous_actions_enabled
+                       : concurrent_assertion_failure_actions_enabled;
+}
+
 } // namespace fsim::app

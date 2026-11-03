@@ -204,6 +204,13 @@ enum class ListKind : std::uint8_t {
     pack_insts,
     argvs,
     param_decls,
+    // Processes and statements (IEEE 1076-2019 19.11).
+    statements,
+    branches,
+    cond_waveforms,
+    select_waveforms,
+    waveform_elems,
+    choices,
 };
 
 struct Object final : Handle {
@@ -260,12 +267,44 @@ struct Object final : Handle {
     // (vhpiAliasedName, IEEE 1076-2019 19.4.3).
     Object* aliased { };
 
+    // Processes and statements (IEEE 1076-2019 19.11): the process, or the
+    // statement (for a branch, waveform or alternative, the statement it is
+    // part of), the case alternative, the statements the object contains
+    // (vhpiSeqStmts), the condition of a branch or conditional waveform and
+    // the index of a branch or waveform element.
+    const vhdl::Process* process { };
+    const vhdl::Statement* statement { };
+    const vhdl::CaseAlternative* alternative { };
+    const std::vector<semantic::StatementId>* body { };
+    std::optional<semantic::ExpressionId> condition;
+    std::size_t part { };
+    // A process or statement (class stmt), and whether it is sequential.
+    bool is_stmt { };
+    bool sequential { };
+    // The explicit label (vhpiLabelNameP); the implicit one is in `name`.
+    std::string label_name;
+
     // Type declarations.
     std::unique_ptr<TypeData> type_data;
 
     // Lazily built one-to-many associations.
     std::map<ListKind, std::vector<Object*>> lists;
     std::map<std::string, Object*, std::less<>> children;
+};
+
+// A process or concurrent statement of a region, in textual order.
+struct StatementMember {
+    const vhdl::Process* process { };
+    const vhdl::Statement* statement { };
+};
+
+// One branch of an if statement, or one conditional waveform: the node that
+// holds the condition (or the assignment of a conditional waveform), the
+// condition (none for an else branch) and the statements of the branch.
+struct BranchPart {
+    const vhdl::Statement* node { };
+    std::optional<semantic::ExpressionId> condition;
+    const std::vector<semantic::StatementId>* body { };
 };
 
 struct Callback final : Handle {
@@ -399,6 +438,9 @@ struct ModuleSpec {
 {
     switch (reason) {
     case vhpiCbValueChange:
+    case vhpiCbForce:
+    case vhpiCbRelease:
+    case vhpiCbTransaction:
     case vhpiCbRepEndOfProcesses:
     case vhpiCbRepLastKnownDeltaCycle:
     case vhpiCbRepNextTimeStep:
@@ -487,6 +529,12 @@ public:
         }
         if (change_token_ != 0U) {
             simulation_.remove_signal_change_hook(change_token_);
+        }
+        if (force_token_ != 0U) {
+            simulation_.remove_force_statement_hook(force_token_);
+        }
+        if (transaction_token_ != 0U) {
+            simulation_.remove_signal_transaction_hook(transaction_token_);
         }
     }
 
@@ -1070,6 +1118,31 @@ private:
             ensure_change_hook();
             break;
         }
+        // Object callbacks on a signal; a force or release callback with no
+        // object watches every signal (IEEE 1076-2019 21.3.2.3-5).
+        case vhpiCbForce:
+        case vhpiCbRelease:
+        case vhpiCbTransaction: {
+            Object* object = nullptr;
+            if (data->obj != nullptr || data->reason == vhpiCbTransaction) {
+                object = object_of(data->obj);
+                if (object == nullptr) {
+                    return nullptr;
+                }
+                if (!object->signal) {
+                    error(vhpiError, "object callbacks need a signal");
+                    return nullptr;
+                }
+            }
+            callback.object = object;
+            callback.data.obj = object != nullptr ? to_handle(object) : nullptr;
+            if (data->reason == vhpiCbTransaction) {
+                ensure_transaction_hook(*object->signal);
+            } else {
+                ensure_force_hook();
+            }
+            break;
+        }
         default:
             error(vhpiError,
                 "unsupported callback reason " + std::to_string(data->reason));
@@ -1240,20 +1313,26 @@ private:
     }
 
     // Run a callback's routine with a fresh copy of its data.
-    void run(Callback& callback)
+    // `trigger`: the object the event occurred on, for a callback
+    // registered without one.
+    void run(Callback& callback, Object* const trigger = nullptr)
     {
         if (callback.state != vhpiEnable) {
             return;
         }
         auto data = callback.data;
+        auto* const object = trigger != nullptr ? trigger : callback.object;
+        if (trigger != nullptr) {
+            data.obj = to_handle(trigger);
+        }
         vhpiTimeT time { };
         if (callback.has_time) {
             time = to_vhpi_time(now_femtoseconds());
             data.time = &time;
         }
         auto value = callback.value;
-        if (callback.has_value && callback.object != nullptr) {
-            (void)read_value(*callback.object, value);
+        if (callback.has_value && object != nullptr) {
+            (void)read_value(*object, value);
             data.value = &value;
         }
         auto* const previous = dispatching_;
@@ -1427,6 +1506,10 @@ private:
             }
         }
         flush_changes();
+        if (phase == runtime::SchedulerPhase::update) {
+            flush_forces();
+            flush_transactions();
+        }
         if (stopping_) {
             return;
         }
@@ -1584,6 +1667,150 @@ private:
                     continue;
                 }
                 callback->last = std::move(bits);
+                run(*callback);
+            }
+        }
+    }
+
+    // A force or release of a signal slice; `target` is the object a
+    // vhpi_put_value named.
+    struct ForceEvent {
+        SignalId signal { };
+        std::size_t offset { };
+        std::size_t width { };
+        bool release { };
+        Object* target { };
+    };
+
+    void ensure_force_hook()
+    {
+        if (force_token_ != 0U) {
+            return;
+        }
+        force_token_ = simulation_.add_force_statement_hook(
+            [this](const runtime::simir::ProcessId, const SignalId signal,
+                const std::size_t offset, const std::size_t width,
+                const bool release) {
+                forces_.push_back(
+                    ForceEvent { signal, offset, width, release, nullptr });
+            });
+    }
+
+    void ensure_transaction_hook(const SignalId signal)
+    {
+        transaction_watch_.insert(signal);
+        if (transaction_token_ != 0U) {
+            return;
+        }
+        transaction_token_ = simulation_.add_signal_transaction_hook(
+            [this](const SignalId active) {
+                if (transaction_watch_.contains(active)) {
+                    active_.insert(active);
+                }
+            });
+    }
+
+    // Whether forcing `width` bits of `signal` from `offset` forces the
+    // trigger object: the target is the object or contains it
+    // (IEEE 1076-2019 21.3.2.3).
+    [[nodiscard]] bool forces(const Object& object, const ForceEvent& event)
+    {
+        if (!object.signal || *object.signal != event.signal) {
+            return false;
+        }
+        const auto bits = object.type != nullptr ? width_of(*object.type) : 0U;
+        return object.offset >= event.offset
+            && object.offset + bits <= event.offset + event.width;
+    }
+
+    // The declared signal a force with no named target object refers to.
+    [[nodiscard]] Object* signal_object(const SignalId signal)
+    {
+        for (const auto& object : objects_) {
+            if (object->signal && *object->signal == signal
+                && object->declaration != nullptr && object->offset == 0U
+                && object->aliased == nullptr) {
+                return object.get();
+            }
+        }
+        const auto path = simulation_.signal_path(signal);
+        if (!path) {
+            return nullptr;
+        }
+        // The lookup is the tool's own; it leaves the error state as it was.
+        const auto had_error = has_error_;
+        const auto severity = error_severity_;
+        auto message = error_message_;
+        auto* const handle = handle_by_name(path->c_str(), nullptr);
+        auto* const found = handle != nullptr ? object_of(handle) : nullptr;
+        has_error_ = had_error;
+        error_severity_ = severity;
+        error_message_ = std::move(message);
+        return found != nullptr && found->signal && *found->signal == signal
+            ? found
+            : nullptr;
+    }
+
+    // Force and release callbacks run once the update that applies them
+    // has taken place, with the resulting value (IEEE 1076-2019 21.3.2.1).
+    void flush_forces()
+    {
+        while (!forces_.empty()) {
+            const auto events = std::exchange(forces_, { });
+            for (const auto& event : events) {
+                deliver_force(event);
+            }
+        }
+    }
+
+    void deliver_force(const ForceEvent& event)
+    {
+        const auto reason = event.release ? vhpiCbRelease : vhpiCbForce;
+        std::vector<std::pair<Callback*, std::uint64_t>> selected;
+        for (auto* const callback : callbacks_) {
+            if (callback->data.reason == reason
+                && (callback->object == nullptr
+                    || forces(*callback->object, event))) {
+                selected.emplace_back(callback, callback->order);
+            }
+        }
+        Object* target = event.target;
+        for (const auto& [callback, order] : selected) {
+            if (!live(callback, order)) {
+                continue;
+            }
+            if (callback->object != nullptr) {
+                run(*callback);
+                continue;
+            }
+            if (target == nullptr) {
+                target = signal_object(event.signal);
+                if (target == nullptr) {
+                    return;
+                }
+            }
+            run(*callback, target);
+        }
+    }
+
+    // A signal is active in each cycle with a transaction on it
+    // (IEEE 1076-2019 14.7.3.1, 21.3.2.5).
+    void flush_transactions()
+    {
+        if (active_.empty()) {
+            return;
+        }
+        const auto active = std::exchange(active_, { });
+        std::vector<std::pair<Callback*, std::uint64_t>> selected;
+        for (auto* const callback : callbacks_) {
+            if (callback->data.reason == vhpiCbTransaction
+                && callback->object != nullptr && callback->object->signal
+                && active.contains(*callback->object->signal)) {
+                selected.emplace_back(callback, callback->order);
+            }
+        }
+        for (const auto& [callback, order] : selected) {
+            if (live(callback, order)) {
                 run(*callback);
             }
         }
@@ -2033,6 +2260,10 @@ private:
         for (const auto& instance : design_.instances()) {
             collect(design_.path(instance.path));
         }
+        // A generate that declares no signal is known by its processes.
+        for (const auto& process : design_.processes()) {
+            collect(process.name);
+        }
         for (const auto index : indexes) {
             result.push_back(generate_object(region, generate, index));
         }
@@ -2060,6 +2291,827 @@ private:
             result.insert(result.end(), occurrences.begin(), occurrences.end());
         }
         return result;
+    }
+
+    // --- processes and statements (IEEE 1076-2019 19.11) -----------------------------
+
+    [[nodiscard]] const vhdl::Statement* hir_statement(
+        const semantic::StatementId id) const
+    {
+        return semantic::find_by_id(hir_.statements(), id);
+    }
+
+    [[nodiscard]] const vhdl::Process* hir_process(
+        const semantic::ProcessId id) const
+    {
+        return semantic::find_by_id(hir_.processes(), id);
+    }
+
+    // Where a statement begins, for the textual order of 19.4.2.3; what has
+    // no source sorts last.
+    [[nodiscard]] std::pair<std::uint32_t, std::uint32_t> source_position(
+        const std::optional<semantic::SourceSpanId> source) const
+    {
+        const auto& spans = simulation_.semantics().source_spans();
+        if (!source || !source->valid() || source->value() >= spans.size()) {
+            return { std::numeric_limits<std::uint32_t>::max(), 0U };
+        }
+        const auto& begin = spans.at(source->value()).begin;
+        return { begin.line, begin.column };
+    }
+
+    // The class of a concurrent statement that is equivalent to a process
+    // (IEEE 1076-2019 11.4 to 11.7, Figure 38).
+    [[nodiscard]] static std::optional<vhpiClassKindT> concurrent_kind(
+        const vhdl::Statement& statement)
+    {
+        switch (statement.kind) {
+        case vhdl::StatementKind::signal_assignment:
+            return vhpiSimpleSigAssignStmtK;
+        case vhdl::StatementKind::conditional:
+            if (statement.conditional_assignment) {
+                return vhpiCondSigAssignStmtK;
+            }
+            return std::nullopt;
+        case vhdl::StatementKind::selection:
+            if (statement.selected_assignment) {
+                return vhpiSelectSigAssignStmtK;
+            }
+            return std::nullopt;
+        case vhdl::StatementKind::assertion:
+            return vhpiConcAssertStmtK;
+        case vhdl::StatementKind::procedure_call:
+            return vhpiConcProcCallStmtK;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    // The class of a sequential statement (IEEE 1076-2019 Figure 42). A
+    // sequential block, force and release statement have no class.
+    [[nodiscard]] std::optional<vhpiClassKindT> sequential_kind(
+        const vhdl::Statement& statement) const
+    {
+        switch (statement.kind) {
+        case vhdl::StatementKind::signal_assignment:
+            return vhpiSeqSigAssignStmtK;
+        case vhdl::StatementKind::variable_assignment:
+            return vhpiVarAssignStmtK;
+        case vhdl::StatementKind::conditional:
+            return vhpiIfStmtK;
+        case vhdl::StatementKind::selection:
+            return vhpiCaseStmtK;
+        case vhdl::StatementKind::loop:
+            if (!statement.loop_variable.empty()) {
+                return vhpiForLoopK;
+            }
+            return forever_loop(statement) ? vhpiForeverLoopK : vhpiWhileLoopK;
+        case vhdl::StatementKind::exit_loop:
+            return vhpiExitStmtK;
+        case vhdl::StatementKind::next_loop:
+            return vhpiNextStmtK;
+        case vhdl::StatementKind::return_statement:
+            return vhpiReturnStmtK;
+        case vhdl::StatementKind::procedure_call:
+            return vhpiSeqProcCallStmtK;
+        case vhdl::StatementKind::assertion:
+            return vhpiSeqAssertStmtK;
+        case vhdl::StatementKind::report:
+            return vhpiReportStmtK;
+        case vhdl::StatementKind::wait_statement:
+            return vhpiWaitStmtK;
+        case vhdl::StatementKind::null_statement:
+            return vhpiNullStmtK;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    // A loop statement with the condition `true` is a plain loop (the
+    // frontend does not tell `loop` from `while true loop`).
+    [[nodiscard]] bool forever_loop(const vhdl::Statement& statement) const
+    {
+        if (!statement.condition) {
+            return true;
+        }
+        const auto* const condition = hir_expression(*statement.condition);
+        return condition != nullptr
+            && condition->kind == vhdl::ExpressionKind::boolean_literal
+            && same_name(condition->text, "true");
+    }
+
+    // The driver the frontend adds to a guarded block for GUARD.
+    [[nodiscard]] bool guard_driver(
+        const Object& region, const vhdl::Statement& statement) const
+    {
+        if (region.generate == nullptr
+            || region.generate->kind != vhdl::GenerateKind::block
+            || !region.generate->condition
+            || statement.kind != vhdl::StatementKind::signal_assignment
+            || !statement.target) {
+            return false;
+        }
+        const auto* const target = hir_expression(*statement.target);
+        return target != nullptr && same_name(target->text, "guard");
+    }
+
+    // The processes and the concurrent statements equivalent to processes
+    // that a declarative part holds, in textual order.
+    [[nodiscard]] std::vector<StatementMember> unit_members(
+        const std::vector<semantic::ProcessId>& processes,
+        const std::vector<semantic::StatementId>& statements,
+        const Object& region) const
+    {
+        std::vector<StatementMember> result;
+        for (const auto id : processes) {
+            if (const auto* const process = hir_process(id)) {
+                result.push_back({ process, nullptr });
+            }
+        }
+        for (const auto id : statements) {
+            const auto* const statement = hir_statement(id);
+            if (statement != nullptr && concurrent_kind(*statement)
+                && !guard_driver(region, *statement)) {
+                result.push_back({ nullptr, statement });
+            }
+        }
+        std::ranges::stable_sort(
+            result, { }, [&](const StatementMember& member) {
+                return source_position(member.process != nullptr
+                        ? member.process->source
+                        : member.statement->source);
+            });
+        return result;
+    }
+
+    // The process and concurrent statement objects of a region: those of
+    // the entity declaration, then of the architecture body, a block or a
+    // generate statement. An unlabeled one has the implicit label `_P<n>`
+    // (IEEE 1076-2019 19.4.2.3), which counts the unlabeled ones only, those
+    // of the architecture after those of the entity.
+    [[nodiscard]] std::vector<Object*>& concurrent_statements(Object& region)
+    {
+        auto& result = region.lists[ListKind::statements];
+        if (!result.empty() || !is_region(region)
+            || region.kind == vhpiPackInstK) {
+            return result;
+        }
+        std::size_t sequence { };
+        const auto add = [&](const std::vector<StatementMember>& members) {
+            for (const auto& member : members) {
+                const auto& declared_label = member.process != nullptr
+                    ? member.process->name
+                    : member.statement->label;
+                const bool implicit = declared_label.empty()
+                    || declared_label == "<process>";
+                const auto label = implicit
+                    ? "_P" + std::to_string(sequence++)
+                    : declared_label;
+                result.push_back(member_object(region, member, label, implicit));
+            }
+        };
+        if (region.generate != nullptr) {
+            if (region.kind != vhpiForGenerateK || region.generate_index) {
+                add(unit_members(region.generate->processes,
+                    region.generate->concurrent_statements, region));
+            }
+        } else if (region.unit != nullptr) {
+            if (region.entity != nullptr) {
+                add(unit_members(region.entity->processes,
+                    region.entity->concurrent_statements, region));
+            }
+            add(unit_members(region.unit->processes,
+                region.unit->concurrent_statements, region));
+        }
+        return result;
+    }
+
+    [[nodiscard]] Object* member_object(Object& region,
+        const StatementMember& member, const std::string& label,
+        const bool implicit)
+    {
+        const void* const identity = member.process != nullptr
+            ? static_cast<const void*>(member.process)
+            : static_cast<const void*>(member.statement);
+        const auto key
+            = "@stmt:" + std::to_string(reinterpret_cast<std::uintptr_t>(identity));
+        if (const auto found = region.children.find(key);
+            found != region.children.end()) {
+            return found->second;
+        }
+        const auto kind = member.process != nullptr
+            ? vhpiProcessStmtK
+            : *concurrent_kind(*member.statement);
+        auto* const object = make_object(kind, label, &region);
+        object->process = member.process;
+        object->statement = member.statement;
+        object->is_stmt = true;
+        object->label_name = implicit ? std::string { } : label;
+        object->source = member.process != nullptr ? member.process->source
+                                                   : member.statement->source;
+        object->path = region.path + "." + lower(label);
+        object->full_name = region.full_name + ":" + object->name;
+        object->full_case_name = region.full_case_name + ":" + object->case_name;
+        if (member.process != nullptr) {
+            object->body = &member.process->statements;
+            for (const auto id : member.process->declarations) {
+                if (const auto* const declaration = hir_.find_declaration(id)) {
+                    object->region_declarations.push_back(declaration);
+                }
+            }
+            std::size_t next_loop { };
+            number_loops(member.process->statements, next_loop);
+        }
+        region.children.emplace(key, object);
+        return object;
+    }
+
+    // The sequence numbers of the loop statements of a process, in textual
+    // order, labeled ones included (IEEE 1076-2019 19.4.2.2).
+    void number_loops(const std::vector<semantic::StatementId>& statements,
+        std::size_t& next)
+    {
+        for (const auto id : statements) {
+            const auto* const statement = hir_statement(id);
+            if (statement == nullptr) {
+                continue;
+            }
+            if (statement->kind == vhdl::StatementKind::loop) {
+                loop_numbers_.emplace(statement, next++);
+            }
+            number_loops(statement->statements, next);
+            number_loops(statement->else_statements, next);
+            for (const auto& alternative : statement->alternatives) {
+                number_loops(alternative.statements, next);
+            }
+        }
+    }
+
+    // The statements of a region (vhpiStmts): its processes and concurrent
+    // statements, then its component instantiations, block and generate
+    // statements.
+    [[nodiscard]] std::vector<Object*> region_statements(Object& region)
+    {
+        auto result = concurrent_statements(region);
+        const auto instances = child_instances(region);
+        result.insert(result.end(), instances.begin(), instances.end());
+        const auto statements = child_statements(region);
+        result.insert(result.end(), statements.begin(), statements.end());
+        return result;
+    }
+
+    [[nodiscard]] static Object* enclosing_process(Object& object) noexcept
+    {
+        for (auto* current = &object; current != nullptr;
+             current = current->parent) {
+            if (current->kind == vhpiProcessStmtK) {
+                return current;
+            }
+        }
+        return nullptr;
+    }
+
+    // The sequential statements of a process, loop statement or branch
+    // (vhpiSeqStmts).
+    [[nodiscard]] std::vector<Object*>& sequential_statements(Object& owner)
+    {
+        auto& result = owner.lists[ListKind::statements];
+        if (!result.empty() || owner.body == nullptr) {
+            return result;
+        }
+        for (const auto id : *owner.body) {
+            const auto* const statement = hir_statement(id);
+            if (statement != nullptr && sequential_kind(*statement)) {
+                result.push_back(sequential_object(owner, *statement));
+            }
+        }
+        return result;
+    }
+
+    [[nodiscard]] Object* sequential_object(
+        Object& owner, const vhdl::Statement& statement)
+    {
+        const auto key = "@seq:"
+            + std::to_string(reinterpret_cast<std::uintptr_t>(&statement));
+        if (const auto found = owner.children.find(key);
+            found != owner.children.end()) {
+            return found->second;
+        }
+        const bool loop = statement.kind == vhdl::StatementKind::loop;
+        // A loop statement is named by its label, explicit or implicit
+        // (IEEE 1076-2019 19.4.3); other statements by none.
+        const auto& declared_label = loop && !statement.loop_label.empty()
+            ? statement.loop_label
+            : statement.label;
+        auto label = declared_label;
+        if (loop && label.empty()) {
+            if (const auto found = loop_numbers_.find(&statement);
+                found != loop_numbers_.end()) {
+                label = "_L" + std::to_string(found->second);
+            }
+        }
+        auto* const object = make_object(*sequential_kind(statement), label, &owner);
+        object->statement = &statement;
+        object->is_stmt = true;
+        object->sequential = true;
+        object->label_name = declared_label;
+        object->source = statement.source;
+        if (const auto* const process = enclosing_process(owner)) {
+            if (loop && !label.empty()) {
+                object->full_name = process->full_name + ":" + object->name;
+                object->full_case_name
+                    = process->full_case_name + ":" + object->case_name;
+                object->path = process->path + "." + lower(label);
+            }
+        }
+        if (loop) {
+            object->body = &statement.statements;
+            for (const auto id : statement.declarations) {
+                if (const auto* const declaration = hir_.find_declaration(id)) {
+                    object->region_declarations.push_back(declaration);
+                }
+            }
+            // The loop parameter of a for loop (IEEE 1076-2019 19.11
+            // Figure 40).
+            if (object->kind == vhpiForLoopK
+                && !object->region_declarations.empty()) {
+                if (auto* const parameter
+                    = declared(*object, *object->region_declarations.front())) {
+                    object->children.emplace("@param", parameter);
+                }
+            }
+        }
+        owner.children.emplace(key, object);
+        return object;
+    }
+
+    // The branches of an if statement: the if and every elsif, then the else.
+    // An else part that holds one unlabeled if statement is taken for an
+    // elsif (the frontend represents both alike).
+    [[nodiscard]] std::vector<BranchPart> if_branches(
+        const vhdl::Statement& statement) const
+    {
+        std::vector<BranchPart> result;
+        const auto* node = &statement;
+        while (node != nullptr) {
+            result.push_back({ node, node->condition, &node->statements });
+            const vhdl::Statement* next = nullptr;
+            if (node->else_statements.size() == 1U) {
+                const auto* const child = hir_statement(node->else_statements.front());
+                if (child != nullptr
+                    && child->kind == vhdl::StatementKind::conditional
+                    && child->label.empty() && !child->conditional_assignment) {
+                    next = child;
+                }
+            }
+            if (next == nullptr && !node->else_statements.empty()) {
+                result.push_back({ nullptr, std::nullopt, &node->else_statements });
+            }
+            node = next;
+        }
+        return result;
+    }
+
+    // The conditional waveforms of a concurrent conditional signal
+    // assignment (IEEE 1076-2019 11.6): the assignment of each part, with
+    // its condition, none for the last part.
+    [[nodiscard]] std::vector<BranchPart> conditional_waveform_parts(
+        const vhdl::Statement& statement) const
+    {
+        std::vector<BranchPart> result;
+        const auto* node = &statement;
+        while (node != nullptr && node->kind == vhdl::StatementKind::conditional
+            && node->conditional_assignment) {
+            if (!node->statements.empty()) {
+                if (const auto* const leaf = hir_statement(node->statements.front())) {
+                    result.push_back({ leaf, node->condition, nullptr });
+                }
+            }
+            const vhdl::Statement* next = nullptr;
+            if (!node->else_statements.empty()) {
+                const auto* const child = hir_statement(node->else_statements.front());
+                if (child != nullptr
+                    && child->kind == vhdl::StatementKind::conditional
+                    && child->conditional_assignment) {
+                    next = child;
+                } else if (child != nullptr) {
+                    result.push_back({ child, std::nullopt, nullptr });
+                }
+            }
+            node = next;
+        }
+        return result;
+    }
+
+    // The signal assignment a concurrent conditional or selected signal
+    // assignment holds first, which has the target and the delay mechanism.
+    [[nodiscard]] const vhdl::Statement& assignment_of(
+        const vhdl::Statement& statement) const
+    {
+        const vhdl::Statement* leaf = nullptr;
+        if (statement.kind == vhdl::StatementKind::conditional
+            && statement.conditional_assignment && !statement.statements.empty()) {
+            leaf = hir_statement(statement.statements.front());
+        } else if (statement.kind == vhdl::StatementKind::selection
+            && statement.selected_assignment && !statement.alternatives.empty()
+            && !statement.alternatives.front().statements.empty()) {
+            leaf = hir_statement(statement.alternatives.front().statements.front());
+        }
+        return leaf != nullptr ? *leaf : statement;
+    }
+
+    // The branches of an if or case statement (vhpiBranchs), the
+    // conditional waveforms (vhpiCondWaveforms) or the selected waveforms
+    // (vhpiSelectWaveforms) of a concurrent signal assignment.
+    [[nodiscard]] std::vector<Object*>& branch_objects(
+        Object& owner, const ListKind kind)
+    {
+        auto& result = owner.lists[kind];
+        if (!result.empty() || owner.statement == nullptr) {
+            return result;
+        }
+        const auto& statement = *owner.statement;
+        const auto add = [&](const vhpiClassKindT object_kind) -> Object& {
+            auto* const object = make_object(object_kind, "", &owner);
+            object->part = result.size();
+            result.push_back(object);
+            return *object;
+        };
+        if (kind == ListKind::branches && owner.kind == vhpiIfStmtK) {
+            for (const auto& part : if_branches(statement)) {
+                auto& object = add(vhpiBranchK);
+                object.statement = part.node != nullptr ? part.node : &statement;
+                object.condition = part.condition;
+                object.body = part.body;
+                if (part.node != nullptr) {
+                    object.source = part.node->source;
+                }
+                object.sequential = true;
+            }
+        } else if (kind == ListKind::branches) {
+            for (const auto& alternative : statement.alternatives) {
+                auto& object = add(vhpiBranchK);
+                object.statement = &statement;
+                object.alternative = &alternative;
+                object.body = &alternative.statements;
+                object.source = alternative.source;
+                object.sequential = true;
+            }
+        } else if (kind == ListKind::cond_waveforms) {
+            for (const auto& part : conditional_waveform_parts(statement)) {
+                auto& object = add(vhpiCondWaveformK);
+                object.statement = part.node;
+                object.condition = part.condition;
+                // The frontend's assignment of the first part carries no
+                // source of its own; its waveform does.
+                object.source = part.node->waveform.empty()
+                    ? part.node->source
+                    : part.node->waveform.front().source;
+            }
+        } else {
+            for (const auto& alternative : statement.alternatives) {
+                auto& object = add(vhpiSelectWaveformK);
+                object.alternative = &alternative;
+                object.statement = alternative.statements.empty()
+                    ? nullptr
+                    : hir_statement(alternative.statements.front());
+                object.source = alternative.source;
+            }
+        }
+        return result;
+    }
+
+    // The waveform elements of a signal assignment (vhpiWaveformElems); a
+    // conditional or selected waveform holds the assignment of its part.
+    [[nodiscard]] std::vector<Object*>& waveform_elements(Object& owner)
+    {
+        auto& result = owner.lists[ListKind::waveform_elems];
+        const auto* const assignment = owner.statement;
+        if (!result.empty() || assignment == nullptr) {
+            return result;
+        }
+        const auto count = assignment->waveform.empty()
+            ? (assignment->unaffected ? std::size_t { 1U } : std::size_t { })
+            : assignment->waveform.size();
+        for (std::size_t index = 0U; index < count; ++index) {
+            auto* const object = make_object(vhpiWaveformElemK, "", &owner);
+            object->statement = assignment;
+            object->part = index;
+            object->source = index < assignment->waveform.size()
+                ? assignment->waveform[index].source
+                : assignment->source;
+            result.push_back(object);
+        }
+        return result;
+    }
+
+    // The choices of a case branch or selected waveform (vhpiChoices); the
+    // choices that are ranges have no object.
+    [[nodiscard]] std::vector<Object*>& choice_objects(Object& owner)
+    {
+        auto& result = owner.lists[ListKind::choices];
+        if (!result.empty() || owner.alternative == nullptr) {
+            return result;
+        }
+        for (const auto choice : owner.alternative->choices) {
+            if (auto* const object = expression_object(owner, choice)) {
+                result.push_back(object);
+            }
+        }
+        if (owner.alternative->is_default) {
+            auto* const others = make_object(vhpiOthersK, "others", &owner);
+            others->source = owner.alternative->source;
+            result.push_back(others);
+        }
+        return result;
+    }
+
+    // The signals a process or concurrent statement is sensitive to, or a
+    // wait statement waits on (vhpiSensitivitys, vhpiSigNames). The
+    // sensitivity of a concurrent statement is implicit and not listed.
+    [[nodiscard]] std::vector<Object*> sensitivity_objects(Object& owner)
+    {
+        std::vector<Object*> result;
+        const std::vector<vhdl::Sensitivity>* sensitivities = nullptr;
+        if (owner.process != nullptr) {
+            sensitivities = &owner.process->sensitivities;
+        } else if (owner.statement != nullptr && owner.is_stmt) {
+            sensitivities = &owner.statement->sensitivities;
+        }
+        if (sensitivities == nullptr) {
+            return result;
+        }
+        for (const auto& sensitivity : *sensitivities) {
+            Object* object = nullptr;
+            if (sensitivity.expression) {
+                object = expression_object(owner, *sensitivity.expression);
+            }
+            if (object == nullptr) {
+                object = lookup_name(owner, sensitivity.signal);
+            }
+            if (object != nullptr) {
+                result.push_back(object);
+            }
+        }
+        return result;
+    }
+
+    // The object a name denotes, searched from `scope` outward through the
+    // processes, loops and regions that enclose it.
+    [[nodiscard]] Object* lookup_name(Object& scope, const std::string_view text)
+    {
+        if (text.empty()) {
+            return nullptr;
+        }
+        const std::string name { text };
+        for (auto* current = &scope; current != nullptr;
+             current = current->parent) {
+            if (!is_declarative(*current)) {
+                continue;
+            }
+            if (const auto found = handle_by_name(name.c_str(), to_handle(current))) {
+                return object_of(found);
+            }
+        }
+        return nullptr;
+    }
+
+    // The object an expression stands for: a name that denotes a declared
+    // object or a part of one with literal indexes, or an integer literal.
+    // Other expressions have no object.
+    [[nodiscard]] Object* expression_object(
+        Object& scope, const semantic::ExpressionId id)
+    {
+        const auto* const expression = hir_expression(id);
+        if (expression == nullptr) {
+            return nullptr;
+        }
+        switch (expression->kind) {
+        case vhdl::ExpressionKind::name: {
+            const std::string_view text = expression->referenced_name
+                    && !expression->referenced_name->spelling.empty()
+                ? std::string_view { expression->referenced_name->spelling }
+                : std::string_view { expression->text };
+            return lookup_name(scope, text);
+        }
+        case vhdl::ExpressionKind::index: {
+            if (expression->operands.size() < 2U) {
+                return nullptr;
+            }
+            auto* const prefix = expression_object(scope, expression->operands[0]);
+            if (prefix == nullptr) {
+                return nullptr;
+            }
+            std::vector<std::int64_t> indexes;
+            for (std::size_t operand = 1U; operand < expression->operands.size();
+                 ++operand) {
+                const auto index = integer_literal(expression->operands[operand]);
+                if (!index) {
+                    return nullptr;
+                }
+                indexes.push_back(*index);
+            }
+            return indexed(*prefix, indexes);
+        }
+        case vhdl::ExpressionKind::integer_literal:
+            return literal_object(id);
+        case vhdl::ExpressionKind::unary:
+            return integer_literal(id) ? literal_object(id) : nullptr;
+        default:
+            return nullptr;
+        }
+    }
+
+    [[nodiscard]] Object* literal_object(const semantic::ExpressionId id)
+    {
+        if (const auto found = literal_objects_.find(id.value());
+            found != literal_objects_.end()) {
+            return found->second;
+        }
+        const auto value = integer_literal(id);
+        if (!value) {
+            return nullptr;
+        }
+        auto* const object
+            = make_object(vhpiIntLiteralK, std::to_string(*value), nullptr);
+        object->full_name = object->name;
+        object->full_case_name = object->case_name;
+        object->type = standard_type("integer");
+        const auto width = object->type != nullptr
+                && object->type->type_data != nullptr
+                && object->type->type_data->width != 0U
+            ? object->type->type_data->width
+            : 32U;
+        object->constant = PackedLogic4::from_aval_bval(
+            width, static_cast<std::uint64_t>(*value), 0U);
+        literal_objects_.emplace(id.value(), object);
+        return object;
+    }
+
+    [[nodiscard]] static std::optional<semantic::ExpressionId> delay_expression(
+        const std::optional<vhdl::Delay>& delay)
+    {
+        return delay ? delay->primary.expression : std::nullopt;
+    }
+
+    // The HIR expression a relation of a statement object leads to.
+    [[nodiscard]] std::optional<semantic::ExpressionId> statement_expression(
+        const Object& object, const vhpiOneToOneT relation) const
+    {
+        const auto* const statement = object.statement;
+        if (statement == nullptr) {
+            return std::nullopt;
+        }
+        switch (relation) {
+        case vhpiCondExpr:
+            switch (object.kind) {
+            case vhpiBranchK:
+            case vhpiCondWaveformK:
+                return object.condition;
+            case vhpiWhileLoopK:
+            case vhpiExitStmtK:
+            case vhpiNextStmtK:
+            case vhpiWaitStmtK:
+            case vhpiSeqAssertStmtK:
+            case vhpiConcAssertStmtK:
+                return statement->condition;
+            default:
+                return std::nullopt;
+            }
+        case vhpiLhsExpr:
+            switch (object.kind) {
+            case vhpiSimpleSigAssignStmtK:
+            case vhpiCondSigAssignStmtK:
+            case vhpiSelectSigAssignStmtK:
+            case vhpiSeqSigAssignStmtK:
+            case vhpiVarAssignStmtK:
+                return assignment_of(*statement).target;
+            default:
+                return std::nullopt;
+            }
+        case vhpiRhsExpr:
+            return object.kind == vhpiVarAssignStmtK ? statement->value
+                                                     : std::nullopt;
+        case vhpiCaseExpr:
+            return object.kind == vhpiCaseStmtK ? statement->condition
+                                                : std::nullopt;
+        case vhpiSelectExpr:
+            return object.kind == vhpiSelectSigAssignStmtK ? statement->condition
+                                                           : std::nullopt;
+        case vhpiReturnExpr:
+            return object.kind == vhpiReturnStmtK ? statement->value
+                                                  : std::nullopt;
+        case vhpiTimeOutExpr:
+            return object.kind == vhpiWaitStmtK
+                ? delay_expression(statement->delay)
+                : std::nullopt;
+        case vhpiReportExpr:
+            return object.kind == vhpiReportStmtK
+                    || object.kind == vhpiSeqAssertStmtK
+                    || object.kind == vhpiConcAssertStmtK
+                ? statement->report
+                : std::nullopt;
+        case vhpiSeverityExpr:
+            return object.kind == vhpiReportStmtK
+                    || object.kind == vhpiSeqAssertStmtK
+                    || object.kind == vhpiConcAssertStmtK
+                ? statement->severity
+                : std::nullopt;
+        case vhpiRejectTime:
+            switch (object.kind) {
+            case vhpiSimpleSigAssignStmtK:
+            case vhpiCondSigAssignStmtK:
+            case vhpiSelectSigAssignStmtK:
+            case vhpiSeqSigAssignStmtK:
+                return delay_expression(
+                    assignment_of(*statement).rejection_limit);
+            default:
+                return std::nullopt;
+            }
+        case vhpiTimeExpr:
+            if (object.kind == vhpiWaveformElemK
+                && object.part < statement->waveform.size()) {
+                return delay_expression(statement->waveform[object.part].delay);
+            }
+            return std::nullopt;
+        case vhpiValExpr:
+            if (object.kind == vhpiWaveformElemK && !statement->unaffected
+                && object.part < statement->waveform.size()) {
+                return statement->waveform[object.part].value;
+            }
+            return std::nullopt;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    [[nodiscard]] static bool is_signal_assignment(const Object& object) noexcept
+    {
+        switch (object.kind) {
+        case vhpiSimpleSigAssignStmtK:
+        case vhpiCondSigAssignStmtK:
+        case vhpiSelectSigAssignStmtK:
+        case vhpiSeqSigAssignStmtK:
+            return object.statement != nullptr;
+        default:
+            return false;
+        }
+    }
+
+    // Whether a process, or the statements below, assign a signal or call
+    // a procedure; a procedure may assign signals, so a call is taken to.
+    void scan_activity(const std::vector<semantic::StatementId>& statements,
+        bool& active) const
+    {
+        for (const auto id : statements) {
+            const auto* const statement = hir_statement(id);
+            if (statement == nullptr) {
+                continue;
+            }
+            switch (statement->kind) {
+            case vhdl::StatementKind::signal_assignment:
+            case vhdl::StatementKind::force:
+            case vhdl::StatementKind::release:
+            case vhdl::StatementKind::procedure_call:
+                active = true;
+                break;
+            default:
+                break;
+            }
+            scan_activity(statement->statements, active);
+            scan_activity(statement->else_statements, active);
+            for (const auto& alternative : statement->alternatives) {
+                scan_activity(alternative.statements, active);
+            }
+        }
+    }
+
+    // The IsPassive property of a process or concurrent statement.
+    [[nodiscard]] vhpiIntT passive(const Object& object) const
+    {
+        if (object.process != nullptr) {
+            bool active { };
+            scan_activity(object.process->statements, active);
+            return active ? 0 : 1;
+        }
+        return object.kind == vhpiConcAssertStmtK ? 1 : 0;
+    }
+
+    // The label of the loop an exit or next statement leaves (vhpiLoopLabelNameP).
+    [[nodiscard]] std::string loop_label_of(const Object& object) const
+    {
+        if (object.statement != nullptr
+            && !object.statement->loop_control_label.empty()) {
+            return object.statement->loop_control_label;
+        }
+        for (const auto* current = object.parent; current != nullptr;
+             current = current->parent) {
+            if (current->kind == vhpiForLoopK || current->kind == vhpiWhileLoopK
+                || current->kind == vhpiForeverLoopK) {
+                return current->name;
+            }
+        }
+        return { };
     }
 
     // A declared object of a region, created on first use.
@@ -2657,6 +3709,14 @@ private:
                 return occurrences.empty() ? nullptr : occurrences.front();
             }
         }
+        // A process or a concurrent statement, by its label.
+        if (is_region(region)) {
+            for (auto* const statement : concurrent_statements(region)) {
+                if (same_name(statement->case_name, name)) {
+                    return statement;
+                }
+            }
+        }
         return nullptr;
     }
 
@@ -3076,7 +4136,7 @@ private:
             while (!part.empty() && part.back() == ' ') {
                 part.remove_suffix(1U);
             }
-            if (is_region(*current)) {
+            if (is_declarative(*current)) {
                 current = find_declared(*current, part);
             } else {
                 current = selected(*current, part);
@@ -3106,6 +4166,14 @@ private:
         default:
             return false;
         }
+    }
+
+    // A region, a process or a for loop: the objects whose declarative part
+    // holds declarations that names can denote.
+    [[nodiscard]] static bool is_declarative(const Object& object) noexcept
+    {
+        return is_region(object) || object.kind == vhpiProcessStmtK
+            || object.kind == vhpiForLoopK;
     }
 
     [[nodiscard]] static bool is_type(const Object& object) noexcept
@@ -3234,8 +4302,39 @@ private:
             return found == object->children.end() ? nullptr
                                                    : to_handle(found->second);
         }
-        case vhpiParent:
+        case vhpiCondExpr:
+        case vhpiLhsExpr:
+        case vhpiRhsExpr:
+        case vhpiCaseExpr:
+        case vhpiSelectExpr:
+        case vhpiReturnExpr:
+        case vhpiTimeOutExpr:
+        case vhpiReportExpr:
+        case vhpiSeverityExpr:
+        case vhpiRejectTime:
+        case vhpiTimeExpr:
+        case vhpiValExpr: {
+            // The expression of a statement, branch or waveform (IEEE
+            // 1076-2019 19.11); one with no object leads to none.
+            const auto id = statement_expression(*object, relation);
+            auto* const expression
+                = id ? expression_object(*object, *id) : nullptr;
+            return expression == nullptr ? nullptr : to_handle(expression);
+        }
         case vhpiUpperRegion:
+            // The region of a sequential statement is the region of its
+            // process, not the enclosing statement.
+            if (object->sequential) {
+                for (auto* region = object->parent; region != nullptr;
+                     region = region->parent) {
+                    if (is_region(*region)) {
+                        return to_handle(region);
+                    }
+                }
+                return nullptr;
+            }
+            [[fallthrough]];
+        case vhpiParent:
             return object->parent == nullptr ? nullptr
                                              : to_handle(object->parent);
         default:
@@ -3304,7 +4403,7 @@ private:
     {
         std::vector<Object*> result;
         const auto declarations = [&](auto&& accept) {
-            if (object == nullptr || !is_region(*object)) {
+            if (object == nullptr || !is_declarative(*object)) {
                 return;
             }
             for (const auto* const declaration : object->region_declarations) {
@@ -3379,6 +4478,54 @@ private:
                         result.push_back(statement);
                     }
                 }
+            }
+            break;
+        case vhpiStmts:
+            if (object != nullptr && is_region(*object)) {
+                result = region_statements(*object);
+            }
+            break;
+        case vhpiSeqStmts:
+            if (object != nullptr && object->body != nullptr) {
+                result = sequential_statements(*object);
+            }
+            break;
+        case vhpiBranchs:
+            if (object != nullptr
+                && (object->kind == vhpiIfStmtK || object->kind == vhpiCaseStmtK)) {
+                result = branch_objects(*object, ListKind::branches);
+            }
+            break;
+        case vhpiCondWaveforms:
+            if (object != nullptr && object->kind == vhpiCondSigAssignStmtK) {
+                result = branch_objects(*object, ListKind::cond_waveforms);
+            }
+            break;
+        case vhpiSelectWaveforms:
+            if (object != nullptr && object->kind == vhpiSelectSigAssignStmtK) {
+                result = branch_objects(*object, ListKind::select_waveforms);
+            }
+            break;
+        case vhpiWaveformElems:
+            if (object != nullptr
+                && (object->kind == vhpiSimpleSigAssignStmtK
+                    || object->kind == vhpiSeqSigAssignStmtK
+                    || object->kind == vhpiCondWaveformK
+                    || object->kind == vhpiSelectWaveformK)) {
+                result = waveform_elements(*object);
+            }
+            break;
+        case vhpiChoices:
+            if (object != nullptr
+                && (object->kind == vhpiBranchK
+                    || object->kind == vhpiSelectWaveformK)) {
+                result = choice_objects(*object);
+            }
+            break;
+        case DEPRECATED_vhpiSensitivitys:
+        case vhpiSigNames:
+            if (object != nullptr) {
+                result = sensitivity_objects(*object);
             }
             break;
         case vhpiIndexedNames:
@@ -4423,12 +5570,57 @@ private:
         case vhpiIsLocalP:
             return 0;
         case vhpiIsSeqStmtP:
+            if (object.is_stmt) {
+                return object.sequential ? 1 : 0;
+            }
             if (is_region(object) && object.kind != vhpiRootInstK
                 && object.kind != vhpiPackInstK) {
                 return 0;
             }
             break;
+        case vhpiIsPostponedP:
+            // A process or a concurrent statement (IEEE 1076-2019 11.3).
+            if (object.process != nullptr) {
+                return object.process->postponed ? 1 : 0;
+            }
+            if (object.is_stmt && !object.sequential
+                && object.statement != nullptr) {
+                return object.statement->postponed ? 1 : 0;
+            }
+            break;
+        case vhpiIsPassiveP:
+            if (object.is_stmt && !object.sequential) {
+                return passive(object);
+            }
+            break;
+        case vhpiIsForeignP:
+            if (object.process != nullptr) {
+                return 0;
+            }
+            break;
+        case vhpiIsTransportP:
+            if (is_signal_assignment(object)) {
+                const auto& assignment = assignment_of(*object.statement);
+                return assignment.delay_mechanism
+                        && *assignment.delay_mechanism
+                            == vhdl::DelayMechanism::transport
+                    ? 1
+                    : 0;
+            }
+            break;
+        case vhpiIsUnaffectedP:
+            if (object.kind == vhpiWaveformElemK && object.statement != nullptr) {
+                return object.statement->unaffected ? 1 : 0;
+            }
+            break;
         case vhpiIsGuardedP:
+            if (is_signal_assignment(object)) {
+                const auto& assignment = assignment_of(*object.statement);
+                return object.statement->guarded_assignment
+                        || assignment.guarded_assignment
+                    ? 1
+                    : 0;
+            }
             // A guarded block declares the implicit signal GUARD (IEEE
             // 1076-2019 11.2).
             if (object.kind == vhpiBlockStmtK) {
@@ -4606,8 +5798,18 @@ private:
                 } else {
                     text = &object.case_name;
                 }
+            } else if (object.is_stmt) {
+                // The explicit label; an unlabeled statement has none.
+                text = &object.label_name;
             }
             break;
+        case vhpiLoopLabelNameP:
+            if (object.kind == vhpiExitStmtK || object.kind == vhpiNextStmtK) {
+                scratch = loop_label_of(object);
+                break;
+            }
+            error(vhpiError, "vhpiLoopLabelNameP needs an exit or next statement");
+            return nullptr;
         case vhpiKindStrP:
             scratch = kind_name(object.kind);
             break;
@@ -6023,6 +7225,7 @@ private:
         }
         if (mode == vhpiRelease) {
             simulation_.release_signal(*object->signal);
+            put_force_event(*object, true, false);
             return 0;
         }
         // Writes to elements of a signal in one cycle merge into the value
@@ -6163,11 +7366,15 @@ private:
         case vhpiForce:
             simulation_.force_signal(*object->signal, std::move(whole));
             absorb_change(*object->signal);
+            put_force_event(*object, false, false);
             break;
         case vhpiForcePropagate:
         case vhpiDepositPropagate:
             schedule_update(*object->signal, std::move(whole),
                 mode == vhpiForcePropagate);
+            if (mode == vhpiForcePropagate) {
+                put_force_event(*object, false, true);
+            }
             break;
         default:
             simulation_.deposit_signal(*object->signal, std::move(whole));
@@ -6175,6 +7382,26 @@ private:
             break;
         }
         return 0;
+    }
+
+    // A force or release by vhpi_put_value triggers the callbacks on its
+    // object (IEEE 1076-2019 21.3.2.3-4): at once, or after the update
+    // that applies a propagating force.
+    void put_force_event(
+        Object& object, const bool release, const bool propagate)
+    {
+        if (force_token_ == 0U) {
+            return;
+        }
+        const auto whole = simulation_.read_signal_snapshot(*object.signal);
+        const auto width = object.type != nullptr ? width_of(*object.type) : 0U;
+        ForceEvent event { *object.signal, object.offset,
+            width != 0U ? width : whole.width(), release, &object };
+        if (propagate) {
+            forces_.push_back(event);
+        } else {
+            deliver_force(event);
+        }
     }
 
     // A deposit or force without propagation is not a value-change trigger
@@ -6458,6 +7685,10 @@ private:
     std::vector<std::string> arguments_;
     std::vector<std::unique_ptr<platform::DynamicLibrary>> libraries_;
     std::vector<std::unique_ptr<Object>> objects_;
+    // The sequence numbers of the loop statements of the processes, and
+    // the objects of integer literals, by expression.
+    std::map<const vhdl::Statement*, std::size_t> loop_numbers_;
+    std::map<std::uint32_t, Object*> literal_objects_;
     // Callback slots: addresses stay stable and are reused after removal.
     std::deque<Callback> callback_pool_;
     std::vector<Callback*> free_callbacks_;
@@ -6483,6 +7714,11 @@ private:
     std::vector<runtime::SystemVerilogVpiCallbackHandle> lifecycle_;
     std::optional<runtime::SystemVerilogVpiCallbackHandle> next_time_;
     std::set<SignalId> changed_;
+    std::vector<ForceEvent> forces_;
+    std::set<SignalId> transaction_watch_;
+    std::set<SignalId> active_;
+    std::uint64_t force_token_ { };
+    std::uint64_t transaction_token_ { };
     Object* root_ { };
     Object* tool_ { };
     vhpiHandleT dispatching_ { };

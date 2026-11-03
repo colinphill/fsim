@@ -155,6 +155,14 @@ enum class SystemVerilogVpiAssertionControlOperation : std::uint32_t {
     Enable,
     Disable,
     Kill,
+    // Whether the pass, vacuous-pass and fail actions run (IEEE 1800-2023
+    // 39.5).
+    EnablePassAction,
+    DisablePassAction,
+    EnableFailAction,
+    DisableFailAction,
+    EnableNonvacuousAction,
+    DisableVacuousAction,
 };
 
 enum class SystemVerilogVpiAssertionApiError : std::uint32_t {

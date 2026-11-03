@@ -6,7 +6,8 @@
 # FSIM_SOURCE may list several files separated by "|", compiled one per
 # step in order (one language per compile); FSIM_INTERFACE "mixed" loads
 # the plug-in as both a VPI and a VHPI library. FSIM_SIMULATE_STATUS is the
-# exit status `fsim simulate` must return (0 when unset).
+# exit status `fsim simulate` must return (0 when unset); a true
+# FSIM_ELABORATE_PLUGIN also loads the VPI plug-in at `fsim elaborate`.
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -49,7 +50,11 @@ endfunction()
 foreach(FSIM_SOURCE_NAME IN LISTS FSIM_SOURCE_NAMES)
   fsim_step(compile compile "${FSIM_SOURCE_NAME}")
 endforeach()
-fsim_step(elaborate elaborate "${FSIM_TOP}")
+if(FSIM_ELABORATE_PLUGIN)
+  fsim_step(elaborate elaborate --vpi "${FSIM_PLUGIN}" "${FSIM_TOP}")
+else()
+  fsim_step(elaborate elaborate "${FSIM_TOP}")
+endif()
 separate_arguments(FSIM_SIMULATE_ARGUMENTS UNIX_COMMAND "${FSIM_SIMULATE_ARGS}")
 if(FSIM_INTERFACE STREQUAL "mixed")
   set(FSIM_LIBRARY_ARGUMENTS --vpi "${FSIM_PLUGIN}" --vhpi "${FSIM_PLUGIN}")

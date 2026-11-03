@@ -126,6 +126,11 @@ const semantic::vhdl::Hir& Simulation::vhdl_hir() const noexcept
     return impl_->built.vhdl_hir;
 }
 
+const semantic::sv::Hir& Simulation::systemverilog_hir() const noexcept
+{
+    return impl_->built.systemverilog_hir;
+}
+
 const semantic::Model& Simulation::semantics() const noexcept
 {
     return impl_->built.semantics;
@@ -302,6 +307,22 @@ std::optional<SignalId> Simulation::find_signal(
         : std::optional<SignalId> {
               static_cast<SignalId>(found->runtime_index)
           };
+}
+
+std::optional<std::string> Simulation::signal_path(
+    const SignalId signal) const
+{
+    const auto& design = impl_->built.design_ir;
+    const auto found = std::ranges::find_if(
+        design.objects(), [&](const auto& object) {
+            return design_object_is_signal_bearing(object)
+                && object.runtime_index == signal && object.path.valid()
+                && object.path.value() < design.hierarchy_paths().size();
+        });
+    if (found == design.objects().end()) {
+        return std::nullopt;
+    }
+    return std::string { design.path(found->path) };
 }
 
 PackedLogic4 Simulation::read_driver(

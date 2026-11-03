@@ -1,0 +1,99 @@
+#c vpiContAssign line=11
+#c   delay: vpiConstant line=11 2 const=1 size=64 bin=0000000000000000000000000000000000000000000000000000000000000010
+#c   lhs: vpiNet line=0 top.w
+#c   rhs: vpiOperation line=11 op=30
+#c     vpiReg line=0 top.d
+#c     vpiConstant line=11 4'b1010 const=3 size=4 bin=1010
+#c vpiAlways line=13 always_type=1
+#c   vpiEventControl line=13
+#c     cond: vpiOperation line=13 op=39
+#c       vpiReg line=0 top.clk
+#c     vpiAssignment line=13 blocking=0
+#c       lhs: vpiReg line=0 top.q
+#c       rhs: vpiReg line=0 top.d
+#c vpiAlways line=15 always_type=2
+#c   vpiBegin line=16
+#c     vpiIfElse line=16
+#c       cond: vpiBitSelect line=16
+#c         index: vpiConstant line=16 0 const=7 size=32 bin=00000000000000000000000000000000
+#c       vpiAssignment line=17 blocking=1
+#c         lhs: vpiIntegerVar line=0 top.i
+#c         rhs: vpiConstant line=17 1 const=7 size=32 bin=00000000000000000000000000000001
+#c       else: vpiAssignment line=19 blocking=1
+#c         lhs: vpiIntegerVar line=0 top.i
+#c         rhs: vpiConstant line=19 2 const=7 size=32 bin=00000000000000000000000000000010
+#c     vpiCase line=20
+#c       cond: vpiPartSelect line=20
+#c         left: vpiConstant line=20 2 const=7 size=32 bin=00000000000000000000000000000010
+#c         right: vpiConstant line=20 1 const=7 size=32 bin=00000000000000000000000000000001
+#c       vpiCaseItem line=21
+#c         choice: vpiConstant line=21 2'b00 const=3 size=2 bin=00
+#c         vpiAssignment line=21 blocking=1
+#c           lhs: vpiIntegerVar line=0 top.i
+#c           rhs: vpiConstant line=21 3 const=7 size=32 bin=00000000000000000000000000000011
+#c       vpiCaseItem line=22
+#c         vpiAssignment line=22 blocking=1
+#c           lhs: vpiIntegerVar line=0 top.i
+#c           rhs: vpiConstant line=22 4 const=7 size=32 bin=00000000000000000000000000000100
+#c vpiInitial line=30
+#c   vpiNamedBegin line=0 run
+#c     vpiAssignment line=31 blocking=1
+#c       lhs: vpiReg line=0 top.d
+#c       rhs: vpiConstant line=31 4'hc const=5 size=4 bin=1100
+#c     vpiFor line=32
+#c       init: vpiAssignment line=32 blocking=1
+#c         lhs: vpiRefObj line=32 top.run.k
+#c         rhs: vpiConstant line=32 0 const=7 size=32 bin=00000000000000000000000000000000
+#c       cond: vpiOperation line=32 op=20
+#c         vpiRefObj line=32 top.run.k
+#c         vpiConstant line=32 2 const=7 size=32 bin=00000000000000000000000000000010
+#c       inc: vpiAssignment line=32 blocking=1
+#c         lhs: vpiRefObj line=32 top.run.k
+#c         rhs: vpiOperation line=32 op=24
+#c           vpiRefObj line=32 top.run.k
+#c           vpiConstant line=32 1 const=7 size=32 bin=00000000000000000000000000000001
+#c       vpiAssignment line=33 blocking=1
+#c         lhs: vpiReg line=0 top.d
+#c         rhs: vpiOperation line=33 op=24
+#c           vpiReg line=0 top.d
+#c           vpiConstant line=33 1 const=7 size=32 bin=00000000000000000000000000000001
+#c     vpiTaskCall line=34 pulse
+#c       arg: vpiConstant line=34 2 const=7 size=32 bin=00000000000000000000000000000010
+#c     vpiDelayControl line=35
+#c       delay: vpiConstant line=35 5 const=1 size=64 bin=0000000000000000000000000000000000000000000000000000000000000101
+#c       vpiSysTaskCall line=35 $display
+#c         arg: vpiConstant line=35 "done %0d" const=6 size=64 bin=0110010001101111011011100110010100100000001001010011000001100100
+#c         arg: vpiReg line=0 top.q
+#c vpiInitial line=39
+#c   vpiBegin line=40
+#c     vpiDelayControl line=40
+#c       delay: vpiConstant line=40 10 const=1 size=64 bin=0000000000000000000000000000000000000000000000000000000000001010
+#c       vpiForce line=40
+#c         lhs: vpiReg line=0 top.q
+#c         rhs: vpiConstant line=40 4'h5 const=5 size=4 bin=0101
+#c     vpiDelayControl line=41
+#c       delay: vpiConstant line=41 2 const=1 size=64 bin=0000000000000000000000000000000000000000000000000000000000000010
+#c       vpiRelease line=41
+#c         lhs: vpiReg line=0 top.q
+#c     vpiDelayControl line=42
+#c       delay: vpiConstant line=42 1 const=1 size=64 bin=0000000000000000000000000000000000000000000000000000000000000001
+#c       vpiAssignStmt line=42
+#c         lhs: vpiReg line=0 top.r
+#c         rhs: vpiReg line=0 top.d
+#c     vpiDelayControl line=43
+#c       delay: vpiConstant line=43 1 const=1 size=64 bin=0000000000000000000000000000000000000000000000000000000000000001
+#c       vpiDeassign line=43
+#c         lhs: vpiReg line=0 top.r
+#c task top.pulse
+#c   vpiRepeat line=27
+#c     cond: vpiRefObj line=27 top.pulse.n
+#c     vpiDelayControl line=27
+#c       delay: vpiConstant line=27 1 const=1 size=64 bin=0000000000000000000000000000000000000000000000000000000000000001
+#c       vpiAssignment line=27 blocking=1
+#c         lhs: vpiReg line=0 top.clk
+#c         rhs: vpiOperation line=27 op=4
+#c           vpiReg line=0 top.clk
+#c 10 force vpiForce line=40 top.q=0101
+#c 12 release vpiRelease line=41 top.q=0101
+#c 13 assign vpiAssignStmt line=42 top.r=1110
+#c 14 deassign vpiDeassign line=43 top.r=1110

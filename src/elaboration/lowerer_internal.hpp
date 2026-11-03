@@ -3011,6 +3011,8 @@ private:
     // diagnostic while the current statement was lowered; named in the
     // statement's FSIM-ELAB-HIR-001 report.
     std::optional<std::string> hir_unlowered_expression_;
+    // The `$name` of that expression when it is a system function call.
+    std::optional<std::string> hir_unresolved_system_call_;
     // The first construct or step that rejected the current statement or
     // process without a diagnostic of its own; named in FSIM-ELAB-HIR-001.
     std::optional<std::string> hir_lowering_rejection_;

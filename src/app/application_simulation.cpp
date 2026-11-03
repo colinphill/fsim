@@ -584,6 +584,65 @@ void Simulation::remove_safe_point_hook(const std::uint64_t token) noexcept
     impl_->safe_point_observers.erase(token);
 }
 
+std::uint64_t Simulation::add_force_statement_hook(ForceStatementHook hook)
+{
+    if (!hook) {
+        throw std::invalid_argument("force observer cannot be empty");
+    }
+    const auto token = impl_->next_activity_observer++;
+    impl_->force_statement_observers.emplace(token, std::move(hook));
+    if (impl_->force_statement_observers.size() == 1U) {
+        impl_->interpreter->set_force_statement_hook(
+            [impl = impl_.get()](const runtime::simir::ProcessId process,
+                const SignalId signal, const std::size_t offset,
+                const std::size_t width, const bool release) {
+                for (const auto& [_, observer] :
+                    impl->force_statement_observers) {
+                    observer(process, signal, offset, width, release);
+                }
+            });
+    }
+    return token;
+}
+
+void Simulation::remove_force_statement_hook(
+    const std::uint64_t token) noexcept
+{
+    if (impl_->force_statement_observers.erase(token) != 0U
+        && impl_->force_statement_observers.empty()) {
+        impl_->interpreter->set_force_statement_hook({});
+    }
+}
+
+std::uint64_t Simulation::add_signal_transaction_hook(
+    SignalTransactionHook hook)
+{
+    if (!hook) {
+        throw std::invalid_argument("transaction observer cannot be empty");
+    }
+    const auto token = impl_->next_activity_observer++;
+    impl_->signal_transaction_observers.emplace(token, std::move(hook));
+    if (impl_->signal_transaction_observers.size() == 1U) {
+        impl_->interpreter->set_signal_transaction_hook(
+            [impl = impl_.get()](const SignalId signal) {
+                for (const auto& [_, observer] :
+                    impl->signal_transaction_observers) {
+                    observer(signal);
+                }
+            });
+    }
+    return token;
+}
+
+void Simulation::remove_signal_transaction_hook(
+    const std::uint64_t token) noexcept
+{
+    if (impl_->signal_transaction_observers.erase(token) != 0U
+        && impl_->signal_transaction_observers.empty()) {
+        impl_->interpreter->set_signal_transaction_hook({});
+    }
+}
+
 SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
     const SdfReannotationApplication& application)
 {

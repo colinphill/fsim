@@ -423,6 +423,9 @@ struct Diagnostic {
     std::string code;
     std::string message;
     frontend::SourceSpan span;
+    // The unknown system task or function a lowering failure names, for
+    // cbUnresolvedSystf (IEEE 1800-2023 38.36.2).
+    std::string system_call {};
 };
 
 /// The name checks of one VHDL architecture without elaborating what it

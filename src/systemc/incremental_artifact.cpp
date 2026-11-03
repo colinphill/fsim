@@ -561,8 +561,21 @@ void remove_abandoned_private_directories(const std::filesystem::path& temporary
     code.clear();
     iterator.increment(code);
   }
+  // Another process may sweep the same directory at once, and two removals
+  // of one tree can each stop part-way; a rename to a name of this process
+  // claims it for one of them. A claim left by a process that dies is
+  // swept like its own private directories.
+  std::uint64_t claims{};
   for (const auto& directory : abandoned) {
-    support::native_fs::remove_all(directory, code);
+    const auto claimed = temporary
+        / (std::string{kPrivateDirectoryPrefix} + std::to_string(process_id()) + "-"
+            + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
+            + std::to_string(++claims));
+    code.clear();
+    support::native_fs::rename(directory, claimed, code);
+    if (!code) {
+      support::native_fs::remove_all(claimed, code);
+    }
   }
 }
 

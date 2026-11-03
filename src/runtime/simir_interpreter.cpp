@@ -4381,6 +4381,16 @@ void Interpreter::set_event_trigger_hook(EventTriggerHook hook)
     impl_->event_trigger_hook = std::move(hook);
 }
 
+void Interpreter::set_force_statement_hook(ForceStatementHook hook)
+{
+    impl_->force_statement_hook = std::move(hook);
+}
+
+void Interpreter::set_signal_transaction_hook(SignalTransactionHook hook)
+{
+    impl_->signal_transaction_hook = std::move(hook);
+}
+
 void Interpreter::set_container_object_change_hook(
     ContainerObjectChangeHook hook)
 {

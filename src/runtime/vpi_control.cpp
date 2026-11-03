@@ -76,7 +76,7 @@ namespace {
     {
         return static_cast<std::uint32_t>(operation)
             <= static_cast<std::uint32_t>(
-                SystemVerilogVpiAssertionControlOperation::Kill);
+                SystemVerilogVpiAssertionControlOperation::DisableVacuousAction);
     }
 
     bool valid_assertion_kind(const SystemVerilogVpiAssertionKind kind)
@@ -611,7 +611,7 @@ SystemVerilogVpiAssertionApiError SystemVerilogVpiAssertionApi::control(
         case SystemVerilogVpiAssertionControlOperation::Disable:
             record.enabled = false;
             break;
-        case SystemVerilogVpiAssertionControlOperation::Kill:
+        default:
             break;
         }
     };

@@ -12467,6 +12467,16 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
     if (!result && !hir_unlowered_expression_
         && diagnostics_.size() == diagnostics_before) {
         hir_unlowered_expression_ = hir_expression_summary(expression_id);
+        const auto expression = specialized_hir_unit_
+            ? specialized_hir_unit_->find_expression(expression_id)
+            : std::nullopt;
+        if (expression && expression->systemverilog != nullptr
+            && expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::call
+            && expression->systemverilog->text.starts_with('$')) {
+            hir_unresolved_system_call_
+                = std::string { expression->systemverilog->text };
+        }
     }
     return result;
 }

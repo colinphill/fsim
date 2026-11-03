@@ -11,6 +11,7 @@
 static vhpiHandleT clk;
 static vhpiHandleT d;
 static vhpiHandleT n;
+static vhpiHandleT p;
 
 static unsigned long long now(void)
 {
@@ -112,6 +113,7 @@ static void at_12(const vhpiCbDataT* data)
     printf(" dec=%s", text(n, vhpiDecStrVal));
     printf(" hex=%s\n", text(n, vhpiHexStrVal));
     fflush(stdout);
+    put_logic(p, vhpi1, vhpiForce);
     (void)raise(SIGINT);
 }
 
@@ -137,6 +139,39 @@ static void timeout_15(const vhpiCbDataT* data)
         read_int(n));
     fflush(stdout);
     (void)register_cb(vhpiCbStartOfPostponed, NULL, at_postponed, 0U);
+    put_logic(p, vhpi0, vhpiRelease);
+}
+
+// Force and release callbacks carry the forced object and run with the
+// value the force produced (IEEE 1076-2019 21.3.2.1, 21.3.2.3-4).
+static void on_force(const vhpiCbDataT* data)
+{
+    printf("#c %llu %s %s=%s\n", now(), (const char*)data->user_data,
+        (const char*)vhpi_get_str(vhpiFullNameP, data->obj),
+        text(data->obj, vhpiBinStrVal));
+    fflush(stdout);
+}
+
+// Every transaction makes the signal active, with or without an event
+// (IEEE 1076-2019 21.3.2.5).
+static void on_transaction(const vhpiCbDataT* data)
+{
+    printf("#c %llu transaction %s=%s\n", now(),
+        (const char*)vhpi_get_str(vhpiFullNameP, data->obj),
+        text(data->obj, vhpiBinStrVal));
+    fflush(stdout);
+}
+
+static void object_cb(int32_t reason, vhpiHandleT object, const char* name,
+    void (*routine)(const vhpiCbDataT*))
+{
+    vhpiCbDataT data;
+    memset(&data, 0, sizeof data);
+    data.reason = reason;
+    data.cb_rtn = routine;
+    data.obj = object;
+    data.user_data = (void*)name;
+    (void)vhpi_register_cb(&data, 0);
 }
 
 // The routine's error, as vhpi_check_error reports it to a
@@ -177,6 +212,7 @@ static void start(const vhpiCbDataT* data)
     clk = vhpi_handle_by_name("top.clk", NULL);
     d = vhpi_handle_by_name("top.d", NULL);
     n = vhpi_handle_by_name("top.n", NULL);
+    p = vhpi_handle_by_name("top.p", NULL);
     printf("#c capabilities=%d\n",
         vhpi_get(vhpiCapabilitiesP, vhpi_handle(vhpiTool, NULL))
             == (vhpiProvidesHierarchy | vhpiProvidesForeignModel));
@@ -198,6 +234,12 @@ static void start(const vhpiCbDataT* data)
     (void)register_cb(vhpiCbValueChange, d, on_d, 0U);
     (void)register_cb(vhpiCbAfterDelay, NULL, at_12, 12000000U);
     (void)register_cb(vhpiCbTimeOut, NULL, timeout_15, 15000000U);
+    object_cb(vhpiCbForce, NULL, "force", on_force);
+    object_cb(vhpiCbForce, vhpi_handle_by_name("top.f(1)", NULL),
+        "element force", on_force);
+    object_cb(vhpiCbRelease, NULL, "release", on_force);
+    object_cb(vhpiCbTransaction, vhpi_handle_by_name("top.t", NULL),
+        "transaction", on_transaction);
     fflush(stdout);
 }
 

@@ -674,6 +674,10 @@ public:
     using UvmActivityHook = runtime::SystemVerilogUvmActivityService::Observer;
     using UvmTaskPhaseContinuation = runtime::SystemVerilogUvmPhaseService::TaskPhaseCallback;
     using SafePointHook = runtime::Scheduler::SafePointHook;
+    using ForceStatementHook
+        = runtime::simir::Interpreter::ForceStatementHook;
+    using SignalTransactionHook
+        = runtime::simir::Interpreter::SignalTransactionHook;
     using ClassPropertyChangeHook = std::function<void(
         runtime::SystemVerilogClassHandle,
         std::string_view,
@@ -713,6 +717,7 @@ public:
         runtime::simir::ProcessId process) const;
     [[nodiscard]] const semantic::design::DesignIr& design_ir() const noexcept;
     [[nodiscard]] const semantic::vhdl::Hir& vhdl_hir() const noexcept;
+    [[nodiscard]] const semantic::sv::Hir& systemverilog_hir() const noexcept;
     [[nodiscard]] const semantic::Model& semantics() const noexcept;
     [[nodiscard]] const std::vector<MappedLibraryProvenance>&
     mapped_libraries() const noexcept;
@@ -734,6 +739,9 @@ public:
     [[nodiscard]] std::string_view time_resolution() const noexcept;
     [[nodiscard]] std::optional<runtime::simir::SignalId> find_signal(
         std::string_view path) const noexcept;
+    /// The hierarchical path `find_signal` takes for a signal, if it has one.
+    [[nodiscard]] std::optional<std::string> signal_path(
+        runtime::simir::SignalId signal) const;
     /// Return a live reference backed by public storage for its lifetime.
     [[nodiscard]] const runtime::PackedLogic4& read_signal(
         runtime::simir::SignalId signal) const;
@@ -1086,6 +1094,14 @@ public:
     /// debugger, interrupt, or API control hook.
     [[nodiscard]] std::uint64_t add_safe_point_hook(SafePointHook hook);
     void remove_safe_point_hook(std::uint64_t token) noexcept;
+    /// Observe each process force or release statement as it executes.
+    [[nodiscard]] std::uint64_t add_force_statement_hook(
+        ForceStatementHook hook);
+    void remove_force_statement_hook(std::uint64_t token) noexcept;
+    /// Observe every signal transaction, with or without an event.
+    [[nodiscard]] std::uint64_t add_signal_transaction_hook(
+        SignalTransactionHook hook);
+    void remove_signal_transaction_hook(std::uint64_t token) noexcept;
     [[nodiscard]] SdfReannotationCommitResult commit_sdf_reannotation(
         const SdfReannotationApplication& application);
     [[nodiscard]] bool at_sdf_reannotation_safe_point() const noexcept;

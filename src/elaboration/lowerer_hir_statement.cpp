@@ -1887,6 +1887,7 @@ bool Lowerer::lower_hir_statements(
     bool valid = true;
     for (const auto statement : statements) {
         hir_unlowered_expression_.reset();
+        hir_unresolved_system_call_.reset();
         hir_lowering_rejection_.reset();
         const auto diagnostics_before = diagnostics_.size();
         if (!lower_hir_statement(statement)) {
@@ -1898,7 +1899,11 @@ bool Lowerer::lower_hir_statements(
                 : diagnostics_.size() != diagnostics_before
                 ? std::string { "; an enclosed statement was reported" }
                 : std::string { };
+            auto system_call = hir_unlowered_expression_
+                ? std::move(hir_unresolved_system_call_)
+                : std::nullopt;
             hir_unlowered_expression_.reset();
+            hir_unresolved_system_call_.reset();
             hir_lowering_rejection_.reset();
             const auto record = specialized_hir_unit_ != nullptr
                 ? specialized_hir_unit_->find_statement(statement)
@@ -1921,6 +1926,13 @@ bool Lowerer::lower_hir_statements(
                         + std::to_string(origin.begin.line)
                         + " could not be lowered" + detail + task,
                     origin);
+                if (!task.empty()
+                    && record->systemverilog->task.spelling.starts_with('$')) {
+                    system_call = record->systemverilog->task.spelling;
+                }
+                if (system_call) {
+                    diagnostics_.back().system_call = std::move(*system_call);
+                }
             } else if (record && record->vhdl != nullptr) {
                 const auto origin = hir_source_span(record->vhdl->source);
                 report(

@@ -5,6 +5,7 @@
 #include "application_foreign_signal.hpp"
 
 #include "application_internal.hpp"
+#include "application_vpi_statements.hpp"
 #include "fsim/platform/dynamic_library.hpp"
 #include "fsim/runtime/vpi_bridge.h"
 #include "fsim/runtime/vpi_system.hpp"
@@ -28,6 +29,7 @@
 #include <deque>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
@@ -65,6 +67,9 @@ enum class Tag : std::uint64_t {
     typespec = 15,
     typespec_member = 16,
     enum_const = 17,
+    // A process, statement, expression or continuous assignment of the
+    // statement model (IEEE 1800-2023 37.43-37.79).
+    node = 18,
 };
 constexpr std::uint64_t serial_mask = (std::uint64_t { 1 } << 48U) - 1U;
 
@@ -272,6 +277,8 @@ void system_function_shape(const s_vpi_systf_data& data,
 class RegistrationHost final : public Host {
 public:
     std::vector<elaboration::UserSystemTask> tasks;
+    // cbUnresolvedSystf callbacks; the others never run at elaboration.
+    std::vector<s_cb_data> unresolved;
 
     fsim_vpi_status_v1 invoke(const Routine routine,
         const fsim_vpi_service_request_v1& request,
@@ -296,8 +303,14 @@ public:
             tasks.push_back(std::move(task));
             return succeed(result, tagged(Tag::systf, tasks.size()));
         }
-        case Routine::RegisterCallback:
+        case Routine::RegisterCallback: {
+            const auto* const data = pointer<s_cb_data>(request.user_data);
+            if (data != nullptr && data->reason == cbUnresolvedSystf
+                && data->cb_rtn != nullptr) {
+                unresolved.push_back(*data);
+            }
             return succeed(result, tagged(Tag::callback, ++callbacks_));
+        }
         case Routine::Print:
         case Routine::VariablePrint:
         case Routine::McdPrint:
@@ -757,6 +770,10 @@ public:
         if (signal_hook_ != 0U) {
             simulation_.remove_safe_point_hook(signal_hook_);
         }
+        if (force_hook_ != 0U) {
+            simulation_.remove_force_statement_hook(force_hook_);
+            simulation_.remove_safe_point_hook(force_delivery_hook_);
+        }
         // The simulation may outlive the service; no foreign routine may
         // run after it is gone.
         for (const auto& [serial, callback] : callbacks_) {
@@ -764,6 +781,16 @@ public:
                 (void)simulation_.systemverilog_vpi_callbacks()
                     .remove_callback(*callback->managed);
             }
+        }
+        for (const auto& [serial, callback] : assertion_callbacks_) {
+            if (callback.managed) {
+                (void)simulation_.systemverilog_vpi_callbacks()
+                    .remove_callback(*callback.managed);
+            }
+        }
+        for (const auto& managed : assertion_system_hooks_) {
+            (void)simulation_.systemverilog_vpi_callbacks().remove_callback(
+                managed);
         }
     }
     LiveService(const LiveService&) = delete;
@@ -919,6 +946,28 @@ public:
     }
 
 private:
+    // The cbUnresolvedSystf callbacks get the name in user_data
+    // (IEEE 1800-2023 38.36.3); true when there were any.
+    [[nodiscard]] bool resolve(const std::string& name)
+    {
+        std::string text { name };
+        const auto listeners = unresolved_callbacks_;
+        for (const auto serial : listeners) {
+            const auto found = callbacks_.find(serial);
+            if (found == callbacks_.end()) {
+                continue;
+            }
+            auto data = found->second->data;
+            data.obj = nullptr;
+            data.time = nullptr;
+            data.value = nullptr;
+            data.user_data = text.data();
+            CallScope scope { *this };
+            (void)data.cb_rtn(&data);
+        }
+        return !listeners.empty();
+    }
+
     void deliver_signals()
     {
         std::vector<std::uint64_t> arrived;
@@ -931,6 +980,643 @@ private:
             if (signal_traps_.contains(serial)) {
                 fire(serial, std::nullopt, true);
             }
+        }
+    }
+
+    void ensure_force_hook()
+    {
+        if (force_hook_ != 0U) {
+            return;
+        }
+        force_hook_ = simulation_.add_force_statement_hook(
+            [this](const runtime::simir::ProcessId process,
+                const runtime::simir::SignalId signal, const std::size_t offset,
+                const std::size_t width, const bool release) {
+                pending_forces_.push_back(
+                    ForceEvent { process, signal, offset, width, release });
+            });
+        force_delivery_hook_ = simulation_.add_safe_point_hook(
+            [this](runtime::Scheduler&, runtime::SchedulerPhase) {
+                deliver_forces();
+            });
+    }
+
+    // Each force, release, assign or deassign a process executed since the
+    // last safe point reaches the callbacks of its reason with the
+    // statement as obj and the resulting value of its target (IEEE
+    // 1800-2023 38.36.1).
+    void deliver_forces()
+    {
+        if (pending_forces_.empty()) {
+            return;
+        }
+        auto events = std::exchange(pending_forces_, { });
+        const auto& design = simulation_.design_ir();
+        for (const auto& event : events) {
+            if (force_callbacks_.empty()) {
+                return;
+            }
+            const auto path = simulation_.signal_path(event.signal);
+            if (!path) {
+                continue;
+            }
+            const auto target = registry_.find(*path);
+            if (!target || !target.value) {
+                continue;
+            }
+            const auto object = target.value->handle;
+            // The statement is the executing process's own, or one of a
+            // task or function it called. The processes that keep a forced
+            // or assigned value applied have no source and no statement.
+            const auto occurrence = std::ranges::find(design.processes(),
+                event.process, &semantic::design::ProcessOccurrence::runtime_index);
+            if (occurrence == design.processes().end()
+                || !occurrence->source_process) {
+                continue;
+            }
+            const auto& specialization = design.specializations().at(
+                occurrence->specialization.value());
+            const auto instance_path = std::string { design.path(
+                design.instances().at(specialization.instance.value()).path) };
+            const auto instance = registry_.find(instance_path);
+            const auto scope = instance && instance.value
+                ? hir_scope(instance.value->handle)
+                : std::nullopt;
+            if (!scope) {
+                continue;
+            }
+            auto sites = statement_model().force_sites(*scope, event.release,
+                [&](const fsim_vpi_handle_v1 candidate) {
+                    return candidate == object;
+                });
+            auto own = std::ranges::find(sites,
+                occurrence->source_process->value(), &VpiStatementModel::ForceSite::process);
+            if (own == sites.end()) {
+                own = std::ranges::find(
+                    sites, 0U, &VpiStatementModel::ForceSite::process);
+            }
+            if (own == sites.end()) {
+                continue;
+            }
+            const auto site = *own;
+            // The resulting value of the forced bits of the target.
+            std::optional<Value> value = object_value(object);
+            if (value && value->kind == Value::Kind::bits
+                && event.width < value->bits.width()) {
+                PackedLogic4 bits { event.width, Logic4::x };
+                for (std::size_t bit = 0U; bit < event.width; ++bit) {
+                    if (event.offset + bit < value->bits.width()) {
+                        bits.set(bit, value->bits.get(event.offset + bit));
+                    }
+                }
+                value->bits = std::move(bits);
+            }
+            const auto listeners = force_callbacks_;
+            for (const auto serial : listeners) {
+                const auto found = callbacks_.find(serial);
+                if (found == callbacks_.end()
+                    || found->second->data.reason != site.reason) {
+                    continue;
+                }
+                const auto watched = resolve(internal(found->second->data.obj));
+                if (watched != 0U && watched != object) {
+                    continue;
+                }
+                fire_statement(serial, site.statement, value);
+            }
+        }
+    }
+
+    // A statement callback: obj is the statement, and value the given
+    // value in the registered format.
+    void fire_statement(const std::uint64_t serial,
+        const fsim_vpi_handle_v1 statement, const std::optional<Value>& result)
+    {
+        const auto found = callbacks_.find(serial);
+        if (found == callbacks_.end()) {
+            return;
+        }
+        const auto& stored = *found->second;
+        auto data = stored.data;
+        auto time = stored.time;
+        auto value = stored.value;
+        data.obj = reinterpret_cast<vpiHandle>(
+            static_cast<std::uintptr_t>(statement));
+        data.time = nullptr;
+        data.value = nullptr;
+        if (stored.has_time) {
+            fill_time(time, statement);
+            data.time = &time;
+        }
+        if (stored.has_value && result && write_value(*result, value)) {
+            data.value = &value;
+        }
+        const auto routine = data.cb_rtn;
+        CallScope scope { *this };
+        routine(&data);
+    }
+
+    // --- assertions (IEEE 1800-2023 39) -------------------------------------
+
+    // vpi_register_assertion_cb's arguments, as libfsim_tf packs them.
+    struct AssertionCallbackArguments {
+        PLI_INT32 reason { };
+        vpi_assertion_callback_func* callback { };
+        PLI_BYTE8* user_data { };
+    };
+    struct AssertionCallback {
+        fsim_vpi_handle_v1 assertion { };
+        PLI_INT32 reason { };
+        vpi_assertion_callback_func* routine { };
+        PLI_BYTE8* user_data { };
+        std::optional<runtime::SystemVerilogVpiCallbackHandle> managed;
+    };
+
+    // The concurrent assertion statement an assertion object's process was
+    // lowered from, found by its label in the instance's unit.
+    [[nodiscard]] const semantic::sv::ConcurrentAssertion* concurrent_assertion(
+        const runtime::SystemVerilogVpiObjectInfo& object) const
+    {
+        if (object.kind != SystemVerilogVpiObjectKind::Assertion) {
+            return nullptr;
+        }
+        const auto process = info(object.parent);
+        if (!process) {
+            return nullptr;
+        }
+        const auto module = info(enclosing_module(process->parent));
+        if (!module || !module->type || !module->type->semantic_unit_id) {
+            return nullptr;
+        }
+        const auto& units = simulation_.systemverilog_hir().units();
+        const auto unit = std::ranges::find(units,
+            semantic::UnitId::from_index(*module->type->semantic_unit_id),
+            &semantic::sv::Unit::id);
+        if (unit == units.end()) {
+            return nullptr;
+        }
+        const auto found = std::ranges::find(unit->concurrent_assertions,
+            process->name, &semantic::sv::ConcurrentAssertion::name);
+        return found == unit->concurrent_assertions.end() ? nullptr : &*found;
+    }
+
+    [[nodiscard]] const semantic::sv::ConcurrentAssertion* concurrent_assertion(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto object = info(handle);
+        return object ? concurrent_assertion(*object) : nullptr;
+    }
+
+    // Where an assertion statement is: its file and line.
+    [[nodiscard]] std::optional<std::pair<std::string, std::int64_t>>
+    assertion_location(const semantic::sv::ConcurrentAssertion& assertion) const
+    {
+        const auto& semantics = simulation_.semantics();
+        if (!assertion.source.valid()
+            || assertion.source.value() >= semantics.source_spans().size()) {
+            return std::nullopt;
+        }
+        const auto& location = semantics.source_spans().at(assertion.source.value());
+        auto file = location.logical_name;
+        if (file.empty() && location.file.valid()
+            && location.file.value() < semantics.source_files().size()) {
+            file = semantics.source_files().at(location.file.value()).physical_name;
+        }
+        return std::pair { std::move(file),
+            static_cast<std::int64_t>(location.begin.line) };
+    }
+
+    [[nodiscard]] static PLI_INT32 assertion_type(
+        const semantic::sv::ConcurrentAssertion& assertion)
+    {
+        switch (assertion.kind) {
+        case semantic::sv::ConcurrentAssertionKind::assumption:
+            return vpiAssume;
+        case semantic::sv::ConcurrentAssertionKind::cover:
+            return vpiCover;
+        case semantic::sv::ConcurrentAssertionKind::restriction:
+            return vpiRestrict;
+        default:
+            return vpiAssert;
+        }
+    }
+
+    // The concurrent assertions of a scope and the scopes in it, short of
+    // other instances; all of them for a NULL scope (IEEE 1800-2023 39.3.1).
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> assertions_in(
+        const fsim_vpi_handle_v1 scope)
+    {
+        std::vector<fsim_vpi_handle_v1> objects;
+        for (const auto handle : drain(
+                 registry_.iterate_objects(SystemVerilogVpiObjectKind::Assertion))) {
+            const auto object = info(handle);
+            if (!object || concurrent_assertion(*object) == nullptr) {
+                continue;
+            }
+            const auto process = info(object->parent);
+            bool inside = scope == 0U;
+            for (auto current = process ? process->parent : 0U;
+                 !inside && current != 0U;) {
+                const auto owner = info(current);
+                if (!owner) {
+                    break;
+                }
+                if (current == scope) {
+                    inside = true;
+                } else if (instance_kind(owner->kind)) {
+                    break;
+                }
+                current = owner->parent;
+            }
+            if (inside) {
+                objects.push_back(handle);
+            }
+        }
+        return objects;
+    }
+
+    fsim_vpi_status_v1 register_assertion_callback(
+        const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        const auto* const arguments
+            = pointer<AssertionCallbackArguments>(request.user_data);
+        const auto assertion = resolve(request.handle);
+        if (arguments == nullptr || arguments->callback == nullptr
+            || concurrent_assertion(assertion) == nullptr
+            || assertion_system_ended_) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        std::optional<runtime::SystemVerilogVpiCallbackKind> kind;
+        switch (arguments->reason) {
+        case cbAssertionSuccess:
+            kind = runtime::SystemVerilogVpiCallbackKind::AssertionSuccess;
+            break;
+        case cbAssertionFailure:
+            kind = runtime::SystemVerilogVpiCallbackKind::AssertionFailure;
+            break;
+        case cbAssertionVacuousSuccess:
+            kind = runtime::SystemVerilogVpiCallbackKind::AssertionVacuous;
+            break;
+        case cbAssertionDisabledEvaluation:
+            kind = runtime::SystemVerilogVpiCallbackKind::AssertionDisabled;
+            break;
+        // Steps occur only on an attempt stepping is enabled for, and
+        // vpiAssertionEnableStep is refused; the control reasons occur on
+        // vpi_control (39.5.2).
+        case cbAssertionStepSuccess:
+        case cbAssertionStepFailure:
+        case cbAssertionLock:
+        case cbAssertionUnlock:
+        case cbAssertionDisable:
+        case cbAssertionEnable:
+        case cbAssertionReset:
+        case cbAssertionKill:
+        case cbAssertionEnablePassAction:
+        case cbAssertionDisablePassAction:
+        case cbAssertionEnableFailAction:
+        case cbAssertionDisableFailAction:
+        case cbAssertionEnableNonvacuousAction:
+        case cbAssertionDisableVacuousAction:
+            break;
+        // Attempt starts are not observed.
+        default:
+            error_message_ = "vpi_register_assertion_cb: reason "
+                + std::to_string(arguments->reason) + " is not supported";
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        const auto serial = ++next_callback_;
+        AssertionCallback stored;
+        stored.assertion = assertion;
+        stored.reason = arguments->reason;
+        stored.routine = arguments->callback;
+        stored.user_data = arguments->user_data;
+        if (kind) {
+            runtime::SystemVerilogVpiCallbackRegistration registration;
+            registration.kind = *kind;
+            registration.object = assertion;
+            registration.callback
+                = [this, serial](const runtime::SystemVerilogVpiCallbackEvent&) {
+                      fire_assertion(serial, true);
+                  };
+            const auto registered
+                = simulation_.systemverilog_vpi_callbacks().register_callback(
+                    std::move(registration));
+            if (!registered) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            stored.managed = registered.value;
+        }
+        assertion_callbacks_.emplace(serial, stored);
+        return succeed(result, tagged(Tag::callback, serial));
+    }
+
+    bool remove_assertion_callback(const std::uint64_t serial)
+    {
+        const auto found = assertion_callbacks_.find(serial);
+        if (found == assertion_callbacks_.end()) {
+            return false;
+        }
+        if (found->second.managed) {
+            (void)simulation_.systemverilog_vpi_callbacks().remove_callback(
+                *found->second.managed);
+        }
+        assertion_callbacks_.erase(found);
+        return true;
+    }
+
+    // The callback gets the attempt information for an attempt's outcome
+    // and NULL for a control action (IEEE 1800-2023 39.4.2). The attempt's
+    // start is not observed, so attemptStartTime is the outcome's time,
+    // and a failure has no failing expression.
+    void fire_assertion(const std::uint64_t serial, const bool attempt)
+    {
+        const auto found = assertion_callbacks_.find(serial);
+        if (found == assertion_callbacks_.end()) {
+            return;
+        }
+        const auto stored = found->second;
+        s_vpi_time time { };
+        time.type = vpiSimTime;
+        fill_time(time, stored.assertion);
+        s_vpi_attempt_info detail { };
+        detail.detail.failExpr = nullptr;
+        detail.attemptStartTime = time;
+        CallScope scope { *this };
+        stored.routine(stored.reason, &time,
+            reinterpret_cast<vpiHandle>(
+                static_cast<std::uintptr_t>(stored.assertion)),
+            attempt ? &detail : nullptr, stored.user_data);
+    }
+
+    // The control-action callbacks of one assertion.
+    void fire_assertion_control(
+        const fsim_vpi_handle_v1 assertion, const PLI_INT32 reason)
+    {
+        std::vector<std::uint64_t> listeners;
+        for (const auto& [serial, stored] : assertion_callbacks_) {
+            if (stored.assertion == assertion && stored.reason == reason) {
+                listeners.push_back(serial);
+            }
+        }
+        for (const auto serial : listeners) {
+            fire_assertion(serial, false);
+        }
+    }
+
+    // The assertion system callbacks of one reason (IEEE 1800-2023 39.4.1).
+    void fire_assertion_system(const PLI_INT32 reason)
+    {
+        std::vector<std::uint64_t> listeners;
+        for (const auto serial : assertion_system_callbacks_) {
+            const auto found = callbacks_.find(serial);
+            if (found != callbacks_.end()
+                && found->second->data.reason == reason) {
+                listeners.push_back(serial);
+            }
+        }
+        for (const auto serial : listeners) {
+            fire(serial, std::nullopt, true);
+        }
+    }
+
+    // The assertion system initializes and starts with the simulation and
+    // ends with it.
+    void ensure_assertion_system_hooks()
+    {
+        if (assertion_system_hooked_) {
+            return;
+        }
+        assertion_system_hooked_ = true;
+        auto& callbacks = simulation_.systemverilog_vpi_callbacks();
+        runtime::SystemVerilogVpiCallbackRegistration start;
+        start.kind = runtime::SystemVerilogVpiCallbackKind::StartOfSimulation;
+        start.callback = [this](const runtime::SystemVerilogVpiCallbackEvent&) {
+            fire_assertion_system(cbAssertionSysInitialized);
+            fire_assertion_system(cbAssertionSysOn);
+        };
+        if (const auto registered = callbacks.register_callback(std::move(start))) {
+            assertion_system_hooks_.push_back(registered.value);
+        }
+        runtime::SystemVerilogVpiCallbackRegistration end;
+        end.kind = runtime::SystemVerilogVpiCallbackKind::EndOfSimulation;
+        end.callback = [this](const runtime::SystemVerilogVpiCallbackEvent&) {
+            end_assertion_system();
+        };
+        if (const auto registered = callbacks.register_callback(std::move(end))) {
+            assertion_system_hooks_.push_back(registered.value);
+        }
+    }
+
+    // No assertion callback occurs after cbAssertionSysEnd, and every
+    // assertion callback is removed (IEEE 1800-2023 39.4.1, 39.5.1).
+    void end_assertion_system()
+    {
+        if (assertion_system_ended_) {
+            return;
+        }
+        fire_assertion_system(cbAssertionSysEnd);
+        assertion_system_ended_ = true;
+        std::vector<std::uint64_t> serials;
+        for (const auto& [serial, stored] : assertion_callbacks_) {
+            serials.push_back(serial);
+        }
+        for (const auto serial : serials) {
+            remove_assertion_callback(serial);
+        }
+        for (const auto serial : assertion_system_callbacks_) {
+            callbacks_.erase(serial);
+        }
+        assertion_system_callbacks_.clear();
+    }
+
+    [[nodiscard]] static bool assertion_control_operation(
+        const PLI_INT32 operation)
+    {
+        return (operation >= vpiAssertionDisable
+                   && operation <= vpiAssertionSysKill)
+            || (operation >= vpiAssertionDisablePassAction
+                && operation <= vpiAssertionSysUnlock);
+    }
+
+    // vpi_control on assertions and the assertion system (IEEE 1800-2023
+    // 39.5); a locked assertion or system keeps its status until unlocked.
+    fsim_vpi_status_v1 assertion_control(const PLI_INT32 operation,
+        const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        using Operation = runtime::SystemVerilogVpiAssertionControlOperation;
+        auto* const arguments = pointer<va_list>(request.user_data);
+        fsim_vpi_handle_v1 handle { };
+        if (arguments != nullptr) {
+            va_list copy;
+            va_copy(copy, *arguments);
+            handle = resolve(static_cast<fsim_vpi_handle_v1>(
+                reinterpret_cast<std::uintptr_t>(va_arg(copy, vpiHandle))));
+            va_end(copy);
+        }
+        if (assertion_system_ended_) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        auto& assertions = simulation_.systemverilog_vpi_assertions();
+        const auto apply = [&](const Operation applied,
+                               const std::optional<fsim_vpi_handle_v1> object) {
+            return assertions.control(applied, object)
+                == runtime::SystemVerilogVpiAssertionApiError::None;
+        };
+        const auto done = [&]() -> fsim_vpi_status_v1 {
+            return succeed(result, 0U, 1U);
+        };
+        // The assertion system: every assertion, or those of a scope.
+        const auto system = [&](const PLI_INT32 reason,
+                                const std::initializer_list<Operation> steps)
+            -> fsim_vpi_status_v1 {
+            if (assertion_system_locked_) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            for (const auto step : steps) {
+                if (handle == 0U) {
+                    if (!apply(step, std::nullopt)) {
+                        return FSIM_VPI_STATUS_NOT_FOUND;
+                    }
+                    continue;
+                }
+                for (const auto assertion : assertions_in(handle)) {
+                    if (!locked_assertions_.contains(assertion)
+                        && !apply(step, assertion)) {
+                        return FSIM_VPI_STATUS_NOT_FOUND;
+                    }
+                }
+            }
+            fire_assertion_system(reason);
+            return done();
+        };
+        switch (operation) {
+        case vpiAssertionSysOn:
+            return system(cbAssertionSysOn, { Operation::Enable });
+        case vpiAssertionSysOff:
+            return system(cbAssertionSysOff, { Operation::Disable });
+        case vpiAssertionSysKill:
+            return handle == 0U
+                ? system(cbAssertionSysKill, { Operation::Kill })
+                : system(cbAssertionSysKill,
+                      { Operation::Kill, Operation::Disable });
+        // The initial state, without the step callbacks.
+        case vpiAssertionSysReset: {
+            const auto status = system(cbAssertionSysReset,
+                { Operation::Kill, Operation::Reset, Operation::Enable,
+                    Operation::EnablePassAction, Operation::EnableFailAction });
+            if (status == FSIM_VPI_STATUS_OK) {
+                std::vector<std::uint64_t> steps;
+                for (const auto& [serial, stored] : assertion_callbacks_) {
+                    if (stored.reason == cbAssertionStepSuccess
+                        || stored.reason == cbAssertionStepFailure) {
+                        steps.push_back(serial);
+                    }
+                }
+                for (const auto serial : steps) {
+                    remove_assertion_callback(serial);
+                }
+            }
+            return status;
+        }
+        case vpiAssertionSysEnd:
+            if (!apply(Operation::Kill, std::nullopt)) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            end_assertion_system();
+            return done();
+        case vpiAssertionSysLock:
+            assertion_system_locked_ = true;
+            fire_assertion_system(cbAssertionSysLock);
+            return done();
+        case vpiAssertionSysUnlock:
+            assertion_system_locked_ = false;
+            fire_assertion_system(cbAssertionSysUnlock);
+            return done();
+        case vpiAssertionSysEnablePassAction:
+            return system(cbAssertionSysEnablePassAction,
+                { Operation::EnablePassAction });
+        case vpiAssertionSysDisablePassAction:
+            return system(cbAssertionSysDisablePassAction,
+                { Operation::DisablePassAction });
+        case vpiAssertionSysEnableFailAction:
+            return system(cbAssertionSysEnableFailAction,
+                { Operation::EnableFailAction });
+        case vpiAssertionSysDisableFailAction:
+            return system(cbAssertionSysDisableFailAction,
+                { Operation::DisableFailAction });
+        case vpiAssertionSysEnableNonvacuousAction:
+            return system(cbAssertionSysEnableNonvacuousAction,
+                { Operation::EnableNonvacuousAction });
+        case vpiAssertionSysDisableVacuousAction:
+            return system(cbAssertionSysDisableVacuousAction,
+                { Operation::DisableVacuousAction });
+        default:
+            break;
+        }
+        // One assertion statement (39.5.2).
+        if (concurrent_assertion(handle) == nullptr) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        if (operation == vpiAssertionUnlock) {
+            locked_assertions_.erase(handle);
+            fire_assertion_control(handle, cbAssertionUnlock);
+            return done();
+        }
+        if (assertion_system_locked_ || locked_assertions_.contains(handle)) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        const auto single = [&](const PLI_INT32 reason,
+                                const std::initializer_list<Operation> steps)
+            -> fsim_vpi_status_v1 {
+            for (const auto step : steps) {
+                if (!apply(step, handle)) {
+                    return FSIM_VPI_STATUS_NOT_FOUND;
+                }
+            }
+            fire_assertion_control(handle, reason);
+            return done();
+        };
+        switch (operation) {
+        case vpiAssertionLock:
+            locked_assertions_.insert(handle);
+            fire_assertion_control(handle, cbAssertionLock);
+            return done();
+        case vpiAssertionReset:
+            return single(cbAssertionReset,
+                { Operation::Kill, Operation::Reset, Operation::Enable });
+        case vpiAssertionDisable:
+            return single(cbAssertionDisable, { Operation::Disable });
+        case vpiAssertionEnable:
+            return single(cbAssertionEnable, { Operation::Enable });
+        // Attempts are not told apart by their start, so every attempt in
+        // progress is discarded.
+        case vpiAssertionKill:
+            return single(cbAssertionKill, { Operation::Kill });
+        case vpiAssertionEnablePassAction:
+            return single(
+                cbAssertionEnablePassAction, { Operation::EnablePassAction });
+        case vpiAssertionDisablePassAction:
+            return single(
+                cbAssertionDisablePassAction, { Operation::DisablePassAction });
+        case vpiAssertionEnableFailAction:
+            return single(
+                cbAssertionEnableFailAction, { Operation::EnableFailAction });
+        case vpiAssertionDisableFailAction:
+            return single(
+                cbAssertionDisableFailAction, { Operation::DisableFailAction });
+        case vpiAssertionEnableNonvacuousAction:
+            return single(cbAssertionEnableNonvacuousAction,
+                { Operation::EnableNonvacuousAction });
+        case vpiAssertionDisableVacuousAction:
+            return single(cbAssertionDisableVacuousAction,
+                { Operation::DisableVacuousAction });
+        // Stepping (vpiAssertionEnableStep, vpiAssertionDisableStep) is not
+        // available.
+        default:
+            return FSIM_VPI_STATUS_NOT_FOUND;
         }
     }
 
@@ -972,6 +1658,12 @@ private:
             return routine == Routine::GetValue
                 ? get_value_array(request, result)
                 : put_value_array(request, result);
+        }
+        constexpr std::uint32_t assertion_callback_operation = 2U;
+        if (request.flags == assertion_callback_operation
+            && routine == Routine::RegisterCallback) {
+            error_ = false;
+            return register_assertion_callback(request, result);
         }
         if (request.flags != 0U) {
             return FSIM_VPI_STATUS_UNSUPPORTED;
@@ -2864,7 +3556,10 @@ private:
                     + static_cast<std::uint32_t>(digit - '0');
             }
         }
-        const auto systf = systf_by_name_.find(site.name);
+        auto systf = systf_by_name_.find(site.name);
+        if (systf == systf_by_name_.end() && resolve(site.name)) {
+            systf = systf_by_name_.find(site.name);
+        }
         if (systf == systf_by_name_.end()) {
             throw std::runtime_error { "VPI system task '" + site.name
                 + "' is not registered by a loaded VPI module" };
@@ -2988,6 +3683,124 @@ private:
             return named->object;
         }
         return handle;
+    }
+
+    // --- statement model ---------------------------------------------------
+
+    // The design's processes and statements, built on first use from the
+    // SystemVerilog HIR.
+    [[nodiscard]] VpiStatementModel& statement_model()
+    {
+        if (!statement_model_) {
+            VpiStatementModel::Hooks hooks;
+            hooks.handle = [](const std::uint64_t serial) {
+                return tagged(Tag::node, serial);
+            };
+            hooks.resolve = [this](const fsim_vpi_handle_v1 scope,
+                                const std::string& name) {
+                return name_from_scope(scope, name);
+            };
+            hooks.child_scope = [this](const fsim_vpi_handle_v1 scope,
+                                    const std::string& name) {
+                const auto owner = info(scope);
+                if (!owner) {
+                    return fsim_vpi_handle_v1 { };
+                }
+                const auto found = registry_.find(owner->full_name + "." + name);
+                return found && found.value && scope_kind(found.value->kind)
+                    ? found.value->handle
+                    : fsim_vpi_handle_v1 { };
+            };
+            hooks.full_name = [this](const fsim_vpi_handle_v1 scope) {
+                const auto owner = info(scope);
+                return owner ? owner->full_name : std::string { };
+            };
+            statement_model_ = std::make_unique<VpiStatementModel>(
+                simulation_.systemverilog_hir(), simulation_.semantics(),
+                std::move(hooks));
+        }
+        return *statement_model_;
+    }
+
+    [[nodiscard]] std::optional<std::uint64_t> node_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::node || !statement_model_
+            || !statement_model_->owns(serial_of(handle))) {
+            return std::nullopt;
+        }
+        return serial_of(handle);
+    }
+
+    // A simple or hierarchical name seen from a scope: the scope and the
+    // scopes enclosing it up to the instance, then the design (IEEE
+    // 1800-2023 23.8, 23.9).
+    [[nodiscard]] fsim_vpi_handle_v1 name_from_scope(
+        const fsim_vpi_handle_v1 scope, const std::string& name) const
+    {
+        auto current = scope;
+        for (std::size_t depth = 0U; current != 0U && depth < 256U; ++depth) {
+            const auto object = info(current);
+            if (!object) {
+                break;
+            }
+            const auto found = registry_.find(object->full_name
+                + (object->full_name.ends_with("::") ? "" : ".") + name);
+            if (found && found.value) {
+                return found.value->handle;
+            }
+            if (instance_kind(object->kind)) {
+                break;
+            }
+            current = object->parent;
+        }
+        const auto found = registry_.find(name);
+        return found && found.value ? found.value->handle : 0U;
+    }
+
+    // Where a scope object's contents are in the HIR: the generate
+    // blocks, callable and named blocks from its instance down to it.
+    [[nodiscard]] std::optional<VpiHirScope> hir_scope(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        VpiHirScope scope;
+        scope.handle = handle;
+        auto current = handle;
+        for (std::size_t depth = 0U; depth < 256U; ++depth) {
+            const auto object = info(current);
+            if (!object) {
+                return std::nullopt;
+            }
+            switch (object->kind) {
+            case SystemVerilogVpiObjectKind::Root:
+            case SystemVerilogVpiObjectKind::Module:
+            case SystemVerilogVpiObjectKind::Interface:
+            case SystemVerilogVpiObjectKind::Program:
+                if (!object->type || !object->type->semantic_unit_id) {
+                    return std::nullopt;
+                }
+                scope.unit = *object->type->semantic_unit_id;
+                std::ranges::reverse(scope.steps);
+                return scope;
+            case SystemVerilogVpiObjectKind::GenerateScope:
+                scope.steps.emplace_back(VpiHirScope::Step::generate, object->name);
+                break;
+            case SystemVerilogVpiObjectKind::Task:
+            case SystemVerilogVpiObjectKind::Function:
+                scope.steps.emplace_back(VpiHirScope::Step::callable, object->name);
+                break;
+            case SystemVerilogVpiObjectKind::Begin:
+            case SystemVerilogVpiObjectKind::Fork:
+                scope.steps.emplace_back(VpiHirScope::Step::block, object->name);
+                break;
+            case SystemVerilogVpiObjectKind::GenerateScopeArray:
+                break;
+            default:
+                return std::nullopt;
+            }
+            current = object->parent;
+        }
+        return std::nullopt;
     }
 
     // --- registration ------------------------------------------------------
@@ -3134,6 +3947,11 @@ private:
         case cbPLIError:
             pli_error_callbacks_.push_back(serial);
             break;
+        // A call site whose system task or function the modules have not
+        // registered in this run (IEEE 1800-2023 38.36.2).
+        case cbUnresolvedSystf:
+            unresolved_callbacks_.push_back(serial);
+            break;
         // `index` names the signal; it reaches the callback at the next
         // safe point (IEEE 1800-2023 38.36.3).
         case cbSignal: {
@@ -3155,6 +3973,40 @@ private:
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
             kind = runtime::SystemVerilogVpiCallbackKind::ValueChange;
+            break;
+        // After a force, release, procedural assign or deassign statement;
+        // a NULL object watches every one, and a bit-select is not allowed
+        // (IEEE 1800-2023 38.36.1).
+        case cbForce:
+        case cbRelease:
+        case cbAssign:
+        case cbDeassign:
+            if (object != 0U && (owned(object) || !info(object))) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            force_callbacks_.push_back(serial);
+            ensure_force_hook();
+            break;
+        // The assertion system's changes (IEEE 1800-2023 39.4.1).
+        case cbAssertionSysInitialized:
+        case cbAssertionSysOn:
+        case cbAssertionSysOff:
+        case cbAssertionSysKill:
+        case cbAssertionSysLock:
+        case cbAssertionSysUnlock:
+        case cbAssertionSysEnd:
+        case cbAssertionSysReset:
+        case cbAssertionSysEnablePassAction:
+        case cbAssertionSysEnableFailAction:
+        case cbAssertionSysDisablePassAction:
+        case cbAssertionSysDisableFailAction:
+        case cbAssertionSysEnableNonvacuousAction:
+        case cbAssertionSysDisableVacuousAction:
+            if (assertion_system_ended_) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            assertion_system_callbacks_.push_back(serial);
+            ensure_assertion_system_hooks();
             break;
         case cbAfterDelay:
             if (!stored->has_time) {
@@ -3251,7 +4103,9 @@ private:
         }
         const auto found = callbacks_.find(serial_of(request.handle));
         if (found == callbacks_.end()) {
-            return FSIM_VPI_STATUS_NOT_FOUND;
+            return remove_assertion_callback(serial_of(request.handle))
+                ? succeed(result, 0U, 1U)
+                : FSIM_VPI_STATUS_NOT_FOUND;
         }
         if (found->second->managed) {
             (void)simulation_.systemverilog_vpi_callbacks().remove_callback(
@@ -3259,6 +4113,9 @@ private:
         }
         std::erase(end_of_compile_, found->first);
         std::erase(run_error_callbacks_, found->first);
+        std::erase(unresolved_callbacks_, found->first);
+        std::erase(force_callbacks_, found->first);
+        std::erase(assertion_system_callbacks_, found->first);
         signal_traps_.erase(found->first);
         std::erase(pli_error_callbacks_, found->first);
         callbacks_.erase(found);
@@ -3493,6 +4350,11 @@ private:
             return vpiNamedEvent;
         case SystemVerilogVpiObjectKind::Constant:
             return vpiConstant;
+        case SystemVerilogVpiObjectKind::Assertion:
+            if (const auto* assertion = concurrent_assertion(object)) {
+                return assertion_type(*assertion);
+            }
+            return vpiUndefined;
         default:
             return vpiUndefined;
         }
@@ -3500,6 +4362,9 @@ private:
 
     [[nodiscard]] PLI_INT32 handle_type(const fsim_vpi_handle_v1 handle) const
     {
+        if (const auto serial = node_of(handle)) {
+            return statement_model_->type(*serial);
+        }
         if (const auto* site = call_of(handle)) {
             return site->function ? vpiSysFuncCall : vpiSysTaskCall;
         }
@@ -3729,6 +4594,22 @@ private:
         const auto type = static_cast<PLI_INT32>(request.argument);
         const auto reference = resolve(request.handle);
         std::vector<fsim_vpi_handle_v1> objects;
+        if (const auto serial = node_of(reference)) {
+            return succeed(result, make_iterator(
+                statement_model_->iterate(*serial, type).value_or(objects)));
+        }
+        // The processes and continuous assignments of an instance or
+        // generate scope, the statements of a named block (IEEE 1800-2023
+        // 37.10, 37.43, 37.44).
+        if ((type == vpiProcess || type == vpiContAssign || type == vpiStmt)
+            && reference != 0U && !owned(reference)) {
+            if (const auto scope = hir_scope(reference)) {
+                objects = statement_model()
+                              .iterate_scope(*scope, type)
+                              .value_or(objects);
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
         if (const auto* level = typespec_of(reference)) {
             const auto copy = *level;
             return succeed(result,
@@ -3878,6 +4759,11 @@ private:
             }
             return succeed(result, make_iterator(std::move(objects)));
         }
+        // The concurrent assertions of the design or of an instance (IEEE
+        // 1800-2023 39.3.1).
+        if (type == vpiAssertion) {
+            return succeed(result, make_iterator(assertions_in(reference)));
+        }
         // Only design roots iterate from a NULL reference (IEEE 1800-2023
         // 37.10).
         if (reference == 0U && type != vpiModule && type != vpiInstance
@@ -4003,6 +4889,18 @@ private:
             return succeed(result);
         }
         const auto reference = resolve(request.handle);
+        if (const auto serial = node_of(reference)) {
+            return succeed(result,
+                statement_model_->relation(*serial, type).value_or(0U));
+        }
+        // The statement of a task or function (IEEE 1800-2023 37.42).
+        if (type == vpiStmt && reference != 0U && !owned(reference)) {
+            if (const auto scope = hir_scope(reference)) {
+                return succeed(result,
+                    statement_model().scope_relation(*scope, type).value_or(0U));
+            }
+            return succeed(result);
+        }
         // Typespecs, their members and enumeration constants (IEEE
         // 1800-2023 37.25).
         if (const auto* level = typespec_of(reference)) {
@@ -4146,6 +5044,14 @@ private:
         const auto object = info(reference);
         if (!object) {
             return succeed(result);
+        }
+        // An assertion's scope is its process's (IEEE 1800-2023 39.3.1).
+        if (concurrent_assertion(*object) != nullptr
+            && (type == vpiScope || type == vpiParent || type == vpiModule)) {
+            const auto process = info(object->parent);
+            const auto scope = process ? process->parent : 0U;
+            return succeed(result,
+                type == vpiModule ? enclosing_module(scope) : scope);
         }
         switch (type) {
         case vpiScope:
@@ -4306,6 +5212,25 @@ private:
         return name.starts_with('\\') ? name.substr(1U) : name;
     }
 
+    // A labelled concurrent assertion is found by its name, which is its
+    // process's; an unlabelled one is not found (IEEE 1800-2023 39.3.1).
+    [[nodiscard]] fsim_vpi_handle_v1 labelled_assertion(
+        const fsim_vpi_handle_v1 handle)
+    {
+        const auto object = info(handle);
+        if (!object || object->kind != SystemVerilogVpiObjectKind::Process) {
+            return handle;
+        }
+        const auto child = registry_.find_child(handle, "$assertion");
+        if (!child || !child.value) {
+            return handle;
+        }
+        const auto* assertion = concurrent_assertion(child.value->handle);
+        return assertion != nullptr && assertion->explicit_label
+            ? child.value->handle
+            : handle;
+    }
+
     fsim_vpi_status_v1 handle_by_name(const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
@@ -4317,7 +5242,7 @@ private:
         if (request.handle == 0U) {
             const auto found = registry_.find(name);
             if (found && found.value) {
-                return succeed(result, found.value->handle);
+                return succeed(result, labelled_assertion(found.value->handle));
             }
             if (const auto member = find_declared_path(name)) {
                 return succeed(result, member);
@@ -4332,7 +5257,7 @@ private:
             + (scope->full_name.ends_with("::") ? "" : ".") + name;
         auto found = registry_.find(scoped);
         if (found && found.value) {
-            return succeed(result, found.value->handle);
+            return succeed(result, labelled_assertion(found.value->handle));
         }
         if (const auto member = find_declared_path(scoped)) {
             return succeed(result, member);
@@ -4341,7 +5266,8 @@ private:
             return succeed(result, through);
         }
         found = registry_.find(name);
-        return succeed(result, found && found.value ? found.value->handle
+        return succeed(result, found && found.value
+                ? labelled_assertion(found.value->handle)
                                                     : find_declared_path(name));
     }
 
@@ -4485,6 +5411,10 @@ private:
         }
         if (property == vpiType) {
             return integer(handle_type(request.handle));
+        }
+        if (const auto serial = node_of(request.handle)) {
+            const auto value = statement_model_->property(*serial, property);
+            return value ? integer(*value) : succeed(result, 0U, undefined);
         }
         if (const auto* level = typespec_of(request.handle)) {
             const auto& node = *level->node;
@@ -4711,6 +5641,10 @@ private:
         case vpiVector:
             return integer(width > 1U ? 1 : 0);
         case vpiLineNo:
+            if (const auto* assertion = concurrent_assertion(*object)) {
+                const auto location = assertion_location(*assertion);
+                return integer(location ? location->second : 0);
+            }
             return integer(object->source ? object->source->line : 0);
         case vpiTopModule:
             return integer(object->parent == 0U ? 1 : 0);
@@ -5292,6 +6226,10 @@ private:
             const auto* const name = type_name(handle_type(request.handle));
             return name == nullptr ? FSIM_VPI_STATUS_NOT_FOUND : text(name);
         }
+        if (const auto serial = node_of(request.handle)) {
+            auto value = statement_model_->string_property(*serial, property);
+            return value ? text(std::move(*value)) : FSIM_VPI_STATUS_NOT_FOUND;
+        }
         // A typespec is named by its typedef (IEEE 1800-2023 37.25 detail
         // 1); a member and an enumeration constant by their own names.
         if (const auto* level = typespec_of(request.handle)) {
@@ -5381,6 +6319,23 @@ private:
         if (!object) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
+        // An assertion is named by its label, and its process is its
+        // place in the hierarchy (IEEE 1800-2023 39.3.1).
+        if (concurrent_assertion(*object) != nullptr
+            && (property == vpiName || property == vpiFullName)) {
+            const auto process = info(object->parent);
+            return property == vpiName
+                ? text(std::string { unescaped(process->name) })
+                : text(presented_full_name(*process));
+        }
+        if (property == vpiFile) {
+            if (const auto* assertion = concurrent_assertion(*object)) {
+                auto location = assertion_location(*assertion);
+                return location && !location->first.empty()
+                    ? text(std::move(location->first))
+                    : FSIM_VPI_STATUS_NOT_FOUND;
+            }
+        }
         switch (property) {
         case vpiName:
             // An array word is named by its array and index
@@ -5450,6 +6405,23 @@ private:
     [[nodiscard]] std::optional<Value> object_value(
         const fsim_vpi_handle_v1 handle) const
     {
+        if (const auto serial = node_of(handle)) {
+            auto constant = statement_model_->value(*serial);
+            if (!constant) {
+                return std::nullopt;
+            }
+            Value value;
+            value.kind = constant->kind == VpiStatementValue::Kind::real
+                ? Value::Kind::real
+                : constant->kind == VpiStatementValue::Kind::string
+                ? Value::Kind::string
+                : Value::Kind::bits;
+            value.bits = std::move(constant->bits);
+            value.real = constant->real;
+            value.text = std::move(constant->text);
+            value.is_signed = constant->is_signed;
+            return value;
+        }
         if (const auto* named = argument(handle)) {
             if (named->object == 0U) {
                 return named->value;
@@ -6309,6 +7281,9 @@ private:
         fsim_vpi_service_result_v1& result)
     {
         const auto operation = static_cast<PLI_INT32>(request.argument);
+        if (assertion_control_operation(operation)) {
+            return assertion_control(operation, request, result);
+        }
         if (operation != vpiFinish && operation != vpiStop) {
             return FSIM_VPI_STATUS_UNSUPPORTED;
         }
@@ -6374,6 +7349,7 @@ private:
     std::vector<std::uint64_t> end_of_compile_;
     // The cbError and cbPLIError callbacks, which run on every error.
     std::vector<std::uint64_t> run_error_callbacks_;
+    std::vector<std::uint64_t> unresolved_callbacks_;
     std::vector<std::uint64_t> pli_error_callbacks_;
     bool in_pli_error_ { };
     // The cbSignal callbacks and their traps, delivered at safe points.
@@ -6386,6 +7362,27 @@ private:
     std::vector<std::byte> array_buffer_;
     std::vector<Select> selects_;
     std::vector<Constant> constants_;
+    std::unique_ptr<VpiStatementModel> statement_model_;
+    // A force or release a process executed, waiting for the next safe
+    // point.
+    struct ForceEvent {
+        runtime::simir::ProcessId process { };
+        runtime::simir::SignalId signal { };
+        std::size_t offset { };
+        std::size_t width { };
+        bool release { };
+    };
+    std::vector<ForceEvent> pending_forces_;
+    std::vector<std::uint64_t> force_callbacks_;
+    std::uint64_t force_hook_ { };
+    std::uint64_t force_delivery_hook_ { };
+    std::map<std::uint64_t, AssertionCallback> assertion_callbacks_;
+    std::vector<std::uint64_t> assertion_system_callbacks_;
+    std::set<fsim_vpi_handle_v1> locked_assertions_;
+    std::vector<runtime::SystemVerilogVpiCallbackHandle> assertion_system_hooks_;
+    bool assertion_system_hooked_ { };
+    bool assertion_system_locked_ { };
+    bool assertion_system_ended_ { };
     std::vector<Range> ranges_;
     std::vector<SubArray> subarrays_;
     std::vector<TypespecLevel> typespecs_;
@@ -6419,24 +7416,72 @@ private:
 
 } // namespace
 
-std::optional<std::vector<elaboration::UserSystemTask>>
-register_vpi_user_system_tasks(
+namespace {
+
+class ElaborationModules final : public VpiElaborationModules {
+public:
+    [[nodiscard]] bool load(const std::span<const std::string> modules,
+        diagnostic::Engine& diagnostics)
+    {
+        for (const auto& module : modules) {
+            std::string error;
+            auto library = load_module(parse_module(module), host_, error);
+            if (!library) {
+                diagnostics.error("FSIM-VPI-LOAD-001",
+                    "cannot load VPI module '" + module + "': " + error);
+                return false;
+            }
+            libraries_.push_back(std::move(library));
+        }
+        return true;
+    }
+
+    [[nodiscard]] std::span<const elaboration::UserSystemTask>
+    tasks() const noexcept override
+    {
+        return host_.tasks;
+    }
+
+    // user_data names the unresolved system task or function
+    // (IEEE 1800-2023 38.36.3).
+    [[nodiscard]] bool resolve(const std::string& name) override
+    {
+        const auto before = host_.tasks.size();
+        std::string text { name };
+        const auto callbacks = host_.unresolved;
+        for (const auto& registered : callbacks) {
+            CallScope scope { host_ };
+            if (!scope.entered()) {
+                break;
+            }
+            auto data = registered;
+            data.obj = nullptr;
+            data.time = nullptr;
+            data.value = nullptr;
+            data.user_data = text.data();
+            (void)data.cb_rtn(&data);
+        }
+        return std::ranges::any_of(
+            std::span { host_.tasks }.subspan(before),
+            [&](const auto& task) { return task.name == name; });
+    }
+
+private:
+    RegistrationHost host_;
+    std::vector<std::unique_ptr<platform::DynamicLibrary>> libraries_;
+};
+
+} // namespace
+
+std::unique_ptr<VpiElaborationModules> register_vpi_user_system_tasks(
     const std::span<const std::string> modules,
     diagnostic::Engine& diagnostics)
 {
-    RegistrationHost host;
-    std::vector<std::unique_ptr<platform::DynamicLibrary>> libraries;
-    for (const auto& module : modules) {
-        std::string error;
-        auto library = load_module(parse_module(module), host, error);
-        if (!library) {
-            diagnostics.error("FSIM-VPI-LOAD-001",
-                "cannot load VPI module '" + module + "': " + error);
-            return std::nullopt;
-        }
-        libraries.push_back(std::move(library));
+    auto loaded = std::make_unique<ElaborationModules>();
+    if (!loaded->load(modules, diagnostics)) {
+        return nullptr;
     }
-    return std::move(host.tasks);
+    return loaded;
 }
 
 std::unique_ptr<VpiForeignService> attach_vpi_modules(

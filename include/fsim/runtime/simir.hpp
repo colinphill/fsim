@@ -2245,6 +2245,14 @@ public:
         = std::function<void(ProcessId, SignalId, SimulationTick)>;
     /// Observes an immediate, delta, or timed named-event trigger at delivery.
     using EventTriggerHook = std::function<void(SignalId, SimulationTick)>;
+    /// Observes a process's force or release of a signal slice when the
+    /// statement executes, before a VHDL update applies it (IEEE 1076-2019
+    /// 10.5.2.1, 21.3.2.3-4). The width is in bits from the offset.
+    using ForceStatementHook = std::function<void(
+        ProcessId, SignalId, std::size_t, std::size_t, bool)>;
+    /// Observes a signal becoming active: every transaction, with or without
+    /// an event (IEEE 1076-2019 14.7.3.1, 21.3.2.5).
+    using SignalTransactionHook = std::function<void(SignalId)>;
     /// Observes an actual write to a base container object after its value and
     /// any signal alias have been committed.
     using ContainerObjectChangeHook
@@ -2603,6 +2611,8 @@ public:
     void set_stored_signal_change_hook(StoredSignalChangeHook hook);
     void set_driver_change_hook(DriverChangeHook hook);
     void set_event_trigger_hook(EventTriggerHook hook);
+    void set_force_statement_hook(ForceStatementHook hook);
+    void set_signal_transaction_hook(SignalTransactionHook hook);
     void set_container_object_change_hook(ContainerObjectChangeHook hook);
     void set_container_element_change_hook(ContainerElementChangeHook hook);
 #include "fsim/runtime/simir_scalar_interpreter.hpp"

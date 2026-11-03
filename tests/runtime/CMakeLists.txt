@@ -1007,10 +1007,15 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
   else()
     set(FSIM_PLUGIN_TARGET "fsim_foreign_${FSIM_INTERFACE}_runtime_plugin")
   endif()
-  # An optional seventh argument is the exit status simulate must return.
+  # An optional seventh argument is the exit status simulate must return;
+  # a true eighth one loads the plug-in at elaboration too.
   set(FSIM_SIMULATE_STATUS 0)
-  if(ARGC GREATER 6)
+  if(ARGC GREATER 6 AND NOT "${ARGV6}" STREQUAL "")
     set(FSIM_SIMULATE_STATUS "${ARGV6}")
+  endif()
+  set(FSIM_ELABORATE_PLUGIN OFF)
+  if(ARGC GREATER 7)
+    set(FSIM_ELABORATE_PLUGIN "${ARGV7}")
   endif()
   # Several sources are separated by "|".
   string(REPLACE "|" "|${FSIM_FOREIGN_FIXTURES}/" FSIM_SOURCE_PATHS
@@ -1029,6 +1034,7 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
         "-DFSIM_EXPECTED=${FSIM_FOREIGN_FIXTURES}/${FSIM_EXPECTED}"
         "-DFSIM_SIMULATE_ARGS=${FSIM_SIMULATE_ARGS}"
         "-DFSIM_SIMULATE_STATUS=${FSIM_SIMULATE_STATUS}"
+        "-DFSIM_ELABORATE_PLUGIN=${FSIM_ELABORATE_PLUGIN}"
         "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/foreign/${FSIM_NAME}-${FSIM_ENGINE}"
         -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunForeignConformanceCase.cmake")
     set_tests_properties(
@@ -1062,3 +1068,45 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-error vpi foreign_vpi_error.sv foreign_vpi_error.expected ""
   fsim_foreign_vpi_error_plugin 1)
+# A system task registered only by a cbUnresolvedSystf callback
+# (IEEE 1800-2023 38.36.2), at elaboration and at simulation.
+add_library(fsim_foreign_vpi_unresolved_plugin SHARED
+  foreign_vpi_unresolved_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_unresolved_plugin)
+target_link_libraries(fsim_foreign_vpi_unresolved_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_unresolved_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-unresolved vpi foreign_vpi_unresolved.sv
+  foreign_vpi_unresolved.expected "" fsim_foreign_vpi_unresolved_plugin ""
+  ON)
+# Processes, statements and expressions (IEEE 1800-2023 37.43-37.79).
+add_library(fsim_foreign_vpi_statements_plugin SHARED
+  foreign_vpi_statements_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_statements_plugin)
+target_link_libraries(fsim_foreign_vpi_statements_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_statements_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-statements vpi foreign_vpi_statements.sv
+  foreign_vpi_statements.expected "" fsim_foreign_vpi_statements_plugin)
+# Assertions and the assertion API (IEEE 1800-2023 39).
+add_library(fsim_foreign_vpi_assertions_plugin SHARED
+  foreign_vpi_assertions_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_assertions_plugin)
+target_link_libraries(fsim_foreign_vpi_assertions_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_assertions_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-assertions vpi foreign_vpi_assertions.sv
+  foreign_vpi_assertions.expected "" fsim_foreign_vpi_assertions_plugin)
+# Processes and statements (IEEE 1076-2019 19.4.2, 19.11).
+add_library(fsim_foreign_vhpi_statements_plugin SHARED
+  foreign_vhpi_statements_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_statements_plugin)
+target_link_libraries(fsim_foreign_vhpi_statements_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_statements_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-statements vhpi foreign_vhpi_statements.vhd
+  foreign_vhpi_statements.expected "" fsim_foreign_vhpi_statements_plugin)

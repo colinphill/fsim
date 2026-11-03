@@ -3850,6 +3850,9 @@ void Interpreter::Impl::note_signal_transaction(
     const SignalChangeOrigin origin)
 {
     scheduler.note_signal_transaction(signal_id);
+    if (signal_transaction_hook) {
+        signal_transaction_hook(signal_id);
+    }
     // A port conversion of an active source is itself active in the same
     // cycle, even without an event (IEEE 1076-2008 14.7.3.3).
     if (!vhdl_conversion_dependents.empty()) {

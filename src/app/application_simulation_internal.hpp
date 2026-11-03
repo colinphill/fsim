@@ -11,6 +11,7 @@
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -23,6 +24,7 @@
 #include <optional>
 #include <set>
 #include <stdexcept>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -799,6 +801,13 @@ struct Simulation::Impl {
 
     std::uint64_t next_safe_point_observer { 1 };
 
+    std::map<std::uint64_t, ForceStatementHook> force_statement_observers;
+
+    std::map<std::uint64_t, SignalTransactionHook>
+        signal_transaction_observers;
+
+    std::uint64_t next_activity_observer { 1 };
+
     OutputHook output_hook;
 
     runtime::simir::Interpreter::OutputHook interpreter_output_hook;
@@ -870,6 +879,17 @@ struct Simulation::Impl {
     bool concurrent_assertion_vacuous_actions_enabled { true };
 
     bool concurrent_assertion_failure_actions_enabled { true };
+
+    // Per assertion, the vpi_control action settings that override the
+    // global ones above: pass, vacuous pass, fail (IEEE 1800-2023 39.5.2).
+    std::map<runtime::simir::ProcessId, std::array<std::optional<bool>, 3U>>
+        concurrent_assertion_action_overrides;
+
+    // Whether the action of an outcome ("pass", "vacuous", else fail) of a
+    // design process's assertion runs.
+    [[nodiscard]] bool concurrent_assertion_action_enabled(
+        runtime::simir::ProcessId design_process,
+        std::string_view outcome) const;
 
     ClassPropertyChangeHook class_property_change_hook;
 
