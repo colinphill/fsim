@@ -138,6 +138,45 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-02: VPI/VHPI data object model part 2, cocotb plan gate A-G2 (`8962d2ad`, sweeps `ag2p`, `ag2pa`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md`. The gate closes the second half of the A-G2 data object model. Inventory rows are in `docs/foreign-interface-conformance.md`.
+
+**What landed (`8962d2ad`):**
+- **VPI typespecs (37.25):**
+  - Elaboration records the typespec of each declaration that names a type, has several packed dimensions or is an array. The runtime state schema becomes 94.
+  - Built-in typespecs come from the value category. Typedef names and `vpiTypedefAlias`, `vpiElemTypespec`, ranges, members, enum constants and `vpiBaseTypespec` are reported.
+  - Partial: HIR binding folds dimensions over a named type into the use, so intermediate typedef names of such a chain are not kept.
+- **VPI instances (37.10, 37.11):**
+  - `vpiDefFile`, `vpiDefLineNo`, `vpiLibrary` and `vpiCell` are set at instance publication.
+  - New properties: `vpiTop`, `vpiArrayMember`, `vpiDefNetType`, `vpiUnconnDrive`, `vpiDefDelayMode` and `vpiProtected`.
+  - Instance arrays get `vpiRange`, `vpiLeftRange` and `vpiRightRange` from their elements' indexes.
+- **VPI parameters and generates (37.28, 37.85, 27.6):**
+  - `vpiLocalParam`.
+  - The frontend records generate blocks named by the implicit-name rule, which gives `vpiImplicitDecl` on gen scopes. It also records implicit nets (6.10).
+- **Fix:** `vpiNetType` returned the internal net-kind order instead of the 37.16 constants.
+- **VHPI (19, Figure 14):**
+  - The full `vhpiKindStrP` table, plus `vhpiFileNameP` and `vhpiLineNoP` on decls and regions.
+  - The file, subprogram, component, attribute and group declaration classes appear in `vhpiDecls`.
+- **Decided:** VHPI variable updates belong to the Advanced debug set, which fsim does not claim (17.3). Process variables need processStmt regions, so they move to A-G5.
+
+**Gate:**
+- ct4: 1109/1109 in all four variants.
+- Sweep `ag2p` (frozen `8962d2ad`, archive `ag3`): 0 losses against `ag2g`.
+- Sweep `ag2pa`: 0 losses against `ag2ga`, and `ivtest/pow_reg_signed` passes again.
+- Census: 0 losses.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+| Suite | ag2g passed / in scope | ag2p passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2638 / 2638 | 2638 / 2638 | 273 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
 ### 2026-11-02: VPI/VHPI data object model part 1, cocotb plan gate A-G2 (`d8c0eb03`, sweeps `ag2g`, `ag2ga`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md`. The gate closes the first half of the data object model. Inventory rows are in `docs/foreign-interface-conformance.md`.
