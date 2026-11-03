@@ -138,6 +138,55 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-03: VPI/VHPI cross-language visibility and callback reasons, cocotb plan gates A-G3 and A-G4 part 1 (`ba15706e`, sweeps `ag4g`, `ag4ga`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md`. Inventory rows are in `docs/foreign-interface-conformance.md`.
+
+**What landed (`ba15706e`):**
+- **A-G3 cross-language visibility:**
+  - In a design with SystemVerilog, each VHDL instance is a VPI module scope without objects, carrying its entity's name, file and library. Paths through VHDL instances resolve.
+  - The VHPI root falls back to the first root of any language, and SystemVerilog instances are regions.
+  - New test `fsim.foreign.mixed-model`.
+- **VPI region callbacks (38.36.2):**
+  - `cbNBASynch` runs first in the SystemVerilog NBA region (4.4.3.3).
+  - `cbAtEndOfSimTime` is Pre-Postponed (4.4.3.9).
+  - A NULL time or `vpiSuppressTime` on a simulation time reason is an error and creates no callback. ivtest `vpi_nextsimtime_cb3`/`cb4` rely on the opposite and are excluded (275 ivtest exclusions).
+- **VHPI cycle (14.7.5):**
+  - `vhpiCbStartOfProcesses` and `vhpiCbStartOfPostponed`. From StartOfPostponed to the end of the time step, an update is an error.
+  - `vhpiCbTimeOut`/`RepTimeOut` run after the cycle's signal updates.
+  - `vhpiCbEndOfTimeStep` runs after the postponed processes.
+  - A cycle whose updates wake no process ends at the update safe point.
+- **Error callbacks:**
+  - `cbError` runs on run-time errors, before end of simulation; there is a new `fsim.foreign.vpi-error` test.
+  - Also added: `cbPLIError`, `vhpiCbPLIError` and `vhpiCbQuiescense`.
+- **Signal callbacks:**
+  - `cbSignal` and `vhpiCbSigInterrupt` (SIGINT) are delivered at safe points through a shared signal trap.
+  - The run's SIGINT guard is installed before the foreign libraries load.
+- **Fixes found by ct4:**
+  - VPI instance profiles skip unitless and non-VHDL specializations; this was a SystemC crash.
+  - The `vhdl_logic9` alias test uses the full path through the VHDL scope.
+
+**Gate:**
+- ct4: 1113/1113 in all four variants.
+- Sweep `ag4g` (frozen `ba15706e`, archive `ag4`): 0 losses against `ag2p`, apart from the two excluded cases.
+- Sweep `ag4ga`: 0 losses against `ag2pa` apart from the same two. `ivtest/pow_reg_signed` timed out while a full build ran alongside (it runs close to the 60 s limit); a rerun on the quiet host passes in 38.4 s.
+- Census: 0 losses.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+| Suite | ag2p passed / in scope | ag4g passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2638 / 2638 | 2636 / 2636 | 275 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
+**Next:**
+- In the live tree: VHPI `vhpiCbForce`, `vhpiCbRelease` and `vhpiCbTransaction`, and `cbUnresolvedSystf` (at elaboration and at simulate).
+- The remaining A-G4 reasons have statement, process, thread, class or timing-check objects as their `obj`, so they move to A-G5 with those objects. The assertion API (39) moves there too, with the assertion objects.
+
 ### 2026-11-02: VPI/VHPI data object model part 2, cocotb plan gate A-G2 (`8962d2ad`, sweeps `ag2p`, `ag2pa`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md`. The gate closes the second half of the A-G2 data object model. Inventory rows are in `docs/foreign-interface-conformance.md`.
