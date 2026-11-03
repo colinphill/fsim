@@ -138,6 +138,54 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-03: Kernel-owned signals with a foreign library, cocotb plan A-G5 part 5, A-G7 and B2 (`707907c0`, `ba3f5e25`, `252525d5`, sweeps `ag7bg`, `ag7bga`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md`. Inventory rows are in `docs/foreign-interface-conformance.md`.
+
+**What landed:**
+- **A-G7 (`707907c0`):** a loaded VPI/VHPI library no longer changes the v4 kernel plan.
+  - Signals stay kernel-owned and compiled. The access plan drops foreign, observed and observe_all.
+  - No VPI value mirror: registry objects are live-bound and read the kernel slot or the scheduler store.
+  - A value-change callback, a durable value reference or a VHPI transaction watch turns its slot into a kernel output at run time. Only watched objects are notified.
+  - VPI writes go straight into the kernel slot.
+  - Measured (user+sys s, no library / idle / clock watch): original_throughput 1.22 / 1.52 / 1.80, codex_throughput 0.28 / 0.27 / 0.30, mixed_throughput (VHPI) 1.41 / 1.48 / 1.76. Owner targets: idle ≤ 1.25×, watch ≤ 1.5×.
+- **A-G5 part 5 (`707907c0`):**
+  - `simulate --foreign-probes` (`simulate.foreign_probes`) for cbStmt, cbDisable, vhpiCbStmt, Start/EndOfSubpCall and Resume/Suspend.
+  - VPI drivers/loads, clocking blocks, nettypes and task/function declarations.
+  - VHPI drivers, loads, basic signals, vhpiCbSensitivity, `vhpi_create` collections, `vhpi_protected_call` and process variables.
+- **Gate fixes (`ba3f5e25`):**
+  - The kernel time warp also stops while the host's current time slot has pending activity (IEEE 1800-2023 4.4, 38.35).
+  - A continuous assignment that wakes itself leaves its partition, so a zero-delay loop raises FSIM-RUN-DELTA-0001 (10.3.2, 4.4.2.2).
+  - New tests `fsim.foreign.vpi-scheduled` and `fsim.foreign.vpi-error-partition`.
+- **B2 (`252525d5`):**
+  - `compile --timescale UNIT/PRECISION` and the `compile.timescale` keys (object format 11).
+  - `elaborate --time-resolution`.
+  - `--generic` documented in `--help`.
+  - `vhpi_control(vhpiFinish)` ends the run as a finish (1076-2019 23.5).
+
+**First attempt (archive `ag7`, frozen `707907c0`):** one loss, `ivtest/vpi_br_gh235`. A zero-delay `vpi_put_value` made before time 0 ran after the kernel had already warped to later time steps, and the case printed x. The warp fix in `ba3f5e25` closes it. The side-agent review also found the self-waking partition gap, and that fix is in the same commit. The gate was then rerun as `ag7b` (frozen `252525d5`).
+
+**Gate:**
+- ct4: 1139/1139 in all four variants.
+- Sweep `ag7bg`: 0 losses against `ag5g`.
+- Sweep `ag7bga`: 0 losses against `ag5ga`.
+- Census: 0 losses in both modes.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+| Suite | ag5g passed / in scope | ag7bg passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2636 / 2636 | 2636 / 2636 | 275 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
+**Open after this gate:**
+- The idle and watch costs are above the owner targets on original_throughput.
+- With `--time-resolution 1fs`, `%t` prints in fs rather than the design precision (existing `elaborate.time_resolution` behaviour).
+
 ### 2026-11-03: VPI/VHPI statement models, statement callbacks and the assertion API, cocotb plan A-G4 part 2 and A-G5 parts 1–4 (`b1623cba`, sweeps `ag5g`, `ag5ga`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md`. Inventory rows are in `docs/foreign-interface-conformance.md`.
