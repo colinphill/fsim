@@ -1,16 +1,17 @@
 #c vhpirootinstk name=top case=top full=:top label= line=8 file=foreign_vhpi_statements.vhd seq=-1
 #c   vhpiprocessstmtk name=clock case=clock full=:top:clock label=clock line=18 file=foreign_vhpi_statements.vhd seq=0
 #c     process postponed=0 passive=0 foreign=0
+#c     lines begin=18 end=43
 #c     parent is region=1
 #c     sensitivities: :top:clk
 #c     decl vhpivardeclk :top:clock:count line=19
 #c     decl vhpiconstdeclk :top:clock:limit line=20
 #c     vhpiifstmtk name= case= full= label= line=22 file=foreign_vhpi_statements.vhd seq=1
 #c       branch kind=vhpibranchk line=22
-#c         cond=-
+#c         cond=vhpifunccallk "="
 #c         vhpivarassignstmtk name= case= full= label= line=23 file=foreign_vhpi_statements.vhd seq=1
 #c           lhs=vhpivardeclk :top:clock:count
-#c           rhs=-
+#c           rhs=vhpifunccallk "+"
 #c         vhpiseqsigassignstmtk name= case= full= label= line=24 file=foreign_vhpi_statements.vhd seq=1
 #c           assign guarded=0 transport=0 postponed=0
 #c           lhs=vhpisigdeclk :top:a
@@ -19,7 +20,7 @@
 #c             val=vhpivardeclk :top:clock:count
 #c             time=-
 #c       branch kind=vhpibranchk line=25
-#c         cond=-
+#c         cond=vhpifunccallk "="
 #c         vhpiseqsigassignstmtk name= case= full= label= line=26 file=foreign_vhpi_statements.vhd seq=1
 #c           assign guarded=0 transport=0 postponed=0
 #c           lhs=vhpisigdeclk :top:a
@@ -61,30 +62,30 @@
 #c           reject=-
 #c           waveform elem unaffected=0 line=33
 #c             val=vhpiintliteralk 3
-#c             time=-
+#c             time=vhpiphysliteralk 1 ns
 #c     vhpiforloopk name=_l0 case=_l0 full=:top:clock:_l0 label= line=35 file=foreign_vhpi_statements.vhd seq=1
 #c       param vhpiconstdeclk i
 #c       vhpiseqsigassignstmtk name= case= full= label= line=36 file=foreign_vhpi_statements.vhd seq=1
 #c         assign guarded=0 transport=0 postponed=0
-#c         lhs=-
+#c         lhs=vhpiindexednamek v(i)
 #c         reject=-
 #c         waveform elem unaffected=0 line=36
-#c           val=-
+#c           val=vhpienumliteralk '1'
 #c           time=-
 #c       vhpiifstmtk name= case= full= label= line=37 file=foreign_vhpi_statements.vhd seq=1
 #c         branch kind=vhpibranchk line=37
-#c           cond=-
+#c           cond=vhpifunccallk "="
 #c           vhpiexitstmtk name= case= full= label= line=37 file=foreign_vhpi_statements.vhd seq=1
 #c             loop label=_l0
 #c             cond=-
 #c     vhpiwhileloopk name=lp case=lp full=:top:clock:lp label=lp line=39 file=foreign_vhpi_statements.vhd seq=1
-#c       cond=-
+#c       cond=vhpifunccallk "<"
 #c       vhpivarassignstmtk name= case= full= label= line=40 file=foreign_vhpi_statements.vhd seq=1
 #c         lhs=vhpivardeclk :top:clock:count
-#c         rhs=-
+#c         rhs=vhpifunccallk "+"
 #c       vhpiifstmtk name= case= full= label= line=41 file=foreign_vhpi_statements.vhd seq=1
 #c         branch kind=vhpibranchk line=41
-#c           cond=-
+#c           cond=vhpifunccallk "="
 #c           vhpinextstmtk name= case= full= label= line=41 file=foreign_vhpi_statements.vhd seq=1
 #c             loop label=lp
 #c             cond=-
@@ -97,6 +98,7 @@
 #c       time=-
 #c   vhpiprocessstmtk name=_p1 case=_p1 full=:top:_p1 label= line=48 file=foreign_vhpi_statements.vhd seq=0
 #c     process postponed=0 passive=1 foreign=0
+#c     lines begin=48 end=51
 #c     parent is region=1
 #c     sensitivities:
 #c     vhpiwaitstmtk name= case= full= label= line=50 file=foreign_vhpi_statements.vhd seq=1
@@ -106,7 +108,7 @@
 #c   vhpicondsigassignstmtk name=_p2 case=_p2 full=:top:_p2 label= line=53 file=foreign_vhpi_statements.vhd seq=0
 #c     lhs=vhpisigdeclk :top:t
 #c     cond waveform line=53
-#c       cond=-
+#c       cond=vhpifunccallk "="
 #c       waveform elem unaffected=0 line=53
 #c         val=vhpiintliteralk 1
 #c         time=-
@@ -130,35 +132,36 @@
 #c         time=-
 #c   vhpiconcassertstmtk name=chk case=chk full=:top:chk label=chk line=57 file=foreign_vhpi_statements.vhd seq=0
 #c     assert passive=1
-#c     cond=-
-#c     report=-
+#c     cond=vhpifunccallk ">="
+#c     report=vhpistringliteralk negative
 #c     severity=-
 #c   vhpiprocessstmtk name=stimulus case=stimulus full=:top:stimulus label=stimulus line=60 file=foreign_vhpi_statements.vhd seq=0
 #c     process postponed=0 passive=0 foreign=0
+#c     lines begin=60 end=68
 #c     parent is region=1
 #c     sensitivities:
 #c     vhpiwaitstmtk name= case= full= label= line=62 file=foreign_vhpi_statements.vhd seq=1
 #c       signames:
 #c       cond=-
-#c       timeout=-
+#c       timeout=vhpiphysliteralk 5 ns
 #c     vhpiseqsigassignstmtk name= case= full= label= line=63 file=foreign_vhpi_statements.vhd seq=1
 #c       assign guarded=0 transport=0 postponed=0
 #c       lhs=vhpisigdeclk :top:clk
 #c       reject=-
 #c       waveform elem unaffected=0 line=63
-#c         val=-
+#c         val=vhpienumliteralk '1'
 #c         time=-
 #c     vhpiwaitstmtk name= case= full= label= line=64 file=foreign_vhpi_statements.vhd seq=1
 #c       signames: :top:clk
-#c       cond=-
-#c       timeout=-
+#c       cond=vhpifunccallk "="
+#c       timeout=vhpiphysliteralk 10 ns
 #c     vhpiseqassertstmtk name= case= full= label= line=65 file=foreign_vhpi_statements.vhd seq=1
 #c       assert passive=-1
-#c       cond=-
-#c       report=-
+#c       cond=vhpifunccallk ">="
+#c       report=vhpistringliteralk negative
 #c       severity=-
 #c     vhpireportstmtk name= case= full= label= line=66 file=foreign_vhpi_statements.vhd seq=1
-#c       report=-
+#c       report=vhpistringliteralk done
 #c       severity=-
 #c     vhpiwaitstmtk name= case= full= label= line=67 file=foreign_vhpi_statements.vhd seq=1
 #c       signames:
@@ -175,14 +178,212 @@
 #c   vhpiforgeneratek name=gen(0) case=gen(0) full=:top:gen(0) label=gen line=76 file=foreign_vhpi_statements.vhd seq=0
 #c     vhpiprocessstmtk name=p case=p full=:top:gen(0):p label=p line=77 file=foreign_vhpi_statements.vhd seq=0
 #c       process postponed=0 passive=1 foreign=0
+#c       lines begin=77 end=80
 #c       parent is region=1
 #c       sensitivities: :top:clk
 #c       vhpinullstmtk name= case= full= label= line=79 file=foreign_vhpi_statements.vhd seq=1
 #c   vhpiforgeneratek name=gen(1) case=gen(1) full=:top:gen(1) label=gen line=76 file=foreign_vhpi_statements.vhd seq=0
 #c     vhpiprocessstmtk name=p case=p full=:top:gen(1):p label=p line=77 file=foreign_vhpi_statements.vhd seq=0
 #c       process postponed=0 passive=1 foreign=0
+#c       lines begin=77 end=80
 #c       parent is region=1
 #c       sensitivities: :top:clk
 #c       vhpinullstmtk name= case= full= label= line=79 file=foreign_vhpi_statements.vhd seq=1
+#c   vhpiblockstmtk name=ext case=ext full=:top:ext label=ext line=84 file=foreign_vhpi_statements.vhd seq=0
+#c     vhpiprocessstmtk name=drive case=drive full=:top:ext:drive label=drive line=109 file=foreign_vhpi_statements.vhd seq=0
+#c       process postponed=0 passive=0 foreign=0
+#c       lines begin=109 end=116
+#c       parent is region=1
+#c       sensitivities:
+#c       decl vhpivardeclk :top:ext:drive:r line=110
+#c       vhpiseqproccallstmtk name=poke case=poke full= label= line=112 file=foreign_vhpi_statements.vhd seq=1
+#c         call params=2
+#c           assoc pos=0 named=0 open=0
+#c             actual=vhpisigdeclk :top:ext:q
+#c             formal=set
+#c           assoc pos=1 named=0 open=0
+#c             actual=vhpiintliteralk 3 intval=3
+#c             formal=set
+#c       vhpivarassignstmtk name= case= full= label= line=113 file=foreign_vhpi_statements.vhd seq=1
+#c         lhs=vhpivardeclk :top:ext:drive:r
+#c         rhs=vhpifunccallk "+" operator=1 params=2
+#c           assoc pos=0 named=0 open=0
+#c             actual=vhpifunccallk twice operator=0 params=1
+#c               assoc pos=0 named=0 open=0
+#c                 actual=vhpivardeclk :top:ext:drive:r
+#c                 formal=set
+#c             formal=-
+#c           assoc pos=1 named=0 open=0
+#c             actual=vhpiintliteralk 1 intval=1
+#c             formal=-
+#c       vhpiseqsigassignstmtk name= case= full= label= line=114 file=foreign_vhpi_statements.vhd seq=1
+#c         assign guarded=0 transport=0 postponed=0
+#c         lhs=vhpisigdeclk :top:ext:bits
+#c         reject=-
+#c         waveform elem unaffected=0 line=114
+#c           val=vhpiaggregatek 
+#c             elem assoc named=1
+#c               choices: vhpiintliteralk 1
+#c               expr=vhpienumliteralk '1'
+#c             elem assoc named=1
+#c               choices: vhpiintliteralk 0
+#c               expr=vhpienumliteralk '0'
+#c           time=-
+#c       vhpiwaitstmtk name= case= full= label= line=115 file=foreign_vhpi_statements.vhd seq=1
+#c         signames:
+#c         cond=-
+#c         timeout=-
+#c     vhpisimplesigassignstmtk name=_p0 case=_p0 full=:top:ext:_p0 label= line=118 file=foreign_vhpi_statements.vhd seq=0
+#c       assign guarded=0 transport=0 postponed=0
+#c       lhs=vhpisigdeclk :top:ext:q2
+#c       reject=-
+#c       waveform elem unaffected=0 line=118
+#c         val=vhpiintliteralk 4 intval=4
+#c         time=-
+#c       eq process=vhpiprocessstmtk postponed=0 passive=0 foreign=0 lines=118/118
+#c     vhpiconcproccallstmtk name=pc case=pc full=:top:ext:pc label=pc line=120 file=foreign_vhpi_statements.vhd seq=0
+#c       call params=2
+#c         assoc pos=0 named=0 open=0
+#c           actual=vhpisigdeclk :top:ext:q3
+#c           formal=set
+#c         assoc pos=1 named=0 open=0
+#c           actual=vhpiintliteralk 5 intval=5
+#c           formal=set
+#c       eq process=vhpiprocessstmtk postponed=0 passive=0 foreign=0 lines=120/120
+#c   vhpiblockstmtk name=sub case=sub full=:top:sub label=sub line=125 file=foreign_vhpi_statements.vhd seq=0
 #c by name clock=vhpiprocessstmtk
 #c by name blk._p0=vhpisimplesigassignstmtk
+#c protected var kind=vhpivardeclk shared=1 protected=1
+#c protected function var=ctr data=1
+#c protected call result=41 count=1 error=0
+#c nested call result=1 error=1
+#c outer call result=7 count=1 error=0
+#c protected function var=ctr data=2
+#c call after nested result=42 count=2 error=0
+#c signal result=1 count=2 error=1
+#c collection kind=vhpianycollectionk first=2 copy=3 same=1 grown=1
+#c members: :top:a :top:b :top:s
+#c driver collection of a signal: handle=null error=1
+#c driver collection of an any collection: handle=null error=1
+#c handle1 not a collection: handle=null error=1
+#c no member: handle=null error=1
+#c process: handle=null error=1
+#c process message not implemented=1
+#c driver: handle=null error=1
+#c subprogram add1 vhpifuncdeclk params=1 pure=1 return=integer
+#c   param vhpiconstparamdeclk n type=integer
+#c   body vhpisubpbodyk lines=128/133 foreign=0
+#c   decl vhpivardeclk t
+#c   vhpivarassignstmtk line=131
+#c     lhs=vhpivardeclk :top:sub:add1:t
+#c     rhs=vhpifunccallk "+" builtin=1 static=1003 params=2
+#c       assoc pos=0 formal=- -
+#c         actual=vhpivardeclk :top:sub:add1:t
+#c       assoc pos=1 formal=- -
+#c         actual=vhpiintliteralk 1
+#c   vhpireturnstmtk line=132
+#c subprogram note vhpiprocdeclk params=3
+#c   param vhpiconstparamdeclk d mode=in type=integer
+#c   param vhpisigparamdeclk s mode=out type=integer
+#c   param vhpivarparamdeclk v mode=inout type=integer
+#c   body vhpisubpbodyk lines=134/145 foreign=0
+#c   decl vhpivardeclk w
+#c   vhpiifstmtk line=138
+#c     branch line=138
+#c       cond=vhpifunccallk ">" builtin=1 static=1003 params=2
+#c         assoc pos=0 formal=- -
+#c           actual=vhpiconstparamdeclk :top:sub:note:d
+#c         assoc pos=1 formal=- -
+#c           actual=vhpiintliteralk 100
+#c       vhpivarassignstmtk line=139
+#c         lhs=vhpivardeclk :top:sub:note:w
+#c         rhs=vhpiintliteralk 1
+#c     branch line=-1
+#c       cond=-
+#c       vhpiifstmtk line=140
+#c         branch line=140
+#c           cond=vhpifunccallk ">" builtin=1 static=1003 params=2
+#c             assoc pos=0 formal=- -
+#c               actual=vhpiconstparamdeclk :top:sub:note:d
+#c             assoc pos=1 formal=- -
+#c               actual=vhpiintliteralk 50
+#c           vhpivarassignstmtk line=141
+#c             lhs=vhpivardeclk :top:sub:note:w
+#c             rhs=vhpiintliteralk 2
+#c   vhpiseqsigassignstmtk line=144
+#c subprogram drive vhpiprocdeclk params=2
+#c   param vhpisigparamdeclk s mode=out type=integer
+#c   param vhpiconstparamdeclk d mode=in type=integer
+#c   body vhpisubpbodyk lines=146/149 foreign=0
+#c   vhpiseqsigassignstmtk line=148
+#c component cmp
+#c   generic vhpigenericdeclk g
+#c   port vhpiportdeclk pin mode=in
+#c   port vhpiportdeclk pout mode=out
+#c process expr
+#c   vhpivarassignstmtk line=161
+#c     lhs=vhpivardeclk :top:sub:expr:r
+#c     rhs=vhpifunccallk add1 builtin=0 static=1003 type=integer params=1
+#c       assoc pos=0 formal=vhpiconstparamdeclk n
+#c         actual=vhpivardeclk :top:sub:expr:k
+#c   vhpiseqproccallstmtk line=162
+#c     builtin=0 params=3
+#c     assoc pos=0 formal=vhpiconstparamdeclk d
+#c       actual=vhpivardeclk :top:sub:expr:k
+#c     assoc pos=1 formal=vhpisigparamdeclk s
+#c       actual=vhpisigdeclk :top:sub:sig
+#c     assoc pos=2 formal=vhpivarparamdeclk v
+#c       actual=vhpivardeclk :top:sub:expr:r
+#c   vhpivarassignstmtk line=163
+#c     lhs=vhpivardeclk :top:sub:expr:r
+#c     rhs=vhpitypeconvk integer type=integer static=1003
+#c       expr=vhpitypeconvk real type=real static=1003
+#c         expr=vhpivardeclk :top:sub:expr:k
+#c   vhpivarassignstmtk line=164
+#c     lhs=vhpivardeclk :top:sub:expr:r
+#c     rhs=vhpiqualifiedexprk integer type=integer static=1003
+#c       expr=vhpivardeclk :top:sub:expr:k
+#c   vhpivarassignstmtk line=165
+#c     lhs=vhpivardeclk :top:sub:expr:u
+#c     rhs=vhpiaggregatek  static=1001
+#c   vhpiifstmtk line=166
+#c     branch line=166
+#c       cond=vhpifunccallk "and" builtin=1 static=1003 params=2
+#c         assoc pos=0 formal=- -
+#c           actual=vhpisimpattrnamek clk'event
+#c             prefix=:top:clk
+#c         assoc pos=1 formal=- -
+#c           actual=vhpifunccallk "=" builtin=1 static=1003 params=2
+#c             assoc pos=0 formal=- -
+#c               actual=vhpisimpattrnamek clk'last_value
+#c                 prefix=:top:clk
+#c             assoc pos=1 formal=- -
+#c               actual=vhpienumliteralk '0'
+#c       vhpivarassignstmtk line=167
+#c         lhs=vhpiindexednamek v(k)
+#c           prefix=:top:sub:expr:v
+#c           index=vhpivardeclk :top:sub:expr:k
+#c         rhs=vhpienumliteralk '1'
+#c     branch line=168
+#c       cond=vhpifunccallk ">" builtin=1 static=1003 params=2
+#c         assoc pos=0 formal=- -
+#c           actual=vhpivardeclk :top:sub:expr:r
+#c         assoc pos=1 formal=- -
+#c           actual=vhpiintliteralk 1
+#c       vhpivarassignstmtk line=169
+#c         lhs=vhpivardeclk :top:sub:expr:u
+#c         rhs=vhpislicenamek v(k downto 1)
+#c           prefix=:top:sub:expr:v
+#c   vhpireportstmtk line=171
+#c     report=vhpiparamattrnamek integer'image
+#c       prefix=-
+#c       param=vhpivardeclk :top:sub:expr:k
+#c   vhpiwaitstmtk line=172
+#c concurrent call vhpiconcproccallstmtk params=2
+#c   assoc pos=0 formal=vhpisigparamdeclk s
+#c     actual=vhpisigdeclk :top:sub:sig2
+#c   assoc pos=1 formal=vhpiconstparamdeclk d
+#c     actual=vhpiintliteralk 7
+#c variable r read=1 value=2 put=0 now=9 force=1
+#c variable count read=1 value=3 put=0
+#c variable count after the process ran: 11

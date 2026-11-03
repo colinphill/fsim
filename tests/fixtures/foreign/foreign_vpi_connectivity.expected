@@ -1,0 +1,77 @@
+#c driver top.d: vpiAssignment line=34
+#c load top.d: vpiContAssign line=17
+#c load top.d: vpiAssignment line=35
+#c use top.d: vpiContAssign line=17
+#c use top.d: vpiAssignment line=34
+#c use top.d: vpiAssignment line=35
+#c driver top.q: vpiAssignment line=38
+#c driver top.q: vpiAssignment line=40
+#c load top.q: vpiAssignment line=40
+#c use top.q: vpiAssignment line=38
+#c use top.q: vpiAssignment line=40
+#c driver top.mem: vpiAssignment line=35
+#c driver top.mem: vpiAssignment line=37
+#c load top.mem: vpiAssignment line=37
+#c load top.mem: vpiAssignment line=38
+#c use top.mem: vpiAssignment line=35
+#c use top.mem: vpiAssignment line=37
+#c use top.mem: vpiAssignment line=38
+#c driver top.idx: vpiAssignment line=36
+#c load top.idx: vpiAssignment line=37
+#c use top.idx: vpiAssignment line=36
+#c use top.idx: vpiAssignment line=37
+#c use top.idx: vpiTaskCall line=41
+#c driver top.w: vpiContAssign line=17
+#c load top.w: none
+#c use top.w: vpiContAssign line=17
+#c driver top.s_in: none
+#c load top.s_in: vpiPort a
+#c use top.s_in: vpiPort a
+#c driver top.s_out: vpiPort y
+#c load top.s_out: none
+#c use top.s_out: vpiPort y
+#c driver top.u.a: vpiPort a
+#c load top.u.a: vpiContAssign line=5
+#c use top.u.a: vpiContAssign line=5
+#c use top.u.a: vpiPort a
+#c driver top.u.y: vpiContAssign line=5
+#c load top.u.y: vpiPort y
+#c use top.u.y: vpiContAssign line=5
+#c use top.u.y: vpiPort y
+#c driver top.gv: none
+#c load top.gv: none
+#c use top.gv: none
+#c line 35 lhs: vpiVarSelect parent=top.mem const=1
+#c line 35 lhs:   index 1
+#c line 37 lhs: vpiVarSelect parent=top.mem const=0
+#c line 37 lhs:   index top.idx
+#c line 37 rhs: vpiVarSelect parent=top.mem const=1
+#c line 37 rhs:   index 1
+#c line 38 rhs: vpiVarSelect parent=top.mem const=1
+#c line 38 rhs:   index 2
+#c line 39: vpiFor localvardecls=1
+#c line 39: loop variable vpiRefObj parent=top
+#c line 41: vpiTaskCall task=top.bump arguments=2
+#c line 42: vpiSysTaskCall userdefn=0
+#c line 42: vpiFuncCall function=top.add functype=1
+#c top.add: vpiFunction method=0 virtual=0 visibility=1 access=1
+#c top.add: functype=1 size=32 signed=1
+#c top.add:   vpiIODecl x dir=1 size=32 signed=1
+#c top.add:   vpiIODecl y dir=1 size=32 signed=1
+#c top.add:   return vpiIntVar add size=32
+#c top.wide: vpiFunction method=0 virtual=0 visibility=1 access=1
+#c top.wide: functype=4 size=8 signed=0
+#c top.wide:   vpiIODecl n dir=1 size=4 signed=0
+#c top.wide:   return vpiReg wide size=8
+#c top.bump: vpiTask method=0 virtual=0 visibility=1 access=1
+#c top.bump:   vpiIODecl n dir=1 size=32 signed=1
+#c top.bump:   vpiIODecl m dir=2 size=32 signed=1
+#c top.bump:   no return
+#c top.w: vpiContAssign netdeclassign=0
+#c top.w:   vpiContAssignBit offset=0 size=1 parent=vpiContAssign
+#c top.w:   vpiContAssignBit offset=1 size=1 parent=vpiContAssign
+#c top.w:   vpiContAssignBit offset=2 size=1 parent=vpiContAssign
+#c top.w:   vpiContAssignBit offset=3 size=1 parent=vpiContAssign
+#c spy.nd: no driver
+#c sysfunc $clog2 functype=1
+#c sysfunc $time functype=3 value=0

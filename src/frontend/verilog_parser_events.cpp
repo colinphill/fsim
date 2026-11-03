@@ -191,6 +191,8 @@ void VerilogParser::parse_default_clocking(
       return;
     }
     auto& block = unit.systemverilog_clocking_blocks.back();
+    // The unnamed form reuses the global parse path only to omit the name.
+    block.global = false;
     if (unnamed) {
       block.name = "$default_clock";
     }
@@ -291,6 +293,7 @@ void VerilogParser::parse_clocking_block(
   }
   SystemVerilogClockingBlock block;
   block.name = name.text;
+  block.global = global;
   expect(
       TokenKind::At,
       "'@' before a clocking event",

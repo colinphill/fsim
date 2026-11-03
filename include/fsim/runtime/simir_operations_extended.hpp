@@ -438,6 +438,10 @@ enum class DebugPointKind : std::uint8_t {
     // process may name; `scope` holds its hierarchical name.
     block_entry,
     block_exit,
+    // A VHDL subprogram call's return, after the body completes and before
+    // its result is used or its parameters are copied back (IEEE 1076-2019
+    // 21.3.4.6).
+    call_return,
 };
 
 struct DebugPoint {

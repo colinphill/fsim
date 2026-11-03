@@ -2871,12 +2871,18 @@ void Interpreter::Impl::set_driver(
         }
     }
     if (slot == value) {
+        if (driver_transaction_hook) {
+            driver_transaction_hook(process, signal_id);
+        }
         return;
     }
     slot = std::move(value);
     if (driver_change_hook) {
         driver_change_hook(process, signal_id, scheduler.now());
         publish_aggregate_leaf_driver_change(process, signal_id);
+    }
+    if (driver_transaction_hook) {
+        driver_transaction_hook(process, signal_id);
     }
     wake_switch_source_readers(signal_id, process);
 }
@@ -2933,6 +2939,9 @@ void Interpreter::Impl::commit_driver(
     if (get_signal(signal_id).resolution
         == ResolutionKind::none) {
         commit(signal_id, std::move(value), change_origin);
+        if (driver_transaction_hook) {
+            driver_transaction_hook(process, signal_id);
+        }
         return;
     }
     set_driver(process, signal_id, std::move(value));
@@ -3273,6 +3282,9 @@ void Interpreter::Impl::commit_driver_slice(
         == ResolutionKind::none) {
         commit_slice(
             signal_id, std::move(value), offset, change_origin);
+        if (driver_transaction_hook) {
+            driver_transaction_hook(process, signal_id);
+        }
         return;
     }
     if (offset > get_signal(signal_id).initial_value.width()

@@ -57,6 +57,9 @@ fsim_safe_point_kind_t convert_safe_point_kind(
       return FSIM_SAFE_POINT_PROCESS_ENTRY;
     case Kind::process_suspend:
       return FSIM_SAFE_POINT_PROCESS_SUSPEND;
+    // Not delivered to the API (Simulation::install_execution_point_hooks).
+    case Kind::call_return:
+      return FSIM_SAFE_POINT_CALL;
   }
   return FSIM_SAFE_POINT_SCHEDULER;
 }

@@ -577,6 +577,9 @@ puts "control-ok"
             input,
             output,
             error);
+        if (result != 0) {
+            std::cerr << output.str() << error.str();
+        }
         assert(result == 0);
         assert(output.str().find("control-ok") != std::string::npos);
         assert(error.str().empty());

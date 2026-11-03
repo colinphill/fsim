@@ -521,6 +521,9 @@ struct Statement {
     bool force_driving_value { };
     bool postponed { };
     bool conditional_assignment { };
+    // The if statement of an `elsif` branch, nested in the else part of the
+    // statement it continues; an `else if` does not have it.
+    bool elsif_branch { };
     bool selected_assignment { };
     bool matching_case { };
     bool guarded_assignment { };

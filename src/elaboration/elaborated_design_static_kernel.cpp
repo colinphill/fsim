@@ -233,8 +233,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // SimIR operation, like a foreign library (S19). Every signal stays a
     // host signal, and each SystemC process runs in its process executor.
     const bool systemc = !systemc_processes_.empty() || !systemc_objects_.empty();
-    auto access = requested_access;
-    access.foreign = access.foreign || systemc;
+    const auto& access = requested_access;
+    // The debugger examines, deposits and forces any signal and stops any
+    // process at any statement: every signal stays a host signal, as for
+    // SystemC. Foreign libraries and traces need no plan of their own: they
+    // observe and write kernel-owned signals at run time (S19).
+    const bool host_all = access.debug || systemc;
     // The access plan replaces the whole-design coverage, specify and
     // VCD-control gates (docs/engine-v4-semantics.md S19, S21);
     // FSIM_STATIC_KERNEL_ACCESS_PLAN=0 restores them.
@@ -272,12 +276,10 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                   << '\n';
         stage_begin = now;
     };
-    // Access plan: clients outside the SimIR processes that reach any
-    // signal. Their signals stay host signals, which members write through
-    // the host commit path, so the clients see the reference values,
-    // callbacks and delta timing. A VCD control operation raises
-    // `observe_all` below.
-    bool observe_all = access.observe_all;
+    // Every signal stays a host signal, which members write through the
+    // host commit path, for a VCD control operation in the design or a VHDL
+    // opaque process (raised below).
+    bool observe_all = false;
     // Census (FSIM_PROFILE_PHASES): the first reason each process stays on
     // the host. Opaque accesses come first: they refuse the whole design.
     // That refusal is then deferred until the processes are classified.
@@ -440,21 +442,16 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                            != ProcessSchedulingDomain::systemverilog;
                });
         // A VHDL opaque process (a VHPIDIRECT foreign subprogram call, say)
-        // is harmless when every signal is a host object anyway: a foreign
-        // library or an observer is attached (S19, S21). Nothing is
+        // keeps every signal a host object (S19, S21). Nothing is
         // kernel-owned, so nothing needs publishing and no host-computed
         // effective value replaces a kernel slot; the process is hosted like
         // any other non-member (S25a).
-        // A trace selection widens to every signal for such a process.
-        const bool all_signals_host
-            = (access.foreign || observe_all || !access.observed.empty())
-            && (publish_all_switch == nullptr
-                || std::string_view { publish_all_switch } != "0");
+        const bool all_signals_host = publish_all_switch == nullptr
+            || std::string_view { publish_all_switch } != "0";
         if (publish_all_allowed) {
             publish_all = true;
         } else if (all_signals_host) {
-            // Accepted: no refusal, no publish-all mode. A trace selection
-            // then observes every signal.
+            // Accepted: no refusal, no publish-all mode.
             observe_all = true;
         } else {
             // Fail closed: an opaque access could read kernel-owned state.
@@ -1181,15 +1178,15 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             return false;
         });
     // A signal the kernel never mirrors as a sole writer's update
-    // (sole_writer_inputs below): the design forces, a foreign library is
-    // attached, its resolution is not a single driver's value, or its
-    // drivers are several processes or have a drive strength. Its kernel
+    // (sole_writer_inputs below): the design forces, every signal is a host
+    // signal (host_all), its resolution is not a single driver's value, or
+    // its drivers are several processes or have a drive strength. Its kernel
     // readers wake when the host commits it, as host readers do.
     const auto never_sole_writer = [&](const SignalId signal) {
         if (signal >= signal_count) {
             return false;
         }
-        if (forces || access.foreign) {
+        if (forces || host_all) {
             return true;
         }
         const auto& info = signals_[signal];
@@ -2406,9 +2403,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             proxy_signal[family.proxy] = 1U;
         }
     }
-    // Every signal and container is a host object for a foreign library
-    // (VPI/VHPI/DPI) or a trace/VCD observer.
-    const bool host_signals = access.foreign || observe_all;
+    // Every signal and container is a host object for the debugger, SystemC,
+    // a VCD control operation or a VHDL opaque process.
+    const bool host_signals = host_all || observe_all;
     std::vector<std::uint8_t> container_shape_ok(object_count, 0U);
     for (std::size_t object = 0U; object < object_count; ++object) {
         const auto& container = container_objects_[object];
@@ -2538,13 +2535,6 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
                             || views[writer.process].drive_strength()
                                 != DriveStrength { });
                 })) {
-            host_touched[signal] = 1U;
-        }
-    }
-    // A file trace's fixed selection: its signals are host signals, which
-    // the trace observes through the host commit path (plan §3.6).
-    for (const auto signal : access.observed) {
-        if (signal < signal_count) {
             host_touched[signal] = 1U;
         }
     }
@@ -3196,8 +3186,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
             }
         }
         // An actual no process drives keeps its default value for the whole
-        // run (IEEE 1076-2019 14.7.3.1): unless a force or a foreign library
-        // changes it, it is a constant the kernel owns, and a wiring or
+        // run (IEEE 1076-2019 14.7.3.1): unless a force changes it, it is a
+        // constant the kernel owns (a foreign library's deposit is imported
+        // into its slot), and a wiring or
         // conversion of it converts that value once (14.7.5.2).
         if (!forces && !host_signals) {
             const auto own_undriven = [&](const SignalId source) {
@@ -3888,15 +3879,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // and every signal a client outside the processes may observe. Liveness
     // flows from a live process to what it reads and from a live signal or
     // container to its writers. Members on a cycle of activations stay live:
-    // such a cycle need not settle (IEEE 1800-2023 4.7). Any client that
-    // reads arbitrary state as it changes (foreign library, trace, coverage,
-    // debugger, publish-all) turns the removal off.
+    // such a cycle need not settle (IEEE 1800-2023 4.7). Coverage, the
+    // debugger and publish-all turn the removal off; a foreign library or a
+    // trace watching a dead signal revives its writers (StaticKernel::watch).
     std::vector<std::uint8_t> lazy(process_count, 0U);
     {
         const char* dead_text = std::getenv("FSIM_STATIC_KERNEL_DEAD_LOGIC");
         bool enabled = (dead_text == nullptr || std::string_view { dead_text } != "0")
-            && !access.foreign && !observe_all && access.observed.empty()
-            && !access.coverage && !access.debug
+            && !host_all && !observe_all && !access.coverage
             && !publish_all && graph.access_inventory_complete()
             && graph_processes.size() == process_count;
         for (std::size_t index = 0U; enabled && index < process_count; ++index) {
@@ -4234,8 +4224,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     // suspends only on a positive constant delay (a clock generator): the
     // kernel runs it before the time step's first round. The kernel confirms
     // each member's purity on its compiled code and keeps the subset closed
-    // under the reader rule (StaticKernel::plan_delta_collapse). Clients
-    // that observe arbitrary signals turn it off.
+    // under the reader rule (StaticKernel::plan_delta_collapse). Coverage
+    // and the debugger turn it off; a watch or a foreign write ends it at
+    // run time (StaticKernel::open_boundary).
     std::vector<std::uint8_t> collapse(process_count, 0U);
     // First-delta members whose assignments are all zero-delay, and
     // delay-only threads: what they write changes at most once per time
@@ -4250,8 +4241,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         const char* collapse_text = std::getenv("FSIM_STATIC_KERNEL_DELTA_COLLAPSE");
         bool enabled = vhdl_mode
             && (collapse_text == nullptr || std::string_view { collapse_text } != "0")
-            && !access.foreign && !observe_all && access.observed.empty()
-            && !access.coverage && !access.debug
+            && !host_all && !observe_all && !access.coverage
             && !publish_all && graph.access_inventory_complete()
             && graph_processes.size() == process_count;
         // An operation whose accesses are opaque could write anything.
@@ -5116,12 +5106,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
     }
     for (SignalId signal = 0U; signal < signal_count; ++signal) {
         const auto& node = graph_signals[signal];
-        // A foreign library may deposit into a signal no process writes
-        // between kernel rounds.
+        // A foreign library's deposit into such a signal makes it a written
+        // input at run time (StaticKernel::note_external_write).
         // A force writes the signal as well (IEEE 1800-2023 10.6.2): a
         // hosted process that forces an input changes it inside the
         // activation, where only the written inputs are rescanned.
-        if (!forces && !access.foreign && owned[signal] == 0U
+        if (!forces && !host_all && owned[signal] == 0U
             && virtual_owned[signal] == 0U
             && node.writers.empty() && alias_written[signal] == 0U
             && std::ranges::any_of(node.readers, [&](const auto& reader) {
@@ -5133,13 +5123,14 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel(
         // after it (IEEE 1800-2023 4.7, 10.3.2, 10.4.1). A host signal with
         // one driving member process takes that driver's value, so the
         // kernel can mirror its staged Active updates at once.
-        // A foreign library may deposit or release a signal, and a module
-        // path delays the host's commit of its destination, so the host
-        // does not apply a member's update unchanged and at once. A mirrored
-        // update would wake a member whose history query (history_read) does
-        // not see it yet. Nor would it change the aliased host object
-        // (container_aliased).
-        if (!forces && !access.foreign && path_destination[signal] == 0U
+        // A module path delays the host's commit of its destination, so the
+        // host does not apply a member's update unchanged and at once (nor
+        // does it under a foreign library's force or release, which ends the
+        // mirroring at run time: StaticKernel::note_external_write). A
+        // mirrored update would wake a member whose history query
+        // (history_read) does not see it yet. Nor would it change the aliased
+        // host object (container_aliased).
+        if (!forces && !host_all && path_destination[signal] == 0U
             && container_aliased[signal] == 0U
             && path_source[signal] == 0U && history_read[signal] == 0U
             && owned[signal] == 0U && virtual_owned[signal] == 0U

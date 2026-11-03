@@ -44,6 +44,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -145,6 +146,42 @@ struct SystemVerilogVpiLiveMemory {
     std::vector<fsim_vpi_handle_v1> words;
 };
 
+// Objects created on first access beneath their parent (a lookup below it
+// or an iteration of its children), not when the design is published; the
+// registry counts them as live children of the parent meanwhile. They are
+// the words of a fixed memory without element signals, the anonymous
+// processes of a scope, and the drivers of an object.
+struct SystemVerilogVpiDeferredMemory {
+    runtime::simir::ContainerObjectId container { };
+    std::string path;
+    runtime::simir::ContainerType type;
+    runtime::SystemVerilogVpiTypeInfo word_type;
+    bool net_array { };
+    runtime::SystemVerilogScalarKind scalar_kind { };
+    runtime::SystemVerilogVpiValueCategory category { };
+};
+
+struct SystemVerilogVpiDeferredProcess {
+    // Index into the design's process occurrences.
+    std::uint32_t process { };
+    std::string name;
+    std::string path;
+};
+
+struct SystemVerilogVpiDeferredChildren {
+    std::optional<SystemVerilogVpiDeferredMemory> memory;
+    std::vector<SystemVerilogVpiDeferredProcess> processes;
+    // Indices into the design's drivers.
+    std::vector<std::uint32_t> drivers;
+};
+
+struct SystemVerilogVpiMaterializedChildren {
+    std::vector<std::pair<fsim_vpi_handle_v1, std::size_t>> words;
+    std::vector<std::pair<runtime::simir::SignalId,
+        SystemVerilogVpiDriverBinding>>
+        drivers;
+};
+
 struct SystemVerilogVpiPublishedDesign {
     std::unique_ptr<runtime::SystemVerilogVpiObjectRegistry> registry;
     std::map<runtime::simir::SignalId, std::vector<fsim_vpi_handle_v1>>
@@ -175,6 +212,8 @@ struct SystemVerilogVpiPublishedDesign {
         container_categories;
     std::map<runtime::simir::ContainerObjectId, SystemVerilogVpiLiveMemory>
         live_memories;
+    std::unordered_map<fsim_vpi_handle_v1, SystemVerilogVpiDeferredChildren>
+        deferred;
     std::vector<runtime::SystemVerilogVpiPort> ports;
 };
 
@@ -183,6 +222,17 @@ struct SystemVerilogVpiPublishedDesign {
 [[nodiscard]] fsim_vpi_handle_v1 create_systemverilog_vpi_live_word(
     runtime::SystemVerilogVpiObjectRegistry& registry,
     const SystemVerilogVpiLiveMemory& memory, std::size_t ordinal);
+
+// Create the deferred children of `parent` with their current values: the
+// words first, then the processes, then the drivers, the order the design
+// publication would have created them in.
+[[nodiscard]] SystemVerilogVpiMaterializedChildren
+materialize_systemverilog_vpi_children(
+    runtime::SystemVerilogVpiObjectRegistry& registry,
+    const BuiltProject& project,
+    const runtime::simir::Interpreter& interpreter,
+    fsim_vpi_handle_v1 parent,
+    const SystemVerilogVpiDeferredChildren& deferred);
 
 // The stored VPI value of one element of a container value: a string, or
 // packed bits under the container's scalar profile.
@@ -1188,21 +1238,16 @@ enum class SimulationOutputSink {
 /// engine. The kernel then runs whenever cone fusion is on.
 [[nodiscard]] bool static_kernel_requested(SimulationEngine engine) noexcept;
 
-/// The static-kernel access plan of a simulation client that cone fusion
-/// does not serve (docs/engine-v4-semantics.md S19, S21): `foreign` for a
-/// client that may read or write any design object (VPI, VHPI, DPI, a Tcl
-/// session), `observe_all` for one that records any signal (tracing, a Tcl
-/// session). The debugger also makes every member a stoppable thread.
-/// FSIM_STATIC_KERNEL_ACCESS_PLAN=0 restores the gates; FSIM_DEBUG_KERNEL=0
-/// runs the debugger on the reference interpreter.
-void plan_kernel_access(BuiltProject& built, SimulationEngine engine,
-    bool foreign, bool observe_all);
-
-/// A file trace whose selection (`filters`) is fixed for the run observes
-/// only the signals it records: they replace `observe_all` in the plan
-/// (FSIM_STATIC_KERNEL_TRACE_SELECTION=0 keeps every signal a host signal).
-void plan_trace_access(
-    BuiltProject& built, const std::vector<std::string>& filters);
+/// The static-kernel access plan of a simulation that cone fusion does not
+/// serve (docs/engine-v4-semantics.md S19, S21). Foreign libraries (VPI,
+/// VHPI, DPI), traces and Tcl sessions use the default plan: they watch and
+/// write kernel-owned signals at run time. The debugger, and a client given
+/// `debug_points` (a foreign client's `--foreign-probes`: cbStmt, vhpiCbStmt
+/// and the other execution-point callbacks), make every member a stoppable
+/// thread. FSIM_STATIC_KERNEL_ACCESS_PLAN=0 restores the gates;
+/// FSIM_DEBUG_KERNEL=0 runs the debugger on the reference interpreter.
+void plan_kernel_access(
+    BuiltProject& built, SimulationEngine engine, bool debug_points = false);
 
 int run_built_project(
     BuiltProject project,

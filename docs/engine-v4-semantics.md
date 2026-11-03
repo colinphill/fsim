@@ -237,7 +237,12 @@ state, S3):
     one Active pass.
   - Evaluation order within the pass is levelized (writer before reader). It
     is one admissible order of Active events.
-  - A member does not wake on its own writes while it runs.
+  - A member does not wake on its own writes while it runs, except a member
+    with a continuous-assignment update (`WriteUpdate*` in the
+    `systemverilog_active` domain): its write is an update event that
+    matures after the member suspends, so a change of its own operand
+    re-runs it (1800 §10.3.2). `always @*` and `always_comb` write
+    blocking and do not wake themselves, as in the reference.
   - A combinational loop is evaluated until it settles or the iteration limit
     stops it; loops are placed after the acyclic members.
   - The settled value is independent of the order, for a design with no race
@@ -249,10 +254,14 @@ state, S3):
   - Levels come from the member write/read graph; members in a cycle take the
     last levels (`simir_static_kernel.cpp`, constructor).
   - Within one level, order is unspecified (a LIFO bucket).
-  - Gap: a loop that does not settle raises the error "static kernel
-    combinational logic did not settle" after `members * 64 + 1,000,000`
-    evaluations. The reference stops at its delta limit instead. Plan §3.1
-    says loops and latches become behavioral; that is not implemented.
+  - A loop that does not settle after `members * 64 + 1,000,000`
+    evaluations raises the reference's delta-limit error
+    (`FSIM-RUN-DELTA-0001`, `DeltaCycleLimitError`), so a zero-delay
+    feedback loop such as `assign a = go ? ~a : 1'b0;` fails as in the
+    reference instead of completing. Plan §3.1 says loops and latches
+    become behavioral; that is not implemented.
+  - Gap: a self-waking member inside a compiled partition is still
+    suppressed while its partition runs.
 - **Witness.** T-sv (combinational netlist, case block, net array), T-cone.
   Loop and latch behavior: to add.
 
@@ -697,10 +706,20 @@ state, S3):
   - *Readable on demand* is implemented (`materialize`, reached through the
     interpreter's `prepare_signal_observation` hook): a hidden owned signal
     is written to the host under its driver identity when something reads it.
-  - *Value-change observed* and *writable* are *not yet*. Today a signal that
-    needs either is not owned, because a non-member touch makes it a host
-    signal (S4), and a design-level feature makes the whole kernel off
-    (S20).
+  - *Value-change observed* is implemented at run time: a watch
+    (`Interpreter::watch_signal_changes`, from a VPI/VHPI value-change or
+    transaction callback, a trace, or a durable `signal_value` reference)
+    turns the signal's slot into an output that publishes its changes from
+    then on, revives dead logic writing it, and turns off delta collapse.
+    `watch_signal_transactions` also reports assignments that leave the
+    value unchanged (1076 §14.7.3.1). A loaded VPI/VHPI library alone
+    watches nothing; a callback registration or a boundary request
+    (`open_external_observation`) opens the kernel's rounds to the host.
+  - *Writable* is implemented for deposits: a VPI put to a kernel-owned,
+    unforced signal writes its slot (`deposit_kernel_signal`) and wakes its
+    readers; VPI reads of owned signals read the slot
+    (`kernel_signal_value`). Force and release still go through the host
+    commit path.
   - Per-partition recompile at a safe point is *not yet*.
 - **Witness.** T-sv, T-vhdl, T-cone (hidden signals read back mid-run and at
   the end: the on-demand class). To add: observed and writable classes.
@@ -728,9 +747,8 @@ state, S3):
   Access plan (`StaticKernelAccessPlan`, P3): unless
   `FSIM_STATIC_KERNEL_ACCESS_PLAN=0`, the coverage, trace, foreign-library,
   `vcd_control` and `specify` rows are no longer gates. Foreign libraries
-  and trace/VCD observers make every signal and container a host object
-  (members write it through the host commit path, read it as a boundary
-  input; no unwritten or sole-writer input shortcuts for foreign). Module
+  and trace/VCD observers no longer change the plan: signals stay
+  kernel-owned, and the observed ones are watched at run time (S19). Module
   paths and timing checks mark their terminals, conditions, notifiers and
   delayed copies host signals. `CodeCoverageHit` is a kernel operation (a
   host counter bump with no signal access; static, behavioral and VHDL
@@ -1072,8 +1090,8 @@ state, S3):
   SystemC) runs on the v4 kernel. No SimIR operation is interpreted.
 - **Rule.** The SystemC kernel reads and writes HDL signals through the
   boundary context, outside any SimIR operation, so a design with SystemC
-  processes or named SystemC objects is planned as if a foreign library
-  were attached (S19): every signal and container is a host object. Each
+  processes or named SystemC objects is planned as for the debugger
+  (S19): every signal and container is a host object. Each
   SystemC process keeps its SimIR stub (one `Halt` or `WaitSensitivity`)
   and is never a member or a hosted step: it is a host process whose
   process executor (`SystemCProcessExecutor`) resumes the native SystemC

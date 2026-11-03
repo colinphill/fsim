@@ -18353,6 +18353,21 @@ bool Lowerer::lower_hir_statement_unsuspended(
         patch_hir_jumps(end_jumps, end);
         return true;
     };
+    // A loop's execution point on each later pass, at its continue target:
+    // before a while loop's condition, a for loop's increment or a repeat
+    // loop's count (IEEE 1800-2023 Table 38-6, cbStmt). A VHDL loop's
+    // (`vhdl`) is before a while condition, a plain loop's statements or the
+    // next value of a for loop's parameter (IEEE 1076-2019 21.3.4.2
+    // vhpiCbStmt). The first pass has the loop statement's own point; a
+    // later pass's is at the end of the loop, where no statement begins.
+    auto loop_pass_span = span;
+    loop_pass_span.begin = span.end;
+    const auto emit_loop_pass_point = [&](const bool vhdl = false) {
+        if (statement->systemverilog != nullptr
+            || (vhdl && statement->vhdl != nullptr)) {
+            emit_debug_point(DebugPointKind::statement, loop_pass_span);
+        }
+    };
     const auto lower_loop = [&](const std::string_view label) {
         const auto saved_scope = hir_process_scope_;
         const auto saved_hir_locals = hir_local_registers_;
@@ -18794,6 +18809,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     auto control = std::move(*body_control);
                     const auto increment = static_cast<InstructionIndex>(
                         process_.operations.size());
+                    emit_loop_pass_point();
                     patch_hir_jumps(control.continue_jumps, increment);
                     const auto next = allocate_register(
                         32U, binding->domain);
@@ -18888,6 +18904,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     auto control = std::move(*body_control);
                     const auto increment = static_cast<InstructionIndex>(
                         process_.operations.size());
+                    emit_loop_pass_point();
                     patch_hir_jumps(control.continue_jumps, increment);
                     const auto next = allocate_register(
                         32U, frontend::ValueDomain::Bit2);
@@ -18947,6 +18964,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     auto control = std::move(*body_control);
                     const auto update = static_cast<InstructionIndex>(
                         process_.operations.size());
+                    emit_loop_pass_point();
                     patch_hir_jumps(control.continue_jumps, update);
                     if (!lower_loop_assignment(
                             loop_statement.loop_update_target
@@ -19017,6 +19035,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 const auto condition_start
                     = static_cast<InstructionIndex>(
                         process_.operations.size());
+                emit_loop_pass_point();
                 patch_hir_jumps(control.continue_jumps, condition_start);
                 if (!emit_coverage_decision(*condition)) {
                     restore_scope();
@@ -19065,7 +19084,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return false;
             }
             auto control = std::move(*body_control);
-            patch_hir_jumps(control.continue_jumps, loop_start);
+            const auto pass = static_cast<InstructionIndex>(
+                process_.operations.size());
+            emit_loop_pass_point(true);
+            patch_hir_jumps(control.continue_jumps, pass);
             process_.operations.emplace_back(Jump { loop_start });
             const auto end = static_cast<InstructionIndex>(
                 process_.operations.size());
@@ -20025,6 +20047,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             });
             const auto step = static_cast<InstructionIndex>(
                 process_.operations.size());
+            emit_loop_pass_point(true);
             const auto one = load_integer(
                 1, parameter_width, frontend::ValueDomain::Integer);
             const auto next = allocate_register(
@@ -20261,6 +20284,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         more, 0U, 0U, UnknownBranchPolicy::when_false });
                     const auto store_next = static_cast<InstructionIndex>(
                         process_.operations.size());
+                    emit_loop_pass_point(true);
                     process_.operations.emplace_back(CopyRegister {
                         parameter_register, next });
                     process_.operations.emplace_back(Jump { loop_start });
@@ -20400,6 +20424,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         more, 0U, 0U, UnknownBranchPolicy::when_false });
                     const auto store_next = static_cast<InstructionIndex>(
                         process_.operations.size());
+                    emit_loop_pass_point(true);
                     const auto next = allocate_register(
                         width, frontend::ValueDomain::Integer);
                     process_.operations.emplace_back(Binary {
@@ -20500,6 +20525,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
         };
         for (std::size_t iteration = 0U;
             iteration < *iterations; ++iteration) {
+            if (iteration != 0U && statement->vhdl != nullptr) {
+                emit_debug_point(DebugPointKind::statement, loop_pass_span);
+            }
             if (vhdl_loop_parameter && vhdl_loop_initial) {
                 const auto ordinal = static_cast<std::int64_t>(iteration);
                 const auto iteration_value = vhdl_loop_descending
@@ -20525,6 +20553,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             const auto update_start = static_cast<InstructionIndex>(
                 process_.operations.size());
+            emit_loop_pass_point();
             if (statement->systemverilog != nullptr) {
                 const auto& loop_statement = *statement->systemverilog;
                 if ((!loop_statement.loop_variable.empty()

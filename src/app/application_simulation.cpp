@@ -263,15 +263,12 @@ runtime::RunResult Simulation::run(
                 && !impl_->scalar_signal_change_hook
                 && impl_->scalar_signal_observers.empty()
                 && impl_->safe_point_observers.empty()
-                && impl_->vpi_signal_handles.empty()
-                && !impl_->vpi_runtime_updates_enabled
                 && impl_->built.systemc_hierarchies.empty()
-                && !impl_->built.systemc_hierarchy
-                // Foreign libraries and VCD observers may start observing
-                // or depositing at any time step.
-                && !impl_->built.kernel_access.foreign
-                && !impl_->built.kernel_access.observe_all
-                && impl_->built.kernel_access.observed.empty());
+                && !impl_->built.systemc_hierarchy);
+        // A loaded foreign library alone observes nothing: one that starts
+        // observing time steps or values, or writing signals, ends the
+        // kernel's own time steps then (Interpreter::open_external_observation,
+        // the observation hooks of a watched object).
         auto result = impl_->interpreter->run(until);
         if (profile_phase_split) {
             const auto milliseconds = [](const auto duration) {
@@ -643,6 +640,36 @@ void Simulation::remove_signal_transaction_hook(
     }
 }
 
+std::uint64_t Simulation::add_driver_transaction_hook(
+    DriverTransactionHook hook)
+{
+    if (!hook) {
+        throw std::invalid_argument("driver observer cannot be empty");
+    }
+    const auto token = impl_->next_activity_observer++;
+    impl_->driver_transaction_observers.emplace(token, std::move(hook));
+    if (impl_->driver_transaction_observers.size() == 1U) {
+        impl_->interpreter->set_driver_transaction_hook(
+            [impl = impl_.get()](const runtime::simir::ProcessId process,
+                const SignalId signal) {
+                for (const auto& [_, observer] :
+                    impl->driver_transaction_observers) {
+                    observer(process, signal);
+                }
+            });
+    }
+    return token;
+}
+
+void Simulation::remove_driver_transaction_hook(
+    const std::uint64_t token) noexcept
+{
+    if (impl_->driver_transaction_observers.erase(token) != 0U
+        && impl_->driver_transaction_observers.empty()) {
+        impl_->interpreter->set_driver_transaction_hook({});
+    }
+}
+
 SdfReannotationCommitResult Simulation::commit_sdf_reannotation(
     const SdfReannotationApplication& application)
 {
@@ -664,9 +691,65 @@ bool Simulation::at_sdf_reannotation_safe_point() const noexcept
     return impl_->interpreter->scheduler().at_safe_point();
 }
 
+void Simulation::install_execution_point_hooks()
+{
+    if (impl_->execution_point_observers.empty()
+        && !impl_->execution_point_primary) {
+        impl_->interpreter->set_execution_point_hook({ });
+        return;
+    }
+    // Observers see a point before the debugger, which may stop the run. A
+    // subprogram return is a point only for the foreign interfaces (IEEE
+    // 1076-2019 21.3.4.6); the debugger and the C API never see it.
+    impl_->interpreter->set_execution_point_hook(
+        [impl = impl_.get()](runtime::Scheduler& scheduler,
+            const runtime::simir::ExecutionPoint& point) {
+            for (const auto& [_, observer] : impl->execution_point_observers) {
+                observer(scheduler, point);
+            }
+            if (impl->execution_point_primary
+                && point.kind != runtime::simir::ExecutionPointKind::call_return) {
+                impl->execution_point_primary(scheduler, point);
+            }
+        });
+}
+
 void Simulation::set_execution_point_hook(ExecutionPointHook hook)
 {
-    impl_->interpreter->set_execution_point_hook(std::move(hook));
+    impl_->execution_point_primary = std::move(hook);
+    install_execution_point_hooks();
+}
+
+std::uint64_t Simulation::add_execution_point_hook(ExecutionPointHook hook)
+{
+    if (!hook) {
+        throw std::invalid_argument("execution-point observer cannot be empty");
+    }
+    const auto token = impl_->next_activity_observer++;
+    impl_->execution_point_observers.emplace(token, std::move(hook));
+    if (impl_->execution_point_observers.size() == 1U) {
+        install_execution_point_hooks();
+    }
+    return token;
+}
+
+void Simulation::remove_execution_point_hook(
+    const std::uint64_t token) noexcept
+{
+    if (impl_->execution_point_observers.erase(token) != 0U
+        && impl_->execution_point_observers.empty()) {
+        install_execution_point_hooks();
+    }
+}
+
+void Simulation::set_foreign_probes(const bool enabled) noexcept
+{
+    impl_->foreign_probes = enabled;
+}
+
+bool Simulation::foreign_probes() const noexcept
+{
+    return impl_->foreign_probes;
 }
 
 void Simulation::set_systemverilog_plusargs(
@@ -746,6 +829,26 @@ void Simulation::set_concurrent_assertion_hook(
     ConcurrentAssertionHook hook)
 {
     impl_->concurrent_assertion_hook = std::move(hook);
+}
+
+void Simulation::set_assertion_attempt_hook(AssertionAttemptHook hook)
+{
+    impl_->assertion_attempt_hook = std::move(hook);
+}
+
+bool Simulation::kill_assertion_attempt(
+    const std::uint64_t assertion, const runtime::SimulationTick start)
+{
+    const auto processes = impl_->vpi_assertion_processes.find(assertion);
+    if (processes == impl_->vpi_assertion_processes.end()
+        || !impl_->interpreter) {
+        return false;
+    }
+    const std::vector<runtime::simir::ProcessId> selected {
+        processes->second.begin(), processes->second.end()
+    };
+    return impl_->interpreter->kill_sva_attempt(
+        selected, static_cast<std::int64_t>(start));
 }
 
 void Simulation::set_vhdl_psl_attempt_hook(VhdlPslAttemptHook hook)

@@ -244,11 +244,9 @@ int run_built_project(
     built.cone_fusion = engine != SimulationEngine::debug
         && !built.code_coverage_enabled && !trace_output && !foreign;
     // Cone fusion hides internal nets and stays off for these clients; the
-    // static kernel's access plan replaces the gates.
-    plan_kernel_access(built, engine, foreign, trace_output);
-    if (trace_output) {
-        plan_trace_access(built, trace_config.run.trace_filters);
-    }
+    // static kernel serves them with its default plan (they watch and write
+    // its signals at run time).
+    plan_kernel_access(built, engine, foreign && config.run.foreign_probes);
     if (profile_phases && !built.cone_fusion
         && !built.kernel_access.admit && static_kernel_requested(engine)) {
         // The census counts these runs as kernel-off, by gate.
@@ -268,6 +266,7 @@ int run_built_project(
         engine,
         foreign ? SystemVerilogVpiRuntimeUpdates::enabled
                     : SystemVerilogVpiRuntimeUpdates::omitted);
+    simulation.set_foreign_probes(foreign && config.run.foreign_probes);
 #if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
     allocation_profile_session.after_setup();
 #endif

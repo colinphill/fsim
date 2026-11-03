@@ -177,6 +177,9 @@ struct SystemVerilogVpiTypespec {
     std::vector<std::string> member_names;
     std::vector<SystemVerilogVpiTypespec> members;
     std::vector<SystemVerilogVpiEnumLiteral> enum_constants;
+    // The key type of an associative array (at most one element; none for
+    // the wildcard index, IEEE 1800-2023 37.25 detail 2 vpiIndexTypespec).
+    std::vector<SystemVerilogVpiTypespec> index;
 
     friend bool operator==(
         const SystemVerilogVpiTypespec&,

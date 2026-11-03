@@ -22,4 +22,12 @@ module top;
     #10 b = 1;
     #20 $finish;
   end
+
+  // Multi-cycle attempts (39.4.2, 39.5.2): one starts at every edge and
+  // reaches its outcome two edges later; the plug-in kills the one that
+  // started at 15.
+  a_seq: assert property (@(posedge clk) a ##2 b)
+  else
+    $display("action fail a_seq %0t", $time);
+  cs_hit: cover sequence (@(posedge clk) a ##1 b);
 endmodule

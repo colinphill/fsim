@@ -535,6 +535,9 @@ struct Statement {
     bool memory_write { };
     std::vector<OutputValue> output_values;
     std::string output_trailing_text;
+    // VPI-only: the output task as written ([0], with its radix suffix) and
+    // its leading format string literal ([1]), when the call had one.
+    std::vector<std::string> output_source;
     std::vector<StatementId> statements;
     std::vector<StatementId> else_statements;
     CaseMatchKind case_match { CaseMatchKind::exact };
@@ -1181,6 +1184,8 @@ struct ClockingBlock {
     std::vector<ClockingSignal> signals;
     SourceSpanId source;
     OriginId origin;
+    // A `global clocking` declaration (IEEE 1800-2023 14.14).
+    bool global { };
 };
 
 struct GenerateRegion {

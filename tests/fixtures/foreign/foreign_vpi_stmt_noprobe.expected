@@ -1,0 +1,2 @@
+#c refused vpiNamedBegin: vpi_register_cb: cbStmt needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c done n=13

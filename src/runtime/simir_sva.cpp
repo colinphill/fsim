@@ -78,9 +78,16 @@ void Interpreter::Impl::run_sva(
     };
     auto& active_monitor = sva_monitors[{ storage.process(), operation.site }];
     if (operation.kind == SvaKind::outcome) {
-        write_result(active_monitor
-                ? static_cast<std::size_t>(active_monitor->next_outcome())
-                : 0U);
+        if (!active_monitor) {
+            write_result(0U);
+            return;
+        }
+        const auto outcome = active_monitor->next_outcome();
+        if (outcome != sva::Outcome::none) {
+            sva_outcome_starts[storage.design_process()]
+                = active_monitor->last_outcome_start();
+        }
+        write_result(static_cast<std::size_t>(outcome));
         return;
     }
     if (!active_monitor) {
@@ -135,6 +142,12 @@ void Interpreter::Impl::run_sva(
     }
     if (!error.empty()) {
         storage.fail(error);
+    }
+    const auto attempt_starts = active_monitor->take_started();
+    if (sva_attempt_hook) {
+        for (const auto when : attempt_starts) {
+            sva_attempt_hook(storage.design_process(), when);
+        }
     }
     write_result(active_monitor->pending_outcomes());
 }

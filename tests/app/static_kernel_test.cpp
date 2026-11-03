@@ -317,9 +317,10 @@ const std::vector<std::string> observed_paths {
 
 enum class Observation : std::uint8_t { reference, all, selection };
 
-// Value changes of the observed signals, by signal: value, time, delta. The
-// kernel runs with every signal a host signal (`all`, as for a debugger or
-// a foreign library) or with the observed signals as a trace's selection.
+// Value changes of the observed signals, by signal: value, time, delta. One
+// kernel serves every run; it publishes the signals watched at run time,
+// every signal (`all`, as for a debugger or a foreign library observing any
+// change) or the observed signals alone (a trace's selection).
 [[nodiscard]] std::map<std::uint32_t, std::vector<std::string>> observe(
     const std::filesystem::path& root, const Observation mode)
 {
@@ -337,28 +338,20 @@ enum class Observation : std::uint8_t { reference, all, selection };
     require(observed.size() == observed_paths.size(),
         "the observed signals must be design objects");
     project.cone_fusion = false;
-    if (mode == Observation::all) {
+    if (mode != Observation::reference) {
         project.kernel_access.admit = true;
-        project.kernel_access.observe_all = true;
-    } else if (mode == Observation::selection) {
-        auto& access = project.kernel_access;
-        access.admit = true;
-        access.observed = observed;
-        access.observed_identity = "static-kernel-test";
-        fsim::elaboration::StaticKernelAccessPlan all_access;
-        all_access.admit = true;
-        all_access.observe_all = true;
-        const auto plan = project.design.plan_static_kernel(access);
-        const auto all_plan = project.design.plan_static_kernel(all_access);
-        require(!plan.disabled && !all_plan.disabled,
-            "the fixture must be eligible for the kernel");
-        require(plan.owned_signals > all_plan.owned_signals + 20U,
-            "only the selection's signals may be host signals");
+        const auto plan = project.design.plan_static_kernel(project.kernel_access);
+        require(!plan.disabled, "the fixture must be eligible for the kernel");
     }
     set_environment("FSIM_STATIC_KERNEL",
         mode == Observation::reference ? "0" : "1");
     Simulation simulation(std::move(project), 100'000U,
         SimulationEngine::compiled, SystemVerilogVpiRuntimeUpdates::omitted);
+    if (mode == Observation::all) {
+        simulation.watch_all_signal_changes();
+    } else if (mode == Observation::selection) {
+        simulation.watch_signal_changes(observed);
+    }
     std::map<std::uint32_t, std::vector<std::string>> changes;
     (void)simulation.add_signal_change_hook(
         [&](const fsim::runtime::simir::SignalId signal,
@@ -439,7 +432,7 @@ int main()
                     && actual[index] == expected[index]) {
                     ++index;
                 }
-                std::cerr << (mode == Observation::all ? "all-host" : "selection")
+                std::cerr << (mode == Observation::all ? "all" : "selection")
                           << " signal " << signal << " reference changes="
                           << expected.size() << " kernel changes=" << actual.size()
                           << " first difference: "

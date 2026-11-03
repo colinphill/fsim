@@ -24,6 +24,45 @@ namespace kw = kernel_word;
 
 namespace {
 constexpr std::string_view native_magic { "fsim-static-kernel-templates-v1" };
+
+/// The operands build_native binds to slots (bind_slot), in binding order:
+/// the field, and whether it holds the slot's arena offset (else its index;
+/// in a canonical body, the binding).
+template <typename Inst, typename Visit>
+void visit_slot_operands(Inst& inst, Visit&& visit)
+{
+    switch (inst.op) {
+    case KOp::load_slot:
+        visit(inst.x, true);
+        break;
+    case KOp::load_field:
+    case KOp::load_slot9:
+    case KOp::load_field9:
+    case KOp::wide_load:
+        visit(inst.x, false);
+        break;
+    case KOp::dynamic_extract:
+    case KOp::dynamic_part_select:
+        if (inst.sub == 1U) {
+            visit(inst.x, false);
+        }
+        break;
+    case KOp::store_slot:
+    case KOp::store_slot_nba:
+    case KOp::store_slot_dynamic:
+    case KOp::store_slot_part:
+    case KOp::store_vhdl:
+    case KOp::wide_store:
+        visit(inst.d, false);
+        break;
+    case KOp::wide_move:
+        visit(inst.d, false);
+        visit(inst.x, false);
+        break;
+    default:
+        break;
+    }
+}
 } // namespace
 
 std::string static_kernel_canonical_identity()
@@ -898,46 +937,17 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                     slot | (slots_[slot].silent ? partition_tag : 0U));
             };
             for (auto& inst : canonical->code) {
+                // A silent slot's store is plain in the template (aux 1): part
+                // of its shape, so units whose slot is not silent get their
+                // own template (and a watched one, respecialize_silent).
+                if (inst.op == KOp::store_slot && inst.sub == 0U
+                    && slots_[inst.d].silent) {
+                    inst.aux = 1U;
+                }
+                visit_slot_operands(inst, [&](std::uint32_t& field, const bool offset) {
+                    field = bind_slot(offset ? slot_of_offset.at(field) : field);
+                });
                 switch (inst.op) {
-                case KOp::load_slot:
-                    inst.x = bind_slot(slot_of_offset.at(inst.x));
-                    break;
-                case KOp::load_field:
-                    inst.x = bind_slot(inst.x);
-                    break;
-                case KOp::dynamic_extract:
-                case KOp::dynamic_part_select:
-                    if (inst.sub == 1U) {
-                        inst.x = bind_slot(inst.x);
-                    }
-                    break;
-                case KOp::store_slot:
-                    // A silent slot's store is plain in the template (aux 1):
-                    // part of its shape, so units whose slot is not silent
-                    // get their own template.
-                    if (inst.sub == 0U && slots_[inst.d].silent) {
-                        inst.aux = 1U;
-                    }
-                    inst.d = bind_slot(inst.d);
-                    break;
-                case KOp::store_slot_nba:
-                case KOp::store_slot_dynamic:
-                case KOp::store_slot_part:
-                case KOp::store_vhdl:
-                    inst.d = bind_slot(inst.d);
-                    break;
-                case KOp::wide_move:
-                    inst.d = bind_slot(inst.d);
-                    inst.x = bind_slot(inst.x);
-                    break;
-                case KOp::load_slot9:
-                case KOp::load_field9:
-                case KOp::wide_load:
-                    inst.x = bind_slot(inst.x);
-                    break;
-                case KOp::wide_store:
-                    inst.d = bind_slot(inst.d);
-                    break;
                 case KOp::load_host:
                     inst.x = bind(2U, inst.x, inst.x, 0U);
                     break;
@@ -1258,6 +1268,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             templates[index].resume_points = &continuations_[index];
         }
     }
+    template_codes_ = templates;
     StaticKernelNativeHelpers helpers;
     set_instruction_helpers(helpers);
     helpers.notify = &StaticKernel::native_notify;
@@ -1463,6 +1474,110 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         } else if (lazy_of[index] != no_slot) {
             units[unit].native->lazy_template = lazy_of[index];
             lazy_templates_[lazy_of[index]].units.push_back(units[unit].native);
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::respecialize_silent(
+    const std::vector<std::uint8_t>& unsilenced)
+{
+    const auto unsilenced_slot = [&](const std::uint32_t info) {
+        const auto slot = info & ~partition_tag;
+        return slot < unsilenced.size() && unsilenced[slot] != 0U;
+    };
+    std::vector<NativeUnit*> units;
+    for (auto& partition_state : partitions_) {
+        units.push_back(&partition_state.native);
+    }
+    for (auto& member : members_) {
+        if (member.compiled && member.partition == no_slot) {
+            units.push_back(&member.native);
+        }
+    }
+    for (auto& group : dispatch_groups_) {
+        if (group.fused) {
+            units.push_back(&group.native);
+        }
+    }
+    std::unordered_map<const CompiledBody*, std::uint32_t> template_of;
+    for (std::uint32_t index = 0U; index < templates_.size(); ++index) {
+        template_of.emplace(templates_[index].get(), index);
+    }
+    // Units of one template whose plain stores to these slots are the same
+    // instructions share one new template.
+    std::map<std::pair<const CompiledBody*, std::vector<std::uint32_t>>, std::size_t>
+        copy_of;
+    std::vector<StaticKernelTemplate> batch;
+    std::vector<std::vector<NativeUnit*>> batch_units;
+    for (auto* unit : units) {
+        if (unit->program == nullptr) {
+            continue;
+        }
+        // The stores that are not plain test the slot's silent bit in its
+        // binding as they run.
+        std::vector<std::uint32_t> plain;
+        const auto& code = unit->program->code;
+        for (std::uint32_t at = 0U; at < code.size(); ++at) {
+            visit_slot_operands(code[at], [&](const std::uint32_t binding, bool) {
+                auto& info = unit->bindings[2U * binding + 1U];
+                if (unsilenced_slot(info)) {
+                    info &= ~partition_tag;
+                }
+            });
+            if (code[at].op == KOp::store_slot && code[at].sub == 0U
+                && code[at].aux != 0U
+                && unsilenced_slot(unit->bindings[2U * code[at].d + 1U])) {
+                plain.push_back(at);
+            }
+        }
+        // A unit without code (it failed to compile) runs the kernel's own
+        // instructions, which test Slot::silent.
+        if (plain.empty() || (unit->entry == nullptr && unit->lazy_template == no_slot)) {
+            continue;
+        }
+        const auto [it, inserted] = copy_of.try_emplace(
+            std::pair { unit->program, plain }, batch.size());
+        if (inserted) {
+            auto body = std::make_unique<CompiledBody>(*unit->program);
+            for (const auto at : plain) {
+                body->code[at].aux = 0U;
+            }
+            // Full-semantics code: valid for any register values, so the
+            // two-state code's continuations are not needed.
+            auto derived = template_codes_[template_of.at(unit->program)];
+            derived.body = body.get();
+            derived.two_state = false;
+            derived.resume_points = nullptr;
+            templates_.push_back(std::move(body));
+            template_codes_.push_back(derived);
+            batch.push_back(derived);
+            batch_units.emplace_back();
+        }
+        batch_units[it->second].push_back(unit);
+    }
+    if (batch.empty()) {
+        return;
+    }
+    const auto entries = codegen_ != nullptr
+        ? codegen_->compile(batch, native_helpers_)
+        : std::vector<StaticKernelNativeEntry>(batch.size(), nullptr);
+    for (std::size_t index = 0U; index < batch.size(); ++index) {
+        for (auto* unit : batch_units[index]) {
+            if (unit->lazy_template != no_slot) {
+                std::erase(lazy_templates_[unit->lazy_template].units, unit);
+                unit->lazy_template = no_slot;
+            }
+            if (unit->entry == nullptr && entries[index] != nullptr) {
+                ++native_units_;
+            }
+            if (unit->full_template != no_slot) {
+                std::erase(full_templates_[unit->full_template].units, unit);
+                unit->full_template = no_slot;
+            }
+            unit->program = batch[index].body;
+            unit->two_state = false;
+            unit->full_entry = nullptr;
+            unit->entry = entries[index];
         }
     }
 }

@@ -984,7 +984,9 @@ Statement VhdlParser::parse_if_branch(const Token& start) {
   statement.statements = parse_statement_list({"elsif", "else", "end"});
   if (match_keyword("elsif", true)) {
     const auto elsif = previous();
-    statement.else_statements.push_back(parse_if_branch(elsif));
+    auto branch = parse_if_branch(elsif);
+    branch.vhdl_elsif = true;
+    statement.else_statements.push_back(std::move(branch));
   } else if (match_keyword("else", true)) {
     statement.else_statements = parse_statement_list({"end"});
   }

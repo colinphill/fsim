@@ -135,6 +135,8 @@ struct Invocation {
   std::optional<project::TraceCompression> trace_compression;
   std::optional<std::size_t> trace_report_limit;
   std::optional<bool> trace_enabled;
+  // `--foreign-probes`: statement, call and suspend probes for VPI/VHPI.
+  std::optional<bool> foreign_probes;
   std::optional<std::filesystem::path> coverage_output;
   std::optional<std::uint64_t> seed;
   bool random_seed{false};

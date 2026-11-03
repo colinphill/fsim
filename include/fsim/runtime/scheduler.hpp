@@ -696,6 +696,8 @@ public:
   /// end-of-slot work for the current timestamp has drained.
   [[nodiscard]] bool at_runtime_slot_quiet_point() const noexcept;
   [[nodiscard]] SimulationTick now() const noexcept;
+  /// SchedulerOptions::max_delta_cycles of this scheduler.
+  [[nodiscard]] std::uint64_t max_delta_cycles() const noexcept;
   [[nodiscard]] std::uint64_t delta() const noexcept;
   [[nodiscard]] std::optional<SchedulerPhase> current_phase() const noexcept;
   /// Monotonic identity changed whenever work enters the phase currently

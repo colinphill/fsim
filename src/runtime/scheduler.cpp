@@ -488,6 +488,10 @@ bool Scheduler::at_runtime_slot_quiet_point() const noexcept
     return impl_->in_runtime_slot_quiet_point;
 }
 SimulationTick Scheduler::now() const noexcept { return impl_->now; }
+std::uint64_t Scheduler::max_delta_cycles() const noexcept
+{
+    return impl_->options.max_delta_cycles;
+}
 std::uint64_t Scheduler::delta() const noexcept
 {
     return impl_->current ? impl_->current->delta : 0;

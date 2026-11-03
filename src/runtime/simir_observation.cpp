@@ -92,6 +92,13 @@ void Interpreter::Impl::expose_signal_value_reference(
 {
     auto& state = get_signal(signal);
     if (!state.public_value_reference_exposed) {
+        if (signal < static_kernel_owned_signal.size()
+            && static_kernel_owned_signal[signal] != 0U) {
+            // The reference reads the host copy from now on, so the kernel
+            // publishes this signal's changes to it.
+            const SignalId watched[] { signal };
+            watch_static_kernel_signals(watched);
+        }
         if (started) {
             // Install the durable pin only after the observation barrier has
             // completed. A failed getter can then retry the same preparation.

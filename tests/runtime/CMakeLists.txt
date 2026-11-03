@@ -1055,6 +1055,16 @@ fsim_add_foreign_conformance_test(
 fsim_add_foreign_conformance_test(
   vpi-model vpi foreign_vpi_model.sv foreign_vpi_model.expected ""
   fsim_foreign_vpi_model_plugin)
+# Clocking blocks and nettype declarations (IEEE 1800-2023 37.23, 37.48).
+add_library(fsim_foreign_vpi_clocking_plugin SHARED
+  foreign_vpi_clocking_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_clocking_plugin)
+target_link_libraries(fsim_foreign_vpi_clocking_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_clocking_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-clocking vpi foreign_vpi_clocking.sv foreign_vpi_clocking.expected ""
+  fsim_foreign_vpi_clocking_plugin)
 fsim_add_foreign_conformance_test(
   mixed-model mixed "foreign_mixed_model.vhd|foreign_mixed_model.sv"
   foreign_mixed_model.expected "" fsim_foreign_mixed_model_plugin)
@@ -1090,6 +1100,17 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-statements vpi foreign_vpi_statements.sv
   foreign_vpi_statements.expected "" fsim_foreign_vpi_statements_plugin)
+# Drivers and loads, var selects, task and function declarations and calls
+# (IEEE 1800-2023 37.21, 37.41, 37.42, 37.46, 37.58).
+add_library(fsim_foreign_vpi_connectivity_plugin SHARED
+  foreign_vpi_connectivity_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_connectivity_plugin)
+target_link_libraries(fsim_foreign_vpi_connectivity_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_connectivity_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-connectivity vpi foreign_vpi_connectivity.sv
+  foreign_vpi_connectivity.expected "" fsim_foreign_vpi_connectivity_plugin)
 # Assertions and the assertion API (IEEE 1800-2023 39).
 add_library(fsim_foreign_vpi_assertions_plugin SHARED
   foreign_vpi_assertions_plugin.c)
@@ -1100,6 +1121,31 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-assertions vpi foreign_vpi_assertions.sv
   foreign_vpi_assertions.expected "" fsim_foreign_vpi_assertions_plugin)
+# cbStmt with and without the execution probes (IEEE 1800-2023 38.36.1.1).
+add_library(fsim_foreign_vpi_stmt_plugin SHARED foreign_vpi_stmt_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_stmt_plugin)
+target_link_libraries(fsim_foreign_vpi_stmt_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_stmt_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-stmt vpi foreign_vpi_stmt.sv foreign_vpi_stmt.expected
+  "--foreign-probes" fsim_foreign_vpi_stmt_plugin)
+fsim_add_foreign_conformance_test(
+  vpi-stmt-noprobe vpi foreign_vpi_stmt.sv foreign_vpi_stmt_noprobe.expected
+  "" fsim_foreign_vpi_stmt_plugin)
+# vhpiCbStmt, vhpiCbResume and vhpiCbSuspend with and without the execution
+# probes (IEEE 1076-2019 21.3.4).
+add_library(fsim_foreign_vhpi_stmt_plugin SHARED foreign_vhpi_stmt_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_stmt_plugin)
+target_link_libraries(fsim_foreign_vhpi_stmt_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_stmt_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-stmt vhpi foreign_vhpi_stmt.vhd foreign_vhpi_stmt.expected
+  "--foreign-probes" fsim_foreign_vhpi_stmt_plugin)
+fsim_add_foreign_conformance_test(
+  vhpi-stmt-noprobe vhpi foreign_vhpi_stmt.vhd
+  foreign_vhpi_stmt_noprobe.expected "" fsim_foreign_vhpi_stmt_plugin)
 # Processes and statements (IEEE 1076-2019 19.4.2, 19.11).
 add_library(fsim_foreign_vhpi_statements_plugin SHARED
   foreign_vhpi_statements_plugin.c)
@@ -1110,3 +1156,13 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vhpi-statements vhpi foreign_vhpi_statements.vhd
   foreign_vhpi_statements.expected "" fsim_foreign_vhpi_statements_plugin)
+# Drivers, basic signals, contributors and loads (IEEE 1076-2019 19.12).
+add_library(fsim_foreign_vhpi_connectivity_plugin SHARED
+  foreign_vhpi_connectivity_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_connectivity_plugin)
+target_link_libraries(fsim_foreign_vhpi_connectivity_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_connectivity_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-connectivity vhpi foreign_vhpi_connectivity.vhd
+  foreign_vhpi_connectivity.expected "" fsim_foreign_vhpi_connectivity_plugin)

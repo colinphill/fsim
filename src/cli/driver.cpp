@@ -437,6 +437,9 @@ namespace {
         if (invocation.trace_enabled.has_value()) {
             config.run.trace_enabled = *invocation.trace_enabled;
         }
+        if (invocation.foreign_probes.has_value()) {
+            config.run.foreign_probes = *invocation.foreign_probes;
+        }
         if (invocation.coverage_output.has_value()) {
             config.run.coverage_output
                 = absolute_normalized(*invocation.coverage_output);
@@ -514,6 +517,9 @@ namespace {
         }
         if (invocation.trace_enabled.has_value()) {
             config.run.trace_enabled = *invocation.trace_enabled;
+        }
+        if (invocation.foreign_probes.has_value()) {
+            config.run.foreign_probes = *invocation.foreign_probes;
         }
         if (invocation.coverage_output.has_value()) {
             config.run.coverage_output
@@ -657,6 +663,8 @@ namespace {
             << "      --sv-lib LIB         Load a DPI-C library; repeatable\n"
             << "      --vhpi LIB[:BOOTSTRAP]\n"
             << "                           Load a VHPI module; repeatable (simulate)\n"
+            << "      --foreign-probes     Give VPI/VHPI libraries statement, call and\n"
+            << "                           suspend callbacks (cbStmt, vhpiCbStmt, ...)\n"
             << "      --diagnostics text|json\n"
             << "      --color auto|always|never\n"
             << "\n"
@@ -938,6 +946,7 @@ namespace {
             "--aot",
             "--no-aot",
             "--code-coverage",
+            "--foreign-probes",
             "--partial",
             "--preprocess-only",
             "--no-config",
@@ -1382,6 +1391,8 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 invocation.jobs = static_cast<std::uint32_t>(number);
+            } else if (argument == "--foreign-probes") {
+                invocation.foreign_probes = true;
             } else if (argument == "--code-coverage") {
                 invocation.code_coverage = true;
             } else if (argument == "--partial") {
@@ -2014,6 +2025,11 @@ std::optional<Invocation> parse_arguments(
         argument_error(diagnostics, "--vhpi requires simulate, debug, or tcl");
         return std::nullopt;
     }
+    if (invocation.foreign_probes.has_value() && !snapshot_consumer) {
+        argument_error(
+            diagnostics, "--foreign-probes requires simulate, debug, or tcl");
+        return std::nullopt;
+    }
     if (!invocation.sv_libs.empty() && !snapshot_consumer) {
         argument_error(diagnostics, "--sv-lib requires simulate, debug, or tcl");
         return std::nullopt;
@@ -2410,6 +2426,9 @@ void apply_configuration_defaults(
         }
         if (!invocation.max_deltas) {
             invocation.max_deltas = number("simulate.max_deltas");
+        }
+        if (!invocation.foreign_probes) {
+            invocation.foreign_probes = boolean("simulate.foreign_probes");
         }
         fill_seed("simulate.seed");
         fill_list(invocation.sv_libs, "simulate.sv_libs");

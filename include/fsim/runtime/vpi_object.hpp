@@ -247,6 +247,14 @@ using SystemVerilogVpiValueObserver = std::function<void(
     fsim_vpi_handle_v1,
     const SystemVerilogVpiStoredValue&)>;
 
+/// The current value of a live object (see `bind_live_value`): its
+/// effective value in the simulation, forced or not, or with `stored` the
+/// value its drivers and assignments gave it beneath a force. None when the
+/// object has no value right now.
+using SystemVerilogVpiLiveValueSource
+    = std::function<std::optional<SystemVerilogVpiStoredValue>(
+        fsim_vpi_handle_v1, bool stored)>;
+
 /// Complete stored/effective state after a host-originated VPI mutation.
 /// Kernel-originated `update_bound_value` publications intentionally do not
 /// produce this event, which makes the observer suitable for a live runtime
@@ -288,6 +296,12 @@ struct SystemVerilogVpiPort {
     fsim_vpi_handle_v1 low_conn { };
     fsim_vpi_handle_v1 high_conn { };
     fsim_vpi_handle_v1 actual { };
+    /// A high connection that is not a simple name: the HIR expression of
+    /// the actual, with the scope it is seen from (IEEE 1800-2023 37.14
+    /// vpiHighConn is any expression). `high_conn` stays 0 for it.
+    std::uint32_t high_expression { };
+    bool has_high_expression { };
+    fsim_vpi_handle_v1 high_scope { };
 };
 
 struct SystemVerilogVpiObjectDescriptor {
@@ -430,12 +444,20 @@ public:
         std::string_view name);
     [[nodiscard]] SystemVerilogVpiObjectResult create(
         const SystemVerilogVpiObjectDescriptor& descriptor);
+    /// create, taking the descriptor's type and source.
+    [[nodiscard]] SystemVerilogVpiObjectResult create(
+        SystemVerilogVpiObjectDescriptor&& descriptor);
+    /// Room for this many more objects without rehashing the name indexes.
+    void reserve(std::size_t objects);
     [[nodiscard]] SystemVerilogVpiObjectLookupResult lookup(
         fsim_vpi_handle_v1 handle) const;
     [[nodiscard]] SystemVerilogVpiObjectLookupResult find(
         std::string_view full_name) const;
     [[nodiscard]] SystemVerilogVpiObjectLookupResult find_child(
         fsim_vpi_handle_v1 parent, std::string_view name) const;
+    /// The kind of a live object, without copying its record.
+    [[nodiscard]] std::optional<SystemVerilogVpiObjectKind> kind_of(
+        fsim_vpi_handle_v1 handle) const;
     [[nodiscard]] SystemVerilogVpiTypeLookupResult type_info(
         fsim_vpi_handle_v1 handle) const;
     [[nodiscard]] static SystemVerilogVpiObjectCapabilities capabilities()
@@ -451,6 +473,22 @@ public:
         SystemVerilogVpiPropertyKind property) const;
     [[nodiscard]] SystemVerilogVpiValueError bind_value(
         fsim_vpi_handle_v1 handle, SystemVerilogVpiStoredValue value);
+    /// Bind an object to the simulation without a stored copy: a read asks
+    /// the live value source, a write reaches only the value state
+    /// observers, and the simulation reports its changes through
+    /// `notify_live_value`.
+    [[nodiscard]] SystemVerilogVpiValueError bind_live_value(
+        fsim_vpi_handle_v1 handle);
+    void set_live_value_source(SystemVerilogVpiLiveValueSource source);
+    /// Ask for the value changes of `handle` to reach the value observers;
+    /// the simulation announces only the changes of watched live objects.
+    /// Handle 0 asks for every object's changes.
+    void watch_value(fsim_vpi_handle_v1 handle) const;
+    void set_value_watch_hook(std::function<void(fsim_vpi_handle_v1)> hook);
+    /// Report a change of a live object's effective value to the value
+    /// observers.
+    [[nodiscard]] SystemVerilogVpiValueError notify_live_value(
+        fsim_vpi_handle_v1 handle, const SystemVerilogVpiStoredValue& value);
     /// Seed a newly established startup baseline without dispatching value
     /// observers. Both the current and reset values become the supplied value.
     [[nodiscard]] SystemVerilogVpiValueError initialize_bound_value(
@@ -512,11 +550,24 @@ public:
     [[nodiscard]] SystemVerilogVpiIteratorError release_iterator(
         fsim_vpi_handle_v1 iterator);
 
+    /// Announce `count` more children of `parent` that are created on first
+    /// access: a lookup beneath the parent that misses, an iteration of its
+    /// children or a state snapshot calls the materializer once, which
+    /// creates all of them. Until then the parent reports them in its live
+    /// child count.
+    [[nodiscard]] SystemVerilogVpiObjectError defer_children(
+        fsim_vpi_handle_v1 parent, std::uint32_t count);
+    void set_child_materializer(
+        std::function<void(fsim_vpi_handle_v1)> materializer);
+    /// Create every deferred child now.
+    void materialize_all() const;
+
 private:
     struct Record {
         std::uint16_t epoch { };
         bool live { };
         std::uint32_t live_children { };
+        mutable std::uint32_t pending_children { };
         std::uint64_t ordinal { };
         fsim_vpi_handle_v1 parent { };
         SystemVerilogVpiObjectKind kind { SystemVerilogVpiObjectKind::Root };
@@ -527,6 +578,11 @@ private:
         std::optional<SystemVerilogVpiStoredValue> value;
         std::optional<SystemVerilogVpiStoredValue> forced_value;
         std::optional<SystemVerilogVpiStoredValue> initial_value;
+        // The value is the simulation's (see bind_live_value); forced_value
+        // then only records a VPI force.
+        bool live_value { };
+        // Live child slots in ordinal order.
+        std::vector<std::uint32_t> children;
     };
     struct IteratorRecord {
         std::uint16_t epoch { };
@@ -553,6 +609,13 @@ private:
         fsim_vpi_handle_v1 handle) const;
     [[nodiscard]] SystemVerilogVpiIteratorResult create_iterator_locked(
         std::vector<fsim_vpi_handle_v1> objects);
+    void materialize(fsim_vpi_handle_v1 parent) const;
+    [[nodiscard]] std::optional<SystemVerilogVpiStoredValue> visible_value(
+        const Record& record, fsim_vpi_handle_v1 handle,
+        bool stored = false) const;
+    /// The deferred parent whose children would contain `full_name`.
+    [[nodiscard]] fsim_vpi_handle_v1 deferred_owner(
+        std::string_view full_name) const;
 
     std::uint64_t simulation_identity_ { };
     std::uint32_t registry_identity_ { };
@@ -570,6 +633,11 @@ private:
     std::uint64_t next_value_state_observer_ { 1 };
     std::map<std::uint64_t, SystemVerilogVpiValueStateObserver>
         value_state_observers_;
+    mutable std::recursive_mutex materialize_mutex_;
+    std::function<void(fsim_vpi_handle_v1)> materializer_;
+    SystemVerilogVpiLiveValueSource live_source_;
+    std::function<void(fsim_vpi_handle_v1)> watch_hook_;
+    mutable std::uint64_t deferred_parents_ { };
 };
 
 } // namespace fsim::runtime

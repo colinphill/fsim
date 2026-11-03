@@ -813,6 +813,21 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                         return std::nullopt;
                     }
                     array.element.push_back(std::move(*inner));
+                    // The key type, unless the index is the wildcard (7.8.1).
+                    if (array.array_kind == ArrayKind::Associative
+                        && input.associative_index) {
+                        semantic::sv::TypeReference index_reference
+                            = input.associative_index_metadata
+                            ? semantic::sv::
+                                type_reference_from_associative_index_metadata(
+                                    *input.associative_index_metadata)
+                            : semantic::sv::TypeReference { };
+                        index_reference.target = *input.associative_index;
+                        if (auto key = self(
+                                self, index_reference, use_scope, depth + 1U)) {
+                            array.index.push_back(std::move(*key));
+                        }
+                    }
                     return array;
                 }
                 element.container_form.reset();
@@ -957,6 +972,14 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                         return std::nullopt;
                     }
                     array.ranges.push_back(*bounds);
+                }
+                if (form == Form::associative_array
+                    && record->container->associative_index) {
+                    if (auto key = self(self,
+                            *record->container->associative_index,
+                            record_scope, depth + 1U)) {
+                        array.index.push_back(std::move(*key));
+                    }
                 }
                 element.container_form.reset();
                 element.unpacked_dimensions.clear();

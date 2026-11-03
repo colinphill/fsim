@@ -1308,6 +1308,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         const auto default_format = default_output_format(task_name);
         Statement statement;
         statement.kind = StatementKind::FileDisplay;
+        statement.output_source.push_back(task_name);
         statement.output_newline = newline;
         statement.output_postponed = postponed;
         statement.output_monitor = monitor;
@@ -1334,6 +1335,11 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         } else {
             const auto format_token = advance();
             statement.output_generated_text = format_token.generated_text;
+            // Generated text (`__FILE__`) is rebuilt where it is used.
+            if (format_token.generated_text == GeneratedTextKind::none) {
+                statement.output_source.push_back(
+                    decoded_string_literal_text(format_token));
+            }
             auto parsed_format = parse_output_format(
                 decoded_string_literal_text(format_token));
             const bool has_unformatted = std::ranges::any_of(
@@ -1484,6 +1490,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         const auto start = advance();
         Statement statement;
         statement.kind = StatementKind::Display;
+        statement.output_source.push_back(std::string { task_name });
         statement.output_newline = newline;
         statement.output_postponed = postponed;
         statement.output_monitor = monitor;
@@ -1548,6 +1555,14 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     && (at(TokenKind::Comma, 1U)
                         || at(TokenKind::RightParen, 1U))) {
                     const auto format_token = advance();
+                    if (statement.output_source.size() == 1U
+                        && statement.output_values.empty()
+                        && pending.empty()
+                        && format_token.generated_text
+                            == GeneratedTextKind::none) {
+                        statement.output_source.push_back(
+                            decoded_string_literal_text(format_token));
+                    }
                     auto parsed_format = parse_output_format(
                         decoded_string_literal_text(format_token));
                     // %u and %z write raw data, as for $fwrite (IEEE 1800-2017
@@ -1617,6 +1632,10 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     const auto format_token = advance();
                     statement.output_generated_text
                         = format_token.generated_text;
+                    if (format_token.generated_text == GeneratedTextKind::none) {
+                        statement.output_source.push_back(
+                            decoded_string_literal_text(format_token));
+                    }
                     auto parsed_format = parse_output_format(
                         decoded_string_literal_text(format_token));
                     std::vector<Expression> values;

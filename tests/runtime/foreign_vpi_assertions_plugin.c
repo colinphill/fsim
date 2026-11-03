@@ -11,6 +11,8 @@
 
 static vpiHandle a_req;
 static vpiHandle c_hit;
+static vpiHandle a_seq;
+static vpiHandle seq_callbacks[4];
 
 static const char* text(PLI_INT32 property, vpiHandle object)
 {
@@ -21,6 +23,8 @@ static const char* text(PLI_INT32 property, vpiHandle object)
 static const char* reason_name(PLI_INT32 reason)
 {
     switch (reason) {
+    case cbAssertionStart:
+        return "start";
     case cbAssertionSuccess:
         return "success";
     case cbAssertionFailure:
@@ -146,6 +150,88 @@ static void list(vpiHandle scope, const char* label)
     }
 }
 
+// Attempt starts and outcomes of a_seq with the time each attempt started
+// (39.4.2 attemptStartTime, the attempt's identity).
+static PLI_INT32 attempt_observed(PLI_INT32 reason, p_vpi_time time,
+    vpiHandle assertion, p_vpi_attempt_info info, PLI_BYTE8* user_data)
+{
+    (void)user_data;
+    if (info == NULL) {
+        vpi_printf("#c %u %s %s info=no\n", (unsigned)time->low,
+            reason_name(reason), text(vpiName, assertion));
+    } else {
+        vpi_printf("#c %u %s %s start=%u\n", (unsigned)time->low,
+            reason_name(reason), text(vpiName, assertion),
+            (unsigned)info->attemptStartTime.low);
+    }
+    return 0;
+}
+
+// vpiAssertionKill takes an attempt start time and discards that attempt only.
+static PLI_INT32 kill_attempt(p_cb_data data)
+{
+    s_vpi_time started;
+    (void)data;
+    memset(&started, 0, sizeof started);
+    started.type = vpiSimTime;
+    started.low = 15U;
+    vpi_printf("#c 26 control kill-attempt-15 -> %d\n",
+        (int)vpi_control(vpiAssertionKill, a_seq, &started));
+    return 0;
+}
+
+static PLI_INT32 remove_seq_callbacks(p_cb_data data)
+{
+    int removed = 0;
+    size_t index;
+    (void)data;
+    for (index = 0; index < sizeof seq_callbacks / sizeof seq_callbacks[0];
+         ++index) {
+        removed += (int)vpi_remove_cb(seq_callbacks[index]);
+    }
+    vpi_printf("#c 56 removed %d\n", removed);
+    return 0;
+}
+
+static void after(unsigned time, PLI_INT32 (*routine)(p_cb_data))
+{
+    s_vpi_time delay;
+    s_cb_data data;
+    memset(&delay, 0, sizeof delay);
+    memset(&data, 0, sizeof data);
+    delay.type = vpiSimTime;
+    delay.low = time;
+    data.reason = cbAfterDelay;
+    data.cb_rtn = routine;
+    data.time = &delay;
+    (void)vpi_register_cb(&data);
+}
+
+static void properties(vpiHandle assertion, const char* name)
+{
+    vpi_printf("#c props %s clock-inferred=%d cover-sequence=%d\n", name,
+        (int)vpi_get(vpiIsClockInferred, assertion),
+        (int)vpi_get(vpiIsCoverSequence, assertion));
+}
+
+static void sequence_assertions(vpiHandle top)
+{
+    static const PLI_INT32 reasons[] = { cbAssertionStart, cbAssertionSuccess,
+        cbAssertionFailure, cbAssertionKill };
+    size_t index;
+    a_seq = vpi_handle_by_name("top.a_seq", NULL);
+    properties(a_req, "a_req");
+    properties(c_hit, "c_hit");
+    properties(a_seq, "a_seq");
+    properties(vpi_handle_by_name("cs_hit", top), "cs_hit");
+    for (index = 0; index < sizeof reasons / sizeof reasons[0]; ++index) {
+        seq_callbacks[index] = vpi_register_assertion_cb(
+            a_seq, reasons[index], attempt_observed, NULL);
+    }
+    after(26U, kill_attempt);
+    after(56U, remove_seq_callbacks);
+}
+
 static PLI_INT32 start(p_cb_data data)
 {
     static const PLI_INT32 attempts[] = { cbAssertionSuccess,
@@ -175,6 +261,7 @@ static PLI_INT32 start(p_cb_data data)
     for (index = 0; index < sizeof steps / sizeof steps[0]; ++index) {
         at(&steps[index]);
     }
+    sequence_assertions(top);
     return 0;
 }
 

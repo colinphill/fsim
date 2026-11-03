@@ -1933,6 +1933,7 @@ enum class ExecutionPointKind : std::uint8_t {
     assertion,
     process_entry,
     process_suspend,
+    call_return,
 };
 
 struct ExecutionPoint {
@@ -2253,6 +2254,12 @@ public:
     /// Observes a signal becoming active: every transaction, with or without
     /// an event (IEEE 1076-2019 14.7.3.1, 21.3.2.5).
     using SignalTransactionHook = std::function<void(SignalId)>;
+    /// Observes a driver acquiring the value of a matured transaction, with
+    /// or without a change: the process that holds the driver and the
+    /// signal it drives (IEEE 1076-2019 14.7.2, 21.3.2.5). Called after the
+    /// driver's value is updated; composite-signal families that are
+    /// updated as a whole are reported through DriverChangeHook only.
+    using DriverTransactionHook = std::function<void(ProcessId, SignalId)>;
     /// Observes an actual write to a base container object after its value and
     /// any signal alias have been committed.
     using ContainerObjectChangeHook
@@ -2298,6 +2305,10 @@ public:
     /// The identity is the static design process that owns the fork, including
     /// when a dynamic child creates a nested fork.
     using ForkSpawnFilter = std::function<bool(ProcessId)>;
+    /// A concurrent assertion's monitor started an attempt at the given
+    /// simulation tick (IEEE 1800-2023 39.4.2 cbAssertionStart); the process
+    /// is the static design process that owns the assertion.
+    using SvaAttemptHook = std::function<void(ProcessId, std::int64_t)>;
     // Class callbacks receive the currently executing process. The next
     // identity is the owning static design process; runtime fork children
     // retain it even though their ProcessProgram id is dynamic.
@@ -2513,6 +2524,41 @@ public:
     /// start, initial state is already public; the caller must expose its new
     /// registration to the startup observation inventory before calling start.
     void prepare_signal_observation(SignalId signal);
+    /// Every later change of these signals reaches the scheduler's signal
+    /// state in its own region (value-change observers such as VPI and VHPI
+    /// callbacks and traces see it). A signal the v4 kernel owns is published
+    /// from now on (docs/engine-v4-semantics.md S19); other signals already
+    /// are. A watch lasts for the rest of the run.
+    void watch_signal_changes(std::span<const SignalId> signals);
+    /// watch_signal_changes, and the v4 kernel also reports every assignment
+    /// to these signals that leaves the value as it is, a transaction
+    /// without an event (IEEE 1076-2019 14.7.3.1), to the signal transaction
+    /// hook. A watch lasts for the rest of the run.
+    void watch_signal_transactions(std::span<const SignalId> signals);
+    /// A client outside the processes (a foreign library) observes delta
+    /// cycles or time steps from now on: the v4 kernel runs every round as a
+    /// scheduler delta (docs/engine-v4-semantics.md S19).
+    void open_external_observation();
+    /// The v4 kernel owns the signal: its scheduler copy is current only
+    /// while watched or after an observation barrier
+    /// (prepare_signal_observation).
+    [[nodiscard]] bool signal_kernel_owned(SignalId signal) const noexcept;
+    /// A client outside the processes is about to write, force or release
+    /// the signal through the scheduler (VPI and VHPI puts): the v4 kernel
+    /// takes the committed value into a signal it owns and rescans a signal
+    /// it reads.
+    void note_external_signal_write(SignalId signal);
+    /// A foreign deposit straight into the slot of a signal the v4 kernel
+    /// owns, as an update event of the current time step: false when the
+    /// kernel does not hold the signal's value alone (not owned, forced,
+    /// published to the scheduler, or computed on read), and the caller
+    /// deposits through the scheduler.
+    [[nodiscard]] bool deposit_kernel_signal(SignalId signal,
+        const PackedLogic4& value);
+    /// The value of a signal the v4 kernel owns, read from its slot without
+    /// an observation barrier; nullopt under the same conditions.
+    [[nodiscard]] std::optional<PackedLogic4> kernel_signal_value(
+        SignalId signal) const;
 
     /// Return a live reference; its backing remains on public storage because
     /// callers may retain it beyond this call.
@@ -2590,8 +2636,23 @@ public:
     /// Stop the running attempts of the selected processes' monitors
     /// ($assertkill, IEEE 1800-2017 20.12).
     void kill_sva_monitors(std::span<const ProcessId> design_processes);
+    /// Stop only the running attempts that started at `start_time` in the
+    /// selected processes' monitors (vpiAssertionKill with an attempt start
+    /// time, IEEE 1800-2023 39.5.2); true when one was running.
+    bool kill_sva_attempt(
+        std::span<const ProcessId> design_processes, std::int64_t start_time);
+    /// The start tick of the attempt behind the outcome the process's monitor
+    /// reported last (attemptStartTime, 39.4.2).
+    [[nodiscard]] std::optional<std::int64_t> sva_outcome_start(
+        ProcessId design_process) const;
+    void set_sva_attempt_hook(SvaAttemptHook hook);
     [[nodiscard]] PackedLogic4 read_debug_local(
         ProcessId process, std::size_t local_index) const;
+    /// Deposit a value into a debug local (a variable of a process): the
+    /// value has the local's width (VHPI vhpi_put_value, IEEE 1076-2019
+    /// 22.5.2).
+    void write_debug_local(
+        ProcessId process, std::size_t local_index, const PackedLogic4& value);
     [[nodiscard]] std::string read_debug_string_local(
         ProcessId process, std::size_t local_index) const;
     [[nodiscard]] ContainerValue read_debug_container_local(
@@ -2613,6 +2674,7 @@ public:
     void set_event_trigger_hook(EventTriggerHook hook);
     void set_force_statement_hook(ForceStatementHook hook);
     void set_signal_transaction_hook(SignalTransactionHook hook);
+    void set_driver_transaction_hook(DriverTransactionHook hook);
     void set_container_object_change_hook(ContainerObjectChangeHook hook);
     void set_container_element_change_hook(ContainerElementChangeHook hook);
 #include "fsim/runtime/simir_scalar_interpreter.hpp"

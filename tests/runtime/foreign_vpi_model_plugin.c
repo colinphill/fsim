@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // VPI data-model conformance plug-in: structures, unions, enumerations,
 // packed arrays, net arrays, ports, generate scope arrays and instance
-// arrays, typespecs, definitions and parameters (IEEE 1800-2023 37.10,
+// arrays, typespecs, definitions and parameters (IEEE 1800-2023 37.5, 37.10,
 // 37.11, 37.14, 37.16-37.18, 37.25, 37.26, 37.28, 37.85).
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
@@ -245,6 +245,8 @@ static void typespecs(void)
     }
 }
 
+static void late_checks(void);
+
 // Where an instance's definition is (37.10) and parameters (37.28).
 static void definitions(void)
 {
@@ -326,6 +328,7 @@ static void definitions(void)
             text(vpi_get_str(vpiName, object)),
             (int)vpi_get(vpiLocalParam, object), (int)value.value.integer);
     }
+    late_checks();
 }
 
 // Modports and an interface port's reference object (37.7, 37.15).
@@ -429,6 +432,54 @@ static void hierarchy(void)
     interfaces();
     typespecs();
     definitions();
+}
+
+// Port bits, high connections that are expressions, typedefs of a scope and
+// a parameter named by a typedef (IEEE 1800-2023 37.5, 37.14, 37.25, 37.28).
+static void late_checks(void)
+{
+    static char* instances[] = { "top.u1", "top.u2", "top.u3" };
+    vpiHandle iterator;
+    vpiHandle object;
+    vpiHandle port;
+    int count = 0;
+    iterator = vpi_iterate(vpiPort, vpi_handle_by_name("top.u0", NULL));
+    while (iterator != NULL && (port = vpi_scan(iterator)) != NULL) {
+        vpiHandle bits = vpi_iterate(vpiBit, port);
+        count = 0;
+        while (bits != NULL && (object = vpi_scan(bits)) != NULL) {
+            vpiHandle parent = vpi_handle(vpiParent, object);
+            vpi_printf("#c u0 port %s bit %d type=%s size=%d name=%s "
+                       "parent=%s\n",
+                name_of(port), count, text(vpi_get_str(vpiType, object)),
+                (int)vpi_get(vpiSize, object),
+                text(vpi_get_str(vpiName, object)), name_of(parent));
+            ++count;
+        }
+        vpi_printf("#c u0 port %s bits=%d\n", name_of(port), count);
+    }
+    for (size_t index = 0U; index < sizeof instances / sizeof instances[0];
+         ++index) {
+        vpiHandle high;
+        port = vpi_scan(vpi_iterate(vpiPort,
+            vpi_handle_by_name(instances[index], NULL)));
+        high = vpi_handle(vpiHighConn, port);
+        vpi_printf("#c %s.a high type=%s optype=%d parent=%s\n",
+            instances[index], high != NULL ? text(vpi_get_str(vpiType, high)) : "-",
+            high != NULL ? (int)vpi_get(vpiOpType, high) : -1,
+            high != NULL
+                ? text(vpi_get_str(vpiType, vpi_handle(vpiParent, high)))
+                : "-");
+    }
+    iterator = vpi_iterate(vpiTypedef, vpi_handle_by_name("top", NULL));
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        vpiHandle key = vpi_handle(vpiIndexTypespec, object);
+        typespec_chain(text(vpi_get_str(vpiName, object)), object);
+        vpi_printf("#c td %s index=%s\n", name_of(object),
+            key != NULL ? text(vpi_get_str(vpiType, key)) : "-");
+    }
+    object = vpi_handle(vpiTypespec, vpi_handle_by_name("top.NP", NULL));
+    typespec_chain("NP", object);
 }
 
 static PLI_INT32 start(p_cb_data data)

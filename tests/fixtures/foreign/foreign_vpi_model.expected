@@ -114,3 +114,19 @@
 #c nettype lz=1 tn=4 implicit lz=0 imp=1
 #c scope top.g[1] found=1 implicit=0 member=1
 #c scope top.genblk2 found=1 implicit=1 member=0
+#c g[1] param i local=1 value=1
+#c u0 port a bit 0 type=vpiPortBit size=1 name=- parent=a
+#c u0 port a bit 1 type=vpiPortBit size=1 name=- parent=a
+#c u0 port a bit 2 type=vpiPortBit size=1 name=- parent=a
+#c u0 port a bit 3 type=vpiPortBit size=1 name=- parent=a
+#c u0 port a bits=4
+#c u0 port y bits=0
+#c u0 port z bits=0
+#c top.u1.a high type=vpiOperation optype=33 parent=vpiPort
+#c top.u2.a high type=vpiConstant optype=-1 parent=vpiPort
+#c top.u3.a high type=vpiPartSelect optype=-1 parent=vpiReg
+#c ts nib_t.0 type=vpiLogicTypespec name=nib_t ranges=[3:0] alias=-:-
+#c ts nib_t.1 type=vpiLogicTypespec name=- ranges=- alias=-:-
+#c td nib_t index=-
+#c ts my_int_t.0 type=vpiIntTypespec name=my_int_t ranges=- alias=vpiIntTypespec:-
+#c td my_int_t index=-

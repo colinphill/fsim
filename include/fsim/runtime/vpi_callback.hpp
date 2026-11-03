@@ -67,6 +67,8 @@ struct SystemVerilogVpiAssertionEvent {
     std::uint32_t slot { };
     std::uint32_t source_span { };
     bool action_suppressed { };
+    // The tick the attempt started at (IEEE 1800-2023 39.4.2).
+    std::uint64_t attempt_start { };
 };
 
 enum class SystemVerilogVpiCallbackError {

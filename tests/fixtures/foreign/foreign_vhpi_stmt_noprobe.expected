@@ -1,0 +1,1 @@
+#c refused stmt clock: vhpi_register_cb: vhpiCbStmt needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)

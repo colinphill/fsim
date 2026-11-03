@@ -273,6 +273,34 @@ public:
             && (text == nullptr || std::string_view { text } != "0");
     }
     void materialize(SignalId signal);
+    /// Value-change observation (docs/engine-v4-semantics.md S19): the
+    /// kernel-owned signals become boundary outputs for the rest of the run,
+    /// so every change reaches the host in its writer's region. A slot whose
+    /// stores were compiled plain (silent) gets its writer units' code again
+    /// with notifying stores; nothing leaves compiled code. A request made
+    /// inside an activation takes effect when the activation ends.
+    void watch(std::span<const SignalId> requested);
+    /// The slots of these signals queue every assignment, also one that
+    /// leaves the value as it is, and commit_writes reports those as
+    /// transactions (note_unchanged_transactions).
+    void watch_transactions(std::span<const SignalId> signals);
+    /// A foreign library observes delta cycles or time steps (a callback
+    /// other than the start and end of simulation): every kernel round is a
+    /// host delta from now on, as for a run with outputs (no closed time
+    /// warp, no delta collapse).
+    void open_boundary();
+    /// A foreign library is about to write, force or release the signal
+    /// through the host: a host input no process writes is scanned from now
+    /// on and no longer mirrors a sole writer's updates, the host's commit
+    /// to a kernel-owned signal is imported into its slot, and dead logic
+    /// writing it runs again (so the written value lasts until its inputs
+    /// change, as a live driver's would).
+    void note_external_write(SignalId signal);
+    /// Interpreter::deposit_kernel_signal and kernel_signal_value.
+    [[nodiscard]] bool deposit_owned(SignalId signal, const PackedLogic4& value);
+    [[nodiscard]] std::optional<PackedLogic4> owned_value(SignalId signal);
+    /// The slot of an owned signal whose value only the kernel holds.
+    [[nodiscard]] std::uint32_t sole_owned_slot(SignalId signal) const;
     /// Runs the lazy writers of a slot, their lazy inputs' writers first.
     void refresh_lazy(std::uint32_t slot);
     /// The host committed a new value to the kernel-owned signal (a process
@@ -283,6 +311,13 @@ public:
     /// time step. Not called for the kernel's own publication or
     /// materialization (Impl::import_static_kernel_write filters those).
     void import_host_write(SignalId signal, SignalChangeOrigin origin);
+    /// commit_writes: the transactions of watched signals whose value the
+    /// round left as it was.
+    void note_unchanged_transactions(std::uint32_t count);
+    /// Zero-delay logic that never settles: the scheduler's delta-cycle
+    /// limit error, as each of its evaluations is a delta cycle of the
+    /// reference (S19). `member` names the loop in a trace.
+    [[noreturn]] void fail_unsettled(std::uint32_t member) const;
     /// Hosted tier: a wake of a hosted process, redirected from the host
     /// scheduler's queue_* entry points (Impl::static_kernel_enqueue_hosted).
     /// Runs the process to its next suspension on its hosted tier; false when
@@ -1155,6 +1190,16 @@ private:
     std::vector<std::uint32_t> profile_partition_first_wake_;
     void note_partition_wake(std::uint32_t partition, std::uint32_t position);
     void build_native(StaticKernelCodegen& codegen);
+    /// watch's work on the requested signals' slots.
+    void apply_watches();
+    /// StaticKernelContainerInfo::flags bits 2 and 3 for these element
+    /// slots: blocking writes store in place when the slots agree on whether
+    /// a change is announced.
+    [[nodiscard]] std::uint32_t container_store_flags(
+        std::span<const std::uint32_t> element_slots) const;
+    /// Compiles the units writing the given (no longer silent) slots with
+    /// notifying stores in place of plain ones.
+    void respecialize_silent(const std::vector<std::uint8_t>& unsilenced);
     /// Whether every register's X plane and 'U' mask is zero (clearing them
     /// for registers each activation writes before reading).
     [[nodiscard]] static bool registers_known(CompiledBody& body) noexcept;
@@ -1298,6 +1343,9 @@ private:
     /// discarded what earlier publishes staged) commits every output's
     /// current value at once, in every domain.
     void publish(bool immediate = false, bool ending = false);
+    /// One output slot of publish: hands its value to the host unless the
+    /// host already holds it (or `ending`).
+    void publish_slot(std::uint32_t slot_index, bool immediate, bool ending);
     void initialize();
     [[nodiscard]] bool scan_inputs(bool all = true);
     /// Take one input's committed host value into its mirror and wake its
@@ -1380,6 +1428,16 @@ private:
     /// pool. Every write queued in the leader's writes_ marks its slot.
     std::vector<std::uint32_t> write_marks_;
     std::uint32_t write_round_ { 1U };
+    /// watch_transactions' slots, sorted.
+    std::vector<std::uint32_t> transaction_slots_;
+    /// Marks transaction_slots_ queued in this round, so that the
+    /// generated code queues their unchanged writes too.
+    void mark_transaction_slots() noexcept
+    {
+        for (const auto slot : transaction_slots_) {
+            mark_write(slot);
+        }
+    }
     void mark_write(const std::uint32_t slot) noexcept
     {
         if (slot < write_marks_.size()) {
@@ -1714,7 +1772,17 @@ private:
         bool vhdl_host_cycles { };
     };
     std::optional<HostScan> restored_host_scan_;
-    void record_host_scan(const HostScan& scan);
+    /// The members whose signal writes are SystemVerilog Active-region
+    /// update events (continuous assignments, IEEE 1800-2023 10.3.2): the
+    /// update matures after the member suspends, so a change of an operand
+    /// it writes wakes it again. A process's blocking writes happen while it
+    /// runs and never wake it. The constructor's scan finds them; a restored
+    /// image holds them after the host scan.
+    std::vector<std::uint32_t> update_writers_;
+    std::optional<std::vector<std::uint32_t>> restored_update_writers_;
+    std::vector<std::uint8_t> self_waking_;
+    void record_host_scan(const HostScan& scan,
+        const std::vector<std::uint32_t>& update_writers);
     /// plan_delta_collapse's parts: deciding (the analysis), applying, and
     /// appending the plan to the image being recorded.
     [[nodiscard]] CollapsePlan decide_delta_collapse();
@@ -2054,6 +2122,9 @@ private:
     std::vector<LazyTemplate> lazy_templates_;
     /// Two-state templates' full-semantics code, compiled on demand.
     std::vector<LazyTemplate> full_templates_;
+    /// Per template: how build_native compiled it (tier, VHDL), for the
+    /// templates respecialize_silent derives from it.
+    std::vector<StaticKernelTemplate> template_codes_;
     /// Per template: the instructions its full code continues two-state
     /// code at (StaticKernelTemplate::resume_points); sized once.
     std::vector<std::vector<std::uint32_t>> continuations_;
@@ -2320,6 +2391,20 @@ private:
     void run_settle_entry(std::uint32_t entry, std::size_t& evaluations,
         std::size_t limit);
     std::vector<std::uint64_t> arena_;
+    /// Outputs' last published values (Slot::published offsets): apart from
+    /// the arena, so watch can add outputs during the run.
+    std::vector<std::uint64_t> published_;
+    /// Signals watch was asked for inside an activation.
+    std::vector<SignalId> pending_watches_;
+    /// Slots whose dead writers come alive (note_external_write), and an
+    /// open_boundary request, waiting for apply_watches.
+    std::vector<std::uint32_t> pending_revivals_;
+    bool boundary_requested_ { };
+    /// A boundary was opened (open_boundary or a watch): it survives the
+    /// initialization's own choice of host_boundary_ and closed_.
+    bool boundary_opened_ { };
+    /// Inside activate() (watch defers its work).
+    bool activating_ { };
     /// VHDL delta mode (StaticKernelRuntimeSpec::vhdl).
     bool vhdl_ { };
     /// Debugger plan (StaticKernelRuntimeSpec::debug_points).
@@ -3051,6 +3136,10 @@ private:
     /// slot when that changed it (import_before_ holds the old words), else
     /// no_slot.
     [[nodiscard]] std::uint32_t import_slot(SignalId signal);
+    /// Stores `value` into the slot (import_before_ holds the old words):
+    /// whether that changed it.
+    [[nodiscard]] bool store_slot(
+        std::uint32_t slot_index, const PackedLogic4& value);
     std::vector<std::uint64_t> profile_member_runs_;
     std::vector<std::string> profile_names_;
     std::size_t compiled_members_ { };

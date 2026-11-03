@@ -169,6 +169,9 @@ void Interpreter::Impl::schedule_update_commit()
                     continue;
                 }
                 const auto process = staged.process;
+                if (driver_transaction_hook) {
+                    driver_transaction_hook(process, signal);
+                }
                 const auto origin = capture_signal_change_origin(process);
                 const bool can_publish = hook_free_publication
                     && can_publish_native_logic9_word_prevalidated(
@@ -756,6 +759,9 @@ void Interpreter::Impl::schedule_update_commit()
                 const auto process = staged.process;
                 const auto origin = capture_signal_change_origin(process);
                 staged.active = 0U;
+                if (driver_transaction_hook) {
+                    driver_transaction_hook(process, signal);
+                }
                 const auto& route = direct_single_driver_routes[signal];
                 if (!route.active || route.process != process
                     || direct_single_driver_record(signal) == nullptr
@@ -839,6 +845,9 @@ void Interpreter::Impl::schedule_update_commit()
                     };
                 }
                 const auto process = record->process;
+                if (driver_transaction_hook) {
+                    driver_transaction_hook(process, signal);
+                }
                 if (record->value != *staged) {
                     record->value = *staged;
                     if (driver_change_hook) {

@@ -667,6 +667,13 @@ struct CoverageFsmMachine {
 /// generic/parameter values after constant evaluation. Each occurrence remains
 /// an explicit specialization record so process ownership and cache identity
 /// never depend on recovering hierarchy from process-name strings.
+/// A typedef an instance declares, as a typespec (IEEE 1800-2023 37.5, 37.12
+/// vpiTypedef; 37.25); empty when its type has no typespec model.
+struct VpiTypedefInfo {
+    std::string name;
+    std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
+};
+
 struct SpecializationInfo {
     SpecializationId id { };
     std::string unit;
@@ -710,6 +717,11 @@ struct SpecializationInfo {
     // Concurrent and continuous assignments whose statements count, under
     // code coverage, in lowering order.
     std::vector<semantic::StatementId> coverage_concurrent_statements;
+    // The typedefs the instance declares, in declaration order.
+    std::vector<VpiTypedefInfo> vpi_typedefs;
+    // The typespec of each value parameter whose declared type names a
+    // typedef, by parameter name (IEEE 1800-2023 37.28 vpiTypespec).
+    std::vector<VpiTypedefInfo> vpi_parameter_typespecs;
 };
 
 using UdpTableId = std::uint32_t;
@@ -916,35 +928,25 @@ struct StaticKernelHostReason {
     std::string example;
 };
 
-/// What code outside the SimIR processes observes or touches, as the
+/// What code outside the SimIR processes needs from the plan, as the
 /// application knows it before planning (docs/engine-v4-semantics.md S19,
-/// S21). The planner keeps every signal such a client can reach a host
-/// signal: kernel members write it through the host commit path and read it
-/// as a boundary input, so the client sees exactly the reference values,
-/// callbacks and delta timing. The planner derives the design-local needs
-/// itself (module paths, timing checks and VCD control operations).
+/// S21). Foreign libraries (VPI, VHPI, DPI) and traces need nothing here:
+/// they read, watch and write kernel-owned signals at run time
+/// (Interpreter::watch_signal_changes, StaticKernel::note_external_write),
+/// so their runs use the default plan and its kernel image. The planner
+/// derives the design-local needs itself (module paths, timing checks and
+/// VCD control operations).
 struct StaticKernelAccessPlan {
     /// The application admits the kernel for this run although cone fusion
     /// is off, because this plan replaces the whole-design gate (switch
     /// FSIM_STATIC_KERNEL_ACCESS_PLAN=0 restores the gates).
     bool admit { };
-    /// A VPI, VHPI or DPI library is loaded: it reads and writes any design
-    /// object, registers value-change callbacks, and may deposit values
-    /// between kernel rounds. Every signal and container is a host object.
-    bool foreign { };
-    /// A trace writer or a VCD control observer records every value change
-    /// of any signal (IEEE 1800-2023 21.7): every signal is a host signal.
-    bool observe_all { };
-    /// A trace file whose selection is fixed for the run records these
-    /// signals (sorted, unique; a superset of the selection is exact): they
-    /// alone are host signals for it. `observed_identity` keys the set.
-    std::vector<runtime::simir::SignalId> observed;
-    std::string observed_identity;
     /// Code coverage is on. Statement, branch and line counters are host
     /// data bumped by CodeCoverageHit operations, which the kernel does not
     /// evaluate: processes with such operations stay host processes.
     bool coverage { };
-    /// The source-level debugger drives the run (`--engine debug`): every
+    /// The source-level debugger (or a client that may stop and examine
+    /// any process) drives the run: every signal is a host signal and every
     /// process is a behavioral thread or a hosted process, so each can stop
     /// at a statement, and the members' debug points are executable.
     bool debug { };
@@ -952,14 +954,10 @@ struct StaticKernelAccessPlan {
     /// Key text for persisted plans; empty for the default plan.
     [[nodiscard]] std::string identity() const
     {
-        if (!foreign && !observe_all && !coverage && !debug
-            && observed_identity.empty()) {
+        if (!coverage && !debug) {
             return { };
         }
         std::string text { "access" };
-        text += foreign ? ";foreign" : "";
-        text += observe_all ? ";observe_all" : "";
-        text += observed_identity.empty() ? "" : ";observed=" + observed_identity;
         text += coverage ? ";coverage" : "";
         text += debug ? ";debug" : "";
         return text;

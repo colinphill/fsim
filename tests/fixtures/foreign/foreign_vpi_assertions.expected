@@ -1,24 +1,43 @@
 #c design vpiAssert name=a_req full=top.a_req line=10 scope=top
 #c design vpiCover name=c_hit full=top.c_hit line=14 scope=top
 #c design vpiAssume name=$assertion$3 full=top.$assertion$3 line=15 scope=top
+#c design vpiAssert name=a_seq full=top.a_seq line=29 scope=top
+#c design vpiCover name=cs_hit full=top.cs_hit line=32 scope=top
 #c top vpiAssert name=a_req full=top.a_req line=10 scope=top
 #c top vpiCover name=c_hit full=top.c_hit line=14 scope=top
 #c top vpiAssume name=$assertion$3 full=top.$assertion$3 line=15 scope=top
+#c top vpiAssert name=a_seq full=top.a_seq line=29 scope=top
+#c top vpiCover name=cs_hit full=top.cs_hit line=32 scope=top
 #c lookup a_req=vpiAssert c_hit=vpiCover
-#c start-callback=refused
+#c start-callback=placed
+#c props a_req clock-inferred=0 cover-sequence=0
+#c props c_hit clock-inferred=0 cover-sequence=0
+#c props a_seq clock-inferred=0 cover-sequence=0
+#c props cs_hit clock-inferred=0 cover-sequence=1
 #c 0 sys-initialized
 #c 0 sys-on
+#c 5 start a_req info=yes
 #c 5 vacuous a_req info=yes
+#c 5 start a_seq start=5
+#c 5 failure a_seq start=5
 #c action pass a_req 5
 #c 14 disable-pass-action a_req info=no
 #c 14 control disable-pass-action -> 1
+#c 15 start a_req info=yes
 #c 15 success a_req info=yes
 #c 15 success c_hit info=yes
+#c 15 start a_seq start=15
 #c 20 enable-pass-action a_req info=no
 #c 20 control enable-pass-action -> 1
+#c 25 start a_req info=yes
 #c 25 failure a_req info=yes
+#c 25 start a_seq start=25
 #c action fail a_req 25
+#c 26 kill a_seq info=no
+#c 26 control kill-attempt-15 -> 1
+#c 35 start a_req info=yes
 #c 35 disabled-evaluation a_req info=yes
+#c 35 start a_seq start=35
 #c 40 lock a_req info=no
 #c 40 control lock -> 1
 #c 40 control disable-while-locked -> 0
@@ -26,13 +45,19 @@
 #c 40 control unlock -> 1
 #c 40 disable a_req info=no
 #c 40 control disable -> 1
+#c 45 start a_seq start=45
+#c 45 failure a_seq start=25
 #c 50 enable a_req info=no
 #c 50 control enable -> 1
 #c 51 kill c_hit info=no
 #c 51 control kill -> 1
+#c 55 start a_req info=yes
 #c 55 success a_req info=yes
 #c 55 success c_hit info=yes
+#c 55 start a_seq start=55
+#c 55 success a_seq start=35
 #c action pass a_req 55
+#c 56 removed 4
 #c 58 sys-off
 #c 58 control sys-off -> 1
 #c 68 sys-on

@@ -53,7 +53,7 @@ using namespace static_kernel_compiled_detail;
 
 namespace {
 
-constexpr std::string_view image_magic { "fsim-static-kernel-image-v1" };
+constexpr std::string_view image_magic { "fsim-static-kernel-image-v2" };
 
 template <typename T>
 struct is_vector : std::false_type { };
@@ -351,6 +351,7 @@ void Interpreter::Impl::StaticKernel::visit_image_fields(Self& self, Visit&& vis
 {
     visit(self.slots_);
     visit(self.arena_);
+    visit(self.published_);
     visit(self.slot_of_signal_);
     visit(self.family_of_signal_);
     visit(self.families_);
@@ -480,7 +481,8 @@ void Interpreter::Impl::StaticKernel::Member::materialize_operations() const
     }
 }
 
-void Interpreter::Impl::StaticKernel::record_host_scan(const HostScan& scan)
+void Interpreter::Impl::StaticKernel::record_host_scan(const HostScan& scan,
+    const std::vector<std::uint32_t>& update_writers)
 {
     // Between the image's reasons and the collapse plan.
     if (!recording_image_ || recording_image_->empty()) {
@@ -488,6 +490,7 @@ void Interpreter::Impl::StaticKernel::record_host_scan(const HostScan& scan)
     }
     ImageWriter writer { *recording_image_ };
     writer.write(scan);
+    writer.write(update_writers);
     if (!writer.ok()) {
         recording_image_->clear();
     }
@@ -554,9 +557,10 @@ bool Interpreter::Impl::StaticKernel::restore_image(
     }
     std::vector<std::optional<std::string>> reasons;
     HostScan host_scan;
+    std::vector<std::uint32_t> update_writers;
     CollapsePlan collapse;
     ok = ok && reader.read(reasons) && reader.read(host_scan)
-        && reader.read(collapse) && reader.done();
+        && reader.read(update_writers) && reader.read(collapse) && reader.done();
     if (!ok && failure == nullptr) {
         failure = "fields";
     }
@@ -746,6 +750,7 @@ bool Interpreter::Impl::StaticKernel::restore_image(
     build_container_info();
     fast_runs_.assign(members_.size(), FastRun { });
     restored_host_scan_ = host_scan;
+    restored_update_writers_ = std::move(update_writers);
     restored_collapse_ = std::move(collapse);
     stage("finish");
     note_image("restore", "restored", spec.kernel_image->size());

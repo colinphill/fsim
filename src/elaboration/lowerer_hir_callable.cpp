@@ -19934,6 +19934,10 @@ Lowerer::lower_hir_function_call_value(
         { },
     });
     reload_hir_vhdl_protected_caches();
+    if (call_expression->vhdl != nullptr) {
+        emit_debug_point(
+            DebugPointKind::call_return, hir_source_span(call_source));
+    }
     transfer_hir_static_formals(frame, false);
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
@@ -21814,6 +21818,10 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         { },
     });
     reload_hir_vhdl_protected_caches();
+    if (call_expression->vhdl != nullptr) {
+        emit_debug_point(
+            DebugPointKind::call_return, hir_source_span(call_source));
+    }
     transfer_hir_static_formals(frame, false);
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
@@ -23367,6 +23375,9 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         { },
     });
     reload_hir_vhdl_protected_caches();
+    emit_debug_point(
+        DebugPointKind::call_return,
+        hir_source_span(statement->vhdl->source));
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
     }

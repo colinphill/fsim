@@ -1998,6 +1998,8 @@ namespace {
                 }
             }
             output.output_trailing_text = input.output_trailing_text;
+            output.output_source.assign(
+                input.output_source.begin(), input.output_source.end());
             const auto transfer_type = !input.target.nominal_type.empty()
                 ? input.target.nominal_type
                 : input.value.nominal_type;

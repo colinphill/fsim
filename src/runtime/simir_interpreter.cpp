@@ -3575,6 +3575,7 @@ RunResult Interpreter::finish()
 void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
     const ProcessSchedulingDomain origin_domain)
 {
+    note_external_signal_write(signal);
     if (!impl_->started) {
         impl_->vhdl_deposited_before_start.insert(signal);
     }
@@ -3624,6 +3625,7 @@ void Interpreter::force_signal(SignalId signal, PackedLogic4 value,
     if (width != value.width()) {
         throw std::invalid_argument("SimIR signal force width mismatch");
     }
+    note_external_signal_write(signal);
     impl_->force_slice(signal, std::move(value), 0,
         SignalChangeOrigin { origin_domain, SchedulerPhase::active });
 }
@@ -3652,6 +3654,7 @@ void Interpreter::release_signal(SignalId signal,
         };
     }
     const auto width = impl_->get_signal(signal).initial_value.width();
+    note_external_signal_write(signal);
     impl_->release_slice(signal, 0, width,
         SignalChangeOrigin { origin_domain, SchedulerPhase::active });
 }
@@ -3666,6 +3669,7 @@ void Interpreter::force_signal_slice(
             "package static startup cannot force a signal slice"
         };
     }
+    note_external_signal_write(signal);
     impl_->force_slice(signal, std::move(value), offset);
 }
 
@@ -3679,6 +3683,7 @@ void Interpreter::release_signal_slice(
             "package static startup cannot release a signal slice force"
         };
     }
+    note_external_signal_write(signal);
     impl_->release_slice(signal, offset, width);
 }
 
@@ -3713,6 +3718,7 @@ void Interpreter::schedule_signal_at(SignalId signal, PackedLogic4 value,
             + std::to_string(impl_->get_signal(signal).initial_value.width())
             + ", value has width " + std::to_string(value.width()) + ")");
     }
+    note_external_signal_write(signal);
     impl_->scheduler.schedule_at(
         time, SchedulerPhase::update, order,
         [state = impl_.get(), signal, value = std::move(value)](
@@ -4029,6 +4035,9 @@ PackedLogic4 Interpreter::driver_value(
     if (process >= impl_->processes.size()) {
         throw std::out_of_range("invalid SimIR process ID");
     }
+    // A driver of a signal the v4 kernel owns holds its value in the kernel
+    // until an observation barrier commits it (S19).
+    impl_->prepare_signal_observation(signal);
     if (signal < impl_->signal_container_aggregate_aliases.size()
         && impl_->signal_container_aggregate_aliases[signal]) {
         const auto object = *impl_->signal_container_aggregate_aliases[signal];
@@ -4180,6 +4189,34 @@ void Interpreter::kill_sva_monitors(
     }
 }
 
+bool Interpreter::kill_sva_attempt(
+    const std::span<const ProcessId> design_processes,
+    const std::int64_t start_time)
+{
+    bool killed = false;
+    for (auto& [key, monitor] : impl_->sva_monitors) {
+        if (std::ranges::find(design_processes, key.first)
+            != design_processes.end()) {
+            killed = monitor->kill_attempt(start_time) != 0U || killed;
+        }
+    }
+    return killed;
+}
+
+std::optional<std::int64_t> Interpreter::sva_outcome_start(
+    const ProcessId design_process) const
+{
+    const auto found = impl_->sva_outcome_starts.find(design_process);
+    return found == impl_->sva_outcome_starts.end()
+        ? std::nullopt
+        : std::optional<std::int64_t> { found->second };
+}
+
+void Interpreter::set_sva_attempt_hook(SvaAttemptHook hook)
+{
+    impl_->sva_attempt_hook = std::move(hook);
+}
+
 PackedLogic4 Interpreter::read_debug_local(
     const ProcessId process,
     const std::size_t local_index) const
@@ -4212,6 +4249,32 @@ PackedLogic4 Interpreter::read_debug_local(
         throw std::logic_error { "SimIR debug local has not been initialized" };
     }
     return value;
+}
+
+void Interpreter::write_debug_local(const ProcessId process,
+    const std::size_t local_index, const PackedLogic4& value)
+{
+    const auto kernel_owner = impl_->static_kernel
+        ? impl_->static_kernel->debug_owner(process) : std::nullopt;
+    const auto* const kernel_original = kernel_owner
+        ? impl_->static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl_->processes.program_view(kernel_owner.value_or(process));
+    if (local_index >= program.debug_locals().size()) {
+        throw std::out_of_range { "invalid SimIR debug-local index" };
+    }
+    const auto& local = program.debug_locals()[local_index];
+    if (value.width() != local.width) {
+        throw std::invalid_argument { "invalid SimIR debug-local payload" };
+    }
+    if (kernel_owner) {
+        impl_->static_kernel->debug_write_register(
+            *kernel_owner, local.register_id, value);
+        return;
+    }
+    auto& state = impl_->get_process(process);
+    impl_->write_process_register(state, local.register_id, value);
 }
 
 SystemVerilogScalarValue Interpreter::read_debug_scalar_local(
@@ -4389,6 +4452,11 @@ void Interpreter::set_force_statement_hook(ForceStatementHook hook)
 void Interpreter::set_signal_transaction_hook(SignalTransactionHook hook)
 {
     impl_->signal_transaction_hook = std::move(hook);
+}
+
+void Interpreter::set_driver_transaction_hook(DriverTransactionHook hook)
+{
+    impl_->driver_transaction_hook = std::move(hook);
 }
 
 void Interpreter::set_container_object_change_hook(

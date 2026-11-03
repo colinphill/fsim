@@ -1174,12 +1174,19 @@ private:
             if (record->referenced_name) {
                 result = declaration_types(*record->referenced_name);
             }
-            // CHARACTER and BIT need no retained declarations (16.3).
+            // CHARACTER and BIT need no retained declarations (16.3), nor
+            // STD_ULOGIC, which this pass treats as predefined too (16.7).
             add(result, builtin("character"));
             const auto text = std::string_view { record->text };
             if (text == "'0'" || text == "'1'" || text == "0"
                 || text == "1") {
                 add(result, builtin("bit"));
+            }
+            if (text.size() == 3U && text.front() == '\''
+                && text.back() == '\''
+                && std::string_view { "UX01ZWLH-" }.find(text[1])
+                    != std::string_view::npos) {
+                add(result, builtin("std_ulogic"));
             }
             return result;
         }

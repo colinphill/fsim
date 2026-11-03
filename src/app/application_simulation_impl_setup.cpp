@@ -140,28 +140,6 @@ void assign_handle_container(runtime::SystemVerilogClassHeap& heap,
     }
 }
 
-[[nodiscard]] std::vector<runtime::simir::SignalId>
-collect_package_static_startup_signal_ids(const BuiltProject& built)
-{
-    std::vector<runtime::simir::SignalId> result;
-    // Process views keep artifact-backed rows unmaterialized for the
-    // interpreter, which registers them from their shared templates.
-    using Access = elaboration::detail::ElaboratedDesignProcessAccess;
-    for (std::size_t index = 0U; index < built.design.process_count(); ++index) {
-        const auto process = Access::process_view(built.design, index);
-        if (!runtime::simir::startup_initializer_phase(
-                process.startup_phase())) {
-            continue;
-        }
-        for (const auto& region : process.driver_regions()) {
-            result.push_back(region.signal);
-        }
-    }
-    std::ranges::sort(result);
-    result.erase(std::unique(result.begin(), result.end()), result.end());
-    return result;
-}
-
 #if defined(FSIM_HAS_LLVM)
 /// The static-kernel plan persisted for a loaded artifact (elaborate --aot
 /// stores it; simulate restores it), keyed by the artifact's content and
@@ -271,12 +249,10 @@ bool application_detail::static_kernel_requested(
 }
 
 void application_detail::plan_kernel_access(BuiltProject& built,
-    const SimulationEngine engine, const bool foreign, const bool observe_all)
+    const SimulationEngine engine, const bool debug_points)
 {
-    // The static kernel keeps every signal such a client can reach a host
-    // signal. The debugger examines, deposits and forces any signal, so it
-    // runs the kernel as a foreign and observing client whose plan also
-    // makes every member a stoppable thread (StaticKernelAccessPlan::debug).
+    // The debugger examines, deposits and forces any signal and stops any
+    // member at a statement (StaticKernelAccessPlan::debug).
     const char* access_switch = std::getenv("FSIM_STATIC_KERNEL_ACCESS_PLAN");
     const bool access_plans = access_switch == nullptr
         || std::string_view { access_switch } != "0";
@@ -287,10 +263,8 @@ void application_detail::plan_kernel_access(BuiltProject& built,
         return;
     }
     built.kernel_access.admit = true;
-    built.kernel_access.foreign = foreign || debug_kernel;
-    built.kernel_access.observe_all = observe_all || debug_kernel;
     built.kernel_access.coverage = built.code_coverage_enabled;
-    built.kernel_access.debug = debug_kernel;
+    built.kernel_access.debug = debug_kernel || debug_points;
 }
 
 namespace {
@@ -319,8 +293,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
     // locals and request stops, so the plan is the debugger's: every member
     // a stoppable thread with its debug points and registers retained.
     if (kernel && !built.cone_fusion && !built.kernel_access.admit) {
-        application_detail::plan_kernel_access(built, engine, true, true);
-        built.kernel_access.debug = built.kernel_access.admit;
+        application_detail::plan_kernel_access(built, engine, true);
     }
     // FSIM_V4_STRICT=1: a kernel run that would leave any process to the
     // reference interpreter fails instead, naming the gate, so the tests
@@ -384,9 +357,7 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
         }();
         if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
             if (built.kernel_access.admit) {
-                std::cerr << "fsim-profile: static-kernel-access foreign="
-                          << built.kernel_access.foreign << " observe_all="
-                          << built.kernel_access.observe_all << " coverage="
+                std::cerr << "fsim-profile: static-kernel-access coverage="
                           << built.kernel_access.coverage << " debug="
                           << built.kernel_access.debug << '\n';
             }
@@ -666,8 +637,6 @@ Simulation::Impl::Impl(
     const SimulationEngine engine,
     const SystemVerilogVpiRuntimeUpdates vpi_runtime_updates)
     : built(std::move(project))
-    , package_static_startup_signal_ids(
-          collect_package_static_startup_signal_ids(built))
     , vpi_runtime_updates_enabled(
           vpi_runtime_updates == SystemVerilogVpiRuntimeUpdates::enabled)
     , class_heap(
@@ -1893,12 +1862,65 @@ Simulation::Impl::Impl(
             = std::move(published_vpi.container_scalar_kinds);
         vpi_container_categories
             = std::move(published_vpi.container_categories);
+        vpi_deferred_children = std::move(published_vpi.deferred);
+        for (const auto& [signal, drivers] : vpi_driver_bindings) {
+            for (const auto& driver : drivers) {
+                vpi_driver_handles.emplace(
+                    driver.handle, std::pair { driver.process, signal });
+            }
+        }
+        vpi_registry->set_child_materializer(
+            [this](const fsim_vpi_handle_v1 parent) {
+                materialize_vpi_children(parent);
+            });
+        if (vpi_runtime_updates_enabled) {
+            vpi_registry->set_live_value_source(
+                [this](const fsim_vpi_handle_v1 handle, const bool stored) {
+                    return vpi_live_value(handle, stored);
+                });
+        } else {
+            // A dormant registry keeps showing the time-zero values.
+            std::map<std::pair<fsim_vpi_handle_v1, bool>,
+                std::optional<runtime::SystemVerilogVpiStoredValue>>
+                dormant;
+            const auto capture = [&](const fsim_vpi_handle_v1 handle) {
+                for (const bool stored : { false, true }) {
+                    dormant.emplace(std::pair { handle, stored },
+                        vpi_live_value(handle, stored));
+                }
+            };
+            for (const auto& entry : vpi_handle_signals) {
+                capture(entry.first);
+            }
+            for (const auto& entry : vpi_word_handles) {
+                capture(entry.first);
+            }
+            for (const auto& entry : vpi_driver_handles) {
+                capture(entry.first);
+            }
+            vpi_registry->set_live_value_source(
+                [values = std::move(dormant)](
+                    const fsim_vpi_handle_v1 handle, const bool stored)
+                    -> std::optional<runtime::SystemVerilogVpiStoredValue> {
+                    const auto found = values.find(std::pair { handle, stored });
+                    return found != values.end() ? found->second : std::nullopt;
+                });
+        }
+        vpi_registry->set_value_watch_hook(
+            [this](const fsim_vpi_handle_v1 handle) {
+                watch_vpi_object(handle == 0U
+                    ? std::nullopt
+                    : std::optional<fsim_vpi_handle_v1> { handle });
+            });
     }
     for (const auto& process : built.design_ir.processes()) {
         if (const auto assertion = vpi_assertion_handles.find(process.name);
             assertion != vpi_assertion_handles.end()) {
             vpi_assertion_processes[assertion->second].insert(
                 static_cast<runtime::simir::ProcessId>(process.runtime_index));
+            vpi_process_assertions[static_cast<runtime::simir::ProcessId>(
+                process.runtime_index)]
+                = assertion->second;
         }
     }
     vpi_time = std::make_unique<runtime::SystemVerilogVpiTimeService>(
@@ -1927,21 +1949,46 @@ Simulation::Impl::Impl(
             interpreter->scheduler(),
             *vpi_time,
             vpi_callback_order,
-            [this](runtime::SystemVerilogVpiCallbackKind,
+            [this](const runtime::SystemVerilogVpiCallbackKind kind,
                 std::optional<fsim_vpi_handle_v1> object) {
+                using Kind = runtime::SystemVerilogVpiCallbackKind;
+                const bool value_change = kind == Kind::ValueChange;
+                // A callback at a region or time step sees every kernel
+                // round as a scheduler delta; a value change callback hears
+                // every change of its signal.
+                if (kind != Kind::StartOfSimulation && kind != Kind::EndOfSimulation) {
+                    interpreter->open_external_observation();
+                }
+                if (value_change) {
+                    watch_vpi_object(object);
+                }
                 if (object) {
-                    const auto signal = vpi_handle_signals.find(*object);
-                    if (signal != vpi_handle_signals.end()) {
-                        interpreter->prepare_signal_observation(signal->second);
+                    auto signal = vpi_handle_signals.find(*object);
+                    const auto driver = vpi_driver_handles.find(*object);
+                    if (signal != vpi_handle_signals.end()
+                        || driver != vpi_driver_handles.end()) {
+                        const auto bound = signal != vpi_handle_signals.end()
+                            ? signal->second
+                            : driver->second.second;
+                        interpreter->prepare_signal_observation(bound);
+                        if (value_change) {
+                            interpreter->watch_signal_changes(
+                                std::span { &bound, 1U });
+                        }
                         return;
                     }
                 }
                 // An object without an exact signal binding may cover a scope
                 // or aggregate. Retain a conservative barrier for all exposed
                 // signal, original-driver, and named-event state.
+                std::vector<SignalId> exposed;
                 for (const auto& [signal, handles] : vpi_signal_handles) {
                     (void)handles;
                     interpreter->prepare_signal_observation(signal);
+                    exposed.push_back(signal);
+                }
+                if (value_change) {
+                    interpreter->watch_signal_changes(exposed);
                 }
                 for (const auto& [signal, drivers] : vpi_driver_bindings) {
                     (void)drivers;
@@ -2206,6 +2253,11 @@ Simulation::Impl::Impl(
                     && !disabled_vpi_assertion_processes.contains(process));
         },
         false);
+    interpreter->set_sva_attempt_hook(
+        [this](const runtime::simir::ProcessId process,
+            const std::int64_t start) {
+            publish_assertion_attempt_start(process, start);
+        });
     interpreter_output_hook =
         [this](
             const runtime::simir::ProcessId process,
@@ -2658,6 +2710,11 @@ Simulation::Impl::Impl(
                                     = ConcurrentAssertionOutcome::disabled;
                                 event.time = time;
                                 event.delta = delta;
+                                event.attempt_start = static_cast<
+                                    runtime::SimulationTick>(
+                                    interpreter->sva_outcome_start(coverage_key)
+                                        .value_or(
+                                            static_cast<std::int64_t>(time)));
                                 publish_vpi_assertion(event);
                             }
                         }
@@ -2690,6 +2747,9 @@ Simulation::Impl::Impl(
                     event.source_span = coverage.source_span;
                     event.time = time;
                     event.delta = delta;
+                    event.attempt_start = static_cast<runtime::SimulationTick>(
+                        interpreter->sva_outcome_start(coverage_key)
+                            .value_or(static_cast<std::int64_t>(time)));
                     event.action_suppressed
                         = concurrent_assertion_actions_suppressed[process];
                     ++coverage.attempts;
@@ -2843,7 +2903,7 @@ void Simulation::Impl::refresh_observation_hooks()
         = static_cast<bool>(signal_change_hook)
         || !signal_observers.empty();
     const bool needs_signal_bridge = has_public_signal_observer
-        || (vpi_runtime_updates_enabled && !vpi_signal_handles.empty());
+        || (vpi_runtime_updates_enabled && vpi_any_signal_watched());
 
     if (signal_observation_bridge_installed != needs_signal_bridge) {
         if (needs_signal_bridge) {
@@ -2933,8 +2993,7 @@ void Simulation::Impl::refresh_observation_hooks()
 
     const bool has_vpi_observation = vpi_runtime_updates_enabled
         && vpi_callbacks->has_registrations()
-        && (!vpi_signal_handles.empty() || !vpi_driver_bindings.empty()
-            || !vpi_event_handles.empty());
+        && (vpi_any_signal_watched() || !vpi_event_handles.empty());
     const bool needs_native_observation_hooks
         = needs_signal_bridge || has_vpi_observation;
     if (native_signal_observation_hooks_installed
@@ -2945,8 +3004,7 @@ void Simulation::Impl::refresh_observation_hooks()
                     return signal_change_hook || !signal_observers.empty()
                         || (vpi_runtime_updates_enabled
                             && vpi_callbacks->has_registrations()
-                            && (vpi_signal_handles.contains(signal)
-                                || vpi_driver_bindings.contains(signal)
+                            && (vpi_signal_watched(signal)
                                 || vpi_event_handles.contains(signal)));
                 });
             interpreter->set_native_signal_observation_any_hook(
@@ -2954,8 +3012,7 @@ void Simulation::Impl::refresh_observation_hooks()
                     return signal_change_hook || !signal_observers.empty()
                         || (vpi_runtime_updates_enabled
                             && vpi_callbacks->has_registrations()
-                            && (!vpi_signal_handles.empty()
-                                || !vpi_driver_bindings.empty()
+                            && (vpi_any_signal_watched()
                                 || !vpi_event_handles.empty()));
                 });
         } else {
@@ -2966,8 +3023,12 @@ void Simulation::Impl::refresh_observation_hooks()
             = needs_native_observation_hooks;
     }
 
-    if (vpi_observation_hooks_installed != vpi_runtime_updates_enabled) {
-        if (vpi_runtime_updates_enabled) {
+    // A loaded library hears only of the objects it watches; with nothing
+    // watched the kernel runs unobserved.
+    const bool needs_vpi_value_hooks
+        = vpi_runtime_updates_enabled && vpi_any_signal_watched();
+    if (vpi_observation_hooks_installed != needs_vpi_value_hooks) {
+        if (needs_vpi_value_hooks) {
             interpreter->set_stored_signal_change_hook(
                 [this](const SignalId signal, const SimulationTick) {
                     publish_vpi_stored_signal(signal);
@@ -2981,18 +3042,29 @@ void Simulation::Impl::refresh_observation_hooks()
                 [this](const SignalId event, const SimulationTick) {
                     publish_vpi_event(event);
                 });
+        } else {
+            interpreter->set_stored_signal_change_hook({});
+            interpreter->set_driver_change_hook({});
+            interpreter->set_event_trigger_hook({});
+        }
+        vpi_observation_hooks_installed = needs_vpi_value_hooks;
+    }
+    // A dynamic memory's words follow its size; a watched memory's words
+    // announce their changes.
+    const bool needs_vpi_container_hook = vpi_runtime_updates_enabled
+        && (!vpi_live_memories.empty() || !vpi_watched_containers.empty()
+            || vpi_watch_all_values);
+    if (vpi_container_hook_installed != needs_vpi_container_hook) {
+        if (needs_vpi_container_hook) {
             interpreter->set_container_object_change_hook(
                 [this](const runtime::simir::ContainerObjectId object,
                     const SimulationTick) {
                     publish_vpi_container(object);
                 });
         } else {
-            interpreter->set_stored_signal_change_hook({});
-            interpreter->set_driver_change_hook({});
-            interpreter->set_event_trigger_hook({});
             interpreter->set_container_object_change_hook({});
         }
-        vpi_observation_hooks_installed = vpi_runtime_updates_enabled;
+        vpi_container_hook_installed = needs_vpi_container_hook;
     }
 
 }

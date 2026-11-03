@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <numeric>
 
 namespace fsim::app {
 // Included by application_simulation.cpp after Simulation::Impl is complete.
@@ -108,6 +109,14 @@ PackedLogic4 Simulation::read_process_local(
     return impl_->interpreter->read_debug_local(process, local_index);
 }
 
+void Simulation::write_process_local(
+    const runtime::simir::ProcessId process,
+    const std::size_t local_index,
+    const PackedLogic4& value)
+{
+    impl_->interpreter->write_debug_local(process, local_index, value);
+}
+
 runtime::SystemVerilogScalarValue Simulation::read_process_scalar_local(
     const runtime::simir::ProcessId process,
     const std::size_t local_index) const
@@ -179,6 +188,31 @@ void Simulation::set_signal_change_hook(SignalChangeHook hook)
 {
     impl_->signal_change_hook = std::move(hook);
     impl_->refresh_observation_hooks();
+}
+
+void Simulation::watch_signal_changes(
+    const std::span<const runtime::simir::SignalId> signals)
+{
+    impl_->interpreter->watch_signal_changes(signals);
+}
+
+void Simulation::watch_all_signal_changes()
+{
+    std::vector<runtime::simir::SignalId> signals(
+        runtime_adapter().signals().size());
+    std::iota(signals.begin(), signals.end(), runtime::simir::SignalId { });
+    impl_->interpreter->watch_signal_changes(signals);
+}
+
+void Simulation::watch_signal_transactions(
+    const std::span<const runtime::simir::SignalId> signals)
+{
+    impl_->interpreter->watch_signal_transactions(signals);
+}
+
+void Simulation::open_external_observation()
+{
+    impl_->interpreter->open_external_observation();
 }
 
 std::uint64_t Simulation::add_signal_change_hook(SignalChangeHook hook)

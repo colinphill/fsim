@@ -110,6 +110,22 @@ The largest retained UVM 1.2 and UVM 2020 Debug qualification runs used
 6 GiB. These are Linux measurements, not inferred Windows thresholds. Windows
 measurements require the pinned LLVM-MinGW hosted lanes.
 
+## Foreign libraries
+
+`simulate --vpi LIB[:BOOTSTRAP]` and `--vhpi LIB[:BOOTSTRAP]` load VPI and VHPI
+libraries; `elaborate --vpi` also registers a library's system tasks and
+functions for the design. `docs/foreign-interface-conformance.md` lists what
+each interface implements.
+
+The callbacks that run at a point inside a process need the compiled kernel to
+keep its statement probes. They are VPI `cbStmt` and VHPI `vhpiCbStmt`, and
+later the call, suspend and resume reasons. Ask for them with
+`simulate --foreign-probes` or the configuration key `simulate.foreign_probes`.
+Without it, registering one of these callbacks fails, and `vpi_chk_error` /
+`vhpi_check_error` name the option. With it the run is slower: the kernel is
+rebuilt for the run instead of loaded from the cache, runs on one thread, and
+stops at every statement.
+
 ## Workspace and cache recovery
 
 The workspace is exactly the current working directory. Local libraries use

@@ -1526,8 +1526,7 @@ bool Interpreter::Impl::StaticKernel::run_parallel_batch(const BatchPhase phase,
             if (++evaluations > limit) {
                 const auto member = (entry & partition_tag) != 0U
                     ? partitions_[entry & ~partition_tag].members.front() : entry;
-                fail(member, members_[member].body_begin,
-                    "static kernel combinational logic did not settle");
+                fail_unsettled(member);
             }
             replay(entry, lane_run, true);
             continue;
@@ -1851,8 +1850,7 @@ void Interpreter::Impl::StaticKernel::replay_domain_record(Domain& domain,
     if (++evaluations > limit) {
         const auto member = (entry & partition_tag) != 0U
             ? partitions_[entry & ~partition_tag].members.front() : entry;
-        fail(member, members_[member].body_begin,
-            "static kernel combinational logic did not settle");
+        fail_unsettled(member);
     }
     const auto count = static_cast<std::uint32_t>(domain.records.size());
     for (auto at = record; at < count && (at == record || domain.records[at].continued); ++at) {
@@ -2063,8 +2061,7 @@ void Interpreter::Impl::StaticKernel::finish_domains(std::size_t& evaluations,
             const auto entry = domains_[*busy].records.back().entry;
             const auto member = (entry & partition_tag) != 0U
                 ? partitions_[entry & ~partition_tag].members.front() : entry;
-            fail(member, members_[member].body_begin,
-                "static kernel combinational logic did not settle");
+            fail_unsettled(member);
         }
     } else {
         ++mt_stats_.domain_merges;
@@ -2157,8 +2154,7 @@ void Interpreter::Impl::StaticKernel::finish_domains(std::size_t& evaluations,
             const auto entry = domain.snapshot[domain.next];
             const auto member = (entry & partition_tag) != 0U
                 ? partitions_[entry & ~partition_tag].members.front() : entry;
-            fail(member, members_[member].body_begin,
-                "static kernel combinational logic did not settle");
+            fail_unsettled(member);
         }
     }
     if (mt_stats_.enabled) {

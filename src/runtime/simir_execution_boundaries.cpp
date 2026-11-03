@@ -2045,6 +2045,9 @@ void Interpreter::Impl::handle_boundary(
         case DebugPointKind::process_entry:
             kind = ExecutionPointKind::process_entry;
             break;
+        case DebugPointKind::call_return:
+            kind = ExecutionPointKind::call_return;
+            break;
         case DebugPointKind::block_entry:
         case DebugPointKind::block_exit:
             break;

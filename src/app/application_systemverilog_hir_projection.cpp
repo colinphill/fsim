@@ -1707,6 +1707,7 @@ template <typename Input>
 {
     sv::ClockingBlock output;
     output.name = input.name;
+    output.global = input.global;
     output.source = source(input.span);
     output.origin = origin(output.source, parent, input.name);
     for (const auto& input_event : input.event) {

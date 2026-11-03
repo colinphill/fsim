@@ -29,9 +29,11 @@
 #include <deque>
 #include <filesystem>
 #include <map>
+#include <tuple>
 #include <set>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 
@@ -70,6 +72,14 @@ enum class Tag : std::uint64_t {
     // A process, statement, expression or continuous assignment of the
     // statement model (IEEE 1800-2023 37.43-37.79).
     node = 18,
+    // A clocking block's default or a clockvar's skew as a delay control,
+    // and a clocking block's event as an event control (IEEE 1800-2023
+    // 37.48).
+    clocking_skew = 19,
+    clocking_event = 20,
+    // A bit of a vector port (IEEE 1800-2023 37.14 vpiBit): the port's
+    // index in the upper bits, the bit's position in the low 24.
+    port_bit = 21,
 };
 constexpr std::uint64_t serial_mask = (std::uint64_t { 1 } << 48U) - 1U;
 
@@ -774,6 +784,12 @@ public:
             simulation_.remove_force_statement_hook(force_hook_);
             simulation_.remove_safe_point_hook(force_delivery_hook_);
         }
+        if (statement_hook_ != 0U) {
+            simulation_.remove_execution_point_hook(statement_hook_);
+        }
+        if (disable_hook_ != 0U) {
+            simulation_.remove_safe_point_hook(disable_hook_);
+        }
         // The simulation may outlive the service; no foreign routine may
         // run after it is gone.
         for (const auto& [serial, callback] : callbacks_) {
@@ -817,8 +833,12 @@ public:
     // end-of-compile callbacks (IEEE 1800-2023 38.36.2, 38.36.3).
     void compile(const std::size_t process_count)
     {
-        for (runtime::simir::ProcessId process = 0U; process < process_count;
-             ++process) {
+        // Call sites exist for their compiletf routines here; a call creates
+        // its site anyway.
+        const bool compiletf = std::ranges::any_of(systfs_,
+            [](const auto& systf) { return systf.data.compiletf != nullptr; });
+        for (runtime::simir::ProcessId process = 0U;
+             compiletf && process < process_count; ++process) {
             const auto& program = simulation_.process_program(process);
             for (std::size_t index = 0U; index < program.operations.size();
                  ++index) {
@@ -1011,7 +1031,6 @@ private:
             return;
         }
         auto events = std::exchange(pending_forces_, { });
-        const auto& design = simulation_.design_ir();
         for (const auto& event : events) {
             if (force_callbacks_.empty()) {
                 return;
@@ -1028,29 +1047,17 @@ private:
             // The statement is the executing process's own, or one of a
             // task or function it called. The processes that keep a forced
             // or assigned value applied have no source and no statement.
-            const auto occurrence = std::ranges::find(design.processes(),
-                event.process, &semantic::design::ProcessOccurrence::runtime_index);
-            if (occurrence == design.processes().end()
-                || !occurrence->source_process) {
+            const auto source = source_process(event.process);
+            if (!source) {
                 continue;
             }
-            const auto& specialization = design.specializations().at(
-                occurrence->specialization.value());
-            const auto instance_path = std::string { design.path(
-                design.instances().at(specialization.instance.value()).path) };
-            const auto instance = registry_.find(instance_path);
-            const auto scope = instance && instance.value
-                ? hir_scope(instance.value->handle)
-                : std::nullopt;
-            if (!scope) {
-                continue;
-            }
-            auto sites = statement_model().force_sites(*scope, event.release,
+            const auto& [scope, process] = *source;
+            auto sites = statement_model().force_sites(scope, event.release,
                 [&](const fsim_vpi_handle_v1 candidate) {
                     return candidate == object;
                 });
-            auto own = std::ranges::find(sites,
-                occurrence->source_process->value(), &VpiStatementModel::ForceSite::process);
+            auto own = std::ranges::find(
+                sites, process, &VpiStatementModel::ForceSite::process);
             if (own == sites.end()) {
                 own = std::ranges::find(
                     sites, 0U, &VpiStatementModel::ForceSite::process);
@@ -1087,6 +1094,150 @@ private:
         }
     }
 
+    // The HIR scope of a running design process's instance, and the HIR
+    // process it was elaborated from; none for a process without source.
+    [[nodiscard]] std::optional<std::pair<VpiHirScope, std::uint32_t>>
+    source_process(const runtime::simir::ProcessId running)
+    {
+        const auto& design = simulation_.design_ir();
+        const auto occurrence = std::ranges::find(design.processes(), running,
+            &semantic::design::ProcessOccurrence::runtime_index);
+        if (occurrence == design.processes().end()
+            || !occurrence->source_process) {
+            return std::nullopt;
+        }
+        const auto& specialization = design.specializations().at(
+            occurrence->specialization.value());
+        const auto instance_path = std::string { design.path(
+            design.instances().at(specialization.instance.value()).path) };
+        const auto instance = registry_.find(instance_path);
+        auto scope = instance && instance.value
+            ? hir_scope(instance.value->handle)
+            : std::nullopt;
+        if (!scope) {
+            return std::nullopt;
+        }
+        return std::pair { std::move(*scope),
+            static_cast<std::uint32_t>(occurrence->source_process->value()) };
+    }
+
+    // The statement whose execution point runs a cbStmt callback on
+    // `object`: the statement itself, or a block's first statement, before
+    // which the block's callback runs (IEEE 1800-2023 Table 38-6). 0 for an
+    // empty block.
+    [[nodiscard]] fsim_vpi_handle_v1 statement_trigger(
+        fsim_vpi_handle_v1 object)
+    {
+        for (std::size_t depth = 0U; depth < 1024U; ++depth) {
+            const auto type = handle_type(object);
+            std::vector<fsim_vpi_handle_v1> inner;
+            if (const auto serial = node_of(object)) {
+                if (type != vpiBegin && type != vpiFork) {
+                    return object;
+                }
+                inner = statement_model_->iterate(*serial, vpiStmt)
+                            .value_or(inner);
+            } else if (const auto scope = hir_scope(object)) {
+                inner = statement_model()
+                            .iterate_scope(*scope, vpiStmt)
+                            .value_or(inner);
+            }
+            if (inner.empty()) {
+                return 0U;
+            }
+            object = inner.front();
+        }
+        return 0U;
+    }
+
+    // cbDisable callbacks on a disabled block, task or function run after
+    // its disable statement has executed.
+    void deliver_disables()
+    {
+        const auto targets = std::exchange(pending_disables_, { });
+        for (const auto target : targets) {
+            const auto listeners = disable_callbacks_;
+            for (const auto serial : listeners) {
+                const auto found = callbacks_.find(serial);
+                if (found != callbacks_.end()
+                    && resolve(internal(found->second->data.obj)) == target) {
+                    fire_statement(serial, target, std::nullopt);
+                }
+            }
+        }
+    }
+
+    void ensure_statement_hook()
+    {
+        if (disable_hook_ == 0U && !disable_callbacks_.empty()) {
+            disable_hook_ = simulation_.add_safe_point_hook(
+                [this](runtime::Scheduler&, runtime::SchedulerPhase) {
+                    deliver_disables();
+                });
+        }
+        if (statement_hook_ != 0U) {
+            return;
+        }
+        statement_hook_ = simulation_.add_execution_point_hook(
+            [this](auto&, const runtime::simir::ExecutionPoint& point) {
+                using Kind = runtime::simir::ExecutionPointKind;
+                if (point.kind == Kind::statement
+                    || point.kind == Kind::assertion
+                    || point.kind == Kind::process_entry) {
+                    deliver_statement(point);
+                }
+            });
+    }
+
+    // Just before a statement executes, its cbStmt callbacks run with the
+    // statement or block they were placed on (IEEE 1800-2023 38.36.1.1).
+    void deliver_statement(const runtime::simir::ExecutionPoint& point)
+    {
+        if (statement_callbacks_.empty() && disable_callbacks_.empty()) {
+            return;
+        }
+        // An interned path is one process-wide string.
+        const auto key = std::tuple { point.design_process,
+            &point.source.path.str(), point.source.line, point.source.column };
+        auto found = statement_points_.find(key);
+        if (found == statement_points_.end()) {
+            VpiStatementModel::StatementPoint statement;
+            if (const auto source = source_process(point.design_process)) {
+                statement = statement_model().statement_at(source->first,
+                    source->second, point.source.path.str(), point.source.line,
+                    point.source.column);
+            }
+            found = statement_points_.emplace(key, statement).first;
+        }
+        if (found->second.statement == 0U) {
+            return;
+        }
+        // A loop's later pass runs the loop's own callbacks, not those of a
+        // block it begins.
+        const auto [statement, pass] = found->second;
+        // A disable statement's target reaches its cbDisable callbacks once
+        // it has been disabled, at the next safe point (IEEE 1800-2023
+        // 38.36.1).
+        if (!disable_callbacks_.empty() && !pass
+            && handle_type(statement) == vpiDisable) {
+            if (const auto serial = node_of(statement)) {
+                if (const auto target
+                    = statement_model_->relation(*serial, vpiExpr)) {
+                    if (*target != 0U) {
+                        pending_disables_.push_back(*target);
+                    }
+                }
+            }
+        }
+        const auto listeners = statement_callbacks_;
+        for (const auto& listener : listeners) {
+            if (listener.trigger == statement
+                && (!pass || listener.object == statement)) {
+                fire_statement(listener.serial, listener.object, std::nullopt);
+            }
+        }
+    }
+
     // A statement callback: obj is the statement, and value the given
     // value in the registered format.
     void fire_statement(const std::uint64_t serial,
@@ -1104,7 +1255,8 @@ private:
             static_cast<std::uintptr_t>(statement));
         data.time = nullptr;
         data.value = nullptr;
-        if (stored.has_time) {
+        data.index = 0;
+        if (stored.has_time && stored.time.type != vpiSuppressTime) {
             fill_time(time, statement);
             data.time = &time;
         }
@@ -1134,7 +1286,8 @@ private:
 
     // The concurrent assertion statement an assertion object's process was
     // lowered from, found by its label in the instance's unit.
-    [[nodiscard]] const semantic::sv::ConcurrentAssertion* concurrent_assertion(
+    // The HIR unit of the module that holds an assertion object.
+    [[nodiscard]] const semantic::sv::Unit* assertion_unit(
         const runtime::SystemVerilogVpiObjectInfo& object) const
     {
         if (object.kind != SystemVerilogVpiObjectKind::Assertion) {
@@ -1152,9 +1305,17 @@ private:
         const auto unit = std::ranges::find(units,
             semantic::UnitId::from_index(*module->type->semantic_unit_id),
             &semantic::sv::Unit::id);
-        if (unit == units.end()) {
+        return unit == units.end() ? nullptr : &*unit;
+    }
+
+    [[nodiscard]] const semantic::sv::ConcurrentAssertion* concurrent_assertion(
+        const runtime::SystemVerilogVpiObjectInfo& object) const
+    {
+        const auto* const unit = assertion_unit(object);
+        if (unit == nullptr) {
             return nullptr;
         }
+        const auto process = info(object.parent);
         const auto found = std::ranges::find(unit->concurrent_assertions,
             process->name, &semantic::sv::ConcurrentAssertion::name);
         return found == unit->concurrent_assertions.end() ? nullptr : &*found;
@@ -1279,7 +1440,10 @@ private:
         case cbAssertionEnableNonvacuousAction:
         case cbAssertionDisableVacuousAction:
             break;
-        // Attempt starts are not observed.
+        // An attempt start comes from the monitor's attempt hook.
+        case cbAssertionStart:
+            ensure_assertion_start_hook();
+            break;
         default:
             error_message_ = "vpi_register_assertion_cb: reason "
                 + std::to_string(arguments->reason) + " is not supported";
@@ -1297,8 +1461,11 @@ private:
             registration.kind = *kind;
             registration.object = assertion;
             registration.callback
-                = [this, serial](const runtime::SystemVerilogVpiCallbackEvent&) {
-                      fire_assertion(serial, true);
+                = [this, serial](
+                      const runtime::SystemVerilogVpiCallbackEvent& event) {
+                      fire_assertion(serial, true,
+                          event.assertion ? event.assertion->attempt_start
+                                          : std::uint64_t { });
                   };
             const auto registered
                 = simulation_.systemverilog_vpi_callbacks().register_callback(
@@ -1326,11 +1493,12 @@ private:
         return true;
     }
 
-    // The callback gets the attempt information for an attempt's outcome
-    // and NULL for a control action (IEEE 1800-2023 39.4.2). The attempt's
-    // start is not observed, so attemptStartTime is the outcome's time,
-    // and a failure has no failing expression.
-    void fire_assertion(const std::uint64_t serial, const bool attempt)
+    // The callback gets the attempt information for an attempt's start and
+    // outcome and NULL for a control action (IEEE 1800-2023 39.4.2);
+    // attemptStartTime is the tick the attempt started at, and a failure has
+    // no failing expression.
+    void fire_assertion(const std::uint64_t serial, const bool attempt,
+        const std::uint64_t attempt_start = 0U)
     {
         const auto found = assertion_callbacks_.find(serial);
         if (found == assertion_callbacks_.end()) {
@@ -1342,12 +1510,48 @@ private:
         fill_time(time, stored.assertion);
         s_vpi_attempt_info detail { };
         detail.detail.failExpr = nullptr;
-        detail.attemptStartTime = time;
+        detail.attemptStartTime.type = vpiSimTime;
+        detail.attemptStartTime.high
+            = static_cast<PLI_UINT32>(attempt_start >> 32U);
+        detail.attemptStartTime.low
+            = static_cast<PLI_UINT32>(attempt_start & 0xFFFFFFFFU);
         CallScope scope { *this };
         stored.routine(stored.reason, &time,
             reinterpret_cast<vpiHandle>(
                 static_cast<std::uintptr_t>(stored.assertion)),
             attempt ? &detail : nullptr, stored.user_data);
+    }
+
+    // The attempt-start callbacks of one assertion (cbAssertionStart).
+    void fire_assertion_start(
+        const fsim_vpi_handle_v1 assertion, const std::uint64_t start)
+    {
+        if (assertion_system_ended_) {
+            return;
+        }
+        std::vector<std::uint64_t> listeners;
+        for (const auto& [serial, stored] : assertion_callbacks_) {
+            if (stored.assertion == assertion
+                && stored.reason == cbAssertionStart) {
+                listeners.push_back(serial);
+            }
+        }
+        for (const auto serial : listeners) {
+            fire_assertion(serial, true, start);
+        }
+    }
+
+    void ensure_assertion_start_hook()
+    {
+        if (assertion_start_hooked_) {
+            return;
+        }
+        assertion_start_hooked_ = true;
+        simulation_.set_assertion_attempt_hook(
+            [this](const std::uint64_t assertion,
+                const runtime::SimulationTick start) {
+                fire_assertion_start(assertion, start);
+            });
     }
 
     // The control-action callbacks of one assertion.
@@ -1449,11 +1653,18 @@ private:
         using Operation = runtime::SystemVerilogVpiAssertionControlOperation;
         auto* const arguments = pointer<va_list>(request.user_data);
         fsim_vpi_handle_v1 handle { };
+        // The attempt start time of the per-attempt controls (39.5.2).
+        const s_vpi_time* attempt_time = nullptr;
         if (arguments != nullptr) {
             va_list copy;
             va_copy(copy, *arguments);
             handle = resolve(static_cast<fsim_vpi_handle_v1>(
                 reinterpret_cast<std::uintptr_t>(va_arg(copy, vpiHandle))));
+            if (operation == vpiAssertionKill
+                || operation == vpiAssertionDisableStep
+                || operation == vpiAssertionEnableStep) {
+                attempt_time = va_arg(copy, const s_vpi_time*);
+            }
             va_end(copy);
         }
         if (assertion_system_ended_) {
@@ -1591,10 +1802,21 @@ private:
             return single(cbAssertionDisable, { Operation::Disable });
         case vpiAssertionEnable:
             return single(cbAssertionEnable, { Operation::Enable });
-        // Attempts are not told apart by their start, so every attempt in
-        // progress is discarded.
-        case vpiAssertionKill:
-            return single(cbAssertionKill, { Operation::Kill });
+        // Kill discards the one attempt that started at the given time and
+        // leaves the assertion enabled (39.5.2).
+        case vpiAssertionKill: {
+            if (attempt_time == nullptr || attempt_time->type != vpiSimTime) {
+                error_message_ = "vpi_control: vpiAssertionKill takes an "
+                                 "attempt start time of type vpiSimTime";
+                error_ = true;
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            (void)simulation_.kill_assertion_attempt(handle,
+                (static_cast<std::uint64_t>(attempt_time->high) << 32U)
+                    | attempt_time->low);
+            fire_assertion_control(handle, cbAssertionKill);
+            return done();
+        }
         case vpiAssertionEnablePassAction:
             return single(
                 cbAssertionEnablePassAction, { Operation::EnablePassAction });
@@ -1856,6 +2078,11 @@ private:
     struct Constant {
         Value value;
         PLI_INT32 const_type { vpiDecConst };
+    };
+    // The skew of a clocking block or clockvar (`owner`), input or output.
+    struct ClockingSkewHandle {
+        fsim_vpi_handle_v1 owner { };
+        bool output { };
     };
     // One dimension of an array or vector (IEEE 1800-2023 37.22 vpiRange).
     struct Range {
@@ -2530,6 +2757,52 @@ private:
             : static_cast<std::int64_t>(node.enum_constants.front().value.width());
     }
 
+    // The typespec of a declared built-in type, and its range bounds
+    // (IEEE 1800-2023 37.25, 37.41).
+    [[nodiscard]] fsim_vpi_handle_v1 declared_type_relation(
+        const VpiStatementModel::DeclaredType& declared, const PLI_INT32 type)
+    {
+        if (type != vpiTypespec) {
+            return declared.ranges.empty() ? 0U
+                : make_constant(type == vpiLeftRange
+                          ? declared.ranges.front().first
+                          : declared.ranges.front().second);
+        }
+        const auto key
+            = std::tuple { declared.word, declared.is_signed, declared.ranges };
+        if (const auto known = declared_typespecs_.find(key);
+            known != declared_typespecs_.end()) {
+            return known->second;
+        }
+        static const std::map<std::string, TypespecKind, std::less<>> kinds {
+            { "logic", TypespecKind::Logic }, { "bit", TypespecKind::Bit },
+            { "byte", TypespecKind::Byte },
+            { "shortint", TypespecKind::ShortInt },
+            { "int", TypespecKind::Int }, { "longint", TypespecKind::LongInt },
+            { "integer", TypespecKind::Integer },
+            { "time", TypespecKind::Time }, { "real", TypespecKind::Real },
+            { "realtime", TypespecKind::Real },
+            { "shortreal", TypespecKind::ShortReal },
+            { "string", TypespecKind::String } };
+        const auto kind = kinds.find(declared.word);
+        if (kind == kinds.end()) {
+            return 0U;
+        }
+        Typespec scalar;
+        scalar.kind = kind->second;
+        scalar.is_signed = declared.is_signed;
+        // A built-in vector is one logic or bit typespec with its packed
+        // dimensions, as the elaborator builds it.
+        for (const auto& [left, right] : declared.ranges) {
+            scalar.ranges.push_back({ left, right });
+        }
+        declared_typespec_nodes_.push_back(std::move(scalar));
+        const auto handle
+            = make_typespec({ &declared_typespec_nodes_.back(), 0U });
+        declared_typespecs_.emplace(key, handle);
+        return handle;
+    }
+
     fsim_vpi_status_v1 typespec_relation(const TypespecLevel level,
         const fsim_vpi_handle_v1 self, const PLI_INT32 type,
         fsim_vpi_service_result_v1& result)
@@ -2541,6 +2814,12 @@ private:
                 return succeed(result, make_typespec(*element));
             }
             return succeed(result);
+        case vpiIndexTypespec:
+            return succeed(result,
+                node.kind == TypespecKind::Array && level.dropped == 0U
+                        && !node.index.empty()
+                    ? make_typespec({ &node.index.front(), 0U })
+                    : 0U);
         case vpiBaseTypespec:
             return succeed(result,
                 node.kind == TypespecKind::Enum && !node.element.empty()
@@ -3498,16 +3777,325 @@ private:
         return &constants_[serial_of(handle)];
     }
 
+    // --- clocking blocks (IEEE 1800-2023 37.48) -----------------------------
+
+    // A clocking block or clockvar object and its declaration in the
+    // instance's unit.
+    struct ClockingView {
+        const semantic::sv::ClockingBlock* block { };
+        const semantic::sv::ClockingSignal* signal { };
+        fsim_vpi_handle_v1 block_handle { };
+        // The module, interface or program holding the block.
+        fsim_vpi_handle_v1 scope { };
+    };
+
+    [[nodiscard]] const semantic::sv::Unit* unit_of(
+        const runtime::SystemVerilogVpiObjectInfo& instance) const
+    {
+        if (!instance.type || !instance.type->semantic_unit_id) {
+            return nullptr;
+        }
+        const auto& units = simulation_.systemverilog_hir().units();
+        const auto unit = std::ranges::find(units,
+            semantic::UnitId::from_index(*instance.type->semantic_unit_id),
+            &semantic::sv::Unit::id);
+        return unit == units.end() ? nullptr : &*unit;
+    }
+
+    [[nodiscard]] std::optional<ClockingView> clocking_view(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto object = info(handle);
+        if (!object
+            || (object->kind != SystemVerilogVpiObjectKind::ClockingBlock
+                && object->kind != SystemVerilogVpiObjectKind::ClockingIo)) {
+            return std::nullopt;
+        }
+        ClockingView view;
+        view.block_handle
+            = object->kind == SystemVerilogVpiObjectKind::ClockingBlock
+            ? handle
+            : object->parent;
+        const auto block = info(view.block_handle);
+        const auto scope = block ? info(block->parent) : std::nullopt;
+        const auto* unit = scope ? unit_of(*scope) : nullptr;
+        if (unit == nullptr) {
+            return std::nullopt;
+        }
+        view.scope = block->parent;
+        const auto found = std::ranges::find(unit->clocking_blocks,
+            block->name, &semantic::sv::ClockingBlock::name);
+        if (found == unit->clocking_blocks.end()) {
+            return std::nullopt;
+        }
+        view.block = &*found;
+        if (object->kind == SystemVerilogVpiObjectKind::ClockingIo) {
+            const auto signal = std::ranges::find(found->signals,
+                object->name,
+                [](const semantic::sv::ClockingSignal& entry)
+                    -> const std::string& { return entry.name.spelling; });
+            if (signal == found->signals.end()) {
+                return std::nullopt;
+            }
+            view.signal = &*signal;
+        }
+        return view;
+    }
+
+    // The skew that applies to the block's defaults or to the clockvar
+    // itself (37.48 detail 1); the output skew of an input is none.
+    [[nodiscard]] static const semantic::sv::ClockingSkew* clocking_skew_of(
+        const ClockingView& view, const bool output)
+    {
+        using Direction = semantic::sv::Direction;
+        if (view.signal == nullptr) {
+            const auto& skew = output ? view.block->default_output_skew
+                                      : view.block->default_input_skew;
+            return skew ? &*skew : nullptr;
+        }
+        const auto direction = view.signal->direction;
+        const auto& skew = output && direction == Direction::inout
+            ? view.signal->output_skew
+            : view.signal->skew;
+        if (output ? direction == Direction::input
+                   : direction == Direction::output) {
+            return nullptr;
+        }
+        return skew ? &*skew : nullptr;
+    }
+
+    [[nodiscard]] static PLI_INT32 clocking_edge(
+        const semantic::sv::ClockingSkew* skew)
+    {
+        if (skew == nullptr) {
+            return vpiNoEdge;
+        }
+        return skew->edge == semantic::sv::EdgeKind::positive ? vpiPosedge
+            : skew->edge == semantic::sv::EdgeKind::negative  ? vpiNegedge
+                                                              : vpiNoEdge;
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 make_clocking_skew(
+        const fsim_vpi_handle_v1 owner, const bool output)
+    {
+        for (std::size_t index = 0U; index < clocking_skews_.size(); ++index) {
+            if (clocking_skews_[index].owner == owner
+                && clocking_skews_[index].output == output) {
+                return tagged(Tag::clocking_skew, index);
+            }
+        }
+        clocking_skews_.push_back({ owner, output });
+        return tagged(Tag::clocking_skew, clocking_skews_.size() - 1U);
+    }
+
+    [[nodiscard]] const ClockingSkewHandle* clocking_skew_handle(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::clocking_skew
+            || serial_of(handle) >= clocking_skews_.size()) {
+            return nullptr;
+        }
+        return &clocking_skews_[serial_of(handle)];
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 make_clocking_event(
+        const fsim_vpi_handle_v1 block)
+    {
+        const auto found = std::ranges::find(clocking_events_, block);
+        if (found != clocking_events_.end()) {
+            return tagged(Tag::clocking_event,
+                static_cast<std::uint64_t>(found - clocking_events_.begin()));
+        }
+        clocking_events_.push_back(block);
+        return tagged(Tag::clocking_event, clocking_events_.size() - 1U);
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 clocking_event_block(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::clocking_event
+            || serial_of(handle) >= clocking_events_.size()) {
+            return 0U;
+        }
+        return clocking_events_[serial_of(handle)];
+    }
+
+    // The default clocking of an instance (14.12), or the global clocking in
+    // effect there, which is the nearest enclosing declaration (14.14).
+    [[nodiscard]] fsim_vpi_handle_v1 clocking_declared(
+        const runtime::SystemVerilogVpiObjectInfo& instance,
+        const bool global) const
+    {
+        auto current = std::optional { instance };
+        for (std::size_t depth = 0U; current && depth < 256U; ++depth) {
+            if (const auto* unit = unit_of(*current);
+                unit != nullptr && instance_kind(current->kind)) {
+                std::string name;
+                if (!global) {
+                    if (unit->default_clocking) {
+                        name = unit->default_clocking->block.spelling;
+                    }
+                } else if (const auto block
+                    = std::ranges::find_if(unit->clocking_blocks,
+                        &semantic::sv::ClockingBlock::global);
+                    block != unit->clocking_blocks.end()) {
+                    name = block->name;
+                }
+                if (!name.empty()) {
+                    const auto found
+                        = registry_.find_child(current->handle, name);
+                    if (found && found.value) {
+                        return found.value->handle;
+                    }
+                }
+            }
+            if (!global) {
+                break;
+            }
+            current = info(current->parent);
+        }
+        return 0U;
+    }
+
+    // vpi_handle(type, clocking object) for the relations of 37.48; 0 when
+    // the object has none. The expression a clockvar names is the object of
+    // its name, or of the simple or hierarchical name it is assigned
+    // (detail 4); any other expression is not published.
+    [[nodiscard]] fsim_vpi_handle_v1 clocking_relation(
+        const fsim_vpi_handle_v1 handle, const PLI_INT32 type)
+    {
+        const auto view = clocking_view(handle);
+        if (!view) {
+            return 0U;
+        }
+        switch (type) {
+        case vpiInputSkew:
+        case vpiOutputSkew: {
+            const auto* skew = clocking_skew_of(*view, type == vpiOutputSkew);
+            return skew != nullptr && (skew->delay || skew->one_step)
+                ? make_clocking_skew(handle, type == vpiOutputSkew)
+                : 0U;
+        }
+        case vpiClockingEvent:
+            return view->signal == nullptr
+                    && !view->block->event.empty()
+                ? make_clocking_event(handle)
+                : 0U;
+        case vpiExpr: {
+            if (view->signal == nullptr) {
+                return 0U;
+            }
+            std::string name = view->signal->name.spelling;
+            if (view->signal->expression) {
+                const auto* expression = simulation_.systemverilog_hir()
+                                             .find_expression(*view->signal->expression);
+                if (expression == nullptr
+                    || expression->kind != semantic::sv::ExpressionKind::name) {
+                    return 0U;
+                }
+                name = expression->text;
+            }
+            return name_from_scope(view->scope, name);
+        }
+        default:
+            return 0U;
+        }
+    }
+
+    // --- nettype declarations (IEEE 1800-2023 37.23) -----------------------
+
+    // A nettype declaration object and its declaration in the instance's
+    // unit.
+    struct NettypeView {
+        const semantic::sv::TypeDefinition* type { };
+        fsim_vpi_handle_v1 instance { };
+    };
+
+    [[nodiscard]] std::optional<NettypeView> nettype_view(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto object = info(handle);
+        if (!object
+            || object->kind != SystemVerilogVpiObjectKind::TypeSpecification) {
+            return std::nullopt;
+        }
+        const auto instance = info(object->parent);
+        if (!instance || !instance->type || !instance->type->semantic_unit_id) {
+            return std::nullopt;
+        }
+        const auto& hir = simulation_.systemverilog_hir();
+        const auto& scopes = simulation_.semantics().scopes();
+        const auto unit
+            = semantic::UnitId::from_index(*instance->type->semantic_unit_id);
+        for (const auto& declaration : hir.declarations()) {
+            if (declaration.form
+                    != semantic::sv::DeclarationForm::nettype_declaration
+                || declaration.name != object->name
+                || !declaration.declared_type || !declaration.scope.valid()
+                || declaration.scope.value() >= scopes.size()
+                || scopes[declaration.scope.value()].unit != unit) {
+                continue;
+            }
+            if (const auto* type = hir.find_type(*declaration.declared_type)) {
+                return NettypeView { type, object->parent };
+            }
+        }
+        return std::nullopt;
+    }
+
+    // vpiWith is the resolution function and vpiNetTypedefAlias the nettype
+    // this one is declared as a synonym of; each is NULL when absent (37.23
+    // details 1, 2).
+    [[nodiscard]] fsim_vpi_handle_v1 nettype_relation(
+        const fsim_vpi_handle_v1 handle, const PLI_INT32 type) const
+    {
+        const auto view = nettype_view(handle);
+        if (!view) {
+            return 0U;
+        }
+        if (type == vpiWith) {
+            return view->type->resolution_function.empty()
+                ? 0U
+                : name_from_scope(
+                      view->instance, view->type->resolution_function);
+        }
+        const auto sibling = registry_.find_child(
+            view->instance, view->type->base.target.spelling);
+        return type == vpiNetTypedefAlias && sibling && sibling.value
+                && sibling.value->kind
+                    == SystemVerilogVpiObjectKind::TypeSpecification
+            ? sibling.value->handle
+            : 0U;
+    }
+
+    // The delay of a skew as a constant, in the unit it is written in;
+    // `#1step` and a delay given by an expression have none.
+    [[nodiscard]] fsim_vpi_handle_v1 clocking_skew_delay(
+        const ClockingSkewHandle& handle)
+    {
+        const auto view = clocking_view(handle.owner);
+        const auto* skew = view ? clocking_skew_of(*view, handle.output)
+                                : nullptr;
+        if (skew == nullptr || !skew->delay || skew->one_step) {
+            return 0U;
+        }
+        const auto& primary = skew->delay->primary;
+        if (primary.expression && primary.magnitude == 0U) {
+            return 0U;
+        }
+        return make_constant(static_cast<std::int64_t>(
+            primary.magnitude / std::max<std::uint64_t>(primary.divisor, 1U)));
+    }
+
     // The index of an array word, from the name the registry gives it.
     [[nodiscard]] std::optional<std::int64_t> word_index(
         const runtime::SystemVerilogVpiObjectInfo& word) const
     {
-        const auto parent = info(word.parent);
-        if (!parent || parent->kind != SystemVerilogVpiObjectKind::Memory) {
-            return std::nullopt;
-        }
         const auto open = word.full_name.rfind('[');
-        if (open == std::string::npos || word.full_name.back() != ']') {
+        if (open == std::string::npos || word.full_name.back() != ']'
+            || word.parent == 0U || owned(word.parent)
+            || registry_.kind_of(word.parent)
+                != SystemVerilogVpiObjectKind::Memory) {
             return std::nullopt;
         }
         std::int64_t index { };
@@ -3715,6 +4303,28 @@ private:
                 const auto owner = info(scope);
                 return owner ? owner->full_name : std::string { };
             };
+            hooks.unpacked_dimensions = [this](const fsim_vpi_handle_v1 handle) {
+                const auto owner = info(handle);
+                return owner && owner->kind == SystemVerilogVpiObjectKind::Memory
+                    ? dimension_ranges(handle).size()
+                    : std::size_t { 0U };
+            };
+            hooks.bit_width = [this](const fsim_vpi_handle_v1 handle) {
+                auto object = handle;
+                if (const auto selected = select_expression_object(handle);
+                    selected != 0U) {
+                    object = selected;
+                }
+                if (const auto* select = select_of(object)) {
+                    return static_cast<std::size_t>(select->width);
+                }
+                const auto described = info(object);
+                if (!described || !described->type
+                    || described->kind == SystemVerilogVpiObjectKind::Memory) {
+                    return std::size_t { 0U };
+                }
+                return static_cast<std::size_t>(described->type->width);
+            };
             statement_model_ = std::make_unique<VpiStatementModel>(
                 simulation_.systemverilog_hir(), simulation_.semantics(),
                 std::move(hooks));
@@ -3730,6 +4340,128 @@ private:
             return std::nullopt;
         }
         return serial_of(handle);
+    }
+
+    // The drivers, loads or uses of a net or variable: the continuous
+    // assignments, assignment statements, forces and procedural assigns of
+    // its declaring scope that write, read or mention it, and the ports that
+    // connect it (IEEE 1800-2023 37.21, 37.46, 37.58). A port drives the side
+    // it is an input to and loads the side it is an output from. Primitive
+    // terminals are not modelled, and statements of other scopes that name the
+    // object hierarchically are not found.
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> connections_of(
+        const PLI_INT32 type, const fsim_vpi_handle_v1 handle)
+    {
+        std::vector<fsim_vpi_handle_v1> found;
+        const auto object = info(handle);
+        if (!object) {
+            return found;
+        }
+        switch (object->kind) {
+        case SystemVerilogVpiObjectKind::Net:
+        case SystemVerilogVpiObjectKind::Variable:
+        case SystemVerilogVpiObjectKind::Memory:
+        case SystemVerilogVpiObjectKind::Port:
+            break;
+        default:
+            return found;
+        }
+        const auto connection = type == vpiDriver || type == vpiLocalDriver
+            ? VpiStatementModel::Connection::driver
+            : type == vpiLoad || type == vpiLocalLoad
+            ? VpiStatementModel::Connection::load
+            : VpiStatementModel::Connection::use;
+        if (const auto scope = hir_scope(object->parent)) {
+            found = statement_model().connections(*scope, handle, connection);
+        }
+        using Direction = runtime::SystemVerilogVpiDirection;
+        const auto& ports = simulation_.systemverilog_vpi_ports();
+        for (std::size_t index = 0U; index < ports.size(); ++index) {
+            const auto& port = ports[index];
+            const auto low = port.low_conn == handle;
+            if (port.io_declaration || (!low && port.high_conn != handle)) {
+                continue;
+            }
+            const auto input = port.direction == Direction::Input
+                || port.direction == Direction::Inout;
+            const auto output = port.direction == Direction::Output
+                || port.direction == Direction::Inout;
+            const auto drives = low ? input : output;
+            const auto loads = low ? output : input;
+            if (connection == VpiStatementModel::Connection::use
+                || (connection == VpiStatementModel::Connection::driver
+                        ? drives
+                        : loads)) {
+                found.push_back(tagged(Tag::port, index));
+            }
+        }
+        return found;
+    }
+
+    // The vpiFuncType of a system function call: the type a registered
+    // function declared, or what the standard defines for a built-in one
+    // (IEEE 1800-2023 20, 37.42).
+    [[nodiscard]] std::optional<std::int64_t> system_function_type(
+        const std::string& name) const
+    {
+        if (const auto known = systf_by_name_.find(name);
+            known != systf_by_name_.end()) {
+            return systfs_[known->second].data.sysfunctype;
+        }
+        static const std::unordered_map<std::string_view, std::int64_t> builtin {
+            { "$time", vpiTimeFunc }, { "$stime", vpiSizedFunc },
+            { "$realtime", vpiRealFunc }, { "$itor", vpiRealFunc },
+            { "$bitstoreal", vpiRealFunc }, { "$bitstoshortreal", vpiRealFunc },
+            { "$sqrt", vpiRealFunc }, { "$ln", vpiRealFunc },
+            { "$log10", vpiRealFunc }, { "$exp", vpiRealFunc },
+            { "$pow", vpiRealFunc }, { "$floor", vpiRealFunc },
+            { "$ceil", vpiRealFunc }, { "$sin", vpiRealFunc },
+            { "$cos", vpiRealFunc }, { "$tan", vpiRealFunc },
+            { "$asin", vpiRealFunc }, { "$acos", vpiRealFunc },
+            { "$atan", vpiRealFunc }, { "$atan2", vpiRealFunc },
+            { "$hypot", vpiRealFunc }, { "$sinh", vpiRealFunc },
+            { "$cosh", vpiRealFunc }, { "$tanh", vpiRealFunc },
+            { "$asinh", vpiRealFunc }, { "$acosh", vpiRealFunc },
+            { "$atanh", vpiRealFunc }, { "$random", vpiIntFunc },
+            { "$rtoi", vpiIntFunc }, { "$clog2", vpiIntFunc },
+            { "$bits", vpiIntFunc }, { "$countones", vpiIntFunc },
+            { "$onehot", vpiIntFunc }, { "$onehot0", vpiIntFunc },
+            { "$isunknown", vpiIntFunc }, { "$dimensions", vpiIntFunc },
+            { "$unpacked_dimensions", vpiIntFunc }, { "$left", vpiIntFunc },
+            { "$right", vpiIntFunc }, { "$low", vpiIntFunc },
+            { "$high", vpiIntFunc }, { "$increment", vpiIntFunc },
+            { "$size", vpiIntFunc }, { "$test$plusargs", vpiIntFunc },
+            { "$value$plusargs", vpiIntFunc }, { "$urandom_range", vpiSizedFunc },
+            { "$urandom", vpiSizedFunc }, { "$realtobits", vpiSizedFunc },
+            { "$shortrealtobits", vpiSizedFunc }, { "$unsigned", vpiSizedFunc },
+            { "$signed", vpiSizedSignedFunc },
+        };
+        const auto found = builtin.find(name);
+        return found == builtin.end() ? std::nullopt
+                                      : std::optional { found->second };
+    }
+
+    // A user function call has its function's vpiFuncType (IEEE 1800-2023
+    // 37.42).
+    [[nodiscard]] std::optional<std::int64_t> call_function_type(
+        const std::uint64_t serial)
+    {
+        const auto type = statement_model_->type(serial);
+        if (type == vpiSysFuncCall) {
+            const auto name
+                = statement_model_->string_property(serial, vpiName);
+            return name ? system_function_type(*name) : std::nullopt;
+        }
+        if (type != vpiFuncCall && type != vpiMethodFuncCall) {
+            return std::nullopt;
+        }
+        const auto callee
+            = statement_model_->relation(serial, vpiFunction).value_or(0U);
+        const auto scope = callee != 0U && !owned(callee)
+            ? hir_scope(callee)
+            : std::nullopt;
+        return scope ? statement_model().scope_property(*scope, vpiFuncType)
+                     : std::nullopt;
     }
 
     // A simple or hierarchical name seen from a scope: the scope and the
@@ -3752,6 +4484,17 @@ private:
             if (instance_kind(object->kind)) {
                 break;
             }
+            // A formal or local of a task, function or named block is no
+            // published object, but hides the outer names.
+            if ((block_kind(object->kind)
+                    || object->kind == SystemVerilogVpiObjectKind::Task
+                    || object->kind == SystemVerilogVpiObjectKind::Function)
+                && statement_model_) {
+                if (const auto local = hir_scope(current);
+                    local && statement_model_->declares(*local, name)) {
+                    return 0U;
+                }
+            }
             current = object->parent;
         }
         const auto found = registry_.find(name);
@@ -3760,6 +4503,19 @@ private:
 
     // Where a scope object's contents are in the HIR: the generate
     // blocks, callable and named blocks from its instance down to it.
+    [[nodiscard]] static bool block_kind(
+        const SystemVerilogVpiObjectKind kind) noexcept
+    {
+        return kind == SystemVerilogVpiObjectKind::Begin
+            || kind == SystemVerilogVpiObjectKind::Fork;
+    }
+    // Where a named block scope is: the registry holds no source for one.
+    [[nodiscard]] std::optional<VpiStatementModel::BlockSource>
+    named_block_source(const fsim_vpi_handle_v1 handle)
+    {
+        const auto scope = hir_scope(handle);
+        return scope ? statement_model().block_source(*scope) : std::nullopt;
+    }
     [[nodiscard]] std::optional<VpiHirScope> hir_scope(
         const fsim_vpi_handle_v1 handle) const
     {
@@ -3943,6 +4699,10 @@ private:
             break;
         case cbError:
             run_error_callbacks_.push_back(serial);
+            // The callback reads the time and state of the error's time
+            // step, so the v4 kernel runs no time steps the scheduler does
+            // not see (docs/engine-v4-semantics.md S19).
+            simulation_.open_external_observation();
             break;
         case cbPLIError:
             pli_error_callbacks_.push_back(serial);
@@ -3987,6 +4747,48 @@ private:
             force_callbacks_.push_back(serial);
             ensure_force_hook();
             break;
+        // Before a statement executes (IEEE 1800-2023 38.36.1.1). The kernel
+        // reports its statements only when the run keeps its execution
+        // probes, which the user asks for.
+        case cbStmt: {
+            if (!simulation_.foreign_probes()) {
+                error_message_ = "vpi_register_cb: cbStmt needs the execution "
+                                 "probes of simulate --foreign-probes "
+                                 "(configuration key simulate.foreign_probes)";
+                error_ = true;
+                return FSIM_VPI_STATUS_UNSUPPORTED;
+            }
+            const auto node = node_of(object);
+            const auto type = handle_type(object);
+            if (node ? !statement_model_->is_statement(*node)
+                     : type != vpiNamedBegin && type != vpiNamedFork) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            statement_callbacks_.push_back(StatementCallback {
+                serial, object, statement_trigger(object) });
+            ensure_statement_hook();
+            break;
+        }
+        // After a named block, task or function is disabled (IEEE 1800-2023
+        // 38.36.1); a disable statement's execution point finds it.
+        case cbDisable: {
+            if (!simulation_.foreign_probes()) {
+                error_message_ = "vpi_register_cb: cbDisable needs the "
+                                 "execution probes of simulate "
+                                 "--foreign-probes (configuration key "
+                                 "simulate.foreign_probes)";
+                error_ = true;
+                return FSIM_VPI_STATUS_UNSUPPORTED;
+            }
+            const auto type = handle_type(object);
+            if (type != vpiNamedBegin && type != vpiNamedFork
+                && type != vpiTask && type != vpiFunction) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            disable_callbacks_.push_back(serial);
+            ensure_statement_hook();
+            break;
+        }
         // The assertion system's changes (IEEE 1800-2023 39.4.1).
         case cbAssertionSysInitialized:
         case cbAssertionSysOn:
@@ -4115,6 +4917,10 @@ private:
         std::erase(run_error_callbacks_, found->first);
         std::erase(unresolved_callbacks_, found->first);
         std::erase(force_callbacks_, found->first);
+        std::erase_if(statement_callbacks_, [&](const auto& listener) {
+            return listener.serial == found->first;
+        });
+        std::erase(disable_callbacks_, found->first);
         std::erase(assertion_system_callbacks_, found->first);
         signal_traps_.erase(found->first);
         std::erase(pli_error_callbacks_, found->first);
@@ -4165,27 +4971,26 @@ private:
         // vpiSuppressVal, since it has no value to report.
         if (event && stored.has_value
             && event->kind == runtime::SystemVerilogVpiCallbackKind::ValueChange
-            && event->object && !event->value) {
+            && event->object) {
             const auto object = info(*event->object);
-            if (object
-                && object->kind == runtime::SystemVerilogVpiObjectKind::NamedEvent) {
-                value.format = vpiSuppressVal;
-                data.value = &value;
-            }
-        }
-        if (event && stored.has_value
-            && event->kind == runtime::SystemVerilogVpiCallbackKind::ValueChange
-            && event->object && event->value) {
-            const auto type = registry_.type_info(*event->object);
-            const auto changed = stored_to_value(*event->value,
-                type && type.value && type.value->is_signed);
-            if (changed && write_value(*changed, value)) {
-                data.value = &value;
-            }
-            // An array word reports its index (IEEE 1800-2023 38.36.1).
-            if (const auto word = info(*event->object)) {
-                if (const auto index = word_index(*word)) {
-                    data.index = static_cast<PLI_INT32>(*index);
+            if (!event->value) {
+                if (object
+                    && object->kind
+                        == runtime::SystemVerilogVpiObjectKind::NamedEvent) {
+                    value.format = vpiSuppressVal;
+                    data.value = &value;
+                }
+            } else {
+                const auto changed = stored_to_value(*event->value,
+                    object && object->type && object->type->is_signed);
+                if (changed && write_value(*changed, value)) {
+                    data.value = &value;
+                }
+                // An array word reports its index (IEEE 1800-2023 38.36.1).
+                if (object) {
+                    if (const auto index = word_index(*object)) {
+                        data.index = static_cast<PLI_INT32>(*index);
+                    }
                 }
             }
         }
@@ -4302,6 +5107,14 @@ private:
             return vpiGenScopeArray;
         case SystemVerilogVpiObjectKind::Modport:
             return vpiModport;
+        // The type specification objects are the nettype declarations
+        // (IEEE 1800-2023 37.23).
+        case SystemVerilogVpiObjectKind::TypeSpecification:
+            return vpiNettypeDecl;
+        case SystemVerilogVpiObjectKind::ClockingBlock:
+            return vpiClockingBlock;
+        case SystemVerilogVpiObjectKind::ClockingIo:
+            return vpiClockingIODecl;
         case SystemVerilogVpiObjectKind::ModuleArray:
             return vpiModuleArray;
         case SystemVerilogVpiObjectKind::InterfaceArray:
@@ -4410,6 +5223,9 @@ private:
         if (const auto* port = port_of(handle)) {
             return port->io_declaration ? vpiIODecl : vpiPort;
         }
+        if (port_bit_of(handle)) {
+            return vpiPortBit;
+        }
         if (reference_of(handle) != nullptr) {
             return vpiRefObj;
         }
@@ -4433,6 +5249,10 @@ private:
                 return vpiCallback;
             case Tag::scheduled:
                 return vpiSchedEvent;
+            case Tag::clocking_skew:
+                return vpiDelayControl;
+            case Tag::clocking_event:
+                return vpiEventControl;
             default:
                 return vpiUndefined;
             }
@@ -4598,6 +5418,49 @@ private:
             return succeed(result, make_iterator(
                 statement_model_->iterate(*serial, type).value_or(objects)));
         }
+        // The typedefs an instance declares (IEEE 1800-2023 37.5, 37.12,
+        // 37.25); those of generate blocks, packages and $unit are not
+        // recorded.
+        if (type == vpiTypedef && reference != 0U && !owned(reference)) {
+            if (const auto owner = info(reference);
+                owner && instance_kind(owner->kind)) {
+                for (const auto& specialization :
+                    simulation_.design().specializations()) {
+                    if (specialization.instance != owner->full_name) {
+                        continue;
+                    }
+                    for (const auto& declared : specialization.vpi_typedefs) {
+                        if (declared.typespec) {
+                            objects.push_back(make_typespec(
+                                TypespecLevel { declared.typespec.get(), 0U }));
+                        }
+                    }
+                }
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
+        // The drivers and loads of a net or variable, and the statements that
+        // use it (IEEE 1800-2023 37.21, 37.46, 37.58).
+        if ((type == vpiDriver || type == vpiLoad || type == vpiLocalDriver
+                || type == vpiLocalLoad || type == vpiUse)
+            && reference != 0U && !owned(reference)) {
+            return succeed(
+                result, make_iterator(connections_of(type, reference)));
+        }
+        // The formal arguments of a task or function (IEEE 1800-2023 37.41).
+        if (type == vpiIODecl && reference != 0U && !owned(reference)) {
+            const auto callable = info(reference);
+            if (callable
+                && (callable->kind == SystemVerilogVpiObjectKind::Task
+                    || callable->kind == SystemVerilogVpiObjectKind::Function)) {
+                if (const auto scope = hir_scope(reference)) {
+                    objects = statement_model()
+                                  .scope_iterate_tf(*scope, type)
+                                  .value_or(objects);
+                }
+                return succeed(result, make_iterator(std::move(objects)));
+            }
+        }
         // The processes and continuous assignments of an instance or
         // generate scope, the statements of a named block (IEEE 1800-2023
         // 37.10, 37.43, 37.44).
@@ -4700,7 +5563,22 @@ private:
             }
             return succeed(result, make_iterator(std::move(objects)));
         }
-        if (port_of(reference) != nullptr || reference_of(reference) != nullptr) {
+        // The bits of a vector port, left to right (IEEE 1800-2023 37.14).
+        if (const auto* port = port_of(reference); port != nullptr
+            && type == vpiBit && !port->io_declaration
+            && !port->interface_port) {
+            const auto width = port_width(*port);
+            const auto index = static_cast<std::uint64_t>(
+                port - simulation_.systemverilog_vpi_ports().data());
+            for (auto position = width; width > 1 && position > 0; --position) {
+                objects.push_back(tagged(Tag::port_bit,
+                    (index << 24U)
+                        | static_cast<std::uint64_t>(position - 1)));
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
+        if (port_of(reference) != nullptr || reference_of(reference) != nullptr
+            || port_bit_of(reference)) {
             return succeed(result, make_iterator(std::move(objects)));
         }
         // The members of a structure or union, the elements of a packed
@@ -4794,8 +5672,10 @@ private:
             const auto object = info(handle);
             // Names starting `$` or `@` are the elaborator's own storage,
             // not design objects.
-            if (!object || object->name.starts_with('$')
-                || object->name.starts_with('@')) {
+            if (!object
+                || ((object->name.starts_with('$')
+                        && object->kind != SystemVerilogVpiObjectKind::ClockingBlock)
+                    || object->name.starts_with('@'))) {
                 continue;
             }
             if (matches(type, *object)) {
@@ -4890,11 +5770,31 @@ private:
         }
         const auto reference = resolve(request.handle);
         if (const auto serial = node_of(reference)) {
+            if (type == vpiTypespec || type == vpiLeftRange
+                || type == vpiRightRange) {
+                if (const auto declared = statement_model_->declared_type(*serial)) {
+                    return succeed(result, declared_type_relation(*declared, type));
+                }
+            }
             return succeed(result,
                 statement_model_->relation(*serial, type).value_or(0U));
         }
-        // The statement of a task or function (IEEE 1800-2023 37.42).
-        if (type == vpiStmt && reference != 0U && !owned(reference)) {
+        // A function's return type range (IEEE 1800-2023 37.41).
+        if ((type == vpiLeftRange || type == vpiRightRange) && reference != 0U
+            && !owned(reference)) {
+            if (const auto scope = hir_scope(reference)) {
+                if (const auto returned
+                    = statement_model().scope_return_type(*scope);
+                    returned && !returned->ranges.empty()) {
+                    return succeed(result,
+                        declared_type_relation(*returned, type));
+                }
+            }
+        }
+        // The statement and the return variable of a task or function (IEEE
+        // 1800-2023 37.41, 37.42).
+        if ((type == vpiStmt || type == vpiReturn) && reference != 0U
+            && !owned(reference)) {
             if (const auto scope = hir_scope(reference)) {
                 return succeed(result,
                     statement_model().scope_relation(*scope, type).value_or(0U));
@@ -4938,6 +5838,30 @@ private:
                 return succeed(result);
             }
         }
+        if (const auto* skew = clocking_skew_handle(reference)) {
+            const auto copy = *skew;
+            return succeed(result,
+                type == vpiParent ? copy.owner
+                : type == vpiDelay ? clocking_skew_delay(copy)
+                                   : 0U);
+        }
+        if (const auto block = clocking_event_block(reference)) {
+            if (type == vpiParent) {
+                return succeed(result, block);
+            }
+            const auto view = clocking_view(block);
+            // The event of a single sensitivity without an edge is its
+            // signal; an edge operator is not published.
+            if (type == vpiCondition && view
+                && view->block->event.size() == 1U
+                && view->block->event.front().edge
+                    == semantic::sv::EdgeKind::any) {
+                return succeed(result,
+                    name_from_scope(view->scope,
+                        view->block->event.front().signal));
+            }
+            return succeed(result);
+        }
         if (const auto* port = port_of(reference)) {
             if (port->io_declaration) {
                 switch (type) {
@@ -4959,10 +5883,23 @@ private:
                         ? tagged(Tag::reference, serial_of(reference))
                         : port->low_conn);
             case vpiHighConn:
+                if (port->has_high_expression) {
+                    return succeed(result,
+                        statement_model().expression_in_scope(
+                            semantic::ExpressionId::from_index(
+                                port->high_expression),
+                            port->high_scope, reference));
+                }
                 return succeed(result, port->high_conn);
             default:
                 return succeed(result);
             }
+        }
+        if (const auto bit = port_bit_of(reference)) {
+            return succeed(result,
+                type == vpiParent
+                    ? tagged(Tag::port, static_cast<std::uint64_t>(bit->port))
+                    : 0U);
         }
         if (const auto* port = reference_of(reference)) {
             switch (type) {
@@ -5052,6 +5989,27 @@ private:
             const auto scope = process ? process->parent : 0U;
             return succeed(result,
                 type == vpiModule ? enclosing_module(scope) : scope);
+        }
+        // The clocking relations of 37.48 and of an instance (14.12, 14.14).
+        if (object->kind == SystemVerilogVpiObjectKind::ClockingBlock
+            || object->kind == SystemVerilogVpiObjectKind::ClockingIo) {
+            if (type == vpiInputSkew || type == vpiOutputSkew
+                || type == vpiClockingEvent || type == vpiExpr) {
+                return succeed(result, clocking_relation(reference, type));
+            }
+            if (type == vpiInstance
+                && object->kind == SystemVerilogVpiObjectKind::ClockingBlock) {
+                return succeed(result, object->parent);
+            }
+        }
+        if (object->kind == SystemVerilogVpiObjectKind::TypeSpecification
+            && (type == vpiWith || type == vpiNetTypedefAlias)) {
+            return succeed(result, nettype_relation(reference, type));
+        }
+        if (instance_kind(object->kind)
+            && (type == vpiDefaultClocking || type == vpiGlobalClocking)) {
+            return succeed(result,
+                clocking_declared(*object, type == vpiGlobalClocking));
         }
         switch (type) {
         case vpiScope:
@@ -5274,51 +6232,150 @@ private:
     fsim_vpi_status_v1 handle_by_index(const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
-        const auto reference = resolve(request.handle);
-        const auto index = static_cast<PLI_INT32>(request.argument);
+        return succeed(result,
+            index_handle(resolve(request.handle),
+                static_cast<PLI_INT32>(request.argument)));
+    }
+
+    // The object `reference[index]` names (IEEE 1800-2023 38.24); 0 when
+    // none does.
+    [[nodiscard]] fsim_vpi_handle_v1 index_handle(
+        const fsim_vpi_handle_v1 reference, const PLI_INT32 index)
+    {
         if (const auto* subarray = subarray_of(reference)) {
             const auto copy = *subarray;
-            return succeed(result, index_array(copy.memory, copy.depth,
-                copy.name, copy.full_name, index));
+            return index_array(copy.memory, copy.depth, copy.name,
+                copy.full_name, index);
         }
         if (const auto* select = select_of(reference)) {
             if (select->declared) {
-                return succeed(result, declared_index(reference, index));
+                return declared_index(reference, index);
             }
             if (!select->element) {
-                return succeed(result);
+                return 0U;
             }
             const auto copy = *select;
-            return succeed(result, make_element(copy.parent, copy.offset,
-                copy.dimensions, copy.suffix, index));
+            return make_element(copy.parent, copy.offset, copy.dimensions,
+                copy.suffix, index);
         }
         const auto object = info(reference);
         if (!object) {
-            return succeed(result);
+            return 0U;
         }
         const auto found = registry_.find(
             object->full_name + "[" + std::to_string(index) + "]");
         if (found && found.value) {
-            return succeed(result, found.value->handle);
+            return found.value->handle;
         }
         if (object->type && object->type->declared
             && object->type->declared->kind
                 == runtime::SystemVerilogVpiDescriptorKind::PackedArray) {
-            return succeed(result, packed_element(reference, index));
+            return packed_element(reference, index);
         }
         if (object->kind == SystemVerilogVpiObjectKind::Memory) {
-            return succeed(result, index_array(reference, 0U, object->name,
-                object->full_name, index));
+            return index_array(reference, 0U, object->name,
+                object->full_name, index);
         }
         // An index of a vector with several packed dimensions selects an
         // element of the leftmost one (IEEE 1800-2023 7.4.5).
         if (const auto dimensions = dimension_ranges(reference);
             dimensions.size() > 1U) {
-            return succeed(result,
-                make_element(reference, 0U, dimensions, "", index));
+            return make_element(reference, 0U, dimensions, "", index);
         }
         // A vector's index names a bit-select (IEEE 1800-2023 37.18).
-        return succeed(result, make_select(reference, index, index, true));
+        return make_select(reference, index, index, true);
+    }
+
+    // The integer an expression handle holds now: a constant, a parameter
+    // or the current value of a variable; none when it has an x or z bit.
+    [[nodiscard]] std::optional<std::int64_t> handle_integer(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto value = object_value(handle);
+        if (!value || value->kind != Value::Kind::bits) {
+            return std::nullopt;
+        }
+        for (std::size_t bit = 0U; bit < value->bits.width(); ++bit) {
+            const auto level = value->bits.get(bit);
+            if (level != Logic4::zero && level != Logic4::one) {
+                return std::nullopt;
+            }
+        }
+        return signed_bits(value->bits, value->is_signed);
+    }
+
+    // The registry object a select expression of the statement model
+    // stands for, once its base and indexes are known (IEEE 1800-2023
+    // 37.18, 37.19, 37.59); 0 when they are not. The select's name and
+    // value are those of that object.
+    [[nodiscard]] fsim_vpi_handle_v1 select_expression_object(
+        const fsim_vpi_handle_v1 expression, const std::size_t depth = 0U)
+    {
+        const auto serial = node_of(expression);
+        if (!serial || depth > 16U) {
+            return 0U;
+        }
+        const auto type = statement_model_->type(*serial);
+        if (type != vpiBitSelect && type != vpiVarSelect
+            && type != vpiPartSelect && type != vpiIndexedPartSelect) {
+            return 0U;
+        }
+        const auto parent
+            = statement_model_->relation(*serial, vpiParent).value_or(0U);
+        const auto base = node_of(parent)
+            ? select_expression_object(parent, depth + 1U)
+            : parent;
+        if (base == 0U
+            || (owned(base) && select_of(base) == nullptr
+                && subarray_of(base) == nullptr)) {
+            return 0U;
+        }
+        const auto number
+            = [&](const PLI_INT32 relation) -> std::optional<std::int64_t> {
+            const auto operand
+                = statement_model_->relation(*serial, relation).value_or(0U);
+            return operand != 0U ? handle_integer(operand) : std::nullopt;
+        };
+        if (type == vpiVarSelect) {
+            auto current = base;
+            const auto indices
+                = statement_model_->iterate(*serial, vpiIndex)
+                      .value_or(std::vector<fsim_vpi_handle_v1> { });
+            for (const auto index : indices) {
+                const auto value = handle_integer(index);
+                if (!value || current == 0U) {
+                    return 0U;
+                }
+                current = index_handle(current, static_cast<PLI_INT32>(*value));
+            }
+            return current;
+        }
+        if (type == vpiBitSelect) {
+            const auto index = number(vpiIndex);
+            return index ? index_handle(base, static_cast<PLI_INT32>(*index))
+                         : fsim_vpi_handle_v1 { };
+        }
+        if (type == vpiPartSelect) {
+            const auto left = number(vpiLeftRange);
+            const auto right = number(vpiRightRange);
+            return left && right ? make_select(base, *left, *right, false)
+                                 : fsim_vpi_handle_v1 { };
+        }
+        // `base +: width` and `base -: width` (IEEE 1800-2023 11.5.1).
+        const auto start = number(vpiBaseExpr);
+        const auto width = number(vpiWidthExpr);
+        const auto range = declared_range(base);
+        const auto direction
+            = statement_model_->property(*serial, vpiIndexedPartSelectType);
+        if (!start || !width || *width < 1 || !range || !direction) {
+            return 0U;
+        }
+        const auto plus = *direction == vpiPosIndexed;
+        const auto descending = range->first >= range->second;
+        const auto far = plus ? *start + *width - 1 : *start - *width + 1;
+        const auto left = plus == descending ? far : *start;
+        const auto right = plus == descending ? *start : far;
+        return make_select(base, left, right, false);
     }
 
     // The element of a multidimensional array at one index per unpacked
@@ -5340,6 +6397,42 @@ private:
         return succeed(result, found && found.value ? found.value->handle : 0U);
     }
 
+    // A port's size follows the formal; a port without a low connection
+    // has size 0 (IEEE 1800-2023 37.14 detail 11).
+    [[nodiscard]] std::int64_t port_width(
+        const runtime::SystemVerilogVpiPort& port) const
+    {
+        const auto object = info(port.low_conn);
+        if (!object || !object->type) {
+            return 0;
+        }
+        if (const auto& declared = object->type->declared) {
+            return static_cast<std::int64_t>(
+                runtime::systemverilog_vpi_declared_bits(*declared));
+        }
+        return static_cast<std::int64_t>(object->type->width);
+    }
+
+    // The bit of a port that `handle` is.
+    struct PortBitRef {
+        std::size_t port { };
+        std::uint32_t position { };
+    };
+    [[nodiscard]] std::optional<PortBitRef> port_bit_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto& ports = simulation_.systemverilog_vpi_ports();
+        if (!owned(handle) || tag_of(handle) != Tag::port_bit) {
+            return std::nullopt;
+        }
+        const auto serial = serial_of(handle);
+        const auto index = static_cast<std::size_t>(serial >> 24U);
+        if (index >= ports.size()) {
+            return std::nullopt;
+        }
+        return PortBitRef { index, static_cast<std::uint32_t>(serial & 0xFFFFFFU) };
+    }
+
     // The properties of a port (IEEE 1800-2023 37.14). Its size, scalar and
     // vector follow the formal; a port without a low connection has size 0.
     fsim_vpi_status_v1 port_property(const runtime::SystemVerilogVpiPort& port,
@@ -5348,17 +6441,7 @@ private:
         const auto integer = [&](const std::int64_t value) {
             return succeed(result, 0U, static_cast<std::uint64_t>(value));
         };
-        const auto size = [&]() -> std::int64_t {
-            const auto object = info(port.low_conn);
-            if (!object || !object->type) {
-                return 0;
-            }
-            if (const auto& declared = object->type->declared) {
-                return static_cast<std::int64_t>(
-                    runtime::systemverilog_vpi_declared_bits(*declared));
-            }
-            return static_cast<std::int64_t>(object->type->width);
-        };
+        const auto size = [&]() { return port_width(port); };
         switch (property) {
         case vpiPortIndex:
             return integer(port.index);
@@ -5413,7 +6496,20 @@ private:
             return integer(handle_type(request.handle));
         }
         if (const auto serial = node_of(request.handle)) {
-            const auto value = statement_model_->property(*serial, property);
+            auto value = statement_model_->property(*serial, property);
+            if (!value && property == vpiFuncType) {
+                value = call_function_type(*serial);
+            }
+            // A system task or function is user-defined when a plug-in
+            // registered it (IEEE 1800-2023 37.42).
+            if (!value && property == vpiUserDefn) {
+                const auto type = statement_model_->type(*serial);
+                if (type == vpiSysFuncCall || type == vpiSysTaskCall) {
+                    const auto name
+                        = statement_model_->string_property(*serial, vpiName);
+                    value = name && systf_by_name_.contains(*name) ? 1 : 0;
+                }
+            }
             return value ? integer(*value) : succeed(result, 0U, undefined);
         }
         if (const auto* level = typespec_of(request.handle)) {
@@ -5484,6 +6580,13 @@ private:
         }
         if (const auto* port = port_of(request.handle)) {
             return port_property(*port, property, result);
+        }
+        // A port bit has no name or index (37.14 detail 7); it is one bit.
+        if (port_bit_of(request.handle)) {
+            return property == vpiSize || property == vpiScalar
+                ? integer(1)
+                : property == vpiVector ? integer(0)
+                                        : succeed(result, 0U, undefined);
         }
         if (reference_of(request.handle) != nullptr) {
             return property == vpiGeneric
@@ -5595,6 +6698,38 @@ private:
         if (!object) {
             return succeed(result, 0U, undefined);
         }
+        // A concurrent assertion's own properties (IEEE 1800-2023 37.50):
+        // `cover sequence`, and a clock the assertion did not write.
+        if (const auto* assertion = concurrent_assertion(*object);
+            assertion != nullptr
+            && (property == vpiIsCoverSequence
+                || property == vpiIsClockInferred)) {
+            return integer(property == vpiIsCoverSequence
+                    ? (assertion->kind
+                                == semantic::sv::ConcurrentAssertionKind::cover
+                            && assertion->form
+                                == semantic::sv::ConcurrentAssertionForm::sequence
+                        ? 1
+                        : 0)
+                    : (clock_inferred(*assertion_unit(*object), *assertion)
+                            ? 1
+                            : 0));
+        }
+        // A task's or function's own properties (IEEE 1800-2023 37.41).
+        if ((object->kind == SystemVerilogVpiObjectKind::Task
+                || object->kind == SystemVerilogVpiObjectKind::Function)
+            && (property == vpiSize || property == vpiSigned
+                || property == vpiFuncType || property == vpiMethod
+                || property == vpiVirtual || property == vpiVisibility
+                || property == vpiAccessType)) {
+            if (const auto scope = hir_scope(resolve(request.handle))) {
+                if (const auto value
+                    = statement_model().scope_property(*scope, property)) {
+                    return integer(*value);
+                }
+            }
+            return succeed(result, 0U, undefined);
+        }
         const auto width = object->type ? object->type->width : 0U;
         if (object->type && object->type->declared) {
             if (const auto answer = declared_property(
@@ -5644,6 +6779,11 @@ private:
             if (const auto* assertion = concurrent_assertion(*object)) {
                 const auto location = assertion_location(*assertion);
                 return integer(location ? location->second : 0);
+            }
+            if (!object->source && block_kind(object->kind)) {
+                if (const auto block = named_block_source(request.handle)) {
+                    return integer(block->line);
+                }
             }
             return integer(object->source ? object->source->line : 0);
         case vpiTopModule:
@@ -5723,6 +6863,13 @@ private:
             }
             return integer(
                 object->type && object->type->local_parameter ? 1 : 0);
+        case vpiInputEdge:
+        case vpiOutputEdge:
+            if (const auto view = clocking_view(request.handle)) {
+                return integer(clocking_edge(
+                    clocking_skew_of(*view, property == vpiOutputEdge)));
+            }
+            return succeed(result, 0U, undefined);
         case vpiAutomatic:
             return integer(object->type
                         && object->type->lifetime
@@ -5730,6 +6877,22 @@ private:
                     ? 1
                     : 0);
         case vpiDirection:
+            // A clockvar's direction is its declaration's (37.48).
+            if (object->kind == SystemVerilogVpiObjectKind::ClockingIo) {
+                const auto view = clocking_view(request.handle);
+                if (!view || view->signal == nullptr) {
+                    return succeed(result, 0U, undefined);
+                }
+                using Direction = semantic::sv::Direction;
+                switch (view->signal->direction) {
+                case Direction::input:
+                    return integer(vpiInput);
+                case Direction::output:
+                    return integer(vpiOutput);
+                default:
+                    return integer(vpiInout);
+                }
+            }
             // A formal's net or variable has no direction; its port has
             // (IEEE 1800-2023 37.14, 37.16, 37.17).
             if (!object->type
@@ -6228,7 +7391,20 @@ private:
         }
         if (const auto serial = node_of(request.handle)) {
             auto value = statement_model_->string_property(*serial, property);
-            return value ? text(std::move(*value)) : FSIM_VPI_STATUS_NOT_FOUND;
+            if (value) {
+                return text(std::move(*value));
+            }
+            // A select is named like the object it selects (IEEE 1800-2023
+            // 37.18, 37.19).
+            if (property == vpiName || property == vpiFullName) {
+                if (const auto selected = select_expression_object(request.handle);
+                    selected != 0U) {
+                    auto inner = request;
+                    inner.handle = selected;
+                    return string_property(inner, result);
+                }
+            }
+            return FSIM_VPI_STATUS_NOT_FOUND;
         }
         // A typespec is named by its typedef (IEEE 1800-2023 37.25 detail
         // 1); a member and an enumeration constant by their own names.
@@ -6256,6 +7432,9 @@ private:
         if (const auto* port = port_of(request.handle)) {
             return property == vpiName ? text(port->name)
                                        : FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        if (port_bit_of(request.handle)) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
         }
         if (const auto* port = reference_of(request.handle)) {
             return property == vpiName ? text(port->name)
@@ -6353,6 +7532,12 @@ private:
         case vpiFullName:
             return text(presented_full_name(*object));
         case vpiFile:
+            if (!object->source && block_kind(object->kind)) {
+                if (const auto block = named_block_source(request.handle);
+                    block && !block->file.empty()) {
+                    return text(block->file);
+                }
+            }
             return object->source ? text(object->source->file)
                                   : FSIM_VPI_STATUS_NOT_FOUND;
         // Where the instance's definition is, and its library; without a
@@ -6400,7 +7585,55 @@ private:
         }
     }
 
+    // A concurrent assertion whose property has no clocking event of its own
+    // takes its clock from the context (IEEE 1800-2023 16.16). The frontend
+    // declares an inline property, clock included, as a named property.
+    [[nodiscard]] static bool clock_inferred(const semantic::sv::Unit& unit,
+        const semantic::sv::ConcurrentAssertion& assertion)
+    {
+        const auto first = std::ranges::find_if(assertion.property_tokens,
+            [](const auto& token) { return token.text != "("; });
+        if (first == assertion.property_tokens.end()) {
+            return true;
+        }
+        if (first->text == "@") {
+            return false;
+        }
+        const auto declared = std::ranges::find(unit.assertion_declarations,
+            first->text, &semantic::sv::AssertionDeclaration::name);
+        return declared == unit.assertion_declarations.end()
+            || !declared->clock;
+    }
+
     // --- values -------------------------------------------------------------
+
+    // The value of a `$time`, `$stime` or `$realtime` call: the simulation
+    // time in the time unit of the call's module (IEEE 1800-2023 20.3,
+    // 37.42 detail 4).
+    [[nodiscard]] std::optional<Value> system_time_value(
+        const std::uint64_t serial) const
+    {
+        if (statement_model_->type(serial) != vpiSysFuncCall) {
+            return std::nullopt;
+        }
+        const auto name = statement_model_->string_property(serial, vpiName);
+        if (!name || (*name != "$time" && *name != "$stime" && *name != "$realtime")) {
+            return std::nullopt;
+        }
+        s_vpi_time time { };
+        time.type = vpiScaledRealTime;
+        fill_time(time, statement_model_->relation(serial, vpiScope).value_or(0U));
+        Value value;
+        if (*name == "$realtime") {
+            value.kind = Value::Kind::real;
+            value.real = time.real;
+            return value;
+        }
+        const auto ticks = static_cast<std::uint64_t>(std::llround(time.real));
+        value.bits = *name == "$time" ? integer_bits(ticks, 64U)
+                                      : integer_bits(ticks & 0xFFFFFFFFU, 32U);
+        return value;
+    }
 
     [[nodiscard]] std::optional<Value> object_value(
         const fsim_vpi_handle_v1 handle) const
@@ -6408,7 +7641,7 @@ private:
         if (const auto serial = node_of(handle)) {
             auto constant = statement_model_->value(*serial);
             if (!constant) {
-                return std::nullopt;
+                return system_time_value(*serial);
             }
             Value value;
             value.kind = constant->kind == VpiStatementValue::Kind::real
@@ -6604,9 +7837,13 @@ private:
         if (out == nullptr) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
-        const auto value = valueless(resolve(request.handle))
+        // A select expression reads the object it selects (IEEE 1800-2023
+        // 37.19, 37.59).
+        const auto selected = select_expression_object(request.handle);
+        const auto source = selected != 0U ? selected : request.handle;
+        const auto value = valueless(resolve(source))
             ? std::nullopt
-            : object_value(request.handle);
+            : object_value(source);
         if (!value || !write_value(*value, *out)) {
             // A value that cannot be read leaves no stale data in the
             // caller's structure.
@@ -7362,6 +8599,8 @@ private:
     std::vector<std::byte> array_buffer_;
     std::vector<Select> selects_;
     std::vector<Constant> constants_;
+    std::vector<ClockingSkewHandle> clocking_skews_;
+    std::vector<fsim_vpi_handle_v1> clocking_events_;
     std::unique_ptr<VpiStatementModel> statement_model_;
     // A force or release a process executed, waiting for the next safe
     // point.
@@ -7376,11 +8615,31 @@ private:
     std::vector<std::uint64_t> force_callbacks_;
     std::uint64_t force_hook_ { };
     std::uint64_t force_delivery_hook_ { };
+    // cbStmt callbacks: the object each was placed on, and the statement
+    // whose execution point runs it.
+    struct StatementCallback {
+        std::uint64_t serial { };
+        fsim_vpi_handle_v1 object { };
+        fsim_vpi_handle_v1 trigger { };
+    };
+    std::vector<StatementCallback> statement_callbacks_;
+    std::uint64_t statement_hook_ { };
+    // cbDisable callbacks, and the objects disabled since the last safe
+    // point.
+    std::vector<std::uint64_t> disable_callbacks_;
+    std::vector<fsim_vpi_handle_v1> pending_disables_;
+    std::uint64_t disable_hook_ { };
+    // The statement at each (design process, line, column) execution point.
+    std::map<std::tuple<runtime::simir::ProcessId, const std::string*,
+                 std::uint32_t, std::uint32_t>,
+        VpiStatementModel::StatementPoint>
+        statement_points_;
     std::map<std::uint64_t, AssertionCallback> assertion_callbacks_;
     std::vector<std::uint64_t> assertion_system_callbacks_;
     std::set<fsim_vpi_handle_v1> locked_assertions_;
     std::vector<runtime::SystemVerilogVpiCallbackHandle> assertion_system_hooks_;
     bool assertion_system_hooked_ { };
+    bool assertion_start_hooked_ { };
     bool assertion_system_locked_ { };
     bool assertion_system_ended_ { };
     std::vector<Range> ranges_;
@@ -7389,6 +8648,13 @@ private:
     std::map<std::pair<const void*, std::size_t>, std::size_t> typespec_index_;
     std::vector<TypespecPart> typespec_members_;
     std::vector<TypespecPart> enum_constants_;
+    // Typespecs of a function's return variable and formals, built from
+    // the declaration's HIR type (IEEE 1800-2023 37.41).
+    std::deque<runtime::SystemVerilogVpiTypespec> declared_typespec_nodes_;
+    std::map<std::tuple<std::string, bool,
+                 std::vector<std::pair<std::int64_t, std::int64_t>>>,
+        fsim_vpi_handle_v1>
+        declared_typespecs_;
     std::map<fsim_vpi_handle_v1,
         std::shared_ptr<const runtime::SystemVerilogVpiTypespec>>
         derived_typespecs_;

@@ -17,6 +17,7 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 
 namespace fsim::runtime::sva {
 
@@ -1133,34 +1134,42 @@ void Monitor::tick(const std::vector<bool>& guards, const bool start,
         ++tick_;
     }
     plan_->now = tick_;
+    if (start && leading) {
+        started_.push_back(time);
+    }
     if (disabled) {
         if (start || !attempts_.empty()) {
-            outcomes_.push_back(Outcome::disabled);
+            // The disabled state ends the earliest running attempt's
+            // evaluation, or the one that just started (39.4.2).
+            outcomes_.push_back({ Outcome::disabled,
+                attempts_.empty() ? time : attempts_.front().started });
         }
         attempts_.clear();
         return;
     }
     if (start && leading) {
-        attempts_.push_back(
-            std::make_unique<Instance>(*plan_, plan_->root, tick_));
+        attempts_.push_back({ std::make_unique<Instance>(
+                                  *plan_, plan_->root, tick_),
+            time });
     }
     for (auto attempt = attempts_.begin(); attempt != attempts_.end();) {
-        auto& instance = **attempt;
+        auto& instance = *attempt->instance;
         if (plan_->every_match) {
             if (instance.step_every_match(tick_)) {
-                outcomes_.push_back(Outcome::success);
+                outcomes_.push_back({ Outcome::success, attempt->started });
             }
             // An attempt that ends without a match is a failed cover
             // attempt.
             if (instance.decided() && !instance.matched_once()) {
-                outcomes_.push_back(Outcome::failure);
+                outcomes_.push_back({ Outcome::failure, attempt->started });
             }
         } else {
             instance.step(tick_);
             if (instance.decided()) {
-                outcomes_.push_back(!instance.holds() ? Outcome::failure
+                outcomes_.push_back({ !instance.holds() ? Outcome::failure
                         : instance.vacuous()          ? Outcome::vacuous
-                                                      : Outcome::success);
+                                                      : Outcome::success,
+                    attempt->started });
             }
         }
         if (instance.decided()) {
@@ -1181,9 +1190,20 @@ Outcome Monitor::next_outcome()
     if (outcomes_.empty()) {
         return Outcome::none;
     }
-    const auto outcome = outcomes_.front();
+    const auto resolved = outcomes_.front();
     outcomes_.pop_front();
-    return outcome;
+    last_start_ = resolved.started;
+    return resolved.outcome;
+}
+
+std::int64_t Monitor::last_outcome_start() const noexcept
+{
+    return last_start_;
+}
+
+std::vector<std::int64_t> Monitor::take_started()
+{
+    return std::exchange(started_, std::vector<std::int64_t> { });
 }
 
 Monitor::Finished Monitor::finish()
@@ -1191,7 +1211,7 @@ Monitor::Finished Monitor::finish()
     Finished result;
     if (!plan_->every_match) {
         for (const auto& attempt : attempts_) {
-            if (attempt->finish(tick_)) {
+            if (attempt.instance->finish(tick_)) {
                 ++result.holds;
             } else {
                 ++result.failures;
@@ -1206,6 +1226,13 @@ void Monitor::kill()
 {
     attempts_.clear();
     outcomes_.clear();
+}
+
+std::size_t Monitor::kill_attempt(const std::int64_t start_time)
+{
+    return std::erase_if(attempts_, [&](const Running& attempt) {
+        return attempt.started == start_time;
+    });
 }
 
 std::size_t Monitor::running_attempts() const

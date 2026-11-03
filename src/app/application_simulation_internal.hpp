@@ -26,6 +26,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 namespace fsim::app {
@@ -460,7 +461,6 @@ struct Simulation::Impl {
 
     void publish_vpi_stored_signal(const SignalId signal);
 
-    void publish_vpi_package_startup_values();
 
     void start_interpreter();
 
@@ -470,6 +470,18 @@ struct Simulation::Impl {
 
     // Creates and releases the words of a published dynamic array or queue
     // to match its current size (IEEE 1800-2023 37.17).
+    void materialize_vpi_children(fsim_vpi_handle_v1 parent);
+    [[nodiscard]] std::optional<runtime::SystemVerilogVpiStoredValue>
+    vpi_live_value(fsim_vpi_handle_v1 handle, bool stored) const;
+    [[nodiscard]] bool vpi_signal_watched(SignalId signal) const noexcept;
+    [[nodiscard]] bool vpi_any_signal_watched() const noexcept
+    {
+        return vpi_watch_all_values || vpi_some_signal_watched;
+    }
+    /// Start announcing the value changes of `object` (a value change
+    /// callback was registered on it); an object without a signal, word or
+    /// driver binding watches every value.
+    void watch_vpi_object(std::optional<fsim_vpi_handle_v1> object);
     void sync_vpi_live_memory(runtime::simir::ContainerObjectId object,
         const runtime::simir::ContainerValue& value);
     void publish_vpi_container(
@@ -495,6 +507,9 @@ struct Simulation::Impl {
 
     void publish_vpi_assertion(
         const ConcurrentAssertionEvent& event);
+
+    void publish_assertion_attempt_start(
+        runtime::simir::ProcessId design_process, std::int64_t start);
 
     void start_vpi();
 
@@ -546,11 +561,7 @@ struct Simulation::Impl {
         std::map<std::string, std::string, std::less<>>, std::less<>>
         class_instance_parameter_cache;
 
-    std::vector<SignalId> package_static_startup_signal_ids;
-
     bool vpi_runtime_updates_enabled { true };
-
-    bool package_static_startup_values_published { };
 
     runtime::SystemVerilogClassHeap class_heap;
     // The types class constraints give the properties they name, by
@@ -718,6 +729,25 @@ struct Simulation::Impl {
     std::map<runtime::simir::ContainerObjectId, SystemVerilogVpiLiveMemory>
         vpi_live_memories;
 
+    std::unordered_map<fsim_vpi_handle_v1, SystemVerilogVpiDeferredChildren>
+        vpi_deferred_children;
+
+    std::unordered_map<fsim_vpi_handle_v1,
+        std::pair<runtime::simir::ProcessId, SignalId>>
+        vpi_driver_handles;
+
+    // The signals and memories whose value changes reach VPI observers; a
+    // watched memory keeps its last announced value to find changed words.
+    std::vector<std::uint8_t> vpi_watched_signals;
+    std::map<runtime::simir::ContainerObjectId,
+        std::optional<runtime::simir::ContainerValue>>
+        vpi_watched_containers;
+    bool vpi_watch_all_values { };
+    bool vpi_some_signal_watched { };
+    std::map<SignalId, std::vector<fsim_vpi_handle_v1>> vpi_watched_handles;
+    [[nodiscard]] bool vpi_handle_watched(
+        SignalId signal, fsim_vpi_handle_v1 handle) const;
+
     std::map<fsim_vpi_handle_v1,
         std::pair<runtime::simir::ContainerObjectId, std::size_t>>
         vpi_word_handles;
@@ -792,6 +822,7 @@ struct Simulation::Impl {
     bool native_signal_observation_hooks_installed { };
 
     bool vpi_observation_hooks_installed { };
+    bool vpi_container_hook_installed { };
 
     std::uint64_t next_scalar_signal_observer { 1 };
 
@@ -803,8 +834,17 @@ struct Simulation::Impl {
 
     std::map<std::uint64_t, ForceStatementHook> force_statement_observers;
 
+    ExecutionPointHook execution_point_primary;
+
+    std::map<std::uint64_t, ExecutionPointHook> execution_point_observers;
+
+    bool foreign_probes { };
+
     std::map<std::uint64_t, SignalTransactionHook>
         signal_transaction_observers;
+
+    std::map<std::uint64_t, DriverTransactionHook>
+        driver_transaction_observers;
 
     std::uint64_t next_activity_observer { 1 };
 
@@ -845,6 +885,12 @@ struct Simulation::Impl {
         standard_coverage_run_identity;
 
     ConcurrentAssertionHook concurrent_assertion_hook;
+
+    AssertionAttemptHook assertion_attempt_hook;
+
+    // The VPI assertion object of each design process that owns one.
+    std::map<runtime::simir::ProcessId, fsim_vpi_handle_v1>
+        vpi_process_assertions;
 
     VhdlPslAttemptHook vhdl_psl_attempt_hook;
 

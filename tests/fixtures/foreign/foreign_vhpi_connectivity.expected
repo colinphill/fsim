@@ -1,0 +1,91 @@
+#c a isbasic=1 drivers=1
+#c   basic :top:a isbasic=1 simnet=-
+#c     driver vhpidriverk process=:top:p1 basic=:top:a access=5 size=1 foreign=0
+#c     contributors=1
+#c     loads: :top:p2 :top:_p0
+#c v isbasic=0 drivers=3
+#c   basic :top:v(1) isbasic=1 simnet=-
+#c     driver vhpidriverk process=:top:p2 basic=:top:v(1) access=5 size=1 foreign=0
+#c     contributors=1
+#c     loads:
+#c   basic :top:v(0) isbasic=1 simnet=-
+#c     driver vhpidriverk process=:top:p1 basic=:top:v(0) access=5 size=1 foreign=0
+#c     driver vhpidriverk process=:top:p2 basic=:top:v(0) access=5 size=1 foreign=0
+#c     contributors=2
+#c     loads:
+#c c isbasic=1 drivers=1
+#c   basic :top:c isbasic=1 simnet=-
+#c     driver vhpidriverk process=:top:_p0 basic=:top:c access=5 size=1 foreign=0
+#c     contributors=1
+#c     loads:
+#c w isbasic=0 drivers=6
+#c   basic :top:w(3) isbasic=1 simnet=-
+#c     driver vhpidriverk process=:top:p3 basic=:top:w(3) access=5 size=1 foreign=0
+#c     driver vhpidriverk process=:top:p4 basic=:top:w(3) access=5 size=1 foreign=0
+#c     contributors=2
+#c     loads:
+#c   basic :top:w(2) isbasic=1 simnet=-
+#c     driver vhpidriverk process=:top:p3 basic=:top:w(2) access=5 size=1 foreign=0
+#c     driver vhpidriverk process=:top:p4 basic=:top:w(2) access=5 size=1 foreign=0
+#c     contributors=2
+#c     loads:
+#c   basic :top:w(1) isbasic=1 simnet=-
+#c     driver vhpidriverk process=:top:p4 basic=:top:w(1) access=5 size=1 foreign=0
+#c     contributors=1
+#c     loads:
+#c   basic :top:w(0) isbasic=1 simnet=-
+#c     driver vhpidriverk process=:top:p4 basic=:top:w(0) access=5 size=1 foreign=0
+#c     contributors=1
+#c     loads:
+#c q isbasic=1 drivers=1
+#c   basic :top:q isbasic=1 simnet=-
+#c     driver vhpidriverk process=:top:p5 basic=:top:q access=5 size=1 foreign=0
+#c     contributors=1
+#c     loads:
+#c process :top:p1 drivers: :top:a :top:v(0)
+#c process :top:p2 drivers: :top:v(1) :top:v(0)
+#c process :top:_p0 drivers: :top:c
+#c process :top:p3 drivers: :top:w(3) :top:w(2)
+#c process :top:p4 drivers: :top:w(3) :top:w(2) :top:w(1) :top:w(0)
+#c process :top:p5 drivers: :top:q
+#c u port assocs: 3
+#c   assoc position=0 named=1 open=0 formal=:top:u:i actual=:top:x
+#c   assoc position=1 named=1 open=0 formal=:top:u:o actual=:top:y
+#c   assoc position=2 named=1 open=1 formal=:top:u:n actual=-
+#c port u.i mode=1001 in=vhpiinportk=:top:u:i out=-
+#c port u.o mode=1002 in=- out=vhpioutportk=:top:u:o
+#c port u.n mode=1001 in=vhpiinportk=:top:u:n out=-
+#c ends :top:x(1)
+#c   contributors: driver[:top:px]
+#c   loads: vhpiinportk=:top:u:i(1)
+#c ends :top:x(0)
+#c   contributors: driver[:top:px]
+#c   loads: vhpiinportk=:top:u:i(0)
+#c ends :top:y
+#c   contributors: vhpioutportk=:top:u:o
+#c   loads:
+#c ends :top:u:i(1)
+#c   contributors: vhpiindexednamek=:top:x(1)
+#c   loads: vhpisimplesigassignstmtk=:top:u:_p0
+#c ends :top:u:i(0)
+#c   contributors: vhpiindexednamek=:top:x(0)
+#c   loads: vhpisimplesigassignstmtk=:top:u:_p0
+#c ends :top:u:o
+#c   contributors: driver[:top:u:_p0]
+#c   loads: vhpisigdeclk=:top:y
+#c ends :top:u:n
+#c   contributors: vhpienumliteralk='1'
+#c   loads:
+#c transaction callback on a driver: accepted
+#c put_value on a driver: rc=1
+#c error pending: 1
+#c value :top:a of :top:p1 = 1
+#c value :top:v(1) of :top:p2 = 1
+#c value :top:v(0) of :top:p1 = 1
+#c value :top:v(0) of :top:p2 = 1
+#c value :top:c of :top:_p0 = 1
+#c driver transaction of :top:pd at 1000000 fs: 1
+#c driver change of :top:pd at 1000000 fs: 1
+#c driver transaction of :top:pd at 2000000 fs: 1
+#c driver transaction of :top:pd at 4000000 fs: 0
+#c driver change of :top:pd at 4000000 fs: 0

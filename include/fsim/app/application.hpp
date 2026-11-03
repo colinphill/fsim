@@ -481,6 +481,8 @@ struct ConcurrentAssertionEvent {
     bool action_suppressed { };
     std::string instance_identity;
     std::uint32_t source_span { };
+    // The tick the attempt that reached this outcome started at.
+    runtime::SimulationTick attempt_start { };
 
     friend bool operator==(
         const ConcurrentAssertionEvent&,
@@ -670,6 +672,10 @@ public:
         = runtime::simir::Interpreter::DpiFunctionCallHook;
     using VcdControlHook = runtime::simir::Interpreter::VcdControlHook;
     using ConcurrentAssertionHook = std::function<void(const ConcurrentAssertionEvent&)>;
+    /// An attempt of the VPI assertion object (a handle) started at the tick
+    /// (IEEE 1800-2023 39.4.2 cbAssertionStart).
+    using AssertionAttemptHook
+        = std::function<void(std::uint64_t, runtime::SimulationTick)>;
     using VhdlPslAttemptHook = runtime::VhdlPslCompletionHook;
     using UvmActivityHook = runtime::SystemVerilogUvmActivityService::Observer;
     using UvmTaskPhaseContinuation = runtime::SystemVerilogUvmPhaseService::TaskPhaseCallback;
@@ -678,6 +684,8 @@ public:
         = runtime::simir::Interpreter::ForceStatementHook;
     using SignalTransactionHook
         = runtime::simir::Interpreter::SignalTransactionHook;
+    using DriverTransactionHook
+        = runtime::simir::Interpreter::DriverTransactionHook;
     using ClassPropertyChangeHook = std::function<void(
         runtime::SystemVerilogClassHandle,
         std::string_view,
@@ -759,6 +767,9 @@ public:
         runtime::simir::SignalId signal) const;
     [[nodiscard]] runtime::PackedLogic4 read_process_local(
         runtime::simir::ProcessId process, std::size_t local_index) const;
+    /// Deposit a value into a variable of a process (VHPI 22.5.2).
+    void write_process_local(runtime::simir::ProcessId process,
+        std::size_t local_index, const runtime::PackedLogic4& value);
     [[nodiscard]] runtime::SystemVerilogScalarValue read_process_scalar_local(
         runtime::simir::ProcessId process, std::size_t local_index) const;
     [[nodiscard]] std::string read_process_string_local(
@@ -1081,6 +1092,20 @@ public:
     /// Stub kept for API compatibility: no-op (no background compilation).
     void await_all_native_compilation() const;
     void set_signal_change_hook(SignalChangeHook hook);
+    /// Signal change observers see every later change of these signals,
+    /// also of those the v4 kernel owns (docs/engine-v4-semantics.md S19).
+    /// A watch lasts for the rest of the run.
+    void watch_signal_changes(std::span<const runtime::simir::SignalId> signals);
+    /// watch_signal_changes for every signal (an observer of any change).
+    void watch_all_signal_changes();
+    /// watch_signal_changes, and signal transaction hooks also hear the
+    /// assignments that leave these signals' values unchanged
+    /// (Interpreter::watch_signal_transactions).
+    void watch_signal_transactions(
+        std::span<const runtime::simir::SignalId> signals);
+    /// A client observes delta cycles or time steps from outside the design
+    /// (Interpreter::open_external_observation).
+    void open_external_observation();
     /// Add an independent signal observer without replacing the trace/API hook.
     /// The returned token remains valid until removed or the Simulation dies.
     [[nodiscard]] std::uint64_t add_signal_change_hook(SignalChangeHook hook);
@@ -1102,10 +1127,25 @@ public:
     [[nodiscard]] std::uint64_t add_signal_transaction_hook(
         SignalTransactionHook hook);
     void remove_signal_transaction_hook(std::uint64_t token) noexcept;
+    /// Observe every driver update by the process that holds the driver,
+    /// with or without a change of the driver's value.
+    [[nodiscard]] std::uint64_t add_driver_transaction_hook(
+        DriverTransactionHook hook);
+    void remove_driver_transaction_hook(std::uint64_t token) noexcept;
     [[nodiscard]] SdfReannotationCommitResult commit_sdf_reannotation(
         const SdfReannotationApplication& application);
     [[nodiscard]] bool at_sdf_reannotation_safe_point() const noexcept;
     void set_execution_point_hook(ExecutionPointHook hook);
+    /// Add an execution-point observer beside the debugger's hook. The
+    /// static kernel reports points only when it keeps its debug points
+    /// (`--engine debug`, or `foreign_probes`).
+    [[nodiscard]] std::uint64_t add_execution_point_hook(
+        ExecutionPointHook hook);
+    void remove_execution_point_hook(std::uint64_t token) noexcept;
+    /// The run asked for statement, call and suspend probes for its foreign
+    /// libraries (`simulate --foreign-probes`).
+    void set_foreign_probes(bool enabled) noexcept;
+    [[nodiscard]] bool foreign_probes() const noexcept;
     /// Replace the host executor for IEEE $system calls. The default invokes
     /// C system(); an empty hook makes the service unavailable at execution.
     void set_system_command_hook(SystemCommandHook hook);
@@ -1129,6 +1169,12 @@ public:
     /// barrier.
     void set_trusted_text_report_hook(ReportHook hook);
     void set_concurrent_assertion_hook(ConcurrentAssertionHook hook);
+    void set_assertion_attempt_hook(AssertionAttemptHook hook);
+    /// Discard the running attempts of the VPI assertion object that started
+    /// at the tick, leaving it enabled (vpiAssertionKill, IEEE 1800-2023
+    /// 39.5.2); true when one was running.
+    bool kill_assertion_attempt(
+        std::uint64_t assertion, runtime::SimulationTick start);
     void set_vhdl_psl_attempt_hook(VhdlPslAttemptHook hook);
     [[nodiscard]] std::uint64_t add_uvm_activity_hook(UvmActivityHook hook);
     void remove_uvm_activity_hook(std::uint64_t token) noexcept;
@@ -1140,6 +1186,7 @@ private:
     friend struct ::fsim::runtime::simir::NativeRegionAllocationTestAccess;
     friend struct ::fsim::runtime::simir::SystemCBridgeTestAccess;
     struct Impl;
+    void install_execution_point_hooks();
     std::unique_ptr<Impl> impl_;
 };
 

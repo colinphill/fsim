@@ -156,11 +156,11 @@ SystemVerilogVpiObjectRegistry::stored_value(
     if (!record.type) {
         return { std::nullopt, SystemVerilogVpiValueError::NotReadable };
     }
-    const auto& value = record.forced_value ? record.forced_value : record.value;
+    auto value = visible_value(record, handle);
     if (!value) {
         return { std::nullopt, SystemVerilogVpiValueError::NotBound };
     }
-    return { *value, SystemVerilogVpiValueError::None };
+    return { std::move(*value), SystemVerilogVpiValueError::None };
 }
 
 struct SystemVerilogVpiDataReadService::Impl final {
@@ -266,6 +266,18 @@ struct SystemVerilogVpiDataReadService::Impl final {
         SystemVerilogVpiStoredValue value,
         const bool explicit_publication)
     {
+        // A value change of an object nobody loaded is no sample.
+        if (!explicit_publication) {
+            std::scoped_lock lock { mutex };
+            if (access == SystemVerilogVpiDataReadAccess::PostProcess) {
+                return SystemVerilogVpiDataReadError::None;
+            }
+            const auto found = histories.find(object);
+            if (access == SystemVerilogVpiDataReadAccess::LimitedInteractive
+                && (found == histories.end() || !found->second.loaded)) {
+                return SystemVerilogVpiDataReadError::None;
+            }
+        }
         const auto type = objects.type_info(object);
         if (!type) {
             return object_error(type.error);
@@ -356,6 +368,11 @@ struct SystemVerilogVpiDataReadService::Impl final {
             }
         } catch (...) {
             return SystemVerilogVpiDataReadError::ResourceLimit;
+        }
+        // A loaded object's changes must reach the value observer. The
+        // watch takes the simulation's lock, so it runs before this one.
+        for (const auto& item : prepared) {
+            objects.watch_value(item.object);
         }
         const auto position = now();
         std::scoped_lock lock { mutex };
@@ -515,6 +532,10 @@ SystemVerilogVpiDataReadService::SystemVerilogVpiDataReadService(
         return;
     }
     impl_->observer = *observer;
+    // An interactive reader records every object's changes.
+    if (access == SystemVerilogVpiDataReadAccess::Interactive) {
+        objects.watch_value(0U);
+    }
 }
 
 SystemVerilogVpiDataReadService::~SystemVerilogVpiDataReadService()

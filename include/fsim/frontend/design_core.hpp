@@ -1745,6 +1745,10 @@ struct Statement {
     // True only for a Case node synthesized from a VHDL selected
     // assignment, whose alternatives are parts of one assignment.
     bool vhdl_selected_assignment { };
+    // True only for the If node of an `elsif` branch, which the parser nests
+    // in the else part of the if statement it continues (IEEE 1076-2019
+    // 10.8); an `else if` is a separate statement without it.
+    bool vhdl_elsif { };
     // A concurrent guarded assignment retains the keyword plus the implicit
     // block GUARD expression attached during generated-scope expansion.
     bool vhdl_guarded_assignment { };
@@ -1846,6 +1850,10 @@ struct Statement {
     // one conversion and one value.
     support::RareVector<OutputValue> output_values;
     std::string output_trailing_text;
+    // VPI-only source form of a Display/FileDisplay task (IEEE 1800-2023
+    // 37.62): [0] the task name as written ($displayh keeps its radix),
+    // [1] the leading format string literal, when the call had one.
+    support::RareVector<std::string> output_source;
     GeneratedTextKind output_generated_text { GeneratedTextKind::none };
 
     // Block contents or the true branch/delayed statement.

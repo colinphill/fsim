@@ -1063,46 +1063,6 @@ bool trace_selected(
            });
 }
 
-void plan_trace_access(
-    BuiltProject& built, const std::vector<std::string>& filters)
-{
-    auto& access = built.kernel_access;
-    const char* text = std::getenv("FSIM_STATIC_KERNEL_TRACE_SELECTION");
-    if (!access.admit || !access.observe_all || access.foreign || access.debug
-        || (text != nullptr && std::string_view { text } == "0")) {
-        return;
-    }
-    // attach_trace's selection, by design path or canonical FST path,
-    // whichever format the file has: a superset of what it records.
-    std::vector<SignalId> observed;
-    try {
-        for (const auto& object : built.design_ir.objects()) {
-            if (!design_object_is_signal_bearing(object)
-                || object.runtime_index > std::numeric_limits<SignalId>::max()) {
-                continue;
-            }
-            if (trace_selected(filters, built.design_ir.path(object.path))
-                || (object.specialization.valid()
-                    && trace_selected(filters,
-                        canonical_fst_trace_object(built.design_ir, object).path))) {
-                observed.push_back(static_cast<SignalId>(object.runtime_index));
-            }
-        }
-    } catch (const std::exception&) {
-        // Keep the whole-design observer.
-        return;
-    }
-    std::ranges::sort(observed);
-    observed.erase(std::unique(observed.begin(), observed.end()), observed.end());
-    support::Sha256 hash;
-    for (const auto signal : observed) {
-        hash.update(std::to_string(signal) + ",");
-    }
-    access.observe_all = false;
-    access.observed_identity = support::Sha256::hex(hash.finish());
-    access.observed = std::move(observed);
-}
-
 std::optional<VcdScale> vcd_scale(
     const std::string_view resolution,
     diagnostic::Engine& diagnostics)
@@ -1453,6 +1413,16 @@ std::unique_ptr<TraceState> attach_trace(
         }
         trace->selection = std::make_unique<TraceSelectionControl>(
             *trace->declarations, selection_declarations);
+        // The declared signals' changes reach the trace (a dynamic selection
+        // declares every signal).
+        {
+            std::vector<SignalId> traced;
+            traced.reserve(selection_declarations.size());
+            for (const auto& declaration : selection_declarations) {
+                traced.push_back(declaration.runtime_signal);
+            }
+            simulation.watch_signal_changes(traced);
+        }
         if (*format == project::TraceFormat::vcd) {
             trace->writer = std::make_unique<runtime::VcdWriter>(
                 trace->stream, scale->timescale);

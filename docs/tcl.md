@@ -174,6 +174,7 @@ to apply them.
 | `simulate.coverage_output` | text |  | code-coverage database written at the end of simulation |
 | `simulate.delay_mode` | text | `typical` | delay mode: minimum, typical, maximum |
 | `simulate.duration` | text |  | time to simulate, e.g. 10us; empty runs to the end |
+| `simulate.foreign_probes` | boolean | `false` | statement, call and suspend callbacks for VPI/VHPI libraries |
 | `simulate.max_deltas` | integer | `100000` | delta cycles allowed in one time step |
 | `simulate.seed` | text | `1` | random seed, or 'random' |
 | `simulate.sv_libs` | list |  | DPI-C libraries loaded for simulation |

@@ -1,0 +1,37 @@
+#c cb type=vpiClockingBlock full=top.cb instance=top event=vpiEventControl condition=-
+#c cb default-input type=vpiDelayControl delay=1
+#c cb default-output type=vpiDelayControl delay=2
+#c cb default-edges input=none output=none
+#c cb.data type=vpiClockingIODecl full=top.cb.data dir=input parent=cb expr=data
+#c cb.data input-skew none
+#c cb.data output-skew none
+#c cb.res type=vpiClockingIODecl full=top.cb.res dir=output parent=cb expr=res
+#c cb.res input-skew none
+#c cb.res output-skew none
+#c cb.ack type=vpiClockingIODecl full=top.cb.ack dir=input parent=cb expr=ack
+#c cb.ack input-skew type=vpiDelayControl delay=3
+#c cb.ack output-skew none
+#c cb.rdy type=vpiClockingIODecl full=top.cb.rdy dir=inout parent=cb expr=rdy
+#c cb.rdy input-skew none
+#c cb.rdy output-skew none
+#c cb2 type=vpiClockingBlock full=top.cb2 instance=top event=vpiEventControl condition=clk
+#c cb2 default-input none
+#c cb2 default-output none
+#c cb2 default-edges input=none output=none
+#c cb2.ack2 type=vpiClockingIODecl full=top.cb2.ack2 dir=input parent=cb2 expr=ack2
+#c cb2.ack2 input-skew type=vpiDelayControl delay=none
+#c cb2.ack2 output-skew none
+#c cb2.mon type=vpiClockingIODecl full=top.cb2.mon dir=output parent=cb2 expr=mon
+#c cb2.mon input-skew none
+#c cb2.mon output-skew type=vpiDelayControl delay=4
+#c gck type=vpiClockingBlock full=top.gck instance=top event=vpiEventControl condition=-
+#c gck default-input none
+#c gck default-output none
+#c gck default-edges input=none output=none
+#c clocking blocks=3
+#c by name cb2
+#c default clocking cb global clocking gck
+#c nettype real_t type=vpiNettypeDecl full=top.real_t with=- alias=-
+#c nettype alias_t type=vpiNettypeDecl full=top.alias_t with=- alias=real_t
+#c nettype pick_t type=vpiNettypeDecl full=top.pick_t with=pick alias=-
+#c nettypes=3

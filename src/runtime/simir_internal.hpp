@@ -1570,6 +1570,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::map<std::pair<ProcessId, std::uint32_t>,
         std::unique_ptr<sva::Monitor>>
         sva_monitors;
+    // The start tick of the attempt each design process's monitor reported
+    // an outcome for last, and the observer of attempt starts.
+    std::unordered_map<ProcessId, std::int64_t> sva_outcome_starts;
+    SvaAttemptHook sva_attempt_hook;
     std::vector<ModulePath> module_paths;
     std::vector<ModuleTimingCheck> module_timing_checks;
     std::vector<ModuleTimingCheckState> module_timing_check_states;
@@ -1693,6 +1697,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     EventTriggerHook event_trigger_hook;
     ForceStatementHook force_statement_hook;
     SignalTransactionHook signal_transaction_hook;
+    DriverTransactionHook driver_transaction_hook;
     ContainerObjectChangeHook container_object_change_hook;
     ContainerElementChangeHook container_element_change_hook;
     ScalarSignalChangeHook scalar_signal_change_hook;
@@ -1822,6 +1827,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::uint8_t> static_kernel_owned_signal;
     bool static_kernel_materializing { };
     void materialize_static_kernel_signal(SignalId signal);
+    void watch_static_kernel_signals(std::span<const SignalId> watched);
     /// Publish-all designs (StaticKernelRuntimeSpec::import_host_writes):
     /// publish_value_change hands host commits to kernel-owned signals to the
     /// kernel. One flag test guards the hook; it is false otherwise.

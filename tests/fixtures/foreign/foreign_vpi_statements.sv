@@ -42,4 +42,22 @@ module top;
         #1 assign r = d;
         #1 deassign r;
     end
+
+    // Increments are operations, compound updates assignments with an
+    // operator, and output tasks keep their source name and format
+    // (37.60-37.63, 37.79).
+    integer n;
+    initial begin
+        n = 0;
+        n++;
+        --n;
+        n += 3;
+        $displayh("n=%0h", n);
+        $write("plain");
+    end
+
+    // The range and typespec of a return value (37.41).
+    function automatic logic [7:0] wide(input logic [3:0] a);
+        return {a, a};
+    endfunction
 endmodule

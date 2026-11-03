@@ -16641,6 +16641,50 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             materialization.signals,
             specialization);
     }
+    // The typedefs the instance declares, each as the typespec a use of it
+    // would have (IEEE 1800-2023 37.5 vpiTypedef, 37.25).
+    for (const auto declaration_id : active_declarations) {
+        const auto declaration = specialized->find_declaration(declaration_id);
+        if (declaration && declaration->systemverilog != nullptr
+            && (declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::parameter
+                || declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::local_parameter)
+            && declaration->systemverilog->type
+            && declaration->systemverilog->type->target.target.valid()) {
+            auto typespec
+                = hierarchy_sv_type_layout_detail::systemverilog_vpi_typespec(
+                    *specialized, *declaration->systemverilog->type,
+                    declaration->systemverilog->scope);
+            if (typespec) {
+                specialization.vpi_parameter_typespecs.push_back({
+                    declaration->systemverilog->name,
+                    std::make_shared<const runtime::SystemVerilogVpiTypespec>(
+                        std::move(*typespec)),
+                });
+            }
+            continue;
+        }
+        if (!declaration || declaration->systemverilog == nullptr
+            || declaration->systemverilog->form
+                != semantic::sv::DeclarationForm::typedef_declaration
+            || !declaration->systemverilog->declared_type) {
+            continue;
+        }
+        semantic::sv::TypeReference reference;
+        reference.target.target = *declaration->systemverilog->declared_type;
+        reference.target.spelling = declaration->systemverilog->name;
+        auto typespec
+            = hierarchy_sv_type_layout_detail::systemverilog_vpi_typespec(
+                *specialized, reference, declaration->systemverilog->scope);
+        specialization.vpi_typedefs.push_back({
+            declaration->systemverilog->name,
+            typespec ? std::make_shared<
+                           const runtime::SystemVerilogVpiTypespec>(
+                           std::move(*typespec))
+                     : nullptr,
+        });
+    }
     design_.specializations_.push_back(std::move(specialization));
 
     auto instance_worklist

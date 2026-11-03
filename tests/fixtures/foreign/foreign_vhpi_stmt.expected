@@ -1,0 +1,46 @@
+#c refused stmt clk: statement callbacks need a sequential statement, a branch or a process
+#c refused endcall bump: end of subprogram call callbacks need a subprogram call
+#c refused endcall inc: end of subprogram call callbacks need a subprogram call
+#c stmt clock vhpiForLoopK line 11 t=0
+#c stmt clock.for vhpiForLoopK line 11 t=0
+#c suspend clock vhpiWaitStmtK line 13 t=0
+#c stmt counter.while vhpiWhileLoopK line 33 t=0
+#c stmt counter.while vhpiWhileLoopK line 33 t=0
+#c stmt counter.while vhpiWhileLoopK line 33 t=0
+#c startcall calls.first vhpiSeqProcCallStmtK line 47 t=0
+#c startcall bump vhpiSeqProcCallStmtK line 47 t=0
+#c endcall calls.first vhpiSeqProcCallStmtK line 47 t=0
+#c startcall fn.call vhpiFuncCallK line 62 t=0
+#c startcall inc vhpiFuncCallK line 62 t=0
+#c stmt inc.return vhpiReturnStmtK line 57 t=0
+#c endcall fn.call vhpiFuncCallK line 62 t=0
+#c stmt fn.elsif vhpiBranchK line 65 t=0
+#c stmt fn.else vhpiBranchK line -1 t=0
+#c startcall fn.call vhpiFuncCallK line 62 t=0
+#c startcall inc vhpiFuncCallK line 62 t=0
+#c stmt inc.return vhpiReturnStmtK line 57 t=0
+#c endcall fn.call vhpiFuncCallK line 62 t=0
+#c stmt fn.elsif vhpiBranchK line 65 t=0
+#c startcall cc vhpiConcProcCallStmtK line 82 t=0
+#c stmt cc vhpiNullStmtK line 79 t=0
+#c endcall cc vhpiConcProcCallStmtK line 82 t=0
+#c sensitivity clk vhpiSigDeclK line 7 t=0 event=0
+#c sensitivity set vhpiAnyCollectionK line -1 t=0 event=0 bitmap=1 elems=1
+#c resume watch vhpiVarAssignStmtK line 21 t=0
+#c stmt watch.when2 vhpiBranchK line 23 t=0
+#c resume clock vhpiForLoopK line 11 t=5000000
+#c stmt clock.for vhpiForLoopK line 11 t=5000000
+#c suspend clock vhpiWaitStmtK line 13 t=5000000
+#c sensitivity clk vhpiSigDeclK line 7 t=5000000 event=5000000
+#c sensitivity set vhpiAnyCollectionK line -1 t=5000000 event=5000000 bitmap=1 elems=1
+#c resume watch vhpiVarAssignStmtK line 21 t=5000000
+#c startcall bump vhpiSeqProcCallStmtK line 49 t=7000000
+#c sensitivity set vhpiAnyCollectionK line -1 t=7000000 event=7000000 bitmap=2 elems=1
+#c resume clock vhpiForLoopK line 11 t=10000000
+#c stmt clock.for vhpiForLoopK line 11 t=10000000
+#c suspend clock vhpiWaitStmtK line 13 t=10000000
+#c sensitivity clk vhpiSigDeclK line 7 t=10000000 event=10000000
+#c sensitivity set vhpiAnyCollectionK line -1 t=10000000 event=10000000 bitmap=1 elems=1
+#c resume watch vhpiVarAssignStmtK line 21 t=10000000
+#c resume clock vhpiWaitStmtK line 15 t=15000000
+#c suspend clock vhpiWaitStmtK line 15 t=15000000

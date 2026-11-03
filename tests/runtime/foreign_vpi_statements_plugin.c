@@ -94,8 +94,14 @@ static void dump(vpiHandle object, int depth, const char* role)
     } else if (type == vpiOperation) {
         snprintf(detail, sizeof detail, " op=%d", (int)vpi_get(vpiOpType, object));
     } else if (type == vpiAssignment) {
+        // A compound update (37.47) reports its operator.
+        const PLI_INT32 op = vpi_get(vpiOpType, object);
         snprintf(detail, sizeof detail, " blocking=%d",
             (int)vpi_get(vpiBlocking, object));
+        if (op != vpiAssignmentOp) {
+            snprintf(detail + strlen(detail), sizeof detail - strlen(detail),
+                " op=%d", (int)op);
+        }
     } else if (type == vpiAlways) {
         snprintf(detail, sizeof detail, " always_type=%d",
             (int)vpi_get(vpiAlwaysType, object));
@@ -134,6 +140,78 @@ static void dump(vpiHandle object, int depth, const char* role)
     child(object, vpiElseStmt, depth, "else: ");
 }
 
+static int integer_of(vpiHandle object)
+{
+    s_vpi_value value;
+    memset(&value, 0, sizeof value);
+    value.format = vpiIntVal;
+    vpi_get_value(object, &value);
+    return value.value.integer;
+}
+
+// A select expression is named and valued like the object it selects
+// (37.18, 37.19, 37.59).
+static void select_line(vpiHandle select)
+{
+    s_vpi_value value;
+    memset(&value, 0, sizeof value);
+    value.format = vpiBinStrVal;
+    vpi_get_value(select, &value);
+    vpi_printf("#c select %s name=%s value=%s\n", text(vpiFullName, select),
+        text(vpiName, select), value.value.str != NULL ? value.value.str : "?");
+}
+
+// The range and typespec of a function's return value and of a formal
+// (37.41).
+static void typed(const char* role, vpiHandle object)
+{
+    vpiHandle const typespec = vpi_handle(vpiTypespec, object);
+    vpiHandle const left = typespec != NULL ? vpi_handle(vpiLeftRange, typespec) : NULL;
+    vpiHandle const right = typespec != NULL ? vpi_handle(vpiRightRange, typespec) : NULL;
+    vpi_printf("#c %s %s type=%s left=%d right=%d\n", role,
+        text(vpiFullName, object), typespec != NULL ? text(vpiType, typespec) : "none",
+        left != NULL ? integer_of(left) : -1, right != NULL ? integer_of(right) : -1);
+}
+
+static void extras(vpiHandle top)
+{
+    vpiHandle const function = vpi_handle_by_name("top.wide", NULL);
+    vpiHandle const processes = vpi_iterate(vpiProcess, top);
+    vpiHandle process;
+    if (function != NULL) {
+        vpiHandle const left = vpi_handle(vpiLeftRange, function);
+        vpiHandle const right = vpi_handle(vpiRightRange, function);
+        vpiHandle const formals = vpi_iterate(vpiIODecl, function);
+        vpiHandle formal;
+        vpi_printf("#c func %s left=%d right=%d functype=%d\n",
+            text(vpiFullName, function), left != NULL ? integer_of(left) : -1,
+            right != NULL ? integer_of(right) : -1,
+            (int)vpi_get(vpiFuncType, function));
+        typed("return", vpi_handle(vpiReturn, function));
+        while (formals != NULL && (formal = vpi_scan(formals)) != NULL) {
+            typed("formal", formal);
+        }
+    }
+    while (processes != NULL && (process = vpi_scan(processes)) != NULL) {
+        vpiHandle block;
+        vpiHandle items;
+        vpiHandle item;
+        vpiHandle condition;
+        if (vpi_get(vpiType, process) != vpiAlways
+            || vpi_get(vpiAlwaysType, process) != vpiAlwaysComb) {
+            continue;
+        }
+        block = vpi_handle(vpiStmt, process);
+        items = block != NULL ? vpi_iterate(vpiStmt, block) : NULL;
+        while (items != NULL && (item = vpi_scan(items)) != NULL) {
+            condition = vpi_handle(vpiCondition, item);
+            if (condition != NULL) {
+                select_line(condition);
+            }
+        }
+    }
+}
+
 static PLI_INT32 start(p_cb_data data)
 {
     vpiHandle const top = vpi_handle_by_name("top", NULL);
@@ -150,6 +228,7 @@ static PLI_INT32 start(p_cb_data data)
         vpi_printf("#c task %s\n", text(vpiFullName, task));
         child(task, vpiStmt, 1, "");
     }
+    extras(top);
     return 0;
 }
 

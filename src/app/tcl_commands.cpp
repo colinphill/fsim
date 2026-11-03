@@ -211,7 +211,20 @@ namespace fsim::app::tcl_detail {
 
     void attach_callbacks(TclContext& context)
     {
-        if (context.callbacks_attached || !context.simulation) {
+        if (!context.simulation) {
+            return;
+        }
+        // A value-change callback hears every signal; a safe-point callback
+        // runs between the scheduler's deltas.
+        if (!context.callbacks.at(static_cast<std::size_t>(TclCallback::value_change))
+                .empty()) {
+            context.simulation->watch_all_signal_changes();
+        }
+        if (!context.callbacks.at(static_cast<std::size_t>(TclCallback::safe_point))
+                .empty()) {
+            context.simulation->open_external_observation();
+        }
+        if (context.callbacks_attached) {
             return;
         }
         auto* state = &context;
@@ -346,13 +359,16 @@ namespace fsim::app::tcl_detail {
         if (!ensure_built(context, interpreter)) {
             return false;
         }
-        // A Tcl session may examine, deposit and force any signal.
+        // A Tcl session may examine, deposit and force any signal (at run
+        // time, as a foreign library does).
         application_detail::plan_kernel_access(
-            *context.built, engine, true, true);
+            *context.built, engine, context.config.run.foreign_probes);
         context.simulation = std::make_unique<Simulation>(
             std::move(*context.built),
             context.config.run.max_deltas,
             engine);
+        context.simulation->set_foreign_probes(
+            context.config.run.foreign_probes);
         context.simulation->set_output_hook(
             [&context](
                 const runtime::simir::ProcessId,

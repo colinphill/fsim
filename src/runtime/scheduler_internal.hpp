@@ -706,6 +706,17 @@ namespace scheduler_detail {
 
         [[nodiscard]] bool empty() const noexcept
         {
+            // The scheduler asks every region's queue each cycle; most are
+            // drained.
+            if (cursor >= entries.size() && current_insertions.empty())
+                [[likely]] {
+                return true;
+            }
+            return pending_empty();
+        }
+
+        [[nodiscard]] bool pending_empty() const noexcept
+        {
             for (auto index = cursor; index < entries.size(); ++index) {
                 const auto& entry = entries[index];
                 if (entry.is_cancelled())
@@ -2398,14 +2409,14 @@ struct Scheduler::Impl {
     void load_next_slot()
     {
         auto first = future.begin();
-        CurrentSlot slot;
+        // Built in place: the queues are exchanged, not moved twice.
+        auto& slot = current.emplace();
         slot.time = first->first;
-        slot.current = std::move(first->second.generic);
-        slot.systemverilog = std::move(first->second.systemverilog);
-        slot.end_of_slot = std::move(first->second.end_of_slot);
+        slot.current.swap(first->second.generic);
+        slot.systemverilog.swap(first->second.systemverilog);
+        slot.end_of_slot.swap(first->second.end_of_slot);
         retain_future_node(first);
         now = slot.time;
-        current.emplace(std::move(slot));
     }
 
     [[nodiscard]] std::vector<StableOrder> pending_next_orders() const

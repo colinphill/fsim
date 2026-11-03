@@ -543,6 +543,8 @@ struct SystemVerilogClockingBlock {
     std::optional<SystemVerilogClockingSkew> default_output_skew;
     std::vector<SystemVerilogClockingSignal> signals;
     SourceSpan span;
+    // A `global clocking` declaration (IEEE 1800-2023 14.14).
+    bool global { };
 };
 
 struct GenerateBody {

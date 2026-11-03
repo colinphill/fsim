@@ -1263,6 +1263,9 @@ DebuggerFrameInfo DebuggerSession::frame(const std::size_t index) const
   case runtime::simir::ExecutionPointKind::process_suspend:
     result.point_kind = "process_suspend";
     break;
+  case runtime::simir::ExecutionPointKind::call_return:
+    result.point_kind = "call_return";
+    break;
   }
   const auto process_id = point.process;
   for (std::size_t local_index = 0U;
