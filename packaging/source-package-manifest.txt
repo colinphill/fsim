@@ -2152,6 +2152,9 @@ tests/fixtures/foreign/foreign_vpi_connectivity.sv
 tests/fixtures/foreign/foreign_vpi_error.expected
 tests/fixtures/foreign/foreign_vpi_error.expected.license
 tests/fixtures/foreign/foreign_vpi_error.sv
+tests/fixtures/foreign/foreign_vpi_error_partition.expected
+tests/fixtures/foreign/foreign_vpi_error_partition.expected.license
+tests/fixtures/foreign/foreign_vpi_error_partition.sv
 tests/fixtures/foreign/foreign_vpi_model.expected
 tests/fixtures/foreign/foreign_vpi_model.expected.license
 tests/fixtures/foreign/foreign_vpi_model.sv
@@ -2160,6 +2163,9 @@ tests/fixtures/foreign/foreign_vpi_runtime.expected.license
 tests/fixtures/foreign/foreign_vpi_runtime.sv
 tests/fixtures/foreign/foreign_vpi_runtime_duration.expected
 tests/fixtures/foreign/foreign_vpi_runtime_duration.expected.license
+tests/fixtures/foreign/foreign_vpi_scheduled.expected
+tests/fixtures/foreign/foreign_vpi_scheduled.expected.license
+tests/fixtures/foreign/foreign_vpi_scheduled.sv
 tests/fixtures/foreign/foreign_vpi_statements.expected
 tests/fixtures/foreign/foreign_vpi_statements.expected.license
 tests/fixtures/foreign/foreign_vpi_statements.sv
@@ -2457,6 +2463,7 @@ tests/runtime/foreign_vpi_connectivity_plugin.c
 tests/runtime/foreign_vpi_error_plugin.c
 tests/runtime/foreign_vpi_model_plugin.c
 tests/runtime/foreign_vpi_runtime_plugin.c
+tests/runtime/foreign_vpi_scheduled_plugin.c
 tests/runtime/foreign_vpi_statements_plugin.c
 tests/runtime/foreign_vpi_stmt_plugin.c
 tests/runtime/foreign_vpi_unresolved_plugin.c

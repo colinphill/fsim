@@ -2296,6 +2296,10 @@ void Interpreter::Impl::StaticKernel::build_partitions(
             }
         }
     }
+    // A continuous assignment that wakes itself (assign a = ~a) stays out
+    // too: a partition pass runs each member once, so the update would not
+    // wake it again and a loop that never settles would end silently
+    // instead of reaching the delta-cycle limit.
     // A member with a loop in its body (a procedural for or while) stays
     // out: a partition pass runs every member of its component, and such a
     // member usually spans many otherwise separate cones (one per array
@@ -2323,7 +2327,8 @@ void Interpreter::Impl::StaticKernel::build_partitions(
         const auto& member = members_[index];
         if (member.kind == StaticKernelMemberKind::combinational && !member.vhdl
             && member.compiled && member.partition_key != no_slot
-            && on_cycle[index] == 0U && !loops(member)) {
+            && on_cycle[index] == 0U && !member.wakes_itself
+            && !loops(member)) {
             groups[member.partition_key].push_back(index);
         }
     }

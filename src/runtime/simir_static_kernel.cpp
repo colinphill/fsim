@@ -1406,13 +1406,15 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             continue;
         }
         std::vector<std::uint32_t> written;
+        std::vector<std::uint32_t> updated;
         std::vector<SignalId> assigned;
         for (const auto& operation : member.operations()) {
             // A write in the NBA region lands after the Active region has
             // drained, so it orders nothing within a pass: its readers wake
             // when the commit changes the slot.
             bool deferred = false;
-            const auto signal = visit_operation([&deferred](const auto& op)
+            bool update = false;
+            const auto signal = visit_operation([&deferred, &update](const auto& op)
                 -> std::optional<SignalId> {
                 using T = std::decay_t<decltype(op)>;
                 if constexpr (std::is_same_v<T, WriteBlocking>
@@ -1425,6 +1427,7 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                     || std::is_same_v<T, WriteUpdateDynamicSlice>
                     || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
                     deferred = op.domain == SignalUpdateDomain::systemverilog_nba;
+                    update = op.domain == SignalUpdateDomain::systemverilog_active;
                     return op.signal;
                 } else {
                     return std::nullopt;
@@ -1443,6 +1446,9 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                         slots_[slot_of_signal_[*signal]].deferred_write = true;
                     } else {
                         written.push_back(slot_of_signal_[*signal]);
+                        if (update) {
+                            updated.push_back(slot_of_signal_[*signal]);
+                        }
                     }
                 } else if (family_of_signal_[*signal] != no_slot) {
                     for (const auto& leaf :
@@ -1451,6 +1457,9 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
                             slots_[leaf.slot].deferred_write = true;
                         } else {
                             written.push_back(leaf.slot);
+                            if (update) {
+                                updated.push_back(leaf.slot);
+                            }
                         }
                     }
                 }
@@ -1462,6 +1471,18 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         std::ranges::sort(written);
         written.erase(std::unique(written.begin(), written.end()),
             written.end());
+        // An Active-region update to a slot the member reads wakes the member
+        // again once it suspends (IEEE 1800-2023 10.3.2, 4.4.2.2): assign
+        // a = ~a. The successor edges leave such self-edges out.
+        members_[index].wakes_itself = std::ranges::any_of(updated,
+            [&](const std::uint32_t slot) {
+                return std::ranges::any_of(slots_[slot].readers,
+                           [&](const auto& reader) {
+                               return reader.member == index;
+                           })
+                    || std::ranges::find(slot_readers[slot], index)
+                        != slot_readers[slot].end();
+            });
         for (const auto slot : written) {
             for (const auto& reader : slots_[slot].readers) {
                 if (reader.member != index
@@ -6959,8 +6980,12 @@ bool Interpreter::Impl::StaticKernel::activate()
         if (!next) {
             break;
         }
+        // Host events still pending in this time step (a foreign library's
+        // zero-delay write in the update region, say) run before any later
+        // time step.
         const auto host_next = impl_.scheduler.next_pending_time();
-        if (host_next && *host_next <= *next) {
+        if ((host_next && *host_next <= *next)
+            || impl_.scheduler.has_pending_activity_now()) {
             break;
         }
         warp_time_ = *next;

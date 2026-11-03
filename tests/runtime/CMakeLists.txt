@@ -1078,6 +1078,21 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-error vpi foreign_vpi_error.sv foreign_vpi_error.expected ""
   fsim_foreign_vpi_error_plugin 1)
+# The same with the looping assignment among partitioned ones.
+fsim_add_foreign_conformance_test(
+  vpi-error-partition vpi foreign_vpi_error_partition.sv
+  foreign_vpi_error_partition.expected "" fsim_foreign_vpi_error_plugin 1)
+# Zero-delay scheduled writes made before time 0 to variables no process
+# writes take effect at time 0 (IEEE 1800-2023 38.35).
+add_library(fsim_foreign_vpi_scheduled_plugin SHARED
+  foreign_vpi_scheduled_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_scheduled_plugin)
+target_link_libraries(fsim_foreign_vpi_scheduled_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_scheduled_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-scheduled vpi foreign_vpi_scheduled.sv foreign_vpi_scheduled.expected ""
+  fsim_foreign_vpi_scheduled_plugin)
 # A system task registered only by a cbUnresolvedSystf callback
 # (IEEE 1800-2023 38.36.2), at elaboration and at simulation.
 add_library(fsim_foreign_vpi_unresolved_plugin SHARED

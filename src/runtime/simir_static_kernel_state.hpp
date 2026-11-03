@@ -654,6 +654,9 @@ private:
         /// The body assigns one signal more than once in a run, so an
         /// intermediate value is visible to the members it wakes.
         bool rewrites_signal { };
+        /// An Active-region update of a slot it reads wakes it again
+        /// (build_fresh); it is not partitioned.
+        bool wakes_itself { };
         std::uint32_t partition { static_kernel_detail::no_slot };
         std::uint32_t position { };
         /// VHDL delta mode: the next run starts at operation 0.
