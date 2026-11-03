@@ -16,6 +16,8 @@
 #include <chrono>
 #include <cstdio>
 #include <iostream>
+#include <optional>
+#include <string>
 #if defined(_WIN32)
 #  include <io.h>
 #else
@@ -311,6 +313,10 @@ int run_built_project(
             time.profile().precision_exponent,
         });
     }
+    // Installed before the foreign libraries load, so a signal trap that
+    // their startup routines set up replaces it (IEEE 1800-2023 38.36.3,
+    // IEEE 1076-2019 21.3.7.10), and destroyed after them.
+    const InterruptSignalGuard interrupt_signal;
     std::unique_ptr<VpiForeignService> vpi_service;
     if (vpi_modules) {
         auto print = sink == SimulationOutputSink::builtin_stdout
@@ -379,15 +385,20 @@ int run_built_project(
         return 1;
     }
     install_interrupt_hook(simulation);
-    const InterruptSignalGuard interrupt_signal;
     // However the run ends, the foreign interfaces see the end of
     // simulation and of the tool while their libraries are still loaded
     // (IEEE 1800-2023 38.36.3, IEEE 1076-2019 20.10).
     struct ForeignEnd {
         Simulation& simulation;
+        VpiForeignService* vpi;
         VhpiForeignService* vhpi;
+        // A run-time error that ended the run (IEEE 1800-2023 38.36.3).
+        std::optional<std::string> error;
         ~ForeignEnd()
         {
+            if (vpi != nullptr && error) {
+                vpi->run_error(*error);
+            }
             simulation.end_foreign_simulation();
             if (vhpi != nullptr) {
                 try {
@@ -396,7 +407,7 @@ int run_built_project(
                 }
             }
         }
-    } foreign_end { simulation, vhpi_service.get() };
+    } foreign_end { simulation, vpi_service.get(), vhpi_service.get(), { } };
     try {
         // Native materialization overlaps the initial interpreted execution.
         // Each deferred executor is installed only at a process-resume safe
@@ -511,6 +522,7 @@ int run_built_project(
                 message << error.recent_signals()[index];
             }
         }
+        foreign_end.error = message.str();
         diagnostics.error(
             "FSIM-RUN-DELTA-0001", message.str());
     } catch (const runtime::simir::AssertionError& error) {
@@ -541,8 +553,10 @@ int run_built_project(
             message += simulation.process_program(error.process()).name;
             message += '\'';
         }
+        foreign_end.error = message;
         diagnostics.error("FSIM-RUN-0001", std::move(message));
     } catch (const std::exception& error) {
+        foreign_end.error = error.what();
         diagnostics.error("FSIM-RUN-0002", error.what());
     }
     return 1;

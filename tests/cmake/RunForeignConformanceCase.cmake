@@ -3,6 +3,10 @@
 # Runs one VPI or VHPI conformance plug-in on a small design through
 # `fsim compile`, `fsim elaborate` and `fsim simulate`, and compares the
 # lines the plug-in marks with "#c " against an expected trace.
+# FSIM_SOURCE may list several files separated by "|", compiled one per
+# step in order (one language per compile); FSIM_INTERFACE "mixed" loads
+# the plug-in as both a VPI and a VHPI library. FSIM_SIMULATE_STATUS is the
+# exit status `fsim simulate` must return (0 when unset).
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -14,8 +18,14 @@ foreach(FSIM_REQUIRED IN ITEMS FSIM_EXECUTABLE FSIM_PLUGIN FSIM_INTERFACE
 endforeach()
 
 file(MAKE_DIRECTORY "${FSIM_WORK_DIR}")
-get_filename_component(FSIM_SOURCE_NAME "${FSIM_SOURCE}" NAME)
-configure_file("${FSIM_SOURCE}" "${FSIM_WORK_DIR}/${FSIM_SOURCE_NAME}" COPYONLY)
+string(REPLACE "|" ";" FSIM_SOURCES "${FSIM_SOURCE}")
+set(FSIM_SOURCE_NAMES "")
+foreach(FSIM_SOURCE_FILE IN LISTS FSIM_SOURCES)
+  get_filename_component(FSIM_SOURCE_NAME "${FSIM_SOURCE_FILE}" NAME)
+  configure_file("${FSIM_SOURCE_FILE}" "${FSIM_WORK_DIR}/${FSIM_SOURCE_NAME}"
+    COPYONLY)
+  list(APPEND FSIM_SOURCE_NAMES "${FSIM_SOURCE_NAME}")
+endforeach()
 
 function(fsim_step FSIM_STEP_NAME)
   execute_process(
@@ -24,18 +34,30 @@ function(fsim_step FSIM_STEP_NAME)
     RESULT_VARIABLE FSIM_RESULT
     OUTPUT_VARIABLE FSIM_OUTPUT
     ERROR_VARIABLE FSIM_ERROR)
-  if(NOT FSIM_RESULT EQUAL 0)
+  set(FSIM_WANTED 0)
+  if(FSIM_STEP_NAME STREQUAL "simulate" AND DEFINED FSIM_SIMULATE_STATUS
+      AND NOT FSIM_SIMULATE_STATUS STREQUAL "")
+    set(FSIM_WANTED "${FSIM_SIMULATE_STATUS}")
+  endif()
+  if(NOT FSIM_RESULT EQUAL FSIM_WANTED)
     message(FATAL_ERROR
       "fsim ${FSIM_STEP_NAME} failed (${FSIM_RESULT}):\n${FSIM_OUTPUT}${FSIM_ERROR}")
   endif()
   set(FSIM_STEP_OUTPUT "${FSIM_OUTPUT}" PARENT_SCOPE)
 endfunction()
 
-fsim_step(compile compile "${FSIM_SOURCE_NAME}")
+foreach(FSIM_SOURCE_NAME IN LISTS FSIM_SOURCE_NAMES)
+  fsim_step(compile compile "${FSIM_SOURCE_NAME}")
+endforeach()
 fsim_step(elaborate elaborate "${FSIM_TOP}")
 separate_arguments(FSIM_SIMULATE_ARGUMENTS UNIX_COMMAND "${FSIM_SIMULATE_ARGS}")
+if(FSIM_INTERFACE STREQUAL "mixed")
+  set(FSIM_LIBRARY_ARGUMENTS --vpi "${FSIM_PLUGIN}" --vhpi "${FSIM_PLUGIN}")
+else()
+  set(FSIM_LIBRARY_ARGUMENTS "--${FSIM_INTERFACE}" "${FSIM_PLUGIN}")
+endif()
 fsim_step(simulate simulate --engine "${FSIM_ENGINE}"
-  "--${FSIM_INTERFACE}" "${FSIM_PLUGIN}" ${FSIM_SIMULATE_ARGUMENTS})
+  ${FSIM_LIBRARY_ARGUMENTS} ${FSIM_SIMULATE_ARGUMENTS})
 
 string(REPLACE "\r\n" "\n" FSIM_OUTPUT "${FSIM_STEP_OUTPUT}")
 string(REPLACE "\n" ";" FSIM_LINES "${FSIM_OUTPUT}")

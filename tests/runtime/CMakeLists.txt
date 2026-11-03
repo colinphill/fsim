@@ -984,9 +984,10 @@ foreach(FSIM_FOREIGN_INTERFACE IN ITEMS vpi vhpi)
     fsim_foreign_${FSIM_FOREIGN_INTERFACE}_runtime_plugin
     PRIVATE "${PROJECT_SOURCE_DIR}/include")
 endforeach()
-# The VHPI information-model plug-in (IEEE 1076-2019 19, 22.2, 23.9) and the
-# VPI data-model plug-in (IEEE 1800-2023 37.16-37.18, 37.26).
-foreach(FSIM_FOREIGN_INTERFACE IN ITEMS vpi vhpi)
+# The VHPI information-model plug-in (IEEE 1076-2019 19, 22.2, 23.9), the
+# VPI data-model plug-in (IEEE 1800-2023 37.16-37.18, 37.26) and the
+# mixed-language hierarchy plug-in, which is both.
+foreach(FSIM_FOREIGN_INTERFACE IN ITEMS vpi vhpi mixed)
   add_library(
     fsim_foreign_${FSIM_FOREIGN_INTERFACE}_model_plugin SHARED
     foreign_${FSIM_FOREIGN_INTERFACE}_model_plugin.c)
@@ -1001,11 +1002,19 @@ set(FSIM_FOREIGN_FIXTURES "${PROJECT_SOURCE_DIR}/tests/fixtures/foreign")
 # An optional sixth argument names the plug-in target.
 function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
     FSIM_SOURCE FSIM_EXPECTED FSIM_SIMULATE_ARGS)
-  if(ARGC GREATER 5)
+  if(ARGC GREATER 5 AND NOT "${ARGV5}" STREQUAL "")
     set(FSIM_PLUGIN_TARGET "${ARGV5}")
   else()
     set(FSIM_PLUGIN_TARGET "fsim_foreign_${FSIM_INTERFACE}_runtime_plugin")
   endif()
+  # An optional seventh argument is the exit status simulate must return.
+  set(FSIM_SIMULATE_STATUS 0)
+  if(ARGC GREATER 6)
+    set(FSIM_SIMULATE_STATUS "${ARGV6}")
+  endif()
+  # Several sources are separated by "|".
+  string(REPLACE "|" "|${FSIM_FOREIGN_FIXTURES}/" FSIM_SOURCE_PATHS
+    "${FSIM_FOREIGN_FIXTURES}/${FSIM_SOURCE}")
   foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
     add_test(
       NAME fsim.foreign.${FSIM_NAME}.${FSIM_ENGINE}
@@ -1014,11 +1023,12 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
         "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
         "-DFSIM_PLUGIN=$<TARGET_FILE:${FSIM_PLUGIN_TARGET}>"
         "-DFSIM_INTERFACE=${FSIM_INTERFACE}"
-        "-DFSIM_SOURCE=${FSIM_FOREIGN_FIXTURES}/${FSIM_SOURCE}"
+        "-DFSIM_SOURCE=${FSIM_SOURCE_PATHS}"
         "-DFSIM_TOP=top"
         "-DFSIM_ENGINE=${FSIM_ENGINE}"
         "-DFSIM_EXPECTED=${FSIM_FOREIGN_FIXTURES}/${FSIM_EXPECTED}"
         "-DFSIM_SIMULATE_ARGS=${FSIM_SIMULATE_ARGS}"
+        "-DFSIM_SIMULATE_STATUS=${FSIM_SIMULATE_STATUS}"
         "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/foreign/${FSIM_NAME}-${FSIM_ENGINE}"
         -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunForeignConformanceCase.cmake")
     set_tests_properties(
@@ -1039,3 +1049,16 @@ fsim_add_foreign_conformance_test(
 fsim_add_foreign_conformance_test(
   vpi-model vpi foreign_vpi_model.sv foreign_vpi_model.expected ""
   fsim_foreign_vpi_model_plugin)
+fsim_add_foreign_conformance_test(
+  mixed-model mixed "foreign_mixed_model.vhd|foreign_mixed_model.sv"
+  foreign_mixed_model.expected "" fsim_foreign_mixed_model_plugin)
+# A run-time error runs the cbError callbacks before the end of simulation
+# (IEEE 1800-2023 38.36.3); simulate fails.
+add_library(fsim_foreign_vpi_error_plugin SHARED foreign_vpi_error_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_error_plugin)
+target_link_libraries(fsim_foreign_vpi_error_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_error_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-error vpi foreign_vpi_error.sv foreign_vpi_error.expected ""
+  fsim_foreign_vpi_error_plugin 1)

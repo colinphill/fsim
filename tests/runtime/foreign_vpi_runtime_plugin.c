@@ -4,6 +4,7 @@
 #include "fsim/runtime/vpi_abi.h"
 #include "vpi_user.h"
 
+#include <signal.h>
 #include <string.h>
 
 static vpiHandle clk;
@@ -109,6 +110,50 @@ static PLI_INT32 schedule_cancel(p_cb_data data)
     return 0;
 }
 
+// The time-slot regions around the nonblocking update of q at 15 (IEEE
+// 1800-2023 4.4.3.3, 4.4.3.9, 38.36.2).
+static PLI_INT32 pre_nba(p_cb_data data)
+{
+    (void)data;
+    vpi_printf("#c %llu nba synch q=%d\n", now(), read_int(q));
+    return 0;
+}
+
+static PLI_INT32 end_of_slot(p_cb_data data)
+{
+    (void)data;
+    vpi_printf("#c %llu end of sim time q=%d\n", now(), read_int(q));
+    return 0;
+}
+
+// An error in a VPI routine runs the cbPLIError callbacks, which read it
+// with vpi_chk_error (IEEE 1800-2023 38.36.3).
+static PLI_INT32 pli_error(p_cb_data data)
+{
+    s_vpi_error_info info;
+    (void)data;
+    memset(&info, 0, sizeof info);
+    vpi_printf("#c pli error level=%d message=%s\n",
+        (int)vpi_chk_error(&info), info.message != NULL ? info.message : "");
+    return 0;
+}
+
+// A trapped signal reaches its cbSignal callback at the next safe point
+// (IEEE 1800-2023 38.36.3).
+static PLI_INT32 on_signal(p_cb_data data)
+{
+    vpi_printf("#c %llu signal trapped=%d\n", now(), data->index == SIGUSR1);
+    return 0;
+}
+
+static PLI_INT32 raise_signal(p_cb_data data)
+{
+    (void)data;
+    vpi_printf("#c %llu raise signal\n", now());
+    (void)raise(SIGUSR1);
+    return 0;
+}
+
 static PLI_INT32 start(p_cb_data data)
 {
     s_vpi_error_info info;
@@ -143,6 +188,18 @@ static PLI_INT32 start(p_cb_data data)
     (void)register_cb(cbAfterDelay, NULL, schedule_cancel, 22U,
         vpiSuppressVal);
     (void)register_cb(cbReadOnlySynch, NULL, read_only, 1U, vpiSuppressVal);
+    (void)register_cb(cbNBASynch, NULL, pre_nba, 15U, vpiSuppressVal);
+    (void)register_cb(cbAtEndOfSimTime, NULL, end_of_slot, 15U,
+        vpiSuppressVal);
+    {
+        s_cb_data trap;
+        memset(&trap, 0, sizeof trap);
+        trap.reason = cbSignal;
+        trap.cb_rtn = on_signal;
+        trap.index = SIGUSR1;
+        (void)vpi_register_cb(&trap);
+    }
+    (void)register_cb(cbAfterDelay, NULL, raise_signal, 7U, vpiSuppressVal);
     return 0;
 }
 
@@ -157,6 +214,7 @@ static void startup(void)
 {
     (void)register_cb(cbStartOfSimulation, NULL, start, 0U, vpiSuppressVal);
     (void)register_cb(cbEndOfSimulation, NULL, end, 0U, vpiSuppressVal);
+    (void)register_cb(cbPLIError, NULL, pli_error, 0U, vpiSuppressVal);
 }
 
 FSIM_VPI_EXPORT void (*vlog_startup_routines[])(void) = { startup, 0 };

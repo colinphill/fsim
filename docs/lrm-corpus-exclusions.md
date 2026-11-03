@@ -12,7 +12,7 @@ Exclusions never count as closures.
 |---|---:|---:|
 | sv-tests | 0 | 2 |
 | verilator | 63 | 297 |
-| ivtest | 7 | 301 |
+| ivtest | 7 | 303 |
 | vests | 2 | 0 |
 | nvc | 225 | 0 |
 | vhdl-compliance | 7 | 0 |
@@ -688,6 +688,8 @@ Exclusions never count as closures.
 | `vpi_genblk_unnamed` | out of scope | gold lists objects in Icarus's iteration order; IEEE 1800-2023 38.23 and 38.40 define no order for an iteration |
 | `vpi_memmon` | out of scope | value-change callbacks on a whole array with cb->index per word are an Icarus extension (IEEE 1800-2023 38.36.1 places them on array members) |
 | `vpi_myscope` | out of scope | uses vpi_handle(vpiScope, NULL), an Icarus extension (IEEE 1800-2023 37.42 accesses only the calling system task or function with a NULL reference) |
+| `vpi_nextsimtime_cb3` | out of scope | registers cbNextSimTime with a vpiSuppressTime or NULL time; IEEE 1800-2023 38.36.2 makes that an error that creates no callback |
+| `vpi_nextsimtime_cb4` | out of scope | registers cbNextSimTime with a vpiSuppressTime or NULL time; IEEE 1800-2023 38.36.2 makes that an error that creates no callback |
 | `vpi_poke_escaped` | out of scope | uses vpi_handle(vpiScope, NULL), an Icarus extension (IEEE 1800-2023 37.42 accesses only the calling system task or function with a NULL reference) |
 | `vpi_ports_params` | out of scope | gold reports Icarus's vpiConstType for typed time parameters |
 | `vpi_pr2966059` | not run | ivtest type NI |

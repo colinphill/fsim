@@ -113,6 +113,9 @@ namespace {
         case SystemVerilogVpiCallbackKind::ValueChange:
         case SystemVerilogVpiCallbackKind::AfterDelay:
         case SystemVerilogVpiCallbackKind::NextTime:
+        // Reaches its slot in the active region, then waits for the slot
+        // to become quiescent.
+        case SystemVerilogVpiCallbackKind::EndOfTimeSlot:
             return SchedulerPhase::active;
         }
         return SchedulerPhase::active;
@@ -646,6 +649,31 @@ SystemVerilogVpiCallbackManager::register_callback(
                     time_error);
             }
             position->second.timed_handle = timed.value;
+        } else if (registration.kind
+            == SystemVerilogVpiCallbackKind::Synchronization) {
+            // Pre-NBA (IEEE 1800-2023 4.4.3.3, 38.36.2): first in the
+            // SystemVerilog NBA region, ahead of every nonblocking update.
+            position->second.scheduler_handle
+                = impl_->scheduler->schedule_systemverilog_after_cancelable(
+                    scheduled_delay, SchedulerPhase::update, StableOrder { },
+                    [weak, id](Scheduler&) {
+                        if (const auto state = weak.lock()) {
+                            dispatch_callback(state, id, std::nullopt);
+                        }
+                    });
+        } else if (registration.kind
+            == SystemVerilogVpiCallbackKind::EndOfTimeSlot) {
+            position->second.scheduler_handle
+                = impl_->scheduler->schedule_after_cancelable(
+                    scheduled_delay, SchedulerPhase::active, stable_order,
+                    [weak, id, stable_order](Scheduler& scheduler) {
+                        scheduler.schedule_end_of_time_slot(stable_order,
+                            [weak, id](Scheduler&) {
+                                if (const auto state = weak.lock()) {
+                                    dispatch_callback(state, id, std::nullopt);
+                                }
+                            });
+                    });
         } else if (registration.kind
                 != SystemVerilogVpiCallbackKind::ValueChange
             && !is_assertion(registration.kind)

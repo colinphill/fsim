@@ -2,6 +2,7 @@
 #include "application_vpi_foreign.hpp"
 
 #include "application_dpi_foreign.hpp"
+#include "application_foreign_signal.hpp"
 
 #include "application_internal.hpp"
 #include "fsim/platform/dynamic_library.hpp"
@@ -753,6 +754,9 @@ public:
         if (path_delay_hook_ != 0U) {
             simulation_.remove_safe_point_hook(path_delay_hook_);
         }
+        if (signal_hook_ != 0U) {
+            simulation_.remove_safe_point_hook(signal_hook_);
+        }
         // The simulation may outlive the service; no foreign routine may
         // run after it is gone.
         for (const auto& [serial, callback] : callbacks_) {
@@ -890,10 +894,72 @@ public:
                         : ": the request failed");
             error_ = true;
         }
+        if (status != FSIM_VPI_STATUS_OK && routine != Routine::CheckError) {
+            pli_error();
+        }
         return status;
     }
 
+    // A run-time error ends the simulation: the cbError callbacks run
+    // first, and vpi_chk_error reports it to them (IEEE 1800-2023
+    // 38.36.3).
+    void run_error(const std::string_view message) noexcept override
+    {
+        try {
+            error_message_ = message;
+            error_ = true;
+            const auto listeners = run_error_callbacks_;
+            for (const auto serial : listeners) {
+                error_message_ = message;
+                error_ = true;
+                fire(serial, std::nullopt, true);
+            }
+        } catch (...) {
+        }
+    }
+
 private:
+    void deliver_signals()
+    {
+        std::vector<std::uint64_t> arrived;
+        for (const auto& [serial, trap] : signal_traps_) {
+            if (trap->take()) {
+                arrived.push_back(serial);
+            }
+        }
+        for (const auto serial : arrived) {
+            if (signal_traps_.contains(serial)) {
+                fire(serial, std::nullopt, true);
+            }
+        }
+    }
+
+    // An error in a VPI routine runs the cbPLIError callbacks, which can
+    // read it with vpi_chk_error; the caller still sees it afterwards
+    // (IEEE 1800-2023 38.36.3).
+    void pli_error()
+    {
+        if (in_pli_error_ || !error_ || pli_error_callbacks_.empty()) {
+            return;
+        }
+        in_pli_error_ = true;
+        const auto message = error_message_;
+        const auto listeners = pli_error_callbacks_;
+        try {
+            for (const auto serial : listeners) {
+                error_message_ = message;
+                error_ = true;
+                fire(serial, std::nullopt, true);
+            }
+        } catch (...) {
+            in_pli_error_ = false;
+            throw;
+        }
+        in_pli_error_ = false;
+        error_message_ = message;
+        error_ = true;
+    }
+
     fsim_vpi_status_v1 route(const Routine routine,
         const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
@@ -3016,10 +3082,27 @@ private:
             || data->reason == cbEnterInteractive
             || data->reason == cbExitInteractive
             || data->reason == cbInteractiveScopeChange
-            || data->reason == cbUnresolvedSystf;
+            || data->reason == cbUnresolvedSystf
+            || data->reason == cbSignal;
         if (!action_reason && data->time != nullptr) {
             stored->time = *data->time;
             stored->has_time = true;
+        }
+        // A simulation time callback needs a vpiSimTime or
+        // vpiScaledRealTime time; vpiSuppressTime or a NULL time is an
+        // error and creates no callback (IEEE 1800-2023 38.36.2).
+        const auto time_reason = data->reason == cbAtStartOfSimTime
+            || data->reason == cbReadWriteSynch
+            || data->reason == cbReadOnlySynch
+            || data->reason == cbNextSimTime
+            || data->reason == cbAfterDelay
+            || data->reason == cbAtEndOfSimTime
+            || data->reason == cbNBASynch;
+        if (time_reason
+            && (!stored->has_time
+                || (stored->time.type != vpiSimTime
+                    && stored->time.type != vpiScaledRealTime))) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
         }
         // Only the object callbacks read value (IEEE 1800-2023 38.36.1);
         // other reasons may leave the field uninitialized.
@@ -3045,6 +3128,28 @@ private:
         case cbEndOfSimulation:
             kind = runtime::SystemVerilogVpiCallbackKind::EndOfSimulation;
             break;
+        case cbError:
+            run_error_callbacks_.push_back(serial);
+            break;
+        case cbPLIError:
+            pli_error_callbacks_.push_back(serial);
+            break;
+        // `index` names the signal; it reaches the callback at the next
+        // safe point (IEEE 1800-2023 38.36.3).
+        case cbSignal: {
+            auto trap = std::make_unique<ForeignSignalTrap>(data->index);
+            if (!trap->valid()) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            signal_traps_.emplace(serial, std::move(trap));
+            if (signal_hook_ == 0U) {
+                signal_hook_ = simulation_.add_safe_point_hook(
+                    [this](runtime::Scheduler&, runtime::SchedulerPhase) {
+                        deliver_signals();
+                    });
+            }
+            break;
+        }
         case cbValueChange:
             if (object == 0U || owned(object)) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
@@ -3059,8 +3164,9 @@ private:
             delay = delay_of(stored->time, object);
             break;
         // The time of these callbacks names a time queue, not a delay
-        // (IEEE 1800-2023 38.36.2); cbAtEndOfSimTime runs after the
-        // nonblocking assignments, before the read-only phase.
+        // (IEEE 1800-2023 38.36.2); cbAtEndOfSimTime runs in the
+        // Pre-Postponed region (4.4.3.9), after every other region of the
+        // slot and before the read-only phase.
         case cbAtStartOfSimTime:
         case cbAtEndOfSimTime: {
             if (!stored->has_time) {
@@ -3081,9 +3187,14 @@ private:
             delay->low = static_cast<std::uint32_t>(precision_ticks);
             kind = data->reason == cbAtStartOfSimTime
                 ? runtime::SystemVerilogVpiCallbackKind::AfterDelay
-                : runtime::SystemVerilogVpiCallbackKind::ReadWrite;
+                : runtime::SystemVerilogVpiCallbackKind::EndOfTimeSlot;
             break;
         }
+        // Immediately before the nonblocking assignments (IEEE 1800-2023
+        // 38.36.2, 4.4.3.3).
+        case cbNBASynch:
+            kind = runtime::SystemVerilogVpiCallbackKind::Synchronization;
+            break;
         case cbReadWriteSynch:
             kind = runtime::SystemVerilogVpiCallbackKind::ReadWrite;
             break;
@@ -3103,7 +3214,9 @@ private:
                 registration.object = object;
             }
             if ((*kind == runtime::SystemVerilogVpiCallbackKind::ReadWrite
-                    || *kind == runtime::SystemVerilogVpiCallbackKind::ReadOnly)
+                    || *kind == runtime::SystemVerilogVpiCallbackKind::ReadOnly
+                    || *kind
+                        == runtime::SystemVerilogVpiCallbackKind::Synchronization)
                 && data->reason != cbAtEndOfSimTime && stored->has_time
                 && (stored->time.high != 0 || stored->time.low != 0
                     || stored->time.real != 0.0)) {
@@ -3145,6 +3258,9 @@ private:
                 *found->second->managed);
         }
         std::erase(end_of_compile_, found->first);
+        std::erase(run_error_callbacks_, found->first);
+        signal_traps_.erase(found->first);
+        std::erase(pli_error_callbacks_, found->first);
         callbacks_.erase(found);
         return succeed(result, 0U, 1U);
     }
@@ -3169,7 +3285,8 @@ private:
     }
 
     void fire(const std::uint64_t serial,
-        const std::optional<runtime::SystemVerilogVpiCallbackEvent>& event)
+        const std::optional<runtime::SystemVerilogVpiCallbackEvent>& event,
+        const bool repeat = false)
     {
         const auto found = callbacks_.find(serial);
         if (found == callbacks_.end()) {
@@ -3215,8 +3332,10 @@ private:
                 }
             }
         }
-        const auto one_shot = !event
-            || event->kind != runtime::SystemVerilogVpiCallbackKind::ValueChange;
+        const auto one_shot = !repeat
+            && (!event
+                || event->kind
+                    != runtime::SystemVerilogVpiCallbackKind::ValueChange);
         const auto routine = data.cb_rtn;
         const auto read_only = std::exchange(read_only_,
             event
@@ -6253,6 +6372,13 @@ private:
     std::uint64_t next_callback_ { };
     std::unordered_map<std::uint64_t, std::unique_ptr<Callback>> callbacks_;
     std::vector<std::uint64_t> end_of_compile_;
+    // The cbError and cbPLIError callbacks, which run on every error.
+    std::vector<std::uint64_t> run_error_callbacks_;
+    std::vector<std::uint64_t> pli_error_callbacks_;
+    bool in_pli_error_ { };
+    // The cbSignal callbacks and their traps, delivered at safe points.
+    std::map<std::uint64_t, std::unique_ptr<ForeignSignalTrap>> signal_traps_;
+    std::uint64_t signal_hook_ { };
     std::uint64_t next_iterator_ { };
     std::unordered_map<std::uint64_t, Iterator> iterators_;
     std::unordered_map<fsim_vpi_handle_v1, void*> user_data_;

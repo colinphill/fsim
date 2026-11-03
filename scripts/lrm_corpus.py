@@ -1830,6 +1830,9 @@ IVTEST_VPI_NONSTANDARD = {
     "pr2971220": "gold holds the file name as given on Icarus's command line",
     "by_index": "reads vpiIndex with vpi_get; IEEE 1800-2023 Annex K defines it "
         "only as a one-to-one relation",
+    **{name: "registers cbNextSimTime with a vpiSuppressTime or NULL time; IEEE "
+       "1800-2023 38.36.2 makes that an error that creates no callback"
+       for name in ("nextsimtime_cb3", "nextsimtime_cb4")},
 }
 
 

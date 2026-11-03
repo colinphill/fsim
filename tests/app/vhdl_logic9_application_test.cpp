@@ -2055,14 +2055,14 @@ endmodule
                 vhdl_parent_config,
                 fsim::app::SimulationEngine::interpreter,
                 "vhdl_logic9_parent.result",
-                "vhdl_logic9_parent_child.result",
+                "vhdl_logic9_parent.child.result",
                 "vhdl_logic9_parent.wide_down_result",
                 "vhdl_logic9_parent.wide_up_result");
             const auto vhdl_parent_compiled = run_mixed(
                 vhdl_parent_config,
                 fsim::app::SimulationEngine::compiled,
                 "vhdl_logic9_parent.result",
-                "vhdl_logic9_parent_child.result",
+                "vhdl_logic9_parent.child.result",
                 "vhdl_logic9_parent.wide_down_result",
                 "vhdl_logic9_parent.wide_up_result");
             assert(

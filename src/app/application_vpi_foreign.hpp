@@ -43,6 +43,13 @@ public:
     VpiForeignService() = default;
     VpiForeignService(const VpiForeignService&) = delete;
     VpiForeignService& operator=(const VpiForeignService&) = delete;
+
+    /// Report a run-time error that ends the simulation, before its end of
+    /// simulation (IEEE 1800-2023 38.36.3 cbError).
+    virtual void run_error(std::string_view message) noexcept
+    {
+        (void)message;
+    }
 };
 
 /// Load the modules into a constructed, not yet started simulation, run

@@ -1349,6 +1349,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/app/application.cpp")
       src/app/application_class_hir_execution.cpp
       src/app/application_vhdl_debug.cpp
       src/app/application_vpi.cpp
+      src/app/application_foreign_signal.cpp
       src/app/application_vpi_foreign.cpp
       src/app/application_vhpi_foreign.cpp
       src/app/application_dpi_foreign.cpp

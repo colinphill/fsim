@@ -4,6 +4,7 @@
 #include "fsim/runtime/vhpi_abi.h"
 #include "vhpi_user.h"
 
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -111,6 +112,59 @@ static void at_12(const vhpiCbDataT* data)
     printf(" dec=%s", text(n, vhpiDecStrVal));
     printf(" hex=%s\n", text(n, vhpiHexStrVal));
     fflush(stdout);
+    (void)raise(SIGINT);
+}
+
+// From vhpiCbStartOfPostponed to the end of the time step no update may
+// cause a delta cycle (IEEE 1076-2019 14.7.5.3 h).
+static void at_postponed(const vhpiCbDataT* data)
+{
+    int rejected;
+    (void)data;
+    put_logic(d, vhpi0, vhpiDepositPropagate);
+    rejected = vhpi_check_error(NULL) != 0;
+    printf("#c %llu start of postponed n=%d put rejected=%d\n", now(),
+        read_int(n), rejected);
+    fflush(stdout);
+}
+
+// A timeout runs after the cycle's signal updates, before the processes'
+// new values are applied (IEEE 1076-2019 14.7.5.3 f 3).
+static void timeout_15(const vhpiCbDataT* data)
+{
+    (void)data;
+    printf("#c %llu timeout clk=%s n=%d\n", now(), text(clk, vhpiBinStrVal),
+        read_int(n));
+    fflush(stdout);
+    (void)register_cb(vhpiCbStartOfPostponed, NULL, at_postponed, 0U);
+}
+
+// The routine's error, as vhpi_check_error reports it to a
+// vhpiCbPLIError callback.
+static void pli_error(const vhpiCbDataT* data)
+{
+    vhpiErrorInfoT info;
+    (void)data;
+    memset(&info, 0, sizeof info);
+    printf("#c pli error=%d severity=%d\n", vhpi_check_error(&info),
+        (int)info.severity);
+    fflush(stdout);
+}
+
+// fsim's interrupt event is SIGINT (IEEE 1076-2019 21.3.7.10); the run
+// goes on.
+static void interrupt(const vhpiCbDataT* data)
+{
+    (void)data;
+    printf("#c %llu interrupt\n", now());
+    fflush(stdout);
+}
+
+static void quiescence(const vhpiCbDataT* data)
+{
+    (void)data;
+    printf("#c %llu quiescence\n", now());
+    fflush(stdout);
 }
 
 static void start(const vhpiCbDataT* data)
@@ -143,6 +197,7 @@ static void start(const vhpiCbDataT* data)
     (void)register_cb(vhpiCbValueChange, clk, on_clk, 0U);
     (void)register_cb(vhpiCbValueChange, d, on_d, 0U);
     (void)register_cb(vhpiCbAfterDelay, NULL, at_12, 12000000U);
+    (void)register_cb(vhpiCbTimeOut, NULL, timeout_15, 15000000U);
     fflush(stdout);
 }
 
@@ -166,6 +221,9 @@ static void startup(void)
     phase_cb(vhpiCbStartOfSimulation, "start of simulation", start);
     phase_cb(vhpiCbEndOfSimulation, "end of simulation", phase);
     phase_cb(vhpiCbEndOfTool, "end of tool", phase);
+    phase_cb(vhpiCbPLIError, "pli error", pli_error);
+    phase_cb(vhpiCbQuiescense, "quiescence", quiescence);
+    phase_cb(vhpiCbSigInterrupt, "interrupt", interrupt);
 }
 
 FSIM_VHPI_EXPORT void (*vhpi_startup_routines[])(void) = { startup, 0 };

@@ -1,0 +1,20 @@
+#c vpi 0 vpiModule top def=top
+#c vpi 1 vpiModule top.m def=mixed_mid
+#c vpi 2 vpiModule top.m.l def=mixed_sleaf
+#c vpi 3 vpiModule top.m.l.g def=mixed_vleaf
+#c vpi byname top.m vpiModule
+#c vpi byname top.m.t NULL
+#c vpi byname top.m.l vpiModule
+#c vpi byname top.m.l.y vpiReg
+#c vpi byname top.m.l.g vpiModule
+#c vpi byname top.m.l.g.s NULL
+#c vhpi root vhpirootinstk :top
+#c vhpi 1 vhpicompinststmtk :top:m
+#c vhpi 2 vhpicompinststmtk :top:m:l
+#c vhpi 3 vhpicompinststmtk :top:m:l:g
+#c vhpi byname top.m vhpicompinststmtk
+#c vhpi byname top.m.t vhpisigdeclk
+#c vhpi byname top.m.l vhpicompinststmtk
+#c vhpi byname top.m.l.g vhpicompinststmtk
+#c vhpi byname top.m.l.g.s vhpisigdeclk
+#c vhpi byname :top:m:l:g:s vhpisigdeclk

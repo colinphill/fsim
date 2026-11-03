@@ -83,12 +83,15 @@ Files: `vpi` = `src/app/application_vpi_foreign.cpp`, `vpi-cb` =
 | `cbReadWriteSynch` | done | |
 | `cbReadOnlySynch` | done | a write, or an event scheduled before the next scheduled event, is an error |
 | `cbNextSimTime` | done | never fires when no event is pending |
-| `cbAfterDelay` | partial | no error for `vpiSuppressTime` |
-| `cbAtEndOfSimTime` | partial | runs in the reactive region |
-| `cbNBASynch` | missing | gate A-G4 |
+| `cbAfterDelay` | done | a NULL time or `vpiSuppressTime` on any simulation time reason is an error and creates no callback (38.36.2) |
+| `cbAtEndOfSimTime` | done | Pre-Postponed (4.4.3.9): after the nonblocking updates, when the time slot is quiet, writes allowed (`fsim.foreign.vpi-runtime`) |
+| `cbNBASynch` | done | Pre-NBA (4.4.3.3): first in the NBA region, before every nonblocking update (`fsim.foreign.vpi-runtime`) |
 | `cbEndOfCompile`, `cbStartOfSimulation` | done | |
 | `cbEndOfSimulation` | done | on every end of a run: `$finish`, `vpiFinish`, `--duration`, `$stop` in batch, a fatal error |
-| `cbError`, `cbPLIError`, `cbTchkViolation`, `cbSignal`, `cbUnresolvedSystf` | missing | gate A-G4 |
+| `cbError` | done | a run-time error that ends the run (delta-cycle limit, run-time failure) runs the callbacks before `cbEndOfSimulation`; `vpi_chk_error` reports it to them (`fsim.foreign.vpi-error`) |
+| `cbPLIError` | done | runs when a VPI routine fails; `vpi_chk_error` reports the error inside the callback and to the caller afterwards (`fsim.foreign.vpi-runtime`) |
+| `cbSignal` | done | `index` names the signal; while a callback traps it, the signal reaches the callback at the next scheduler safe point instead of the tool's own handling (`fsim.foreign.vpi-runtime`) |
+| `cbTchkViolation`, `cbUnresolvedSystf` | missing | gate A-G4 |
 | save, restart, reset, interactive reasons | missing | gate A-G6 |
 | assertion callbacks (39) | missing | gate A-G4 |
 
@@ -97,6 +100,7 @@ Files: `vpi` = `src/app/application_vpi_foreign.cpp`, `vpi-cb` =
 | Diagram | Clause | Status | Notes |
 | --- | --- | --- | --- |
 | modules, scopes, `vpiInternalScope` | 37.5, 37.10, 37.12 | partial | done: `vpiDefFile`, `vpiDefLineNo`, `vpiLibrary`, `vpiCell` (the definition without a configuration), `vpiTop`, `vpiArrayMember`, `vpiDefNetType`, `vpiUnconnDrive`, `vpiDefDelayMode` (`vpiDelayModeNone`: there are no delay-mode directives), `vpiProtected` (false: no decryption) (`fsim.foreign.vpi-model`). Missing: `vpiModule` also matches interfaces and programs; `vpiTypedef` and `vpiNetTypedef` iteration (gate A-G5) |
+| mixed-language hierarchies | 37.10 | done | 1800-2023 has no VHDL objects: in a design with SystemVerilog, each VHDL entity instance is a `vpiModule` scope without objects whose `vpiDefName`, `vpiDefFile`, `vpiLibrary` and `vpiCell` name its entity, so the whole instance tree is visible and SystemVerilog instances beneath it keep their full paths (`fsim.foreign.mixed-model`); VHDL objects are reached through VHPI |
 | interfaces, modports, ref objects | 37.6, 37.7, 37.15 | partial | done: `vpiModport` objects under each interface instance with `vpiInterface`, their members as `vpiIODecl` with `vpiDirection` and `vpiExpr`; an interface port's `vpiLowConn` is a `vpiRefObj` whose `vpiActual` is the interface or modport, found by name and through it (`top.u.b.data`) (`fsim.foreign.vpi-model`). Missing: `vpiInterfaceTfDecl`, clocking modport members, virtual interfaces (gate A-G5) |
 | instance arrays | 37.11 | partial | done: `vpiModuleArray`, `vpiInterfaceArray`, `vpiProgramArray` beside their elements, `vpiSize`, element iteration, `vpi_handle_by_index` (`fsim.foreign.vpi-model`). `vpiRange`, `vpiLeftRange` and `vpiRightRange` from the elements' indexes. Missing: the `vpiListOp` connection expression, primitive arrays (gate A-G5) |
 | ports, IODecl, high/low connections | 37.13, 37.14 | partial | done: `vpiPort` objects in port order with `vpiPortIndex`, `vpiDirection`, `vpiPortType`, `vpiSize`, `vpiConnByName`, `vpiLowConn` (the formal's net or variable), `vpiHighConn` for a simple-name actual, `vpiPorts` and `vpiPortInst` from nets and variables; a formal's net or variable has no `vpiDirection` (`fsim.foreign.vpi-model`). An interface port's low connection is a `vpiRefObj`, a modport's members are `vpiIODecl` (37.7). Missing: port bits, `vpiHighConn` expressions (gate A-G5) |
@@ -171,9 +175,9 @@ Files: `vpi` = `src/app/application_vpi_foreign.cpp`, `vpi-cb` =
 | `vhpiCbValueChange` | partial | signals only; changes coalesce at the next safe point |
 | `vhpiCbForce`, `vhpiCbRelease`, `vhpiCbTransaction`, `vhpiCbStmt`, `vhpiCbResume`, `vhpiCbSuspend`, `vhpiCbSubpCall`, `vhpiCbSubpReturn`, `vhpiCbSensitivity` | missing | gate A-G4 |
 | `vhpiCbAfterDelay` / `vhpiCbRepAfterDelay` | done | registering one at the end of a time step is an error |
-| `vhpiCbTimeOut` / `vhpiCbRepTimeOut` | missing | gate A-G4 |
-| `vhpiCbNextTimeStep`, `vhpiCbStartOfNextCycle`, `vhpiCbEndOfProcesses`, `vhpiCbLastKnownDeltaCycle`, `vhpiCbEndOfTimeStep` (and repetitive forms) | done | a first cycle at time zero is a delta cycle (14.7.5.1): it runs StartOfNextCycle but not NextTimeStep; EndOfProcesses also runs at initialization step h) |
-| `vhpiCbStartOfProcesses`, `vhpiCbStartOfPostponed` (and repetitive forms) | missing | gate A-G4 |
+| `vhpiCbTimeOut` / `vhpiCbRepTimeOut` | done | after the cycle's signal updates and `vhpiCbStartOfProcesses`, with the processes resumed by a timeout (14.7.5.3 f 3); `obj` and `value` are ignored (21.3.3.2); an end-of-time-step callback cannot register or enable one |
+| `vhpiCbNextTimeStep`, `vhpiCbStartOfNextCycle`, `vhpiCbEndOfProcesses`, `vhpiCbLastKnownDeltaCycle`, `vhpiCbEndOfTimeStep` (and repetitive forms) | done | a first cycle at time zero is a delta cycle (14.7.5.1): it runs StartOfNextCycle but not NextTimeStep; EndOfProcesses also runs at initialization step h); the first cycle of a time step runs NextTimeStep, StartOfNextCycle and the after-delay callbacks before its signal updates; EndOfTimeStep runs after the postponed processes (h 6) |
+| `vhpiCbStartOfProcesses`, `vhpiCbStartOfPostponed` (and repetitive forms) | done | initialization steps e) and i), cycle steps f 1) and h 3); from `vhpiCbStartOfPostponed` to the end of the time step an update is an error (14.7.5.3 h) |
 | `vhpiCbStartOfTool` | done | immediately before the registration phase completes |
 | `vhpiCbEndOfTool` | done | in the termination phase, also after an error ends the run |
 | `vhpiCbStartOfAnalysis` / `vhpiCbEndOfAnalysis` | N-A | `fsim simulate` has no analysis phase (21.3.7.3) |
@@ -182,14 +186,17 @@ Files: `vpi` = `src/app/application_vpi_foreign.cpp`, `vpi-cb` =
 | `vhpiCbEndOfInitialization` | done | after the processes' first run (14.7.5.2 m) |
 | `vhpiCbStartOfSimulation` | done | before the first simulation cycle |
 | `vhpiCbEndOfSimulation` | done | on every end of a run; updates inside it are errors |
-| `vhpiCbQuiescense`, `vhpiCbPLIError`, `vhpiCbSigInterrupt` | missing | gate A-G4 |
+| `vhpiCbQuiescense` | done | after the end of a time step with nothing left to simulate (14.7.5.3 h 7); it may cause further cycles (`fsim.foreign.vhpi-runtime`) |
+| `vhpiCbPLIError` | done | Annex B reason, repetitive: runs as a VHPI routine that raised an error returns; `vhpi_check_error` reports the error inside the callback and to the caller afterwards (`fsim.foreign.vhpi-runtime`) |
+| `vhpiCbSigInterrupt` | done | fsim's interrupt event is SIGINT: while a callback is registered, an interrupt reaches it at the next scheduler safe point and the run goes on (`fsim.foreign.vhpi-runtime`) |
 | interactive, save, restart, reset reasons | missing | gate A-G6 |
 
 ## VHPI information model (IEEE 1076-2019 19)
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| `rootInst`, `compInstStmt`, block and for/if generates, `packInst`, `tool`, `argv` | done | the first VHDL root only; Verilog children are empty regions (gate A-G3) |
+| `rootInst`, `compInstStmt`, block and for/if generates, `packInst`, `tool`, `argv` | done | `vhpiRootInst` is the first VHDL root, or in a design without one the first root; other roots resolve by name |
+| mixed-language hierarchies | done | 1076-2019 leaves them to the tool: a SystemVerilog instance is a `compInstStmt` (or the root) region without declarations, so VHDL instances beneath it are reachable and full paths through it resolve (`fsim.foreign.mixed-model`) |
 | `aliasDecl` | done | `vhpiAliasDecls` and `vhpiDecls` list aliases of objects; the value, indexes and sub-names read through the target; `vhpiAliasedName` |
 | subprogram, component, attribute, file and group declarations | done | `vhpiFuncDeclK`, `vhpiProcDeclK` (one object per overload), `vhpiCompDeclK`, `vhpiAttrDeclK`, `vhpiAttrSpecK`, `vhpiFileDeclK`, `vhpiGroupTempDeclK`, `vhpiGroupDeclK` in `vhpiDecls` (`fsim.foreign.vhpi-model`); their parameters, ports and bodies come with the static access set (gate A-G5) |
 | case generates | choice | the case generate statement has no class in Annex B of the header, so a selected alternative is an `ifGenerate` |

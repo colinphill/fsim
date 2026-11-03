@@ -139,6 +139,39 @@ namespace {
         apply_vpi_source(type, project, unit->source);
     }
 
+    // A VHDL instance's provenance as a VPI scope of a mixed design: its
+    // entity in its library, and where its design unit is.
+    void apply_vpi_vhdl_provenance(runtime::SystemVerilogVpiTypeInfo& type,
+        const BuiltProject& project,
+        const semantic::design::Specialization& specialization)
+    {
+        const auto& unit
+            = project.semantics.units().at(specialization.unit.value());
+        const auto provenance = std::ranges::find(
+            project.vhdl_unit_provenance, unit.id, &VhdlUnitProvenance::unit);
+        runtime::SystemVerilogVpiTypeInfo located;
+        apply_vpi_source(located, project, unit.source);
+        if (provenance == project.vhdl_unit_provenance.end()
+            || located.source_path.empty()
+            || provenance->standard.empty()
+            || provenance->compatibility_profile.empty()) {
+            return;
+        }
+        const auto& entity = unit.kind == semantic::UnitKind::vhdl_architecture
+            ? unit.secondary_name
+            : unit.name;
+        type.semantic_unit_id = unit.id.value();
+        type.source_id = located.source_id;
+        type.semantic_unit = unit.library + "::" + entity;
+        type.source_path = located.source_path;
+        type.source_line = located.source_line;
+        type.source_column = located.source_column;
+        type.definition_path = located.source_path;
+        type.definition_line = located.source_line;
+        type.standard = provenance->standard;
+        type.compatibility_profile = provenance->compatibility_profile;
+    }
+
     void apply_vpi_specialization_provenance(
         runtime::SystemVerilogVpiTypeInfo& type,
         const BuiltProject& project,
@@ -1186,6 +1219,28 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         instance_profiles.insert_or_assign(specialization.instance.value(),
             vpi_profile_language(project, specialization));
     }
+    // In a mixed design each VHDL instance is a module scope without
+    // objects, so the whole instance tree is visible and a path through a
+    // VHDL instance resolves; VHDL objects belong to VHPI.
+    if (!instance_profiles.empty()) {
+        for (const auto& specialization :
+            project.design_ir.specializations()) {
+            if (specialization.language != semantic::Language::vhdl
+                || !specialization.unit.valid()
+                || specialization.unit.value()
+                    >= project.semantics.units().size()) {
+                continue;
+            }
+            const auto kind
+                = project.semantics.units().at(specialization.unit.value()).kind;
+            if ((kind == semantic::UnitKind::vhdl_entity
+                    || kind == semantic::UnitKind::vhdl_architecture
+                    || kind == semantic::UnitKind::vhdl_configuration)) {
+                instance_profiles.try_emplace(specialization.instance.value(),
+                    runtime::SystemVerilogVpiLanguage::SystemVerilog2017);
+            }
+        }
+    }
 
     // Package startup processes have a parentless, package-named synthetic
     // specialization. Publish its runtime paths beneath the package object
@@ -1493,6 +1548,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             scope_type.implicit_nets = unit->implicit_nets;
         }
         apply_vpi_unit_provenance(scope_type, project, unit_identity);
+        if (specialization.language == semantic::Language::vhdl) {
+            apply_vpi_vhdl_provenance(scope_type, project, specialization);
+        }
         descriptor.type = scope_type;
         const auto handle = create_checked(
             *result.registry, std::move(descriptor), instance_path);

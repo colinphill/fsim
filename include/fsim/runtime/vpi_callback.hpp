@@ -23,7 +23,12 @@ enum class SystemVerilogVpiCallbackKind {
     ReadWrite,
     ReadOnly,
     NextTime,
+    // Immediately before the nonblocking assignments (IEEE 1800-2023 4.4.3.3
+    // Pre-NBA, cbNBASynch).
     Synchronization,
+    // After every region of the time slot but the postponed one (IEEE
+    // 1800-2023 4.4.3.9 Pre-Postponed, cbAtEndOfSimTime).
+    EndOfTimeSlot,
     StartOfSimulation,
     EndOfSimulation,
     StartOfReset,

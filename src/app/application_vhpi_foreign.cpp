@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_vhpi_foreign.hpp"
 
+#include "application_foreign_signal.hpp"
 #include "application_internal.hpp"
 #include "fsim/platform/dynamic_library.hpp"
 #include "fsim/runtime/scheduler.hpp"
@@ -15,6 +16,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -402,7 +404,13 @@ struct ModuleSpec {
     case vhpiCbRepNextTimeStep:
     case vhpiCbRepEndOfTimeStep:
     case vhpiCbRepStartOfNextCycle:
+    case vhpiCbRepStartOfProcesses:
+    case vhpiCbRepStartOfPostponed:
     case vhpiCbRepAfterDelay:
+    case vhpiCbRepTimeOut:
+    case vhpiCbQuiescense:
+    case vhpiCbPLIError:
+    case vhpiCbSigInterrupt:
         return true;
     default:
         return false;
@@ -423,8 +431,14 @@ struct ModuleSpec {
         return vhpiCbEndOfTimeStep;
     case vhpiCbRepStartOfNextCycle:
         return vhpiCbStartOfNextCycle;
+    case vhpiCbRepStartOfProcesses:
+        return vhpiCbStartOfProcesses;
+    case vhpiCbRepStartOfPostponed:
+        return vhpiCbStartOfPostponed;
     case vhpiCbRepAfterDelay:
         return vhpiCbAfterDelay;
+    case vhpiCbRepTimeOut:
+        return vhpiCbTimeOut;
     default:
         return reason;
     }
@@ -633,14 +647,16 @@ private:
     {
         auto& service = self(user_data);
         service.clear_error();
+        auto result = fallback;
         try {
-            return function(service);
+            result = function(service);
         } catch (const std::exception& error) {
             service.error(vhpiError, error.what());
         } catch (...) {
             service.error(vhpiInternal, "internal VHPI error");
         }
-        return fallback;
+        service.pli_error();
+        return result;
     }
 
     void install_routines()
@@ -807,13 +823,38 @@ private:
     [[nodiscard]] Result not_implemented(
         const char* const function, const Result fallback)
     {
+        clear_error();
         error(vhpiError, std::string { function } + " is not implemented");
+        pli_error();
         return fallback;
     }
 
     // --- errors and output ---------------------------------------------------------
 
     void clear_error() noexcept { has_error_ = false; }
+
+    // An error in a VHPI routine runs the vhpiCbPLIError callbacks as the
+    // routine returns; they read it with vhpi_check_error, and the caller
+    // still sees it afterwards.
+    void pli_error()
+    {
+        if (!has_error_ || in_pli_error_ || !has_callbacks(vhpiCbPLIError)) {
+            return;
+        }
+        in_pli_error_ = true;
+        const auto severity = error_severity_;
+        const auto message = error_message_;
+        try {
+            dispatch(vhpiCbPLIError);
+        } catch (...) {
+            in_pli_error_ = false;
+            throw;
+        }
+        in_pli_error_ = false;
+        has_error_ = true;
+        error_severity_ = severity;
+        error_message_ = message;
+    }
 
     void error(const vhpiSeverityT severity, std::string message)
     {
@@ -948,8 +989,12 @@ private:
         case vhpiCbRepStartOfNextCycle:
         case vhpiCbEndOfTimeStep:
         case vhpiCbRepEndOfTimeStep:
+        case vhpiCbStartOfProcesses:
+        case vhpiCbRepStartOfProcesses:
         case vhpiCbEndOfProcesses:
         case vhpiCbRepEndOfProcesses:
+        case vhpiCbStartOfPostponed:
+        case vhpiCbRepStartOfPostponed:
         case vhpiCbLastKnownDeltaCycle:
         case vhpiCbRepLastKnownDeltaCycle:
         case vhpiCbStartOfAnalysis:
@@ -958,6 +1003,9 @@ private:
         case vhpiCbEndOfElaboration:
         case vhpiCbStartOfTool:
         case vhpiCbEndOfTool:
+        case vhpiCbQuiescense:
+        case vhpiCbPLIError:
+        case vhpiCbSigInterrupt:
             callback.data.obj = nullptr;
             callback.data.time = nullptr;
             callback.data.value = nullptr;
@@ -966,20 +1014,39 @@ private:
             if (dispatch_reason(data->reason) == vhpiCbNextTimeStep) {
                 ensure_next_time();
             }
+            // fsim's interrupt event is SIGINT (IEEE 1076-2019
+            // 21.3.7.10); it reaches the callbacks at the next safe point
+            // instead of stopping the run.
+            if (data->reason == vhpiCbSigInterrupt && !interrupt_trap_) {
+                interrupt_trap_ = std::make_unique<ForeignSignalTrap>(SIGINT);
+                if (!interrupt_trap_->valid()) {
+                    interrupt_trap_.reset();
+                    error(vhpiError, "cannot trap the interrupt signal");
+                    return nullptr;
+                }
+            }
             break;
         case vhpiCbAfterDelay:
-        case vhpiCbRepAfterDelay: {
+        case vhpiCbRepAfterDelay:
+        case vhpiCbTimeOut:
+        case vhpiCbRepTimeOut: {
             // An end-of-time-step callback cannot affect the time of the
             // next cycle (IEEE 1076-2019 21.3.6.8).
             if (time_step_ended_) {
                 error(vhpiError,
-                    "cannot register an after-delay callback at the end of a "
-                    "time step");
+                    "cannot register a timed callback at the end of a time "
+                    "step");
                 return nullptr;
             }
             if (data->time == nullptr) {
-                error(vhpiError, "missing time for an after-delay callback");
+                error(vhpiError, "missing time for a timed callback");
                 return nullptr;
+            }
+            // A timeout ignores obj and value (21.3.3.2).
+            if (dispatch_reason(data->reason) == vhpiCbTimeOut) {
+                callback.data.obj = nullptr;
+                callback.data.value = nullptr;
+                callback.has_value = false;
             }
             callback.delay = from_vhpi_time(*data->time);
             if (!schedule_delay(callback)) {
@@ -1029,7 +1096,12 @@ private:
         registration.delay = runtime::SystemVerilogVpiTimeValue { };
         registration.delay->high = static_cast<std::uint32_t>(quanta >> 32U);
         registration.delay->low = static_cast<std::uint32_t>(quanta);
-        registration.at_slot_start = true;
+        // An after-delay callback runs at the start of its cycle (IEEE
+        // 1076-2019 14.7.5.3 b 3); a timeout runs with the processes that
+        // resume by a timeout in that cycle, like a wait statement's
+        // timeout clause (step f 3, 21.3.3.2).
+        registration.at_slot_start
+            = dispatch_reason(callback.data.reason) == vhpiCbAfterDelay;
         registration.callback
             = [this, target = &callback, order = callback.order](
                   const runtime::SystemVerilogVpiCallbackEvent&) {
@@ -1053,6 +1125,14 @@ private:
         callback->managed.reset();
         if (callback->repetitive) {
             (void)schedule_delay(*callback);
+        }
+        // Steps b 1) and 2) of the cycle precede its after-delay
+        // callbacks (IEEE 1076-2019 14.7.5.3); a timeout runs after the
+        // cycle's signal updates, with the processes (step f 3).
+        begin_time_step();
+        if (dispatch_reason(callback->data.reason) == vhpiCbTimeOut) {
+            due_timeouts_.emplace_back(callback, order);
+            return;
         }
         run(*callback);
         if (live(callback, order) && !callback->repetitive) {
@@ -1137,10 +1217,10 @@ private:
             return 1;
         }
         if (state == vhpiEnable && time_step_ended_
-            && dispatch_reason(callback->data.reason) == vhpiCbAfterDelay) {
+            && (dispatch_reason(callback->data.reason) == vhpiCbAfterDelay
+                || dispatch_reason(callback->data.reason) == vhpiCbTimeOut)) {
             error(vhpiError,
-                "cannot enable an after-delay callback at the end of a time "
-                "step");
+                "cannot enable a timed callback at the end of a time step");
             return 1;
         }
         callback->state = state;
@@ -1223,6 +1303,7 @@ private:
         phase_ = vhpiInitializationPhase;
         dispatch(vhpiCbStartOfInitialization);
         dispatch(vhpiCbStartOfNextCycle);
+        dispatch(vhpiCbStartOfProcesses);
         // The safe point after the processes' first run completes the
         // initialization, also in a design with no process.
         simulation_.schedule_active_task([] { });
@@ -1235,12 +1316,14 @@ private:
     {
         initialized_ = true;
         dispatch(vhpiCbEndOfProcesses);
+        dispatch(vhpiCbStartOfPostponed);
         dispatch(vhpiCbEndOfInitialization);
         phase_ = vhpiSimulationPhase;
         dispatch(vhpiCbStartOfSimulation);
         // A first simulation cycle at time zero is a delta cycle (Tn = Tc,
         // 14.7.5.1): it starts the next cycle but not a new time step.
         if (scheduler != nullptr && pending_now(*scheduler)) {
+            cycle_started_ = true;
             dispatch(vhpiCbStartOfNextCycle);
         }
         if (has_callbacks(vhpiCbNextTimeStep)
@@ -1265,9 +1348,12 @@ private:
             cycled_ = true;
             dispatch(vhpiCbEndOfProcesses);
             dispatch(vhpiCbLastKnownDeltaCycle);
-            time_step_ended_ = true;
-            dispatch(vhpiCbEndOfTimeStep);
-            time_step_ended_ = false;
+            start_of_postponed();
+            end_of_time_step_pending_ = true;
+        }
+        // A time step whose postponed processes have not run yet.
+        if (end_of_time_step_pending_) {
+            end_of_time_step(nullptr);
         }
         simulation_ending_ = true;
         dispatch(vhpiCbEndOfSimulation);
@@ -1297,12 +1383,26 @@ private:
     // The first cycle of a new time step (IEEE 1076-2019 21.3.6).
     void next_time_step()
     {
-        time_step_ended_ = false;
-        dispatch(vhpiCbNextTimeStep);
-        dispatch(vhpiCbStartOfNextCycle);
+        begin_time_step();
         if (has_callbacks(vhpiCbNextTimeStep)) {
             ensure_next_time();
         }
+    }
+
+    // Steps b 1) and 2) of the first cycle of a time step, once per time
+    // step; a first cycle at time zero is a delta cycle (14.7.5.1).
+    void begin_time_step()
+    {
+        const auto now = now_femtoseconds();
+        if (now == 0U || stepped_at_ == now) {
+            return;
+        }
+        stepped_at_ = now;
+        cycle_started_ = true;
+        awaiting_update_ = true;
+        time_step_ended_ = false;
+        dispatch(vhpiCbNextTimeStep);
+        dispatch(vhpiCbStartOfNextCycle);
     }
 
     [[nodiscard]] static bool pending_now(const runtime::Scheduler& scheduler)
@@ -1320,18 +1420,71 @@ private:
         if (phase == runtime::SchedulerPhase::update) {
             cycle_counted_ = false;
         }
+        if (interrupt_trap_ && interrupt_trap_->take()) {
+            dispatch(vhpiCbSigInterrupt);
+            if (!has_callbacks(vhpiCbSigInterrupt)) {
+                interrupt_trap_.reset();
+            }
+        }
         flush_changes();
-        if (phase != runtime::SchedulerPhase::active || stopping_) {
+        if (stopping_) {
+            return;
+        }
+        // The signals of the cycle have been updated; its processes run
+        // next (IEEE 1076-2019 14.7.5.3 f 1). A cycle whose updates resume
+        // no process ends here.
+        if (phase == runtime::SchedulerPhase::update && initialized_) {
+            awaiting_update_ = false;
+            if (pending_now(scheduler) || !due_timeouts_.empty()
+                || (cycle_started_ && !end_of_time_step_pending_)) {
+                dispatch(vhpiCbStartOfProcesses);
+                run_timeouts();
+                flush_changes();
+                if (!pending_now(scheduler)) {
+                    end_of_cycle(scheduler);
+                }
+            }
+            return;
+        }
+        if (phase != runtime::SchedulerPhase::active) {
             return;
         }
         if (!initialized_) {
             finish_initialization(&scheduler);
             return;
         }
+        // The first active phase of a time step runs its step b); the
+        // cycle's processes run after its signal updates.
+        if (awaiting_update_) {
+            return;
+        }
+        end_of_cycle(scheduler);
+    }
+
+    void run_timeouts()
+    {
+        auto due = std::move(due_timeouts_);
+        due_timeouts_.clear();
+        for (const auto& [callback, order] : due) {
+            if (!live(callback, order)) {
+                continue;
+            }
+            run(*callback);
+            if (live(callback, order) && !callback->repetitive) {
+                retire(callback);
+            }
+        }
+    }
+
+    // Steps f 4) to h) of a simulation cycle (IEEE 1076-2019 14.7.5.3).
+    void end_of_cycle(runtime::Scheduler& scheduler)
+    {
         cycled_ = true;
+        cycle_started_ = false;
         // The processes of a simulation cycle have run.
         dispatch(vhpiCbEndOfProcesses);
         if (pending_now(scheduler)) {
+            cycle_started_ = true;
             if (has_callbacks(vhpiCbStartOfNextCycle)) {
                 dispatch(vhpiCbStartOfNextCycle);
             }
@@ -1340,14 +1493,47 @@ private:
         dispatch(vhpiCbLastKnownDeltaCycle);
         flush_changes();
         if (pending_now(scheduler)) {
+            cycle_started_ = true;
             dispatch(vhpiCbStartOfNextCycle);
             return;
         }
-        // No callback at the end of a time step may schedule another delta
-        // cycle (IEEE 1076-2019 21.3.6).
+        start_of_postponed();
+        // The time step ends after its postponed processes, which run at
+        // the end of the time slot (14.7.5.3 h 4-6).
+        if (!end_of_time_step_pending_) {
+            end_of_time_step_pending_ = true;
+            scheduler.schedule_end_of_time_slot(
+                std::numeric_limits<runtime::StableOrder>::max(),
+                [this](runtime::Scheduler& slot) { end_of_time_step(&slot); });
+        }
+    }
+
+    // Step h 3) of a simulation cycle: from here to the end of the time
+    // step nothing may cause a delta cycle (IEEE 1076-2019 14.7.5.3).
+    void start_of_postponed()
+    {
+        postponed_ = true;
+        dispatch(vhpiCbStartOfPostponed);
+    }
+
+    // No callback at the end of a time step may schedule another delta
+    // cycle (IEEE 1076-2019 21.3.6.8).
+    void end_of_time_step(const runtime::Scheduler* const scheduler)
+    {
+        if (!end_of_time_step_pending_) {
+            return;
+        }
+        end_of_time_step_pending_ = false;
         time_step_ended_ = true;
         dispatch(vhpiCbEndOfTimeStep);
         time_step_ended_ = false;
+        postponed_ = false;
+        // Nothing is left to simulate (14.7.5.3 h 7); a quiescence
+        // callback may cause further cycles (21.3.7.7).
+        if (scheduler != nullptr && !pending_now(*scheduler)
+            && !scheduler->next_pending_time()) {
+            dispatch(vhpiCbQuiescense);
+        }
         if (has_callbacks(vhpiCbStartOfNextCycle)) {
             ensure_next_time();
         }
@@ -1604,19 +1790,77 @@ private:
         if (root_ != nullptr) {
             return root_;
         }
+        // The first VHDL root; in a design with no VHDL root, the first
+        // root, whose VHDL descendants are then reachable.
+        const semantic::design::InstanceOccurrence* fallback = nullptr;
         for (const auto& instance : design_.instances()) {
-            if (instance.parent) {
+            if (instance.parent || !design_unit_instance(instance)) {
                 continue;
             }
             const auto& specialization = design_.specializations().at(
                 instance.specialization.value());
             if (specialization.language != semantic::Language::vhdl) {
+                if (fallback == nullptr) {
+                    fallback = &instance;
+                }
                 continue;
             }
             root_ = instance_object(instance, nullptr);
             break;
         }
+        if (root_ == nullptr && fallback != nullptr && has_vhdl_instance()) {
+            root_ = instance_object(*fallback, nullptr);
+        }
         return root_;
+    }
+
+    // A root other than the root instance, by name: the other tops of a
+    // design with several.
+    [[nodiscard]] Object* other_root(const std::string_view name)
+    {
+        for (const auto& instance : design_.instances()) {
+            if (instance.parent || !design_unit_instance(instance)) {
+                continue;
+            }
+            const auto path = design_.path(instance.path);
+            if (same_name(path, name)) {
+                auto* const object = instance_object(instance, nullptr);
+                return object != root() ? object : nullptr;
+            }
+        }
+        return nullptr;
+    }
+
+    // An instance of an entity, architecture, configuration or module, not
+    // a package's or another synthetic one.
+    [[nodiscard]] bool design_unit_instance(
+        const semantic::design::InstanceOccurrence& instance) const
+    {
+        const auto& specialization
+            = design_.specializations().at(instance.specialization.value());
+        const auto& units = simulation_.semantics().units();
+        if (specialization.unit.value() >= units.size()) {
+            return false;
+        }
+        switch (units.at(specialization.unit.value()).kind) {
+        case semantic::UnitKind::vhdl_entity:
+        case semantic::UnitKind::vhdl_architecture:
+        case semantic::UnitKind::vhdl_configuration:
+        case semantic::UnitKind::verilog_module:
+        case semantic::UnitKind::systemverilog_interface:
+        case semantic::UnitKind::systemverilog_program:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    [[nodiscard]] bool has_vhdl_instance() const
+    {
+        return std::ranges::any_of(
+            design_.specializations(), [](const auto& specialization) {
+                return specialization.language == semantic::Language::vhdl;
+            });
     }
 
     // The instance of a package (IEEE 1076-2019 19.4.2 vhpiPackInstK), a
@@ -2764,6 +3008,8 @@ private:
                 top = scope;
             } else if (auto* const package = package_instance(first)) {
                 top = package;
+            } else if (auto* const other = other_root(first)) {
+                top = other;
             }
             if (top != nullptr) {
                 scope = top;
@@ -5742,7 +5988,7 @@ private:
         if (object == nullptr || value == nullptr) {
             return 1;
         }
-        if (time_step_ended_) {
+        if (time_step_ended_ || postponed_) {
             error(vhpiError,
                 "cannot create delta cycle during current simulation phase");
             return 1;
@@ -6256,6 +6502,20 @@ private:
     // Inside the end-of-simulation callbacks.
     bool simulation_ending_ { };
     bool time_step_ended_ { };
+    // Between steps h 3) and h 6) of a cycle (IEEE 1076-2019 14.7.5.3).
+    bool postponed_ { };
+    bool end_of_time_step_pending_ { };
+    bool in_pli_error_ { };
+    // Traps SIGINT while vhpiCbSigInterrupt callbacks exist.
+    std::unique_ptr<ForeignSignalTrap> interrupt_trap_;
+    // A cycle has started that has not reached its step f 4).
+    bool cycle_started_ { };
+    // The first cycle of a time step has not updated its signals yet.
+    bool awaiting_update_ { };
+    // Timeouts that expired in the current cycle (14.7.5.3 f 3).
+    std::vector<std::pair<Callback*, std::uint64_t>> due_timeouts_;
+    // The time, in femtoseconds, whose first cycle has run steps b 1-2).
+    std::optional<std::uint64_t> stepped_at_;
     // The initialization phase has completed.
     bool initialized_ { };
     bool cycled_ { };

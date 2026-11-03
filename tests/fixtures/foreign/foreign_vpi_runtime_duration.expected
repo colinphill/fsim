@@ -1,12 +1,18 @@
 #c lifetime limits ok=1
+#c pli error level=3 message=vpi_get_value: the object has no value of that kind
 #c chk_error after bad get_value=1
 #c chk_error cleared=1
+#c pli error level=3 message=vpi_put_value: the object has no value of that kind
 #c 1 read-only write rejected=1
 #c 5 clk rise q=0
+#c 7 raise signal
+#c 7 signal trapped=1
 #c 10 clk fall d=0 after inertial put
 #c 10 d=1
 #c 15 clk rise q=0
+#c 15 nba synch q=0
 #c 15 q=1
+#c 15 end of sim time q=1
 #c 20 clk fall d=1 after inertial put
 #c 20 d=0
 #c 22 scheduled=1 type=53
