@@ -2504,6 +2504,15 @@ NVC_NONSTANDARD = {
     "vhpi8": "expects vhpi_iterator to return an iterator for the "
         "indexed names of a null-range array; IEEE 1076-2019 23.24 returns "
         "NULL for an association with no target objects",
+    "vhpi13": "counts initialization as a time step for "
+        "vhpiCbRepNextTimeStep; IEEE 1076-2019 14.7.5.1 makes a first "
+        "simulation cycle at time zero a delta cycle, and 14.7.5.3 b) 1) "
+        "runs the callback only in a cycle that is not a delta cycle",
+    # Remove when the PostAnalysis capability set is implemented (cocotb
+    # plan, gate A-G5).
+    "vhpi17": "expects the tool to claim vhpiProvidesPostAnalysis; fsim "
+        "does not yet provide the IEEE 1076-2019 17.3 post-analysis "
+        "capability set, and claiming it would contradict 17.3",
     # Owner decision (Batch 81): VHDL integer types stay 32-bit (IEEE
     # 1076-2019 5.2.3.1).
     **{name: "reads 64-bit integer and physical values through VHPI"

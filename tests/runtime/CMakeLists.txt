@@ -971,3 +971,46 @@ add_test(
 set_tests_properties(
   fsim.runtime.region_graph_read_ranges
   PROPERTIES LABELS "fast;runtime;region-graph;range;linux;windows")
+# VPI and VHPI runtime conformance plug-ins, run through the command line on
+# small designs; each trace is checked against its expected file.
+foreach(FSIM_FOREIGN_INTERFACE IN ITEMS vpi vhpi)
+  add_library(
+    fsim_foreign_${FSIM_FOREIGN_INTERFACE}_runtime_plugin SHARED
+    foreign_${FSIM_FOREIGN_INTERFACE}_runtime_plugin.c)
+  fsim_configure_library(fsim_foreign_${FSIM_FOREIGN_INTERFACE}_runtime_plugin)
+  target_link_libraries(
+    fsim_foreign_${FSIM_FOREIGN_INTERFACE}_runtime_plugin PRIVATE fsim_tf)
+  target_include_directories(
+    fsim_foreign_${FSIM_FOREIGN_INTERFACE}_runtime_plugin
+    PRIVATE "${PROJECT_SOURCE_DIR}/include")
+endforeach()
+set(FSIM_FOREIGN_FIXTURES "${PROJECT_SOURCE_DIR}/tests/fixtures/foreign")
+function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
+    FSIM_SOURCE FSIM_EXPECTED FSIM_SIMULATE_ARGS)
+  foreach(FSIM_ENGINE IN ITEMS v4 interpreter)
+    add_test(
+      NAME fsim.foreign.${FSIM_NAME}.${FSIM_ENGINE}
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_PLUGIN=$<TARGET_FILE:fsim_foreign_${FSIM_INTERFACE}_runtime_plugin>"
+        "-DFSIM_INTERFACE=${FSIM_INTERFACE}"
+        "-DFSIM_SOURCE=${FSIM_FOREIGN_FIXTURES}/${FSIM_SOURCE}"
+        "-DFSIM_TOP=top"
+        "-DFSIM_ENGINE=${FSIM_ENGINE}"
+        "-DFSIM_EXPECTED=${FSIM_FOREIGN_FIXTURES}/${FSIM_EXPECTED}"
+        "-DFSIM_SIMULATE_ARGS=${FSIM_SIMULATE_ARGS}"
+        "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/foreign/${FSIM_NAME}-${FSIM_ENGINE}"
+        -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunForeignConformanceCase.cmake")
+    set_tests_properties(
+      fsim.foreign.${FSIM_NAME}.${FSIM_ENGINE}
+      PROPERTIES LABELS "fast;foreign;${FSIM_INTERFACE};conformance;linux")
+  endforeach()
+endfunction()
+fsim_add_foreign_conformance_test(
+  vpi-runtime vpi foreign_vpi_runtime.sv foreign_vpi_runtime.expected "")
+fsim_add_foreign_conformance_test(
+  vpi-runtime-duration vpi foreign_vpi_runtime.sv
+  foreign_vpi_runtime_duration.expected "--duration 30")
+fsim_add_foreign_conformance_test(
+  vhpi-runtime vhpi foreign_vhpi_runtime.vhd foreign_vhpi_runtime.expected "")

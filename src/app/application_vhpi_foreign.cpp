@@ -7,8 +7,10 @@
 #include "fsim/runtime/vhpi_bridge.h"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
+#include "fsim/version.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cctype>
 #include <charconv>
@@ -20,6 +22,7 @@
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -165,6 +168,8 @@ enum class HandleTag : std::uint8_t {
     callback,
     iterator,
     foreign,
+    // A removed callback's slot until it is reused (IEEE 1076-2019 21.2.4).
+    removed,
 };
 
 struct Handle {
@@ -269,6 +274,8 @@ struct Callback final : Handle {
     Object* object { };
     std::optional<PackedLogic4> last;
     std::uint64_t order { };
+    // In `callbacks_`: neither mature nor removed.
+    bool registered { };
 };
 
 struct Iterator final : Handle {
@@ -434,7 +441,7 @@ public:
 
     ~LiveService() override
     {
-        for (const auto& callback : callbacks_) {
+        for (auto* const callback : callbacks_) {
             if (callback->managed) {
                 (void)simulation_.systemverilog_vpi_callbacks()
                     .remove_callback(*callback->managed);
@@ -499,6 +506,9 @@ public:
             }
             libraries_.push_back(std::move(library));
         }
+        // Immediately prior to completion of the registration phase
+        // (IEEE 1076-2019 21.3.7.2).
+        dispatch(vhpiCbStartOfTool);
         return true;
     }
 
@@ -750,6 +760,39 @@ private:
                 return s.foreign_info(handle, data);
             });
         };
+        // A function the tool does not implement raises an error and has no
+        // other effect (IEEE 1076-2019 17.3).
+        host_.schedule_transaction = [](void* user, vhpiHandleT, vhpiValueT*,
+                                         uint32_t, vhpiTimeT*, vhpiDelayModeT,
+                                         vhpiTimeT*) {
+            return self(user).not_implemented("vhpi_schedule_transaction", 1);
+        };
+        host_.format_value = [](void* user, const vhpiValueT*, vhpiValueT*) {
+            return self(user).not_implemented("vhpi_format_value", 1);
+        };
+        host_.create = [](void* user, vhpiClassKindT, vhpiHandleT,
+                           vhpiHandleT) {
+            return self(user).not_implemented<vhpiHandleT>(
+                "vhpi_create", nullptr);
+        };
+        host_.get_data = [](void* user, int32_t, void*, size_t) {
+            return self(user).not_implemented<size_t>("vhpi_get_data", 0U);
+        };
+        host_.put_data = [](void* user, int32_t, void*, size_t) {
+            return self(user).not_implemented<size_t>("vhpi_put_data", 0U);
+        };
+        host_.protected_call = [](void* user, vhpiHandleT, vhpiUserFctT,
+                                   void*) {
+            return self(user).not_implemented("vhpi_protected_call", 1);
+        };
+    }
+
+    template <typename Result>
+    [[nodiscard]] Result not_implemented(
+        const char* const function, const Result fallback)
+    {
+        error(vhpiError, std::string { function } + " is not implemented");
+        return fallback;
     }
 
     // --- errors and output ---------------------------------------------------------
@@ -853,8 +896,18 @@ private:
             error(vhpiError, "callback data has no routine");
             return nullptr;
         }
-        auto stored = std::make_unique<Callback>();
-        auto& callback = *stored;
+        auto& callback = allocate_callback();
+        // Frees the slot unless registration succeeds.
+        struct Pending {
+            LiveService& service;
+            Callback* callback;
+            ~Pending()
+            {
+                if (callback != nullptr) {
+                    service.free_callback(*callback);
+                }
+            }
+        } pending { *this, &callback };
         callback.data = *data;
         callback.state = (flags & vhpiDisableCb) != 0 ? vhpiDisable
                                                        : vhpiEnable;
@@ -900,6 +953,14 @@ private:
             break;
         case vhpiCbAfterDelay:
         case vhpiCbRepAfterDelay: {
+            // An end-of-time-step callback cannot affect the time of the
+            // next cycle (IEEE 1076-2019 21.3.6.8).
+            if (time_step_ended_) {
+                error(vhpiError,
+                    "cannot register an after-delay callback at the end of a "
+                    "time step");
+                return nullptr;
+            }
             if (data->time == nullptr) {
                 error(vhpiError, "missing time for an after-delay callback");
                 return nullptr;
@@ -931,7 +992,9 @@ private:
                 "unsupported callback reason " + std::to_string(data->reason));
             return nullptr;
         }
-        callbacks_.push_back(std::move(stored));
+        pending.callback = nullptr;
+        callback.registered = true;
+        callbacks_.push_back(&callback);
         return (flags & vhpiReturnCb) != 0 ? to_handle(&callback) : nullptr;
     }
 
@@ -952,9 +1015,9 @@ private:
         registration.delay->low = static_cast<std::uint32_t>(quanta);
         registration.at_slot_start = true;
         registration.callback
-            = [this, target = &callback](
+            = [this, target = &callback, order = callback.order](
                   const runtime::SystemVerilogVpiCallbackEvent&) {
-                  timed(target);
+                  timed(target, order);
               };
         const auto registered
             = simulation_.systemverilog_vpi_callbacks().register_callback(
@@ -966,9 +1029,9 @@ private:
         return true;
     }
 
-    void timed(Callback* const callback)
+    void timed(Callback* const callback, const std::uint64_t order)
     {
-        if (!live(callback)) {
+        if (!live(callback, order)) {
             return;
         }
         callback->managed.reset();
@@ -976,19 +1039,46 @@ private:
             (void)schedule_delay(*callback);
         }
         run(*callback);
-        if (!callback->repetitive && live(callback)) {
+        if (live(callback, order) && !callback->repetitive) {
             retire(callback);
         }
     }
 
-    [[nodiscard]] bool live(const Callback* const callback) const
+    // Slots are never returned to the allocator, so a callback pointer
+    // stays readable after removal; `order` tells a reused slot apart.
+    [[nodiscard]] static bool live(
+        const Callback* const callback, const std::uint64_t order) noexcept
     {
-        return std::ranges::any_of(callbacks_,
-            [&](const auto& stored) { return stored.get() == callback; });
+        return callback->tag == HandleTag::callback && callback->registered
+            && callback->order == order;
     }
 
-    // A matured or removed callback keeps its handle valid but never runs
-    // again.
+    [[nodiscard]] Callback& allocate_callback()
+    {
+        if (free_callbacks_.empty()) {
+            return callback_pool_.emplace_back();
+        }
+        auto* const slot = free_callbacks_.back();
+        free_callbacks_.pop_back();
+        std::destroy_at(slot);
+        return *std::construct_at(slot);
+    }
+
+    void free_callback(Callback& callback)
+    {
+        if (callback.registered) {
+            retire(&callback);
+        } else if (callback.managed) {
+            (void)simulation_.systemverilog_vpi_callbacks().remove_callback(
+                *callback.managed);
+            callback.managed.reset();
+        }
+        callback.tag = HandleTag::removed;
+        free_callbacks_.push_back(&callback);
+    }
+
+    // A matured callback keeps its handle valid but never runs again
+    // (IEEE 1076-2019 21.1).
     void retire(Callback* const callback)
     {
         if (callback->managed) {
@@ -996,22 +1086,22 @@ private:
                 *callback->managed);
             callback->managed.reset();
         }
-        const auto found = std::ranges::find_if(callbacks_,
-            [&](const auto& stored) { return stored.get() == callback; });
-        if (found != callbacks_.end()) {
+        if (callback->registered) {
+            callback->registered = false;
             callback->state = vhpiMature;
-            retired_.push_back(std::move(*found));
-            callbacks_.erase(found);
+            std::erase(callbacks_, callback);
         }
     }
 
+    // A removed callback leaves the information model and its handles
+    // become invalid (IEEE 1076-2019 21.2.4).
     [[nodiscard]] int remove_cb(const vhpiHandleT handle)
     {
         auto* const callback = callback_of(handle);
         if (callback == nullptr) {
             return 1;
         }
-        retire(callback);
+        free_callback(*callback);
         return 0;
     }
 
@@ -1028,6 +1118,13 @@ private:
                 state == vhpiEnable
                     ? "callback must be disabled in order to enable it"
                     : "callback must be enabled in order to disable it");
+            return 1;
+        }
+        if (state == vhpiEnable && time_step_ended_
+            && dispatch_reason(callback->data.reason) == vhpiCbAfterDelay) {
+            error(vhpiError,
+                "cannot enable an after-delay callback at the end of a time "
+                "step");
             return 1;
         }
         callback->state = state;
@@ -1077,19 +1174,19 @@ private:
     // disabled.
     void dispatch(const int32_t reason)
     {
-        std::vector<Callback*> selected;
-        for (const auto& callback : callbacks_) {
+        std::vector<std::pair<Callback*, std::uint64_t>> selected;
+        for (auto* const callback : callbacks_) {
             if (dispatch_reason(callback->data.reason) == reason
                 && callback->data.reason != vhpiCbValueChange) {
-                selected.push_back(callback.get());
+                selected.emplace_back(callback, callback->order);
             }
         }
-        for (auto* const callback : selected) {
-            if (!live(callback)) {
+        for (const auto& [callback, order] : selected) {
+            if (!live(callback, order)) {
                 continue;
             }
             run(*callback);
-            if (!callback->repetitive && live(callback)) {
+            if (live(callback, order) && !callback->repetitive) {
                 retire(callback);
             }
         }
@@ -1097,20 +1194,43 @@ private:
 
     [[nodiscard]] bool has_callbacks(const int32_t reason) const
     {
-        return std::ranges::any_of(callbacks_, [&](const auto& callback) {
+        return std::ranges::any_of(callbacks_, [&](const auto* callback) {
             return dispatch_reason(callback->data.reason) == reason;
         });
     }
 
-    // nvc fires end of initialization before the start of simulation
-    // (IEEE 1076-2019 21.3.4.2, 21.3.6); signals hold their initial values.
+    // The initialization phase begins before any process runs
+    // (IEEE 1076-2019 14.7.5.2 a, b); it completes at the first safe point
+    // after the processes have run.
     void start_of_simulation()
     {
-        phase_ = vhpiSimulationPhase;
+        phase_ = vhpiInitializationPhase;
+        dispatch(vhpiCbStartOfInitialization);
+        dispatch(vhpiCbStartOfNextCycle);
+        // The safe point after the processes' first run completes the
+        // initialization, also in a design with no process.
+        simulation_.schedule_active_task([] { });
+    }
+
+    // Steps h) and m) of the initialization phase, then the start of the
+    // simulation phase (IEEE 1076-2019 14.7.5.2, 14.7.5.3). Signals still
+    // hold their initial values: the first update is in the first cycle.
+    void finish_initialization(const runtime::Scheduler* const scheduler)
+    {
+        initialized_ = true;
+        dispatch(vhpiCbEndOfProcesses);
         dispatch(vhpiCbEndOfInitialization);
+        phase_ = vhpiSimulationPhase;
         dispatch(vhpiCbStartOfSimulation);
-        // Time zero is the first time step (IEEE 1076-2019 14.7.5.2).
-        dispatch(vhpiCbNextTimeStep);
+        // A first simulation cycle at time zero is a delta cycle (Tn = Tc,
+        // 14.7.5.1): it starts the next cycle but not a new time step.
+        if (scheduler != nullptr && pending_now(*scheduler)) {
+            dispatch(vhpiCbStartOfNextCycle);
+        }
+        if (has_callbacks(vhpiCbNextTimeStep)
+            || has_callbacks(vhpiCbStartOfNextCycle)) {
+            ensure_next_time();
+        }
     }
 
     void end_of_simulation()
@@ -1119,6 +1239,9 @@ private:
             return;
         }
         simulation_ended_ = true;
+        if (!initialized_) {
+            finish_initialization(nullptr);
+        }
         flush_changes();
         // The initialization is followed by at least one simulation cycle
         // (IEEE 1076-2019 14.7.5.2), even when no process is active in it.
@@ -1130,7 +1253,9 @@ private:
             dispatch(vhpiCbEndOfTimeStep);
             time_step_ended_ = false;
         }
+        simulation_ending_ = true;
         dispatch(vhpiCbEndOfSimulation);
+        simulation_ending_ = false;
     }
 
     void ensure_next_time()
@@ -1166,6 +1291,9 @@ private:
 
     [[nodiscard]] static bool pending_now(const runtime::Scheduler& scheduler)
     {
+        if (scheduler.has_pending_activity_now()) {
+            return true;
+        }
         const auto next = scheduler.next_pending_time();
         return next && *next == scheduler.now();
     }
@@ -1178,6 +1306,10 @@ private:
         }
         flush_changes();
         if (phase != runtime::SchedulerPhase::active || stopping_) {
+            return;
+        }
+        if (!initialized_) {
+            finish_initialization(&scheduler);
             return;
         }
         cycled_ = true;
@@ -1232,17 +1364,17 @@ private:
     {
         while (!changed_.empty()) {
             const auto changed = std::exchange(changed_, { });
-            std::vector<Callback*> selected;
-            for (const auto& callback : callbacks_) {
+            std::vector<std::pair<Callback*, std::uint64_t>> selected;
+            for (auto* const callback : callbacks_) {
                 if (callback->data.reason == vhpiCbValueChange
                     && callback->object != nullptr
                     && callback->object->signal
                     && changed.contains(*callback->object->signal)) {
-                    selected.push_back(callback.get());
+                    selected.emplace_back(callback, callback->order);
                 }
             }
-            for (auto* const callback : selected) {
-                if (!live(callback)) {
+            for (const auto& [callback, order] : selected) {
+                if (!live(callback, order)) {
                     continue;
                 }
                 auto bits = element_bits(*callback->object);
@@ -1273,12 +1405,23 @@ private:
         }
     }
 
+    // Tn, the time of the next simulation cycle: the current time for a
+    // pending delta cycle, TIME'HIGH when no activity remains
+    // (IEEE 1076-2019 23.14, 14.7.5.1).
     [[nodiscard]] int get_next_time(vhpiTimeT* const time)
     {
-        if (time != nullptr) {
-            *time = to_vhpi_time(now_femtoseconds());
+        if (phase_ != vhpiSimulationPhase) {
+            error(vhpiError,
+                "vhpi_get_next_time is available only during simulation");
+            return 1;
         }
-        return simulation_.has_pending() ? 0 : vhpiNoActivity;
+        const auto next = simulation_.next_pending_time();
+        if (time != nullptr) {
+            *time = next ? to_vhpi_time(*next * femtoseconds_per_tick_)
+                         : vhpiTimeT { std::numeric_limits<int32_t>::max(),
+                               std::numeric_limits<uint32_t>::max() };
+        }
+        return next ? 0 : vhpiNoActivity;
     }
 
     [[nodiscard]] int control(const vhpiSimControlT command)
@@ -3455,15 +3598,18 @@ private:
             error(vhpiError, "unsupported iterator property");
             return vhpiUndefined;
         }
+        if (base->tag != HandleTag::object) {
+            error(vhpiError, "invalid handle");
+            return vhpiUndefined;
+        }
         auto& object = static_cast<Object&>(*base);
         auto* const type = is_type(object) ? &object : object.type;
         switch (property) {
         case vhpiKindP:
             return object.kind;
         case vhpiCapabilitiesP:
-            return vhpiProvidesHierarchy | vhpiProvidesStaticAccess
-                | vhpiProvidesConnectivity | vhpiProvidesPostAnalysis
-                | vhpiProvidesForeignModel;
+            // Only the capability sets that are fully provided (17.3).
+            return vhpiProvidesHierarchy | vhpiProvidesForeignModel;
         case vhpiArgcP:
             return static_cast<vhpiIntT>(arguments_.size());
         case vhpiIsUpP:
@@ -3674,7 +3820,7 @@ private:
             scratch = kind_name(object.kind);
             break;
         case vhpiToolVersionP:
-            scratch = "3";
+            scratch = std::string { fsim::version };
             break;
         case vhpiStrValP:
             scratch = object.case_name;
@@ -3936,6 +4082,51 @@ private:
         }
     }
 
+    // A scalar in a string format: its position number in that radix
+    // (IEEE 1076-2019 22.2.8). A STD_ULOGIC value in vhpiBinStrVal reads as
+    // its character, as it does for logic arrays; the format is optional
+    // (22.4), and VHPI programs compare it against "0" and "1".
+    [[nodiscard]] std::optional<std::string> scalar_text(const TypeData& data,
+        const PackedLogic4& bits, const vhpiFormatT format) const
+    {
+        unsigned radix = 0U;
+        switch (format) {
+        case vhpiBinStrVal:
+            radix = 2U;
+            break;
+        case vhpiOctStrVal:
+            radix = 8U;
+            break;
+        case vhpiDecStrVal:
+            radix = 10U;
+            break;
+        case vhpiHexStrVal:
+            radix = 16U;
+            break;
+        default:
+            return std::nullopt;
+        }
+        if (data.storage == Storage::real || data.storage == Storage::other) {
+            return std::nullopt;
+        }
+        const auto position = scalar_at(data, bits, 0U);
+        if (format == vhpiBinStrVal && data.storage == Storage::logic9) {
+            return std::string(
+                1U, runtime::to_char(static_cast<Logic9>(position)));
+        }
+        std::array<char, 72> digits { };
+        const auto result = std::to_chars(digits.data(),
+            digits.data() + digits.size(), position, static_cast<int>(radix));
+        auto text = std::string { digits.data(), result.ptr };
+        if (radix == 16U) {
+            std::ranges::transform(text, text.begin(), [](const char c) {
+                return static_cast<char>(
+                    std::toupper(static_cast<unsigned char>(c)));
+            });
+        }
+        return text;
+    }
+
     [[nodiscard]] int read_value(const Object& object, vhpiValueT& value)
     {
         if (object.type == nullptr || object.type->type_data == nullptr) {
@@ -3988,6 +4179,17 @@ private:
             }
         };
         if (data.storage != Storage::array) {
+            if (const auto text = scalar_text(data, *bits, value.format)) {
+                // The size required, terminator included, when the buffer is
+                // too small (IEEE 1076-2019 23.19).
+                const auto size = text->size() + 1U;
+                value.numElems = 1;
+                if (value.bufSize < size || value.value.str == nullptr) {
+                    return static_cast<int>(size);
+                }
+                std::memcpy(value.value.str, text->c_str(), size);
+                return 0;
+            }
             if (!store_scalar(data, 0U, value.format)) {
                 error(vhpiError, "unsupported value format "
                         + std::to_string(value.format));
@@ -4175,6 +4377,12 @@ private:
                 "cannot create delta cycle during current simulation phase");
             return 1;
         }
+        // No update at the end of simulation (IEEE 1076-2019 21.3.7.6).
+        if (simulation_ending_) {
+            error(vhpiError,
+                "cannot update a value in an end-of-simulation callback");
+            return 1;
+        }
         const bool call = object->call_slot || object->call_result;
         if ((!object->signal && !call) || object->type == nullptr
             || object->type->type_data == nullptr) {
@@ -4201,8 +4409,17 @@ private:
             simulation_.release_signal(*object->signal);
             return 0;
         }
+        // Writes to elements of a signal in one cycle merge into the value
+        // the next update phase applies.
+        const bool propagate
+            = mode == vhpiDepositPropagate || mode == vhpiForcePropagate;
+        const auto pending = !call && propagate
+            ? pending_updates_.find(*object->signal)
+            : pending_updates_.end();
         auto whole = call
             ? call_value(*object).value_or(PackedLogic4 {})
+            : pending != pending_updates_.end()
+            ? pending->second.value
             : simulation_.read_signal_snapshot(*object->signal);
         const auto& data = *object->type->type_data;
         const auto width = width_of(*object->type);
@@ -4324,16 +4541,65 @@ private:
             }
             return 0;
         }
+        // The propagating modes take effect in the next signal update phase
+        // (IEEE 1076-2019 22.5.3).
         switch (mode) {
         case vhpiForce:
-        case vhpiForcePropagate:
             simulation_.force_signal(*object->signal, std::move(whole));
+            absorb_change(*object->signal);
+            break;
+        case vhpiForcePropagate:
+        case vhpiDepositPropagate:
+            schedule_update(*object->signal, std::move(whole),
+                mode == vhpiForcePropagate);
             break;
         default:
             simulation_.deposit_signal(*object->signal, std::move(whole));
+            absorb_change(*object->signal);
             break;
         }
         return 0;
+    }
+
+    // A deposit or force without propagation is not a value-change trigger
+    // (IEEE 1076-2019 21.3.2.2 NOTE 1): the watchers take the new value as
+    // already seen.
+    void absorb_change(const SignalId signal)
+    {
+        for (auto* const callback : callbacks_) {
+            if (callback->data.reason == vhpiCbValueChange
+                && callback->object != nullptr && callback->object->signal
+                && *callback->object->signal == signal) {
+                callback->last = element_bits(*callback->object);
+            }
+        }
+    }
+
+    // A force takes precedence over a deposit scheduled for the same update
+    // (IEEE 1076-2019 22.5.3 NOTE).
+    void schedule_update(
+        const SignalId signal, PackedLogic4 value, const bool force)
+    {
+        auto [found, created] = pending_updates_.try_emplace(signal);
+        found->second.value = std::move(value);
+        found->second.force = found->second.force || force;
+        if (!created) {
+            return;
+        }
+        simulation_.schedule_update_task([this, signal] {
+            const auto update = pending_updates_.find(signal);
+            if (update == pending_updates_.end()) {
+                return;
+            }
+            auto value = std::move(update->second.value);
+            const auto force = update->second.force;
+            pending_updates_.erase(update);
+            if (force) {
+                simulation_.force_signal(signal, std::move(value));
+            } else {
+                simulation_.deposit_signal(signal, std::move(value));
+            }
+        });
     }
 
     // --- foreign subprograms -------------------------------------------------------
@@ -4576,8 +4842,16 @@ private:
     std::vector<std::string> arguments_;
     std::vector<std::unique_ptr<platform::DynamicLibrary>> libraries_;
     std::vector<std::unique_ptr<Object>> objects_;
-    std::vector<std::unique_ptr<Callback>> callbacks_;
-    std::vector<std::unique_ptr<Callback>> retired_;
+    // Callback slots: addresses stay stable and are reused after removal.
+    std::deque<Callback> callback_pool_;
+    std::vector<Callback*> free_callbacks_;
+    // Registered callbacks in registration order.
+    std::vector<Callback*> callbacks_;
+    struct PendingUpdate {
+        PackedLogic4 value;
+        bool force { };
+    };
+    std::unordered_map<SignalId, PendingUpdate> pending_updates_;
     std::vector<std::unique_ptr<Iterator>> iterators_;
     std::deque<std::string> strings_;
     std::map<std::string, Object*, std::less<>> instances_;
@@ -4608,7 +4882,11 @@ private:
     bool failed_ { };
     bool finished_ { };
     bool simulation_ended_ { };
+    // Inside the end-of-simulation callbacks.
+    bool simulation_ending_ { };
     bool time_step_ended_ { };
+    // The initialization phase has completed.
+    bool initialized_ { };
     bool cycled_ { };
     // The simulation cycles of the current time step that updated a signal
     // (IEEE 1076-2019 14.7.5.3): the cycle count vhpi_get_time reports.

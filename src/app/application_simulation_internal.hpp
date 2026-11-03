@@ -733,6 +733,9 @@ struct Simulation::Impl {
     std::recursive_mutex vpi_bridge_mutex;
 
     bool vpi_started { };
+    /// Orders the signal updates foreign interfaces schedule for the next
+    /// update phase (VHPI vhpiDepositPropagate, vhpiForcePropagate).
+    std::uint64_t foreign_update_serial { };
 
     bool vpi_ended { };
 

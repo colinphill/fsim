@@ -189,6 +189,7 @@ docs/design-specific-jit-scheduling.md
 docs/diagnostics.md
 docs/engine-v4-semantics.md
 docs/feature-matrix.md
+docs/foreign-interface-conformance.md
 docs/hierarchy-path-audit-disposition.md
 docs/hierarchy-path-migration.md
 docs/implementation-plan.md
@@ -1626,6 +1627,7 @@ tests/cmake/CheckRequiredSetHelpersSelfTest.cmake
 tests/cmake/CheckTclPatchGovernance.cmake
 tests/cmake/CheckTranslationUnitStructureSelfTest.cmake
 tests/cmake/CheckV3InstalledArchiveRequiredSet.cmake
+tests/cmake/RunForeignConformanceCase.cmake
 tests/cmake/release_assertion_witness.cpp
 tests/compiler/cache_test.cpp
 tests/compiler/cache_wire_fixture_test.cpp
@@ -2113,6 +2115,14 @@ tests/fixtures/compliance/vhdl_unconstrained_constant_custom_index_range_directi
 tests/fixtures/compliance/vhdl_unconstrained_constants.vhd
 tests/fixtures/compliance/vhdl_unconstrained_function_result_procedure_batch58.vhd
 tests/fixtures/compliance/vhdl_user_attribute_subtype_context_20261013.vhd
+tests/fixtures/foreign/foreign_vhpi_runtime.expected
+tests/fixtures/foreign/foreign_vhpi_runtime.expected.license
+tests/fixtures/foreign/foreign_vhpi_runtime.vhd
+tests/fixtures/foreign/foreign_vpi_runtime.expected
+tests/fixtures/foreign/foreign_vpi_runtime.expected.license
+tests/fixtures/foreign/foreign_vpi_runtime.sv
+tests/fixtures/foreign/foreign_vpi_runtime_duration.expected
+tests/fixtures/foreign/foreign_vpi_runtime_duration.expected.license
 tests/fixtures/fst/complete_trace.tsv
 tests/fixtures/sdf/corpus/sdf21/mixed_resolution.sdf
 tests/fixtures/sdf/corpus/sdf21/profile.sdf
@@ -2387,6 +2397,8 @@ tests/runtime/coverage_line_state_test.cpp
 tests/runtime/dpi_bad_abi_plugin.cpp
 tests/runtime/dpi_test_plugin.cpp
 tests/runtime/dpi_test_plugin_c.c
+tests/runtime/foreign_vhpi_runtime_plugin.c
+tests/runtime/foreign_vpi_runtime_plugin.c
 tests/runtime/fst_change_encoder_tests.cpp
 tests/runtime/fst_compression_tests.cpp
 tests/runtime/fst_reader_tests.cpp

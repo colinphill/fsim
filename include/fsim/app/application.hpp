@@ -1017,6 +1017,14 @@ public:
     void deposit_scalar_signal(
         runtime::simir::SignalId signal,
         runtime::SystemVerilogScalarValue value);
+    /// Run `task` in the next signal-update phase of the current time, as
+    /// VHPI vhpiDepositPropagate and vhpiForcePropagate require for their
+    /// updates (IEEE 1076-2019 22.5.3).
+    void schedule_update_task(std::function<void()> task);
+    /// Run `task` after the other work of the current time's generic
+    /// active phase, so the scheduler reaches the safe point that follows
+    /// it even when no process runs at this time.
+    void schedule_active_task(std::function<void()> task);
     void force_signal(
         runtime::simir::SignalId signal,
         runtime::PackedLogic4 value);
@@ -1035,7 +1043,16 @@ public:
     [[nodiscard]] runtime::SimulationTick now() const noexcept;
     [[nodiscard]] std::uint64_t delta() const noexcept;
     [[nodiscard]] bool has_pending() const noexcept;
+    /// The earliest tick with pending activity, the current tick for a
+    /// pending delta cycle; nothing when no activity remains.
+    [[nodiscard]] std::optional<runtime::SimulationTick> next_pending_time()
+        const noexcept;
     [[nodiscard]] bool finished() const noexcept;
+    /// End the simulation for the foreign interfaces when a batch run stops
+    /// for good without finishing (a time limit, a batch `$stop`, a runtime
+    /// error): VPI cbEndOfSimulation callbacks run once, here, if they have
+    /// not yet run (IEEE 1800-2023 38.36.3). Callback failures are ignored.
+    void end_foreign_simulation() noexcept;
     /// True once a final procedure has executed `$stop`.
     [[nodiscard]] bool paused_in_final() const noexcept;
     [[nodiscard]] bool poisoned() const noexcept;

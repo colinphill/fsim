@@ -1,0 +1,23 @@
+#c start of tool phase=registration
+#c start of initialization phase=initialization
+#c end of processes phase=initialization
+#c end of initialization phase=initialization
+#c start of simulation phase=simulation
+#c capabilities=1
+#c binstr size=2
+#c lifetime limits ok=1
+#c not implemented error=1
+#c 5000000 clk=1 next=5000000
+#c 10000000 clk=0 next=10000000
+#c 10000000 d=0 after deposit-propagate
+#c 10000000 d changed to 1
+#c 12000000 d=0 after deposit n=5 bin=101 dec=5 hex=5
+#c 15000000 clk=1 next=15000000
+#c 20000000 clk=0 next=20000000
+#c 20000000 d=0 after deposit-propagate
+#c 20000000 d changed to 1
+#c 25000000 clk=1 next=25000000
+#c 30000000 clk=0 next=30000000
+#c 30000000 d=1 after deposit-propagate
+#c end of simulation phase=simulation
+#c end of tool phase=termination

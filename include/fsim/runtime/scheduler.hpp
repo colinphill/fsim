@@ -686,6 +686,9 @@ public:
   [[nodiscard]] bool generic_active_phase_open() const noexcept;
   [[nodiscard]] std::optional<SimulationTick>
   next_pending_time() const noexcept;
+  /// Work other than Postponed is still queued at the current time: a
+  /// later phase, another SystemVerilog round, or the next delta cycle.
+  [[nodiscard]] bool has_pending_activity_now() const noexcept;
   [[nodiscard]] bool running() const noexcept;
   /// True only while invoking the hook between two completed scheduler phases.
   [[nodiscard]] bool at_safe_point() const noexcept;

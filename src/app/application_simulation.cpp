@@ -363,9 +363,27 @@ bool Simulation::has_pending() const noexcept
     return impl_->interpreter->scheduler().has_pending();
 }
 
+std::optional<runtime::SimulationTick> Simulation::next_pending_time()
+    const noexcept
+{
+    const auto& scheduler = impl_->interpreter->scheduler();
+    if (scheduler.has_pending_activity_now()) {
+        return scheduler.now();
+    }
+    return scheduler.next_pending_time();
+}
+
 bool Simulation::finished() const noexcept
 {
     return impl_->lifecycle == Impl::Lifecycle::finished;
+}
+
+void Simulation::end_foreign_simulation() noexcept
+{
+    try {
+        impl_->end_vpi();
+    } catch (...) {
+    }
 }
 
 bool Simulation::paused_in_final() const noexcept

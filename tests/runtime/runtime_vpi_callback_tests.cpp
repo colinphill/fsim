@@ -657,11 +657,13 @@ void test_systemverilog_vpi_callbacks()
         "VPI value observers run after publication and registry unlock while duplicate values remain silent");
 
     (void)scheduler.run();
+    // Value changes run in the SystemVerilog Active region, ahead of the
+    // update-region synchronization (IEEE 1800-2023 38.36.1).
     const std::vector<SystemVerilogVpiCallbackKind> expected_order {
+        SystemVerilogVpiCallbackKind::ValueChange,
+        SystemVerilogVpiCallbackKind::ValueChange,
+        SystemVerilogVpiCallbackKind::ValueChange,
         SystemVerilogVpiCallbackKind::Synchronization,
-        SystemVerilogVpiCallbackKind::ValueChange,
-        SystemVerilogVpiCallbackKind::ValueChange,
-        SystemVerilogVpiCallbackKind::ValueChange,
         SystemVerilogVpiCallbackKind::ReadWrite,
         SystemVerilogVpiCallbackKind::ReadOnly,
         SystemVerilogVpiCallbackKind::AfterDelay,
@@ -676,17 +678,17 @@ void test_systemverilog_vpi_callbacks()
         "VPI callback dispatch maps synchronization, reactive, read-only, and future work to deterministic scheduler regions");
 
     require_vpi_callback(
-        events[1].registration == value_a_first.value
-            && events[2].registration == value_a_second.value
-            && events[3].registration == value_b.value
-            && events[1].object == signal_a.value
-            && events[3].object == signal_b.value
-            && events[1].value == one && events[3].value == one
-            && events[1].user_data == 11
-            && events[2].registration_order
+        events[0].registration == value_a_first.value
+            && events[1].registration == value_a_second.value
+            && events[2].registration == value_b.value
+            && events[0].object == signal_a.value
+            && events[2].object == signal_b.value
+            && events[0].value == one && events[2].value == one
+            && events[0].user_data == 11
+            && events[1].registration_order
                 == value_a_second.value.id
-            && events[1].simulation_identity == 901
-            && events[3].simulation_identity == 901,
+            && events[0].simulation_identity == 901
+            && events[2].simulation_identity == 901,
         "VPI value-change callbacks retain exact object, copied value, user data, registration order, and multi-root identity");
 
     const auto* delayed_event = find_event(

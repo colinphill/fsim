@@ -451,6 +451,25 @@ bool Scheduler::has_pending() const noexcept
         [](const auto& entry) { return !entry.second.empty(); });
 }
 
+bool Scheduler::has_pending_activity_now() const noexcept
+{
+    if (!impl_->current) {
+        return false;
+    }
+    const auto& slot = *impl_->current;
+    const auto postponed = static_cast<std::size_t>(SchedulerPhase::postponed);
+    const auto active = [&](const Bucket& bucket) {
+        for (std::size_t phase = 0U; phase < phase_count; ++phase) {
+            if (phase != postponed && !bucket.queues[phase].empty()) {
+                return true;
+            }
+        }
+        return false;
+    };
+    return !slot.systemverilog_running.empty() || active(slot.current)
+        || active(slot.next_delta) || active(slot.systemverilog);
+}
+
 std::optional<SimulationTick>
 Scheduler::next_pending_time() const noexcept
 {

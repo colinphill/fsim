@@ -136,6 +136,24 @@ void Simulation::deposit_scalar_signal(
     impl_->refresh_observation_hooks();
 }
 
+void Simulation::schedule_update_task(std::function<void()> task)
+{
+    constexpr runtime::StableOrder foreign_update_order
+        = runtime::StableOrder { 4 } << 60U;
+    impl_->interpreter->scheduler().schedule(runtime::SchedulerPhase::update,
+        foreign_update_order + impl_->foreign_update_serial++,
+        [task = std::move(task)](runtime::Scheduler&) { task(); });
+}
+
+void Simulation::schedule_active_task(std::function<void()> task)
+{
+    constexpr runtime::StableOrder foreign_active_order
+        = runtime::StableOrder { 4 } << 60U;
+    impl_->interpreter->scheduler().schedule(runtime::SchedulerPhase::active,
+        foreign_active_order + impl_->foreign_update_serial++,
+        [task = std::move(task)](runtime::Scheduler&) { task(); });
+}
+
 void Simulation::force_signal(
     const SignalId signal,
     PackedLogic4 value)

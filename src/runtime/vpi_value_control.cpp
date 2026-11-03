@@ -22,7 +22,8 @@ bool valid_write_kind(const SystemVerilogVpiWriteKind kind) {
 
 bool valid_delay_policy(const SystemVerilogVpiDelayPolicy policy) {
   return static_cast<unsigned>(policy)
-      <= static_cast<unsigned>(SystemVerilogVpiDelayPolicy::Transport);
+      <= static_cast<unsigned>(
+          SystemVerilogVpiDelayPolicy::ModifiedTransport);
 }
 
 SystemVerilogVpiValueError apply_write(
@@ -75,6 +76,10 @@ struct SystemVerilogVpiValueControl::Impl {
     SystemVerilogVpiValueError value_error{
         SystemVerilogVpiValueError::None};
     ScheduledTaskHandle scheduler_handle;
+    SimulationTick due{};
+    // False when nobody holds a handle: the record goes once the write
+    // is no longer pending, so applied writes do not accumulate.
+    bool retained{true};
   };
 
   std::uint64_t owner{};
@@ -130,7 +135,8 @@ SystemVerilogVpiValueControl::schedule(
     const SystemVerilogVpiWriteKind kind,
     std::optional<SystemVerilogVpiStoredValue> value,
     const SimulationTick delay,
-    const SystemVerilogVpiDelayPolicy policy) {
+    const SystemVerilogVpiDelayPolicy policy,
+    const bool retain_handle) {
   if (!impl_) {
     return schedule_failure(
         SystemVerilogVpiWriteControlError::InvalidControl);
@@ -164,11 +170,14 @@ SystemVerilogVpiValueControl::schedule(
         SystemVerilogVpiWriteControlError::ResourceLimit);
   }
 
+  const auto due = impl_->scheduler->now() + delay;
   std::vector<std::uint64_t> superseded;
-  if (policy == SystemVerilogVpiDelayPolicy::Inertial) {
+  if (policy != SystemVerilogVpiDelayPolicy::Transport) {
     for (const auto& [id, record] : impl_->records) {
       if (record.status == SystemVerilogVpiScheduledWriteStatus::Pending
-          && record.object == object) {
+          && record.object == object
+          && (policy == SystemVerilogVpiDelayPolicy::Inertial
+              || record.due > due)) {
         superseded.push_back(id);
       }
     }
@@ -184,6 +193,8 @@ SystemVerilogVpiValueControl::schedule(
           SystemVerilogVpiScheduledWriteStatus::Pending,
           SystemVerilogVpiValueError::None,
           {},
+          due,
+          retain_handle,
       });
   if (!inserted) {
     return schedule_failure(
@@ -235,6 +246,10 @@ SystemVerilogVpiValueControl::schedule(
                       != SystemVerilogVpiScheduledWriteStatus::Pending) {
                 return;
               }
+              if (!found->second.retained) {
+                state->records.erase(found);
+                return;
+              }
               found->second.value_error = write_error;
               found->second.status =
                   write_error == SystemVerilogVpiValueError::None
@@ -255,8 +270,12 @@ SystemVerilogVpiValueControl::schedule(
       continue;
     }
     impl_->scheduler->cancel(old->second.scheduler_handle);
-    old->second.status =
-        SystemVerilogVpiScheduledWriteStatus::Cancelled;
+    if (old->second.retained) {
+      old->second.status =
+          SystemVerilogVpiScheduledWriteStatus::Cancelled;
+    } else {
+      impl_->records.erase(old);
+    }
   }
 
   SystemVerilogVpiScheduleWriteResult result;
@@ -339,6 +358,35 @@ SystemVerilogVpiWriteControlError SystemVerilogVpiValueControl::release(
   }
   impl_->records.erase(found);
   return SystemVerilogVpiWriteControlError::None;
+}
+
+SystemVerilogVpiWriteControlError SystemVerilogVpiValueControl::forget(
+    const SystemVerilogVpiScheduledWriteHandle handle) {
+  if (!impl_) {
+    return SystemVerilogVpiWriteControlError::InvalidControl;
+  }
+  if (!handle) {
+    return SystemVerilogVpiWriteControlError::InvalidHandle;
+  }
+  if (handle.owner != impl_->owner) {
+    return SystemVerilogVpiWriteControlError::CrossControl;
+  }
+  std::scoped_lock lock{impl_->mutex};
+  const auto found = impl_->records.find(handle.id);
+  if (found == impl_->records.end()) {
+    return SystemVerilogVpiWriteControlError::NotFound;
+  }
+  if (found->second.status
+      == SystemVerilogVpiScheduledWriteStatus::Pending) {
+    found->second.retained = false;
+  } else {
+    impl_->records.erase(found);
+  }
+  return SystemVerilogVpiWriteControlError::None;
+}
+
+std::uint64_t SystemVerilogVpiValueControl::owner() const noexcept {
+  return impl_ ? impl_->owner : 0U;
 }
 
 std::size_t SystemVerilogVpiValueControl::pending() const noexcept {

@@ -380,6 +380,23 @@ int run_built_project(
     }
     install_interrupt_hook(simulation);
     const InterruptSignalGuard interrupt_signal;
+    // However the run ends, the foreign interfaces see the end of
+    // simulation and of the tool while their libraries are still loaded
+    // (IEEE 1800-2023 38.36.3, IEEE 1076-2019 20.10).
+    struct ForeignEnd {
+        Simulation& simulation;
+        VhpiForeignService* vhpi;
+        ~ForeignEnd()
+        {
+            simulation.end_foreign_simulation();
+            if (vhpi != nullptr) {
+                try {
+                    vhpi->finish();
+                } catch (...) {
+                }
+            }
+        }
+    } foreign_end { simulation, vhpi_service.get() };
     try {
         // Native materialization overlaps the initial interpreted execution.
         // Each deferred executor is installed only at a process-resume safe
@@ -404,6 +421,7 @@ int run_built_project(
 #if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
         allocation_profile_session.after_run();
 #endif
+        simulation.end_foreign_simulation();
         if (trace && !finish_trace(*trace, diagnostics)) {
             return 1;
         }

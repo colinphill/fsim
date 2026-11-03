@@ -14,7 +14,7 @@ Exclusions never count as closures.
 | verilator | 63 | 296 |
 | ivtest | 7 | 301 |
 | vests | 2 | 0 |
-| nvc | 223 | 0 |
+| nvc | 225 | 0 |
 | vhdl-compliance | 7 | 0 |
 
 ## sv-tests
@@ -912,7 +912,9 @@ Exclusions never count as closures.
 | `textio4` | not run | expects READ of a BIT_VECTOR to read past embedded spaces; a character that cannot be part of the value ends the read (IEEE 1076-2008 16.4) |
 | `toplevel3` | not run | hierarchical generic override |
 | `vhpi1` | not run | expects nvc's tool name, its vhpiRandomSeedP property and its unit-name spelling; vhpiRandomSeedP is an nvc extension absent from IEEE 1076-2019 clause 19 and Annex B |
+| `vhpi13` | not run | counts initialization as a time step for vhpiCbRepNextTimeStep; IEEE 1076-2019 14.7.5.1 makes a first simulation cycle at time zero a delta cycle, and 14.7.5.3 b) 1) runs the callback only in a cycle that is not a delta cycle |
 | `vhpi14` | not run | expects vhpi_iterator to return an iterator for a call with no parameters; IEEE 1076-2019 23.24 returns NULL for an association with no target objects |
+| `vhpi17` | not run | expects the tool to claim vhpiProvidesPostAnalysis; fsim does not yet provide the IEEE 1076-2019 17.3 post-analysis capability set, and claiming it would contradict 17.3 |
 | `vhpi18` | not run | reads 64-bit integer and physical values through VHPI |
 | `vhpi20` | not run | nvc-specific test kind tcl |
 | `vhpi4` | not run | binds a foreign subprogram with nvc's single-token VHPIDIRECT form and calling convention; IEEE 1076-2019 20.2.4.3 defines VHPIDIRECT with an object library and execution specifier |

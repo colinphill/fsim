@@ -17,9 +17,13 @@ enum class SystemVerilogVpiWriteKind {
   Release,
 };
 
+// IEEE 1800-2023 38.34: vpiInertialDelay removes every scheduled event on
+// the object, vpiTransportDelay (modified transport) removes the events
+// scheduled for later times, and vpiPureTransportDelay removes none.
 enum class SystemVerilogVpiDelayPolicy {
   Inertial,
   Transport,
+  ModifiedTransport,
 };
 
 enum class SystemVerilogVpiScheduledWriteStatus {
@@ -107,7 +111,8 @@ class SystemVerilogVpiValueControl final {
       SystemVerilogVpiWriteKind kind,
       std::optional<SystemVerilogVpiStoredValue> value,
       SimulationTick delay,
-      SystemVerilogVpiDelayPolicy policy);
+      SystemVerilogVpiDelayPolicy policy,
+      bool retain_handle = true);
 
   [[nodiscard]] SystemVerilogVpiWriteControlError cancel(
       SystemVerilogVpiScheduledWriteHandle handle);
@@ -115,7 +120,13 @@ class SystemVerilogVpiValueControl final {
       SystemVerilogVpiScheduledWriteHandle handle) const;
   [[nodiscard]] SystemVerilogVpiWriteControlError release(
       SystemVerilogVpiScheduledWriteHandle handle);
+  // Drop the handle without affecting the event: a pending write keeps
+  // running and its record goes once it is no longer pending
+  // (vpi_release_handle on a vpiSchedEvent, IEEE 1800-2023 38.34).
+  [[nodiscard]] SystemVerilogVpiWriteControlError forget(
+      SystemVerilogVpiScheduledWriteHandle handle);
   [[nodiscard]] std::size_t pending() const noexcept;
+  [[nodiscard]] std::uint64_t owner() const noexcept;
 
  private:
   struct Impl;

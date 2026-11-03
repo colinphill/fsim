@@ -8,6 +8,7 @@
 #include "fsim/runtime/vpi_bridge.h"
 #include "fsim/runtime/vpi_system.hpp"
 #include "fsim/support/native_filesystem.hpp"
+#include "fsim/version.hpp"
 
 #include "sv_vpi_user.h"
 
@@ -316,7 +317,7 @@ private:
     std::string program_ { "fsim" };
     std::array<char*, 2> argv_ { program_.data(), nullptr };
     std::string product_ { "FSIM" };
-    std::string version_ { "3" };
+    std::string version_ { fsim::version };
 };
 
 // --- Value conversion (IEEE 1800-2023 38.15 vpi_get_value) -----------------
@@ -863,6 +864,32 @@ public:
         const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result) override
     {
+        // vpi_chk_error reports the previous routine's error, and any other
+        // routine clears it (IEEE 1800-2023 38.2).
+        if (routine != Routine::CheckError) {
+            error_ = false;
+        }
+        const auto status = route(routine, request, result);
+        if (status != FSIM_VPI_STATUS_OK && routine != Routine::CheckError
+            && !error_) {
+            const auto* const descriptor
+                = runtime::find_systemverilog_vpi_2023_routine(routine);
+            error_message_ = std::string { descriptor != nullptr
+                                     ? descriptor->name
+                                     : std::string_view { "VPI routine" } }
+                + (status == FSIM_VPI_STATUS_UNSUPPORTED
+                        ? ": the request is not supported"
+                        : ": the request failed");
+            error_ = true;
+        }
+        return status;
+    }
+
+private:
+    fsim_vpi_status_v1 route(const Routine routine,
+        const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
         // The array value routines reach the service as an extension
         // operation of vpi_get_value and vpi_put_value.
         constexpr std::uint32_t value_array_operation = 1U;
@@ -940,6 +967,13 @@ public:
         case Routine::ReleaseHandle:
             if (owned(request.handle) && tag_of(request.handle) == Tag::iterator) {
                 iterators_.erase(serial_of(request.handle));
+            }
+            // Freeing a vpiSchedEvent handle does not affect the event
+            // (IEEE 1800-2023 38.34).
+            if (owned(request.handle)
+                && tag_of(request.handle) == Tag::scheduled) {
+                (void)simulation_.systemverilog_vpi_values().forget(
+                    scheduled_write(request.handle));
             }
             return succeed(result, 0U, 1U);
         case Routine::CompareObjects:
@@ -2058,21 +2092,36 @@ private:
             fill_time(time, internal(stored.data.obj));
             data.time = &time;
         }
+        // The new value of the change that triggered the callback; an event
+        // statement has no value (IEEE 1800-2023 38.36.1).
         if (event && stored.has_value
             && event->kind == runtime::SystemVerilogVpiCallbackKind::ValueChange
-            && event->object) {
-            if (const auto read = object_value(*event->object)) {
-                (void)write_value(*read, value);
+            && event->object && event->value) {
+            const auto type = registry_.type_info(*event->object);
+            const auto changed = stored_to_value(*event->value,
+                type && type.value && type.value->is_signed);
+            if (changed && write_value(*changed, value)) {
+                data.value = &value;
             }
-            data.value = &value;
+            // An array word reports its index (IEEE 1800-2023 38.36.1).
+            if (const auto word = info(*event->object)) {
+                if (const auto index = word_index(*word)) {
+                    data.index = static_cast<PLI_INT32>(*index);
+                }
+            }
         }
         const auto one_shot = !event
             || event->kind != runtime::SystemVerilogVpiCallbackKind::ValueChange;
         const auto routine = data.cb_rtn;
+        const auto read_only = std::exchange(read_only_,
+            event
+                && event->kind
+                    == runtime::SystemVerilogVpiCallbackKind::ReadOnly);
         {
             CallScope scope { *this };
             routine(&data);
         }
+        read_only_ = read_only;
         if (one_shot) {
             callbacks_.erase(serial);
         }
@@ -2244,10 +2293,26 @@ private:
             return vpiPathTerm;
         }
         if (owned(handle)) {
-            return tag_of(handle) == Tag::iterator ? vpiIterator : vpiUndefined;
+            switch (tag_of(handle)) {
+            case Tag::iterator:
+                return vpiIterator;
+            case Tag::callback:
+                return vpiCallback;
+            case Tag::scheduled:
+                return vpiSchedEvent;
+            default:
+                return vpiUndefined;
+            }
         }
         const auto object = info(handle);
         return object ? object_type(*object) : vpiUndefined;
+    }
+
+    [[nodiscard]] runtime::SystemVerilogVpiScheduledWriteHandle
+    scheduled_write(const fsim_vpi_handle_v1 handle)
+    {
+        return { simulation_.systemverilog_vpi_values().owner(),
+            serial_of(handle) };
     }
 
     [[nodiscard]] static bool literal(const std::string_view text)
@@ -2908,6 +2973,21 @@ private:
         }
         if (property == vpiType) {
             return integer(handle_type(request.handle));
+        }
+        // A scheduled event reports whether it is still queued
+        // (IEEE 1800-2023 38.34).
+        if (owned(request.handle)
+            && tag_of(request.handle) == Tag::scheduled) {
+            if (property != vpiScheduled) {
+                return succeed(result, 0U, undefined);
+            }
+            const auto status = simulation_.systemverilog_vpi_values().status(
+                scheduled_write(request.handle));
+            return integer(status
+                    && status.status
+                        == runtime::SystemVerilogVpiScheduledWriteStatus::Pending
+                ? 1
+                : 0);
         }
         if (const auto* range = range_of(request.handle)) {
             return property == vpiSize
@@ -3614,6 +3694,19 @@ private:
         }
         const auto flags = static_cast<PLI_INT32>(request.argument);
         const auto mode = flags & 0xFFF;
+        // Cancelling a scheduled event also frees its handle; cancelling one
+        // that has occurred is not an error (IEEE 1800-2023 38.34).
+        if (mode == vpiCancelEvent) {
+            if (!owned(request.handle)
+                || tag_of(request.handle) != Tag::scheduled) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            auto& values = simulation_.systemverilog_vpi_values();
+            const auto handle = scheduled_write(request.handle);
+            (void)values.cancel(handle);
+            (void)values.release(handle);
+            return succeed(result);
+        }
         // A system function's calltf returns its value by writing the call
         // (IEEE 1800-2023 38.35).
         if (owned(request.handle) && tag_of(request.handle) == Tag::call) {
@@ -3708,6 +3801,14 @@ private:
                 ? succeed(result)
                 : FSIM_VPI_STATUS_NOT_FOUND;
         }
+        // A read-only callback neither writes values nor schedules events
+        // before the next scheduled event (IEEE 1800-2023 38.36.2).
+        if (read_only_ && (mode == vpiNoDelay || arguments->time == nullptr)) {
+            error_message_ = "vpi_put_value: no write in a cbReadOnlySynch "
+                             "callback";
+            error_ = true;
+            return FSIM_VPI_STATUS_INVALID_ARGUMENT;
+        }
         if (mode == vpiNoDelay || arguments->time == nullptr) {
             return values.apply(object,
                        runtime::SystemVerilogVpiWriteKind::Deposit,
@@ -3721,12 +3822,26 @@ private:
         if (!delay) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
+        if (read_only_) {
+            const auto next = simulation_.next_pending_time();
+            if (delay.ticks == 0U
+                || (next && simulation_.now() + delay.ticks < *next)) {
+                error_message_ = "vpi_put_value: a cbReadOnlySynch callback "
+                                 "cannot schedule an event before the next "
+                                 "scheduled event";
+                error_ = true;
+                return FSIM_VPI_STATUS_INVALID_ARGUMENT;
+            }
+        }
         const auto scheduled = values.schedule(object,
             runtime::SystemVerilogVpiWriteKind::Deposit, std::move(*stored),
             delay.ticks,
             mode == vpiInertialDelay
                 ? runtime::SystemVerilogVpiDelayPolicy::Inertial
-                : runtime::SystemVerilogVpiDelayPolicy::Transport);
+                : mode == vpiTransportDelay
+                ? runtime::SystemVerilogVpiDelayPolicy::ModifiedTransport
+                : runtime::SystemVerilogVpiDelayPolicy::Transport,
+            (flags & vpiReturnEvent) != 0);
         if (!scheduled) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
@@ -4178,11 +4293,13 @@ private:
     std::vector<std::string> argv_storage_;
     std::vector<char*> argv_;
     std::string product_ { "FSIM" };
-    std::string version_ { "3" };
+    std::string version_ { fsim::version };
     // The message outlives later routines, such as the vpi_printf that
     // reports it.
     bool error_ { };
     std::string error_message_;
+    // Inside a cbReadOnlySynch callback.
+    bool read_only_ { };
     std::string error_code_ { "FSIM-VPI-001" };
 };
 
