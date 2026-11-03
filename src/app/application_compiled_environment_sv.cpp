@@ -1180,6 +1180,7 @@ public:
         auto& classes = hir.mutable_classes();
         auto& expressions = hir.mutable_expressions();
         auto& statements = hir.mutable_statements();
+        auto& instances = hir.mutable_instances();
         // No owning collection is resized during this pass. Indexed identities
         // remain valid while we annotate names and type references in place.
         design_.refresh_lookup_indexes();
@@ -1247,7 +1248,7 @@ public:
         }
         // A type actual with packed dimensions over a package type
         // (`m #(t [1:0])`) composes as a declaration does.
-        for (auto& instance : hir.mutable_instances()) {
+        for (auto& instance : instances) {
             for (auto& actual : instance.parameters) {
                 if (actual.type && actual.type->packed_over_named_type)
                     bind_type(*actual.type, instance.scope);
