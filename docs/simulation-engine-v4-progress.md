@@ -138,6 +138,51 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-02: VPI/VHPI data object model part 1, cocotb plan gate A-G2 (`d8c0eb03`, sweeps `ag2g`, `ag2ga`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md`. The gate closes the first half of the data object model. Inventory rows are in `docs/foreign-interface-conformance.md`.
+
+**What landed (`d8c0eb03`):**
+- **VPI types (37.17, 37.18, 37.26):**
+  - Elaboration computes each declaration's struct, union, enum or packed-array type, because the simulate-time HIR cannot type declarations. It is persisted on the signal and container records, and the runtime state schema becomes 93.
+  - Variables and nets get their typed kinds, with `vpiMember`, `vpiPacked` and `vpiElement`.
+  - A net array is a `vpiNetArray` of `vpiNet` words.
+- **VPI ports (37.13, 37.14):**
+  - Ports are objects of their own, built at publication from the instance associations. They carry `vpiPortIndex`, `vpiDirection`, `vpiPortType`, `vpiConnByName`, `vpiLowConn` and `vpiHighConn`.
+  - The formal's net or variable reaches its port through `vpiPorts`, and an actual reaches it through `vpiPortInst`. Neither answers `vpiDirection`.
+- **VPI arrays and bits (37.11, 37.16, 37.85):** gen-scope arrays and module, interface and program arrays sit beside their elements. `vpiBit` iterates left to right.
+- **VPI modports and interface ports (37.7, 37.15, 23.3.3.4):**
+  - Modports have `vpiIODecl` members.
+  - An interface port's low connection is a `vpiRefObj` with `vpiActual`.
+  - The formal's binding slot and the alias objects named through it are no longer published, so `top.u.b.data` resolves to the actual interface's object.
+- **Named events:** they get the vpiSuppressVal structure, so ivtest interpreted=0 is back at 2263.
+- **VHPI (19–23):**
+  - Information-model classes and properties.
+  - Staticness per class.
+  - An alias of an index or slice names the selected part (6.6.2).
+- **Exclusion:** verilator/t_vpi_get expects a port from `vpi_handle_by_name` of a port's name. A port has no full name (37.14), so the name denotes the formal's net or variable (37.16, 37.17).
+- **Moved to A-G5:**
+  - primitives (the parser lowers gates to continuous assignments);
+  - VPI drivers and loads, VHPI drivers and `vhpi_schedule_transaction` (they belong to statement and process objects).
+- **Moved to A-G7:** string variables (no change hook until the direct kernel reads).
+
+**Gate:**
+- ct4: 1109/1109 in all four variants.
+- Sweep `ag2g` (frozen `d8c0eb03`, archive `ag2`): 0 losses against `ag1g`.
+- Sweep `ag2ga`: 0 losses against `ag1ga`. `ivtest/pow_reg_signed` timed out under build load; it passes alone in 38.4 s, against 41.8 s in the baseline.
+- Census: 0 losses, ivtest interpreted=0 at 2263.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept.
+
+| Suite | ag1g passed / in scope | ag2g passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2638 / 2638 | 2638 / 2638 | 273 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
 ### 2026-11-02: VPI/VHPI runtime core conformance, cocotb plan gate A-G1 (`2941aa1f`, sweeps `ag1g`, `ag1ga`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md` (cocotb support, owner 11-02). Phase A audits VPI (IEEE 1800-2023 ch. 36–38) and VHPI (IEEE 1076-2019 ch. 17–23) and closes the gaps; the inventory is `docs/foreign-interface-conformance.md`.
