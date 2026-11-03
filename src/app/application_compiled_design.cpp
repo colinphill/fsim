@@ -48,13 +48,19 @@ std::string normalized_source_name(const std::string_view name)
 }
 
 // One file reached under two spellings (a library's recorded path and a
-// consumer's include path) is one source, so identities use absolute paths.
+// consumer's include path, a Windows 8.3 short name and its long name) is
+// one source, so identities use canonical paths where they resolve.
 SourceIdentity source_identity(const semantic::SourceFile& file)
 {
     const auto path = support::path_from_utf8(file.physical_name);
     std::error_code error;
     auto absolute = std::filesystem::absolute(path, error);
-    return { source_path_key(error ? path : absolute), file.content_digest };
+    if (error) {
+        return { source_path_key(path), file.content_digest };
+    }
+    auto canonical = support::native_fs::weakly_canonical(absolute, error);
+    return { source_path_key(error ? absolute : canonical),
+        file.content_digest };
 }
 
 std::optional<SourceMappingIndex> prepare_source_mappings(
