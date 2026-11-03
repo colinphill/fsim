@@ -138,6 +138,45 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-02: VPI/VHPI runtime core conformance, cocotb plan gate A-G1 (`2941aa1f`, sweeps `ag1g`, `ag1ga`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md` (cocotb support, owner 11-02). Phase A audits VPI (IEEE 1800-2023 ch. 36–38) and VHPI (IEEE 1076-2019 ch. 17–23) and closes the gaps; the inventory is `docs/foreign-interface-conformance.md`.
+
+**What landed (`2941aa1f`):**
+- **VPI callbacks and writes:**
+  - cbValueChange runs in the active region of the change and carries the captured value and an array word's index (38.36.1).
+  - Callback and scheduled-write records are reused, so registrations and delayed puts have no lifetime cap.
+  - vpi_chk_error covers every routine. cbReadOnlySynch rejects writes (38.36.2). vpiTransportDelay is transport and vpiCancelEvent cancels.
+- **End of simulation:** cbEndOfSimulation and vhpiCbEndOfSimulation run on every end of a run, including `--duration`, a batch stop and the error paths.
+- **VHPI:**
+  - The initialization phases follow 14.7.5.2. A first cycle at time zero is a delta cycle (14.7.5.1), so vhpiCbRepNextTimeStep does not run there.
+  - vhpi_get_next_time returns Tn.
+  - DepositPropagate and ForcePropagate apply in the next update phase.
+  - A short buffer returns its size, and BinStr on std_logic gives the logic character (owner decision).
+  - The capability claim is Hierarchy|ForeignModel. Unimplemented functions raise the 17.3 error.
+- **Exclusions** (strict reading, `docs/lrm-corpus-exclusions.md` regenerated):
+  - nvc/vhpi13 counts initialization as a time step;
+  - nvc/vhpi17 expects a PostAnalysis claim. It is removed at gate A-G5, when post-analysis access lands.
+
+**Gate:**
+- ct4: 1105/1105 in all four variants.
+- Normal sweep `ag1g` (frozen `2941aa1f`, archive `ag1`): 0 losses against `v4c69c`. The only changes are the two exclusions above.
+- AOT sweep `ag1ga`: 0 losses against `v4c69ca`, with the same two exclusions. The first run was reaped for memory after three suites, and the remaining four were rerun.
+- Census: identical apart from the two excluded cases, and ivtest interpreted=0 at 2259 (was 2263).
+  - The four ivtest `vpi_value_change_cb1-4` cases print no run summary. Since `2941aa1f` a named event's value-change callback got a NULL value, and these excluded cases (whole-variable part-select gold) abort on the test's `assert(cb->value)`.
+  - 38.36.1 makes the value NULL only for event statements and class vars. A named event is an object, so it gets the registered structure with vpiSuppressVal. Fixed in the next gate.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, 4183 kept. It ran in a fresh directory, because the old one holds catalog-3 workspaces.
+
+| Suite | v4c69c passed / in scope | ag1g passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2638 / 2638 | 2638 / 2638 | 273 |
+| nvc | 1259 / 1259 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+
 ### 2026-11-02: Project mode removed; SystemVerilog package-first compile (`709826c0`, `a12b517f`, sweeps `v4c69c`, `v4c69ca`)
 
 Plan: `~/.claude/plans/remove-project-mode.md` (owner, 11-02).
