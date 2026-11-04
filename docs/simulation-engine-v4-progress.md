@@ -214,6 +214,25 @@ Plan: `~/.claude/plans/playful-kindling-teacup.md`. User documentation: `docs/co
 | cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
 | cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
 
+**After the gate push (archive `pb3`):**
+- cocotb's `adder` and `mixed_language` examples ran under cocotb 2.1 and master, each with a Verilog and a VHDL toplevel. Each combination ran through `include $(shell fsim cocotb makefile)` in place of `Makefile.sim` and through `get_runner("fsim")` (`test_dir` = `build_dir`). All 16 runs pass 2/2.
+- **D6 campaign `pb3-g5`** (`tools/perf.sh`, 3 samples, CPU 9, ASLR off, xsim in the same session): geomean e2e 3.78× (`v4c69cq` 3.70×), minimum simulate 3.52× (mixed_codec). Both floors hold.
+  - The report's `passed_timing: false` / `diagnostic_partial` is expected for a D6 campaign, as in every earlier one. `perf_campaign.py` sets `passed_timing` only from `llvm_o2` summaries, and `perf.sh` runs `v4_o2_aot`. `overall_qualified` also needs at least 7 samples. Its per-case checks pass: fsim's median is below xsim's and the noise check is clear in all 10 cases. The D6 floors come from the per-phase medians.
+  - original_codec simulate is 1.83 s / 7.29 s (3.99×). `v4c69cq` measured 2.63 s (2.77×). The `v4c69cq` floor miss came from the host, as its paired checks suggested.
+
+| Case | fsim e2e | xsim e2e | e2e × | fsim sim | xsim sim | sim × |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 10.106 | 26.990 | 2.67 | 1.829 | 7.290 | 3.99 |
+| original_throughput | 4.636 | 15.309 | 3.30 | 1.176 | 7.291 | 6.20 |
+| mixed_codec | 8.625 | 23.908 | 2.77 | 1.829 | 6.438 | 3.52 |
+| mixed_throughput | 4.159 | 12.225 | 2.94 | 1.377 | 5.887 | 4.27 |
+| codex_reference_mode0_frames1 | 2.004 | 9.020 | 4.50 | 0.125 | 3.733 | 29.85 |
+| codex_reference_mode0_frames2 | 2.005 | 9.070 | 4.52 | 0.125 | 3.733 | 29.87 |
+| codex_reference_mode1_frames1 | 2.055 | 9.573 | 4.66 | 0.125 | 3.734 | 29.94 |
+| codex_reference_mode1_frames2 | 2.055 | 9.570 | 4.66 | 0.124 | 3.734 | 30.07 |
+| codex_throughput_default | 2.206 | 9.672 | 4.38 | 0.275 | 3.834 | 13.94 |
+| codex_throughput_direct_syndrome | 2.004 | 8.468 | 4.23 | 0.274 | 3.833 | 13.98 |
+
 **Open after this gate:**
 - A VHDL process that drives an SV wire starts at z, not at the port default (`initial_driver_value` is per signal).
 - VPI string objects are added and then skipped per path. Deduplication works, so this is harmless.
