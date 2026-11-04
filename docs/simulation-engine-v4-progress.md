@@ -138,6 +138,89 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-04: cocotb integration, cocotb plan Phase B (B3–B8) (`38c37c6b`, sweeps `pb3g`, `pb3ga`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md`. User documentation: `docs/cocotb.md`.
+
+**What landed:**
+- **B3/B4:**
+  - The `fsim cocotb makefile|pythonpath|libs` command.
+  - `src/cocotb/Makefile.fsim`, which a cocotb Makefile includes and which also works as cocotb's `SIM=fsim` makefile.
+  - The `fsim_cocotb` runner (`get_runner("fsim")`), installed to `share/fsim/cocotb/`.
+  - cocotb's own GPI libraries for DSim (VPI) and NVC (VHPI), 2.1.x and master.
+  - The product reports itself as `fsim`, with the fsim version.
+- **B5:** `COCOTB_TRUST_INERTIAL_WRITES` defaults to 1 in both flows.
+- **B6:** `scripts/cocotb_suite.py` runs cocotb's unmodified suite. It covers 2.1.x and master, each through VPI and through VHPI, and the mixed-language suites run inside those configurations, as in cocotb's CI. It compares results with a baseline, like the corpus sweeps. The single exclusion, with its LRM reason, is in `scripts/cocotb_exclusions.tsv`. `--suite GLOB` runs a subset, which is compared only on the suites it ran.
+- **Fixes found by cocotb's suite:**
+  - **Mixed SV/VHDL clocking:** a change made by SystemVerilog or through VPI wakes VHDL processes in the same Active region, as Vivado does (`docs/cross-language-semantics.md`).
+  - **VHDL out or buffer formal on an SV actual:** the actual starts at the port default or `T'LEFT` (IEEE 1076-2019 6.5.2, 14.7.3.2).
+  - **Deposits through a top-level input port:** a deposit into a container whose read-only alias bridges the port reaches the bridge signal, also when the kernel owns it (IEEE 1800-2023 38.34).
+  - **VPI puts to variable ports** are accepted (38.34).
+  - **String deposits** wake HDL waiters, through one change signal shared by every scope that writes or waits on the string (9.4.2, 38.34).
+  - **Packed widths:** a packed width named in another compilation unit counts the whole flattened range.
+  - **Fixed unpacked arrays in VPI:** an unpacked struct with an unpacked-array member, and an unpacked array of structs or unions, are published as `vpiRegArray`/`vpiNetArray` with their elements (37.17).
+  - **VPI value-change callbacks** run in change order. Each change runs its object's callbacks as of its turn, so a callback registered on a later change's object sees that change (4.4.2, 38.36.1). This follows the owner's decision for sequential update order.
+  - **VHPI value-change callbacks:** each changed signal's event runs the callbacks registered and enabled at its turn (1076-2019 14.7.3, 21.3.2.2).
+  - **`$unit::name`** resolves by name (37.10).
+  - **Retired callback status:** packed into 2 bits per id. cocotb's `test_trigger_memory_leak` had tripped on the old table's one-time growth.
+- **Deposit into a variable that fused logic drives (owner decision 2026-11-04, kept native):**
+  - A VPI or VHPI write to a slot that a partition member writes gates that member. Its mark calls `fsim_sk_member_due`, and the member is skipped unless an entry of its sensitivity changed since it last ran.
+  - Loads forwarded from the member's stores read the arena again.
+  - The partition's template is copied with the gate and compiled again at run time, as watched silent slots are, so the run stays compiled (IEEE 1800-2023 38.34, 9.2.2.2).
+  - This closes cocotb's `test_assign_Logic` and `test_assign_Logic_4value`. New test `fsim.foreign.vpi-partition-deposit`.
+  - Probe timing (4000 fused members, 100k steps): 63.3 s without the deposit and 62.3 s with it, so the gate costs nothing measurable.
+- **Object-less VPI callbacks:**
+  - cbAfterDelay, cbReadWrite, cbReadOnly and cbNextSimTime no longer run the observation barrier over every exposed signal. Since A-G7.3, handles read live state.
+  - The probe, a VPI put plus a cbAfterDelay per step over a 4000-member chain for 30k steps, dropped from 19.5 s to 0.42 s.
+  - Summed cocotb test time fell from 16.0 s to 11.8 s (2.1 Verilog) and from 15.0 s to 11.7 s (master Verilog). The VHPI runs are unchanged at about 3 s.
+- **B7:** the ctest smoke tests `fsim.cocotb.{dff,counter,mixed}.{makefile,runner}` are registered when `FSIM_COCOTB_PYTHON` names a Python with cocotb.
+- **B8:** `docs/cocotb.md`, plus cocotb sections in the user guide and feature-matrix rows.
+- **Catalog:** FSIM-CLI-0004 (B3) makes the catalog 2980. The three closure audits now pin 2980.
+
+**Gate fixes (first ct4, archive `pb`):** the first ct4 failed `fsim.runtime`, `fsim.application.resolution` and `fsim.native-path-io`.
+- **Mixed rounds (v4):** VHDL work that the previous delta's update phase made ready ran one delta late when SystemVerilog work in the same activation woke other VHDL work.
+  - Cause: `activate_mixed` committed the SV-woken VHDL writes as a separate update phase, then yielded.
+  - Fix: when VHDL work is ready for the delta before the drain, the round runs it and commits both sets of writes in one update phase. What the SV-woken work wakes itself is held for the next delta.
+  - The interpreter's delta placement was already right.
+- **Stale expectations:** the S16 rule wakes generic (VHDL) observers in the SV Active round of the same delta, so the runtime tests now expect that. The mixed boundary loop takes three deltas per iteration instead of four, and `$strobe` lands on delta 13.
+- **Native path I/O:** `fsim cocotb` finds its own path through `support::native_fs`.
+- Archive `pb2` holds these fixes.
+
+**Gate fix (sweep `pb2g`):** `nvc/issue433` was lost; it had been broken since `cb3`.
+- B6 treated a call bound to no declaration as a call of a library function. A qualified expression (`NAME & string'(":U1")`, IEEE 1076-2019 9.3.5) is stored as such a call.
+- The STRING actual was therefore elaborated as bits, and its expression was dropped. A child generic actual that names that generic (`NAME & "()"`) then read an empty string.
+- Qualified expressions no longer count as calls. Archive `pb3` holds the fix.
+
+**Gate:**
+- Archive `pb3`.
+- ct4: 1153/1153 in all four variants.
+- Sweep `pb3g`: 0 losses against `ag7bg`.
+- Sweep `pb3ga`: 0 losses against `ag7bga`.
+- `ivtest/vpi_genblk_unnamed` now matches its gold output, so its output-dependent exclusion no longer applies.
+- Census: 0 losses in both modes. The hosted `WaitOrder` process in `verilator_t_wait_order` (AOT) was already there in `ag7bga`.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, every seed collapses (4183 kept).
+
+| Suite | ag7bg passed / in scope | pb3g passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2636 / 2636 | 2637 / 2637 | 274 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2071 / 2071 | 344 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+| cocotb 2.1 Verilog | 708 / 708 (`cb6`) | 708 / 708 | 1 |
+| cocotb 2.1 VHDL | 646 / 646 | 646 / 646 | 1 |
+| cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
+| cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
+
+**Open after this gate:**
+- A VHDL process that drives an SV wire starts at z, not at the port default (`initial_driver_value` is per signal).
+- VPI string objects are added and then skipped per path. Deduplication works, so this is harmless.
+- `vpiDirection` on an input string port returns -1.
+- A STRING generic whose actual is a function call (`tag("T")`, `INTEGER'IMAGE(42)`) reads as an empty string in a child's generic actual (`NAME & "()"`). The region itself reads the value correctly. This predates this gate: `cb2` shows it too.
+- `--generic` overrides for real, time, character, array and enum generics (task 119).
+
 ### 2026-11-03: Kernel-owned signals with a foreign library, cocotb plan A-G5 part 5, A-G7 and B2 (`707907c0`, `ba3f5e25`, `252525d5`, sweeps `ag7bg`, `ag7bga`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md`. Inventory rows are in `docs/foreign-interface-conformance.md`.
@@ -183,7 +266,7 @@ Plan: `~/.claude/plans/playful-kindling-teacup.md`. Inventory rows are in `docs/
 | vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
 
 **Open after this gate:**
-- The idle and watch costs are above the owner targets on original_throughput.
+- original_throughput meets both targets with little margin: 1.25× idle and 1.48× watch, measured on a loaded host. The remaining idle cost is the eager VPI registry (about 55k objects); a lazy registry is the next lever.
 - With `--time-resolution 1fs`, `%t` prints in fs rather than the design precision (existing `elaborate.time_resolution` behaviour).
 
 ### 2026-11-03: VPI/VHPI statement models, statement callbacks and the assertion API, cocotb plan A-G4 part 2 and A-G5 parts 1–4 (`b1623cba`, sweeps `ag5g`, `ag5ga`)
