@@ -2,6 +2,7 @@
 #include "fsim/runtime/vpi_bridge.h"
 
 #include <array>
+#include <atomic>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +16,12 @@ constexpr std::size_t maximum_text_size = 1U << 20U;
 thread_local std::array<fsim_vpi_call_context_v1*, maximum_context_depth>
     context_stack{};
 thread_local std::size_t context_depth{};
+// The outermost context entered on the simulation thread. A library may
+// query the design from a thread of its own while the simulation thread is
+// parked in one of its callbacks (cocotb's bridge); such a query runs in
+// that callback's context. Routines that change the simulation (writes,
+// callback registration, control) stay with the simulation thread.
+std::atomic<fsim_vpi_call_context_v1*> parked_context{nullptr};
 
 enum class Routine : std::uint32_t {
   RegisterCallback = 0,
@@ -129,6 +136,40 @@ struct FileOpenArguments {
   return context_depth == 0U ? nullptr : context_stack[context_depth - 1U];
 }
 
+[[nodiscard]] constexpr bool query_routine(const Routine routine) noexcept {
+  switch (routine) {
+  case Routine::GetCallbackInfo:
+  case Routine::GetSystemTaskFunctionInfo:
+  case Routine::Handle:
+  case Routine::HandleByName:
+  case Routine::HandleByIndex:
+  case Routine::HandleByMultiIndex:
+  case Routine::HandleMulti:
+  case Routine::Iterate:
+  case Routine::Scan:
+  case Routine::GetProperty:
+  case Routine::GetProperty64:
+  case Routine::GetStringProperty:
+  case Routine::GetDelays:
+  case Routine::GetValue:
+  case Routine::GetTime:
+  case Routine::GetVlogInfo:
+  case Routine::CheckError:
+  case Routine::CompareObjects:
+  case Routine::GetUserData:
+    return true;
+  default:
+    return false;
+  }
+}
+
+[[nodiscard]] fsim_vpi_call_context_v1* calling_context(
+    const Routine routine) noexcept {
+  if (context_depth != 0U) return context_stack[context_depth - 1U];
+  return query_routine(routine)
+      ? parked_context.load(std::memory_order_acquire) : nullptr;
+}
+
 [[nodiscard]] bool valid_context(
     const fsim_vpi_call_context_v1* const context) noexcept {
   return context != nullptr
@@ -187,7 +228,7 @@ template <typename T>
     const Routine routine,
     const fsim_vpi_service_request_v1& request,
     fsim_vpi_service_result_v1& result) noexcept {
-  auto* const context = current_context();
+  auto* const context = calling_context(routine);
   if (!valid_context(context)
       || request.text_size == std::numeric_limits<std::uint32_t>::max()) {
     return false;
@@ -767,6 +808,11 @@ fsim_vpi_call_context_enter_v1(fsim_vpi_call_context_v1* const context) {
   if (!valid_context(context) || context_depth >= context_stack.size()) {
     return -1;
   }
+  if (context_depth == 0U) {
+    fsim_vpi_call_context_v1* expected = nullptr;
+    (void)parked_context.compare_exchange_strong(
+        expected, context, std::memory_order_acq_rel);
+  }
   context_stack[context_depth++] = context;
   return 0;
 }
@@ -777,6 +823,11 @@ fsim_vpi_call_context_leave_v1(fsim_vpi_call_context_v1* const context) {
     return -1;
   }
   context_stack[--context_depth] = nullptr;
+  if (context_depth == 0U) {
+    auto* expected = context;
+    (void)parked_context.compare_exchange_strong(
+        expected, nullptr, std::memory_order_acq_rel);
+  }
   return 0;
 }
 

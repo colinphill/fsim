@@ -1565,6 +1565,39 @@ if(FSIM_PERFORMANCE_PYTHON_EXECUTABLE)
   )
 endif()
 
+# cocotb smoke tests (docs/cocotb.md), registered when FSIM_COCOTB_PYTHON is
+# a Python environment with cocotb installed; each runs a case through
+# Makefile.fsim and through get_runner("fsim").
+set(FSIM_COCOTB_PYTHON "${FSIM_PERFORMANCE_PYTHON_EXECUTABLE}" CACHE FILEPATH
+  "Python interpreter whose environment has cocotb, for the cocotb smoke tests")
+find_program(FSIM_COCOTB_MAKE NAMES make gmake)
+if(FSIM_PERFORMANCE_PYTHON_EXECUTABLE AND FSIM_COCOTB_PYTHON AND FSIM_COCOTB_MAKE)
+  execute_process(
+    COMMAND "${FSIM_COCOTB_PYTHON}" -c "import cocotb, cocotb_tools.runner"
+    RESULT_VARIABLE fsim_cocotb_probe
+    OUTPUT_QUIET ERROR_QUIET
+  )
+  if(fsim_cocotb_probe EQUAL 0)
+    foreach(cocotb_case IN ITEMS dff counter mixed)
+      foreach(cocotb_flow IN ITEMS makefile runner)
+        add_test(
+          NAME fsim.cocotb.${cocotb_case}.${cocotb_flow}
+          COMMAND "${FSIM_PERFORMANCE_PYTHON_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/cocotb/run_cocotb_smoke.py"
+            --fsim "$<TARGET_FILE:fsim>"
+            --python "${FSIM_COCOTB_PYTHON}"
+            --case ${cocotb_case}
+            --flow ${cocotb_flow}
+            --work "${CMAKE_CURRENT_BINARY_DIR}/cocotb/${cocotb_case}-${cocotb_flow}"
+        )
+        set_tests_properties(fsim.cocotb.${cocotb_case}.${cocotb_flow}
+          PROPERTIES LABELS "cocotb;foreign;vpi;vhpi;python"
+          TIMEOUT 600)
+      endforeach()
+    endforeach()
+  endif()
+endif()
+
 if(WIN32)
   set(FSIM_BINARY_INSTALL_API_DIR "${CMAKE_INSTALL_BINDIR}")
 else()

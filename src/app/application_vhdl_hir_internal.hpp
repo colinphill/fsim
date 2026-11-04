@@ -512,6 +512,10 @@ private:
         frontend::VhdlStandard::Vhdl2008
     };
 
+    // The source spellings of the unit being projected, keyed by decoded
+    // name (IEEE 1076-2019 15.4).
+    std::unordered_map<std::string, std::string> unit_spellings_;
+
     bool profile_compatible_ { true };
 };
 

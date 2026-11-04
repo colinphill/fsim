@@ -440,6 +440,10 @@ namespace {
         if (invocation.foreign_probes.has_value()) {
             config.run.foreign_probes = *invocation.foreign_probes;
         }
+        if (invocation.vhpi_end_of_step_timers.has_value()) {
+            config.run.vhpi_end_of_step_timers
+                = *invocation.vhpi_end_of_step_timers;
+        }
         if (invocation.coverage_output.has_value()) {
             config.run.coverage_output
                 = absolute_normalized(*invocation.coverage_output);
@@ -524,6 +528,10 @@ namespace {
         if (invocation.foreign_probes.has_value()) {
             config.run.foreign_probes = *invocation.foreign_probes;
         }
+        if (invocation.vhpi_end_of_step_timers.has_value()) {
+            config.run.vhpi_end_of_step_timers
+                = *invocation.vhpi_end_of_step_timers;
+        }
         if (invocation.coverage_output.has_value()) {
             config.run.coverage_output
                 = absolute_normalized(*invocation.coverage_output);
@@ -586,6 +594,9 @@ namespace {
             << "  snapshot info [NAME]   Show what a snapshot was elaborated with\n"
             << "  coverage merge Merge .fsimcov databases (strict by default)\n"
             << "  coverage report Render or enforce a .fsimcov report\n"
+            << "  cocotb makefile|pythonpath|libs\n"
+            << "                         Print the cocotb Makefile.fsim, the fsim_cocotb\n"
+            << "                         Python path, or the GPI implementations used\n"
             << "\n"
             << "The workspace is the current directory. fsim manages libraries in\n"
             << ".fsim/libraries, snapshots in .fsim/snapshots, and mappings in\n"
@@ -674,6 +685,9 @@ namespace {
             << "                           Load a VHPI module; repeatable (simulate)\n"
             << "      --foreign-probes     Give VPI/VHPI libraries statement, call and\n"
             << "                           suspend callbacks (cbStmt, vhpiCbStmt, ...)\n"
+            << "      --vhpi-end-of-step-timers\n"
+            << "                           Accept VHPI timers registered at the end of a\n"
+            << "                           time step; they run from the next step\n"
             << "      --diagnostics text|json\n"
             << "      --color auto|always|never\n"
             << "\n"
@@ -958,6 +972,7 @@ namespace {
             "--no-aot",
             "--code-coverage",
             "--foreign-probes",
+            "--vhpi-end-of-step-timers",
             "--partial",
             "--preprocess-only",
             "--no-config",
@@ -1428,6 +1443,8 @@ std::optional<Invocation> parse_arguments(
                 invocation.jobs = static_cast<std::uint32_t>(number);
             } else if (argument == "--foreign-probes") {
                 invocation.foreign_probes = true;
+            } else if (argument == "--vhpi-end-of-step-timers") {
+                invocation.vhpi_end_of_step_timers = true;
             } else if (argument == "--code-coverage") {
                 invocation.code_coverage = true;
             } else if (argument == "--partial") {
@@ -1744,6 +1761,27 @@ std::optional<Invocation> parse_arguments(
                 command_selected = true;
                 continue;
             }
+            if (argument == "cocotb") {
+                const std::string_view subcommand
+                    = index + 1 < argc && argv[index + 1] != nullptr
+                    ? std::string_view { argv[index + 1] }
+                    : std::string_view { };
+                if (subcommand != "makefile" && subcommand != "pythonpath"
+                    && subcommand != "libs") {
+                    argument_error(diagnostics,
+                        "cocotb requires a makefile, pythonpath, or libs "
+                        "subcommand");
+                    return std::nullopt;
+                }
+                if (index + 2 < argc) {
+                    argument_error(diagnostics,
+                        "cocotb " + std::string { subcommand }
+                            + " takes no arguments");
+                    return std::nullopt;
+                }
+                invocation.cocotb_query = std::string { subcommand };
+                return invocation;
+            }
             if (argument == "snapshot") {
                 if (index + 1 >= argc || argv[index + 1] == nullptr
                     || std::string_view { argv[index + 1] } != "info") {
@@ -1782,7 +1820,8 @@ std::optional<Invocation> parse_arguments(
                     diagnostics,
                     "unknown command '" + std::string(argument)
                         + "'; expected check, compile, elaborate, simulate, "
-                          "debug, tcl, systemc, library, snapshot, or coverage");
+                          "debug, tcl, systemc, library, snapshot, coverage, "
+                          "or cocotb");
                 return std::nullopt;
             }
             invocation.command = *command;
@@ -2072,6 +2111,11 @@ std::optional<Invocation> parse_arguments(
     if (invocation.foreign_probes.has_value() && !snapshot_consumer) {
         argument_error(
             diagnostics, "--foreign-probes requires simulate, debug, or tcl");
+        return std::nullopt;
+    }
+    if (invocation.vhpi_end_of_step_timers.has_value() && !snapshot_consumer) {
+        argument_error(diagnostics,
+            "--vhpi-end-of-step-timers requires simulate, debug, or tcl");
         return std::nullopt;
     }
     if (!invocation.sv_libs.empty() && !snapshot_consumer) {
@@ -2479,6 +2523,10 @@ void apply_configuration_defaults(
         if (!invocation.foreign_probes) {
             invocation.foreign_probes = boolean("simulate.foreign_probes");
         }
+        if (!invocation.vhpi_end_of_step_timers) {
+            invocation.vhpi_end_of_step_timers
+                = boolean("simulate.vhpi_end_of_step_timers");
+        }
         fill_seed("simulate.seed");
         fill_list(invocation.sv_libs, "simulate.sv_libs");
         if (!invocation.trace_enabled) {
@@ -2532,6 +2580,84 @@ void apply_configuration_defaults(
 
 namespace {
 
+    // The executable's own path: the installed layout is found from it.
+    std::filesystem::path executable_path(const Invocation& invocation)
+    {
+        std::error_code code;
+        // canonical resolves the /proc/self/exe link where it exists.
+        auto path = support::native_fs::canonical("/proc/self/exe", code);
+        if (!code && !path.empty()) {
+            return path;
+        }
+        path = invocation.program_path;
+        if (!path.has_parent_path()) {
+            // Found through PATH.
+#if defined(_WIN32)
+            constexpr char list_separator = ';';
+#else
+            constexpr char list_separator = ':';
+#endif
+            const auto search
+                = fsim::support::environment_variable("PATH").value_or("");
+            std::string_view rest { search };
+            while (!rest.empty()) {
+                const auto separator = rest.find(list_separator);
+                const auto directory = rest.substr(0U, separator);
+                const auto candidate
+                    = fsim::support::path_from_utf8(directory) / path;
+                if (!directory.empty()
+                    && support::native_fs::is_regular_file(candidate, code)) {
+                    path = candidate;
+                    break;
+                }
+                rest = separator == std::string_view::npos
+                    ? std::string_view { }
+                    : rest.substr(separator + 1U);
+            }
+        }
+        const auto resolved
+            = support::native_fs::weakly_canonical(path, code);
+        return code ? path : resolved;
+    }
+
+    // fsim cocotb: the integration lives in share/fsim/cocotb beside the
+    // installed bin directory, or in the build tree beside the executable.
+    int print_cocotb_location(const Invocation& invocation,
+        std::ostream& output, diagnostic::Engine& diagnostics)
+    {
+        if (*invocation.cocotb_query == "libs") {
+            // The cocotb GPI implementations fsim is driven through.
+            output << "vpi dsim\nvhpi nvc\n";
+            return kSuccess;
+        }
+        const auto directory = executable_path(invocation).parent_path();
+        std::filesystem::path root;
+        for (const auto& candidate : { directory.parent_path() / "share"
+                     / "fsim" / "cocotb",
+                 directory / "share" / "fsim" / "cocotb" }) {
+            std::error_code code;
+            if (support::native_fs::is_regular_file(
+                    candidate / "Makefile.fsim", code)) {
+                root = candidate;
+                break;
+            }
+        }
+        if (root.empty()) {
+            diagnostics.error("FSIM-CLI-0004",
+                "the cocotb integration is not installed beside "
+                    + fsim::support::path_to_utf8(directory)
+                    + " (share/fsim/cocotb)",
+                { "<command-line>", { 1, 1, 0 }, { 1, 1, 0 } });
+            return kUserError;
+        }
+        output << fsim::support::path_to_utf8(
+                      *invocation.cocotb_query == "makefile"
+                          ? root / "Makefile.fsim"
+                          : root / "python")
+               << '\n';
+        return kSuccess;
+    }
+
     int run_impl(
         const int argc,
         const char* const* argv,
@@ -2576,6 +2702,13 @@ namespace {
 #endif
                 output << '\n';
                 return kSuccess;
+            }
+            if (invocation->cocotb_query) {
+                const auto status
+                    = print_cocotb_location(*invocation, output, diagnostics);
+                print_diagnostics(error, diagnostics, invocation->diagnostic_format,
+                    invocation->color_mode, error_is_terminal, no_color);
+                return status;
             }
             // The banner is for people at a console. Pipes, scripts, --quiet,
             // and --version keep their exact output.

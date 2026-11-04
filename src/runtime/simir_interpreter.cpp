@@ -3933,7 +3933,20 @@ void Interpreter::deposit_string_object(
         };
     }
     (void)systemverilog_string_length(value);
-    impl_->string_object_storage(object) = value;
+    auto& storage = impl_->string_object_storage(object);
+    if (storage == value) {
+        return;
+    }
+    storage = value;
+    // Its waiters wait on its change signal (IEEE 1800-2023 38.34).
+    if (const auto signal = impl_->string_objects[object].change_signal) {
+        auto toggled = impl_->get_signal(*signal).initial_value;
+        toggled.set(0U,
+            toggled.get(0U) == Logic4::one ? Logic4::zero : Logic4::one);
+        if (!impl_->deposit_kernel_owned(*signal, toggled)) {
+            impl_->commit(*signal, std::move(toggled));
+        }
+    }
 }
 
 const ContainerValue& Interpreter::container_object_value(

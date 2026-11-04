@@ -126,6 +126,12 @@ Without it, registering one of these callbacks fails, and `vpi_chk_error` /
 rebuilt for the run instead of loaded from the cache, runs on one thread, and
 stops at every statement.
 
+In a design with both SystemVerilog or Verilog and VHDL, a library loaded
+through either option gets both interfaces. A library loaded with `--vpi` can
+call the VHPI from its callbacks, and the other way round. A library loaded
+with `--vhpi` can also load a VPI library of its own. cocotb's mixed-language
+flow works this way. `docs/cocotb.md` covers running cocotb testbenches.
+
 ## Workspace and cache recovery
 
 The workspace is exactly the current working directory. Local libraries use

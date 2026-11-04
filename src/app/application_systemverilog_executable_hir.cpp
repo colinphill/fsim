@@ -1934,6 +1934,7 @@ namespace {
                 output.drive_one = static_cast<std::uint8_t>(
                     input.verilog_drive_strength->one);
             }
+            output.gate_primitive = input.gate_primitive;
             output.verilog_switch_driver = input.verilog_switch_driver;
             output.verilog_switch_bidirectional
                 = input.verilog_switch_bidirectional;

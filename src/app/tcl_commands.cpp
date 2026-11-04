@@ -369,6 +369,8 @@ namespace fsim::app::tcl_detail {
             engine);
         context.simulation->set_foreign_probes(
             context.config.run.foreign_probes);
+        context.simulation->set_vhpi_end_of_step_timers(
+            context.config.run.vhpi_end_of_step_timers);
         context.simulation->set_output_hook(
             [&context](
                 const runtime::simir::ProcessId,

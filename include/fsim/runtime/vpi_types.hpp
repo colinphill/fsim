@@ -11,6 +11,11 @@
 
 namespace fsim::runtime {
 
+// The vpiType of a scope that is an instance of another language's design
+// unit, such as a VHDL entity in a mixed design. It is outside the object
+// types of IEEE 1800-2023 Annex K, as a tool-defined type.
+inline constexpr std::int32_t fsim_vpi_foreign_instance_type = 1000;
+
 enum class SystemVerilogVpiLanguage {
     Verilog2005 = 0,
     SystemVerilog2017 = 1,
@@ -235,6 +240,14 @@ struct SystemVerilogVpiTypeInfo {
     // 1800-2023 37.10 vpiDefFile, vpiDefLineNo).
     std::string definition_path;
     std::uint32_t definition_line { };
+    // A gate primitive's type name, such as `and` (IEEE 1800-2023 37.7
+    // vpiDefName, vpiPrimType).
+    std::string definition_name;
+    // An instance of a VHDL design unit in a mixed design, or a generate
+    // scope of its architecture. IEEE 1800-2023 has no object type for the
+    // instance, so its vpiType is `fsim_vpi_foreign_instance_type`; the
+    // names of either are VHDL names.
+    bool foreign_instance { };
     // An instance's `default_nettype, None for `default_nettype none, and
     // `unconnected_drive where its definition is (IEEE 1800-2023 22.8,
     // 22.9, 37.10 vpiDefNetType, vpiUnconnDrive).

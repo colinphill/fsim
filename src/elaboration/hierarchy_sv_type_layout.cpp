@@ -486,9 +486,42 @@ systemverilog_vpi_declared_type(
                            const semantic::sv::TypeReference& input,
                            const semantic::ScopeId use_scope,
                            const unsigned depth) -> std::optional<Descriptor> {
-        if (depth > 32U || input.container_form
-            || !input.unpacked_dimensions.empty() || input.virtual_interface
+        if (depth > 32U || input.virtual_interface
             || !input.class_identity.empty() || input.type_of) {
+            return std::nullopt;
+        }
+        // A fixed unpacked array of its element type, its dimensions
+        // outermost first (IEEE 1800-2023 7.4.2).
+        if (!input.unpacked_dimensions.empty()
+            && (!input.container_form
+                || *input.container_form == Form::static_array)) {
+            auto element_type = input;
+            element_type.unpacked_dimensions.clear();
+            element_type.container_form.reset();
+            element_type.container_element_types.clear();
+            if (element_type.value_form == Form::static_array) {
+                element_type.value_form.reset();
+            }
+            auto element = self(self, element_type, use_scope, depth + 1U);
+            if (!element) {
+                return std::nullopt;
+            }
+            Descriptor array;
+            array.kind = Kind::UnpackedArray;
+            array.category = Category::None;
+            array.width = 0U;
+            for (const auto& range : input.unpacked_dimensions) {
+                const auto left = bound(range.left, range.left_expression);
+                const auto right = bound(range.right, range.right_expression);
+                if (!left || !right) {
+                    return std::nullopt;
+                }
+                array.ranges.push_back({ *left, *right });
+            }
+            array.children.push_back(std::move(*element));
+            return array;
+        }
+        if (input.container_form || !input.unpacked_dimensions.empty()) {
             return std::nullopt;
         }
         if (const auto effective
@@ -1203,16 +1236,66 @@ std::optional<ContainerType> systemverilog_container_type(
     // (`packet_t [1:0]`, IEEE 1800-2017 7.4.1) is resolved to its whole
     // width; the named type gives the width of one element.
     const auto named_packed_width
-        = [](const semantic::sv::TypeReference& candidate,
+        = [&](const semantic::sv::TypeReference& candidate,
               const std::uint64_t element_width)
         -> std::optional<std::uint64_t> {
-        if (!candidate.executable_width || element_width == 0U) {
+        // A resolved named type's reference carries the dimensions declared
+        // over it, then its own flattened width as the last packed
+        // dimension; its executable width is only the type's when the type
+        // is in another compilation unit.
+        if (element_width != 0U && candidate.packed_dimensions.size() > 1U) {
+            std::uint64_t count { element_width };
+            for (std::size_t at = 0U; at < candidate.packed_dimensions.size(); ++at) {
+                const auto& dimension = candidate.packed_dimensions[at];
+                const auto left
+                    = boundary(dimension.left, dimension.left_expression);
+                const auto right
+                    = boundary(dimension.right, dimension.right_expression);
+                if (!left || !right) {
+                    return std::nullopt;
+                }
+                const auto length = static_cast<std::uint64_t>(
+                    *left >= *right ? *left - *right : *right - *left) + 1U;
+                if (at + 1U == candidate.packed_dimensions.size()) {
+                    if (length != element_width) {
+                        count = 0U;
+                    }
+                    break;
+                }
+                if (count > std::numeric_limits<std::uint32_t>::max() / length) {
+                    return std::nullopt;
+                }
+                count *= length;
+            }
+            if (count != 0U) {
+                return count;
+            }
+        }
+        if (element_width == 0U) {
             return element_width;
         }
-        if (*candidate.executable_width % element_width != 0U) {
+        if (candidate.executable_width
+            && *candidate.executable_width % element_width != 0U) {
             return std::nullopt;
         }
-        return std::max(*candidate.executable_width, element_width);
+        auto whole = std::max(
+            candidate.executable_width.value_or(0U), element_width);
+        // Its packed range is the flattened whole width of a named type
+        // from another compilation unit.
+        if (candidate.packed_range) {
+            const auto left = boundary(candidate.packed_range->left,
+                candidate.packed_range->left_expression);
+            const auto right = boundary(candidate.packed_range->right,
+                candidate.packed_range->right_expression);
+            if (left && right) {
+                const auto length = static_cast<std::uint64_t>(
+                    *left >= *right ? *left - *right : *right - *left) + 1U;
+                if (length % element_width == 0U) {
+                    whole = std::max(whole, length);
+                }
+            }
+        }
+        return whole;
     };
     std::unordered_set<std::uint32_t> visiting;
     // A typedef's own declaration scope resolves the names in it; a

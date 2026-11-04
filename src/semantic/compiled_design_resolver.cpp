@@ -4931,10 +4931,52 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         // 1076-2008 16.2.3, 8.3) under the object's element constraints.
         // An indexed name `obj(i)'left` denotes an element of the array
         // object in the same way (IEEE 1076-2008 8.4).
+        // An indexed object name that kept the call form (`obj(i)`, the
+        // object's name with one actual per index) names the object and
+        // selects one of its elements (IEEE 1076-2008 8.4, 16.2.3).
+        // Analysis records the callee of such a call only when it is an
+        // overload set, so an object's name is resolved here, in the scope
+        // of the call (IEEE 1076-2019 12.5).
+        const auto indexed_object_call = [&](const vhdl::Expression& candidate) {
+            if (candidate.kind != vhdl::ExpressionKind::call
+                || candidate.operands.empty() || candidate.text.starts_with('\'')
+                || candidate.text.starts_with('@') || !candidate.referenced_name) {
+                return false;
+            }
+            auto callee = candidate.referenced_name->selected;
+            if (!callee) {
+                callee = CompiledDesignResolver {
+                    *design_, selected_unit_, effective_, active
+                }.resolve_vhdl(*candidate.referenced_name, candidate.scope)
+                             .unique();
+            }
+            if (!callee) {
+                return false;
+            }
+            const auto object = find_declaration(*design_, effective_, *callee);
+            if (!object || object->vhdl == nullptr || object->vhdl->callable) {
+                return false;
+            }
+            switch (object->vhdl->form) {
+            case vhdl::DeclarationForm::variable:
+            case vhdl::DeclarationForm::constant:
+            case vhdl::DeclarationForm::signal:
+            case vhdl::DeclarationForm::port:
+            case vhdl::DeclarationForm::generic_constant:
+                return true;
+            default:
+                return false;
+            }
+        };
         const auto selection_steps = [&](ExpressionId id) {
             std::vector<std::string> steps;
             for (std::size_t depth { }; depth < 16U; ++depth) {
                 const auto selected = find_expression(*design_, effective_, id);
+                if (selected && selected->vhdl != nullptr
+                    && indexed_object_call(*selected->vhdl)) {
+                    steps.insert(steps.begin(), "'element");
+                    break;
+                }
                 if (selected && selected->vhdl != nullptr
                     && selected->vhdl->kind == vhdl::ExpressionKind::index
                     && selected->vhdl->operands.size() >= 2U) {
@@ -4966,9 +5008,11 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         const auto paired_prefix
             = find_expression(*design_, effective_, paired_prefix_id);
         if (!prefix || prefix->vhdl == nullptr
-            || prefix->vhdl->kind != vhdl::ExpressionKind::name
+            || (prefix->vhdl->kind != vhdl::ExpressionKind::name
+                && !indexed_object_call(*prefix->vhdl))
             || !paired_prefix || paired_prefix->vhdl == nullptr
-            || paired_prefix->vhdl->kind != vhdl::ExpressionKind::name) {
+            || (paired_prefix->vhdl->kind != vhdl::ExpressionKind::name
+                && !indexed_object_call(*paired_prefix->vhdl))) {
             return finish(std::nullopt);
         }
         const auto resolver = CompiledDesignResolver {
@@ -5184,6 +5228,23 @@ CompiledDesignResolver::compute_effective_vhdl_subtype(
         }
         if (!source_subtype) {
             return finish(std::nullopt);
+        }
+        // The mark of a type that another unit declares, such as a package
+        // type of a port, is bound by name in the declaration's scope.
+        if (!source_subtype->type_mark.spelling.empty()) {
+            const auto marked = source_subtype->type_mark.target.valid()
+                ? find_type(*design_, effective_,
+                      source_subtype->type_mark.target)
+                : std::nullopt;
+            if (!marked
+                || (marked->vhdl != nullptr
+                    && marked->vhdl->form == vhdl::TypeForm::unresolved)) {
+                if (const auto resolved = resolve_vhdl_named_type(
+                        source_subtype->type_mark.spelling,
+                        declaration->vhdl->scope)) {
+                    source_subtype->type_mark.target = *resolved;
+                }
+            }
         }
         for (const auto& step : steps) {
             const vhdl::TypeDefinition* composite { };

@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# cocotb suite cases excluded from scripts/cocotb_suite.py comparisons.
+# Columns: suite, test, reason. Every reason cites the LRM clause the test
+# goes beyond or against; fsim gaps are never excluded.
+tests/test_cases/test_first_on_coincident_triggers	test_first_on_coincident_triggers.test_repeated_first_no_missed_edges	Expects a value-change callback registered from another callback of the same time step to see a change already pending on its object; IEEE 1800-2023 38.36.1 and 4.4.2 and IEEE 1076-2019 14.7.5 and 21.3 leave that order unspecified (every VHPI simulator xfails it, cocotb gh-5112)

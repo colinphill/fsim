@@ -1,0 +1,5 @@
+#c change 5 top.y 0011
+#c change 5 top.y[0] 1
+#c change 7 top.y 0010
+#c change 7 top.y[0] 0
+#c read 9 top.y 0010

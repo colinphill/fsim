@@ -3434,14 +3434,51 @@ private:
         return false;
     }
 
+    /// NATURAL and POSITIVE, the predefined subtypes of INTEGER, bound the
+    /// elements by their low bound (IEEE 1076-2019 5.2.3.1, 16.3).
+    [[nodiscard]] static bool vhdl_predefined_integer_subtype_range(
+        const vhdl::SubtypeIndication& subtype, const std::int64_t low)
+    {
+        if (subtype.constraints.empty()) {
+            return subtype.integer_storage_width == 32U
+                || subtype.integer_storage_width == 64U;
+        }
+        if (subtype.constraints.size() != 1U) {
+            return false;
+        }
+        const auto& constraint = subtype.constraints.front();
+        if (constraint.kind != vhdl::RangeKind::integer
+            || !constraint.left || !constraint.right
+            || constraint.left_expression || constraint.right_expression
+            || constraint.descending || constraint.null) {
+            return false;
+        }
+        const auto high = subtype.integer_storage_width == 32U
+            ? std::int64_t { std::numeric_limits<std::int32_t>::max() }
+            : subtype.integer_storage_width == 64U
+            ? std::numeric_limits<std::int64_t>::max()
+            : std::int64_t { };
+        return high != 0 && *constraint.left == low
+            && *constraint.right == high;
+    }
+
     [[nodiscard]] static bool vhdl_integer_array_element_subtype(
         const vhdl::SubtypeIndication& subtype)
     {
+        const auto integer = support::equal_ignoring_ascii_case(
+            subtype.type_mark.spelling, "integer");
+        const auto natural = support::equal_ignoring_ascii_case(
+            subtype.type_mark.spelling, "natural");
+        const auto positive = support::equal_ignoring_ascii_case(
+            subtype.type_mark.spelling, "positive");
         return subtype.domain == vhdl::ValueDomain::integer
-            && support::equal_ignoring_ascii_case(
-                subtype.type_mark.spelling, "integer")
+            && (integer || natural || positive)
             && !subtype.type_mark.target.valid()
-            && vhdl_predefined_integer_range(subtype) && !subtype.unconstrained
+            && (integer
+                    ? vhdl_predefined_integer_range(subtype)
+                    : vhdl_predefined_integer_subtype_range(
+                          subtype, natural ? 0 : 1))
+            && !subtype.unconstrained
             && subtype.signed_value && subtype.integer_storage_width != 0U
             && subtype.executable_width == subtype.integer_storage_width
             && subtype.resolution_function.spelling.empty()
@@ -3469,7 +3506,8 @@ private:
             return std::nullopt;
         }
         const auto named_integer_types
-            = unit_.design().vhdl_type_declarations_named("integer");
+            = unit_.design().vhdl_type_declarations_named(
+                integer_element.type_mark.spelling);
         if (!named_integer_types || !named_integer_types->empty()) {
             return std::nullopt;
         }
@@ -4261,6 +4299,59 @@ private:
                         *left, *right);
                 }
             }
+        }
+        if (!vhdl_aggregate_uses_others(
+                expression->vhdl->associations.front())
+            && vhdl_effective_integer_array_element_subtype(subtype)) {
+            // Positional or named associations of an array of INTEGER or its
+            // subtypes cover every element (IEEE 1076-2019 9.3.3.3).
+            auto value = vhdl_array_value(subtype);
+            if (!value || value->boolean_array_element
+                || expression->vhdl->associations.size()
+                    > value->elements.size()) {
+                return std::nullopt;
+            }
+            const auto descending = value->array_left >= value->array_right;
+            std::vector<bool> assigned(value->elements.size());
+            for (std::size_t index { };
+                index < expression->vhdl->associations.size(); ++index) {
+                const auto& association
+                    = expression->vhdl->associations[index];
+                std::size_t position = index;
+                if (!association.positional()) {
+                    if (association.choices.size() != 1U) {
+                        return std::nullopt;
+                    }
+                    const auto choice = vhdl_integer_expression(
+                        association.choices.front());
+                    const auto offset = choice
+                        ? (descending
+                                ? checked_subtract(value->array_left, *choice)
+                                : checked_subtract(*choice, value->array_left))
+                        : std::nullopt;
+                    if (!offset || *offset < 0
+                        || static_cast<std::uint64_t>(*offset)
+                            >= value->elements.size()) {
+                        return std::nullopt;
+                    }
+                    position = static_cast<std::size_t>(*offset);
+                }
+                auto element = evaluate_vhdl_value(association.value);
+                if (!element
+                    || element->kind != VhdlConstantValue::Kind::integer
+                    || assigned[position]
+                    || !consume_constant_work_unit(sizeof(std::int64_t))) {
+                    return std::nullopt;
+                }
+                assigned[position] = true;
+                value->elements[position] = std::move(*element);
+            }
+            if (!std::ranges::all_of(assigned, [](const bool done) {
+                    return done;
+                })) {
+                return std::nullopt;
+            }
+            return value;
         }
         if (!vhdl_aggregate_uses_others(
                 expression->vhdl->associations.front())) {

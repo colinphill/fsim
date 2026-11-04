@@ -2810,6 +2810,23 @@ void Simulation::Impl::require_vpi_value(
             }
             return runtime::SystemVerilogVpiValueError::None;
         }
+        // A string variable takes a string (IEEE 1800-2023 38.15, 38.35).
+        if (const auto text_object = vpi_string_handles.find(update.object);
+            text_object != vpi_string_handles.end()) {
+            if (update.forced_value) {
+                return runtime::SystemVerilogVpiValueError::ReadOnly;
+            }
+            const auto* text = std::get_if<std::string>(&update.value.payload);
+            if (text == nullptr) {
+                return runtime::SystemVerilogVpiValueError::TypeMismatch;
+            }
+            if (interpreter->string_object_value(text_object->second)
+                != *text) {
+                interpreter->deposit_string_object(
+                    text_object->second, *text);
+            }
+            return runtime::SystemVerilogVpiValueError::None;
+        }
         // A put to a named event triggers it; the value is ignored
         // (IEEE 1800-2023 38.35).
         if (const auto event = vpi_event_signals.find(update.object);
@@ -3137,6 +3154,12 @@ Simulation::Impl::vpi_live_value(
             vpi_container_scalar_kinds.at(container),
             vpi_container_categories.at(container));
     }
+    if (const auto text_object = vpi_string_handles.find(handle);
+        text_object != vpi_string_handles.end()) {
+        runtime::SystemVerilogVpiStoredValue text;
+        text.payload = interpreter->string_object_value(text_object->second);
+        return text;
+    }
     if (const auto driver = vpi_driver_handles.find(handle);
         driver != vpi_driver_handles.end()) {
         const auto signal = driver->second.second;
@@ -3202,6 +3225,9 @@ void Simulation::Impl::watch_vpi_object(
                 vpi_watched_containers.emplace(container,
                     interpreter->container_object_value_snapshot(container));
             }
+        } else if (vpi_string_handles.contains(*object)) {
+            // A string variable's changes are not announced; reads and
+            // writes go straight to its string object.
         } else {
             vpi_watch_all_values = true;
         }

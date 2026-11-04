@@ -26,11 +26,13 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -87,6 +89,48 @@ constexpr std::size_t maximum_list_size = 1U << 20U;
                return std::tolower(static_cast<unsigned char>(a))
                    == std::tolower(static_cast<unsigned char>(b));
            });
+}
+
+// The name a declaration has in VHPI (IEEE 1076-2019 15.4.3, 19.4.3): an
+// extended identifier keeps its backslashes and letter case; a basic
+// identifier is case folded.
+[[nodiscard]] std::string_view declared_name(
+    const vhdl::Declaration& declaration) noexcept
+{
+    return support::is_extended_vhdl_identifier(declaration.spelling)
+        ? std::string_view { declaration.spelling }
+        : std::string_view { declaration.name };
+}
+
+// The name of a declaration as it appears in elaborated hierarchy paths.
+[[nodiscard]] std::string declared_path_part(
+    const vhdl::Declaration& declaration)
+{
+    return support::is_extended_vhdl_identifier(declaration.spelling)
+        ? declaration.name
+        : lower(declaration.name);
+}
+
+// The offset of the first `.`, `:` or `(` of a name that is not inside an
+// extended identifier (IEEE 1076-2019 15.4.3), or npos.
+[[nodiscard]] std::size_t name_separator(const std::string_view text) noexcept
+{
+    bool extended { };
+    for (std::size_t index = 0U; index < text.size(); ++index) {
+        const auto character = text[index];
+        if (character == '\\') {
+            if (extended && index + 1U < text.size()
+                && text[index + 1U] == '\\') {
+                ++index;
+            } else {
+                extended = !extended;
+            }
+        } else if (!extended
+            && (character == '.' || character == ':' || character == '(')) {
+            return index;
+        }
+    }
+    return std::string_view::npos;
 }
 
 // --- the type model --------------------------------------------------------
@@ -182,12 +226,34 @@ enum class HandleTag : std::uint8_t {
     removed,
 };
 
+// Every live handle, so a routine given a value that is not one (a VPI
+// handle a mixed-language program passes on, a released callback) reports
+// an error instead of following it (IEEE 1076-2019 23.3).
+struct LiveHandles {
+    std::mutex mutex;
+    std::unordered_set<const void*> handles;
+};
+
+[[nodiscard]] LiveHandles& live_handles() noexcept
+{
+    static LiveHandles live;
+    return live;
+}
+
 struct Handle {
-    explicit Handle(const HandleTag value) noexcept
+    explicit Handle(const HandleTag value)
         : tag { value }
     {
+        auto& live = live_handles();
+        const std::scoped_lock lock { live.mutex };
+        live.handles.insert(this);
     }
-    virtual ~Handle() = default;
+    virtual ~Handle()
+    {
+        auto& live = live_handles();
+        const std::scoped_lock lock { live.mutex };
+        live.handles.erase(this);
+    }
     Handle(const Handle&) = delete;
     Handle& operator=(const Handle&) = delete;
 
@@ -409,7 +475,13 @@ struct ForeignModel final : Handle {
 
 [[nodiscard]] Handle* handle_of(const vhpiHandleT handle) noexcept
 {
-    return reinterpret_cast<Handle*>(handle);
+    if (handle == nullptr) {
+        return nullptr;
+    }
+    auto& live = live_handles();
+    const std::scoped_lock lock { live.mutex };
+    return live.handles.contains(handle) ? reinterpret_cast<Handle*>(handle)
+                                         : nullptr;
 }
 
 [[nodiscard]] vhpiHandleT to_handle(Handle* handle) noexcept
@@ -473,10 +545,12 @@ struct ModuleSpec {
     return 1U;
 }
 
-[[nodiscard]] vhpiTimeT to_vhpi_time(const std::uint64_t femtoseconds) noexcept
+// A time structure counts multiples of the resolution limit, which is one
+// simulation tick (IEEE 1076-2019 22.2.7).
+[[nodiscard]] vhpiTimeT to_vhpi_time(const std::uint64_t ticks) noexcept
 {
-    return vhpiTimeT { static_cast<int32_t>(femtoseconds >> 32U),
-        static_cast<uint32_t>(femtoseconds) };
+    return vhpiTimeT { static_cast<int32_t>(ticks >> 32U),
+        static_cast<uint32_t>(ticks) };
 }
 
 [[nodiscard]] std::uint64_t from_vhpi_time(const vhpiTimeT& time) noexcept
@@ -722,18 +796,40 @@ public:
 
     [[nodiscard]] bool failed() const noexcept override { return failed_; }
 
+    [[nodiscard]] ForeignCompanion calls() override
+    {
+        return {
+            [this] { (void)fsim_vhpi_std_host_enter_v1(&host_); },
+            [this] { (void)fsim_vhpi_std_host_leave_v1(&host_); },
+        };
+    }
+
+    void set_companion(ForeignCompanion companion) override
+    {
+        companion_ = std::move(companion);
+    }
+
 private:
     // --- call context ----------------------------------------------------------
 
+    // The service answers calls, and so does its companion, while a
+    // routine or callback of a loaded library runs.
     class Scope final {
     public:
         explicit Scope(LiveService& service)
             : service_ { service }
         {
             entered_ = fsim_vhpi_std_host_enter_v1(&service.host_) == 0;
+            if (entered_ && service.companion_.enter) {
+                service.companion_.enter();
+                companion_ = true;
+            }
         }
         ~Scope()
         {
+            if (companion_) {
+                service_.companion_.leave();
+            }
             if (entered_) {
                 (void)fsim_vhpi_std_host_leave_v1(&service_.host_);
             }
@@ -744,6 +840,7 @@ private:
     private:
         LiveService& service_;
         bool entered_ { };
+        bool companion_ { };
     };
 
     [[nodiscard]] static LiveService& self(void* const user_data)
@@ -1153,11 +1250,12 @@ private:
         case vhpiCbTimeOut:
         case vhpiCbRepTimeOut: {
             // An end-of-time-step callback cannot affect the time of the
-            // next cycle (IEEE 1076-2019 21.3.6.8).
-            if (time_step_ended_) {
+            // next cycle (IEEE 1076-2019 21.3.6.8), unless the run accepts
+            // such timers (simulate --vhpi-end-of-step-timers).
+            if (time_step_ended_ && !simulation_.vhpi_end_of_step_timers()) {
                 error(vhpiError,
                     "cannot register a timed callback at the end of a time "
-                    "step");
+                    "step (simulate --vhpi-end-of-step-timers accepts it)");
                 return nullptr;
             }
             if (data->time == nullptr) {
@@ -1170,7 +1268,13 @@ private:
                 callback.data.value = nullptr;
                 callback.has_value = false;
             }
-            callback.delay = from_vhpi_time(*data->time);
+            // The delay counts resolution limits (22.2.7).
+            const auto ticks = from_vhpi_time(*data->time);
+            callback.delay = ticks
+                    > std::numeric_limits<std::uint64_t>::max()
+                        / femtoseconds_per_tick_
+                ? std::numeric_limits<std::uint64_t>::max()
+                : ticks * femtoseconds_per_tick_;
             if (!schedule_delay(callback)) {
                 error(vhpiError, "cannot schedule the after-delay callback");
                 return nullptr;
@@ -1189,7 +1293,13 @@ private:
             }
             callback.object = object;
             callback.data.obj = to_handle(object);
-            callback.last = element_bits(*object);
+            // A signal whose event of this update is still to be dispatched
+            // was updated after this registration (14.7.3).
+            if (flushing_.contains(*object->signal)) {
+                flushing_registered_.push_back(*object->signal);
+            } else {
+                callback.last = element_bits(*object);
+            }
             // A driver changes when its process updates it (IEEE 1076-2019
             // 21.3.2.2).
             if (object->kind == vhpiDriverK) {
@@ -1356,6 +1466,12 @@ private:
              ++exponent) {
             quanta /= 10U;
         }
+        // A timer accepted at the end of a time step runs from the next
+        // one (simulate --vhpi-end-of-step-timers): the step that is ending
+        // takes no further cycle (IEEE 1076-2019 21.3.6.8).
+        if (time_step_ended_ && quanta == 0U) {
+            quanta = 1U;
+        }
         runtime::SystemVerilogVpiCallbackRegistration registration;
         registration.kind = runtime::SystemVerilogVpiCallbackKind::AfterDelay;
         registration.delay = runtime::SystemVerilogVpiTimeValue { };
@@ -1482,6 +1598,7 @@ private:
             return 1;
         }
         if (state == vhpiEnable && time_step_ended_
+            && !simulation_.vhpi_end_of_step_timers()
             && (dispatch_reason(callback->data.reason) == vhpiCbAfterDelay
                 || dispatch_reason(callback->data.reason) == vhpiCbTimeOut)) {
             error(vhpiError,
@@ -1519,7 +1636,7 @@ private:
         }
         vhpiTimeT time { };
         if (callback.has_time) {
-            time = to_vhpi_time(now_femtoseconds());
+            time = to_vhpi_time(simulation_.now());
             data.time = &time;
         }
         auto value = callback.value;
@@ -1915,17 +2032,51 @@ private:
                     selected.emplace_back(callback, callback->order);
                 }
             }
+            // An event's callbacks are those registered and enabled when its
+            // signal is updated (IEEE 1076-2019 14.7.3): a callback of an
+            // earlier signal's event that registers on a later signal runs
+            // for that signal's event, and one it removes does not.
+            std::vector<SignalId> signals;
             for (const auto& [callback, order] : selected) {
-                if (!live(callback, order)) {
-                    continue;
+                if (std::ranges::find(signals, *callback->object->signal)
+                    == signals.end()) {
+                    signals.push_back(*callback->object->signal);
                 }
-                auto bits = element_bits(*callback->object);
-                if (callback->last && bits && *callback->last == *bits) {
-                    continue;
-                }
-                callback->last = std::move(bits);
-                run(*callback);
             }
+            flushing_ = changed;
+            for (std::size_t at = 0U; at < signals.size(); ++at) {
+                const auto signal = signals[at];
+                flushing_.erase(signal);
+                std::vector<std::pair<Callback*, std::uint64_t>> current;
+                for (auto* const callback : callbacks_) {
+                    if (callback->data.reason == vhpiCbValueChange
+                        && callback->object != nullptr
+                        && callback->object->signal
+                        && *callback->object->signal == signal
+                        && callback->object->kind != vhpiDriverK) {
+                        current.emplace_back(callback, callback->order);
+                    }
+                }
+                for (const auto& [callback, order] : current) {
+                    if (!live(callback, order)) {
+                        continue;
+                    }
+                    auto bits = element_bits(*callback->object);
+                    if (callback->last && bits && *callback->last == *bits) {
+                        continue;
+                    }
+                    callback->last = std::move(bits);
+                    run(*callback);
+                }
+                // A signal still to come that a callback registered on.
+                for (const auto late : std::exchange(flushing_registered_, { })) {
+                    if (flushing_.contains(late)
+                        && std::ranges::find(signals, late) == signals.end()) {
+                        signals.push_back(late);
+                    }
+                }
+            }
+            flushing_.clear();
         }
     }
 
@@ -2827,7 +2978,7 @@ private:
     void get_time(vhpiTimeT* const time, long* const cycles)
     {
         if (time != nullptr) {
-            *time = to_vhpi_time(now_femtoseconds());
+            *time = to_vhpi_time(simulation_.now());
         }
         if (cycles != nullptr) {
             *cycles = static_cast<long>(
@@ -2847,7 +2998,7 @@ private:
         }
         const auto next = simulation_.next_pending_time();
         if (time != nullptr) {
-            *time = next ? to_vhpi_time(*next * femtoseconds_per_tick_)
+            *time = next ? to_vhpi_time(*next)
                          : vhpiTimeT { std::numeric_limits<int32_t>::max(),
                                std::numeric_limits<uint32_t>::max() };
         }
@@ -2944,6 +3095,20 @@ private:
         return objects_.back().get();
     }
 
+    // An object for a declaration: CaseName is the declaration's spelling
+    // and Name its case folded form; an extended identifier keeps its
+    // backslashes and case in both (IEEE 1076-2019 15.4.3, 19.4.3).
+    [[nodiscard]] Object* make_declared_object(const vhpiClassKindT kind,
+        const vhdl::Declaration& declaration, Object* const parent)
+    {
+        auto* const object
+            = make_object(kind, declared_name(declaration), parent);
+        if (!declaration.spelling.empty()) {
+            object->case_name = declaration.spelling;
+        }
+        return object;
+    }
+
     // --- the design hierarchy ------------------------------------------------------
 
     [[nodiscard]] const vhdl::Unit* unit_for(const semantic::UnitId id) const
@@ -3026,6 +3191,15 @@ private:
         return object;
     }
 
+    // A root has no enclosing path. An instance in a block or generate
+    // statement has no parent instance either (IEEE 1076-2019 19.4.2).
+    [[nodiscard]] bool root_instance(
+        const semantic::design::InstanceOccurrence& instance) const
+    {
+        return !instance.parent
+            && design_.path(instance.path).find('.') == std::string_view::npos;
+    }
+
     [[nodiscard]] Object* root()
     {
         if (root_ != nullptr) {
@@ -3035,7 +3209,7 @@ private:
         // root, whose VHDL descendants are then reachable.
         const semantic::design::InstanceOccurrence* fallback = nullptr;
         for (const auto& instance : design_.instances()) {
-            if (instance.parent || !design_unit_instance(instance)) {
+            if (!root_instance(instance) || !design_unit_instance(instance)) {
                 continue;
             }
             const auto& specialization = design_.specializations().at(
@@ -3060,7 +3234,7 @@ private:
     [[nodiscard]] Object* other_root(const std::string_view name)
     {
         for (const auto& instance : design_.instances()) {
-            if (instance.parent || !design_unit_instance(instance)) {
+            if (!root_instance(instance) || !design_unit_instance(instance)) {
                 continue;
             }
             const auto path = design_.path(instance.path);
@@ -3145,11 +3319,10 @@ private:
             return result;
         }
         for (const auto& instance : design_.instances()) {
-            if (!instance.parent) {
-                continue;
-            }
             // An instance in a block or generate statement is in that
-            // statement's region (IEEE 1076-2019 19.4.2).
+            // statement's region (IEEE 1076-2019 19.4.2). Its occurrence
+            // has no parent instance there, since the statement is not an
+            // instance; a root has no enclosing path.
             const auto path = design_.path(instance.path);
             const auto dot = path.rfind('.');
             if (dot == std::string_view::npos
@@ -3200,6 +3373,15 @@ private:
             ? vhpiForGenerateK
             : vhpiIfGenerateK;
         auto* const object = make_object(kind, name, &region);
+        // CaseName keeps the label as declared (IEEE 1076-2019 19.4.3).
+        if (const auto* const declaration
+            = hir_.find_declaration(generate.declaration);
+            declaration != nullptr && !declaration->spelling.empty()) {
+            object->case_name = declaration->spelling;
+            if (index) {
+                object->case_name += "(" + std::to_string(*index) + ")";
+            }
+        }
         object->path = std::move(path);
         object->unit = region.unit;
         object->generate = &generate;
@@ -6192,7 +6374,7 @@ private:
             return param_object(
                 declaration, subprogram != nullptr ? subprogram : &region);
         }
-        const auto key = lower(declaration.name);
+        const auto key = lower(declared_name(declaration));
         if (const auto found = region.children.find(key);
             found != region.children.end()) {
             return found->second;
@@ -6228,7 +6410,7 @@ private:
         default:
             return nullptr;
         }
-        auto* const object = make_object(kind, declaration.name, &region);
+        auto* const object = make_declared_object(kind, declaration, &region);
         object->declaration = &declaration;
         object->full_name = region.full_name + ":" + object->name;
         object->full_case_name = region.full_case_name + ":" + object->case_name;
@@ -6237,17 +6419,19 @@ private:
         }
         if (!region.path.empty()) {
             object->signal = simulation_.find_signal(
-                region.path + "." + lower(declaration.name));
+                region.path + "." + declared_path_part(declaration));
         }
-        if (!object->signal && declaration.initializer
+        // A generic takes the value elaboration gave it (an actual or an
+        // override) before its default expression.
+        if (!object->signal
+            && declaration.form == vhdl::DeclarationForm::generic_constant) {
+            elaborated_generic(region, *object);
+        }
+        if (!object->signal && !object->constant && declaration.initializer
             && (declaration.form == vhdl::DeclarationForm::constant
                 || declaration.form
                     == vhdl::DeclarationForm::generic_constant)) {
             literal_constant(*object, *declaration.initializer);
-        }
-        if (!object->signal && !object->constant
-            && declaration.form == vhdl::DeclarationForm::generic_constant) {
-            elaborated_generic(region, *object);
         }
         if (object->signal) {
             if (const auto* const info = signal_info(*object->signal)) {
@@ -6306,7 +6490,7 @@ private:
             found != region.children.end()) {
             return found->second;
         }
-        auto* const object = make_object(kind, declaration.name, &region);
+        auto* const object = make_declared_object(kind, declaration, &region);
         object->declaration = &declaration;
         object->full_name = region.full_name + ":" + object->name;
         object->full_case_name = region.full_case_name + ":" + object->case_name;
@@ -6400,7 +6584,7 @@ private:
             found != owner.children.end()) {
             return found->second;
         }
-        auto* const object = make_object(vhpiSubpBodyK, declaration.name, &owner);
+        auto* const object = make_declared_object(vhpiSubpBodyK, declaration, &owner);
         object->declaration = &declaration;
         object->body = &declaration.statements;
         object->source = declaration.source;
@@ -6532,7 +6716,7 @@ private:
             return nullptr;
         }
         auto* const object
-            = make_object(vhpiAliasDeclK, declaration.name, &region);
+            = make_declared_object(vhpiAliasDeclK, declaration, &region);
         object->declaration = &declaration;
         object->aliased = target;
         object->full_name = region.full_name + ":" + object->name;
@@ -6684,6 +6868,24 @@ private:
             }
             return;
         }
+        if (data.storage == Storage::enumeration
+            || data.storage == Storage::logic9) {
+            // The identity of an enumeration value is its position number;
+            // the display may be the literal.
+            const std::string_view identity = found->identity;
+            std::size_t position { };
+            const auto* const last = identity.data() + identity.size();
+            if (const auto [end, failure]
+                = std::from_chars(identity.data(), last, position);
+                !identity.empty() && failure == std::errc { } && end == last
+                && position < data.literals.size()) {
+                object.constant
+                    = enumeration_constant(data, data.literals[position]);
+            } else if (auto value = enumeration_constant(data, display)) {
+                object.constant = std::move(*value);
+            }
+            return;
+        }
         if (data.storage != Storage::integer) {
             return;
         }
@@ -6832,6 +7034,21 @@ private:
             return std::pair { type, PackedLogic4::from_aval_bval(64U,
                 std::bit_cast<std::uint64_t>(value), 0U) };
         }
+        if ((data.storage == Storage::enumeration
+                || data.storage == Storage::logic9)
+            && (expression->kind == vhdl::ExpressionKind::boolean_literal
+                || expression->kind == vhdl::ExpressionKind::logic_literal
+                || expression->kind == vhdl::ExpressionKind::name)) {
+            auto text = expression->text;
+            if (expression->kind == vhdl::ExpressionKind::logic_literal
+                && text.size() == 1U) {
+                text = "'" + text + "'";
+            }
+            if (auto value = enumeration_constant(data, text)) {
+                return std::pair { type, std::move(*value) };
+            }
+            return std::nullopt;
+        }
         if (expression->kind != vhdl::ExpressionKind::string_literal
             || !expression->decoded_string) {
             return std::nullopt;
@@ -6839,8 +7056,29 @@ private:
         return string_constant(type, *expression->decoded_string);
     }
 
-    // The value of a string constant, which also constrains an unconstrained
-    // string type by its length (IEEE 1076-2019 5.3.2.2).
+    // The value of an enumeration literal of a type: a character literal
+    // matches exactly, an identifier without regard to case (IEEE 1076-2019
+    // 15.4).
+    [[nodiscard]] static std::optional<PackedLogic4> enumeration_constant(
+        const TypeData& data, const std::string_view text)
+    {
+        const auto found = std::ranges::find_if(data.literals,
+            [&](const std::string& literal) {
+                return text.starts_with('\'') ? literal == text
+                                               : same_name(literal, text);
+            });
+        if (found == data.literals.end()) {
+            return std::nullopt;
+        }
+        PackedLogic4 bits(std::max<std::size_t>(data.width, 1U), Logic4::zero);
+        store_scalar(bits, data, 0U, found - data.literals.begin());
+        return bits;
+    }
+
+    // The value of a string literal of a one-dimensional array of a type with
+    // character literals (STRING, STD_LOGIC_VECTOR), which also constrains an
+    // unconstrained array type by its length (IEEE 1076-2019 5.3.2.2,
+    // 15.7).
     [[nodiscard]] std::optional<std::pair<Object*, PackedLogic4>>
     string_constant(Object* const type, const std::string_view text)
     {
@@ -6849,10 +7087,27 @@ private:
         }
         const auto& data = *type->type_data;
         if (data.storage != Storage::array || data.element == nullptr
-            || data.element->type_data == nullptr
-            || data.element->type_data->literals.size() != 256U
-            || text.empty()) {
+            || data.element->type_data == nullptr || text.empty()) {
             return std::nullopt;
+        }
+        const auto& element = *data.element->type_data;
+        if (element.storage != Storage::enumeration
+            && element.storage != Storage::logic9) {
+            return std::nullopt;
+        }
+        std::vector<std::int64_t> positions;
+        for (const auto character : text) {
+            // CHARACTER's position is the character code (16.3).
+            if (element.literals.size() == 256U) {
+                positions.push_back(static_cast<unsigned char>(character));
+                continue;
+            }
+            const std::string literal { '\'', character, '\'' };
+            const auto found = std::ranges::find(element.literals, literal);
+            if (found == element.literals.end()) {
+                return std::nullopt;
+            }
+            positions.push_back(found - element.literals.begin());
         }
         auto* value_type = type;
         if (data.unconstrained || data.dimensions.empty()) {
@@ -6874,14 +7129,12 @@ private:
                 != text.size()) {
             return std::nullopt;
         }
-        PackedLogic4 bits(text.size() * 8U, Logic4::zero);
-        for (std::size_t position = 0U; position < text.size(); ++position) {
-            const auto code = static_cast<unsigned char>(text[position]);
-            const auto base = (text.size() - 1U - position) * 8U;
-            for (std::size_t bit = 0U; bit < 8U; ++bit) {
-                bits.set(base + bit,
-                    ((code >> bit) & 1U) != 0U ? Logic4::one : Logic4::zero);
-            }
+        // The leftmost element is the most significant.
+        const auto width = std::max<std::size_t>(element.width, 1U);
+        PackedLogic4 bits(text.size() * width, Logic4::zero);
+        for (std::size_t index = 0U; index < positions.size(); ++index) {
+            store_scalar(bits, element,
+                (positions.size() - 1U - index) * width, positions[index]);
         }
         return std::pair { value_type, std::move(bits) };
     }
@@ -6892,7 +7145,7 @@ private:
     {
         const vhdl::Declaration* match = nullptr;
         for (const auto* const declaration : region.region_declarations) {
-            if (!same_name(declaration->name, name)) {
+            if (!same_name(declared_name(*declaration), name)) {
                 continue;
             }
             if (match == nullptr) {
@@ -6990,6 +7243,24 @@ private:
             result->type_data->element = element;
             result->type_data->unconstrained = false;
             return result;
+        }
+        // A one-dimensional array that elaboration lays out as a packed
+        // vector (numeric_std UNSIGNED and SIGNED) carries its constraint
+        // only as the packed range.
+        if constexpr (requires { metadata.packed_range; }) {
+            if (data.storage == Storage::array && !metadata.vhdl_array
+                && metadata.packed_range && data.dimensions.size() <= 1U) {
+                const auto& packed = *metadata.packed_range;
+                std::vector<Range> dimensions { Range {
+                    packed.left, packed.right, packed.descending } };
+                if (dimensions == data.dimensions) {
+                    return type;
+                }
+                auto* const result = constrained(*type);
+                result->type_data->dimensions = std::move(dimensions);
+                result->type_data->unconstrained = false;
+                return result;
+            }
         }
         if (data.storage == Storage::record && !metadata.packed_members.empty()) {
             auto fields = data.fields;
@@ -7284,7 +7555,7 @@ private:
             if (absolute) {
                 name.remove_prefix(1U);
             }
-            const auto split = name.find_first_of(".:(");
+            const auto split = name_separator(name);
             const auto first = name.substr(0U, split);
             Object* top = nullptr;
             if (same_name(first, scope->case_name)) {
@@ -7354,7 +7625,7 @@ private:
                 }
                 continue;
             }
-            const auto split = name.find_first_of(".:(");
+            const auto split = name_separator(name);
             auto part = name.substr(0U, split);
             while (!part.empty() && part.back() == ' ') {
                 part.remove_suffix(1U);
@@ -7767,9 +8038,22 @@ private:
                 }
             }
         };
+        // The parameter of a for-generate occurrence is a constant implicitly
+        // declared in its declarative region (IEEE 1076-2019 11.8), the first
+        // of its declarations.
+        const auto generate_parameter = [&] {
+            if (object != nullptr && object->kind == vhpiForGenerateK
+                && object->generate_index) {
+                if (const auto found = object->children.find("@param");
+                    found != object->children.end()) {
+                    result.push_back(found->second);
+                }
+            }
+        };
         using Form = vhdl::DeclarationForm;
         switch (relation) {
         case vhpiDecls:
+            generate_parameter();
             declarations([&](const vhdl::Declaration& d) {
                 // The formals of a subprogram are its declaration's
                 // parameters, not declarations of its body.
@@ -7804,6 +8088,7 @@ private:
             });
             break;
         case vhpiConstDecls:
+            generate_parameter();
             declarations([](const vhdl::Declaration& d) {
                 return d.form == Form::constant;
             });
@@ -8382,6 +8667,25 @@ private:
             type = array(upper(key), standard_type(
                     key == "std_ulogic_vector" ? "std_ulogic" : "std_logic"),
                 "ieee", "std_logic_1164", standard_type("natural"));
+        } else if (key == "unresolved_unsigned" || key == "u_unsigned"
+            || key == "unresolved_signed" || key == "u_signed"
+            || key == "unsigned" || key == "signed") {
+            // IEEE.NUMERIC_STD (IEEE 1076-2019 16.8.5.1): the resolved
+            // subtypes have STD_LOGIC elements.
+            const bool is_signed = key.ends_with("signed")
+                && !key.ends_with("unsigned");
+            const bool resolved = key == "unsigned" || key == "signed";
+            type = array(resolved ? upper(key)
+                             : is_signed ? "UNRESOLVED_SIGNED"
+                                         : "UNRESOLVED_UNSIGNED",
+                standard_type(resolved ? "std_logic" : "std_ulogic"), "ieee",
+                "numeric_std", standard_type("natural"));
+        } else if (key == "numeric_bit.unsigned"
+            || key == "numeric_bit.signed") {
+            // IEEE.NUMERIC_BIT (16.8.5.1): arrays of BIT.
+            type = array(key == "numeric_bit.signed" ? "SIGNED" : "UNSIGNED",
+                standard_type("bit"), "ieee", "numeric_bit",
+                standard_type("natural"));
         }
         standard_types_.emplace(key, type);
         return type;
@@ -8724,11 +9028,14 @@ private:
             // A predefined type may be bound without its declaration.
             auto spelling
                 = vhdl::without_builtin_prefix(subtype.type_mark.spelling);
+            const bool numeric_bit = lower(spelling).find("numeric_bit.") != std::string::npos;
             if (const auto dot = spelling.rfind('.');
                 dot != std::string_view::npos) {
                 spelling.remove_prefix(dot + 1U);
             }
-            mark = standard_type(spelling);
+            mark = numeric_bit
+                ? standard_type("numeric_bit." + lower(spelling))
+                : standard_type(spelling);
             if (mark == nullptr) {
                 mark = package_type(subtype.type_mark.spelling);
             }
@@ -11103,8 +11410,11 @@ private:
         const SignalId signal, PackedLogic4 value, const bool force)
     {
         auto [found, created] = pending_updates_.try_emplace(signal);
+        if (!created && found->second.force && !force) {
+            return;
+        }
         found->second.value = std::move(value);
-        found->second.force = found->second.force || force;
+        found->second.force = force || found->second.force;
         if (!created) {
             return;
         }
@@ -11397,6 +11707,10 @@ private:
     std::vector<runtime::SystemVerilogVpiCallbackHandle> lifecycle_;
     std::optional<runtime::SystemVerilogVpiCallbackHandle> next_time_;
     std::set<SignalId> changed_;
+    // The changed signals of the update being dispatched whose events are
+    // still to come (flush_changes).
+    std::set<SignalId> flushing_;
+    std::vector<SignalId> flushing_registered_;
     std::vector<ForceEvent> forces_;
     std::set<SignalId> transaction_watch_;
     std::set<SignalId> active_;
@@ -11473,6 +11787,7 @@ private:
     runtime::SimulationTick cycle_time_ { };
     std::uint64_t cycles_ { };
     bool cycle_counted_ { };
+    ForeignCompanion companion_;
 };
 
 } // namespace
@@ -11482,10 +11797,12 @@ std::unique_ptr<VhpiForeignService> attach_vhpi_modules(
     const std::span<const std::string> modules,
     VhpiForeignService::PrintSink print,
     const std::span<const std::string> arguments,
-    diagnostic::Engine& diagnostics)
+    diagnostic::Engine& diagnostics,
+    ForeignCompanion companion)
 {
     auto service = std::make_unique<LiveService>(
         simulation, std::move(print), arguments);
+    service->set_companion(std::move(companion));
     service->attach();
     if (!service->load(modules, diagnostics)) {
         return nullptr;

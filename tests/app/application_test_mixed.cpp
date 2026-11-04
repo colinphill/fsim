@@ -911,7 +911,8 @@ verify_generated_behavior(
 const auto generated_callable_baseline = verify_generated_behavior(
     generated_behavior_vhdl_config,
     {"chosen.generated_value", "chosen.mapped_value"},
-    {"1000", "0110", "0111"},
+    // chosen.local_value is a constant VHPI finds by name.
+    {"1000", "00000000000000000000000000000110", "0110", "0111"},
     3,
     0,
     {{"chosen.mapped_shift",
@@ -923,7 +924,8 @@ const auto generated_callable_baseline = verify_generated_behavior(
 verify_generated_behavior(
     generated_loop_declarations_vhdl_config,
     {"architecture_value", "lanes[2].generated_value"},
-    {"0111", "0110", "0110"},
+    // lanes[2].local_value is a constant VHPI finds by name.
+    {"0111", "0110", "00000000000000000000000000000110", "0110"},
     3);
 verify_generated_behavior(
     generated_range_behavior_vhdl_config,
@@ -985,7 +987,8 @@ verify_generated_behavior(
 verify_generated_behavior(
     generated_block_behavior_vhdl_config,
     {"static_scope.generated_value"},
-    {"1000", "0111"},
+    // static_scope.local_value is a constant VHPI finds by name.
+    {"1000", "00000000000000000000000000000111", "0111"},
     2);
 const auto block_interface_baseline = verify_generated_behavior(
     generated_block_interface_vhdl_config,
@@ -1070,7 +1073,8 @@ const auto generated_callable_edited = run_generated_behavior(
      {"chosen.selected_math", "bias=5"}});
 assert(generated_callable_edited.keys != generated_callable_baseline.keys);
 assert((generated_callable_edited.simulation.final_values
-        == std::vector<std::string>{"1000", "0110", "1000"}));
+        == std::vector<std::string>{
+            "1000", "00000000000000000000000000000110", "0110", "1000"}));
 #if defined(FSIM_HAS_LLVM)
 assert(generated_callable_edited.simulation.native_cache.hits == 0);
 #endif

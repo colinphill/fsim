@@ -1595,6 +1595,11 @@ struct DesignUnit {
     // is the entity it implements.
     std::string primary_name;
     bool vhdl_extended_primary_name { };
+    // VHDL: the source spelling of each declared identifier of the unit whose
+    // spelling is not its decoded name (extended identifiers keep their
+    // backslashes, basic identifiers their declared letter case), keyed by
+    // the decoded name (IEEE 1076-2019 15.4, 19.4.3).
+    std::vector<std::pair<std::string, std::string>> vhdl_spellings;
     // Nonempty only for a checksum-pinned compiler-supplied standard package.
     // Intrinsic exports remain explicit without masquerading as ordinary user
     // declarations whose bodies and nominal types would require general source

@@ -335,6 +335,10 @@ public:
                 leader[at + 1U] = 1U;
             } else if (inst.op == KOp::ret || inst.op == KOp::suspend) {
                 leader[at + 1U] = 1U;
+            } else if (inst.op == KOp::mark && inst.sub != 0U) {
+                // A dissolved partition's gated member: skipped to aux.
+                leader[std::min(inst.aux, size)] = 1U;
+                leader[at + 1U] = 1U;
             } else if (inst.op == KOp::step) {
                 leader[at + 1U] = 1U;
                 if (inst.z >= 1U) {
@@ -707,6 +711,9 @@ private:
                 leader[std::min(inst.y, size)] = 1U;
                 leader[std::min(inst.z, size)] = 1U;
                 leader[at + 1U] = 1U;
+            } else if (inst.op == KOp::mark && inst.sub != 0U) {
+                leader[std::min(inst.aux, size)] = 1U;
+                leader[at + 1U] = 1U;
             } else if (inst.op == KOp::suspend) {
                 leader[at + 1U] = 1U;
             }
@@ -748,6 +755,9 @@ private:
             } else if (inst.op == KOp::branch) {
                 successors[block] = { block_of[std::min(inst.y, size)],
                     block_of[std::min(inst.z, size)] };
+            } else if (inst.op == KOp::mark && inst.sub != 0U) {
+                successors[block] = { block_of[last + 1U],
+                    block_of[std::min(inst.aux, size)] };
             } else {
                 successors[block] = { block_of[last + 1U] };
             }
@@ -3106,6 +3116,24 @@ private:
             builder_.CreateStore(binding(inst.x, 0U), frame_field(32U));
             builder_.CreateStore(llvm::ConstantInt::get(i32_, inst.d),
                 frame_field(36U));
+            if (inst.sub != 0U) {
+                // A dissolved partition's gated member runs when the
+                // kernel finds it due; otherwise the next member's mark.
+                auto* type = llvm::FunctionType::get(i32_, { ptr_, i32_ }, false);
+                auto* due = builder_.CreateCall(type,
+                    helper_symbol("fsim_sk_member_due", type),
+                    { frame_, llvm::ConstantInt::get(i32_, inst.d) });
+                auto* checked = llvm::BasicBlock::Create(context_, "due", &function_);
+                auto* status = builder_.CreateLoad(i32_, frame_field(40U));
+                builder_.CreateCondBr(
+                    builder_.CreateICmpNE(status, llvm::ConstantInt::get(i32_, 0U)),
+                    failure_block_, checked);
+                builder_.SetInsertPoint(checked);
+                builder_.CreateCondBr(
+                    builder_.CreateICmpNE(due, llvm::ConstantInt::get(i32_, 0U)),
+                    blocks_[at + 1U],
+                    blocks_[std::min<std::size_t>(inst.aux, body_.code.size())]);
+            }
             break;
         case KOp::constant:
             if (inst.sub == 1U) {
@@ -4386,6 +4414,7 @@ private:
         add("fsim_sk_binary", helpers.binary);
         add("fsim_sk_notify_field", helpers.notify_field);
         add("fsim_sk_fail", helpers.fail);
+        add("fsim_sk_member_due", helpers.member_due);
 #if defined(__MINGW32__)
         add("___chkstk_ms", &___chkstk_ms);
 #endif

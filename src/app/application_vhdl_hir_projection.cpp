@@ -1733,6 +1733,11 @@ predefined_subtype_attribute(
     declaration_record.scope = scope;
     declaration_record.form = form;
     declaration_record.name = declaration_name;
+    if (const auto spelled
+        = unit_spellings_.find(std::string { declaration_name });
+        spelled != unit_spellings_.end()) {
+        declaration_record.spelling = spelled->second;
+    }
     declaration_record.source = span;
     declaration_record.origin = declaration_origin;
     hir_.mutable_declarations().push_back(std::move(declaration_record));

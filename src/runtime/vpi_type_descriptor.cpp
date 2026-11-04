@@ -434,7 +434,8 @@ std::uint64_t systemverilog_vpi_declared_bits(
         }
         return bits;
     }
-    case SystemVerilogVpiDescriptorKind::PackedArray: {
+    case SystemVerilogVpiDescriptorKind::PackedArray:
+    case SystemVerilogVpiDescriptorKind::UnpackedArray: {
         if (descriptor.children.size() != 1U) {
             return 0U;
         }

@@ -1667,7 +1667,7 @@ void Interpreter::Impl::publish_container_alias_family(
         }
 
         if (current_stage_ready) {
-            const auto transaction_delta = scheduler.delta() + 1U;
+            const auto transaction_delta = signal_event_delta(origin);
             const bool any_current_change
                 = std::ranges::any_of(plan, [](const PlannedLeaf& leaf) {
                       return leaf.current_changed;
@@ -2276,13 +2276,16 @@ void Interpreter::Impl::write_container_object_value(
         } else {
             object.initial_value = value;
         }
-        if (alias && alias->writable) {
+        // A deposit (no driver) also reaches the signal a read-only alias
+        // bridges, such as a top-level input port's: its readers wait on that
+        // signal (IEEE 1800-2023 38.34).
+        if (alias && (alias->writable || (!driver && alias->readable))) {
             const bool logic9 = get_signal(alias->signal).initial_value.is_logic9();
             auto packed = pack_container_signal_value(value, logic9);
             if (driver) {
                 commit_driver(
                     *driver, alias->signal, std::move(packed), origin, false);
-            } else {
+            } else if (!deposit_kernel_owned(alias->signal, packed)) {
                 commit(alias->signal, std::move(packed), origin);
             }
             if (container_value_reference_exposed[id] == 0U) {

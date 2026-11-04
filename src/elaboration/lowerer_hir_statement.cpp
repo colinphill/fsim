@@ -5780,9 +5780,23 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto* prefix_range = occurrence_prefix_range != nullptr
                 ? occurrence_prefix_range
                 : declared_prefix_range;
-            const bool prefix_rank_one_array = prefix_array != nullptr
-                && prefix_array->array_dimensions.size() == 1U
-                && prefix_array->element_subtype.has_value();
+            // An element of a predefined logic or bit vector type is a
+            // one-dimensional array of scalars with no declared array type
+            // (IEEE 1076-2019 5.3.2.3, 16.8): `v(i)(1)(3 downto 0)`.
+            using Builtin = semantic::vhdl::BuiltinTypeIdentity;
+            const bool prefix_predefined_vector = prefix_array == nullptr
+                && selection
+                && selection->subtype.constraints.size() == 1U
+                && (selection->subtype.builtin_type
+                        == Builtin::ieee_std_logic_1164_std_logic_vector
+                    || selection->subtype.builtin_type
+                        == Builtin::ieee_std_logic_1164_std_ulogic_vector
+                    || selection->subtype.builtin_type
+                        == Builtin::std_standard_bit_vector);
+            const bool prefix_rank_one_array = prefix_predefined_vector
+                || (prefix_array != nullptr
+                    && prefix_array->array_dimensions.size() == 1U
+                    && prefix_array->element_subtype.has_value());
             const auto selected_left = hir_constant_integer(
                 slice.operands[1U]);
             const auto selected_right = hir_constant_integer(
@@ -26517,6 +26531,41 @@ bool Lowerer::hir_class_event_expression(
 std::optional<SignalId> Lowerer::hir_local_event_notifier(
     const semantic::DeclarationId declaration)
 {
+    // A string object's change signal is shared by every scope that
+    // writes or waits on it, and by a deposit into it.
+    if (const auto text = hir_string_binding(
+            declaration, hir_process_scope_, true);
+        text && text->object
+        && *text->object < design_.string_objects_.size()
+        && !design_.string_objects_[*text->object].element_alias) {
+        auto& object = design_.string_objects_[*text->object];
+        if (object.change_signal) {
+            return object.change_signal;
+        }
+        if (design_.signals_.size()
+            >= std::numeric_limits<SignalId>::max()) {
+            return std::nullopt;
+        }
+        guard_design_write();
+        const auto id = static_cast<SignalId>(design_.signals_.size());
+        const auto name = object.name + "$changed";
+        SignalInfo info;
+        info.id = id;
+        info.name = name;
+        info.width = 1U;
+        info.type_name = "bit";
+        info.source_domain = frontend::ValueDomain::Bit2;
+        design_.signal_info_.push_back(std::move(info));
+        design_.signals_.push_back(Signal {
+            name,
+            PackedLogic4 { 1U, Logic4::zero },
+            ResolutionKind::none,
+            value_kind(frontend::ValueDomain::Bit2),
+        });
+        design_.signal_by_name_.emplace(name, id);
+        object.change_signal = id;
+        return id;
+    }
     const auto name = hierarchy_ + ".$local_event_"
         + std::to_string(declaration.value());
     if (const auto found = design_.signal_by_name_.find(name);

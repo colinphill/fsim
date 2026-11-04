@@ -147,10 +147,13 @@ void Interpreter::Impl::StaticKernel::ready_thread(const std::uint32_t index)
     ++thread.epoch;
     thread.queued = true;
     if (members_[thread.member].vhdl) {
-        // A VHDL thread resumes in the next delta cycle, whatever woke it
-        // (IEEE 1076-2019 14.7.5.3): it runs with the VHDL members of the
-        // next round, never in a SystemVerilog Active drain.
-        vhdl_ready_threads_.push_back(index);
+        // A VHDL thread woken by SystemVerilog work resumes in the drain's
+        // Active region, before its nonblocking updates (S16); one woken by
+        // a VHDL update resumes in the next delta cycle (IEEE 1076-2019
+        // 14.7.5.3), with the VHDL members of the next round.
+        (sv_draining_ && !committing_round_ ? sv_woken_threads_
+                                            : vhdl_ready_threads_)
+            .push_back(index);
         return;
     }
     if (committing_round_) {

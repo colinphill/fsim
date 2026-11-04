@@ -161,6 +161,9 @@ struct StaticKernelNativeHelpers {
         std::uint64_t changed, std::uint32_t field_offset) { };
     void (*fail)(StaticKernelNativeFrame*, std::uint32_t at,
         std::uint32_t reason) { };
+    /// A gated mark of a dissolved partition (`fsim_sk_member_due`):
+    /// nonzero when the member at this position runs in the pass.
+    std::uint32_t (*member_due)(StaticKernelNativeFrame*, std::uint32_t position) { };
     /// Executes a generic instruction against the caller's registers, one
     /// helper per operation kind (the instruction's `sub`; generated code
     /// calls `fsim_sk_generic_<sub>`).

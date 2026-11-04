@@ -191,6 +191,10 @@ struct SystemVerilogVpiPublishedDesign {
         std::vector<SystemVerilogVpiDriverBinding>>
         drivers;
     std::map<runtime::simir::SignalId, std::vector<fsim_vpi_handle_v1>> events;
+    // SystemVerilog string variables and string ports, by handle (IEEE
+    // 1800-2023 37.17 vpiStringVar).
+    std::map<fsim_vpi_handle_v1, runtime::simir::StringObjectId>
+        string_handles;
     std::map<std::string, fsim_vpi_handle_v1, std::less<>> assertions;
     std::map<runtime::simir::SignalId, runtime::SystemVerilogScalarKind>
         scalar_kinds;

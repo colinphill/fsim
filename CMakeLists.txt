@@ -1558,6 +1558,32 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
     target_compile_definitions(fsim_base PRIVATE FSIM_ENABLE_ALLOCATION_PROFILING=1)
     target_sources(fsim PRIVATE src/app/allocation_profile_global_new.cpp)
   endif()
+  # The cocotb integration (fsim cocotb makefile|pythonpath) beside the
+  # build-tree executable, laid out as it is installed.
+  set(FSIM_COCOTB_FILES
+    Makefile.fsim
+    fsim_cocotb/__init__.py
+    fsim_cocotb/runner.py)
+  set(FSIM_COCOTB_OUTPUTS)
+  foreach(FSIM_COCOTB_FILE IN LISTS FSIM_COCOTB_FILES)
+    if(FSIM_COCOTB_FILE STREQUAL "Makefile.fsim")
+      set(FSIM_COCOTB_OUTPUT
+        "${PROJECT_BINARY_DIR}/share/fsim/cocotb/${FSIM_COCOTB_FILE}")
+    else()
+      set(FSIM_COCOTB_OUTPUT
+        "${PROJECT_BINARY_DIR}/share/fsim/cocotb/python/${FSIM_COCOTB_FILE}")
+    endif()
+    add_custom_command(
+      OUTPUT "${FSIM_COCOTB_OUTPUT}"
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${PROJECT_SOURCE_DIR}/src/cocotb/${FSIM_COCOTB_FILE}"
+        "${FSIM_COCOTB_OUTPUT}"
+      DEPENDS "${PROJECT_SOURCE_DIR}/src/cocotb/${FSIM_COCOTB_FILE}"
+      VERBATIM)
+    list(APPEND FSIM_COCOTB_OUTPUTS "${FSIM_COCOTB_OUTPUT}")
+  endforeach()
+  add_custom_target(fsim_cocotb_files DEPENDS ${FSIM_COCOTB_OUTPUTS})
+  add_dependencies(fsim fsim_cocotb_files)
 endif()
 
 set(FSIM_SYSTEMC_RUNTIME_TARGET_MANIFEST
@@ -1737,6 +1763,14 @@ install(
     third_party/scv-2.0.1/SOURCE_MANIFEST.txt
     third_party/scv-2.0.1/scv-2.0.1.spdx.json
   DESTINATION "${CMAKE_INSTALL_DOCDIR}/third-party/scv-2.0.1"
+)
+install(
+  FILES src/cocotb/Makefile.fsim
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/cocotb"
+)
+install(
+  FILES src/cocotb/fsim_cocotb/__init__.py src/cocotb/fsim_cocotb/runner.py
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/fsim/cocotb/python/fsim_cocotb"
 )
 install(
   DIRECTORY examples/

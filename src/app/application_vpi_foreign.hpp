@@ -23,6 +23,16 @@ namespace fsim::app::application_detail {
 
 class DpiForeignService;
 
+/// The other interface's service in a run that serves VPI and VHPI: a
+/// mixed-language program (cocotb's) calls both from either one's
+/// callbacks, so while one service's routines or callbacks run the other
+/// answers calls too. `enter` and `leave` bracket such a call on the
+/// running thread.
+struct ForeignCompanion {
+    std::function<void()> enter;
+    std::function<void()> leave;
+};
+
 /// Run the startup routines of each VPI module (`lib[:bootstrap]`) against a
 /// registration-only host and report the system tasks and functions they
 /// register (IEEE 1800-2023 38.36). Elaboration lowers calls of these names
@@ -62,6 +72,10 @@ public:
     {
         (void)message;
     }
+    /// Bracket a call of the other interface's callbacks, during which this
+    /// service answers calls too.
+    [[nodiscard]] virtual ForeignCompanion calls() = 0;
+    virtual void set_companion(ForeignCompanion companion) = 0;
 };
 
 /// Load the modules into a constructed, not yet started simulation, run
@@ -76,6 +90,7 @@ public:
     VpiForeignService::PrintSink print,
     std::span<const std::string> arguments,
     DpiForeignService* dpi,
-    diagnostic::Engine& diagnostics);
+    diagnostic::Engine& diagnostics,
+    ForeignCompanion companion = {});
 
 } // namespace fsim::app::application_detail

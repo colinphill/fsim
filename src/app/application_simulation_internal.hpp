@@ -752,6 +752,11 @@ struct Simulation::Impl {
         std::pair<runtime::simir::ContainerObjectId, std::size_t>>
         vpi_word_handles;
 
+    // The string variables and string ports VPI reads and writes through the
+    // interpreter's string objects (IEEE 1800-2023 37.17, 38.15).
+    std::map<fsim_vpi_handle_v1, runtime::simir::StringObjectId>
+        vpi_string_handles;
+
     std::map<runtime::simir::ContainerObjectId,
         runtime::SystemVerilogScalarKind>
         vpi_container_scalar_kinds;
@@ -839,6 +844,7 @@ struct Simulation::Impl {
     std::map<std::uint64_t, ExecutionPointHook> execution_point_observers;
 
     bool foreign_probes { };
+    bool vhpi_end_of_step_timers { };
 
     std::map<std::uint64_t, SignalTransactionHook>
         signal_transaction_observers;

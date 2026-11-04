@@ -752,6 +752,16 @@ bool Simulation::foreign_probes() const noexcept
     return impl_->foreign_probes;
 }
 
+void Simulation::set_vhpi_end_of_step_timers(const bool enabled) noexcept
+{
+    impl_->vhpi_end_of_step_timers = enabled;
+}
+
+bool Simulation::vhpi_end_of_step_timers() const noexcept
+{
+    return impl_->vhpi_end_of_step_timers;
+}
+
 void Simulation::set_systemverilog_plusargs(
     const std::span<const std::string> plusargs)
 {

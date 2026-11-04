@@ -1857,14 +1857,12 @@ void Interpreter::Impl::queue_next_delta(
     const SignalChangeOrigin origin)
 {
     if (static_kernel_hosts(id)) {
-        // The host scheduler runs a SystemVerilog process's same-domain
-        // next-delta wake in the next round of the Active region and any
-        // other wake, including every wake of a VHDL (generic domain)
-        // process, in the next delta (IEEE 1076-2019 14.7.5.3).
+        // The host scheduler runs a wake by SystemVerilog work in the next
+        // round of the Active region, a VHDL (generic domain) process's too
+        // (S16), and any other wake in the next delta (IEEE 1076-2019
+        // 14.7.5.3).
         static_kernel_enqueue_hosted(id,
             origin.process_domain == ProcessSchedulingDomain::systemverilog
-                    && processes.scheduling_domain(id)
-                        == ProcessSchedulingDomain::systemverilog
                 ? StaticKernelHostedWake::active
                 : StaticKernelHostedWake::next_delta);
         return;
@@ -1914,6 +1912,15 @@ void Interpreter::Impl::queue_next_delta(
                         });
                 });
         }
+        return;
+    }
+    // A change made by SystemVerilog work wakes a VHDL process in the next
+    // round of the Active region, with the SystemVerilog processes it wakes
+    // and before that region's nonblocking updates. No standard orders
+    // zero-delay events across languages; fsim follows Vivado (S16).
+    if (origin.process_domain == ProcessSchedulingDomain::systemverilog
+        && phase == SchedulerPhase::active) {
+        scheduler.schedule_internal_systemverilog_next_delta(phase, id, task);
         return;
     }
     scheduler.schedule_internal_next_delta(phase, id, task);
@@ -2377,6 +2384,18 @@ void Interpreter::Impl::trigger_event(
             }
         }
     }
+}
+
+std::uint64_t Interpreter::Impl::signal_event_delta(
+    const SignalChangeOrigin origin) const
+{
+    // A change made by SystemVerilog work is an event of the current delta,
+    // whose Active region runs the VHDL processes it wakes (S16); an update
+    // of the VHDL cycle is one of the next delta (IEEE 1076-2019 14.7.5.3).
+    return scheduler.delta()
+        + (origin.process_domain == ProcessSchedulingDomain::systemverilog
+                ? 0U
+                : 1U);
 }
 
 void Interpreter::Impl::stamp_signal_event(
@@ -3729,7 +3748,7 @@ void Interpreter::Impl::publish_native_word(
             container_materialized_revisions, std::nullopt);
     }
     record_signal_event(
-        signal_id, scheduler.delta() + 1U, origin);
+        signal_id, signal_event_delta(origin), origin);
     scheduler.note_signal_change(signal_id);
 
     if (!has_static_fanout) {
@@ -3811,7 +3830,7 @@ void Interpreter::Impl::publish_native_logic9_word(
             container_materialized_revisions, std::nullopt);
     }
     record_signal_event(
-        signal_id, scheduler.delta() + 1U, origin);
+        signal_id, signal_event_delta(origin), origin);
     scheduler.note_signal_change(signal_id);
 
     if (!has_static_fanout) {
@@ -3864,7 +3883,7 @@ void Interpreter::Impl::note_signal_transaction(
         }
     }
     const bool group_static_fanout = fanout_cohort_grouping_enabled;
-    signal_transactions[signal_id] = std::pair { scheduler.now(), scheduler.delta() + 1 };
+    signal_transactions[signal_id] = std::pair { scheduler.now(), signal_event_delta(origin) };
     note_selected_signal_transaction(signal_id);
     if (signal_id < signal_container_element_aliases.size()
         && signal_container_element_aliases[signal_id]) {
@@ -3965,7 +3984,7 @@ void Interpreter::Impl::publish_aggregate_signal_value_change(
 {
     // Whole-family writes can preinstall the stamp and history before traces.
     if (!event_prepared) {
-        record_signal_event(proxy, scheduler.delta() + 1U, origin);
+        record_signal_event(proxy, signal_event_delta(origin), origin);
     }
     scheduler.note_signal_change(proxy);
 
@@ -4081,7 +4100,7 @@ void Interpreter::Impl::publish_value_change(
                 container_materialized_revisions, std::nullopt);
         }
         record_signal_event(
-            signal_id, scheduler.delta() + 1U, origin);
+            signal_id, signal_event_delta(origin), origin);
     }
     scheduler.note_signal_change(signal_id);
     if (static_kernel_import_enabled) {

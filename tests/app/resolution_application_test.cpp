@@ -1825,14 +1825,14 @@ end architecture;
     assert((observed_with_delta(names[9])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "00000000", 0, 1 }, { "00000001", 0, 5 },
-            { "00000010", 0, 9 }, { "00000011", 0, 13 } }));
+            { "00000000", 0, 1 }, { "00000001", 0, 4 },
+            { "00000010", 0, 7 }, { "00000011", 0, 10 } }));
     assert((observed_with_delta(names[10])
         == std::vector<std::tuple<
             std::string, fsim::runtime::SimulationTick, std::uint64_t>> {
-            { "0000XXXX", 0, 0 }, { "00000000", 0, 4 },
-            { "00000001", 0, 8 }, { "00000010", 0, 12 },
-            { "00000011", 0, 16 } }));
+            { "0000XXXX", 0, 0 }, { "00000000", 0, 3 },
+            { "00000001", 0, 6 }, { "00000010", 0, 9 },
+            { "00000011", 0, 12 } }));
     assert(reference.paused.status == fsim::runtime::RunStatus::stopped);
     assert(reference.paused.time == 1);
     assert(reference.result.status == fsim::runtime::RunStatus::stopped);
@@ -1853,7 +1853,7 @@ end architecture;
         != std::string::npos);
     assert(reference.vcd.find("$timescale 1ps $end")
         != std::string::npos);
-    assert((reference.outputs == std::vector<std::tuple<std::string, fsim::runtime::SimulationTick, std::uint64_t>> { { "region=11", 0, 17 } }));
+    assert((reference.outputs == std::vector<std::tuple<std::string, fsim::runtime::SimulationTick, std::uint64_t>> { { "region=11", 0, 13 } }));
     assert(reference.final_values[9] == "00000011");
     assert(reference.final_values[10] == "00000011");
     for (const auto* actual : { &cold, &warm }) {

@@ -1,10 +1,10 @@
 // fsim: top=mixed_vhdl_delta_after_sv_write before=mixed_vhdl_delta_after_sv_write_ram.vhd.in
 // SPDX-License-Identifier: Apache-2.0
-// IEEE 1076-2019 14.7.5.3: a VHDL process woken by a signal change runs in
-// the next delta cycle, whatever the writer's language. A SystemVerilog clock
-// edge wakes the VHDL counter and the VHDL read port together, so the read
-// port samples the counter's value from before the edge: rdata is the table
-// entry of the previous address.
+// A SystemVerilog clock edge wakes the VHDL counter and the VHDL read port
+// together, in the same Active region (S16), and the counter's update waits
+// for the update phase (IEEE 1076-2019 14.7.5.3). The read port therefore
+// samples the counter's value from before the edge: rdata is the table entry
+// of the previous address.
 module mixed_vhdl_delta_after_sv_write;
   reg clk = 1'b0;
   wire [7:0] rdata;

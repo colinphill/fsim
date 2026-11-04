@@ -26925,9 +26925,43 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                     register_domain(*rhs)))
                             && (numeric_std_operand(source.operands[0])
                                 || numeric_std_operand(source.operands[1]));
+                        // STD_LOGIC_UNSIGNED and STD_LOGIC_SIGNED order
+                        // STD_LOGIC_VECTOR operands through STD_LOGIC_ARITH.
+                        const auto synopsys_operand
+                            = [&](const semantic::ExpressionId operand) {
+                                  const auto subtype
+                                      = hir_vhdl_expression_subtype(operand);
+                                  if (!subtype) {
+                                      return false;
+                                  }
+                                  return same_hir_identifier(
+                                      simple_name_of(
+                                          subtype->type_mark.spelling),
+                                      "std_logic_vector", true);
+                              };
+                        const auto synopsys_ordering = [&] {
+                            if (vhdl_ordering
+                                || language_ != frontend::Language::Vhdl2008
+                                || (source.text != "<" && source.text != "<="
+                                    && source.text != ">"
+                                    && source.text != ">=")
+                                || (is_two_state_domain(register_domain(*lhs))
+                                    && is_two_state_domain(
+                                        register_domain(*rhs)))
+                                || (!synopsys_operand(source.operands[0])
+                                    && !synopsys_operand(source.operands[1]))) {
+                                return false;
+                            }
+                            const auto context
+                                = hir_vhdl_synopsys_numeric_context(
+                                    expression->vhdl->scope);
+                            return context.signed_visible
+                                || context.unsigned_visible;
+                        }();
                         auto destination = allocate_register(width,
-                            vhdl_ordering ? frontend::ValueDomain::Logic4
-                                          : domain);
+                            vhdl_ordering || synopsys_ordering
+                                ? frontend::ValueDomain::Logic4
+                                : domain);
                         process_.operations.emplace_back(Binary {
                             *operation, destination, *lhs, *rhs });
                         // numeric_std's relations warn when an operand holds
@@ -26982,6 +27016,113 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                 BinaryOperator::case_equal, known,
                                 destination, one });
                             destination = known;
+                        }
+                        if (synopsys_ordering) {
+                            // STD_LOGIC_ARITH converts an operand holding a
+                            // metavalue to all 'X' with a warning, then
+                            // compares bit by bit, where 'X' is neither '0'
+                            // nor '1' (CONV_UNSIGNED, CONV_SIGNED,
+                            // UNSIGNED_IS_LESS[_OR_EQUAL], IS_LESS[_OR_EQUAL];
+                            // ">" and ">=" swap the operands). Unsigned "<" is
+                            // then FALSE, and "<=" is TRUE only for an
+                            // unknown left operand against all ones or an
+                            // all-zero left operand against an unknown right
+                            // one. Signed operands first compare sign bits,
+                            // so the relation is TRUE when the known left
+                            // operand is negative.
+                            const auto known_register = [&](const RegisterId operand) {
+                                const auto self_equal = allocate_register(
+                                    1U, frontend::ValueDomain::Logic4);
+                                process_.operations.emplace_back(Binary {
+                                    BinaryOperator::equal, self_equal, operand,
+                                    operand });
+                                const auto known = allocate_register(
+                                    1U, frontend::ValueDomain::Boolean);
+                                process_.operations.emplace_back(Binary {
+                                    BinaryOperator::case_equal, known,
+                                    self_equal,
+                                    load_constant(unsigned_value(1U, 1U),
+                                        frontend::ValueDomain::Logic4) });
+                                return known;
+                            };
+                            const auto boolean_binary = [&](
+                                const BinaryOperator binary,
+                                const RegisterId left, const RegisterId right) {
+                                const auto result = allocate_register(
+                                    1U, frontend::ValueDomain::Boolean);
+                                process_.operations.emplace_back(
+                                    Binary { binary, result, left, right });
+                                return result;
+                            };
+                            const auto swapped
+                                = source.text == ">" || source.text == ">=";
+                            const auto left = swapped ? *rhs : *lhs;
+                            const auto right = swapped ? *lhs : *rhs;
+                            const auto known_left = known_register(left);
+                            const auto known_right = known_register(right);
+                            const auto known = boolean_binary(
+                                BinaryOperator::bit_and, known_left,
+                                known_right);
+                            // Each conversion warns for its own operand.
+                            for (const auto operand_known :
+                                { known_left, known_right }) {
+                                process_.operations.emplace_back(Assert {
+                                    operand_known,
+                                    "There is an 'U'|'X'|'W'|'Z'|'-' in an "
+                                    "arithmetic operand, the result will be "
+                                    "'X'(es).",
+                                    AssertionSeverity::warning,
+                                    runtime_source_location(
+                                        hir_source_span(source.source)),
+                                });
+                            }
+                            const auto operand_bits = register_width(left);
+                            const auto logic_constant = [&](const Logic4 bit) {
+                                return load_constant(
+                                    PackedLogic4(operand_bits, bit),
+                                    register_domain(left));
+                            };
+                            RegisterId metavalue;
+                            if (signed_operands) {
+                                const auto negative = allocate_register(
+                                    1U, frontend::ValueDomain::Logic4);
+                                process_.operations.emplace_back(Binary {
+                                    BinaryOperator::less_signed, negative,
+                                    left, logic_constant(Logic4::zero) });
+                                metavalue = boolean_binary(
+                                    BinaryOperator::bit_and, known_left,
+                                    boolean_binary(BinaryOperator::case_equal,
+                                        negative,
+                                        load_constant(unsigned_value(1U, 1U),
+                                            frontend::ValueDomain::Logic4)));
+                            } else if (source.text == "<="
+                                || source.text == ">=") {
+                                metavalue = boolean_binary(
+                                    BinaryOperator::bit_or,
+                                    boolean_binary(BinaryOperator::bit_and,
+                                        known_left,
+                                        boolean_binary(
+                                            BinaryOperator::case_equal, left,
+                                            logic_constant(Logic4::zero))),
+                                    boolean_binary(BinaryOperator::bit_and,
+                                        known_right,
+                                        boolean_binary(
+                                            BinaryOperator::case_equal, right,
+                                            logic_constant(Logic4::one))));
+                            } else {
+                                metavalue = load_constant(
+                                    unsigned_value(0U, 1U),
+                                    frontend::ValueDomain::Boolean);
+                            }
+                            const auto definite = boolean_binary(
+                                BinaryOperator::case_equal, destination,
+                                load_constant(unsigned_value(1U, 1U),
+                                    frontend::ValueDomain::Logic4));
+                            const auto selected = allocate_register(
+                                1U, frontend::ValueDomain::Boolean);
+                            process_.operations.emplace_back(ConditionalSelect {
+                                selected, known, definite, metavalue });
+                            destination = selected;
                         }
                         // An unsigned base with a negative signed exponent
                         // (the exponent is self-determined): 1 for a base of

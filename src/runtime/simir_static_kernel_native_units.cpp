@@ -1273,6 +1273,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     set_instruction_helpers(helpers);
     helpers.notify = &StaticKernel::native_notify;
     helpers.notify_field = &StaticKernel::native_notify_field;
+    helpers.member_due = &StaticKernel::native_member_due;
     helpers.binary = [](const std::uint64_t operation_width, const std::uint64_t la,
                          const std::uint64_t lb, const std::uint64_t ra,
                          const std::uint64_t rb, std::uint64_t* out) {
@@ -1580,6 +1581,13 @@ void Interpreter::Impl::StaticKernel::respecialize_silent(
             unit->entry = entries[index];
         }
     }
+    // A member's fast run holds its unit's entry and program.
+    for (std::uint32_t member = 0U; member < members_.size(); ++member) {
+        if (member < fast_runs_.size() && members_[member].compiled
+            && members_[member].partition == no_slot) {
+            refresh_fast_run(member);
+        }
+    }
 }
 
 void Interpreter::Impl::StaticKernel::note_partition_wake(const std::uint32_t partition,
@@ -1639,6 +1647,11 @@ void Interpreter::Impl::StaticKernel::run_partition(const std::uint32_t partitio
         throw;
     }
     scratch().running_partition = no_slot;
+    if (!pending_dissolves_.empty()) {
+        for (const auto pending : std::exchange(pending_dissolves_, { })) {
+            dissolve_member(pending);
+        }
+    }
     if (profile_) {
         profile_partition_operations_[partition]
             += profile_operations_ - operations_before;
@@ -1648,7 +1661,8 @@ void Interpreter::Impl::StaticKernel::run_partition(const std::uint32_t partitio
 std::size_t Interpreter::Impl::StaticKernel::forward_partition_stores(
     CompiledBody& program,
     const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset,
-    std::vector<std::uint32_t>& register_of_slot) const
+    std::vector<std::uint32_t>& register_of_slot,
+    std::vector<std::uint32_t>& restore) const
 {
     // A partition runs its members in order, every pass from the start. A
     // load of a whole narrow slot that a branch-free member stored earlier
@@ -1719,6 +1733,8 @@ std::size_t Interpreter::Impl::StaticKernel::forward_partition_stores(
                 && whole_narrow(slot->second, slots_[slot->second].width)) {
                 if (const auto found = register_of_slot[slot->second];
                     found != no_slot && found != inst.d) {
+                    restore.push_back(static_cast<std::uint32_t>(at));
+                    restore.push_back(inst.x);
                     inst.op = KOp::copy;
                     inst.x = found;
                     ++forwarded;
@@ -2507,7 +2523,7 @@ void Interpreter::Impl::StaticKernel::build_partitions(
         auto& program = state.program;
         concatenate_members(program, state.members, true);
         forwarded[partition] = forward_partition_stores(
-            program, slot_of_offset, register_of_slot[worker]);
+            program, slot_of_offset, register_of_slot[worker], state.forwarded);
     }, 4U);
     for (const auto loads : forwarded) {
         forwarded_loads_ += loads;

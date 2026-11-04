@@ -2415,6 +2415,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const SignalId signal,
         PackedLogic4 value) const;
 
+    // Deposits into the static kernel's slot of a signal it owns; false
+    // when the kernel does not own the signal.
+    [[nodiscard]] bool deposit_kernel_owned(
+        SignalId signal, const PackedLogic4& value);
+
     void remove_dynamic_wait(ProcessState& process)
     {
         // Every dynamic wait sets this before recording cold registrations.
@@ -2913,6 +2918,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] std::uint64_t invalidate_event(
         const SignalId event);
 
+    // The delta whose processes see a change made with `origin` as an event.
+    [[nodiscard]] std::uint64_t signal_event_delta(
+        SignalChangeOrigin origin) const;
     void stamp_signal_event(
         SignalId signal,
         std::uint64_t generic_delta,

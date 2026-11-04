@@ -13,6 +13,7 @@
 #include "fsim/runtime/fst_writer.hpp"
 #include "fsim/support/path.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <iostream>
@@ -267,6 +268,8 @@ int run_built_project(
         foreign ? SystemVerilogVpiRuntimeUpdates::enabled
                     : SystemVerilogVpiRuntimeUpdates::omitted);
     simulation.set_foreign_probes(foreign && config.run.foreign_probes);
+    simulation.set_vhpi_end_of_step_timers(
+        config.run.vhpi_end_of_step_timers);
 #if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
     allocation_profile_session.after_setup();
 #endif
@@ -316,8 +319,42 @@ int run_built_project(
     // their startup routines set up replaces it (IEEE 1800-2023 38.36.3,
     // IEEE 1076-2019 21.3.7.10), and destroyed after them.
     const InterruptSignalGuard interrupt_signal;
+    // A library loaded through one interface may load a library that uses
+    // the other one (a mixed-language cocotb run loads its VHPI layer from
+    // its VPI library, or the reverse), so each interface the design has a
+    // language for is served. A service with no modules of its own is
+    // attached before the one whose startup routines run; with both served,
+    // each answers calls while the other's routines and callbacks run.
+    const auto has_language = [&](const auto... languages) {
+        return std::ranges::any_of(simulation.design_ir().specializations(),
+            [&](const auto& specialization) {
+                return ((specialization.language == languages) || ...);
+            });
+    };
+    const bool vpi_wanted = vpi_modules
+        || (vhpi_modules
+            && has_language(semantic::Language::verilog,
+                semantic::Language::system_verilog));
+    const bool vhpi_wanted = vhpi_modules
+        || (vpi_modules && has_language(semantic::Language::vhdl));
+    const auto vhpi_print = [&] {
+        return sink == SimulationOutputSink::builtin_stdout
+            ? VhpiForeignService::PrintSink { [](const std::string_view text) {
+                  (void)std::fwrite(text.data(), 1U, text.size(), stdout);
+              } }
+            : VhpiForeignService::PrintSink {
+                  [&output](const std::string_view text) { output << text; } };
+    };
+    std::unique_ptr<VhpiForeignService> vhpi_service;
+    if (vhpi_wanted && !vhpi_modules) {
+        vhpi_service = attach_vhpi_modules(
+            simulation, {}, vhpi_print(), plusargs, diagnostics);
+        if (!vhpi_service) {
+            return 1;
+        }
+    }
     std::unique_ptr<VpiForeignService> vpi_service;
-    if (vpi_modules) {
+    if (vpi_wanted) {
         auto print = sink == SimulationOutputSink::builtin_stdout
             ? VpiForeignService::PrintSink { [](const std::string_view text) {
                   (void)std::fwrite(text.data(), 1U, text.size(), stdout);
@@ -326,7 +363,8 @@ int run_built_project(
                   [&output](const std::string_view text) { output << text; } };
         vpi_service = attach_vpi_modules(simulation, config.run.vpi_modules,
             design_process_count, std::move(print), plusargs,
-            dpi_service.get(), diagnostics);
+            dpi_service.get(), diagnostics,
+            vhpi_service ? vhpi_service->calls() : ForeignCompanion {});
         if (!vpi_service) {
             return 1;
         }
@@ -340,19 +378,17 @@ int run_built_project(
                 return dpi->call(identity, actuals, strings);
             });
     }
-    std::unique_ptr<VhpiForeignService> vhpi_service;
     if (vhpi_modules) {
-        auto print = sink == SimulationOutputSink::builtin_stdout
-            ? VhpiForeignService::PrintSink { [](const std::string_view text) {
-                  (void)std::fwrite(text.data(), 1U, text.size(), stdout);
-              } }
-            : VhpiForeignService::PrintSink {
-                  [&output](const std::string_view text) { output << text; } };
         vhpi_service = attach_vhpi_modules(simulation,
-            config.run.vhpi_modules, std::move(print), plusargs, diagnostics);
+            config.run.vhpi_modules, vhpi_print(), plusargs, diagnostics,
+            vpi_service ? vpi_service->calls() : ForeignCompanion {});
         if (!vhpi_service) {
             return 1;
         }
+    }
+    if (vpi_service && vhpi_service) {
+        vpi_service->set_companion(vhpi_service->calls());
+        vhpi_service->set_companion(vpi_service->calls());
     }
     const BuiltinStdoutFlush stdout_flush {
         sink == SimulationOutputSink::builtin_stdout

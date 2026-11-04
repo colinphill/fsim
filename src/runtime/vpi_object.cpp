@@ -215,12 +215,11 @@ std::vector<Observer> snapshot_observers(
             return false;
         }
         switch (kind) {
-        // An input port that is a net takes puts like any net (IEEE
-        // 1800-2023 38.34); a variable input stays read-only.
+        // A port object stands for the net or variable its declaration
+        // declares, which takes puts like any other (IEEE 1800-2023 38.34);
+        // an input's connection updates it again when the actual changes
+        // (23.3.3.2).
         case SystemVerilogVpiObjectKind::Port:
-            return type.direction == SystemVerilogVpiDirection::Output
-                || type.direction == SystemVerilogVpiDirection::Inout
-                || type.net_kind != SystemVerilogVpiNetKind::None;
         case SystemVerilogVpiObjectKind::Net:
         case SystemVerilogVpiObjectKind::Variable:
         case SystemVerilogVpiObjectKind::Memory:
@@ -233,16 +232,6 @@ std::vector<Observer> snapshot_observers(
         }
     }
 
-    SystemVerilogVpiValueError write_access_error(
-        const SystemVerilogVpiObjectKind kind,
-        const SystemVerilogVpiTypeInfo& type)
-    {
-        if (kind == SystemVerilogVpiObjectKind::Port
-            && type.direction == SystemVerilogVpiDirection::Input) {
-            return SystemVerilogVpiValueError::InputOnly;
-        }
-        return SystemVerilogVpiValueError::ReadOnly;
-    }
 
     void notify_value_observers(
         const std::vector<SystemVerilogVpiValueObserver>& observers,
@@ -552,6 +541,11 @@ std::vector<Observer> snapshot_observers(
                 || descriptor_kind == SystemVerilogVpiDescriptorKind::Queue
                 || descriptor_kind
                 == SystemVerilogVpiDescriptorKind::AssociativeArray;
+        }
+        // A variable port may also be a string (IEEE 1800-2023 23.2.2.3).
+        if (kind == SystemVerilogVpiObjectKind::Port
+            && descriptor_kind == SystemVerilogVpiDescriptorKind::String) {
+            return true;
         }
         if (kind == SystemVerilogVpiObjectKind::Net
             || kind == SystemVerilogVpiObjectKind::Port) {
@@ -1399,7 +1393,7 @@ SystemVerilogVpiObjectRegistry::validate_value_write(
         return SystemVerilogVpiValueError::NotReadable;
     }
     if (!writable_value(record.kind, *record.type)) {
-        return write_access_error(record.kind, *record.type);
+        return SystemVerilogVpiValueError::ReadOnly;
     }
     if (value
         && !validate_systemverilog_vpi_stored_value(*record.type, *value)) {
@@ -1541,7 +1535,7 @@ SystemVerilogVpiValueError SystemVerilogVpiObjectRegistry::deposit_value(
         return SystemVerilogVpiValueError::NotReadable;
     }
     if (!writable_value(record.kind, *record.type)) {
-        return write_access_error(record.kind, *record.type);
+        return SystemVerilogVpiValueError::ReadOnly;
     }
     if (!validate_systemverilog_vpi_stored_value(*record.type, value)) {
         return SystemVerilogVpiValueError::TypeMismatch;
@@ -1606,7 +1600,7 @@ SystemVerilogVpiValueError SystemVerilogVpiObjectRegistry::force_value(
         return SystemVerilogVpiValueError::NotReadable;
     }
     if (!writable_value(record.kind, *record.type)) {
-        return write_access_error(record.kind, *record.type);
+        return SystemVerilogVpiValueError::ReadOnly;
     }
     if (!validate_systemverilog_vpi_stored_value(*record.type, value)) {
         return SystemVerilogVpiValueError::TypeMismatch;
@@ -1667,7 +1661,7 @@ SystemVerilogVpiObjectRegistry::release_forced_value(
         return SystemVerilogVpiValueError::NotReadable;
     }
     if (!writable_value(record.kind, *record.type)) {
-        return write_access_error(record.kind, *record.type);
+        return SystemVerilogVpiValueError::ReadOnly;
     }
     if (!record.forced_value) {
         return SystemVerilogVpiValueError::NotForced;

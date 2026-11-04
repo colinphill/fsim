@@ -17,9 +17,13 @@ static const char* text(const char* value)
     return value != NULL ? value : "-";
 }
 
+// The roots are modules; a scope's instances are among its internal
+// scopes, a VHDL instance included with fsim's own object type (IEEE
+// 1800-2023 37.10 has none for it).
 static void vpi_walk(vpiHandle scope, int depth)
 {
-    vpiHandle iterator = vpi_iterate(vpiModule, scope);
+    vpiHandle iterator
+        = vpi_iterate(scope == NULL ? vpiModule : vpiInternalScope, scope);
     vpiHandle module;
     while (iterator != NULL && (module = vpi_scan(iterator)) != NULL) {
         vpi_printf("#c vpi %d %s %s def=%s\n", depth,
@@ -32,8 +36,12 @@ static void vpi_walk(vpiHandle scope, int depth)
 
 static PLI_INT32 vpi_start(p_cb_data data)
 {
+    // A label a VHDL architecture declares matches in either case (IEEE
+    // 1076-2019 15.4.2); the names of a SystemVerilog scope do not (IEEE
+    // 1800-2023 5.6).
     static char* names[] = { "top.m", "top.m.t", "top.m.l", "top.m.l.y",
-        "top.m.l.g", "top.m.l.g.s" };
+        "top.m.l.g", "top.m.l.g.s", "top.m.L", "top.m.L.y", "top.m.L.Y",
+        "top.M", "top.m.GV[1].V" };
     (void)data;
     vpi_walk(NULL, 0);
     for (size_t index = 0U; index < sizeof names / sizeof names[0]; ++index) {
@@ -91,7 +99,8 @@ static void vhpi_walk(vhpiHandleT region, int depth)
 static void vhpi_start(const vhpiCbDataT* data)
 {
     static const char* const names[] = { "top.m", "top.m.t", "top.m.l",
-        "top.m.l.g", "top.m.l.g.s", ":top:m:l:g:s" };
+        "top.m.l.g", "top.m.l.g.s", ":top:m:l:g:s", ":top:m:gv(1):v",
+        ":top:m:gv(1):v:s", "top.m.gv(0).v" };
     vhpiHandleT root = vhpi_handle(vhpiRootInst, NULL);
     (void)data;
     printf("#c vhpi root %s %s\n", lower(root, vhpiKindStrP),

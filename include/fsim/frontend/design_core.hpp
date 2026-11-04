@@ -1791,6 +1791,10 @@ struct Statement {
     Expression verilog_switch_source;
     Expression verilog_switch_control;
     bool verilog_switch_active_high { true };
+    // The gate type of a gate primitive instance's continuous assignment,
+    // such as "and" or "bufif0" (IEEE 1800-2023 28.3, 37.7); empty for
+    // every other statement.
+    std::string gate_primitive;
     // Present only on VHDL signal assignments. VHDL variable assignments and
     // assignments from the Verilog/SystemVerilog frontends leave this empty.
     std::optional<VhdlDelayMechanism> vhdl_delay_mechanism;

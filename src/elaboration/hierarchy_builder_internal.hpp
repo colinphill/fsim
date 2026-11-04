@@ -533,6 +533,16 @@ private:
         const semantic::SpecializedHirUnit& working_specialization;
         const SignalMap& working_signals;
         const Binding* external_binding { };
+        // An expression actual of an input port lowers to an implicit
+        // continuous assignment in the parent (IEEE 1800-2023 23.3.3).
+        const semantic::sv::Unit& unit;
+        const ReadOnlySignalSet& working_read_only_signals;
+        const StringMap& working_strings;
+        const ReadOnlyStringSet& working_read_only_strings;
+        const ContainerMap& working_containers;
+        const ReadOnlyContainerSet& working_read_only_containers;
+        frontend::Language source_language;
+        std::size_t& concurrent_order;
     };
 
     using CompiledSystemVerilogSpecializationFactory = std::optional<semantic::SpecializedHirUnit> (*)(
@@ -718,6 +728,19 @@ private:
         const semantic::vhdl::Declaration& declaration,
         const std::string& name,
         std::optional<semantic::ExpressionId> value = std::nullopt);
+    // A scalar INTEGER or BOOLEAN constant whose initializer is computed
+    // (not a literal), materialized as a read-only signal found only by its
+    // hierarchy path `name` so a foreign interface can read its elaborated
+    // value (IEEE 1076-2019 14.4.2.1, 19.4.3); nullopt when the value does
+    // not evaluate.
+    std::optional<SignalId> add_compiled_vhdl_elaborated_scalar_constant_signal(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::Declaration& declaration,
+        const std::string& name,
+        const std::string& path,
+        SignalMap& signals,
+        ReadOnlySignalSet& read_only_signals,
+        ContainerMap& container_objects);
     // A composite constant of an architecture or block whose value does not
     // fold, computed when its declaration is elaborated into a read-only
     // signal whose subtype the value completes (IEEE 1076-2008 14.4.2.1,
@@ -2225,6 +2248,9 @@ private:
     std::unordered_map<std::uint32_t, std::optional<SignalId>>
         systemverilog_package_variable_signals_;
     std::vector<semantic::UnitId> systemverilog_package_units_;
+    // Whether the packages' parameters were recorded for VPI with an
+    // earlier specialization (IEEE 1800-2023 37.10).
+    bool vpi_package_parameters_recorded_ { };
     std::vector<PendingSystemVerilogPackageInitializer>
         systemverilog_package_initializers_;
     std::unordered_map<std::uint32_t, ContainerObjectId>

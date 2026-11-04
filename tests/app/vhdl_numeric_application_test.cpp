@@ -581,6 +581,155 @@ end architecture;
         assert(output.good());
     }
 
+    // The use clauses precede only the entity, and apply to its architecture
+    // as well (IEEE 1076-2019 13.4). A relation with a metavalue operand
+    // follows the Synopsys package bodies: both operands read as 'X'.
+    const auto synopsys_signed_context
+        = directory.path / "synopsys_signed_context.vhd";
+    {
+        std::ofstream output { synopsys_signed_context };
+        output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_signed.all;
+entity synopsys_signed_context is end entity;
+architecture rtl of synopsys_signed_context is
+  signal zero, minus_one, one : std_logic_vector(3 downto 0);
+  signal negative, positive, unknown : std_logic_vector(1 downto 0);
+  signal less_minus, greater_minus, less_equal_minus : boolean;
+  signal known_negative_less, known_positive_less, unknown_less : boolean;
+  signal unknown_greater : boolean;
+begin
+  zero <= "0000";
+  minus_one <= "1111";
+  one <= "0001";
+  negative <= "10";
+  positive <= "01";
+  unknown <= "X1";
+  less_minus <= zero < minus_one;
+  greater_minus <= minus_one > one;
+  less_equal_minus <= minus_one <= zero;
+  known_negative_less <= negative < unknown;
+  known_positive_less <= positive < unknown;
+  unknown_less <= unknown < negative;
+  unknown_greater <= unknown > negative;
+end architecture;
+)";
+        assert(output.good());
+    }
+
+    const auto synopsys_unsigned_context
+        = directory.path / "synopsys_unsigned_context.vhd";
+    {
+        std::ofstream output { synopsys_unsigned_context };
+        output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.std_logic_unsigned.all;
+entity synopsys_unsigned_context is end entity;
+architecture rtl of synopsys_unsigned_context is
+  signal zeros, ones, low_unknown, high_unknown, mixed : std_logic_vector(1 downto 0);
+  signal ordered, unknown_less, zeros_less_equal, ones_less_equal : boolean;
+  signal unknown_less_equal, ones_greater_equal, ones_greater : boolean;
+begin
+  zeros <= "00";
+  ones <= "11";
+  low_unknown <= "1X";
+  high_unknown <= "X1";
+  mixed <= "10";
+  ordered <= ones > mixed;
+  unknown_less <= high_unknown < ones;
+  zeros_less_equal <= zeros <= low_unknown;
+  ones_less_equal <= high_unknown <= ones;
+  unknown_less_equal <= high_unknown <= mixed;
+  ones_greater_equal <= ones >= high_unknown;
+  ones_greater <= ones > high_unknown;
+end architecture;
+)";
+        assert(output.good());
+    }
+
+    // Generic actuals that call functions of a generate parameter, or
+    // index a function-initialized constant with it, take the value the
+    // generate iteration gives them (IEEE 1076-2019 14.4.2.1, 11.8). An
+    // unconstrained formal takes the actual's index range (6.5.6.2).
+    const auto generate_actuals = directory.path / "generate_actuals.vhd";
+    {
+        std::ofstream output { generate_actuals };
+        output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+package generate_actuals_pkg is
+  type node_array is array (3 downto 0) of signed(3 downto 0);
+  function nodes_of return node_array;
+  constant INIT : node_array;
+end package;
+package body generate_actuals_pkg is
+  function nodes_of return node_array is
+    variable result : node_array;
+  begin
+    result(0) := to_signed(0, 4);
+    for index in 3 downto 1 loop
+      result(index) := to_signed(-index, 4);
+    end loop;
+    return result;
+  end function;
+  constant INIT : node_array := nodes_of;
+end package body;
+library ieee;
+use ieee.std_logic_1164.all;
+entity generate_actuals_code is
+  generic (CODE : std_logic_vector; FIXED : std_logic_vector(1 downto 0));
+  port (high, low : out std_logic);
+end entity;
+architecture rtl of generate_actuals_code is
+begin
+  high <= CODE(CODE'left);
+  low <= FIXED(FIXED'right);
+end architecture;
+library ieee;
+use ieee.numeric_std.all;
+entity generate_actuals_node is
+  generic (VALUE : signed(3 downto 0));
+  port (o : out signed(3 downto 0));
+end entity;
+architecture rtl of generate_actuals_node is
+begin
+  o <= VALUE;
+end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use work.generate_actuals_pkg.all;
+entity generate_actuals is end entity;
+architecture rtl of generate_actuals is
+  constant LOCAL : node_array := nodes_of;
+  signal high, low : std_logic_vector(3 downto 0);
+  signal nodes, locals : node_array;
+  signal node3, node0, local2, local1 : signed(3 downto 0);
+begin
+  codes : for i in 3 downto 0 generate
+    code : entity work.generate_actuals_code
+      generic map (CODE => std_logic_vector(to_unsigned(i, 2)),
+                   FIXED => std_logic_vector(to_unsigned(i, 2)))
+      port map (high => high(i), low => low(i));
+  end generate;
+  values : for i in 3 downto 0 generate
+    package_node : entity work.generate_actuals_node
+      generic map (VALUE => INIT(i)) port map (o => nodes(i));
+    local_node : entity work.generate_actuals_node
+      generic map (VALUE => LOCAL(i)) port map (o => locals(i));
+  end generate;
+  node3 <= nodes(3);
+  node0 <= nodes(0);
+  local2 <= locals(2);
+  local1 <= locals(1);
+end architecture;
+)";
+        assert(output.good());
+    }
+
     for (const auto optimization : {
              fsim::project::Optimization::o0,
              fsim::project::Optimization::o2 }) {
@@ -809,6 +958,52 @@ end architecture;
                 "1" + std::string(135, '0') + "1",
                 "0",
             });
+
+        verify_runs(
+            make_config(
+                directory.path, generate_actuals, "generate_actuals",
+                "generate-actuals", optimization),
+            {
+                "generate_actuals.high",
+                "generate_actuals.low",
+                "generate_actuals.node3",
+                "generate_actuals.node0",
+                "generate_actuals.local2",
+                "generate_actuals.local1",
+            },
+            { "1100", "1010", "1101", "0000", "1110", "1111" });
+
+        verify_runs(
+            make_config(
+                directory.path, synopsys_signed_context,
+                "synopsys_signed_context", "synopsys-signed-context",
+                optimization),
+            {
+                "synopsys_signed_context.less_minus",
+                "synopsys_signed_context.greater_minus",
+                "synopsys_signed_context.less_equal_minus",
+                "synopsys_signed_context.known_negative_less",
+                "synopsys_signed_context.known_positive_less",
+                "synopsys_signed_context.unknown_less",
+                "synopsys_signed_context.unknown_greater",
+            },
+            { "0", "0", "1", "1", "0", "0", "1" });
+
+        verify_runs(
+            make_config(
+                directory.path, synopsys_unsigned_context,
+                "synopsys_unsigned_context", "synopsys-unsigned-context",
+                optimization),
+            {
+                "synopsys_unsigned_context.ordered",
+                "synopsys_unsigned_context.unknown_less",
+                "synopsys_unsigned_context.zeros_less_equal",
+                "synopsys_unsigned_context.ones_less_equal",
+                "synopsys_unsigned_context.unknown_less_equal",
+                "synopsys_unsigned_context.ones_greater_equal",
+                "synopsys_unsigned_context.ones_greater",
+            },
+            { "1", "0", "1", "1", "0", "1", "0" });
     }
     verify_diagnostics(
         make_config(

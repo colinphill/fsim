@@ -1212,6 +1212,9 @@ void VhdlHirBuilder::add_unit(
     const semantic::UnitId unit_id)
 {
     current_vhdl_standard_ = input.vhdl_standard;
+    unit_spellings_.clear();
+    unit_spellings_.insert(
+        input.vhdl_spellings.begin(), input.vhdl_spellings.end());
     const auto& common_unit = model_.units()[unit_id.value()];
     vh::Unit output;
     output.id = unit_id;

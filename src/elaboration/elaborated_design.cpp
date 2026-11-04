@@ -1633,6 +1633,12 @@ ElaboratedDesign::from_state_with_process_rows(
         }
     }
     for (const auto& object : state.string_objects) {
+        if (object.change_signal
+            && (*object.change_signal >= state.signals.size()
+                || state.signals[*object.change_signal].initial_value.width()
+                    != 1U)) {
+            return std::nullopt;
+        }
         const auto& alias = object.element_alias;
         if (!alias) {
             continue;

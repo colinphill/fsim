@@ -1146,6 +1146,10 @@ public:
     /// libraries (`simulate --foreign-probes`).
     void set_foreign_probes(bool enabled) noexcept;
     [[nodiscard]] bool foreign_probes() const noexcept;
+    /// VHPI timed callbacks registered at the end of a time step are
+    /// accepted (`simulate --vhpi-end-of-step-timers`).
+    void set_vhpi_end_of_step_timers(bool enabled) noexcept;
+    [[nodiscard]] bool vhpi_end_of_step_timers() const noexcept;
     /// Replace the host executor for IEEE $system calls. The default invokes
     /// C system(); an empty hook makes the service unavailable at execution.
     void set_system_command_hook(SystemCommandHook hook);

@@ -674,6 +674,34 @@ struct VpiTypedefInfo {
     std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
 };
 
+/// A parameter or local parameter a generate block declares, with its
+/// elaborated value (IEEE 1800-2023 27.5, 37.28, 37.85).
+struct VpiGenerateParameterInfo {
+    std::string name;
+    std::string identity;
+    semantic::DeclarationId declaration;
+    bool local { };
+};
+
+/// One generate block occurrence of an instance: its path relative to the
+/// instance (`blk`, `loop[2].inner`) and the parameters it declares (IEEE
+/// 1800-2023 27.6, 37.85).
+struct VpiGenerateScopeInfo {
+    std::string path;
+    std::vector<VpiGenerateParameterInfo> parameters;
+};
+
+/// A package parameter or local parameter with its elaborated value (IEEE
+/// 1800-2023 3.12.1, 26.2, 37.10, 37.28). The package is named by its
+/// library and name, `lib::name`.
+struct VpiPackageParameterInfo {
+    std::string package;
+    std::string name;
+    std::string identity;
+    semantic::DeclarationId declaration;
+    bool local { };
+};
+
 struct SpecializationInfo {
     SpecializationId id { };
     std::string unit;
@@ -722,6 +750,12 @@ struct SpecializationInfo {
     // The typespec of each value parameter whose declared type names a
     // typedef, by parameter name (IEEE 1800-2023 37.28 vpiTypespec).
     std::vector<VpiTypedefInfo> vpi_parameter_typespecs;
+    // The generate block occurrences of the instance, with the parameters
+    // each declares (IEEE 1800-2023 27.6, 37.85).
+    std::vector<VpiGenerateScopeInfo> vpi_generate_scopes;
+    // The parameters of the design's packages, recorded once with the first
+    // SystemVerilog instance (IEEE 1800-2023 3.12.1, 37.10).
+    std::vector<VpiPackageParameterInfo> vpi_package_parameters;
 };
 
 using UdpTableId = std::uint32_t;

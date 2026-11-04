@@ -571,13 +571,22 @@ state, S3):
     1. pending SystemVerilog work drains first;
     2. VHDL members triggered for round k run (writes deferred); SystemVerilog
        members and threads woken by round k-1's commit become ready;
-    3. SystemVerilog drains again; VHDL members woken by these writes join
-       round k+1;
+    3. SystemVerilog drains again. VHDL members, threads and hosted VHDL
+       processes woken by these writes run in the drain's Active region,
+       before its NBA updates, with their writes deferred to round k's
+       commit (`run_sv_woken_vhdl`);
     4. the VHDL round commits; VHDL readers join round k+1; SystemVerilog
        readers and waiters are held for step 2 of delta k+1.
-  - A SystemVerilog-origin wakeup stays in the current delta. A
-    SystemVerilog process woken by a VHDL update runs in the next delta. A
-    VHDL process woken by any change runs in the next delta.
+  - A wakeup by SystemVerilog work stays in the current delta, for a VHDL
+    process as for a SystemVerilog one: the VHDL process runs in the same
+    Active region as the SystemVerilog processes the change wakes, before
+    that region's nonblocking updates, and the change is an event of the
+    current delta (`'EVENT` is true there). A process woken by a VHDL update
+    runs in the next delta. A VHDL process's own continuation (`wait for
+    0 ns`) and what its writes wake run in the next delta. This is the order
+    Vivado gives: an SV flop feeding a VHDL flop on one SystemVerilog clock
+    samples the old value, as a second SV flop would
+    (`mixed_vhdl_flop_after_sv_flop`).
   - When every kernel round is a host delta (`host_boundary_`: hosted or
     host processes at the boundary), the VHDL members and threads woken by
     SystemVerilog work outside a round (pending at activation, or woken by
@@ -586,7 +595,9 @@ state, S3):
     same writes wake (`sv_drain_outside_round`). Running them in the next
     iteration of the same activation would put them one delta ahead of the
     hosted processes (`mixed_codec`: a hosted RAM read port saw the
-    address its native counter had already advanced).
+    address its native counter had already advanced). Work woken by the
+    drain's own SystemVerilog writes runs in the drain (step 3), and the
+    activation commits its writes in a round before it yields.
   - Slots of Logic9 signals read by SystemVerilog code are coerced to Logic4
     (`U` becomes X); publication uses the writer's domain.
   - A SystemVerilog member of a mixed kernel does not require the host

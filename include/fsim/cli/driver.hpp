@@ -106,6 +106,9 @@ struct Invocation {
   std::optional<std::string> default_timescale;
   // elaborate --time-resolution (elaborate.time_resolution).
   std::optional<std::string> time_resolution;
+  // fsim cocotb makefile|pythonpath|libs: print where the cocotb
+  // integration is installed instead of running a command.
+  std::optional<std::string> cocotb_query;
   std::optional<std::filesystem::path> artifact_output;
   std::vector<std::filesystem::path> objects;
   std::vector<std::filesystem::path> systemc_plugins;
@@ -142,6 +145,9 @@ struct Invocation {
   std::optional<bool> trace_enabled;
   // `--foreign-probes`: statement, call and suspend probes for VPI/VHPI.
   std::optional<bool> foreign_probes;
+  // `--vhpi-end-of-step-timers`: accept VHPI timed callbacks registered at
+  // the end of a time step (an extension of IEEE 1076-2019 21.3.6.8).
+  std::optional<bool> vhpi_end_of_step_timers;
   std::optional<std::filesystem::path> coverage_output;
   std::optional<std::uint64_t> seed;
   bool random_seed{false};

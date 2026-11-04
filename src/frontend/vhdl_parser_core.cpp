@@ -73,6 +73,68 @@ void move_vhdl_generic_subprogram_headers(std::vector<Token>& tokens)
     }
 }
 
+// Records the source spelling of the identifiers a unit declares (IEEE
+// 1076-2019 15.4, 19.4.3): those that follow an object, type, alias,
+// component, attribute, subprogram or loop keyword, and those listed before
+// the colon of an object, interface, record element or label declaration.
+// An identifier is declared before it is used (12.3), so its first such
+// occurrence in the unit is its declaration; a later spelling of the same
+// name does not replace it.
+void record_vhdl_spellings(
+    DesignUnit& unit, const std::vector<Token>& tokens)
+{
+    if (unit.span.empty()) {
+        return;
+    }
+    const auto offset_of = [](const Token& token) {
+        return token.span.begin.offset;
+    };
+    auto index = static_cast<std::size_t>(std::ranges::lower_bound(tokens,
+                                              unit.span.begin.offset, { },
+                                              offset_of)
+        - tokens.begin());
+    std::unordered_set<std::string> seen;
+    for (; index < tokens.size()
+         && tokens[index].span.begin.offset < unit.span.end.offset;
+         ++index) {
+        const auto& token = tokens[index];
+        if (token.kind != TokenKind::Identifier) {
+            continue;
+        }
+        bool declared = index > 0U
+            && tokens[index - 1U].kind == TokenKind::Identifier
+            && (vhdl_token_is(tokens[index - 1U], "signal")
+                || vhdl_token_is(tokens[index - 1U], "constant")
+                || vhdl_token_is(tokens[index - 1U], "variable")
+                || vhdl_token_is(tokens[index - 1U], "file")
+                || vhdl_token_is(tokens[index - 1U], "type")
+                || vhdl_token_is(tokens[index - 1U], "subtype")
+                || vhdl_token_is(tokens[index - 1U], "alias")
+                || vhdl_token_is(tokens[index - 1U], "component")
+                || vhdl_token_is(tokens[index - 1U], "attribute")
+                || vhdl_token_is(tokens[index - 1U], "function")
+                || vhdl_token_is(tokens[index - 1U], "procedure")
+                || vhdl_token_is(tokens[index - 1U], "for"));
+        if (!declared) {
+            auto next = index + 1U;
+            while (next + 1U < tokens.size()
+                && tokens[next].kind == TokenKind::Comma
+                && tokens[next + 1U].kind == TokenKind::Identifier) {
+                next += 2U;
+            }
+            declared = next < tokens.size()
+                && tokens[next].kind == TokenKind::Colon;
+        }
+        if (!declared) {
+            continue;
+        }
+        const auto decoded = detail::vhdl_name(token.text);
+        if (seen.insert(decoded).second && token.text != decoded) {
+            unit.vhdl_spellings.emplace_back(decoded, token.text);
+        }
+    }
+}
+
 }  // namespace
 
 VhdlParser::VhdlParser(LexResult lexed, const VhdlStandard standard)
@@ -227,6 +289,9 @@ ParseResult VhdlParser::run()
         if (unit.kind == UnitKind::VhdlArchitecture) {
             rewrite_vhdl_formal_conversions(unit, &design.units);
         }
+    }
+    for (auto& unit : design.units) {
+        record_vhdl_spellings(unit, tokens_);
     }
     if (!pending_context.empty()) {
         error(Token { TokenKind::EndOfFile, { }, pending_context.front().span, { } },

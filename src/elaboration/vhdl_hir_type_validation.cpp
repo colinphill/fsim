@@ -2067,6 +2067,14 @@ private:
                 if (!left || !right) {
                     continue;
                 }
+                // A null range is compatible with any index subtype
+                // (IEEE 1076-2019 5.2.1).
+                if (constraint.null
+                    || (!constraint.direction_from_bounds
+                        && (constraint.descending ? *left < *right
+                                                  : *left > *right))) {
+                    continue;
+                }
                 const auto& dimension = base.dimensions[index];
                 if ((dimension.minimum && *left < *dimension.minimum)
                     || (dimension.maximum && *left > *dimension.maximum)

@@ -512,6 +512,9 @@ struct Statement {
     std::optional<ExpressionId> verilog_switch_source;
     std::optional<ExpressionId> verilog_switch_control;
     bool verilog_switch_active_high { true };
+    // The gate type of a gate primitive instance's continuous assignment
+    // (IEEE 1800-2023 28.3, 37.7); empty for every other statement.
+    std::string gate_primitive;
     std::vector<Sensitivity> sensitivities;
     std::string assertion_message;
     AssertionSeverity assertion_severity { AssertionSeverity::error };

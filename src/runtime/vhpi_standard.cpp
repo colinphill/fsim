@@ -2,6 +2,7 @@
 #include "fsim/runtime/vhpi_bridge.h"
 
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cstdarg>
 #include <cstddef>
@@ -16,15 +17,41 @@ constexpr std::size_t maximum_text_size = 1U << 20U;
 thread_local std::array<const fsim_vhpi_std_host_v1*, maximum_host_depth>
     host_stack{};
 thread_local std::size_t host_depth{};
+// The outermost host entered on the simulation thread. A library may query
+// the design from a thread of its own while the simulation thread is parked
+// in one of its callbacks (cocotb's bridge); such a query runs against that
+// host. Routines that change the simulation stay with the simulation thread.
+std::atomic<const fsim_vhpi_std_host_v1*> parked_host{nullptr};
+
+[[nodiscard]] constexpr bool query_member(const std::size_t offset) noexcept {
+  return offset == offsetof(fsim_vhpi_std_host_v1, handle_by_name)
+      || offset == offsetof(fsim_vhpi_std_host_v1, handle_by_index)
+      || offset == offsetof(fsim_vhpi_std_host_v1, handle)
+      || offset == offsetof(fsim_vhpi_std_host_v1, iterator)
+      || offset == offsetof(fsim_vhpi_std_host_v1, scan)
+      || offset == offsetof(fsim_vhpi_std_host_v1, get)
+      || offset == offsetof(fsim_vhpi_std_host_v1, get_str)
+      || offset == offsetof(fsim_vhpi_std_host_v1, get_real)
+      || offset == offsetof(fsim_vhpi_std_host_v1, get_phys)
+      || offset == offsetof(fsim_vhpi_std_host_v1, get_value)
+      || offset == offsetof(fsim_vhpi_std_host_v1, format_value)
+      || offset == offsetof(fsim_vhpi_std_host_v1, get_time)
+      || offset == offsetof(fsim_vhpi_std_host_v1, get_next_time)
+      || offset == offsetof(fsim_vhpi_std_host_v1, get_cb_info)
+      || offset == offsetof(fsim_vhpi_std_host_v1, compare_handles)
+      || offset == offsetof(fsim_vhpi_std_host_v1, check_error);
+}
 
 // The innermost host, provided it is large enough to carry the member at
 // `offset` and that member is set.
 [[nodiscard]] const fsim_vhpi_std_host_v1* innermost_host(
     const std::size_t offset, const std::size_t size) {
-  if (host_depth == 0U) {
+  const auto* const host = host_depth != 0U ? host_stack[host_depth - 1U]
+      : query_member(offset) ? parked_host.load(std::memory_order_acquire)
+                             : nullptr;
+  if (host == nullptr) {
     return nullptr;
   }
-  const auto* const host = host_stack[host_depth - 1U];
   return host->struct_size < offset + size ? nullptr : host;
 }
 
@@ -88,6 +115,11 @@ fsim_vhpi_std_host_enter_v1(const fsim_vhpi_std_host_v1* const host) {
       || host_depth == maximum_host_depth) {
     return -1;
   }
+  if (host_depth == 0U) {
+    const fsim_vhpi_std_host_v1* expected = nullptr;
+    (void)parked_host.compare_exchange_strong(
+        expected, host, std::memory_order_acq_rel);
+  }
   host_stack[host_depth++] = host;
   return 0;
 }
@@ -98,6 +130,11 @@ fsim_vhpi_std_host_leave_v1(const fsim_vhpi_std_host_v1* const host) {
     return -1;
   }
   host_stack[--host_depth] = nullptr;
+  if (host_depth == 0U) {
+    auto* expected = host;
+    (void)parked_host.compare_exchange_strong(
+        expected, nullptr, std::memory_order_acq_rel);
+  }
   return 0;
 }
 

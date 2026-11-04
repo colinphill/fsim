@@ -42,8 +42,9 @@ namespace {
 }
 
 // The declared type of a structure, union, enumeration or packed array of
-// them as VPI describes it; null for every other type. Builtin types are
-// skipped without a lookup.
+// them, or a fixed unpacked array of structures or unions, as VPI
+// describes it; null for every other type. Builtin types are skipped
+// without a lookup.
 std::shared_ptr<const runtime::SystemVerilogVpiTypeDescriptor>
 vpi_declared_aggregate(const semantic::SpecializedHirUnit& specialization,
     const semantic::sv::Declaration& declaration,
@@ -58,12 +59,19 @@ vpi_declared_aggregate(const semantic::SpecializedHirUnit& specialization,
         systemverilog_vpi_declared_type(specialization, type, declaration.scope);
     // An unpacked aggregate's width is not known yet here; publication
     // checks the shape against the signal's value.
-    if (!declared
+    // Another unpacked array keeps the memory model (IEEE 1800-2023 37.20).
+    const auto* leaf = declared ? &*declared : nullptr;
+    while (leaf != nullptr && leaf->kind == Kind::UnpackedArray) {
+        leaf = leaf->children.size() == 1U ? &leaf->children.front() : nullptr;
+    }
+    if (!declared || leaf == nullptr
         || (width != 0U
             && runtime::systemverilog_vpi_declared_bits(*declared) != width)
         || (declared->kind != Kind::Struct && declared->kind != Kind::Union
             && declared->kind != Kind::Enum
-            && declared->kind != Kind::PackedArray)) {
+            && declared->kind != Kind::PackedArray
+            && (declared->kind != Kind::UnpackedArray
+                || (leaf->kind != Kind::Struct && leaf->kind != Kind::Union)))) {
         return nullptr;
     }
     return std::make_shared<const runtime::SystemVerilogVpiTypeDescriptor>(
@@ -2229,10 +2237,11 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             info.is_signed = type->signed_elements;
             info.declaration_span = compiled_source_span(
                 *compiled_, declaration.source);
-            // An unpacked structure or union is published through its
-            // bridge (IEEE 1800-2023 37.26).
-            if (declaration.type->unpacked_dimensions.empty()
-                && !declaration.type->container_form) {
+            // An unpacked structure or union, or a fixed array of them, is
+            // published through its bridge (IEEE 1800-2023 37.17, 37.26).
+            if (!declaration.type->container_form
+                || *declaration.type->container_form
+                    == semantic::sv::TypeForm::static_array) {
                 info.vpi_declared_type = vpi_declared_aggregate(
                     working_specialization, declaration, *declaration.type,
                     info.width);

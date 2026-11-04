@@ -1605,14 +1605,18 @@ void test_simir_named_event_origin_cross_domain()
         generic_first_observation != observations.end()
             && generic_first_observation->time == 1U
             && generic_first_observation->phase == SchedulerPhase::active
-            && generic_first_observation->delta > 0U
+            && sv_first_observation != observations.end()
+            && generic_first_observation->delta
+                == sv_first_observation->delta
+            && generic_first_observation->systemverilog_round
+                == sv_first_observation->systemverilog_round
             && generic_inactive_observation != observations.end()
             && generic_inactive_observation->time == 1U
             && generic_inactive_observation->delta
                 > generic_first_observation->delta
             && generic_later_observation != observations.end()
             && generic_later_observation->time == 2U,
-        "SV named-event wakeups cross into the generic next cycle");
+        "SV named-event wakeups reach generic waiters in the SV Active round");
     require(
         sv_first_observation != observations.end()
             && sv_first_observation->time == 1U

@@ -416,6 +416,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
               || keyword("bit") || keyword("byte") || keyword("shortint")
               || keyword("longint") || keyword("time") || keyword("real")
               || keyword("reg") || keyword("var")
+              || keyword("struct") || keyword("union") || keyword("enum")
               || (is_named_type_reference_start()
                   && at(TokenKind::Identifier, 1)));
       // A `ref` port passes a variable by reference (IEEE 1800-2017
@@ -463,9 +464,17 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
             explicit_variable || is_net_type_keyword()
             || keyword("string") || keyword("chandle")
             || keyword("process")
+            || keyword("struct") || keyword("union") || keyword("enum")
             || is_named_type_reference_start();
+        // A structure, union or enumeration data type after the direction
+        // (IEEE 1800-2017 A.2.2.1, 23.2.2.3); it carries its own packed
+        // dimensions.
+        bool aggregate_type = false;
         if (keyword("string") || keyword("chandle")
-            || keyword("process")) {
+            || keyword("process")
+            || keyword("struct") || keyword("union") || keyword("enum")) {
+          aggregate_type = keyword("struct") || keyword("union")
+              || keyword("enum");
           spec.type = parse_parameter_type();
         } else if (auto expanded = parse_named_packed_array_type()) {
           // `output nib_t [1:0] o`: a packed array of a typedef (IEEE
@@ -476,6 +485,20 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         } else {
           const auto default_spelling = spec.type.spelling;
           parse_optional_net_type(spec.type);
+          // `input wire struct packed {...} s`: a net port of an aggregate
+          // or enumeration data type (IEEE 1800-2017 6.7.1, 23.2.2.3).
+          if (language_ == Language::SystemVerilog2017
+              && contains_word(
+                  {"wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
+                      "trior", "trireg", "uwire", "supply0", "supply1"},
+                  spec.type.spelling)
+              && (keyword("struct") || keyword("union")
+                  || keyword("enum"))) {
+            const auto net_kind = spec.type.spelling;
+            spec.type = parse_parameter_type();
+            spec.type.systemverilog_net_type = net_kind;
+            aggregate_type = true;
+          }
           // `output var b` declares a variable of type logic (IEEE 1800-2017
           // 6.8), not the default net.
           if (explicit_variable && spec.type.spelling == default_spelling) {
@@ -492,7 +515,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
           }
         }
         require_default_port_net_type(current(), explicit_type);
-        if (spec.type.named_type.empty()) {
+        if (spec.type.named_type.empty() && !aggregate_type) {
           parse_optional_signedness(spec.type);
           parse_optional_range(spec.type);
         }
@@ -3379,6 +3402,7 @@ void VerilogParser::parse_gate_primitive(
         statement.label = base_label.empty() || mapped_targets.size() == 1
             ? base_label
             : base_label + "$output" + std::to_string(output);
+        statement.gate_primitive = operation;
         statement.span = cover(start.span, previous().span);
         if (tristate_drivers) {
           const auto declared = strength.value_or(VerilogDriveStrength{

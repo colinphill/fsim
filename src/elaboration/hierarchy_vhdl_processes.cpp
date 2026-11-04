@@ -89,6 +89,14 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
             &vhdl_lowering_index_);
         generated_lowerer.set_specialized_hir_unit(
             &materialization.specialization);
+        // A generate or block region names the same package objects as its
+        // architecture (IEEE 1076-2019 14.4.2, 12.3): a composite package
+        // constant is read from its design-wide storage there too.
+        generated_lowerer.set_package_constant_signal(
+            [&](const semantic::DeclarationId constant) {
+                return compiled_vhdl_package_constant_signal(
+                    materialization.specialization, constant);
+            });
         if (materialization.region->kind
                 == semantic::vhdl::GenerateKind::block
             && materialization.region->condition

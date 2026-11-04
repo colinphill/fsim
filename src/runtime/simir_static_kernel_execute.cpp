@@ -244,6 +244,13 @@ void Interpreter::Impl::StaticKernel::execute_body(
         case KOp::mem_bind:
             break;
         case KOp::mark:
+            // A gated member of a partition runs only when due
+            // (dissolve_member); aux is the next member's mark.
+            if (inst.sub != 0U
+                && !dissolved_member_due(scratch().running_partition, inst.d)) {
+                pc = inst.aux;
+                break;
+            }
             scratch().running_position = inst.d;
             member_index = inst.x;
             current = &members_[member_index];

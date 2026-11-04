@@ -23714,6 +23714,21 @@ Lowerer::hir_vhdl_synopsys_numeric_context(
                 }
             }
         }
+        // A secondary unit's context is its primary unit's as well: the
+        // use clauses before an entity apply to its architectures (IEEE
+        // 1076-2019 12.1, 13.4).
+        if (!unit.primary_name.empty()) {
+            for (const auto& primary : design.vhdl_hir.units()) {
+                if (primary.primary_name.empty()
+                    && primary.kind != semantic::vhdl::UnitKind::context
+                    && same_hir_identifier(
+                        primary.library, unit.library, true)
+                    && same_hir_identifier(
+                        primary.name, unit.primary_name, true)) {
+                    self(self, primary);
+                }
+            }
+        }
         visiting.erase(unit.id.value());
     };
     inspect(inspect, *owner);
@@ -25420,20 +25435,16 @@ Lowerer::compute_hir_vhdl_expression_subtype(
         if (!base) {
             return std::nullopt;
         }
-        const auto predefined_packed_vector
-            = vhdl_predefined_packed_vector_domain(
-                  *specialized_hir_unit_, *base)
-                .has_value();
         const auto array = base->type_mark.target.valid()
             ? vhdl_array_definition(
                   *specialized_hir_unit_, base->type_mark.target)
             : nullptr;
+        // A slice keeps its prefix's subtype with the slice's own range
+        // (IEEE 1076-2019 8.5), whether or not the prefix names an array
+        // type here.
         if ((array == nullptr || !array->element_subtype)
-            && !(source.kind == semantic::vhdl::ExpressionKind::slice
-                && predefined_packed_vector)) {
-            return source.kind == semantic::vhdl::ExpressionKind::slice
-                ? base
-                : std::nullopt;
+            && source.kind != semantic::vhdl::ExpressionKind::slice) {
+            return std::nullopt;
         }
         if (source.kind == semantic::vhdl::ExpressionKind::slice) {
             if (source.operands.size() != 3U
@@ -25463,10 +25474,29 @@ Lowerer::compute_hir_vhdl_expression_subtype(
             if (constraint.null) {
                 selected.executable_width = 0U;
             } else {
-                const auto occurrence_range = hir_expression_range(
+                auto occurrence_range = hir_expression_range(
                     source.operands.front(), hir_process_scope_);
-                const auto occurrence_width = hir_expression_width(
+                auto occurrence_width = hir_expression_width(
                     source.operands.front(), hir_process_scope_);
+                // A prefix that a dynamic index selects, such as
+                // `v(i)(1)(1 downto 0)`, has no static occurrence; its
+                // subtype still gives the element stride (IEEE 1076-2019
+                // 8.5).
+                if ((!occurrence_range || !occurrence_width)
+                    && !base->constraints.empty()
+                    && base->constraints.front().left
+                    && base->constraints.front().right
+                    && base->executable_width) {
+                    occurrence_range = HirPackedRange {
+                        *base->constraints.front().left,
+                        *base->constraints.front().right,
+                        base->constraints.front().descending,
+                    };
+                    occurrence_width = *base->executable_width;
+                } else if (!occurrence_range || !occurrence_width) {
+                    // The base's width is the prefix's, not the slice's.
+                    selected.executable_width.reset();
+                }
                 if (constraint.left && constraint.right
                     && occurrence_range && occurrence_width) {
                     const auto occurrence_count = index_distance(

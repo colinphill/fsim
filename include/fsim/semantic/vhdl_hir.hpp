@@ -818,6 +818,11 @@ struct Declaration {
     std::vector<StatementId> statements;
     // A guarded signal's kind: 1 for bus, 2 for register (6.4.2.3).
     std::uint8_t guarded_kind { };
+    // The identifier as written at the declaration (IEEE 1076-2019 15.4,
+    // 19.4.3 vhpiCaseNameP): an extended identifier with its backslashes,
+    // or a basic identifier in its declared letter case. Empty when the
+    // source spelling is already `name`.
+    std::string spelling;
 };
 
 struct OverloadSet {

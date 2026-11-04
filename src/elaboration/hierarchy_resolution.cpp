@@ -2822,9 +2822,16 @@ void HierarchyBuilder::validate_process_drivers()
                         == std::tolower(static_cast<unsigned char>(right));
                 });
     };
+    // A SystemVerilog net a VHDL port drives (an instance under a
+    // SystemVerilog parent) has the port as a source too, seen through the
+    // net's four states (`U` reads as x).
+    const auto port_resolved = [](const ResolutionKind resolution) {
+        return resolution == ResolutionKind::std_logic
+            || resolution == ResolutionKind::sv_wire;
+    };
     for (const auto& [signal, ports] : vhdl_port_sources_) {
         auto& initial = design_.signals_.at(signal).initial_value;
-        if (design_.signals_[signal].resolution != ResolutionKind::std_logic
+        if (!port_resolved(design_.signals_[signal].resolution)
             || std::ranges::none_of(ports, [&](const VhdlPortSource& port) {
                    return port.initial
                        && port.initial->width() == initial.width();
@@ -2871,7 +2878,9 @@ void HierarchyBuilder::validate_process_drivers()
                         port.initial->get_logic9(bit)));
             }
         }
-        initial = std::move(*resolved);
+        initial = design_.signals_[signal].resolution == ResolutionKind::sv_wire
+            ? runtime::collapse_to_logic4(*resolved)
+            : std::move(*resolved);
     }
     // A port is a source of its actual (IEEE 1076-2008 14.7.3.2): a scalar
     // subelement of an out or inout port that no source inside its instance
@@ -2879,7 +2888,7 @@ void HierarchyBuilder::validate_process_drivers()
     // 14.7.3.2). A constant driver contributes that value.
     for (const auto& [signal, ports] : vhdl_port_sources_) {
         const auto& state = design_.signals_.at(signal);
-        if (state.resolution != ResolutionKind::std_logic
+        if (!port_resolved(state.resolution)
             || state.vhdl_resolver
             || !state.vhdl_conversion_drivers.empty()
             || !design_.signal_info_[signal].vhdl_mode_view_bindings.empty()) {
@@ -2929,6 +2938,9 @@ void HierarchyBuilder::validate_process_drivers()
                 : PackedLogic4(width, Logic4::x);
             if (!port.initial || port.initial->width() != width) {
                 value.fill(runtime::Logic9::u);
+            }
+            if (state.resolution == ResolutionKind::sv_wire) {
+                value = runtime::collapse_to_logic4(value);
             }
             Process driver;
             driver.id = static_cast<ProcessId>(design_.process_count());

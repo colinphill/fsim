@@ -1,0 +1,21 @@
+-- Compiled before mixed_vhdl_flop_after_sv_flop.sv into the same library.
+-- SPDX-License-Identifier: Apache-2.0
+-- A rising-edge flop clocked by the SystemVerilog testbench.
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity mixed_flop_vhdl_stage is
+  port (clk : in  std_logic;
+        d   : in  std_logic_vector(7 downto 0);
+        q   : out std_logic_vector(7 downto 0));
+end entity;
+
+architecture rtl of mixed_flop_vhdl_stage is
+begin
+  process (clk) is
+  begin
+    if rising_edge(clk) then
+      q <= d;
+    end if;
+  end process;
+end architecture;

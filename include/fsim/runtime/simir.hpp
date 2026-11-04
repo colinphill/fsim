@@ -1595,6 +1595,9 @@ struct StringObject {
     // Zero marks objects without a SystemVerilog package owner.
     std::uint32_t package_owner_id { };
     std::optional<StringElementAlias> element_alias { };
+    // Toggled on each change, by the design's writes and by a deposit; the
+    // object's waiters wait on it (IEEE 1800-2023 9.4.2, 38.34).
+    std::optional<SignalId> change_signal { };
 };
 
 /// One fixed-array object view backed by a selected range of an earlier

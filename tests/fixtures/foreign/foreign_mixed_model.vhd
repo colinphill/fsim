@@ -30,4 +30,7 @@ architecture rtl of mixed_mid is
 begin
   t <= a;
   l : mixed_sleaf port map (a => t, y => y);
+  gv : for i in 0 to 1 generate
+    v : entity work.mixed_vleaf port map (a => t);
+  end generate;
 end architecture;

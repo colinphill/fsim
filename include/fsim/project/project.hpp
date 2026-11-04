@@ -219,6 +219,10 @@ struct RunSection {
   // Statement, call and suspend probes for the foreign libraries
   // (cbStmt, vhpiCbStmt and the like); the kernel keeps its debug points.
   bool foreign_probes{false};
+  // VHPI after-delay and timeout callbacks registered or enabled by an
+  // end-of-time-step callback are accepted and run from the next time step,
+  // an extension of IEEE 1076-2019 21.3.6.8 that cocotb relies on.
+  bool vhpi_end_of_step_timers{false};
 };
 
 struct SystemCSection {

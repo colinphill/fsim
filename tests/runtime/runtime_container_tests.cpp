@@ -1595,15 +1595,24 @@ void test_simir_containers()
                 && cross_domain.container_object_value(object)
                     .elements.front() == value(8U, 0xaaU),
             "SV container NBA publishes its aliased value and transaction");
+        // An SV change wakes generic (VHDL) observers in the same delta,
+        // in the Active round that wakes the SV ones
+        // (docs/cross-language-semantics.md).
         require(
             generic_backing_dispatch->phase == SchedulerPhase::active
                 && generic_backing_dispatch->time == 1U
-                && generic_backing_dispatch->delta > 0U
+                && generic_backing_dispatch->delta
+                    == sv_backing_dispatch->delta
+                && generic_backing_dispatch->systemverilog_round
+                    == sv_backing_dispatch->systemverilog_round
                 && generic_transaction_dispatch->phase
                     == SchedulerPhase::active
                 && generic_transaction_dispatch->time == 1U
-                && generic_transaction_dispatch->delta > 0U,
-            "container NBA wakes generic observers across a generic cycle");
+                && generic_transaction_dispatch->delta
+                    == sv_transaction_dispatch->delta
+                && generic_transaction_dispatch->systemverilog_round
+                    == sv_transaction_dispatch->systemverilog_round,
+            "container NBA wakes generic observers with the SV observers");
         require(
             sv_backing_dispatch->phase == SchedulerPhase::active
                 && sv_backing_dispatch->time == 1U

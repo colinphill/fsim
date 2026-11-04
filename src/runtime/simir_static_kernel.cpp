@@ -4323,10 +4323,15 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
         return target_at[(id & partition_tag) != 0U
             ? members_.size() + (id & ~partition_tag) : id];
     };
-    for (auto& slot : slots_) {
+    for (std::uint32_t slot_index = 0U; slot_index < slots_.size(); ++slot_index) {
+        auto& slot = slots_[slot_index];
         std::vector<Reader> ranged;
         std::vector<ScheduleTarget> targets;
         for (const auto& reader : slot.readers) {
+            if (members_[reader.member].partition != no_slot) {
+                partition_readers_.push_back(reader);
+                partition_reader_slots_.push_back(slot_index);
+            }
             if (reader.width != 0U) {
                 ranged.push_back(reader);
                 continue;
@@ -4503,12 +4508,16 @@ void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
         return;
     }
     if (mixed_) {
-        // A VHDL member runs in the next round; a SystemVerilog member woken
-        // by a VHDL commit runs in the next delta.
+        // A VHDL member woken by SystemVerilog work runs in the drain's
+        // Active region, before its nonblocking updates (S16); one woken
+        // otherwise runs in the next round. A SystemVerilog member woken by a
+        // VHDL commit runs in the next delta.
         if (state.vhdl) {
             if (!state.round) {
                 state.round = true;
-                next_round_.push_back(member);
+                (sv_draining_ && !committing_round_ ? sv_woken_round_
+                                                    : next_round_)
+                    .push_back(member);
             }
             return;
         }
@@ -6717,10 +6726,10 @@ bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
     input.revision = revision;
     const auto seen = std::exchange(
         input.event_seen, impl_.signal_events[input.signal]);
-    // An event of the current delta (SystemVerilog work of this delta, which
-    // the host stamps for the next one) wakes VHDL processes in the next
-    // delta (IEEE 1076-2019 14.7.5.3, S16); one the previous delta's update
-    // phase made wakes them in this one.
+    // An event this delta's update phase made (stamped for the next delta)
+    // wakes VHDL processes in the next delta (IEEE 1076-2019 14.7.5.3); one
+    // the previous delta's update phase made, or SystemVerilog work of this
+    // delta (stamped for this one, S16), wakes them in this one.
     const bool next_delta = mixed_ && host_boundary_ && input.event_seen
         && *input.event_seen
             == std::pair { impl_.scheduler.now(), impl_.scheduler.delta() + 1U };
@@ -6738,6 +6747,22 @@ bool Interpreter::Impl::StaticKernel::refresh_input(Input& input)
             }
         }
     } hold_woken_scope { *this, next_delta, members, threads };
+    // A change SystemVerilog work made in this delta (a VPI put, a hosted
+    // process's write) wakes VHDL work in the next drain's Active region,
+    // with the SystemVerilog members it wakes (S16).
+    struct SystemVerilogWake {
+        bool& flag;
+        bool previous;
+        ~SystemVerilogWake() { flag = previous; }
+    } systemverilog_wake { sv_draining_,
+        std::exchange(sv_draining_,
+            sv_draining_
+                || (mixed_ && input.event_seen
+                    && *input.event_seen
+                        == std::pair { impl_.scheduler.now(), impl_.scheduler.delta() }
+                    && impl_.signal_event_scheduling_stamps[input.signal]
+                            .origin.process_domain
+                        == ProcessSchedulingDomain::systemverilog)) };
     if (bumped && current == input.cached && !vhdl_
         && impl_.get_signal(input.signal).event_variable) {
         // A trigger of a named event the kernel waits on (its value stays
@@ -7355,10 +7380,60 @@ void Interpreter::Impl::StaticKernel::swap_write_queues()
     std::swap(pending_generic_, parked_pending_);
 }
 
+bool Interpreter::Impl::StaticKernel::run_sv_woken_vhdl()
+{
+    const bool hosted = hosted_vhdl_pending();
+    if (sv_woken_round_.empty() && sv_woken_threads_.empty() && !hosted) {
+        return false;
+    }
+    // Their writes join the round's queue, which commit_round commits as the
+    // update phase of this delta. What they wake themselves (a `wait for
+    // 0 ns`, say) is not SystemVerilog work: it waits for the next delta.
+    const auto draining = std::exchange(sv_draining_, false);
+    swap_write_queues();
+    std::vector<std::uint32_t> members;
+    members.swap(sv_woken_round_);
+    std::ranges::sort(members);
+    for (const auto member : members) {
+        member_schedule_[member].round = false;
+        run(member);
+    }
+    std::vector<std::uint32_t> threads;
+    threads.swap(sv_woken_threads_);
+    for (const auto thread : threads) {
+        if (take_ready(thread)) {
+            run_thread(thread);
+        }
+    }
+    if (hosted) {
+        (void)run_hosted_active_domain(false);
+    }
+    swap_write_queues();
+    sv_draining_ = draining;
+    sv_woken_writes_ = true;
+    return true;
+}
+
+bool Interpreter::Impl::StaticKernel::hosted_vhdl_pending() const
+{
+    // The round ran the hosted VHDL processes ready before the drain; the
+    // ones ready now were woken by its SystemVerilog writes.
+    return has_hosted_ && !in_host_nonblocking_region_ && !hosted_inactive_task_
+        && std::ranges::any_of(hosted_active_, [&](const HostedReady& ready) {
+               return !hosted_systemverilog(ready.process);
+           });
+}
+
 void Interpreter::Impl::StaticKernel::sv_drain()
 {
+    struct Draining {
+        bool& flag;
+        bool previous;
+        ~Draining() { flag = previous; }
+    } draining { sv_draining_, std::exchange(sv_draining_, mixed_) };
     // SystemVerilog regions of one delta: Active (combinational settling,
-    // edge-triggered members, ready threads), Inactive (#0), NBA.
+    // edge-triggered members, ready threads), Inactive (#0), NBA. VHDL work
+    // that SystemVerilog writes wake runs in the Active region (S16).
     for (std::size_t iteration = 0U;; ++iteration) {
         if (iteration > edge_iteration_limit) {
             fail(0U, 0U, "static kernel edge iteration limit exceeded");
@@ -7403,6 +7478,12 @@ void Interpreter::Impl::StaticKernel::sv_drain()
             if (active) {
                 continue;
             }
+        }
+        if (run_sv_woken_vhdl()) {
+            if (stopped_) {
+                return;
+            }
+            continue;
         }
         if (!inactive_threads_.empty() || !hosted_inactive_.empty()) {
             // The Inactive region (#0) of the kernel's threads and hosted
@@ -7450,15 +7531,37 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
     // delta limit stops a design that never settles.
     constexpr std::size_t rounds_per_host_delta = 256U;
     std::size_t rounds = 0U;
-    sv_drain_outside_round();
+    bool merge_round = sv_drain_outside_round();
     while (!stopped_) {
+        if (sv_woken_writes_ && !merge_round) {
+            // A drain outside a round ran VHDL work SystemVerilog writes
+            // woke: its writes are this delta's update phase, before the
+            // next round (the next delta) runs. With VHDL work ready for
+            // this delta too (woken by the previous update phase), the
+            // round below runs it and commits both in one update phase.
+            swap_write_queues();
+            committing_round_ = true;
+            sv_woken_writes_ = false;
+            commit_round();
+            check_owned_edges();
+            committing_round_ = false;
+            swap_write_queues();
+            if (host_boundary_
+                && (!next_round_.empty() || !deferred_targets_.empty()
+                    || !deferred_threads_.empty()
+                    || !vhdl_ready_threads_.empty() || !hosted_active_.empty())) {
+                yield_requested_ = true;
+                break;
+            }
+            continue;
+        }
         if (next_round_.empty() && deferred_targets_.empty()
             && deferred_threads_.empty() && vhdl_ready_threads_.empty()
             && hosted_active_.empty()) {
             if (!scan_inputs(false)) {
                 break;
             }
-            sv_drain_outside_round();
+            merge_round = sv_drain_outside_round();
             continue;
         }
         if (trace_) {
@@ -7523,6 +7626,8 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
         }
         swap_write_queues();
         committing_round_ = true;
+        sv_woken_writes_ = false;
+        merge_round = false;
         commit_round();
         check_owned_edges();
         committing_round_ = false;
@@ -7548,7 +7653,7 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
     }
 }
 
-void Interpreter::Impl::StaticKernel::sv_drain_outside_round()
+bool Interpreter::Impl::StaticKernel::sv_drain_outside_round()
 {
     // SystemVerilog work outside a round (pending at activation, or woken by
     // inputs after a round settled) runs in the current host delta, and a
@@ -7557,15 +7662,19 @@ void Interpreter::Impl::StaticKernel::sv_drain_outside_round()
     // that delta. With one, every round is a host delta: the hosted VHDL
     // processes the same writes wake resume in the next host delta
     // (queue_next_delta), so the members and threads woken here wait for it
-    // too, not for the next iteration of this activation.
-    if (!host_boundary_) {
-        sv_drain();
-        return;
-    }
+    // too, not for the next iteration of this activation. So do they when
+    // VHDL work was ready for this delta before the drain: that round runs
+    // now, with the drain's SystemVerilog-woken VHDL writes (activate_mixed).
     const auto members = next_round_.size();
     const auto threads = vhdl_ready_threads_.size();
+    const bool round_ready = members != 0U || threads != 0U
+        || !deferred_targets_.empty() || !deferred_threads_.empty()
+        || !hosted_active_.empty();
     sv_drain();
-    hold_woken(members, threads);
+    if (host_boundary_ || (sv_woken_writes_ && round_ready)) {
+        hold_woken(members, threads);
+    }
+    return round_ready;
 }
 
 void Interpreter::Impl::StaticKernel::hold_woken(
@@ -7727,11 +7836,226 @@ void Interpreter::Impl::StaticKernel::note_external_write(const SignalId signal)
     if (const auto family = family_of_signal_[signal]; family != no_slot) {
         for (const auto& leaf : families_[family].leaves) {
             pending_revivals_.push_back(leaf.slot);
+            dissolve_writers(leaf.slot);
         }
     } else if (slot_of_signal_[signal] != no_slot) {
         pending_revivals_.push_back(slot_of_signal_[signal]);
+        dissolve_writers(slot_of_signal_[signal]);
     }
     open_boundary();
+}
+
+void Interpreter::Impl::StaticKernel::dissolve_writers(const std::uint32_t slot)
+{
+    // A partition pass runs every member, so a member whose inputs did not
+    // change would overwrite the foreign value before anything it is
+    // sensitive to changes (IEEE 1800-2023 38.34, 9.2.2.2): the members
+    // that write the slot run only when due from now on.
+    if (partitions_.empty()) {
+        return;
+    }
+    if (dissolve_checked_.empty()) {
+        dissolve_checked_.assign(slots_.size(), 0U);
+    }
+    if (std::exchange(dissolve_checked_[slot], 1U) != 0U
+        || slots_[slot].writers.empty()) {
+        return;
+    }
+    if (member_of_process_.empty()) {
+        member_of_process_.reserve(members_.size());
+        for (std::uint32_t member = 0U; member < members_.size(); ++member) {
+            member_of_process_.emplace_back(members_[member].process, member);
+        }
+        std::ranges::sort(member_of_process_);
+    }
+    for (const auto& writer : slots_[slot].writers) {
+        for (auto it = std::ranges::lower_bound(member_of_process_,
+                 std::pair { writer.process, std::uint32_t { 0U } });
+             it != member_of_process_.end() && it->first == writer.process; ++it) {
+            if (members_[it->second].partition != no_slot) {
+                dissolve_member(it->second);
+            }
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::dissolve_member(const std::uint32_t member)
+{
+    const auto partition = members_[member].partition;
+    const auto position = members_[member].position;
+    auto& state = partitions_[partition];
+    if (dissolved_.size() < partitions_.size()) {
+        dissolved_.resize(partitions_.size());
+    }
+    auto& dissolved = dissolved_[partition];
+    if (!dissolved) {
+        // Each member's sensitivity, by position: slot readers, then inputs.
+        dissolved = std::make_unique<DissolvedPartition>();
+        const auto count = static_cast<std::uint32_t>(state.members.size());
+        std::vector<std::vector<Reader>> by_position(count);
+        for (std::size_t index = 0U; index < partition_readers_.size(); ++index) {
+            const auto& reader = partition_readers_[index];
+            if (const auto& reading = members_[reader.member];
+                reading.partition == partition) {
+                by_position[reading.position].push_back(
+                    { partition_reader_slots_[index], reader.offset, reader.width });
+            }
+        }
+        for (std::uint32_t input = 0U; input < inputs_.size(); ++input) {
+            for (const auto& reader : inputs_[input].readers) {
+                if (const auto& reading = members_[reader.member];
+                    reading.partition == partition) {
+                    by_position[reading.position].push_back(
+                        { input | partition_tag, reader.offset, reader.width });
+                }
+            }
+        }
+        dissolved->begin.reserve(count + 1U);
+        for (const auto& readers : by_position) {
+            dissolved->begin.push_back(
+                static_cast<std::uint32_t>(dissolved->readers.size()));
+            dissolved->readers.insert(
+                dissolved->readers.end(), readers.begin(), readers.end());
+        }
+        dissolved->begin.push_back(static_cast<std::uint32_t>(dissolved->readers.size()));
+        dissolved->seen.resize(dissolved->readers.size());
+        dissolved->due.assign(count, 0U);
+        dissolved->gated.assign(count, 0U);
+    }
+    if (dissolved->gated[position] != 0U) {
+        return;
+    }
+    if (scratch().running_partition == partition) {
+        // run_partition gates it once the pass ends.
+        if (std::ranges::find(pending_dissolves_, member) == pending_dissolves_.end()) {
+            pending_dissolves_.push_back(member);
+        }
+        return;
+    }
+    dissolved->gated[position] = 1U;
+    for (auto index = dissolved->begin[position]; index < dissolved->begin[position + 1U];
+         ++index) {
+        const auto source = dissolved->readers[index].member;
+        dissolved->seen[index] = (source & partition_tag) != 0U
+            ? inputs_[source & ~partition_tag].cached
+            : slot_value(source);
+    }
+    // A queued partition may hold a change the member has not seen.
+    dissolved->due[position] = partition_queued_[partition];
+    // The member's mark skips to the next member's unless it is due. A
+    // load forwarded from one of its stores reads the arena again: the
+    // register is stale when the member does not run. The template gets
+    // the same changes at the same instructions (bindings for slots and
+    // marks); its store of the slot names the load's binding.
+    auto& code = state.program.code;
+    const auto size = static_cast<std::uint32_t>(code.size());
+    std::uint32_t begin = size;
+    for (std::uint32_t at = 0U; at < size; ++at) {
+        if (code[at].op == KOp::mark && code[at].d == position) {
+            begin = at;
+            break;
+        }
+    }
+    if (begin == size) {
+        throw std::logic_error("static kernel partition member has no mark");
+    }
+    auto end = begin + 1U;
+    while (end < size && code[end].op != KOp::mark) {
+        ++end;
+    }
+    const auto gate = [&](CompiledBody& body, const bool instance) {
+        body.code[begin].sub = 1U;
+        body.code[begin].aux = end;
+        for (std::size_t at = 0U; at + 1U < state.forwarded.size(); at += 2U) {
+            auto& load = body.code[state.forwarded[at]];
+            const auto offset = state.forwarded[at + 1U];
+            if (load.op != KOp::copy) {
+                continue;
+            }
+            for (auto store = begin; store < end; ++store) {
+                const auto& written = code[store];
+                if (written.op == KOp::store_slot && written.x == load.x
+                    && slots_[written.d].offset == offset) {
+                    load.op = KOp::load_slot;
+                    load.x = instance ? offset : body.code[store].d;
+                    break;
+                }
+            }
+        }
+    };
+    auto& native = state.native;
+    if (native.program != nullptr && codegen_ != nullptr) {
+        auto body = std::make_unique<CompiledBody>(*native.program);
+        gate(*body, false);
+        const auto found = std::ranges::find_if(templates_,
+            [&](const auto& entry) { return entry.get() == native.program; });
+        auto derived = template_codes_[static_cast<std::size_t>(found - templates_.begin())];
+        derived.body = body.get();
+        derived.two_state = false;
+        derived.resume_points = nullptr;
+        templates_.push_back(std::move(body));
+        template_codes_.push_back(derived);
+        const auto entries = codegen_->compile(
+            std::span<const StaticKernelTemplate> { &derived, 1U }, native_helpers_);
+        if (native.lazy_template != no_slot) {
+            std::erase(lazy_templates_[native.lazy_template].units, &native);
+            native.lazy_template = no_slot;
+        }
+        if (native.full_template != no_slot) {
+            std::erase(full_templates_[native.full_template].units, &native);
+            native.full_template = no_slot;
+        }
+        native.program = derived.body;
+        native.entry = entries.front();
+        native.two_state = false;
+        native.full_entry = nullptr;
+    }
+    // The instance program last: gate() reads its stores.
+    gate(state.program, true);
+    // The member's gate reads kernel state: the partition runs on the
+    // leader.
+    if (const auto unit = members_.size() + partition; unit < unit_parallel_.size()) {
+        unit_parallel_[unit] = 0U;
+    }
+}
+
+std::uint32_t Interpreter::Impl::StaticKernel::native_member_due(
+    StaticKernelNativeFrame* frame, const std::uint32_t position)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    try {
+        return kernel.dissolved_member_due(kernel.scratch().running_partition, position)
+            ? 1U : 0U;
+    } catch (...) {
+        kernel.scratch().native_exception = std::current_exception();
+        frame->status = 1U;
+        return 0U;
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::dissolved_member_due(
+    const std::uint32_t partition, const std::uint32_t position)
+{
+    auto& dissolved = *dissolved_[partition];
+    bool due = std::exchange(dissolved.due[position], 0U) != 0U;
+    for (auto index = dissolved.begin[position]; index < dissolved.begin[position + 1U];
+         ++index) {
+        const auto& reader = dissolved.readers[index];
+        auto now = (reader.member & partition_tag) != 0U
+            ? inputs_[reader.member & ~partition_tag].cached
+            : slot_value(reader.member);
+        auto& seen = dissolved.seen[index];
+        if (!due) {
+            due = now.width() != seen.width()
+                || reader.offset + reader.width > now.width()
+                || packed_range_differs(seen, now, reader.offset,
+                    reader.width == 0U ? static_cast<std::uint32_t>(now.width())
+                                       : reader.width,
+                    vhdl_);
+        }
+        seen = std::move(now);
+    }
+    return due;
 }
 
 void Interpreter::Impl::StaticKernel::apply_watches()
@@ -7956,6 +8280,7 @@ bool Interpreter::Impl::StaticKernel::deposit_owned(
     // A foreign write revives a slot the kernel had silenced and ends the
     // rounds the scheduler does not see (note_external_write).
     pending_revivals_.push_back(slot_index);
+    dissolve_writers(slot_index);
     open_boundary();
     if (!store_slot(slot_index, value)) {
         return true;
@@ -7970,7 +8295,13 @@ bool Interpreter::Impl::StaticKernel::deposit_owned(
         // initialize() evaluates every member from the slots.
         return true;
     }
-    slot_changed(slot_index, 0U, import_before_.data());
+    {
+        // A foreign put is SystemVerilog work: the VHDL work it wakes runs
+        // in the next drain's Active region (S16).
+        const auto draining = std::exchange(sv_draining_, sv_draining_ || mixed_);
+        slot_changed(slot_index, 0U, import_before_.data());
+        sv_draining_ = draining;
+    }
     if (!in_activation_) {
         // An update event of this time step: its readers run in the
         // kernel's next round (IEEE 1800-2023 4.4.2.2, 38.34).
@@ -8097,19 +8428,24 @@ void Interpreter::open_external_observation()
     }
 }
 
+bool Interpreter::Impl::deposit_kernel_owned(
+    const SignalId signal, const PackedLogic4& value)
+{
+    if (!static_kernel || !started
+        || signal >= static_kernel_owned_signal.size()
+        || static_kernel_owned_signal[signal] == 0U
+        || (signal < forced_values.size() && forced_values[signal])
+        || switch_network_member(signal)) {
+        return false;
+    }
+    return static_kernel->deposit_owned(
+        signal, normalize_signal_value(signal, value));
+}
+
 bool Interpreter::deposit_kernel_signal(
     const SignalId signal, const PackedLogic4& value)
 {
-    auto& impl = *impl_;
-    if (!impl.static_kernel || !impl.started
-        || signal >= impl.static_kernel_owned_signal.size()
-        || impl.static_kernel_owned_signal[signal] == 0U
-        || (signal < impl.forced_values.size() && impl.forced_values[signal])
-        || impl.switch_network_member(signal)) {
-        return false;
-    }
-    return impl.static_kernel->deposit_owned(
-        signal, impl.normalize_signal_value(signal, value));
+    return impl_->deposit_kernel_owned(signal, value);
 }
 
 std::optional<PackedLogic4> Interpreter::kernel_signal_value(

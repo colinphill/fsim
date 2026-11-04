@@ -302,8 +302,10 @@ std::optional<SignalId> HierarchyBuilder::run_compiled_vhdl_elaboration_program(
         add_elaboration_signals(interpreter, design_.signals_);
         result_image = result;
     }
-    for (const auto& object : design_.string_objects_) {
-        static_cast<void>(interpreter.add_string_object(object));
+    for (auto object : design_.string_objects_) {
+        // Nothing deposits into an elaboration-time run.
+        object.change_signal.reset();
+        static_cast<void>(interpreter.add_string_object(std::move(object)));
     }
     for (auto& object : containers) {
         static_cast<void>(interpreter.add_container_object(std::move(object)));
@@ -401,8 +403,10 @@ std::optional<std::int64_t> HierarchyBuilder::evaluate_compiled_vhdl_integer(
     if (width == 0U || width > 64U) {
         return std::nullopt;
     }
-    // The value runs into a scratch INTEGER signal that is removed again;
-    // nothing else refers to it.
+    // The value runs into a scratch INTEGER signal that nothing else refers
+    // to. It is removed again unless the evaluation materialized signals
+    // after it (a package constant used for the first time, 14.4.2.1);
+    // then it stays as an unnamed signal without drivers or readers.
     const auto scratch = static_cast<SignalId>(design_.signals_.size());
     SignalInfo info;
     info.id = scratch;
@@ -426,13 +430,14 @@ std::optional<std::int64_t> HierarchyBuilder::evaluate_compiled_vhdl_integer(
     const auto value = evaluate_compiled_vhdl_value(specialization,
         expression, scratch, std::nullopt, path, signals, read_only_signals,
         container_objects, generic_bindings);
-    if (design_.signals_.size() != scratch + 1U
-        || design_.signal_info_.size() != scratch + 1U) {
+    if (design_.signals_.size() != design_.signal_info_.size()) {
         throw std::logic_error(
-            "VHDL elaboration-time evaluation created signals");
+            "VHDL elaboration-time evaluation left signal records unpaired");
     }
-    design_.signals_.pop_back();
-    design_.signal_info_.pop_back();
+    if (design_.signals_.size() == scratch + 1U) {
+        design_.signals_.pop_back();
+        design_.signal_info_.pop_back();
+    }
     if (!value || value->width() != width) {
         return std::nullopt;
     }

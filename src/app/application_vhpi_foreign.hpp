@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "application_vpi_foreign.hpp"
+
 #include <functional>
 #include <memory>
 #include <span>
@@ -34,6 +36,10 @@ public:
     /// Whether a VHPI program reported an error or failure (vhpi_assert)
     /// or a module could not be used.
     [[nodiscard]] virtual bool failed() const noexcept = 0;
+    /// Bracket a call of the other interface's callbacks, during which this
+    /// service answers calls too.
+    [[nodiscard]] virtual ForeignCompanion calls() = 0;
+    virtual void set_companion(ForeignCompanion companion) = 0;
 };
 
 /// Load the modules (`lib[:bootstrap]`) into a constructed, not yet started
@@ -44,6 +50,7 @@ public:
     std::span<const std::string> modules,
     VhpiForeignService::PrintSink print,
     std::span<const std::string> arguments,
-    diagnostic::Engine& diagnostics);
+    diagnostic::Engine& diagnostics,
+    ForeignCompanion companion = {});
 
 } // namespace fsim::app::application_detail

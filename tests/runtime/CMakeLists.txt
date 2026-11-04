@@ -1093,6 +1093,29 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-scheduled vpi foreign_vpi_scheduled.sv foreign_vpi_scheduled.expected ""
   fsim_foreign_vpi_scheduled_plugin)
+# A value-change watch registered after time 0 on an output a continuous
+# assignment drives, and on one of its bits (IEEE 1800-2023 38.36.1).
+add_library(fsim_foreign_vpi_late_watch_plugin SHARED
+  foreign_vpi_late_watch_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_late_watch_plugin)
+target_link_libraries(fsim_foreign_vpi_late_watch_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_late_watch_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-late-watch vpi foreign_vpi_late_watch.sv foreign_vpi_late_watch.expected
+  "" fsim_foreign_vpi_late_watch_plugin)
+# A deposit into the output of a combinational block fused into a kernel
+# partition lasts until the block's own input changes (IEEE 1800-2023
+# 38.34).
+add_library(fsim_foreign_vpi_partition_deposit_plugin SHARED
+  foreign_vpi_partition_deposit_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_partition_deposit_plugin)
+target_link_libraries(fsim_foreign_vpi_partition_deposit_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_partition_deposit_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-partition-deposit vpi foreign_vpi_partition_deposit.sv
+  foreign_vpi_partition_deposit.expected "" fsim_foreign_vpi_partition_deposit_plugin)
 # A system task registered only by a cbUnresolvedSystf callback
 # (IEEE 1800-2023 38.36.2), at elaboration and at simulation.
 add_library(fsim_foreign_vpi_unresolved_plugin SHARED

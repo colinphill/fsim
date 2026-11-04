@@ -1857,6 +1857,7 @@ Simulation::Impl::Impl(
         vpi_read_only_container_words
             = std::move(published_vpi.read_only_container_words);
         vpi_word_handles = std::move(published_vpi.word_handles);
+        vpi_string_handles = std::move(published_vpi.string_handles);
         vpi_live_memories = std::move(published_vpi.live_memories);
         vpi_container_scalar_kinds
             = std::move(published_vpi.container_scalar_kinds);
@@ -1893,6 +1894,9 @@ Simulation::Impl::Impl(
                 capture(entry.first);
             }
             for (const auto& entry : vpi_word_handles) {
+                capture(entry.first);
+            }
+            for (const auto& entry : vpi_string_handles) {
                 capture(entry.first);
             }
             for (const auto& entry : vpi_driver_handles) {
@@ -1977,6 +1981,11 @@ Simulation::Impl::Impl(
                         }
                         return;
                     }
+                }
+                if (!object) {
+                    // A time or region callback observes no object: its
+                    // routine reads values through live-bound handles.
+                    return;
                 }
                 // An object without an exact signal binding may cover a scope
                 // or aggregate. Retain a conservative barrier for all exposed

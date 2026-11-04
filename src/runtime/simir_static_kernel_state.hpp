@@ -703,6 +703,25 @@ private:
         std::uint32_t level { };
         CompiledBody program;
         NativeUnit native;
+        /// The loads forward_partition_stores made register copies, as
+        /// (instruction, arena offset) pairs: dissolve_member restores those
+        /// of its member's stores.
+        std::vector<std::uint32_t> forwarded;
+    };
+
+    /// A partition with members a foreign write gated (dissolve_member):
+    /// a gated member runs in a pass only when an entry of its sensitivity
+    /// changed since it last ran. Readers of position p are
+    /// readers[begin[p], begin[p + 1]); seen holds their values at its last
+    /// run, and due marks a member to run regardless (the partition was
+    /// queued when it was gated).
+    struct DissolvedPartition {
+        std::vector<std::uint32_t> begin;
+        /// Reader::member is a slot, or an input | partition_tag.
+        std::vector<Reader> readers;
+        std::vector<PackedLogic4> seen;
+        std::vector<std::uint8_t> due;
+        std::vector<std::uint8_t> gated;
     };
 
     /// A deduplicated scheduling target for whole-slot readers: a member, or
@@ -1105,7 +1124,8 @@ private:
     /// pass; returns the loads forwarded.
     [[nodiscard]] std::size_t forward_partition_stores(CompiledBody& program,
         const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset,
-        std::vector<std::uint32_t>& register_of_slot) const;
+        std::vector<std::uint32_t>& register_of_slot,
+        std::vector<std::uint32_t>& forwarded) const;
     std::size_t forwarded_loads_ { };
     /// Returns whether a two-state caller got a result with X or U bits.
     /// execute_generic's in-place path for a narrow field written into a
@@ -1173,6 +1193,15 @@ private:
         std::uint32_t member, std::uint32_t body_begin, Word x, Word y, Word z,
         std::uint32_t resolved);
     void run_partition(std::uint32_t partition);
+    /// A foreign write to the slot: the partition members that write it
+    /// are gated (once per slot).
+    void dissolve_writers(std::uint32_t slot);
+    /// Gates a partition member and compiles the partition's code again.
+    void dissolve_member(std::uint32_t member);
+    /// Whether a gated member at this position of the running partition
+    /// runs in this pass; records its sensitivity values.
+    [[nodiscard]] bool dissolved_member_due(
+        std::uint32_t partition, std::uint32_t position);
     void build_partitions(
         const std::vector<std::vector<std::uint32_t>>& successors);
     void concatenate_members(CompiledBody& program,
@@ -1261,6 +1290,8 @@ private:
         std::uint32_t slot, std::uint64_t changed);
     static void native_notify_field(StaticKernelNativeFrame* frame,
         std::uint32_t slot, std::uint64_t changed, std::uint32_t field_offset);
+    static std::uint32_t native_member_due(
+        StaticKernelNativeFrame* frame, std::uint32_t position);
     void move_wide(const static_kernel_detail::CompiledBody& body,
         const static_kernel_detail::KInst& inst, std::uint32_t at,
         std::uint32_t member_index, std::uint32_t source_slot, Word base,
@@ -1362,6 +1393,20 @@ private:
     Impl& impl_;
     std::vector<Member> members_;
     std::vector<Partition> partitions_;
+    /// The sensitivity entries of partition members (build_schedule_targets
+    /// keeps only ranged readers in the slots), for dissolve_member:
+    /// Reader::member is the member, offset and width as in the slot's
+    /// reader, and the slot follows in partition_reader_slots_.
+    std::vector<Reader> partition_readers_;
+    std::vector<std::uint32_t> partition_reader_slots_;
+    /// By partition: null unless a member is gated.
+    std::vector<std::unique_ptr<DissolvedPartition>> dissolved_;
+    /// Slots dissolve_writers has handled; members to gate once the
+    /// running pass ends.
+    std::vector<std::uint8_t> dissolve_checked_;
+    std::vector<std::uint32_t> pending_dissolves_;
+    /// (process, member) pairs ordered by process, built on first use.
+    std::vector<std::pair<ProcessId, std::uint32_t>> member_of_process_;
 
     /// Hot scheduling state, packed apart from the large member and
     /// partition records; filled by build_schedule_targets.
@@ -1707,6 +1752,15 @@ private:
     /// scan_inputs' reused list of the inputs it refreshes.
     std::vector<std::uint32_t> scan_order_;
     bool committing_round_ { };
+    /// A mixed kernel drains SystemVerilog regions (sv_drain): the VHDL
+    /// members and threads that SystemVerilog writes wake run in the drain's
+    /// Active region, before its nonblocking updates (S16), from
+    /// sv_woken_round_ and sv_woken_threads_.
+    bool sv_draining_ { };
+    std::vector<std::uint32_t> sv_woken_round_;
+    std::vector<std::uint32_t> sv_woken_threads_;
+    /// Their writes wait in the round's queue for the next commit_round.
+    bool sv_woken_writes_ { };
     /// Collapsed members exist (plan_delta_collapse); collapsing_ while an
     /// update phase after time zero runs, when their wakes go to
     /// collapse_buckets_ (by level) instead of the next round.
@@ -1806,9 +1860,17 @@ private:
     std::vector<Pending> parked_pending_;
     void swap_write_queues();
     void sv_drain();
-    /// sv_drain outside a round of a host-boundary mixed kernel: the VHDL
-    /// members and threads it wakes are held for the next host delta.
-    void sv_drain_outside_round();
+    /// sv_drain outside a round of a mixed kernel: the VHDL members and
+    /// threads it wakes are held for the next host delta at a host boundary,
+    /// or when VHDL work was ready for this delta before the drain, which
+    /// it returns.
+    bool sv_drain_outside_round();
+    /// Runs the VHDL work woken by SystemVerilog writes in this drain; false
+    /// when there is none.
+    [[nodiscard]] bool run_sv_woken_vhdl();
+    /// Hosted VHDL processes are ready in the Active region (woken by
+    /// SystemVerilog writes, S16).
+    [[nodiscard]] bool hosted_vhdl_pending() const;
     std::vector<std::uint32_t> held_round_;
     std::vector<std::uint32_t> held_threads_;
     void activate_mixed();

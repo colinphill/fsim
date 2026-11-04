@@ -248,11 +248,12 @@ void test_systemverilog_vpi_checked_writes() {
           SystemVerilogVpiWriteKind::Deposit,
           *integer_conversion.value)
               == SystemVerilogVpiValueError::ReadOnly
+          // A variable input port is a variable (IEEE 1800-2023 38.34).
           && control.apply(
                  input_port.value,
                  SystemVerilogVpiWriteKind::Deposit,
                  one)
-              == SystemVerilogVpiValueError::InputOnly
+              == SystemVerilogVpiValueError::None
           && control.apply(
                  output_port.value,
                  SystemVerilogVpiWriteKind::Deposit,
@@ -263,7 +264,7 @@ void test_systemverilog_vpi_checked_writes() {
                  SystemVerilogVpiWriteKind::Deposit,
                  stored_write(PackedLogic4{2}))
               == SystemVerilogVpiValueError::TypeMismatch,
-      "VPI writes enforce constants, port direction, and exact width transactionally");
+      "VPI writes enforce constants and exact width transactionally, and reach ports");
   require_vpi_write(
       control.apply(
           output_port.value,

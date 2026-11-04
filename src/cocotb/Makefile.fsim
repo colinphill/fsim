@@ -1,0 +1,155 @@
+# SPDX-License-Identifier: Apache-2.0
+# cocotb simulator makefile for fsim (cocotb 2.1.x and 2.2).
+#
+# Use it in either of two ways:
+#   - include it from a cocotb test Makefile after the sources and toplevel:
+#         include $(shell fsim cocotb makefile)
+#   - install it as cocotb_tools/makefiles/simulators/Makefile.fsim and set
+#     SIM=fsim with cocotb's own Makefile.sim.
+#
+# fsim runs in the current directory, which is its workspace: .fsim holds the
+# libraries and snapshots, and relative $readmemh and $fopen paths resolve
+# here, where cocotb finds the test modules and writes
+# $(COCOTB_RESULTS_FILE).
+
+ifndef COCOTB_MAKEFILE_INC_INCLUDED
+# Included directly: do what cocotb's Makefile.sim does before it includes a
+# simulator makefile.
+.PHONY: all
+all: sim
+
+PYTHON_BIN_RES := $(shell cocotb-config --python-bin 2>>/dev/null; echo $$?)
+PYTHON_BIN_RC := $(lastword $(PYTHON_BIN_RES))
+PYTHON_BIN := $(strip $(subst $(PYTHON_BIN_RC)QQQQ,,$(PYTHON_BIN_RES)QQQQ))
+ifneq ($(PYTHON_BIN_RC),0)
+    PYTHON_BIN := python3
+endif
+
+SIM ?= fsim
+# Writes with zero inertial delay (vpiInertialDelay, vhpiDepositPropagate)
+# follow the LRMs, so cocotb applies them at once.
+COCOTB_TRUST_INERTIAL_WRITES ?= 1
+
+include $(shell $(PYTHON_BIN) -m cocotb_tools.config --makefiles)/Makefile.inc
+else
+# Included by cocotb's Makefile.sim (SIM=fsim): its Makefile.inc gives a
+# simulator it does not know 0. A value from the environment or the command
+# line is kept.
+ifeq ($(origin COCOTB_TRUST_INERTIAL_WRITES),file)
+COCOTB_TRUST_INERTIAL_WRITES := 1
+endif
+endif
+
+CMD_BIN := fsim
+
+ifdef FSIM_BIN_DIR
+    CMD := $(call find_command,$(FSIM_BIN_DIR)/$(CMD_BIN))
+else
+    CMD := $(call find_command,$(CMD_BIN))
+endif
+
+ifdef RTL_LIBRARY
+    $(warning Using RTL_LIBRARY is deprecated, please use TOPLEVEL_LIBRARY instead.)
+    TOPLEVEL_LIBRARY ?= $(RTL_LIBRARY)
+else
+    TOPLEVEL_LIBRARY ?= work
+endif
+
+FSIM := $(CMD)
+TOPLEVELS := $(call deprecate,TOPLEVEL,COCOTB_TOPLEVEL)
+
+# cocotb 2.2 loads its bootstrap library, which takes the GPI implementations
+# from GPI_IMPL; cocotb 2.1 loads the implementation library itself. fsim is
+# driven through the DSim VPI and the NVC VHPI implementations, which follow
+# the LRM without simulator quirks.
+FSIM_GPI_IMPL_SUPPORTED := $(shell $(PYTHON_BIN) -m cocotb_tools.config --help 2>/dev/null | grep -q -- --gpi-impl && echo 1)
+
+FSIM_VPI_LIB = $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-entry vpi dsim)
+FSIM_VHPI_LIB = $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-entry vhpi nvc)
+
+ifeq ($(TOPLEVEL_LANG),vhdl)
+    FSIM_PRIMARY_ARGS = --vhpi $(FSIM_VHPI_LIB)
+    FSIM_PRIMARY_IMPL = nvc vhpi
+    FSIM_EXTRA_IMPL = dsim vpi
+    FSIM_EXTRA_GPI = $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vpi dsim):cocotbvpi_entry_point
+else
+    FSIM_PRIMARY_ARGS = --vpi $(FSIM_VPI_LIB)
+    FSIM_PRIMARY_IMPL = dsim vpi
+    FSIM_EXTRA_IMPL = nvc vhpi
+    FSIM_EXTRA_GPI = $(shell $(PYTHON_BIN) -m cocotb_tools.config --lib-name-path vhpi nvc):cocotbvhpi_entry_point
+endif
+
+# A mixed-language design loads the other language's interface as well.
+FSIM_MIXED := $(and $(VERILOG_SOURCES),$(or $(VHDL_SOURCES),$(filter VHDL_SOURCES_%,$(.VARIABLES))))
+
+COMMA := ,
+ifeq ($(FSIM_GPI_IMPL_SUPPORTED),1)
+    FSIM_GPI_ENV = GPI_IMPL=$(shell $(PYTHON_BIN) -m cocotb_tools.config --gpi-impl $(FSIM_PRIMARY_IMPL))$(if $(FSIM_MIXED),$(COMMA)$(shell $(PYTHON_BIN) -m cocotb_tools.config --gpi-impl $(FSIM_EXTRA_IMPL)))
+else
+    FSIM_GPI_ENV = $(if $(FSIM_MIXED),GPI_EXTRA=$(FSIM_EXTRA_GPI))
+endif
+
+ifdef VERILOG_INCLUDE_DIRS
+    FSIM_VERILOG_ARGS += $(addprefix -I ,$(abspath $(VERILOG_INCLUDE_DIRS)))
+endif
+
+# cocotb's ReadOnly trigger is VHPI's vhpiCbRepEndOfTimeStep, from which it
+# registers timers; IEEE 1076-2019 21.3.6.8 forbids that, so the flow accepts
+# it as an fsim extension (see docs/cocotb.md).
+FSIM_COCOTB_SIM_ARGS := --vhpi-end-of-step-timers
+
+ifeq ($(WAVES),1)
+    FSIM_TRACE_ARGS := --trace $(SIM_BUILD)/$(firstword $(TOPLEVELS)).fst --trace-format fst
+else
+    FSIM_TRACE_ARGS :=
+endif
+
+# Files without a `timescale directive take cocotb's default time unit and
+# precision (IEEE 1800-2023 3.14.2.3 leaves it to the tool).
+FSIM_TIMESCALE_ARGS := --timescale $(COCOTB_HDL_TIMEUNIT)/$(COCOTB_HDL_TIMEPRECISION)
+
+# A design with VHDL units otherwise counts time in femtoseconds; cocotb's
+# precision is the simulator's resolution (IEEE 1076-2019 5.2.4.2).
+FSIM_RESOLUTION_ARGS := $(if $(or $(VHDL_SOURCES),$(filter VHDL_SOURCES_%,$(.VARIABLES))),--time-resolution $(COCOTB_HDL_TIMEPRECISION))
+
+.PHONY: fsim_compile fsim_elaborate
+
+# Compilation: each library of VHDL_LIB_ORDER, then the toplevel library's
+# VHDL, Verilog (.v) and SystemVerilog sources (one source language per fsim
+# compile, inferred from the extension).
+FSIM_V_SOURCES := $(filter %.v %.V,$(VERILOG_SOURCES))
+FSIM_SV_SOURCES := $(filter-out %.v %.V,$(VERILOG_SOURCES))
+
+fsim_compile: $(VERILOG_SOURCES) $(VHDL_SOURCES) $(CUSTOM_COMPILE_DEPS) | $(SIM_BUILD)
+	$(foreach LIB, $(VHDL_LIB_ORDER), $(check_vhdl_sources))
+	$(foreach SOURCES_VAR, $(filter VHDL_SOURCES_%, $(.VARIABLES)), $(check_lib_order))
+	$(foreach LIB,$(VHDL_LIB_ORDER), \
+		$(SIM_CMD_PREFIX) $(FSIM) compile --library $(LIB) $(EXTRA_ARGS) $(COMPILE_ARGS) $(abspath $(VHDL_SOURCES_$(LIB))) && ) true
+	$(if $(VHDL_SOURCES),$(SIM_CMD_PREFIX) $(FSIM) compile --library $(TOPLEVEL_LIBRARY) $(EXTRA_ARGS) $(COMPILE_ARGS) $(abspath $(VHDL_SOURCES)))
+	$(foreach SOURCES,FSIM_V_SOURCES FSIM_SV_SOURCES,$(if $($(SOURCES)), \
+		$(SIM_CMD_PREFIX) $(FSIM) compile --library $(TOPLEVEL_LIBRARY) $(FSIM_TIMESCALE_ARGS) $(FSIM_VERILOG_ARGS) $(EXTRA_ARGS) $(COMPILE_ARGS) $(abspath $($(SOURCES))) && )) true
+
+# A VHDL toplevel is named as one, apart from a Verilog unit of its name.
+FSIM_TOPLEVEL_PREFIX := $(if $(filter vhdl,$(TOPLEVEL_LANG)),vhdl:)$(TOPLEVEL_LIBRARY).
+
+fsim_elaborate: fsim_compile
+	$(SIM_CMD_PREFIX) $(FSIM) elaborate $(FSIM_RESOLUTION_ARGS) $(EXTRA_ARGS) $(ELAB_ARGS) $(addprefix $(FSIM_TOPLEVEL_PREFIX),$(TOPLEVELS))
+
+$(COCOTB_RESULTS_FILE): fsim_elaborate $(CUSTOM_SIM_DEPS)
+	$(RM) $(COCOTB_RESULTS_FILE)
+
+	$(FSIM_GPI_ENV) $(COCOTB_ENV) \
+		$(SIM_CMD_PREFIX) $(FSIM) simulate $(FSIM_PRIMARY_ARGS) $(FSIM_COCOTB_SIM_ARGS) $(FSIM_TRACE_ARGS) $(EXTRA_ARGS) $(SIM_ARGS) $(call deprecate,PLUSARGS,COCOTB_PLUSARGS) $(SIM_CMD_SUFFIX)
+
+	$(call check_results)
+
+debug: fsim_elaborate $(CUSTOM_SIM_DEPS)
+	$(RM) $(COCOTB_RESULTS_FILE)
+
+	$(FSIM_GPI_ENV) $(COCOTB_ENV) \
+		$(SIM_CMD_PREFIX) gdb --args $(FSIM) simulate $(FSIM_PRIMARY_ARGS) $(FSIM_COCOTB_SIM_ARGS) $(FSIM_TRACE_ARGS) $(EXTRA_ARGS) $(SIM_ARGS) $(call deprecate,PLUSARGS,COCOTB_PLUSARGS) $(SIM_CMD_SUFFIX)
+
+	$(call check_results)
+
+clean::
+	@$(RM) -r .fsim

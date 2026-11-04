@@ -262,8 +262,11 @@ end architecture;
       required_vhdl_design,
       "sv:work.required_open_vhdl_parent",
       required_vhdl_bindings);
-  assert(!required_vhdl_result.ok());
-  assert(has_diagnostic(required_vhdl_result, "FSIM-ELAB-BIND-027"));
+  // A SystemVerilog instantiation may leave a VHDL input without a default
+  // unconnected (IEEE 1800-2023 23.3.2); a VHDL one may not (1076-2019
+  // 6.5.6.3, elaborator_vhdl_component_test).
+  assert(required_vhdl_result.ok());
+  assert(!has_diagnostic(required_vhdl_result, "FSIM-ELAB-BIND-027"));
 
   auto invalid_parent = sv_parent.design;
   auto& invalid_instances = invalid_parent.units.front().instances;

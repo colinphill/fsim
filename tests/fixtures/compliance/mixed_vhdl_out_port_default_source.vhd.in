@@ -1,0 +1,16 @@
+-- Compiled before mixed_vhdl_out_port_default.sv into the same library.
+-- SPDX-License-Identifier: Apache-2.0
+-- Out ports that the architecture never drives.
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity mixed_vhdl_out_port_default_source is
+  port (q0 : out std_logic;
+        q1 : out std_logic := '0';
+        q2 : out std_logic_vector(1 downto 0) := "10";
+        b1 : out bit := '1');
+end entity;
+
+architecture rtl of mixed_vhdl_out_port_default_source is
+begin
+end architecture;

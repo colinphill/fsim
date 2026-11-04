@@ -53,6 +53,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-CLI-0001` | error | Invalid command-line argument, option, value, command, or direct-source combination. |
 | `FSIM-CLI-0002` | error | The selected command has no connected implementation in this build. |
 | `FSIM-CLI-0003` | error | An exception escaped command dispatch. |
+| `FSIM-CLI-0004` | error | `fsim cocotb makefile` or `pythonpath` found no cocotb integration in `share/fsim/cocotb` beside the executable. |
 | `FSIM-AOT-001` | error | Explicit post-elaboration native compilation or atomic AOT receipt publication failed; the already-published portable design remains valid. |
 | `FSIM-TCL-0001` | error | The selected build has no embedded Tcl interface. |
 | `FSIM-TCL-0002` | error | The Tcl interpreter, standard library, fsim namespace, or standard channels could not be initialized. |

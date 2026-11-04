@@ -176,6 +176,16 @@ timestamp. It never runs a callback recursively. A process awakened by the
 update/resolve phase runs in the next delta, not later in the completed active
 phase.
 
+A change made by SystemVerilog work (a blocking or continuous assignment in
+the Active region, or an NBA update) wakes VHDL processes in the same delta,
+in the next round of the Active region, with the SystemVerilog processes it
+wakes and before that region's next NBA updates. The change is an event of
+that delta, so `S'EVENT` and `rising_edge` see it. A VHDL process's signal
+assignments still wait for the update phase. No standard orders zero-delay
+events across languages; this is the order Vivado gives. A SystemVerilog flop
+and a VHDL flop on one SystemVerilog clock therefore both sample the values
+from before the edge.
+
 The mixed vertical-slice test exercises this rule: an SV testbench clock wakes
 a VHDL `rising_edge` process, the VHDL update commits `q`, and an SV continuous
 assignment observes the aliased value in a following delta. A second automated
