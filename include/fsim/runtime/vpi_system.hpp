@@ -58,8 +58,6 @@ enum class SystemVerilogVpiRoutineKind : std::uint32_t {
   McdPrint,
   McdVariablePrint,
   McdFlush,
-  FileOpen,
-  GetFile,
 };
 
 enum class SystemVerilogVpiRoutineHandlePolicy : std::uint32_t {

@@ -16628,6 +16628,17 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     }
     append_selected_systemverilog_classes(
         *specialized, selected_generates, generate_occurrences);
+    record_verilog_primitives(
+        unit.primitives, *specialized, path, signals,
+        specialization.processes);
+    for (std::size_t index = 0U; index < generate_occurrences.size()
+         && index < generated_materializations.size(); ++index) {
+        const auto& occurrence = generate_occurrences[index];
+        record_verilog_primitives(
+            occurrence.region->primitives, *occurrence.specialization,
+            occurrence.path, generated_materializations[index].signals,
+            specialization.processes);
+    }
     attach_verilog_specify_drivers(
         specify_path_begin, specialization.processes);
     add_systemverilog_alias_connections(
@@ -32544,6 +32555,8 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
             specialization, concurrent_order, &deferred_regions)) {
         return false;
     }
+    append_vhdl_foreign_architecture_process(
+        *entity, architecture, *specialized, signals, path, specialization);
     record_vhdl_toggle_coverage_signals(
         design_.specializations_.size(), *entity, architecture, signals);
     design_.specializations_.push_back(std::move(specialization));

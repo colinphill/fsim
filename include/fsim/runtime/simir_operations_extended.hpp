@@ -442,6 +442,15 @@ enum class DebugPointKind : std::uint8_t {
     // its result is used or its parameters are copied back (IEEE 1076-2019
     // 21.3.4.6).
     call_return,
+    // A SystemVerilog callable body's first and last point: its frame is
+    // activated once its automatic variables exist, and is about to end
+    // (IEEE 1800-2023 37.43); `callee` names it. Only a run with the
+    // execution probes (simulate --foreign-probes) executes them.
+    frame_entry,
+    frame_exit,
+    // After a lowered class constructor completed (IEEE 1800-2023 38.36.1
+    // cbCreateObj). Probe runs only.
+    class_constructed,
 };
 
 struct DebugPoint {
@@ -450,15 +459,19 @@ struct DebugPoint {
     // Canonical hierarchy-qualified lexical execution scope. This is metadata
     // rather than a scheduler operand, but remains part of native provenance.
     InternedString scope;
+    // The callable a frame point belongs to; empty for other points.
+    InternedString callee;
 
     DebugPoint() = default;
     DebugPoint(
         const DebugPointKind point_kind,
         SourceLocation point_source,
-        InternedString point_scope = { })
+        InternedString point_scope = { },
+        InternedString point_callee = { })
         : kind(point_kind)
         , source(std::move(point_source))
         , scope(std::move(point_scope))
+        , callee(std::move(point_callee))
     {
     }
 };

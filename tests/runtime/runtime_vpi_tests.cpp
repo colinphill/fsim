@@ -149,7 +149,7 @@ void test_systemverilog_vpi_host_abi() {
         "VPI 2023 routine inventory is complete unique and index-stable");
   }
   require(
-      routines.size() == 42U
+      routines.size() == 40U
           && find_systemverilog_vpi_2023_routine(
                  static_cast<SystemVerilogVpiRoutineKind>(999U))
               == nullptr

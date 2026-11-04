@@ -40,7 +40,11 @@ typedef PLI_INT32* HANDLE;
 typedef PLI_INT32* handle;
 #endif
 
-/* Object and subtype identities. */
+/* The PLI_EXTRAS aliases of Annex E (bool, true, false, TRUE, FALSE, null)
+   come from veriuser.h, included above, which guards them for C++ and for C
+   standards where bool/true/false are keywords. */
+
+/* Object and subtype identities (IEEE 1364-2001 Annex E). */
 #define accModule 20
 #define accScope 21
 #define accNet 25
@@ -83,6 +87,7 @@ typedef PLI_INT32* handle;
 #define accIntParam accIntegerParam
 #define accRealParam 202
 #define accStringParam 204
+#define accPath 206
 #define accTchk 208
 #define accPrimitive 210
 #define accBit 212
@@ -95,6 +100,7 @@ typedef PLI_INT32* handle;
 #define accModuleInstance 226
 #define accCellInstance 228
 #define accModPath 230
+#define accWirePath 234
 #define accInterModPath 236
 #define accScalarPort 250
 #define accBitSelectPort 252
@@ -120,6 +126,7 @@ typedef PLI_INT32* handle;
 #define accTimeVar 283
 #define accScalar 300
 #define accVector 302
+#define accCollapsedNet 304
 #define accExpandedVector 306
 #define accUnExpandedVector 307
 #define accProtected 308
@@ -157,10 +164,13 @@ typedef PLI_INT32* handle;
 #define accUserTask 520
 #define accUserFunction 522
 #define accUserRealFunction 524
+#define accNamedBeginStat 560
+#define accNamedForkStat 564
 #define accConstant 600
 #define accConcat 610
 #define accOperator 620
 #define accMinTypMax 696
+#define accModPathHasIfnone 715
 
 /* Configuration selectors. */
 #define accPathDelayCount 1
@@ -193,7 +203,7 @@ typedef PLI_INT32* handle;
 #define accDelayModeDistrib 2
 #define accDelayModeUnit 3
 #define accDelayModeZero 4
-#define accDelayModeVeritime 5
+#define accDelayModeMTM 5
 
 #define accNoDelay 0
 #define accInertialDelay 1
@@ -222,7 +232,9 @@ typedef PLI_INT32* handle;
 #define vcl0 acc0
 #define vcl1 acc1
 #define vclX accX
+#define vclx vclX
 #define vclZ accZ
+#define vclz vclZ
 
 #define logic_value_change 1
 #define strength_value_change 2
@@ -327,13 +339,30 @@ ACC_EXTERN PLI_INT32 acc_append_delays ACC_PROTO((handle object, ...));
 ACC_EXTERN PLI_INT32 acc_append_pulsere
     ACC_PROTO((handle object, double val1r, double val1x, ...));
 ACC_EXTERN void acc_close ACC_PROTO((void));
+/* Annex E declares the acc_next routine parameter without a prototype, so
+   any acc_next_* routine converts to it in C (acc_next takes three
+   arguments, the others two; 23.4, 23.9); C++ and C23 read `()` as
+   `(void)`, so there a caller casts the routine. */
+#if defined(__cplusplus) \
+    || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L)
+#define ACC_NEXT_PARAMS (void)
+#else
+#define ACC_NEXT_PARAMS ()
+#endif
+#if !defined(__cplusplus) && (defined(__GNUC__) || defined(__clang__))
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstrict-prototypes"
+#endif
 ACC_EXTERN handle* acc_collect ACC_PROTO(
-    (handle (*next_routine)(void), handle scope, PLI_INT32* count));
+    (handle (*next_routine)ACC_NEXT_PARAMS, handle scope, PLI_INT32* count));
 ACC_EXTERN PLI_INT32 acc_compare_handles ACC_PROTO((handle lhs, handle rhs));
 ACC_EXTERN PLI_INT32 acc_configure
     ACC_PROTO((PLI_INT32 item, PLI_BYTE8* value));
 ACC_EXTERN PLI_INT32 acc_count
-    ACC_PROTO((handle (*next_routine)(void), handle object));
+    ACC_PROTO((handle (*next_routine)ACC_NEXT_PARAMS, handle object));
+#if !defined(__cplusplus) && (defined(__GNUC__) || defined(__clang__))
+#pragma GCC diagnostic pop
+#endif
 ACC_EXTERN PLI_INT32 acc_fetch_argc ACC_PROTO((void));
 ACC_EXTERN PLI_BYTE8** acc_fetch_argv ACC_PROTO((void));
 ACC_EXTERN double acc_fetch_attribute ACC_PROTO((handle object, ...));

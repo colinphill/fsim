@@ -82,7 +82,8 @@ std::uint32_t FSIM_NATIVE_PLUGIN_CALL lookup_object(
   } else {
     const auto base = registry.lookup(scope);
     if (!base) return status(base.error);
-    if (mode == FSIM_ACC_LOOKUP_PLI_SCOPE) {
+    if (mode == FSIM_ACC_LOOKUP_PLI_SCOPE ||
+        mode == FSIM_ACC_LOOKUP_CALLING_SCOPE) {
       result = registry.find(requested);
       if (result) {
         *object = result.value->handle;

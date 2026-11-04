@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_vhdl_hir_internal.hpp"
 
+#include <set>
+
 namespace fsim::app::application_detail {
 
 VhdlHirBuilder::VhdlHirBuilder(semantic::Model& model, vh::Hir& hir)
@@ -27,6 +29,7 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
     compose_vhdl_mode_views(hir_);
     link_deferred_package_constants(parsed);
     rebuild_overload_sets();
+    mark_foreign_subprograms();
 }
 
 [[nodiscard]] semantic::DeclarationId VhdlHirBuilder::add_parameter(
@@ -1521,6 +1524,54 @@ void VhdlHirBuilder::link_deferred_package_constants(
             auto& output = declaration(*spec_declaration);
             output.completion = *body_declaration;
             output.completion_source = declaration(*body_declaration).source;
+        }
+    }
+}
+
+void VhdlHirBuilder::mark_foreign_subprograms()
+{
+    std::set<std::pair<semantic::ScopeId, std::string>> named;
+    for (const auto& declaration : hir_.declarations()) {
+        if (declaration.form != vh::DeclarationForm::attribute_specification
+            || !declaration.attribute
+            || support::canonical_vhdl_spelling(declaration.name)
+                != "foreign") {
+            continue;
+        }
+        const auto entity_class
+            = support::canonical_vhdl_spelling(
+                declaration.attribute->entity_class);
+        if (entity_class != "function" && entity_class != "procedure") {
+            continue;
+        }
+        for (const auto& name : declaration.attribute->entity_names) {
+            named.emplace(declaration.scope,
+                support::canonical_vhdl_spelling(name.spelling));
+        }
+    }
+    if (named.empty()) {
+        return;
+    }
+    // The body completing a foreign subprogram declaration is foreign too.
+    std::vector<semantic::DeclarationId> completions;
+    auto& declarations = hir_.mutable_declarations();
+    for (auto& declaration : declarations) {
+        if (declaration.callable
+            && (declaration.form == vh::DeclarationForm::function
+                || declaration.form == vh::DeclarationForm::procedure)
+            && named.contains({ declaration.scope,
+                support::canonical_vhdl_spelling(declaration.name) })) {
+            declaration.callable->foreign = true;
+            if (declaration.completion) {
+                completions.push_back(*declaration.completion);
+            }
+        }
+    }
+    for (const auto id : completions) {
+        const auto found = std::ranges::find(
+            declarations, id, &vh::Declaration::id);
+        if (found != declarations.end() && found->callable) {
+            found->callable->foreign = true;
         }
     }
 }

@@ -2899,6 +2899,7 @@ GenerateRegion VerilogParser::generate_gate_array(const Token& instance_start,
 
 void VerilogParser::parse_gate_primitive(
     std::vector<Statement>& statements,
+    std::vector<VerilogPrimitiveInstance>& primitives,
     const std::vector<SignalDeclaration>& signals,
     const std::vector<SignalDeclaration>& ports,
     std::vector<GenerateRegion>* const regions) {
@@ -3278,6 +3279,33 @@ void VerilogParser::parse_gate_primitive(
             !gate_array
                 ? input
                 : terminal_for(input, ordinal, instance_indices[ordinal]));
+      }
+
+      // The terminals in LRM order, before the inputs are folded into the
+      // driver expression (IEEE 1800-2023 28.3, 37.35).
+      {
+        VerilogPrimitiveInstance primitive;
+        primitive.kind = VerilogPrimitiveClass::Gate;
+        primitive.keyword = operation;
+        primitive.name = instance_name;
+        if (gate_array) {
+          primitive.array_member = true;
+          primitive.array_index = instance_indices[ordinal];
+          primitive.array_left = instance_indices.front();
+          primitive.array_right = instance_indices.back();
+        }
+        for (const auto& output : mapped_targets) {
+          primitive.terminals.push_back(
+              { VerilogPrimitiveTerminalDirection::Output, output });
+        }
+        for (const auto& input : mapped_inputs) {
+          primitive.terminals.push_back(
+              { VerilogPrimitiveTerminalDirection::Input, input });
+        }
+        primitive.delay = delay;
+        primitive.drive_strength = strength;
+        primitive.span = cover(start.span, previous().span);
+        primitives.push_back(std::move(primitive));
       }
 
       Expression value = std::move(mapped_inputs.front());

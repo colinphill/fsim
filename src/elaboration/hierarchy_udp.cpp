@@ -141,6 +141,83 @@ frontend::VerilogUdpTableRow compatible_udp_row(
     return result;
 }
 
+char udp_level_character(const frontend::VerilogUdpLevelSymbol level)
+{
+    using Level = frontend::VerilogUdpLevelSymbol;
+    switch (level) {
+    case Level::Zero:
+        return '0';
+    case Level::One:
+        return '1';
+    case Level::Unknown:
+        return 'x';
+    case Level::DontCare:
+        return '?';
+    case Level::Binary:
+        return 'b';
+    }
+    return 'x';
+}
+
+// A table entry as written: `inputs : output` for a combinational UDP and
+// `inputs : state : output` for a sequential one (IEEE 1800-2023 29.3).
+std::string udp_row_text(const frontend::VerilogUdpTableRow& row)
+{
+    using Edge = frontend::VerilogUdpEdgeSymbol;
+    std::string text;
+    for (const auto& input : row.inputs) {
+        if (!text.empty()) {
+            text += ' ';
+        }
+        switch (input.edge) {
+        case Edge::None:
+            text += udp_level_character(input.level);
+            break;
+        case Edge::Rising:
+            text += 'r';
+            break;
+        case Edge::Falling:
+            text += 'f';
+            break;
+        case Edge::Positive:
+            text += 'p';
+            break;
+        case Edge::Negative:
+            text += 'n';
+            break;
+        case Edge::Any:
+            text += '*';
+            break;
+        case Edge::Explicit:
+            text += '(';
+            text += udp_level_character(input.previous);
+            text += udp_level_character(input.current);
+            text += ')';
+            break;
+        }
+    }
+    text += " : ";
+    if (row.current_state) {
+        text += udp_level_character(*row.current_state);
+        text += " : ";
+    }
+    switch (row.output) {
+    case frontend::VerilogUdpOutputSymbol::Zero:
+        text += '0';
+        break;
+    case frontend::VerilogUdpOutputSymbol::One:
+        text += '1';
+        break;
+    case frontend::VerilogUdpOutputSymbol::Unknown:
+        text += 'x';
+        break;
+    case frontend::VerilogUdpOutputSymbol::NoChange:
+        text += '-';
+        break;
+    }
+    return text;
+}
+
 template <typename Declaration>
 UdpTableInfo make_udp_table(
     const Declaration& declaration,
@@ -162,6 +239,7 @@ UdpTableInfo make_udp_table(
     table.rows.reserve(declaration.rows.size());
     for (const auto& row : declaration.rows) {
         table.rows.push_back(compatible_udp_row(row, compiled));
+        table.row_text.push_back(udp_row_text(table.rows.back()));
     }
 
     support::Sha256 digest;
@@ -272,6 +350,38 @@ std::optional<runtime::simir::TransitionDelays> udp_transition_delays(
         turnoff = *value;
     }
     return runtime::simir::TransitionDelays { *rise, fall, turnoff };
+}
+
+// The rise, fall and turn-off delays of a primitive with each of their
+// minimum, typical and maximum values (IEEE 1800-2023 28.3.3, 37.35). Empty
+// when a value is not a static nonnegative simulation time.
+std::vector<VerilogPrimitiveDelayInfo> primitive_delay_info(
+    const semantic::sv::Delay& delay,
+    const semantic::SpecializedHirUnit& specialization)
+{
+    std::vector<VerilogPrimitiveDelayInfo> result;
+    const auto add = [&](const semantic::sv::Delay& value) {
+        const auto typical = udp_delay_value(
+            value.typical ? *value.typical : value.primary, specialization);
+        const auto minimum = value.minimum
+            ? udp_delay_value(*value.minimum, specialization) : typical;
+        const auto maximum = value.maximum
+            ? udp_delay_value(*value.maximum, specialization) : typical;
+        if (!minimum || !typical || !maximum) {
+            return false;
+        }
+        result.push_back({ *minimum, *typical, *maximum });
+        return true;
+    };
+    if (!add(delay)) {
+        return { };
+    }
+    for (const auto& additional : delay.additional) {
+        if (!add(additional)) {
+            return { };
+        }
+    }
+    return result;
 }
 
 void apply_udp_output_profile(
@@ -1041,6 +1151,9 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         { "__udp_table", table.digest },
     };
 
+    // The process whose delayed write carries the output delay (retimed by
+    // vpi_put_delays).
+    std::vector<runtime::simir::ProcessId> output_drivers;
     const auto append_process = [&](runtime::simir::Process process) {
         canonicalize_process_operations(process);
         profile.processes.push_back(process.id);
@@ -1127,6 +1240,9 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         process.register_value_kinds.push_back(
             runtime::simir::ValueKind::logic4);
         apply_udp_output_profile(process, strength, delays);
+        if (delays) {
+            output_drivers.push_back(process.id);
+        }
         const std::array<std::size_t, 1U> widths { 1U };
         process.driver_regions = elaboration_detail::collect_driver_regions(
             process, widths);
@@ -1211,11 +1327,58 @@ bool HierarchyBuilder::instantiate_compiled_udp(
         adapter->language_standard = declaration.standard;
         adapter->compatibility_profile = declaration.compatibility_profile;
         apply_udp_output_profile(*adapter, strength, delays);
+        if (delays) {
+            output_drivers.push_back(adapter->id);
+        }
         append_process(std::move(*adapter));
     }
     append_process(CompiledUdpProcessBuilder {
         design_, path, declaration, inputs, *output, previous, initialized
     }.build());
+
+    // The instance record for the VPI primitive objects (IEEE 1800-2023
+    // 29, 37.35, 37.36). Each terminal is the one-bit signal the table reads
+    // or drives: the connected net when it is a plain scalar, else the
+    // instance's own copy.
+    {
+        VerilogPrimitiveInfo info;
+        const auto separator = path.rfind('.');
+        info.instance = separator == std::string::npos
+            ? std::string { } : path.substr(0U, separator);
+        if (!instance.anonymous) {
+            info.name = separator == std::string::npos
+                ? path : path.substr(separator + 1U);
+            info.full_name = path;
+        }
+        info.kind = VerilogPrimitiveKind::udp;
+        info.keyword = declaration.name;
+        info.udp_table = table_id;
+        info.array_name = instance.anonymous ? std::string { }
+                                             : instance.name;
+        if (array_index && !instance.array_indices.empty()) {
+            info.array_member = true;
+            info.array_index = *array_index;
+            info.array_left = instance.array_indices.front();
+            info.array_right = instance.array_indices.back();
+        }
+        info.terminals.push_back({
+            frontend::VerilogPrimitiveTerminalDirection::Output,
+            *output, 0U, 1U, { } });
+        for (const auto input : inputs) {
+            info.terminals.push_back({
+                frontend::VerilogPrimitiveTerminalDirection::Input,
+                input, 0U, 1U, { } });
+        }
+        if (instance.udp_delay) {
+            info.delays = primitive_delay_info(
+                *instance.udp_delay, specialization);
+        }
+        info.drive_zero = instance.drive_zero;
+        info.drive_one = instance.drive_one;
+        info.drivers = std::move(output_drivers);
+        info.source = source;
+        design_.verilog_primitives_.push_back(std::move(info));
+    }
 
     // A module path of the enclosing module may end at this primitive's
     // output; its delay then applies to the primitive's driver (IEEE
@@ -1224,6 +1387,167 @@ bool HierarchyBuilder::instantiate_compiled_udp(
     attach_verilog_specify_drivers(0U, profile.processes);
     design_.specializations_.push_back(std::move(profile));
     return true;
+}
+
+void HierarchyBuilder::record_verilog_primitives(
+    const std::vector<semantic::sv::PrimitiveInstance>& primitives,
+    const semantic::SpecializedHirUnit& specialization,
+    const std::string& scope_path,
+    const SignalMap& signals,
+    const std::span<const runtime::simir::ProcessId> processes)
+{
+    using Kind = semantic::sv::PrimitiveKind;
+    using Direction = semantic::sv::PrimitiveTerminalDirection;
+    using Form = semantic::sv::ExpressionKind;
+    const auto terminal_for = [&](const semantic::ExpressionId expression)
+        -> VerilogPrimitiveTerminalInfo {
+        VerilogPrimitiveTerminalInfo result;
+        const auto view = specialization.find_expression(expression);
+        if (!view || view->systemverilog == nullptr) {
+            return result;
+        }
+        result.expression = view->systemverilog->text;
+        // A bit or part select of a net names the net first.
+        auto base = view;
+        while (base && base->systemverilog != nullptr
+            && (base->systemverilog->kind == Form::index
+                || base->systemverilog->kind == Form::slice)
+            && !base->systemverilog->operands.empty()) {
+            base = specialization.find_expression(
+                base->systemverilog->operands.front());
+        }
+        if (!base || base->systemverilog == nullptr
+            || base->systemverilog->kind != Form::name) {
+            return result;
+        }
+        const auto& record = *base->systemverilog;
+        auto name = record.text;
+        if (record.referenced_name && record.referenced_name->selected) {
+            const auto selected = specialization.find_declaration(
+                *record.referenced_name->selected);
+            if (selected && selected->systemverilog != nullptr) {
+                name = selected->systemverilog->name;
+            }
+        }
+        const auto found = signals.find(name);
+        if (found == signals.end()
+            || found->second >= design_.signal_info_.size()) {
+            return result;
+        }
+        const auto selection = resolve_verilog_specify_selection(
+            expression, found->second, design_.signal_info_[found->second],
+            specialization);
+        if (selection) {
+            result.signal = selection->signal;
+            result.offset = selection->offset;
+            result.width = selection->width;
+            result.expression.clear();
+        }
+        return result;
+    };
+    // A named gate is lowered to processes named after its instance (the
+    // statement label: `g`, `g[1]`, `g$output1`); the ones that hold a
+    // delayed write carry its delay. Indexed on the first delayed gate.
+    std::unordered_map<std::string, std::vector<runtime::simir::ProcessId>>
+        delayed_drivers;
+    bool indexed { };
+    const auto index_drivers = [&] {
+        indexed = true;
+        for (const auto id : processes) {
+            const auto view = design_.process_view(id);
+            bool delayed { };
+            for (const auto& operation : view.operations()) {
+                delayed = delayed
+                    || runtime::simir::operation_get_if<
+                           runtime::simir::WriteInertial>(&operation)
+                        != nullptr
+                    || runtime::simir::operation_get_if<
+                           runtime::simir::WriteInertialSlice>(&operation)
+                        != nullptr;
+            }
+            if (!delayed) {
+                continue;
+            }
+            delayed_drivers[view.name()].push_back(id);
+        }
+    };
+    for (const auto& primitive : primitives) {
+        // A UDP instance is recorded as it is instantiated.
+        if (primitive.kind == Kind::udp) {
+            continue;
+        }
+        VerilogPrimitiveInfo info;
+        info.instance = scope_path;
+        switch (primitive.kind) {
+        case Kind::gate:
+            info.kind = VerilogPrimitiveKind::gate;
+            break;
+        case Kind::switch_device:
+            info.kind = VerilogPrimitiveKind::switch_device;
+            break;
+        case Kind::pull:
+            info.kind = VerilogPrimitiveKind::pull;
+            break;
+        case Kind::udp:
+            break;
+        }
+        info.keyword = primitive.keyword;
+        info.array_name = primitive.name;
+        info.array_member = primitive.array_member;
+        info.array_index = primitive.array_index;
+        info.array_left = primitive.array_left;
+        info.array_right = primitive.array_right;
+        if (!primitive.name.empty()) {
+            info.name = primitive.array_member
+                ? primitive.name + "[" + std::to_string(primitive.array_index)
+                    + "]"
+                : primitive.name;
+            info.full_name = scope_path.empty()
+                ? info.name : scope_path + "." + info.name;
+        }
+        for (const auto& terminal : primitive.terminals) {
+            auto resolved = terminal.expression
+                ? terminal_for(*terminal.expression)
+                : VerilogPrimitiveTerminalInfo { };
+            resolved.direction = terminal.direction == Direction::output
+                ? frontend::VerilogPrimitiveTerminalDirection::Output
+                : terminal.direction == Direction::inout
+                ? frontend::VerilogPrimitiveTerminalDirection::Inout
+                : frontend::VerilogPrimitiveTerminalDirection::Input;
+            info.terminals.push_back(std::move(resolved));
+        }
+        if (primitive.delay) {
+            info.delays = primitive_delay_info(
+                *primitive.delay, specialization);
+        }
+        info.drive_zero = primitive.drive_zero;
+        info.drive_one = primitive.drive_one;
+        if (!info.delays.empty() && !info.full_name.empty()) {
+            if (!indexed) {
+                index_drivers();
+            }
+            // One process per output terminal (`$outputN`), and a bufif or
+            // notif without a delay splits into `$one`.
+            for (const auto& suffix : { std::string {}, std::string { "$one" } }) {
+                const auto found = delayed_drivers.find(info.full_name + suffix);
+                if (found != delayed_drivers.end()) {
+                    info.drivers.insert(info.drivers.end(),
+                        found->second.begin(), found->second.end());
+                }
+            }
+            for (std::size_t output = 0U;; ++output) {
+                const auto found = delayed_drivers.find(
+                    info.full_name + "$output" + std::to_string(output));
+                if (found == delayed_drivers.end()) {
+                    break;
+                }
+                info.drivers.insert(info.drivers.end(), found->second.begin(),
+                    found->second.end());
+            }
+        }
+        info.source = compiled_source_span(*compiled_, primitive.source);
+        design_.verilog_primitives_.push_back(std::move(info));
+    }
 }
 
 } // namespace fsim::elaboration

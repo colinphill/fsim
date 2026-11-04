@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_type_descriptor.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/systemverilog_class_specialization.hpp"
 #include "fsim/support/index_distance.hpp"
 #include "hierarchy_builder_internal.hpp"
 #include "hierarchy_sv_parameters_internal.hpp"
@@ -1155,6 +1156,34 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
     return true;
 }
 
+std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
+HierarchyBuilder::specialized_class_typespec(
+    const semantic::sv::Declaration& declaration,
+    std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec)
+{
+    if (!typespec
+        || typespec->kind != runtime::SystemVerilogVpiTypespecKind::Class
+        || !declaration.type
+        || (declaration.type->interface_parameter_actuals.empty()
+            && declaration.type->target.spelling.find('#')
+                == std::string::npos)) {
+        return typespec;
+    }
+    auto& classes = design_.class_specializations_;
+    if (!classes) {
+        classes = std::make_shared<semantic::sv::ClassSpecializationIndex>(
+            compiled_->semantics, compiled_->systemverilog_hir);
+    }
+    const auto selected = classes->for_declaration(declaration.id);
+    if (!selected) {
+        return typespec;
+    }
+    auto named = *typespec;
+    named.name = classes->at(*selected).specialization_identity;
+    return std::make_shared<const runtime::SystemVerilogVpiTypespec>(
+        std::move(named));
+}
+
 bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     const semantic::sv::Unit& unit,
     const semantic::DeclarationId declaration_id,
@@ -2025,8 +2054,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             recorded.vpi_element_type = vpi_declared_aggregate(
                 working_specialization, declaration, element,
                 type->element_width);
-            recorded.vpi_typespec = vpi_typespec(
-                working_specialization, declaration, *declaration.type);
+            recorded.vpi_typespec = specialized_class_typespec(declaration,
+                vpi_typespec(
+                    working_specialization, declaration, *declaration.type));
         }
         // The packed dimensions of the elements, for selects within an
         // element named from another scope (IEEE 1800-2017 7.4.5, 23.6).
@@ -2246,8 +2276,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                     working_specialization, declaration, *declaration.type,
                     info.width);
             }
-            info.vpi_typespec = vpi_typespec(
-                working_specialization, declaration, *declaration.type);
+            info.vpi_typespec = specialized_class_typespec(declaration,
+                vpi_typespec(
+                    working_specialization, declaration, *declaration.type));
             const auto initial_value = net_bridge
                 ? net_initial_for(domain, net_type)
                 : domain == frontend::ValueDomain::Logic4
@@ -2534,8 +2565,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     }
     info.vpi_declared_type = vpi_declared_aggregate(
         working_specialization, declaration, *declaration.type, info.width);
-    info.vpi_typespec = vpi_typespec(
-        working_specialization, declaration, *declaration.type);
+    info.vpi_typespec = specialized_class_typespec(declaration,
+        vpi_typespec(
+            working_specialization, declaration, *declaration.type));
     info.is_port = declaration.form == Form::port;
     info.direction = direction;
     info.declaration_span = compiled_source_span(

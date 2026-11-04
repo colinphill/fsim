@@ -765,8 +765,11 @@ public:
         runtime::simir::SignalId signal) const;
     [[nodiscard]] runtime::simir::DriveStrength read_signal_strength(
         runtime::simir::SignalId signal) const;
+    /// `newer_activations` reads an outer activation of a recursive callable
+    /// (VHPI stack frames, IEEE 1076-2019 19.10).
     [[nodiscard]] runtime::PackedLogic4 read_process_local(
-        runtime::simir::ProcessId process, std::size_t local_index) const;
+        runtime::simir::ProcessId process, std::size_t local_index,
+        std::size_t newer_activations = 0U) const;
     /// Deposit a value into a variable of a process (VHPI 22.5.2).
     void write_process_local(runtime::simir::ProcessId process,
         std::size_t local_index, const runtime::PackedLogic4& value);
@@ -882,6 +885,54 @@ public:
     /// caller retries from `add_safe_point_hook`.
     [[nodiscard]] bool set_verilog_module_path_delays(
         std::uint32_t path, std::span<const runtime::SimulationTick> delays);
+    /// Live limits of the elaborated Verilog timing check `check`, in
+    /// scheduler ticks (IEEE 1800-2023 38.10).
+    [[nodiscard]] std::vector<std::int64_t> verilog_timing_check_limits(
+        std::uint32_t check) const;
+    /// Replace that path's delay table and, when `reject` and `error` are not
+    /// empty, its pulse limit tables (IEEE 1800-2023 38.32). Returns false,
+    /// changing nothing, outside a safe point; throws std::invalid_argument
+    /// for tables the path cannot take.
+    [[nodiscard]] bool set_verilog_module_path_timing(std::uint32_t path,
+        std::span<const runtime::SimulationTick> delays,
+        std::span<const runtime::SimulationTick> reject,
+        std::span<const runtime::SimulationTick> error);
+    /// Replace that check's limits (IEEE 1800-2023 38.32). Returns false,
+    /// changing nothing, outside a safe point as for the path delays; throws
+    /// std::invalid_argument for limits the check cannot take.
+    [[nodiscard]] bool set_verilog_timing_check_limits(
+        std::uint32_t check, std::span<const std::int64_t> limits);
+    /// Give a driver process new transition delays for its delayed writes
+    /// (IEEE 1800-2023 38.32); legal at any time. False when the driver has
+    /// no slotted write (the run had no foreign library).
+    [[nodiscard]] bool set_verilog_driver_delays(
+        runtime::simir::ProcessId process, runtime::simir::TransitionDelays delays);
+    /// The transition delays a driver process's delayed writes use now: the
+    /// ones set_verilog_driver_delays gave it, else its first slotted write's.
+    [[nodiscard]] std::optional<runtime::simir::TransitionDelays>
+    verilog_driver_delays(runtime::simir::ProcessId process) const;
+    /// Run `hook` with a timing check's index when it is violated; an empty
+    /// function removes it (IEEE 1800-2023 38.36.3).
+    void set_verilog_timing_violation_hook(
+        std::function<void(std::uint32_t)> hook);
+    /// Run `hook` with a dynamic array's or queue's VPI object and its old
+    /// and new size when the size changes (cbSizeChange, IEEE 1800-2023
+    /// 37.17 detail 14, 38.36.1); an empty function removes it.
+    void set_vpi_size_change_hook(
+        std::function<void(fsim_vpi_handle_v1, std::size_t, std::size_t)> hook);
+    /// Run `hook` once at the end of the simulation, before the end of
+    /// simulation callbacks, so the live class objects can be reclaimed
+    /// (cbReclaimObj, IEEE 1800-2023 38.36.1); an empty function removes it.
+    void set_class_reclaim_hook(std::function<void()> hook);
+    /// Tell `hook` of each class object whose constructor has completed
+    /// (cbCreateObj, IEEE 1800-2023 38.36.1); only a run with the execution
+    /// probes does. An empty function removes it.
+    void set_class_created_hook(
+        std::function<void(runtime::SystemVerilogClassHandle)> hook);
+    /// The object whose lowered constructor just completed (the
+    /// object_created execution point); 0 when none is pending.
+    [[nodiscard]] runtime::SystemVerilogClassHandle
+    take_constructed_class_object() noexcept;
     [[nodiscard]] runtime::SystemVerilogVpiTimeService&
     systemverilog_vpi_time() noexcept;
     [[nodiscard]] const runtime::SystemVerilogVpiTimeService&
@@ -894,6 +945,11 @@ public:
     systemverilog_vpi_callbacks() noexcept;
     [[nodiscard]] const runtime::SystemVerilogVpiCallbackManager&
     systemverilog_vpi_callbacks() const noexcept;
+    /// Publish the compiled kernel's changed outputs now, so the value
+    /// changes a running process made so far are observed before a foreign
+    /// routine it called acts on them (an ACC link deleted after a change,
+    /// IEEE 1364-2001 23.97).
+    void publish_kernel_outputs();
     [[nodiscard]] runtime::SystemVerilogVpiValueControl&
     systemverilog_vpi_values() noexcept;
     [[nodiscard]] const runtime::SystemVerilogVpiValueControl&
@@ -1028,6 +1084,15 @@ public:
         std::vector<runtime::SystemVerilogClassMethodValue> actuals,
         std::optional<std::uint32_t> virtual_slot = std::nullopt,
         ClassMethodCompletion completion = { });
+    /// The VPI multichannel descriptor routines on the table $fopen uses
+    /// (IEEE 1800-2023 38.24-38.29).
+    [[nodiscard]] std::uint32_t mcd_open(std::string_view name);
+    [[nodiscard]] std::uint32_t mcd_close(std::uint32_t descriptor);
+    [[nodiscard]] std::optional<std::string> mcd_name(
+        std::uint32_t descriptor) const;
+    [[nodiscard]] bool mcd_write(
+        std::uint32_t descriptor, std::string_view text);
+    [[nodiscard]] bool mcd_flush(std::uint32_t descriptor);
     void deposit_string_object(
         runtime::simir::StringObjectId object, std::string_view value);
     void deposit_container_object(
@@ -1039,6 +1104,42 @@ public:
     void deposit_scalar_signal(
         runtime::simir::SignalId signal,
         runtime::SystemVerilogScalarValue value);
+    /// Schedule a transaction on the driver that `process`, the placeholder
+    /// process of a foreign VHDL architecture, has for the `value.width()`
+    /// bits of `signal` from `offset` (VHPI vhpi_schedule_transaction,
+    /// IEEE 1076-2019 22.6, 23.34). The transaction time is the current
+    /// time plus `delay` ticks; `rejection` is the pulse rejection limit of
+    /// an inertial transaction.
+    void schedule_foreign_transaction(
+        runtime::simir::ProcessId process,
+        runtime::simir::SignalId signal,
+        runtime::PackedLogic4 value,
+        std::size_t offset,
+        runtime::SimulationTick delay,
+        runtime::SimulationTick rejection,
+        bool transport);
+    /// Force the driver of a foreign architecture's placeholder process
+    /// (VHPI 22.5.4), at once or in the next update phase.
+    void force_foreign_driver(
+        runtime::simir::ProcessId process,
+        runtime::simir::SignalId signal,
+        runtime::PackedLogic4 value,
+        std::size_t offset,
+        bool propagate);
+    /// Deposit into the driver of a foreign architecture's placeholder
+    /// process at once (VHPI vhpiDeposit, 22.5.4).
+    void deposit_foreign_driver(
+        runtime::simir::ProcessId process,
+        runtime::simir::SignalId signal,
+        runtime::PackedLogic4 value,
+        std::size_t offset);
+    /// Release a forced driver of a foreign architecture's placeholder
+    /// process (VHPI 22.5.4).
+    void release_foreign_driver(
+        runtime::simir::ProcessId process,
+        runtime::simir::SignalId signal,
+        std::size_t offset,
+        std::size_t width);
     /// Run `task` in the next signal-update phase of the current time, as
     /// VHPI vhpiDepositPropagate and vhpiForcePropagate require for their
     /// updates (IEEE 1076-2019 22.5.3).
@@ -1062,8 +1163,51 @@ public:
         std::optional<runtime::SimulationTick> until = std::nullopt);
     void request_stop() noexcept;
     void clear_stop() noexcept;
+
+    /// Points of the run a foreign interface hears of beyond its start and
+    /// end: the save, restart and reset phases (IEEE 1800-2023 38.36.3,
+    /// IEEE 1076-2019 20.7-20.9). A reset fires its events here; the
+    /// save and restart events are fired by the save/restart driver.
+    enum class LifecycleEvent : std::uint8_t {
+        start_of_save,
+        end_of_save,
+        start_of_restart,
+        end_of_restart,
+        start_of_reset,
+        end_of_reset,
+    };
+    /// `location` names the save/restart location for the save and restart
+    /// events, and is empty for the others. Hooks run in registration order.
+    using LifecycleHook
+        = std::function<void(LifecycleEvent, std::string_view location)>;
+    void add_lifecycle_hook(LifecycleHook hook);
+    void notify_lifecycle(
+        LifecycleEvent event, std::string_view location = {});
+
+    /// The arguments of $reset (IEEE 1800-2023 D.8, 38.4 vpiReset).
+    struct ResetRequest {
+        /// Zero enters interactive mode after the reset; nonzero begins
+        /// processing at once.
+        std::int32_t stop_value { 1 };
+        std::int32_t reset_value { };
+        std::int32_t diagnostics_value { };
+    };
+    /// True when the engine restores the time-zero state of this run.
+    [[nodiscard]] bool reset_supported() const noexcept;
+    /// Ask for a reset once the caller's routine returns: the run stops at
+    /// the next safe point, the foreign interfaces hear start-of-reset,
+    /// time and every value return to their time-zero state, they hear
+    /// end-of-reset, and run() goes on. False, with nothing queued, when the
+    /// engine cannot reset.
+    [[nodiscard]] bool request_reset(ResetRequest request);
+    /// The resets performed (IEEE 1800-2023 D.8 $reset_count) and the
+    /// reset_value of the last one ($reset_value).
+    [[nodiscard]] std::uint32_t reset_count() const noexcept;
+    [[nodiscard]] std::int32_t reset_value() const noexcept;
     [[nodiscard]] runtime::SimulationTick now() const noexcept;
     [[nodiscard]] std::uint64_t delta() const noexcept;
+    /// Simulation cycles started (IEEE 1076-2019 23.18).
+    [[nodiscard]] std::uint64_t cycles() const noexcept;
     [[nodiscard]] bool has_pending() const noexcept;
     /// The earliest tick with pending activity, the current tick for a
     /// pending delta cycle; nothing when no activity remains.

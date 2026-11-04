@@ -125,7 +125,7 @@ int main() {
   const std::array supported{
       selector(FSIM_ACC_STANDARD_CONFIGURATION, accMinTypMaxDelays),
       selector(FSIM_ACC_STANDARD_EDGE, accPosedge | accNegedge),
-      selector(FSIM_ACC_STANDARD_DELAY_MODE, accDelayModeVeritime),
+      selector(FSIM_ACC_STANDARD_DELAY_MODE, accDelayModeMTM),
       selector(FSIM_ACC_STANDARD_UPDATE, accReleaseFlag),
       selector(FSIM_ACC_STANDARD_VALUE_FORMAT, accVectorVal),
       selector(FSIM_ACC_STANDARD_VCL_REASON, vector_value_change),

@@ -18,9 +18,7 @@ using ContextIdentity = std::pair<std::uint64_t, std::uint64_t>;
 std::mutex safe_point_mutex;
 std::map<ContextIdentity, std::uint64_t> safe_points;
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 }  // namespace
 

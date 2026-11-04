@@ -2330,6 +2330,96 @@ namespace {
                 fill_class(input, parent_scope);
         }
 
+        // The gate, switch, pull and UDP instances of a scope in source order
+        // (IEEE 1800-2023 28, 29, 37.35). A UDP entry refers to its Instance
+        // record.
+        void fill_primitives(
+            const std::vector<frontend::VerilogPrimitiveInstance>& inputs,
+            const std::vector<frontend::Instance>& instances,
+            const std::vector<semantic::InstanceId>& instance_ids,
+            const semantic::ScopeId scope,
+            const semantic::OriginId parent_origin,
+            std::vector<sv::PrimitiveInstance>& outputs)
+        {
+            std::vector<std::pair<std::uint64_t, sv::PrimitiveInstance>>
+                entries;
+            for (const auto& input : inputs) {
+                sv::PrimitiveInstance output;
+                switch (input.kind) {
+                case frontend::VerilogPrimitiveClass::Gate:
+                    output.kind = sv::PrimitiveKind::gate;
+                    break;
+                case frontend::VerilogPrimitiveClass::Switch:
+                    output.kind = sv::PrimitiveKind::switch_device;
+                    break;
+                case frontend::VerilogPrimitiveClass::Pull:
+                    output.kind = sv::PrimitiveKind::pull;
+                    break;
+                }
+                output.keyword = input.keyword;
+                output.name = input.name;
+                output.array_member = input.array_member;
+                output.array_index = input.array_index;
+                output.array_left = input.array_left;
+                output.array_right = input.array_right;
+                for (const auto& terminal : input.terminals) {
+                    sv::PrimitiveTerminal converted;
+                    switch (terminal.direction) {
+                    case frontend::VerilogPrimitiveTerminalDirection::Output:
+                        converted.direction
+                            = sv::PrimitiveTerminalDirection::output;
+                        break;
+                    case frontend::VerilogPrimitiveTerminalDirection::Inout:
+                        converted.direction
+                            = sv::PrimitiveTerminalDirection::inout;
+                        break;
+                    case frontend::VerilogPrimitiveTerminalDirection::Input:
+                        converted.direction
+                            = sv::PrimitiveTerminalDirection::input;
+                        break;
+                    }
+                    converted.expression
+                        = expression(terminal.expression, scope, parent_origin);
+                    output.terminals.push_back(std::move(converted));
+                }
+                if (input.delay) {
+                    output.delay = delay(*input.delay, scope, parent_origin);
+                }
+                if (input.drive_strength) {
+                    output.drive_zero = static_cast<std::uint8_t>(
+                        input.drive_strength->zero);
+                    output.drive_one = static_cast<std::uint8_t>(
+                        input.drive_strength->one);
+                }
+                output.source = source(input.span);
+                entries.emplace_back(
+                    input.span.begin.offset, std::move(output));
+            }
+            for (std::size_t index = 0U;
+                 index < instances.size() && index < instance_ids.size();
+                 ++index) {
+                const auto& instance = instances[index];
+                if (!instance.udp_instance) {
+                    continue;
+                }
+                sv::PrimitiveInstance output;
+                output.kind = sv::PrimitiveKind::udp;
+                output.keyword = instance.unit_name;
+                output.name = instance.anonymous ? std::string { }
+                                                 : instance.name;
+                output.udp_instance = instance_ids[index];
+                output.source = source(instance.span);
+                entries.emplace_back(
+                    instance.span.begin.offset, std::move(output));
+            }
+            std::ranges::stable_sort(
+                entries, {}, &std::pair<std::uint64_t,
+                    sv::PrimitiveInstance>::first);
+            for (auto& entry : entries) {
+                outputs.push_back(std::move(entry.second));
+            }
+        }
+
         void fill_generate_body(
             const frontend::GenerateBody& input,
             sv::GenerateRegion& output)
@@ -2368,6 +2458,9 @@ namespace {
                 output.concurrent_statements.push_back(statement(
                     item, output.scope, output.origin));
             }
+            fill_primitives(
+                input.verilog_primitives, input.instances, output.instances,
+                output.scope, output.origin, output.primitives);
             for (const auto& nested_input : input.generate_regions) {
                 const auto nested_source = source(nested_input.span);
                 const auto nested = std::ranges::find_if(
@@ -2540,6 +2633,9 @@ namespace {
                 output.concurrent_statements.push_back(statement(
                     item, output.scope, output.origin));
             }
+            fill_primitives(
+                input.verilog_primitives, input.instances, output.instances,
+                output.scope, output.origin, output.primitives);
             for (std::size_t index = 0;
                 index < input.generate_regions.size()
                 && index < output.generates.size();

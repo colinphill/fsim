@@ -655,6 +655,9 @@ struct TypeDefinition {
     };
     bool deallocate_releases_storage { true };
     bool reclaim_when_unreachable { };
+    // `type T is range L to R`: an integer or floating type declaration kept
+    // as a subtype of its predefined base (IEEE 1076-2019 5.2.3.1, 5.2.5.1).
+    bool scalar_type { };
     std::vector<DeclarationId> protected_members;
     std::vector<PhysicalUnit> physical_units;
     std::vector<PredefinedAttribute> attributes;
@@ -688,6 +691,9 @@ struct CallableProfile {
     bool function { };
     bool pure { };
     bool defined { };
+    // Named by a FOREIGN attribute specification in its declarative region
+    // (IEEE 1076-2019 14.4.1, 20.4.2): its body is never executed.
+    bool foreign { };
     std::optional<Name> default_callable;
     bool default_box { };
     std::optional<SubtypeIndication> return_type;
@@ -1272,6 +1278,25 @@ private:
     std::vector<Instance> instances_;
     std::uint64_t revision_ { };
 };
+
+/// How an architecture's 'FOREIGN attribute binds it to a VHPI program
+/// (IEEE 1076-2019 20.2.4).
+struct ForeignArchitectureBinding {
+    /// The attribute value, as written.
+    std::string value;
+    /// A standard indirect binding names the registered model
+    /// ("VHPI library model", 20.2.4.2); a standard direct binding names
+    /// entry points instead ("VHPIDIRECT ...", 20.2.4.3) and leaves the
+    /// library and model empty.
+    bool direct { };
+    std::string library;
+    std::string model;
+};
+
+/// The 'FOREIGN binding of an architecture in one of the forms 20.2.4
+/// allows, or nullopt when the architecture is not decorated with it.
+[[nodiscard]] std::optional<ForeignArchitectureBinding>
+foreign_architecture_binding(const Hir& hir, const Unit& architecture);
 
 /// The independently serialized top-level collections whose relationships
 /// cannot be validated by checking individual ID ranges alone.

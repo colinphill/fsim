@@ -13,7 +13,6 @@ namespace {
   switch (kind) {
     case TfArgumentKind::Null:
     case TfArgumentKind::String:
-    case TfArgumentKind::Special:
     case TfArgumentKind::ReadOnly:
     case TfArgumentKind::ReadWrite:
     case TfArgumentKind::ReadWriteBitSelect:

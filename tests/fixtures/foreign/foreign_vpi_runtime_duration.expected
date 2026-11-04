@@ -2,7 +2,12 @@
 #c pli error level=3 message=vpi_get_value: the object has no value of that kind
 #c chk_error after bad get_value=1
 #c chk_error cleared=1
-#c pli error level=3 message=vpi_put_value: the object has no value of that kind
+#c pli error level=3 message=vpi_put_value: vpiStringVal cannot be put to a real variable (IEEE 1800-2023 38.34)
+#c string onto real rejected=1
+#c pli error level=3 message=vpi_put_value: vpiStrengthVal cannot be put to a vector (IEEE 1800-2023 38.34)
+#c strength onto vector rejected=1
+#c strength onto scalar error=0 s=1
+#c pli error level=3 message=vpi_put_value: no write in a cbReadOnlySynch callback
 #c 1 read-only write rejected=1
 #c 5 clk rise q=0
 #c 7 raise signal

@@ -17,9 +17,7 @@ namespace {
 
 thread_local std::string write_string_buffer;
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 [[nodiscard]] bool checked_bytes(
     const void* const pointer, const std::size_t size,

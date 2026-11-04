@@ -28,10 +28,8 @@ bool text_matches(const PLI_BYTE8* const value,
 bool names_match(PLI_BYTE8* const instance) {
   return text_matches(tf_mipname(), "top.u_codec") &&
          text_matches(tf_spname(), "top.u_codec.decode.block") &&
-         text_matches(tf_getroutine(), "$context") &&
          text_matches(tf_imipname(instance), "top.u_codec") &&
-         text_matches(tf_ispname(instance), "top.u_codec.decode.block") &&
-         text_matches(tf_igetroutine(instance), "$context");
+         text_matches(tf_ispname(instance), "top.u_codec.decode.block");
 }
 
 PLI_INT32 FSIM_NATIVE_PLUGIN_CALL context_callback(
@@ -44,8 +42,7 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL context_callback(
   callback_ok = callback_ok && user_data == 0x157 &&
                 instance == expected_instance && names_match(instance) &&
                 tf_imipname(reinterpret_cast<PLI_BYTE8*>(1)) == nullptr &&
-                tf_ispname(reinterpret_cast<PLI_BYTE8*>(1)) == nullptr &&
-                tf_igetroutine(reinterpret_cast<PLI_BYTE8*>(1)) == nullptr;
+                tf_ispname(reinterpret_cast<PLI_BYTE8*>(1)) == nullptr;
   if (reason == reason_checktf) {
     callback_ok = callback_ok && tf_getworkarea() == nullptr &&
                   tf_setworkarea(check_area.data()) == 0 &&
@@ -73,7 +70,7 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL context_callback(
   }
   callback_ok = callback_ok &&
                 tf_isetworkarea(rejected_area.data(),
-                                reinterpret_cast<PLI_BYTE8*>(1)) != 0 &&
+                                reinterpret_cast<PLI_BYTE8*>(1)) == 0 &&
                 tf_putp(0, static_cast<PLI_INT32>(++call_count)) == 0;
   return 0;
 }
@@ -143,8 +140,8 @@ int main() {
   using fsim::runtime::validate_and_copy_tf_context;
 
   require(tf_mipname() == nullptr && tf_spname() == nullptr &&
-              tf_getroutine() == nullptr && tf_getworkarea() == nullptr &&
-              tf_setworkarea(call_area.data()) != 0,
+              tf_getworkarea() == nullptr &&
+              tf_setworkarea(call_area.data()) == 0,
           "TF context services are neutral outside a callback");
   const TfContextProfile original{.module_instance_name = "top.u_codec",
                                   .scope_name =

@@ -640,12 +640,14 @@ InternedString Lowerer::debug_scope()
 
 void Lowerer::emit_debug_point(
     const DebugPointKind kind,
-    const frontend::SourceSpan& span)
+    const frontend::SourceSpan& span,
+    const std::string_view callee)
 {
     process_.operations.emplace_back(DebugPoint {
         kind,
         runtime_source_location(span),
         debug_scope(),
+        callee.empty() ? InternedString { } : InternedString { callee },
     });
 }
 

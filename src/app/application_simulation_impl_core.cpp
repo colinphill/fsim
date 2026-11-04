@@ -2366,6 +2366,12 @@ std::string Simulation::Impl::static_property_specialization(
         (void)class_heap.release(handle);
         throw;
     }
+    // A lowered constructor chain runs in the allocating process: its
+    // completion point announces the object (cbCreateObj, IEEE 1800-2023
+    // 38.36.1), so the object waits here for it.
+    if (foreign_probes && class_created_hook && !run_constructor) {
+        constructed_classes.push_back(handle);
+    }
     const auto before = packed_class_snapshot();
     const auto component_specialization = is_systemverilog_uvm_type(
         built.compiled_systemverilog_class_specializations,
@@ -2493,6 +2499,11 @@ std::string Simulation::Impl::static_property_specialization(
     }
     if (source_function_dispatch_depth == 0U)
         notify_class_changes(before);
+    // The constructor the simulation ran itself has completed (cbCreateObj,
+    // IEEE 1800-2023 38.36.1).
+    if (foreign_probes && class_created_hook && run_constructor) {
+        class_created_hook(handle);
+    }
     return handle;
 }
 
@@ -2985,7 +2996,14 @@ void Simulation::Impl::publish_vpi_container(
     }
     auto value = interpreter->container_object_value_snapshot(object);
     if (live != vpi_live_memories.end()) {
+        const auto before = live->second.words.size();
         sync_vpi_live_memory(object, value);
+        // A resized array announces its size before its words' value
+        // changes (IEEE 1800-2023 37.17 detail 14, 38.36.1).
+        if (vpi_size_change_hook && live->second.words.size() != before) {
+            vpi_size_change_hook(
+                live->second.memory, before, live->second.words.size());
+        }
     }
     if (watched == vpi_watched_containers.end()) {
         return;
@@ -3325,10 +3343,34 @@ void Simulation::Impl::start_vpi()
     vpi_started = true;
 }
 
+bool Simulation::Impl::perform_reset()
+{
+    const auto request = reset_requests.front();
+    reset_requests.erase(reset_requests.begin());
+    for (std::size_t index = 0U; index < lifecycle_hooks.size(); ++index) {
+        lifecycle_hooks[index](Simulation::LifecycleEvent::start_of_reset, {});
+    }
+    interpreter->scheduler().clear_stop();
+    if (!interpreter->reset_run_state()) {
+        throw std::logic_error { "the engine cannot reset the run" };
+    }
+    ++reset_count;
+    reset_value = request.reset_value;
+    for (std::size_t index = 0U; index < lifecycle_hooks.size(); ++index) {
+        lifecycle_hooks[index](Simulation::LifecycleEvent::end_of_reset, {});
+    }
+    return request.stop_value != 0;
+}
+
 void Simulation::Impl::end_vpi()
 {
     if (!vpi_started || vpi_ended) {
         return;
+    }
+    // The class objects still alive are reclaimed before the library hears
+    // of the end (IEEE 1800-2023 38.36.1 cbReclaimObj).
+    if (class_reclaim_hook) {
+        class_reclaim_hook();
     }
     const auto callback = vpi_callbacks->dispatch_lifecycle_now(
         runtime::SystemVerilogVpiCallbackKind::EndOfSimulation);

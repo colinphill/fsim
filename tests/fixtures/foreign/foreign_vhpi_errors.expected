@@ -1,0 +1,31 @@
+#c register arch alpha: handle=1 error=0
+#c register duplicate alpha: handle=0 error=1
+#c register vhpiLibF: handle=0 error=1
+#c register app beta: handle=1 error=0
+#c register app beta again: handle=1 error=0
+#c registration get_time(NULL,NULL): error=1
+#c registration control finish: rc=1 error=1
+#c registration curcallback null=1
+#c initialization curcallback is the callback=1
+#c initialization phase=4
+#c initialization get_time(NULL,NULL): error=1
+#c initialization get_time(time): error=0
+#c initialization get_time(cycles): error=0
+#c initialization control stop: rc=1 error=1
+#c initialization control reset: rc=1 error=1
+#c simulation curcallback is the callback=1
+#c simulation phase=5
+#c simulation get_time(NULL,NULL): error=1
+#c simulation get_time(time): error=0
+#c simulation get_time(cycles): error=0
+#c simulation control reset: rc=1 error=1
+#c simulation control unknown: rc=0 error=0
+#c simulation register: handle=0 error=1
+#c foreignfs iterator type=1
+#c foreignf lib alpha kind=1 class=1
+#c foreignf lib beta kind=5 class=1
+#c foreignf lib beta kind=5 class=1
+#c location of a signal: severity=3 file=foreign_vhpi_errors.vhd line=9
+#c location of the tool: severity=3 file=- line=-1
+#c termination get_time(time): error=1
+#c termination control finish: rc=1 error=1

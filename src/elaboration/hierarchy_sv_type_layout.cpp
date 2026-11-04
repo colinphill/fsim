@@ -928,10 +928,25 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
         }
         if (record == nullptr) {
             const auto& spelling = input.target.spelling;
-            if (!input.class_identity.empty()) {
+            // A class type names the specialization its actuals select
+            // (8.25); a built-in class is named by its spelling (37.32).
+            if (!input.class_identity.empty()
+                || input.value_form == Form::class_handle) {
                 Typespec handle;
                 handle.kind = Kind::Class;
-                handle.name = spelling;
+                handle.name = input.class_specialization.empty()
+                    ? spelling
+                    : input.class_specialization;
+                return handle;
+            }
+            // The built-in classes of package std (15.4, 15.3, 9.7).
+            if (const std::string_view leaf = spelling.starts_with("std::")
+                        ? std::string_view { spelling }.substr(5U)
+                        : std::string_view { spelling };
+                leaf == "mailbox" || leaf == "semaphore" || leaf == "process") {
+                Typespec handle;
+                handle.kind = Kind::Class;
+                handle.name = std::string { leaf };
                 return handle;
             }
             Typespec builtin;

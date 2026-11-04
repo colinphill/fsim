@@ -37,9 +37,7 @@ std::mutex traversal_mutex;
 std::unordered_map<handle, TraversalSession> traversal_sessions;
 std::unordered_map<handle*, std::unique_ptr<handle[]>> collection_arrays;
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 [[nodiscard]] const fsim_acc_handle_context_v3* context() noexcept {
   return fsim::runtime::acc_detail::current_context();
@@ -106,7 +104,20 @@ template <typename Function>
 [[nodiscard]] bool scope_type(const PLI_INT32 type) noexcept {
   return type == accModule || type == accScope || type == accTopModule ||
          type == accModuleInstance || type == accCellInstance ||
-         type == accTask || type == accFunction;
+         type == accTask || type == accFunction ||
+         type == accNamedBeginStat || type == accNamedForkStat;
+}
+
+// acc_next_port also scans the ports connected to a net or register
+// (IEEE 1364-2001 Table 173); acc_next_child with a null reference scans the
+// top modules (Table 172).
+[[nodiscard]] bool reference_type(const std::uint32_t family,
+                                  const PLI_INT32 type) noexcept {
+  if (scope_type(type)) return true;
+  return family == FSIM_ACC_TRAVERSE_PORT &&
+         (fsim::runtime::acc_detail::type_matches(type, accNet) ||
+          fsim::runtime::acc_detail::type_matches(type, accReg) ||
+          type == accIntegerVar || type == accRealVar || type == accTimeVar);
 }
 
 [[nodiscard]] bool family_type(const std::uint32_t family,
@@ -134,7 +145,9 @@ template <typename Function>
     case FSIM_ACC_TRAVERSE_TOP_MODULE:
       return scope_type(type);
     case FSIM_ACC_TRAVERSE_SPECPARAM:
-      return type == accSpecparam;
+      // A specparam's fulltype is its value type (IEEE 1364-2001 Table 113).
+      return type == accSpecparam || type == accIntegerParam ||
+             type == accRealParam || type == accStringParam;
     default:
       return false;
   }
@@ -232,13 +245,15 @@ void end_cursor(const TraversalSession& session) noexcept {
 [[nodiscard]] handle next_object(const std::uint32_t family,
                                  const handle scope,
                                  const handle previous) noexcept {
-  const bool top_modules = family == FSIM_ACC_TRAVERSE_TOP_MODULE;
+  const bool top_modules =
+      family == FSIM_ACC_TRAVERSE_TOP_MODULE ||
+      (family == FSIM_ACC_TRAVERSE_CHILD && scope == nullptr);
   std::uint64_t scope_vpi{};
   if (!top_modules) {
     scope_vpi = fsim_acc_handle_to_vpi_v3(scope);
     PLI_INT32 type{};
     if (scope_vpi == 0 || !resolve_type(scope_vpi, type) ||
-        !scope_type(type)) {
+        !reference_type(family, type)) {
       publish_error(true);
       return nullptr;
     }

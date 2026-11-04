@@ -18,6 +18,7 @@
 #define FSIM_ACC_LOOKUP_ABSOLUTE 1u
 #define FSIM_ACC_LOOKUP_RELATIVE 2u
 #define FSIM_ACC_LOOKUP_PLI_SCOPE 3u
+#define FSIM_ACC_LOOKUP_CALLING_SCOPE 4u
 #define FSIM_ACC_RELATION_PARENT 1u
 #define FSIM_ACC_RELATION_SCOPE 2u
 #define FSIM_ACC_RELATION_SIMULATED_NET 3u
@@ -110,6 +111,10 @@
 #define FSIM_ACC_VCL_QUERY_ABI_VERSION 3u
 #define FSIM_ACC_VCL_REGISTER 1u
 #define FSIM_ACC_VCL_UNREGISTER 2u
+/* Before acc_vcl_delete removes a link, the simulator delivers to it the
+   changes it observed and has not yet dispatched (IEEE 1364-2001 23.97,
+   23.98). */
+#define FSIM_ACC_VCL_FLUSH 3u
 #define FSIM_ACC_VCL_MAXIMUM_LINKS (1u << 20u)
 #define FSIM_ACC_SAFE_POINT_ABI_VERSION 3u
 #define FSIM_ACC_TF_CONTEXT_ABI_VERSION 3u
@@ -428,6 +433,10 @@ fsim_acc_handle_to_vpi_v3(handle object);
 FSIM_ACC_BRIDGE_API PLI_INT32 FSIM_NATIVE_PLUGIN_CALL
 fsim_acc_vcl_dispatch_v3(fsim_acc_handle_context_v3* context,
                          const fsim_acc_vcl_event_v3* event);
+/* The accPathDelimStr separating source and destination in module path names
+   (IEEE 1364-2001 Table 133); "$" until acc_configure sets another. */
+FSIM_ACC_BRIDGE_API const PLI_BYTE8* FSIM_NATIVE_PLUGIN_CALL
+fsim_acc_path_delimiter_v3(void);
 FSIM_ACC_BRIDGE_API PLI_INT32 FSIM_NATIVE_PLUGIN_CALL
 fsim_acc_safe_point_advance_v3(fsim_acc_handle_context_v3* context,
                                const fsim_acc_safe_point_v3* safe_point);

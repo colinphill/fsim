@@ -1266,6 +1266,15 @@ DebuggerFrameInfo DebuggerSession::frame(const std::size_t index) const
   case runtime::simir::ExecutionPointKind::call_return:
     result.point_kind = "call_return";
     break;
+  // Foreign-interface observers only (Simulation::install_execution_point_hooks).
+  case runtime::simir::ExecutionPointKind::frame_start:
+  case runtime::simir::ExecutionPointKind::frame_end:
+  case runtime::simir::ExecutionPointKind::thread_start:
+  case runtime::simir::ExecutionPointKind::thread_end:
+  case runtime::simir::ExecutionPointKind::thread_enter:
+  case runtime::simir::ExecutionPointKind::object_created:
+    result.point_kind = "probe";
+    break;
   }
   const auto process_id = point.process;
   for (std::size_t local_index = 0U;

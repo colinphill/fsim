@@ -22,6 +22,11 @@ struct Fixture {
   bool reject_cancellation{};
   bool dispatch_during_cancellation{};
   PLI_INT32 late_dispatch_result{-1};
+  // The sequence of a pending change the simulator delivers when asked to
+  // flush a link (0: none), and the dispatch result.
+  std::uint64_t flush_sequence{};
+  PLI_INT32 flush_dispatch_result{-1};
+  std::uint32_t flushes{};
 };
 
 struct ConsumerState {
@@ -154,6 +159,15 @@ std::uint32_t FSIM_NATIVE_PLUGIN_CALL vcl_control(
     fixture.last_link = query->link_identity;
     return FSIM_ACC_VPI_OBJECT_VALID;
   }
+  if (query->operation == FSIM_ACC_VCL_FLUSH) {
+    ++fixture.flushes;
+    if (fixture.flush_sequence != 0) {
+      auto pending = event(query->link_identity, fixture.flush_sequence);
+      fixture.flush_dispatch_result =
+          fsim_acc_vcl_dispatch_v3(fixture.context, &pending);
+    }
+    return FSIM_ACC_VPI_OBJECT_VALID;
+  }
   if (query->operation != FSIM_ACC_VCL_UNREGISTER) {
     return FSIM_ACC_VPI_OBJECT_INVALID;
   }
@@ -251,6 +265,25 @@ int main() {
               ordered.calls == 3,
           "removed callbacks cannot publish late observations");
   fixture.dispatch_during_cancellation = false;
+
+  // A change observed before the delete and not yet dispatched reaches the
+  // consumer while acc_vcl_delete runs, before the link is removed (IEEE
+  // 1364-2001 23.97, 23.98).
+  ConsumerState flushed{&fixture, object};
+  auto* const flushed_data = reinterpret_cast<PLI_BYTE8*>(&flushed);
+  acc_vcl_add(object, simple_consumer, flushed_data, vcl_verilog_logic);
+  flushed.link = fixture.last_link;
+  fixture.flush_sequence = 15;
+  const auto flushes_before = fixture.flushes;
+  acc_vcl_delete(object, simple_consumer, flushed_data, vcl_verilog_logic);
+  require(acc_error_flag == 0 && fixture.flushes == flushes_before + 1 &&
+              fixture.flush_dispatch_result == 1 && flushed.calls == 1,
+          "a pending change reaches the consumer before the delete returns");
+  fixture.flush_sequence = 0;
+  auto after_flush = event(flushed.link, 16);
+  require(fsim_acc_vcl_dispatch_v3(&active, &after_flush) == 0 &&
+              flushed.calls == 1,
+          "nothing reaches the consumer after the delete returns");
 
   ConsumerState reentrant{&fixture, object};
   auto* const reentrant_data = reinterpret_cast<PLI_BYTE8*>(&reentrant);

@@ -438,7 +438,7 @@ SdfReannotationResult apply_sdf_reannotation(
 {
     SdfReannotationResult result;
     if (!baseline || !baseline->scheduling()
-        || baseline->semantic_identity().empty() || layers.empty()
+        || baseline->semantic_identity().empty()
         || generation == 0U || limits.max_files == 0U
         || limits.max_targets == 0U || limits.max_pattern_bytes == 0U
         || limits.max_identity_bytes == 0U) {

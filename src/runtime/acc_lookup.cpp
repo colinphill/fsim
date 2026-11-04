@@ -31,9 +31,7 @@ std::map<ScopeKey, ScopeState> scope_states;
 thread_local std::array<PLI_BYTE8, FSIM_ACC_NAME_MAXIMUM_BYTES + 1U>
     name_buffer{};
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 [[nodiscard]] const fsim_acc_handle_context_v3* context() noexcept {
   return fsim::runtime::acc_detail::current_context();
@@ -98,27 +96,33 @@ void publish_error(const bool failed) noexcept {
     case accCellInstance:
     case accTask:
     case accFunction:
+    case accNamedBeginStat:
+    case accNamedForkStat:
       return true;
     default:
       return false;
   }
 }
 
+// The type is the object's full type, so subtypes match their general type
+// (IEEE 1364-2001 Table 161).
 [[nodiscard]] bool named_by_name_type(const PLI_INT32 type) noexcept {
   if (scope_type(type)) return true;
   switch (type) {
-    case accNet:
-    case accReg:
-    case accParameter:
     case accSpecparam:
-    case accPrimitive:
     case accNamedEvent:
     case accIntegerVar:
     case accRealVar:
     case accTimeVar:
+    case accStatement:
+    case accNamedBeginStat:
+    case accNamedForkStat:
       return true;
     default:
-      return false;
+      return fsim::runtime::acc_detail::type_matches(type, accNet) ||
+             fsim::runtime::acc_detail::type_matches(type, accReg) ||
+             fsim::runtime::acc_detail::type_matches(type, accParameter) ||
+             fsim::runtime::acc_detail::type_matches(type, accPrimitive);
   }
 }
 
@@ -288,7 +292,15 @@ extern "C" {
 
 handle acc_handle_by_name(PLI_BYTE8* const name, const handle scope) {
   if (scope == nullptr) {
-    return lookup_handle(name, FSIM_ACC_LOOKUP_ABSOLUTE, 0, true);
+    // The module containing the current system task, searched by the
+    // hierarchical-name rules (IEEE 1364-2001 Table 160, 12.4).
+    const auto* const active = context();
+    if (active == nullptr) {
+      publish_error(true);
+      return nullptr;
+    }
+    return lookup_handle(name, FSIM_ACC_LOOKUP_CALLING_SCOPE,
+                         active->calling_scope, true);
   }
   const auto scope_vpi = fsim_acc_handle_to_vpi_v3(scope);
   PLI_INT32 type{};

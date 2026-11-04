@@ -313,15 +313,23 @@ void test_simir_module_timing_checks()
     const auto width = run_check(
         ModuleTimingCheckKind::width,
         ModulePathEdge::negedge,
-        { { 5, true }, { 8, false } },
+        { { 2, true }, { 9, false }, { 11, true } },
         { });
     require(
         width == std::pair<std::size_t, std::string> { 1, "1" },
-        "$width checks the preceding opposite-edge interval");
+        "$width checks from the reference edge to the opposite edge");
+    const auto other_pulse = run_check(
+        ModuleTimingCheckKind::width,
+        ModulePathEdge::negedge,
+        { { 5, true }, { 7, false }, { 20, true } },
+        { });
+    require(
+        other_pulse == std::pair<std::size_t, std::string> { 0, "0" },
+        "$width ignores the pulse that ends at its reference edge");
     const auto below_threshold = run_check(
         ModuleTimingCheckKind::width,
         ModulePathEdge::negedge,
-        { { 5, true }, { 8, false } },
+        { { 2, true }, { 9, false }, { 12, true } },
         { },
         true,
         3);

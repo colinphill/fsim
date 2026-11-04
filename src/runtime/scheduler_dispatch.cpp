@@ -131,6 +131,7 @@ RunResult Scheduler::run(std::optional<SimulationTick> until)
                 }
                 slot.current.swap(slot.next_delta);
                 ++slot.delta;
+                ++impl_->cycles;
                 slot.phase = 0;
                 continue;
             }

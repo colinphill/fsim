@@ -31,6 +31,16 @@ architecture a of top is
   attribute note of v : signal is "data";
   group pair is (signal, signal);
   group vr : pair (v, r);
+  type volts is range -1.0 to 2.5;
+  subtype unit_volts is volts range 0.0 to 1.0;
+  subtype resolved_bit is resolved std_ulogic;
+  type quad is array (0 to 3) of std_logic;
+  type int_file is file of integer;
+  file fi : int_file;
+  procedure drive(signal s : out std_logic; signal t : out bit) is
+  begin
+    null;
+  end procedure;
 begin
   v <= "10110010";
   c <= green;

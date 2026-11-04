@@ -1,0 +1,37 @@
+#c pk declares Base
+#c Base defn type=vpiClassDefn full=pk::Base virtual=1 automatic=1 line=1 scope=pk value-format=none
+#c Base extends type=- base=- base-type=-
+#c Base derived Derived
+#c Base method get type=vpiFunction method=1 virtual=1 vis=public automatic=1 scope=Base
+#c Base method set type=vpiFunction method=1 virtual=1 vis=public automatic=1 scope=Base
+#c Base method new type=vpiFunction method=1 virtual=0 vis=public automatic=1 scope=Base
+#c Base variable hidden type=vpiIntVar vis=protected automatic=1 rand=none value-format=none
+#c Base variable count type=vpiIntVar vis=public automatic=0 rand=none value-format=none
+#c Base variable id type=vpiBitVar vis=public automatic=1 rand=rand value-format=none
+#c Base parameter W type=vpiParameter local=0
+#c Base parameter LP type=vpiParameter local=1
+#c Base typedef word_t type=vpiIntTypespec
+#c Base constraints=0
+#c Base typespec Base type=vpiClassTypespec class-type=3 defn=Base extends=- variables=3 methods=3 parameters=2
+#c Base typespec Base#(8) type=vpiClassTypespec class-type=3 defn=Base extends=- variables=3 methods=3 parameters=2
+#c pk declares Derived
+#c Derived defn type=vpiClassDefn full=pk::Derived virtual=0 automatic=1 line=1 scope=pk value-format=none
+#c Derived extends type=vpiExtends base=Base base-type=vpiClassTypespec
+#c Derived method get type=vpiFunction method=1 virtual=1 vis=public automatic=1 scope=Derived
+#c Derived variable item type=vpiIntVar vis=public automatic=1 rand=none value-format=none
+#c Derived parameter T type=vpiParameter local=0
+#c Derived constraints=0
+#c Derived typespec Derived#(byte) type=vpiClassTypespec class-type=3 defn=Derived extends=Base#(8) variables=1 methods=1 parameters=1
+#c Derived typespec Derived type=vpiClassTypespec class-type=3 defn=Derived extends=Base#(8) variables=1 methods=1 parameters=1
+#c top declares Local
+#c Local defn type=vpiClassDefn full=top.Local virtual=0 automatic=1 line=1 scope=top value-format=none
+#c Local extends type=- base=- base-type=-
+#c Local method twice type=vpiFunction method=1 virtual=0 vis=public automatic=1 scope=Local
+#c Local variable x type=vpiIntVar vis=public automatic=1 rand=none value-format=none
+#c Local constraints=0
+#c Local typespec Local type=vpiClassTypespec class-type=3 defn=Local extends=- variables=1 methods=1 parameters=0
+#c by name Base Derived Local -
+#c var d type=vpiClassVar typespec=Derived typespec-type=vpiClassTypespec same=1 defn=Derived class-type=3 obj-id=0 obj=null
+#c var e type=vpiClassVar typespec=Derived#(byte) typespec-type=vpiClassTypespec same=1 defn=Derived class-type=3 obj-id=0 obj=null
+#c var l type=vpiClassVar typespec=Local typespec-type=vpiClassTypespec same=1 defn=Local class-type=3 obj-id=0 obj=null
+#c var mb type=vpiClassVar typespec=mailbox typespec-type=vpiClassTypespec same=1 defn=- class-type=1 obj-id=0 obj=null

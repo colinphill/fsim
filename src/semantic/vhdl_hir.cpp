@@ -31,6 +31,68 @@ bool operator_designator(std::string_view name)
             });
 }
 
+std::optional<ForeignArchitectureBinding> foreign_architecture_binding(
+    const Hir& hir, const Unit& architecture)
+{
+    if (architecture.kind != UnitKind::architecture) {
+        return std::nullopt;
+    }
+    // The attribute is specified in the architecture's own declarative part
+    // (IEEE 1076-2019 7.2), naming the architecture or `all`.
+    for (const auto id : architecture.declarations) {
+        const auto* const candidate = hir.find_declaration(id);
+        if (candidate == nullptr
+            || candidate->form != DeclarationForm::attribute_specification
+            || !candidate->attribute || !candidate->attribute->value
+            || !support::equal_ignoring_ascii_case(candidate->name, "foreign")
+            || !support::equal_ignoring_ascii_case(
+                candidate->attribute->entity_class, "architecture")
+            || std::ranges::none_of(candidate->attribute->entity_names,
+                [&](const Name& name) {
+                    return support::equal_ignoring_ascii_case(
+                               name.spelling, architecture.name)
+                        || support::equal_ignoring_ascii_case(
+                            name.spelling, "all");
+                })) {
+            continue;
+        }
+        const auto& expressions = hir.expressions();
+        const auto value = std::ranges::find(
+            expressions, *candidate->attribute->value, &Expression::id);
+        if (value == expressions.end() || !value->decoded_string) {
+            return std::nullopt;
+        }
+        // Identifiers separated by one or more SPACE or NBSP characters,
+        // with leading and trailing ones ignored (20.2.4.1).
+        std::vector<std::string> words;
+        std::string word;
+        for (const auto character : *value->decoded_string) {
+            if (character == ' ' || character == '\xa0') {
+                if (!word.empty()) {
+                    words.push_back(std::move(word));
+                    word.clear();
+                }
+            } else {
+                word.push_back(character);
+            }
+        }
+        if (!word.empty()) {
+            words.push_back(std::move(word));
+        }
+        // The reserved words are case sensitive (20.2.4.2, 20.2.4.3).
+        if (words.size() == 3U && words.front() == "VHPI") {
+            return ForeignArchitectureBinding { *value->decoded_string, false,
+                words[1], words[2] };
+        }
+        if (words.size() == 4U && words.front() == "VHPIDIRECT") {
+            return ForeignArchitectureBinding { *value->decoded_string, true,
+                { }, { } };
+        }
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 SubtypeIndication constrained_element_subtype(
     const SubtypeIndication& owner,
     const std::string_view step,

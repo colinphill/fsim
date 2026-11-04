@@ -1719,14 +1719,15 @@ DesignUnit VerilogParser::parse_module(
             parse_declaration(unit);
         } else if (is_gate_primitive()) {
             module_has_non_time_item_ = true;
-            parse_gate_primitive(unit.concurrent_statements, unit.signals,
-                unit.ports, &unit.generate_regions);
+            parse_gate_primitive(unit.concurrent_statements,
+                unit.verilog_primitives, unit.signals, unit.ports,
+                &unit.generate_regions);
         } else if (any_keyword({ "cmos", "rcmos", "nmos", "pmos", "rnmos",
                        "rpmos", "tran", "rtran", "tranif0", "tranif1",
                        "rtranif0", "rtranif1", "pullup", "pulldown" })) {
             module_has_non_time_item_ = true;
-            parse_switch_primitive(
-                unit.concurrent_statements, unit.signals, unit.ports);
+            parse_switch_primitive(unit.concurrent_statements,
+                unit.verilog_primitives, unit.signals, unit.ports);
         } else if (match_keyword("assign")) {
             module_has_non_time_item_ = true;
             const auto assign_token = previous();

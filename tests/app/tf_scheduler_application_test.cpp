@@ -26,7 +26,7 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL coordinated_call(
     const PLI_INT32, const PLI_INT32 reason) {
   if (reason != reason_calltf) return 0;
   callback_ok = callback_ok && tf_getp(1) == 0 &&
-                tf_putp(1, 1) == 0 && tf_setdelay(3) == 0 &&
+                tf_putp(1, 1) == 0 && tf_setdelay(3) == 1 &&
                 tf_synchronize() == 0 && tf_rosynchronize() == 0 &&
                 tf_warning(const_cast<PLI_BYTE8*>("call")) == 0;
   return 11;
@@ -37,7 +37,7 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL coordinated_misc(
   callback_ok = callback_ok && parameter == 0;
   if (reason == reason_synch) {
     callback_ok = callback_ok && tf_getp(1) == 1 &&
-                  tf_putp(1, 2) == 0 && tf_setdelay(2) == 0 &&
+                  tf_putp(1, 2) == 0 && tf_setdelay(2) == 1 &&
                   tf_rosynchronize() == 0 &&
                   tf_message(1, const_cast<PLI_BYTE8*>("TF"),
                              const_cast<PLI_BYTE8*>("17"),
@@ -46,7 +46,7 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL coordinated_misc(
   }
   if (reason == reason_rosynch) {
     callback_ok = callback_ok && tf_getp(1) == 2 &&
-                  tf_putp(1, 9) != 0 && tf_setdelay(1) != 0;
+                  tf_putp(1, 9) != 0 && tf_setdelay(1) == 0;
     return 13;
   }
   if (reason == reason_reactivate) {

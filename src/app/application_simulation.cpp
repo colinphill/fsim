@@ -184,6 +184,33 @@ void Simulation::schedule_class_method(
         });
 }
 
+std::uint32_t Simulation::mcd_open(const std::string_view name)
+{
+    return impl_->interpreter->mcd_open(name);
+}
+
+std::uint32_t Simulation::mcd_close(const std::uint32_t descriptor)
+{
+    return impl_->interpreter->mcd_close(descriptor);
+}
+
+std::optional<std::string> Simulation::mcd_name(
+    const std::uint32_t descriptor) const
+{
+    return impl_->interpreter->mcd_name(descriptor);
+}
+
+bool Simulation::mcd_write(
+    const std::uint32_t descriptor, const std::string_view text)
+{
+    return impl_->interpreter->mcd_write(descriptor, text);
+}
+
+bool Simulation::mcd_flush(const std::uint32_t descriptor)
+{
+    return impl_->interpreter->mcd_flush(descriptor);
+}
+
 void Simulation::deposit_string_object(
     const runtime::simir::StringObjectId object,
     const std::string_view value)
@@ -270,6 +297,18 @@ runtime::RunResult Simulation::run(
         // kernel's own time steps then (Interpreter::open_external_observation,
         // the observation hooks of a watched object).
         auto result = impl_->interpreter->run(until);
+        // A reset ends the run at a safe point; the design then starts over
+        // at time zero (IEEE 1800-2023 D.8, 38.36.3).
+        while (!impl_->reset_requests.empty()
+            && impl_->vpi_control->state()
+                != runtime::SystemVerilogVpiControlState::Finished) {
+            if (!impl_->perform_reset()) {
+                result = runtime::RunResult { runtime::RunStatus::stopped,
+                    now(), delta(), 0, std::nullopt };
+                break;
+            }
+            result = impl_->interpreter->run(until);
+        }
         if (profile_phase_split) {
             const auto milliseconds = [](const auto duration) {
                 return std::chrono::duration<double, std::milli> { duration }
@@ -345,6 +384,48 @@ void Simulation::clear_stop() noexcept
     }
 }
 
+void Simulation::add_lifecycle_hook(LifecycleHook hook)
+{
+    impl_->lifecycle_hooks.push_back(std::move(hook));
+}
+
+void Simulation::notify_lifecycle(
+    const LifecycleEvent event, const std::string_view location)
+{
+    // A hook may add another; index so the vector can grow underneath.
+    for (std::size_t index = 0U; index < impl_->lifecycle_hooks.size();
+         ++index) {
+        impl_->lifecycle_hooks[index](event, location);
+    }
+}
+
+bool Simulation::reset_supported() const noexcept
+{
+    return impl_->interpreter->can_reset_run_state();
+}
+
+bool Simulation::request_reset(const ResetRequest request)
+{
+    if (!reset_supported()) {
+        return false;
+    }
+    impl_->reset_requests.push_back(request);
+    // The routine that asked has returned by the next safe point (IEEE
+    // 1800-2023 38.4 vpiReset, IEEE 1076-2019 23.5 vhpiReset).
+    request_stop();
+    return true;
+}
+
+std::uint32_t Simulation::reset_count() const noexcept
+{
+    return impl_->reset_count;
+}
+
+std::int32_t Simulation::reset_value() const noexcept
+{
+    return impl_->reset_value;
+}
+
 SimulationTick Simulation::now() const noexcept
 {
     return impl_->interpreter->scheduler().now();
@@ -353,6 +434,11 @@ SimulationTick Simulation::now() const noexcept
 std::uint64_t Simulation::delta() const noexcept
 {
     return impl_->interpreter->scheduler().delta();
+}
+
+std::uint64_t Simulation::cycles() const noexcept
+{
+    return impl_->interpreter->scheduler().cycles();
 }
 
 bool Simulation::has_pending() const noexcept
@@ -514,6 +600,11 @@ runtime::SystemVerilogVpiCallbackManager&
 Simulation::systemverilog_vpi_callbacks() noexcept
 {
     return *impl_->vpi_callbacks;
+}
+
+void Simulation::publish_kernel_outputs()
+{
+    impl_->interpreter->publish_static_kernel_outputs();
 }
 
 const runtime::SystemVerilogVpiCallbackManager&
@@ -700,15 +791,24 @@ void Simulation::install_execution_point_hooks()
     }
     // Observers see a point before the debugger, which may stop the run. A
     // subprogram return is a point only for the foreign interfaces (IEEE
-    // 1076-2019 21.3.4.6); the debugger and the C API never see it.
+    // 1076-2019 21.3.4.6), as are the frame, thread and constructor points
+    // of the execution probes (IEEE 1800-2023 37.43, 37.44, 38.36.1); the
+    // debugger and the C API never see them.
     impl_->interpreter->set_execution_point_hook(
         [impl = impl_.get()](runtime::Scheduler& scheduler,
             const runtime::simir::ExecutionPoint& point) {
             for (const auto& [_, observer] : impl->execution_point_observers) {
                 observer(scheduler, point);
             }
+            using Kind = runtime::simir::ExecutionPointKind;
             if (impl->execution_point_primary
-                && point.kind != runtime::simir::ExecutionPointKind::call_return) {
+                && point.kind != Kind::call_return
+                && point.kind != Kind::frame_start
+                && point.kind != Kind::frame_end
+                && point.kind != Kind::thread_start
+                && point.kind != Kind::thread_end
+                && point.kind != Kind::thread_enter
+                && point.kind != Kind::object_created) {
                 impl->execution_point_primary(scheduler, point);
             }
         });

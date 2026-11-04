@@ -2778,7 +2778,8 @@ void Interpreter::Impl::notify_execution_point(
     const InstructionIndex instruction,
     const ExecutionPointKind kind,
     const SourceLocation& source,
-    const std::string_view scope)
+    const std::string_view scope,
+    const std::string_view callee)
 {
     // The static kernel's host process runs a stub program that is not part
     // of the design: it raises no execution points. (Its members do, through
@@ -2793,7 +2794,8 @@ void Interpreter::Impl::notify_execution_point(
         process.id, process.cold().design_process, process.program(),
         instruction, kind, source,
         scope.empty() ? std::string_view { process.cold().current_scope }
-                      : scope);
+                      : scope,
+        callee);
 }
 
 void Interpreter::Impl::notify_execution_point(
@@ -2803,7 +2805,9 @@ void Interpreter::Impl::notify_execution_point(
     const InstructionIndex instruction,
     const ExecutionPointKind kind,
     const SourceLocation& source,
-    const std::string_view scope)
+    const std::string_view scope,
+    const std::string_view callee,
+    const std::optional<ProcessId> parent)
 {
     if (execution_point_hook) {
         execution_point_hook(
@@ -2811,7 +2815,8 @@ void Interpreter::Impl::notify_execution_point(
             ExecutionPoint {
                 process, design_process, instruction, kind, source,
                 std::string { scope }, program.language_standard(),
-                program.compatibility_profile() });
+                program.compatibility_profile(), std::string { callee },
+                parent });
     }
 }
 

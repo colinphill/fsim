@@ -614,6 +614,66 @@ ElaboratedDesign::processes() const
     return processes_;
 }
 
+std::size_t ElaboratedDesign::bind_primitive_delay_slots()
+{
+    using namespace runtime::simir;
+    std::vector<ProcessId> drivers;
+    for (const auto& primitive : verilog_primitives_) {
+        drivers.insert(drivers.end(), primitive.drivers.begin(),
+            primitive.drivers.end());
+    }
+    if (drivers.empty()) {
+        return 0U;
+    }
+    std::ranges::sort(drivers);
+    drivers.erase(std::ranges::unique(drivers).begin(), drivers.end());
+    (void)processes();
+    const auto delayed = [](const runtime::SimulationTick delay) {
+        return WaitFor { delay };
+    };
+    std::size_t changed { };
+    for (const auto id : drivers) {
+        if (id >= processes_.size()) {
+            continue;
+        }
+        for (auto& operation : processes_[id].operations) {
+            std::optional<std::uint32_t> offset;
+            SignalId signal { };
+            RegisterId source { };
+            TransitionDelays delays;
+            SignalUpdateDomain domain { };
+            if (const auto* write = operation_get_if<WriteInertial>(&operation)) {
+                signal = write->signal;
+                source = write->source;
+                delays = write->delays;
+                domain = write->domain;
+            } else if (const auto* slice
+                = operation_get_if<WriteInertialSlice>(&operation)) {
+                signal = slice->signal;
+                source = slice->source;
+                offset = slice->offset;
+                delays = slice->delays;
+                domain = slice->domain;
+            } else {
+                continue;
+            }
+            WriteDelayed slotted;
+            slotted.signal = signal;
+            slotted.source = source;
+            slotted.delay = delayed(delays.rise);
+            slotted.offset = offset;
+            slotted.inertial = true;
+            slotted.domain = domain;
+            slotted.fall = delayed(delays.fall);
+            slotted.turnoff = delayed(delays.turnoff);
+            slotted.slotted = true;
+            operation = std::move(slotted);
+            ++changed;
+        }
+    }
+    return changed;
+}
+
 std::size_t ElaboratedDesign::process_count() const noexcept
 {
     if (process_builder_) {
@@ -886,6 +946,18 @@ const std::vector<VerilogSpecifyPathInfo>&
 ElaboratedDesign::verilog_specify_paths() const noexcept
 {
     return verilog_specify_paths_;
+}
+
+const std::vector<VerilogPrimitiveInfo>&
+ElaboratedDesign::verilog_primitives() const noexcept
+{
+    return verilog_primitives_;
+}
+
+const std::vector<SdfNetDelayInfo>&
+ElaboratedDesign::sdf_net_delays() const noexcept
+{
+    return sdf_net_delays_;
 }
 
 const std::vector<runtime::simir::ModuleTimingCheck>&
@@ -1371,6 +1443,7 @@ ElaboratedDesignState ElaboratedDesign::state() const&
         verilog_timing_checks_,
         systemc_instances_, systemc_processes_, systemc_objects_, { }, { },
         { }, code_coverage_inventory_, *driver_inventory,
+        verilog_primitives_, sdf_net_delays_,
     };
     if (process_rows_) {
         result.processes.reserve(process_rows_->rows.size());
@@ -1431,6 +1504,7 @@ detail::ElaboratedDesignProcessAccess::artifact_state(
         design.systemc_instances_, design.systemc_processes_,
         design.systemc_objects_, { }, { }, { },
         design.code_coverage_inventory_, *driver_inventory,
+        design.verilog_primitives_, design.sdf_net_delays_,
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1490,6 +1564,8 @@ detail::ElaboratedDesignProcessAccess::take_artifact_state(
         std::move(design.code_coverage_inventory_),
         computed_inventory ? std::move(*computed_inventory)
                            : std::move(*design.signal_driver_inventory_),
+        std::move(design.verilog_primitives_),
+        std::move(design.sdf_net_delays_),
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1556,6 +1632,7 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         std::move(systemc_objects_), { }, { }, { },
         std::move(code_coverage_inventory_),
         std::move(driver_inventory_value),
+        std::move(verilog_primitives_), std::move(sdf_net_delays_),
     };
     result.signal_names.reserve(signal_by_path_.size());
     for (const auto& [path, signal] : signal_by_path_) {
@@ -2001,7 +2078,34 @@ ElaboratedDesign::from_state_with_process_rows(
             return std::nullopt;
         }
     }
+    for (const auto& primitive : state.verilog_primitives) {
+        if ((primitive.udp_table
+                && *primitive.udp_table >= state.udp_tables.size())
+            || !std::ranges::all_of(primitive.terminals,
+                [&](const VerilogPrimitiveTerminalInfo& terminal) {
+                    return terminal.width == 0U
+                        || terminal.signal < state.signals.size();
+                })) {
+            return std::nullopt;
+        }
+    }
+    for (const auto& delay : state.sdf_net_delays) {
+        if (delay.source.signal >= state.signals.size()
+            || delay.destination.signal >= state.signals.size()
+            || delay.delays.size() != 12U) {
+            return std::nullopt;
+        }
+    }
     if (trusted) {
+        for (const auto& primitive : state.verilog_primitives) {
+            if (!std::ranges::all_of(
+                    primitive.drivers,
+                    [&](const runtime::simir::ProcessId driver) {
+                        return driver < process_count;
+                    })) {
+                return std::nullopt;
+            }
+        }
         for (const auto& path : state.verilog_specify_paths) {
             const auto valid_signal = [&](const VerilogSpecifyTerminalInfo& terminal) {
                 return terminal.signal < state.signals.size();
@@ -2152,6 +2256,8 @@ ElaboratedDesign::from_state_with_process_rows(
     result.udp_tables_ = std::move(state.udp_tables);
     result.verilog_specify_paths_ = std::move(state.verilog_specify_paths);
     result.verilog_timing_checks_ = std::move(state.verilog_timing_checks);
+    result.verilog_primitives_ = std::move(state.verilog_primitives);
+    result.sdf_net_delays_ = std::move(state.sdf_net_delays);
     result.systemc_instances_ = std::move(state.systemc_instances);
     result.systemc_processes_ = std::move(state.systemc_processes);
     result.systemc_objects_ = std::move(state.systemc_objects);

@@ -3,6 +3,7 @@
 
 #include "application_vpi_foreign.hpp"
 
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <span>
@@ -42,15 +43,26 @@ public:
     virtual void set_companion(ForeignCompanion companion) = 0;
 };
 
+/// Whether the design has an instance of an architecture decorated with the
+/// 'FOREIGN attribute (IEEE 1076-2019 20.2.4): its model needs a VHPI program
+/// that registers it, so the run needs the VHPI service.
+[[nodiscard]] bool design_has_vhdl_foreign_architecture(
+    const Simulation& simulation);
+
 /// Load the modules (`lib[:bootstrap]`) into a constructed, not yet started
 /// simulation and run their registration routines (IEEE 1076-2019 20.2).
-/// `arguments` are the simulator arguments the tool object reports.
+/// `arguments` are the simulator arguments the tool object reports;
+/// `libraries` lists, on first use, the library directories that
+/// vhpiLibPhysicalNameP names.
+using VhpiLibraryDirectories = std::function<
+    std::vector<std::pair<std::string, std::filesystem::path>>()>;
 [[nodiscard]] std::unique_ptr<VhpiForeignService> attach_vhpi_modules(
     Simulation& simulation,
     std::span<const std::string> modules,
     VhpiForeignService::PrintSink print,
     std::span<const std::string> arguments,
     diagnostic::Engine& diagnostics,
-    ForeignCompanion companion = {});
+    ForeignCompanion companion = {},
+    VhpiLibraryDirectories libraries = {});
 
 } // namespace fsim::app::application_detail

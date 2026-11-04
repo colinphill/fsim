@@ -2,6 +2,8 @@
 #include "hierarchy_builder_internal.hpp"
 #include "lowerer_internal.hpp"
 
+#include "fsim/support/vhdl_identifier.hpp"
+
 #include <algorithm>
 #include <cstddef>
 #include <string>
@@ -22,6 +24,73 @@ void HierarchyBuilder::append_generated_vhdl_processes(Lowerer& source,
         specialization.processes.push_back(generated.id);
         design_.append_process_record(std::move(generated));
     }
+}
+
+void HierarchyBuilder::append_vhdl_foreign_architecture_process(
+    const semantic::vhdl::Unit& entity,
+    const semantic::vhdl::Unit& architecture,
+    const semantic::SpecializedHirUnit& specialized,
+    const SignalMap& signals,
+    const std::string_view path,
+    SpecializationInfo& specialization)
+{
+    if (!semantic::vhdl::foreign_architecture_binding(
+            compiled_->vhdl_hir, architecture)) {
+        return;
+    }
+    Process placeholder;
+    placeholder.id = static_cast<ProcessId>(design_.process_count());
+    placeholder.name = std::string { path }
+        + std::string { vhdl_foreign_architecture_process_suffix };
+    placeholder.language_standard = architecture.standard;
+    placeholder.compatibility_profile = architecture.compatibility_profile;
+    // The model's execution function acts through the drivers a VHPI
+    // program creates for it (vhpi_create, vhpi_schedule_transaction); the
+    // process itself never runs a statement.
+    placeholder.operations.emplace_back(WaitForever { });
+    const auto drive = [&](const semantic::vhdl::Unit& owner,
+                           const bool ports) {
+        for (const auto declaration_id : owner.declarations) {
+            const auto declaration = specialized.find_declaration(
+                declaration_id);
+            if (!declaration || declaration->vhdl == nullptr) {
+                continue;
+            }
+            const auto& object = *declaration->vhdl;
+            const bool driven = ports
+                ? object.form == semantic::vhdl::DeclarationForm::port
+                    && (object.direction == semantic::vhdl::Direction::output
+                        || object.direction
+                            == semantic::vhdl::Direction::inout
+                        || object.direction
+                            == semantic::vhdl::Direction::buffer)
+                : object.form == semantic::vhdl::DeclarationForm::signal;
+            if (!driven) {
+                continue;
+            }
+            const auto found = std::ranges::find_if(signals,
+                [&](const auto& entry) {
+                    return support::equal_ignoring_ascii_case(
+                        entry.first, object.name);
+                });
+            if (found == signals.end()
+                || found->second >= design_.signals_.size()) {
+                continue;
+            }
+            const auto width = design_.signals_[found->second]
+                                   .initial_value.width();
+            if (width == 0U) {
+                continue;
+            }
+            placeholder.driver_regions.push_back(Process::DriverRegion {
+                found->second, 0U, static_cast<std::uint32_t>(width), true });
+        }
+    };
+    drive(entity, true);
+    drive(architecture, false);
+    canonicalize_process_operations(placeholder);
+    specialization.processes.push_back(placeholder.id);
+    design_.append_process_record(std::move(placeholder));
 }
 
 bool HierarchyBuilder::report_vhdl_unspecified_inference(

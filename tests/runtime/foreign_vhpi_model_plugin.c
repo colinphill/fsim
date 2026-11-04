@@ -73,6 +73,110 @@ static const char* reformat(vhpiValueT* in, vhpiFormatT format)
     return buffer;
 }
 
+// The first declaration of the root with the class and the name.
+static vhpiHandleT declaration(vhpiHandleT root, int32_t kind, const char* name)
+{
+    vhpiHandleT iterator = vhpi_iterator(vhpiDecls, root);
+    vhpiHandleT item;
+    while (iterator != NULL && (item = vhpi_scan(iterator)) != NULL) {
+        if (vhpi_get(vhpiKindP, item) == kind
+            && strcmp(text_property(item, vhpiNameP), name) == 0) {
+            return item;
+        }
+    }
+    return NULL;
+}
+
+// The properties the information model defines on declarations, subprograms
+// and iterators (IEEE 1076-2019 19.4, 19.5, 19.16, 19.17, 23.10, 23.17).
+static void properties(vhpiHandleT root, vhpiHandleT unit)
+{
+    vhpiHandleT item = declaration(root, vhpiCompDeclK, "leaf");
+    vhpiHandleT other;
+    vhpiHandleT iterator;
+    vhpiHandleT first;
+    vhpiHandleT second;
+    printf("#c tool vhdlversion=%d\n",
+        (int)vhpi_get(vhpiVHDLversionP, vhpi_handle(vhpiTool, NULL)));
+    printf("#c root numports=%d numgens=%d uninstantiated=%d\n",
+        (int)vhpi_get(vhpiNumPortsP, root), (int)vhpi_get(vhpiNumGensP, root),
+        (int)vhpi_get(vhpiIsUninstantiatedP, root));
+    printf("#c leaf numports=%d numgens=%d\n",
+        (int)vhpi_get(vhpiNumPortsP, item), (int)vhpi_get(vhpiNumGensP, item));
+    first = vhpi_handle_by_name("top.k", NULL);
+    second = vhpi_handle_by_name("top.v", NULL);
+    printf("#c k deferred=%d implicit=%d dynamic=%d\n",
+        (int)vhpi_get(vhpiIsDeferredP, first),
+        (int)vhpi_get(vhpiIsImplicitDeclP, first),
+        (int)vhpi_get(vhpiIsDynamicP, first));
+    printf("#c v implicit=%d dynamic=%d\n",
+        (int)vhpi_get(vhpiIsImplicitDeclP, second),
+        (int)vhpi_get(vhpiIsDynamicP, second));
+    // Resolution and anonymous types (19.4.3).
+    item = declaration(root, vhpiSubtypeDeclK, "resolved_bit");
+    other = declaration(root, vhpiSubtypeDeclK, "unit_volts");
+    printf("#c resolved resolved_bit=%d unit_volts=%d anonymous=%d\n",
+        (int)vhpi_get(vhpiIsResolvedP, item),
+        (int)vhpi_get(vhpiIsResolvedP, other),
+        (int)vhpi_get(vhpiIsAnonymousP, other));
+    item = declaration(root, vhpiSubtypeDeclK, "quad");
+    printf("#c quad anonymous=%d base anonymous=%d\n",
+        (int)vhpi_get(vhpiIsAnonymousP, item),
+        (int)vhpi_get(vhpiIsAnonymousP, vhpi_handle(vhpiBaseType, item)));
+    // Files and the parameters of a subprogram (19.4.3, 19.10).
+    item = declaration(root, vhpiFileDeclK, "fi");
+    printf("#c fi openmode=%d\n", (int)vhpi_get(vhpiOpenModeP, item));
+    item = declaration(root, vhpiProcDeclK, "drive");
+    iterator = vhpi_iterator(vhpiParamDecls, item);
+    first = iterator == NULL ? NULL : vhpi_scan(iterator);
+    second = iterator == NULL ? NULL : vhpi_scan(iterator);
+    printf("#c drive params=%d s resolved=%d t resolved=%d s dynamic=%d\n",
+        (int)vhpi_get(vhpiNumParamsP, item),
+        (int)vhpi_get(vhpiIsResolvedP, first),
+        (int)vhpi_get(vhpiIsResolvedP, second),
+        (int)vhpi_get(vhpiIsDynamicP, first));
+    // The bounds of real types (19.4.3).
+    item = declaration(root, vhpiFloatTypeDeclK, "volts");
+    other = declaration(root, vhpiSubtypeDeclK, "unit_volts");
+    printf("#c volts left=%g right=%g unit_volts left=%g right=%g\n",
+        vhpi_get_real(vhpiFloatLeftBoundP, item),
+        vhpi_get_real(vhpiFloatRightBoundP, item),
+        vhpi_get_real(vhpiFloatLeftBoundP, other),
+        vhpi_get_real(vhpiFloatRightBoundP, other));
+    iterator = vhpi_iterator(vhpiConstraints, item);
+    first = iterator == NULL ? NULL : vhpi_scan(iterator);
+    if (first != NULL) {
+        printf("#c volts range float=%d left=%g right=%g\n",
+            vhpi_get(vhpiKindP, first) == vhpiFloatRangeK,
+            vhpi_get_real(vhpiFloatLeftBoundP, first),
+            vhpi_get_real(vhpiFloatRightBoundP, first));
+    } else {
+        printf("#c volts range missing\n");
+    }
+    // The association an iterator scans (19.16).
+    iterator = vhpi_iterator(vhpiDecls, root);
+    printf("#c iterator type decls=%d\n",
+        iterator != NULL && vhpi_get(vhpiIteratorTypeP, iterator) == vhpiDecls);
+    // Signatures (19.4.4): the base types of the parameters and the result.
+    iterator = vhpi_iterator(vhpiDecls, root);
+    while (iterator != NULL && (item = vhpi_scan(iterator)) != NULL) {
+        if (vhpi_get(vhpiKindP, item) == vhpiFuncDeclK
+            || vhpi_get(vhpiKindP, item) == vhpiProcDeclK) {
+            printf("#c signature %s=%s\n", text_property(item, vhpiNameP),
+                text_property(item, vhpiSignatureNameP));
+        }
+    }
+    item = declaration(root, vhpiEnumTypeDeclK, "color");
+    iterator = vhpi_iterator(vhpiEnumLiterals, item);
+    first = iterator == NULL ? NULL : vhpi_scan(iterator);
+    if (first != NULL) {
+        printf("#c literal %s=%s\n", text_property(first, vhpiNameP),
+            text_property(first, vhpiSignatureNameP));
+    }
+    printf("#c unit physical name set=%d\n",
+        vhpi_get_str(vhpiLibPhysicalNameP, unit) != NULL);
+}
+
 static void start(const vhpiCbDataT* data)
 {
     char hex[16] = "ff";
@@ -198,6 +302,8 @@ static void start(const vhpiCbDataT* data)
                                                 type) < 0.0,
         vhpi_get_real(vhpiFloatRightBoundP, type) > 0.0);
     printf(" val=%g\n", vhpi_get_real(vhpiRealValP, r));
+
+    properties(root, unit);
 
     // Declaration classes and where objects are (19.4, Figure 14).
     iterator = vhpi_iterator(vhpiDecls, root);

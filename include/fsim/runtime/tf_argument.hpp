@@ -17,7 +17,6 @@ inline constexpr std::uint32_t kMaxTfExpressionTextSize = 4096;
 enum class TfArgumentKind : PLI_INT32 {
   Null = tf_nullparam,
   String = tf_string,
-  Special = tf_specialparam,
   ReadOnly = tf_readonly,
   ReadWrite = tf_readwrite,
   ReadWriteBitSelect = tf_rwbitselect,

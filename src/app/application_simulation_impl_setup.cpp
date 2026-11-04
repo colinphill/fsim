@@ -1964,6 +1964,10 @@ Simulation::Impl::Impl(
                     interpreter->open_external_observation();
                 }
                 if (value_change) {
+                    // What the running activation wrote before the
+                    // registration reaches the host first, so the callback
+                    // does not take it for a later change.
+                    interpreter->publish_static_kernel_outputs();
                     watch_vpi_object(object);
                 }
                 if (object) {

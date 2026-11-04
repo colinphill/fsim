@@ -433,6 +433,7 @@ void Scheduler::reset()
         return;
     discard_pending();
     impl_->now = 0;
+    impl_->cycles = 0;
     impl_->callbacks = 0;
     impl_->next_sequence = 0;
     impl_->recent_signals.clear();
@@ -495,6 +496,12 @@ std::uint64_t Scheduler::max_delta_cycles() const noexcept
 std::uint64_t Scheduler::delta() const noexcept
 {
     return impl_->current ? impl_->current->delta : 0;
+}
+
+std::uint64_t Scheduler::cycles() const noexcept { return impl_->cycles; }
+void Scheduler::note_warped_cycles(const std::uint64_t count) noexcept
+{
+    impl_->cycles += count;
 }
 
 std::optional<SchedulerPhase> Scheduler::current_phase() const noexcept

@@ -4,6 +4,7 @@
 
 #include "acc_internal.hpp"
 #include "fsim/runtime/tf_containment.hpp"
+#include "vpi_user.h"
 
 #include <cmath>
 #include <condition_variable>
@@ -36,11 +37,30 @@ std::mutex link_mutex;
 std::condition_variable link_condition;
 std::map<std::uint64_t, VclLink> links;
 std::uint64_t next_link_identity{1};
+
+[[nodiscard]] bool same_design(const VclLink& link,
+                               const fsim_acc_handle_context_v3& context) noexcept {
+  return link.simulation_identity == context.simulation_identity &&
+         link.hierarchy_generation == context.hierarchy_generation;
+}
+
+// Each call site has its own argument handles, so a link's object is
+// compared as an object, not as a handle.
+[[nodiscard]] bool same_object(const VclLink& link,
+                               const std::uint64_t vpi) noexcept {
+  if (link.object == vpi) return true;
+  try {
+    const auto as_handle = [](const std::uint64_t value) {
+      return reinterpret_cast<vpiHandle>(static_cast<std::uintptr_t>(value));
+    };
+    return vpi_compare_objects(as_handle(link.object), as_handle(vpi)) == 1;
+  } catch (...) {
+    return false;
+  }
+}
 thread_local std::uint64_t dispatching_link{};
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 [[nodiscard]] bool checked_bytes(
     const void* const pointer, const std::size_t size,
@@ -119,6 +139,7 @@ void publish_error(const bool failed) noexcept {
   }
   switch (event.reason) {
     case logic_value_change:
+    case sregister_value_change:
     case event_value_change:
       return link.flags == vcl_verilog_logic && event.vector_width == 0 &&
              event.logic_word_count == 0 && event.logic_words == nullptr;
@@ -133,7 +154,6 @@ void publish_error(const bool failed) noexcept {
     case vector_value_change:
     case integer_value_change:
     case time_value_change:
-    case sregister_value_change:
     case vregister_value_change: {
       const auto words = static_cast<std::uint32_t>((link.width + 31) / 32);
       return link.flags == vcl_verilog_logic &&
@@ -157,6 +177,7 @@ void publish_error(const bool failed) noexcept {
   record.user_data = link.user_data;
   switch (event.reason) {
     case logic_value_change:
+    case sregister_value_change:
     case event_value_change:
       record.out_value.logic_value =
           static_cast<PLI_UBYTE8>(event.logic_value);
@@ -209,8 +230,8 @@ void acc_vcl_add(const handle object,
     }
     for (const auto& [unused, link] : links) {
       static_cast<void>(unused);
-      if (!link.canceling && link.context == active &&
-          link.acc_object == object && link.consumer == consumer &&
+      if (!link.canceling && same_design(link, *active) &&
+          same_object(link, vpi) && link.consumer == consumer &&
           link.user_data == user_data && link.flags == flags) {
         publish_error(true);
         return;
@@ -349,15 +370,54 @@ bool cancel_vcl_link(const handle object,
       (flags != vcl_verilog_logic && flags != vcl_verilog_strength)) {
     return false;
   }
+  // The link is named by its object, consumer, user data and flags
+  // (IEEE 1364-2001 23.97), whichever call site added it.
+  const auto vpi = fsim_acc_handle_to_vpi_v3(object);
+  const auto matching = [&]() -> std::uint64_t {
+    std::scoped_lock lock{link_mutex};
+    for (const auto& [candidate_identity, link] : links) {
+      if (!link.canceling && same_design(link, *active) &&
+          same_object(link, vpi) && link.consumer == consumer &&
+          link.user_data == user_data && link.flags == flags) {
+        return candidate_identity;
+      }
+    }
+    return 0;
+  };
+  // The changes observed while the link existed reach the consumer before
+  // the delete returns (23.97); none after it (23.98).
+  if (const auto pending = matching(); pending != 0) {
+    fsim_acc_handle_context_v3* owner{};
+    fsim_acc_vcl_query_v3 flush{};
+    {
+      std::scoped_lock lock{link_mutex};
+      const auto& link = links.at(pending);
+      owner = link.context;
+      flush.abi_version = FSIM_ACC_VCL_QUERY_ABI_VERSION;
+      flush.struct_size = sizeof(flush);
+      flush.operation = FSIM_ACC_VCL_FLUSH;
+      flush.link_identity = pending;
+      flush.object = link.object;
+      flush.object_type = link.type;
+      flush.object_full_type = link.full_type;
+      flush.flags = link.flags;
+    }
+    try {
+      static_cast<void>(owner->vcl(owner->user_data, &flush));
+    } catch (...) {
+    }
+  }
   std::uint64_t identity{};
   fsim_acc_vcl_query_v3 query{};
+  fsim_acc_handle_context_v3* owner{};
   {
     std::scoped_lock lock{link_mutex};
     for (auto& [candidate_identity, link] : links) {
-      if (!link.canceling && link.context == active &&
-          link.acc_object == object && link.consumer == consumer &&
+      if (!link.canceling && same_design(link, *active) &&
+          same_object(link, vpi) && link.consumer == consumer &&
           link.user_data == user_data && link.flags == flags) {
         identity = candidate_identity;
+        owner = link.context;
         link.canceling = true;
         query.abi_version = FSIM_ACC_VCL_QUERY_ABI_VERSION;
         query.struct_size = sizeof(query);
@@ -374,7 +434,7 @@ bool cancel_vcl_link(const handle object,
   if (identity == 0) return false;
   bool unregistered{};
   try {
-    unregistered = active->vcl(active->user_data, &query) ==
+    unregistered = owner->vcl(owner->user_data, &query) ==
                    FSIM_ACC_VPI_OBJECT_VALID;
   } catch (...) {
   }
@@ -394,5 +454,6 @@ bool cancel_vcl_link(const handle object,
   links.erase(identity);
   return true;
 }
+
 
 }  // namespace fsim::runtime::acc_detail

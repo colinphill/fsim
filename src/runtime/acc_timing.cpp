@@ -16,9 +16,7 @@
 
 namespace {
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 [[nodiscard]] bool checked_doubles(
     const double* const pointer, const std::size_t count,
@@ -62,7 +60,7 @@ void publish_error(const bool failed) noexcept {
 
 [[nodiscard]] bool is_path_type(const PLI_INT32 type) noexcept {
   return type == accModPath || type == accInterModPath ||
-         type == accDataPath;
+         type == accWirePath || type == accDataPath;
 }
 
 [[nodiscard]] bool is_timing_check_type(const PLI_INT32 type) noexcept {
@@ -125,10 +123,10 @@ void publish_error(const bool failed) noexcept {
   if (*configured == "average") {
     return static_cast<PLI_INT32>(FSIM_ACC_TIMING_TO_HIZ_AVERAGE);
   }
-  if (*configured == "maximum") {
+  if (*configured == "max") {
     return static_cast<PLI_INT32>(FSIM_ACC_TIMING_TO_HIZ_MAXIMUM);
   }
-  if (*configured == "minimum") {
+  if (*configured == "min") {
     return static_cast<PLI_INT32>(FSIM_ACC_TIMING_TO_HIZ_MINIMUM);
   }
   return std::nullopt;
@@ -158,6 +156,18 @@ struct PreparedTiming {
       return false;
     }
     prepared.delay_count = *configured_count;
+  } else if (is_primitive_type(prepared.metadata.type) ||
+             is_primitive_type(prepared.metadata.full_type)) {
+    // A primitive takes rise and fall, and toZ for a 3-state one (IEEE
+    // 1364-2001 Table 117), unless accToHiZDelay calculates it; the
+    // min:typ:max array always holds nine values (Table 118).
+    const bool three_state = prepared.metadata.timing_delay_count == 3;
+    prepared.delay_count =
+        prepared.min_typ_max ? 3U
+        : three_state && prepared.to_hiz != static_cast<PLI_INT32>(
+                                FSIM_ACC_TIMING_TO_HIZ_FROM_USER)
+            ? 2U
+            : prepared.metadata.timing_delay_count;
   } else {
     prepared.delay_count = prepared.metadata.timing_delay_count;
   }
@@ -477,15 +487,19 @@ PLI_INT32 acc_set_pulsere(const handle object, const double reject,
 }
 
 PLI_INT32 acc_fetch_delay_mode(const handle object) {
+  // The delay mode of a module instance (IEEE 1364-2001 23.14).
   PreparedTiming prepared;
   fsim_acc_timing_result_v3 result{};
-  const bool valid = prepare_timing(object, prepared) &&
-                     delay_target(prepared.metadata) &&
+  const bool valid = resolve_metadata(object, prepared.vpi, prepared.metadata) &&
+                     (fsim::runtime::acc_detail::type_matches(
+                          prepared.metadata.type, accModule) ||
+                      fsim::runtime::acc_detail::type_matches(
+                          prepared.metadata.full_type, accModule)) &&
                      call_timing(prepared,
                                  FSIM_ACC_TIMING_FETCH_DELAY_MODE, {}, result) &&
                      result.value_count == 0 && result.values == nullptr &&
                      result.delay_mode >= accDelayModeNone &&
-                     result.delay_mode <= accDelayModeVeritime;
+                     result.delay_mode <= accDelayModeMTM;
   publish_error(!valid);
   return valid ? result.delay_mode : accDelayModeNone;
 }

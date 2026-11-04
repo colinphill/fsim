@@ -1206,7 +1206,6 @@ struct Interpreter::Impl : SchedulerBatchTask {
     struct ModuleTimingCheckState {
         std::optional<SimulationTick> last_reference;
         std::optional<SimulationTick> last_data;
-        std::optional<SimulationTick> last_terminal_change;
         ScheduledTaskHandle deadline;
         bool active { };
     };
@@ -1674,6 +1673,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
         PendingInertialWrite,
         InertialDriverKeyHash>
         pending_inertial_writes;
+    // Transition delays vpi_put_delays and acc_replace_delays gave a
+    // primitive's driver (IEEE 1800-2023 38.32); they replace the delays of
+    // its slotted WriteDelayed operations, which exist only in a run with a
+    // foreign library.
+    std::unordered_map<ProcessId, TransitionDelays> driver_delay_overrides;
     // Initial values of nets with X bits from delayed continuous
     // assignments (Interpreter::add_signal).
     std::unordered_map<SignalId, PackedLogic4> delayed_net_initial_values;
@@ -1704,6 +1708,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
     ExecutionPointHook execution_point_hook;
     OutputCallback output_hook;
     ReportCallback report_hook;
+    /// Runs on a timing-check violation before the notifier toggles; empty
+    /// (one test of the violation path) unless a foreign cbTchkViolation
+    /// callback is registered (IEEE 1800-2023 38.36.3).
+    std::function<void(std::uint32_t)> timing_violation_hook;
     CoverageSampleHook coverage_sample_hook;
     CoverageQueryHook coverage_query_hook;
     VhdlPslApiHook vhdl_psl_api_hook;
@@ -2065,6 +2073,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
         }
         return value;
     }
+    // The inverse: a one-bit queue holding the bits of `value`, the most
+    // significant first (a DPI open-array actual of run-time size that the
+    // C code may write).
+    static void set_bit_stream(ContainerValue& bits, const PackedLogic4& value)
+    {
+        bits.elements.assign(value.width(), PackedLogic4(1U, Logic4::zero));
+        for (std::size_t index { }; index < value.width(); ++index) {
+            bits.elements[index].set(
+                0U, value.get(value.width() - 1U - index));
+        }
+    }
     [[nodiscard]] SharedContainerValue container_register_storage(
         const ProcessState& process, ContainerRegisterId id) const;
     void set_container_register_storage(
@@ -2218,6 +2237,14 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalChangeOrigin origin = { });
 
     void set_file_root(std::filesystem::path root);
+    static void close_file_state(FileState& file);
+    // The VPI multichannel routines share the $fopen file table (IEEE
+    // 1800-2023 38.24-38.29).
+    [[nodiscard]] FileHandle mcd_open(std::string_view name);
+    [[nodiscard]] FileHandle mcd_close(FileHandle descriptor);
+    [[nodiscard]] std::optional<std::string> mcd_name(FileHandle descriptor) const;
+    [[nodiscard]] bool mcd_write(FileHandle descriptor, std::string_view text);
+    [[nodiscard]] bool mcd_flush(FileHandle descriptor);
     [[nodiscard]] FileHandle open_file(
         ProcessId process,
         std::string_view path,
@@ -2948,7 +2975,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const InstructionIndex instruction,
         const ExecutionPointKind kind,
         const SourceLocation& source,
-        std::string_view scope = { });
+        std::string_view scope = { },
+        std::string_view callee = { });
     void notify_execution_point(
         ProcessId process,
         ProcessId design_process,
@@ -2956,7 +2984,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const InstructionIndex instruction,
         const ExecutionPointKind kind,
         const SourceLocation& source,
-        std::string_view scope = { });
+        std::string_view scope = { },
+        std::string_view callee = { },
+        std::optional<ProcessId> parent = std::nullopt);
 
     [[nodiscard]] bool monitor_watches(
         const SignalId signal) const;

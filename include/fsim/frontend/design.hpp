@@ -547,6 +547,49 @@ struct SystemVerilogClockingBlock {
     bool global { };
 };
 
+/// The kind of a built-in primitive instance (IEEE 1800-2023 28, 37.35).
+enum class VerilogPrimitiveClass : std::uint8_t {
+    Gate,
+    Switch,
+    Pull,
+};
+
+/// The direction of a primitive terminal (IEEE 1800-2023 28.3 to 28.10).
+enum class VerilogPrimitiveTerminalDirection : std::uint8_t {
+    Output,
+    Inout,
+    Input,
+};
+
+struct VerilogPrimitiveTerminal {
+    VerilogPrimitiveTerminalDirection direction {
+        VerilogPrimitiveTerminalDirection::Input
+    };
+    Expression expression;
+};
+
+/// One gate, switch or pull primitive instance, kept beside the continuous
+/// assignments it is lowered to so that the terminal list, array membership
+/// and delays survive for the VPI primitive objects (IEEE 1800-2023 37.35).
+/// An instance array has one record per element.
+struct VerilogPrimitiveInstance {
+    VerilogPrimitiveClass kind { VerilogPrimitiveClass::Gate };
+    // The lower-case primitive keyword, such as "and" or "tranif0".
+    std::string keyword;
+    // Empty for an unnamed instance.
+    std::string name;
+    // An element of an instance array: its index and the declared bounds.
+    bool array_member { };
+    std::int64_t array_index { };
+    std::int64_t array_left { };
+    std::int64_t array_right { };
+    // The terminals in LRM order, outputs first.
+    std::vector<VerilogPrimitiveTerminal> terminals;
+    std::optional<Delay> delay;
+    std::optional<VerilogDriveStrength> drive_strength;
+    SourceSpan span;
+};
+
 struct GenerateBody {
     // Locally static VHDL constants and SystemVerilog parameters/localparams.
     // These are evaluated in declaration order during generate expansion and
@@ -574,6 +617,7 @@ struct GenerateBody {
     std::vector<Statement> concurrent_statements;
     std::vector<Process> processes;
     std::vector<Instance> instances;
+    std::vector<VerilogPrimitiveInstance> verilog_primitives;
     std::vector<VerilogDefparamDeclaration> verilog_defparams;
     std::vector<GenerateRegion> generate_regions;
     // Concurrent assertions of a SystemVerilog generate block (IEEE
@@ -1699,6 +1743,7 @@ struct DesignUnit {
     std::vector<Statement> concurrent_statements;
     std::vector<Process> processes;
     std::vector<Instance> instances;
+    std::vector<VerilogPrimitiveInstance> verilog_primitives;
     std::vector<VerilogDefparamDeclaration> verilog_defparams;
     std::vector<GenerateRegion> generate_regions;
     // Verilog specify blocks retain timing-only declarations separately from

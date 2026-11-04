@@ -63,6 +63,99 @@ bool Simulation::set_verilog_module_path_delays(const std::uint32_t path,
     return impl_->interpreter->set_module_path_delays(path, delays);
 }
 
+std::vector<std::int64_t> Simulation::verilog_timing_check_limits(
+    const std::uint32_t check) const
+{
+    const auto& checks = impl_->built.design.verilog_timing_checks();
+    if (check >= checks.size()) {
+        throw std::out_of_range("Verilog timing check does not exist");
+    }
+    try {
+        return impl_->interpreter->module_timing_check_limits(check);
+    } catch (const std::out_of_range&) {
+        return checks[check].limits;
+    }
+}
+
+bool Simulation::set_verilog_module_path_timing(const std::uint32_t path,
+    const std::span<const runtime::SimulationTick> delays,
+    const std::span<const runtime::SimulationTick> reject,
+    const std::span<const runtime::SimulationTick> error)
+{
+    return impl_->interpreter->set_module_path_timing(
+        path, delays, reject, error);
+}
+
+bool Simulation::set_verilog_timing_check_limits(const std::uint32_t check,
+    const std::span<const std::int64_t> limits)
+{
+    return impl_->interpreter->set_module_timing_check_limits(check, limits);
+}
+
+bool Simulation::set_verilog_driver_delays(const runtime::simir::ProcessId process,
+    const runtime::simir::TransitionDelays delays)
+{
+    return impl_->interpreter->set_driver_delays(process, delays);
+}
+
+std::optional<runtime::simir::TransitionDelays>
+Simulation::verilog_driver_delays(const runtime::simir::ProcessId process) const
+{
+    if (const auto set = impl_->interpreter->driver_delays(process)) {
+        return set;
+    }
+    for (const auto& operation : process_program(process).operations) {
+        const auto* write
+            = runtime::simir::operation_get_if<runtime::simir::WriteDelayed>(
+                &operation);
+        if (write != nullptr && write->slotted) {
+            const auto rise = write->delay.delay;
+            const auto fall = write->fall ? write->fall->delay : rise;
+            const auto turnoff = write->turnoff ? write->turnoff->delay
+                                                : std::min(rise, fall);
+            return runtime::simir::TransitionDelays { rise, fall, turnoff };
+        }
+    }
+    return std::nullopt;
+}
+
+void Simulation::set_verilog_timing_violation_hook(
+    std::function<void(std::uint32_t)> hook)
+{
+    impl_->interpreter->set_module_timing_violation_hook(std::move(hook));
+}
+
+void Simulation::set_vpi_size_change_hook(
+    std::function<void(fsim_vpi_handle_v1, std::size_t, std::size_t)> hook)
+{
+    impl_->vpi_size_change_hook = std::move(hook);
+}
+
+void Simulation::set_class_reclaim_hook(std::function<void()> hook)
+{
+    impl_->class_reclaim_hook = std::move(hook);
+}
+
+void Simulation::set_class_created_hook(
+    std::function<void(runtime::SystemVerilogClassHandle)> hook)
+{
+    impl_->class_created_hook = std::move(hook);
+    if (!impl_->class_created_hook) {
+        impl_->constructed_classes.clear();
+    }
+}
+
+runtime::SystemVerilogClassHandle
+Simulation::take_constructed_class_object() noexcept
+{
+    if (impl_->constructed_classes.empty()) {
+        return 0U;
+    }
+    const auto object = impl_->constructed_classes.back();
+    impl_->constructed_classes.pop_back();
+    return object;
+}
+
 std::optional<std::pair<int, int>>
 Simulation::systemverilog_instance_time_scale(const std::string_view path) const
 {

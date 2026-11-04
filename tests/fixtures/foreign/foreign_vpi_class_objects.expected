@@ -1,0 +1,41 @@
+#c valuechange a value=null objid-set=1
+#c sizechange dyn size=3
+#c sizechange q size=2
+#c var a type=vpiClassVar value-format=none obj=set obj-type=vpiClassObj ids-equal=1 typespec=Item obj-typespec=Item
+#c var b type=vpiClassVar value-format=none obj=set obj-type=vpiClassObj ids-equal=1 typespec=Item obj-typespec=Item
+#c var c type=vpiClassVar value-format=none obj=null obj-type=- ids-equal=1 typespec=Item obj-typespec=-
+#c property value type=vpiIntVar full=- value=read class-obj=null objid-set=0
+#c property label type=vpiStringVar full=- value=read class-obj=null objid-set=0
+#c property next type=vpiClassVar full=- value=none class-obj=set objid-set=1
+#c property w type=vpiIntVar full=- value=read class-obj=null objid-set=0
+#c property arr type=vpiReg full=- value=none class-obj=null objid-set=0
+#c put value value=9
+#c object methods=0 parameters=0 constraints=6
+#c constraint c_small type=vpiConstraint enabled=0 automatic=1 access=0 alloc=2 parent=vpiClassObj
+#c item vpiOperation soft=0 parent=vpiConstraint
+#c item vpiOperation soft=0 parent=vpiConstraint
+#c constraint cond type=vpiConstraint enabled=1 automatic=1 access=0 alloc=2 parent=vpiClassObj
+#c item vpiConstrIfElse soft=0 parent=vpiConstraint
+#c   condition vpiOperation
+#c   item vpiOperation soft=0 parent=vpiConstrIfElse
+#c   item vpiOperation soft=0 parent=vpiConstrIfElse
+#c constraint impl type=vpiConstraint enabled=1 automatic=1 access=0 alloc=2 parent=vpiClassObj
+#c item vpiImplication soft=0 parent=vpiConstraint
+#c   condition vpiOperation
+#c   item vpiOperation soft=0 parent=vpiImplication
+#c constraint dst type=vpiConstraint enabled=1 automatic=1 access=0 alloc=2 parent=vpiClassObj
+#c item vpiDistribution soft=0 parent=vpiConstraint
+#c   expr vpiRefObj
+#c   dist vpiDistItem dist-type=1 weight=vpiConstant
+#c   dist vpiDistItem dist-type=2 weight=vpiConstant
+#c constraint ord type=vpiConstraint enabled=1 automatic=1 access=0 alloc=2 parent=vpiClassObj
+#c item vpiConstraintOrdering soft=0 parent=vpiConstraint
+#c   before=1 after=1
+#c constraint each type=vpiConstraint enabled=1 automatic=1 access=0 alloc=2 parent=vpiClassObj
+#c item vpiConstrForEach soft=0 parent=vpiConstraint
+#c   loop-vars=1 array=vpiRefObj
+#c   item vpiOperation soft=0 parent=vpiConstrForEach
+#c reclaim typespec type=vpiClassObj objid-set=1 typespec=Item
+#c reclaim own type=vpiClassObj objid-set=1 typespec=Item
+#c reclaim typespec type=vpiClassObj objid-set=1 typespec=Item
+#c end of simulation

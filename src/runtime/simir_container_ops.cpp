@@ -77,6 +77,41 @@ void append_container_bits(
     container_error(process, instruction, "bit-stream source is invalid");
 }
 
+// The bits one element of `type` holds as a bit stream; a nested fixed
+// container or an aggregate counts all its elements.
+std::size_t stream_element_bits(const ContainerType& type)
+{
+    std::size_t bits { };
+    switch (type.element_kind) {
+    case ContainerElementKind::Packed:
+    case ContainerElementKind::Scalar:
+        bits = type.element_width;
+        break;
+    case ContainerElementKind::String:
+        bits = 8U;
+        break;
+    case ContainerElementKind::Container:
+        bits = type.element_types.size() == 1U
+            ? stream_element_bits(type.element_types.front()) : 0U;
+        break;
+    case ContainerElementKind::Aggregate:
+        for (const auto& member : type.element_types) {
+            const auto member_bits = stream_element_bits(member);
+            bits = type.union_aggregate ? std::max(bits, member_bits)
+                                        : bits + member_bits;
+        }
+        break;
+    }
+    if (type.fixed) {
+        for (const auto& [left, right] : type.dimensions) {
+            bits *= static_cast<std::size_t>(
+                left >= right ? std::int64_t { left } - right
+                              : std::int64_t { right } - left) + 1U;
+        }
+    }
+    return bits;
+}
+
 // Consume bits into a container value's elements; a variable-size
 // container takes as many elements as the remaining bits fill, less the
 // `reserved` bits of the fixed-size targets after it, the last one padded
@@ -122,6 +157,12 @@ void consume_container_bits(
             return value.type.element_width;
         case ContainerElementKind::String:
             return 8U;
+        case ContainerElementKind::Container:
+            // A dynamic array or queue of fixed rows (a DPI open-array
+            // actual, IEEE 1800-2023 35.5.6.1) takes whole rows.
+            return value.type.element_types.size() == 1U
+                ? stream_element_bits(value.type.element_types.front())
+                : 0U;
         default:
             return 0U;
         }

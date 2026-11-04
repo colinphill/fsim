@@ -1392,6 +1392,11 @@ struct WriteDelayed {
     // turn-off delay defaults to the smaller of the two (28.16).
     std::optional<WaitFor> fall;
     std::optional<WaitFor> turnoff;
+    /// A primitive driver's delayed write in a run with a VPI or PLI library:
+    /// the delays above are the declared ones, and the driver's delays set
+    /// through vpi_put_delays (Interpreter::set_driver_delays) replace them.
+    /// Set only by ElaboratedDesign::bind_primitive_delay_slots.
+    bool slotted { };
 };
 
 /// Suspend and resume later in the current time slot. This is used when one
@@ -1937,6 +1942,21 @@ enum class ExecutionPointKind : std::uint8_t {
     process_entry,
     process_suspend,
     call_return,
+    // A SystemVerilog task, function or method frame is activated, and is
+    // about to end (IEEE 1800-2023 37.43, 38.36.1 cbStartOfFrame and
+    // cbEndOfFrame); `callee` names the callable. Probe builds only.
+    frame_start,
+    frame_end,
+    // A thread (a process or a fork branch) is created, is deleted, and
+    // resumes execution (IEEE 1800-2023 37.44, 38.36.1 cbStartOfThread,
+    // cbEndOfThread, cbEnterThread); `process` identifies the thread and
+    // `parent_process` the thread that forked it. Probe builds only.
+    thread_start,
+    thread_end,
+    thread_enter,
+    // A lowered class constructor has completed (IEEE 1800-2023 38.36.1
+    // cbCreateObj). Probe builds only.
+    object_created,
 };
 
 struct ExecutionPoint {
@@ -1947,6 +1967,10 @@ struct ExecutionPoint {
     std::string scope;
     std::string language_standard;
     std::string compatibility_profile;
+    // The callable of a frame point.
+    std::string callee;
+    // The forking thread of a thread_start point; none for a process.
+    std::optional<ProcessId> parent_process;
 
     ExecutionPoint() = default;
     ExecutionPoint(
@@ -1957,7 +1981,9 @@ struct ExecutionPoint {
         SourceLocation execution_source,
         std::string execution_scope = { },
         std::string execution_language_standard = { },
-        std::string execution_compatibility_profile = { });
+        std::string execution_compatibility_profile = { },
+        std::string execution_callee = { },
+        std::optional<ProcessId> execution_parent = std::nullopt);
 };
 
 using ProcessSignalRemap
@@ -2412,6 +2438,41 @@ public:
     [[nodiscard]] bool set_module_path_delays(
         std::uint32_t path, std::span<const SimulationTick> delays);
 
+    /// Replace one module path's delay table and, when `reject` and `error`
+    /// are not empty, its pulse reject and error tables (the scalar limits
+    /// then no longer apply), as vpi_put_delays does (IEEE 1800-2023 38.32).
+    /// Empty pulse tables keep the path's limits. Safe-point rule and
+    /// exception as for set_module_path_delays.
+    [[nodiscard]] bool set_module_path_timing(std::uint32_t path,
+        std::span<const SimulationTick> delays,
+        std::span<const SimulationTick> reject,
+        std::span<const SimulationTick> error);
+    /// Replace the transition delays of one driver process: its slotted
+    /// delayed writes (WriteDelayed::slotted) use them from the next write
+    /// on, as vpi_put_delays on a primitive does (IEEE 1800-2023 38.32). A
+    /// pending write keeps its timing. Legal at any time; false, changing
+    /// nothing, when the driver has no slotted write.
+    [[nodiscard]] bool set_driver_delays(ProcessId process, TransitionDelays delays);
+    /// The delays set_driver_delays gave a driver, if any.
+    [[nodiscard]] std::optional<TransitionDelays> driver_delays(
+        ProcessId process) const;
+    /// Replace the limits of one module timing check, as vpi_put_delays does
+    /// (IEEE 1800-2023 38.32). Returns false, changing nothing, when the
+    /// scheduler is started and not at a safe point; throws
+    /// std::invalid_argument when the limits do not suit the check.
+    [[nodiscard]] bool set_module_timing_check_limits(
+        std::uint32_t check, std::span<const std::int64_t> limits);
+
+    /// Live limits of one module timing check, in scheduler ticks (IEEE
+    /// 1800-2023 38.10).
+    [[nodiscard]] std::vector<std::int64_t> module_timing_check_limits(
+        std::uint32_t check) const;
+    /// Install (or with an empty function remove) the callback that runs when
+    /// a module timing check is violated, before its notifier toggles. It
+    /// receives the check's index (IEEE 1800-2023 38.36.3).
+    void set_module_timing_violation_hook(
+        std::function<void(std::uint32_t)> hook);
+
     struct VitalTimingReannotation {
         ProcessId process { };
         InstructionIndex instruction { };
@@ -2431,6 +2492,18 @@ public:
     /// Restrict all HDL file operations to paths below this root. Must be set
     /// before start; an empty root leaves file operations disabled.
     void set_file_root(std::filesystem::path root);
+
+    /// The VPI multichannel descriptor routines (IEEE 1800-2023 38.24-38.29)
+    /// on the table $fopen uses. Channel 1 and the preopened descriptors
+    /// belong to the caller.
+    [[nodiscard]] FileHandle mcd_open(std::string_view name);
+    /// Zero, or the descriptor bits left open.
+    [[nodiscard]] FileHandle mcd_close(FileHandle descriptor);
+    [[nodiscard]] std::optional<std::string> mcd_name(
+        FileHandle descriptor) const;
+    /// Write to the files named by the channel bits; false when one failed.
+    [[nodiscard]] bool mcd_write(FileHandle descriptor, std::string_view text);
+    [[nodiscard]] bool mcd_flush(FileHandle descriptor);
 
     /// Bound the operations interpreted from now on; past the bound the
     /// running process fails. Elaboration-time evaluation uses it so that a
@@ -2492,12 +2565,44 @@ public:
     /// its safe stopped boundary.
     [[nodiscard]] RunResult finish();
 
+    /// True when reset_run_state() can restore this run. A reset needs the
+    /// whole mutable run state back at its time-zero value (the scheduler,
+    /// the signal and driver values, the process and thread states, the
+    /// containers, strings and files, the static kernel's slots, waiters
+    /// and timers); no engine restores it yet.
+    [[nodiscard]] bool can_reset_run_state() const noexcept;
+    /// Restore the time-zero state, so that the next run() initializes the
+    /// design again (IEEE 1800-2023 D.8, IEEE 1076-2019 20.9). False, with
+    /// the run unchanged, when can_reset_run_state() is false.
+    [[nodiscard]] bool reset_run_state();
+
     /// Deposit immediately and activate sensitive processes in the next delta.
     /// A systemverilog origin domain (a VPI write from a calltf) wakes
     /// SystemVerilog processes in the current Active region instead
     /// (IEEE 1800-2023 38.34).
     void deposit_signal(SignalId signal, PackedLogic4 value,
         ProcessSchedulingDomain origin_domain = ProcessSchedulingDomain::generic);
+
+    /// A foreign program's driver (VHPI 22.5.4, 22.6, 23.34): the driver
+    /// `process` has for `signal`, the process being the placeholder of a
+    /// foreign architecture. A projected waveform edits the driver's
+    /// projected output waveform (IEEE 1076-2019 10.5.2.2); `offset` selects
+    /// the bits of a basic signal's driver inside the signal.
+    void schedule_host_driver_waveform(ProcessId process, SignalId signal,
+        const std::vector<ProjectedWaveformValue>& elements,
+        std::optional<std::size_t> offset, SimulationTick rejection,
+        ProjectedDelayMode mode);
+    /// Force a host driver at once, or in the next update phase when
+    /// `propagate` is set (IEEE 1076-2019 22.5.4).
+    void force_host_driver(ProcessId process, SignalId signal,
+        PackedLogic4 value, std::size_t offset, bool propagate);
+    /// Deposit into a host driver at once; the bits of a forced driver keep
+    /// their value (IEEE 1076-2019 22.5.4 vhpiDeposit).
+    void deposit_host_driver(ProcessId process, SignalId signal,
+        PackedLogic4 value, std::size_t offset);
+    /// Release a host driver (IEEE 1076-2019 22.5.4).
+    void release_host_driver(ProcessId process, SignalId signal,
+        std::size_t offset, std::size_t width);
 
     /// Override the visible value while preserving subsequently driven values.
     /// Releasing the force publishes the most recent underlying driven value.
@@ -2649,8 +2754,11 @@ public:
     [[nodiscard]] std::optional<std::int64_t> sva_outcome_start(
         ProcessId design_process) const;
     void set_sva_attempt_hook(SvaAttemptHook hook);
-    [[nodiscard]] PackedLogic4 read_debug_local(
-        ProcessId process, std::size_t local_index) const;
+    /// `newer_activations` selects an outer activation of a recursive
+    /// callable: the number of activations of the same callable entered
+    /// after the one read (VHPI stack frames, IEEE 1076-2019 19.10).
+    [[nodiscard]] PackedLogic4 read_debug_local(ProcessId process,
+        std::size_t local_index, std::size_t newer_activations = 0U) const;
     /// Deposit a value into a debug local (a variable of a process): the
     /// value has the local's width (VHPI vhpi_put_value, IEEE 1076-2019
     /// 22.5.2).
@@ -2668,6 +2776,11 @@ public:
     [[nodiscard]] Scheduler& scheduler() noexcept;
     [[nodiscard]] const Scheduler& scheduler() const noexcept;
     void set_signal_change_hook(SignalChangeHook hook);
+    /// Publish the static kernel's changed outputs at once (none without a
+    /// kernel): what its running process wrote reaches the host's signals
+    /// and their observers before a foreign routine the process called
+    /// continues.
+    void publish_static_kernel_outputs();
     void set_native_signal_observation_required_hook(
         NativeSignalObservationRequiredHook hook);
     void set_native_signal_observation_any_hook(

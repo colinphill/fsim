@@ -139,7 +139,9 @@ std::uint32_t FSIM_NATIVE_PLUGIN_CALL timing(
   if (fixture.reject_timing || query == nullptr || result == nullptr ||
       query->abi_version != FSIM_ACC_TIMING_QUERY_ABI_VERSION ||
       query->struct_size < sizeof(*query) || query->reserved != 0 ||
-      query->reserved2 != 0 || query->delay_count == 0 ||
+      query->reserved2 != 0 ||
+      (query->delay_count == 0 &&
+       query->operation != FSIM_ACC_TIMING_FETCH_DELAY_MODE) ||
       query->delay_count > FSIM_ACC_TIMING_MAXIMUM_DELAYS ||
       query->min_typ_max > 1 ||
       result->abi_version != FSIM_ACC_TIMING_QUERY_ABI_VERSION ||
@@ -264,6 +266,9 @@ int main() {
   const auto port_object = add(
       fixture, root, "input",
       Record{accPort, accScalarPort, accInput, FSIM_ACC_TIMING_CAP_DELAYS, 1});
+  const auto three_state_object = add(
+      fixture, root, "tri_gate",
+      Record{accPrimitive, accBufif1Gate, 0, FSIM_ACC_TIMING_CAP_DELAYS, 3});
   const auto net_object = add(
       fixture, root, "net",
       Record{accNet, accWire, 0, FSIM_ACC_TIMING_CAP_DELAYS, 1});
@@ -278,14 +283,18 @@ int main() {
   const auto port = mapped(port_object);
   const auto net = mapped(net_object);
 
-  require(acc_fetch_delay_mode(path) == accDelayModePath &&
+  require(acc_fetch_delay_mode(mapped(root)) == accDelayModePath &&
+              fixture.captured.operation == FSIM_ACC_TIMING_FETCH_DELAY_MODE,
+          "the delay mode of a module is visible");
+  require(acc_fetch_delay_mode(path) == accDelayModeNone &&
+              acc_error_flag == 1,
+          "only a module has a delay mode");
+  require(acc_fetch_polarity(path) == accNegative &&
               fixture.captured.delay_count == 6,
-          "default path count and delay mode are visible");
-  require(acc_fetch_polarity(path) == accNegative,
-          "path polarity is visible");
+          "default path count and polarity are visible");
 
   configure(accPathDelayCount, "2");
-  configure(accToHiZDelay, "maximum");
+  configure(accToHiZDelay, "max");
   double first{};
   double second{};
   require(acc_fetch_delays(path, &first, &second) == 1 && first == 0.25 &&
@@ -347,7 +356,7 @@ int main() {
           "malformed results cannot partially publish");
   fixture.malformed_result = false;
   fixture.throw_timing = true;
-  require(acc_fetch_delay_mode(path) == accDelayModeNone &&
+  require(acc_fetch_delay_mode(mapped(root)) == accDelayModeNone &&
               acc_error_flag == 1,
           "callback exceptions are contained");
   fixture.throw_timing = false;
@@ -357,9 +366,29 @@ int main() {
   fixture.reject_timing = false;
 
   configure(accPathDelayCount, "4");
-  require(acc_fetch_delay_mode(path) == accDelayModeNone &&
-              acc_error_flag == 1,
+  require(acc_fetch_polarity(path) == accUnknown && acc_error_flag == 1,
           "unsupported path delay counts reject before callback");
+
+  // A 3-state primitive: three delays unless accToHiZDelay calculates toZ;
+  // min:typ:max arrays always hold nine values (IEEE 1364-2001 Tables 117,
+  // 118).
+  configure(accMinTypMaxDelays, "false");
+  configure(accToHiZDelay, "from_user");
+  const auto three_state = mapped(three_state_object);
+  require(acc_replace_delays(three_state, 1.0, 2.0, 3.0) == 1 &&
+              fixture.captured.delay_count == 3,
+          "a 3-state primitive takes rise, fall and toZ");
+  configure(accToHiZDelay, "average");
+  require(acc_replace_delays(three_state, 1.0, 2.0) == 1 &&
+              fixture.captured.delay_count == 2,
+          "a calculated toZ leaves two delay arguments");
+  configure(accToHiZDelay, "from_user");
+  configure(accMinTypMaxDelays, "true");
+  const std::array<double, 9> nine{1, 2, 3, 4, 5, 6, 7, 8, 9};
+  require(acc_replace_delays(primitive, nine.data()) == 1 &&
+              fixture.captured.delay_count == 3 &&
+              fixture.captured.values.size() == 9,
+          "a 2-state primitive still holds nine min:typ:max values");
 
   fsim_acc_handle_context_leave_v3(&active);
   acc_close();

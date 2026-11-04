@@ -167,6 +167,10 @@ void load_element(const fsim_svdpi_open_array_v3& array,
   case 'V':
     std::memcpy(destination, element, words * sizeof(svLogicVecVal));
     break;
+  case 'R':
+    // A structure element is reached through svGetArrElemPtr; it has no
+    // vector value (IEEE 1800-2023 H.7.8).
+    break;
   default: {
     std::uint64_t value {};
     std::memcpy(&value, element,
@@ -204,6 +208,8 @@ void store_element(const fsim_svdpi_open_array_v3& array,
     break;
   case 'V':
     std::memcpy(element, source, words * sizeof(svLogicVecVal));
+    break;
+  case 'R':
     break;
   default: {
     std::uint64_t value = source[0].aval;

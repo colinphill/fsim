@@ -612,21 +612,23 @@ bool Interpreter::Impl::StaticKernel::restore_image(
         // A member whose operations are its program's copies them on first
         // use (Member::materialize_operations); a parallel kernel's lanes
         // could do that at once, so it copies them now.
+        // The points only the execution probes use stay out of a kernel
+        // without the debug plan (build_fresh), so the member's positions
+        // are those of the program without them.
+        const bool probe_points = !debug_points_ && has_probe_points(operations);
         const bool lazy = member_spec.process != spec.host && !member.conversion
-            && !member.inlined_calls && member.origin.empty() && mt_threads_ == 1U;
+            && !member.inlined_calls && member.origin.empty() && mt_threads_ == 1U
+            && !probe_points;
+        std::vector<std::uint32_t> stripped;
         if (lazy) {
             member.operations_source = &impl_;
         } else {
-            member.operations().reserve(operations.size());
-            for (std::size_t op = 0U; op < operations.size(); ++op) {
-                const auto& expanded = operations.expanded_ref(op, expand_scratch);
-                if (&expanded == &expand_scratch) {
-                    member.operations().push_back(std::move(expand_scratch));
-                } else {
-                    member.operations().push_back(expanded);
-                }
-            }
+            stripped = copy_member_operations(operations, debug_points_,
+                member.operations(), expand_scratch, member.stripped_origin);
         }
+        const auto spec_body_begin = stripped_pc(stripped, member_spec.body_begin);
+        const auto spec_body_end = stripped_pc(stripped, member_spec.body_end);
+        const auto spec_exit_alt = stripped_pc(stripped, member_spec.exit_alt);
         const auto operation_count = lazy ? operations.size() : member.operations_.size();
         member.body_identity = operations.body_identity();
         if (member.conversion) {
@@ -642,19 +644,19 @@ bool Interpreter::Impl::StaticKernel::restore_image(
                 resolver->second.output);
         }
         // As build_fresh checks the body.
-        if (member_spec.body_end > operation_count
-            || member_spec.body_begin > (member.vhdl ? operation_count
-                                                     : member_spec.body_end)) {
+        if (spec_body_end > operation_count
+            || spec_body_begin > (member.vhdl ? operation_count
+                                                     : spec_body_end)) {
             failure = "operations:bounds";
             ok = false;
             break;
         }
         if (member.inlined_calls) {
             // build_fresh found calls in the body.
-            const bool wait_first = member_spec.exit_alt == 0U;
+            const bool wait_first = spec_exit_alt == 0U;
             auto inlined = static_kernel_inline_calls(member.operations(),
-                wait_first ? 0U : member_spec.body_end,
-                wait_first ? member_spec.body_end : member_spec.exit_alt);
+                wait_first ? 0U : spec_body_end,
+                wait_first ? spec_body_end : spec_exit_alt);
             if (!inlined || inlined->body_begin != member.body_begin
                 || inlined->body_end != member.body_end
                 || inlined->exit_alt != member.exit_alt) {
@@ -663,9 +665,9 @@ bool Interpreter::Impl::StaticKernel::restore_image(
                 break;
             }
             member.operations() = std::move(inlined->operations);
-        } else if (member.prologue_end != member_spec.body_begin
-            || member.body_end != member_spec.body_end
-            || member.exit_alt != member_spec.exit_alt) {
+        } else if (member.prologue_end != spec_body_begin
+            || member.body_end != spec_body_end
+            || member.exit_alt != spec_exit_alt) {
             failure = "operations:body";
             ok = false;
             break;

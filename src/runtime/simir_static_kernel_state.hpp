@@ -215,6 +215,111 @@ struct WriterRegion {
         && kind != DebugPointKind::block_exit;
 }
 
+/// The debug points only the execution probes use (frame entry and exit,
+/// a completed constructor): a kernel without the debug plan drops them
+/// from its operations, so its code is that of a program without them.
+[[nodiscard]] inline bool probe_only_point(const Operation& operation) noexcept
+{
+    const auto* point = operation_get_if<DebugPoint>(&operation);
+    return point != nullptr
+        && (point->kind == DebugPointKind::frame_entry
+            || point->kind == DebugPointKind::frame_exit
+            || point->kind == DebugPointKind::class_constructed);
+}
+
+/// Where operation `pc` of a program lies once the probe points are
+/// dropped; `map` is empty when none was.
+[[nodiscard]] inline std::uint32_t stripped_pc(
+    const std::vector<std::uint32_t>& map, const std::uint32_t pc) noexcept
+{
+    return pc < map.size() ? map[pc] : pc;
+}
+
+/// Whether the program has probe points a kernel without the debug plan
+/// drops.
+[[nodiscard]] inline bool has_probe_points(const OperationList& operations)
+{
+    Operation scratch;
+    for (std::size_t op = 0U; op < operations.size(); ++op) {
+        if (probe_only_point(operations.expanded_ref(op, scratch))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Copy a program's operations (instance fields applied) into `out`,
+/// leaving out the probe points unless `keep_probes`. The returned map
+/// gives each original operation's new position (one more entry for the
+/// end); it is empty when nothing was left out. Jump, branch, call, fork
+/// and disable targets are renumbered.
+[[nodiscard]] inline std::vector<std::uint32_t> copy_member_operations(
+    const OperationList& operations, const bool keep_probes,
+    std::vector<Operation>& out, Operation& scratch,
+    std::vector<InstructionIndex>& original)
+{
+    out.reserve(operations.size());
+    std::vector<std::uint32_t> map;
+    for (std::size_t op = 0U; op < operations.size(); ++op) {
+        const auto& expanded = operations.expanded_ref(op, scratch);
+        if (!keep_probes && probe_only_point(expanded)) {
+            if (map.empty()) {
+                map.reserve(operations.size() + 1U);
+                for (std::size_t kept = 0U; kept < op; ++kept) {
+                    map.push_back(static_cast<std::uint32_t>(kept));
+                }
+            }
+            map.push_back(static_cast<std::uint32_t>(out.size()));
+            continue;
+        }
+        if (!map.empty()) {
+            map.push_back(static_cast<std::uint32_t>(out.size()));
+        }
+        if (&expanded == &scratch) {
+            out.push_back(std::move(scratch));
+        } else {
+            out.push_back(expanded);
+        }
+    }
+    if (map.empty()) {
+        return map;
+    }
+    map.push_back(static_cast<std::uint32_t>(out.size()));
+    // The program operation each kept one stands for, for diagnostics.
+    original.assign(out.size(), 0U);
+    for (std::size_t op = 0U; op + 1U < map.size(); ++op) {
+        if (map[op + 1U] != map[op]) {
+            original[map[op]] = static_cast<InstructionIndex>(op);
+        }
+    }
+    for (auto& operation : out) {
+        visit_operation([&](auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, Jump>) {
+                op.target = stripped_pc(map, op.target);
+            } else if constexpr (std::is_same_v<T, Branch>) {
+                op.when_true = stripped_pc(map, op.when_true);
+                op.when_false = stripped_pc(map, op.when_false);
+            } else if constexpr (std::is_same_v<T, Call>) {
+                op.target = stripped_pc(map, op.target);
+                op.return_target = stripped_pc(map, op.return_target);
+            } else if constexpr (std::is_same_v<T, Fork>) {
+                for (auto& branch : op.branches) {
+                    branch = stripped_pc(map, branch);
+                }
+            } else if constexpr (std::is_same_v<T, DisableFork>) {
+                if (op.site) {
+                    op.site = stripped_pc(map, *op.site);
+                }
+            } else if constexpr (std::is_same_v<T, DisableBlock>) {
+                op.begin = stripped_pc(map, op.begin);
+                op.end = stripped_pc(map, op.end);
+            }
+        }, operation);
+    }
+    return map;
+}
+
 /// A word plus 'U' mask as a value of the given kind.
 [[nodiscard]] inline PackedLogic4 uword_value(const kernel_word::Word value,
     const std::uint64_t unknown, const std::uint32_t width,
@@ -311,6 +416,10 @@ public:
     /// time step. Not called for the kernel's own publication or
     /// materialization (Impl::import_static_kernel_write filters those).
     void import_host_write(SignalId signal, SignalChangeOrigin origin);
+    /// Interpreter::publish_static_kernel_outputs: the Active-region outputs
+    /// commit as before a hosted process runs; NBA-region values stay
+    /// staged.
+    void publish_pending_outputs();
     /// commit_writes: the transactions of watched signals whose value the
     /// round left as it was.
     void note_unchanged_transactions(std::uint32_t count);
@@ -456,8 +565,12 @@ public:
         return host_original_ && process == host_process_ ? &*host_original_
                                                           : nullptr;
     }
-    [[nodiscard]] PackedLogic4 debug_register(
-        ProcessId process, RegisterId reg, std::size_t width) const;
+    /// `newer_activations` reads the register as an outer activation of its
+    /// automatic callable held it: the value saved when the callable was
+    /// entered again that many activations deeper.
+    [[nodiscard]] PackedLogic4 debug_register(ProcessId process,
+        RegisterId reg, std::size_t width,
+        std::size_t newer_activations = 0U) const;
     [[nodiscard]] std::string debug_string_register(
         ProcessId process, StringRegisterId reg) const;
     [[nodiscard]] ContainerValue debug_container_register(
@@ -687,6 +800,18 @@ private:
         /// VHDL members with a specialized body (specialize_member): the
         /// original operation each operation stands for; empty otherwise.
         std::vector<InstructionIndex> origin;
+        /// Without the debug plan, the operations that stand for the program
+        /// operations left out (copy_member_operations); empty otherwise.
+        std::vector<InstructionIndex> stripped_origin;
+        /// The program operation operation `pc` stands for.
+        [[nodiscard]] InstructionIndex original_instruction(
+            const InstructionIndex pc) const noexcept
+        {
+            if (pc < origin.size()) {
+                return origin[pc];
+            }
+            return pc < stripped_origin.size() ? stripped_origin[pc] : pc;
+        }
         /// Debugger plan: the operation of the last debug point any thread
         /// of the member reached, and the registers that may have been
         /// written before it (debug_register_defined).
@@ -1566,6 +1691,9 @@ private:
         bool suspended { };
         bool suspended_wake { };
         bool suspended_running { };
+        /// Probe plan: the thread has run once, so its next run resumes it
+        /// (cbEnterThread, IEEE 1800-2023 38.36.1).
+        bool entered { };
         /// A fork child's random stream (IEEE 1800-2023 18.14: each thread
         /// has its own), seeded as the reference seeds the child process.
         std::uint64_t random_state { };
@@ -2506,6 +2634,9 @@ private:
     [[nodiscard]] bool debug_point(std::uint32_t thread, std::uint32_t pc);
     /// process_suspend of the thread at `pc` (a wait, join or halt).
     void debug_suspend(std::uint32_t thread, std::uint32_t pc);
+    /// Probe plan: a thread was created, deleted or resumed (IEEE 1800-2023
+    /// 37.44, 38.36.1); the foreign observers hear of it.
+    void notify_thread(std::uint32_t thread, ExecutionPointKind kind);
     /// Stops the run after the current thread step: `paused` resumes first.
     void debug_stop(std::uint32_t paused);
     std::vector<std::uint32_t> touched_;

@@ -728,6 +728,17 @@ struct Simulation::Impl {
 
     std::map<runtime::simir::ContainerObjectId, SystemVerilogVpiLiveMemory>
         vpi_live_memories;
+    // A watcher of dynamic array and queue sizes (cbSizeChange), and of the
+    // end of the simulation for the live class objects (cbReclaimObj); both
+    // empty unless a foreign library registered such a callback.
+    std::function<void(fsim_vpi_handle_v1, std::size_t, std::size_t)>
+        vpi_size_change_hook;
+    std::function<void()> class_reclaim_hook;
+    // cbCreateObj under the execution probes: the objects of lowered
+    // constructors that have not completed (innermost last), and the
+    // listener told of each completed object (IEEE 1800-2023 38.36.1).
+    std::function<void(runtime::SystemVerilogClassHandle)> class_created_hook;
+    std::vector<runtime::SystemVerilogClassHandle> constructed_classes;
 
     std::unordered_map<fsim_vpi_handle_v1, SystemVerilogVpiDeferredChildren>
         vpi_deferred_children;
@@ -777,6 +788,18 @@ struct Simulation::Impl {
     std::uint64_t foreign_update_serial { };
 
     bool vpi_ended { };
+
+    /// The foreign interfaces' save, restart and reset hooks, and the
+    /// resets requested but not yet performed (IEEE 1800-2023 D.8).
+    std::vector<Simulation::LifecycleHook> lifecycle_hooks;
+    std::vector<Simulation::ResetRequest> reset_requests;
+    std::uint32_t reset_count { };
+    std::int32_t reset_value { };
+    /// Run the oldest requested reset: start-of-reset before time changes,
+    /// the engine's return to time zero, end-of-reset before the first
+    /// statements run. False when the request enters interactive mode
+    /// afterwards.
+    [[nodiscard]] bool perform_reset();
 
     mutable std::unique_ptr<runtime::VhdlVhpiObjectRegistry>
         vhdl_vhpi_registry;

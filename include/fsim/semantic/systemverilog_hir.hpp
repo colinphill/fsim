@@ -1191,6 +1191,49 @@ struct ClockingBlock {
     bool global { };
 };
 
+enum class PrimitiveKind : std::uint8_t {
+    gate,
+    switch_device,
+    pull,
+    udp,
+};
+
+enum class PrimitiveTerminalDirection : std::uint8_t {
+    output,
+    inout,
+    input,
+};
+
+struct PrimitiveTerminal {
+    PrimitiveTerminalDirection direction {
+        PrimitiveTerminalDirection::input
+    };
+    std::optional<ExpressionId> expression;
+};
+
+/// One built-in primitive or UDP instance of a scope (IEEE 1800-2023 28, 29,
+/// 37.35). A gate, switch or pull instance array has one record per element.
+/// A UDP instance refers to its Instance record and leaves the terminals to
+/// that record's port associations. Records of one scope are in source order
+/// of `source`.
+struct PrimitiveInstance {
+    PrimitiveKind kind { PrimitiveKind::gate };
+    // The primitive keyword, or the UDP name.
+    std::string keyword;
+    // Empty for an unnamed instance.
+    std::string name;
+    bool array_member { };
+    std::int64_t array_index { };
+    std::int64_t array_left { };
+    std::int64_t array_right { };
+    std::vector<PrimitiveTerminal> terminals;
+    std::optional<Delay> delay;
+    std::optional<std::uint8_t> drive_zero;
+    std::optional<std::uint8_t> drive_one;
+    std::optional<InstanceId> udp_instance;
+    SourceSpanId source;
+};
+
 struct GenerateRegion {
     DeclarationId declaration;
     ScopeId scope;
@@ -1208,6 +1251,7 @@ struct GenerateRegion {
     std::vector<InstanceId> instances;
     std::vector<ProcessId> processes;
     std::vector<StatementId> concurrent_statements;
+    std::vector<PrimitiveInstance> primitives;
     std::vector<Defparam> defparams;
     std::vector<std::string> class_declarations;
     std::vector<GenerateAlternative> alternatives;
@@ -2230,6 +2274,7 @@ struct Unit {
     std::vector<InstanceId> instances;
     std::vector<ProcessId> processes;
     std::vector<StatementId> concurrent_statements;
+    std::vector<PrimitiveInstance> primitives;
     std::vector<ConcurrentAssertion> concurrent_assertions;
     std::vector<GenerateRegion> generates;
     std::vector<Defparam> defparams;

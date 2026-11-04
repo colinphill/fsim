@@ -7,6 +7,7 @@
 #include "fsim/app/sdf_endpoint_resolution.hpp"
 #include "fsim/app/sdf_mapping_validation.hpp"
 #include "fsim/app/sdf_target_plan.hpp"
+#include "fsim/app/sdf_delay_modes.hpp"
 #include "fsim/app/sdf_precedence.hpp"
 #include "fsim/app/sdf_scheduling.hpp"
 #include "fsim/app/sdf_drive_timing.hpp"
@@ -100,6 +101,66 @@ std::optional<std::uint64_t> resolution_femtoseconds(
             > std::numeric_limits<std::uint64_t>::max() / *factor)
         return std::nullopt;
     return parsed->magnitude * *factor;
+}
+
+// The persistent record of an INTERCONNECT or PORT annotation: its terminals
+// and the twelve effective transition delays (IEEE 1800-2023 37.37, 37.45).
+std::optional<elaboration::SdfNetDelayInfo> net_delay_record(
+    const SdfPlannedAnnotation& annotation,
+    const SdfPrecedenceApplication& precedence)
+{
+    const auto terminal = [](const SdfResolvedEndpoint& endpoint) {
+        elaboration::SdfNetDelayTerminal result;
+        result.instance = endpoint.instance_path;
+        result.object = endpoint.object_path;
+        result.signal = endpoint.signal;
+        result.port = endpoint.object_kind == SdfEndpointObjectKind::HdlPort;
+        result.select_width = endpoint.select
+            ? static_cast<std::uint32_t>(endpoint.select->width)
+            : 0U;
+        return result;
+    };
+    const auto with_role = [&](const SdfEndpointRole role) {
+        return std::ranges::find(
+            annotation.endpoints, role, &SdfResolvedEndpoint::role);
+    };
+    elaboration::SdfNetDelayInfo result;
+    result.instance = annotation.target_instance_path;
+    result.identity = annotation.target_identity;
+    if (annotation.target_kind == SdfTimingTargetKind::Interconnect) {
+        const auto source = with_role(SdfEndpointRole::InterconnectSource);
+        const auto destination
+            = with_role(SdfEndpointRole::InterconnectDestination);
+        if (source == annotation.endpoints.end()
+            || destination == annotation.endpoints.end())
+            return std::nullopt;
+        result.kind = elaboration::SdfNetDelayKind::interconnect;
+        result.source = terminal(*source);
+        result.destination = terminal(*destination);
+    } else {
+        if (annotation.endpoints.size() != 1U)
+            return std::nullopt;
+        result.kind = elaboration::SdfNetDelayKind::port;
+        result.source = terminal(annotation.endpoints.front());
+        result.destination = result.source;
+    }
+    const auto effective
+        = precedence.find_target(annotation.target_kind, annotation.target_identity);
+    result.delays.assign(12U, 0U);
+    if (effective.empty()) {
+        const auto profile = expand_sdf_transition_delays(annotation.after_ticks);
+        if (!profile)
+            return std::nullopt;
+        result.delays.assign(profile->begin(), profile->end());
+        return result;
+    }
+    for (const auto& value : effective) {
+        if (value.value_index >= result.delays.size()
+            || !value.effective_delay_ticks)
+            return std::nullopt;
+        result.delays[value.value_index] = *value.effective_delay_ticks;
+    }
+    return result;
 }
 
 } // namespace
@@ -197,6 +258,9 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
         });
     std::map<std::string, std::pair<std::uint64_t, std::uint64_t>>
         target_precedence;
+    // The interconnect and port delays the files create; a later file
+    // replaces an earlier delay of the same target.
+    std::vector<elaboration::SdfNetDelayInfo> net_delays;
 
     for (const auto* selected_input : ordered) {
         const auto& input = *selected_input;
@@ -353,6 +417,22 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
         }
         std::map<std::string, std::set<std::string>> targets_by_root;
         for (const auto& annotation : plan.plan->annotations()) {
+            if (annotation.target_kind == SdfTimingTargetKind::Interconnect
+                || annotation.target_kind == SdfTimingTargetKind::Port) {
+                auto record = net_delay_record(annotation, *precedence.application);
+                if (!record) {
+                    diagnostics.error("FSIM-SDF-SESSION-003",
+                        "SDF interconnect or port delay has no complete effective timing");
+                    return std::nullopt;
+                }
+                const auto same = std::ranges::find(net_delays,
+                    record->identity, &elaboration::SdfNetDelayInfo::identity);
+                if (same != net_delays.end())
+                    *same = std::move(*record);
+                else
+                    net_delays.push_back(std::move(*record));
+                continue;
+            }
             if (annotation.target_kind != SdfTimingTargetKind::SpecifyPath
                 && annotation.target_kind
                     != SdfTimingTargetKind::TimingCheck) {
@@ -419,8 +499,12 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
         import_errors(diagnostics, control.diagnostics);
         return std::nullopt;
     }
+    auto result_state = effective.application->design().state();
+    // A design without an interconnect or port delay keeps none (IEEE
+    // 1800-2023 37.45).
+    result_state.sdf_net_delays = std::move(net_delays);
     auto result_design = elaboration::ElaboratedDesign::from_state(
-        effective.application->design().state());
+        std::move(result_state));
     if (!result_design) {
         diagnostics.error("FSIM-SDF-SESSION-001",
             "SDF reannotation produced an invalid elaborated design");

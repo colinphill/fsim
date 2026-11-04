@@ -21534,6 +21534,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                            *user_task, arguments, span)
                     .has_value();
             }
+            if (input.task.spelling == "__fsim_dpi_export_foreign") {
+                // The foreign arm of a DPI export service (IEEE 1800-2023
+                // 35.5.3).
+                return lower_hir_dpi_export_foreign();
+            }
             if (!input.task.spelling.starts_with('$')) {
                 if (const auto lowered = lower_hir_dpi_call_statement(
                         input.task.spelling, input.task_arguments, span,

@@ -43,9 +43,7 @@ std::mutex iterator_mutex;
 std::map<SessionKey, IteratorSession> iterator_sessions;
 std::set<SessionKey> invalidated_iterator_sessions;
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 [[nodiscard]] const fsim_acc_handle_context_v3* context() noexcept {
   return fsim::runtime::acc_detail::current_context();
@@ -290,28 +288,32 @@ void end_cursor(const IteratorSession& session) noexcept {
 
 [[nodiscard]] bool advance(IteratorSession& session, std::uint64_t& object,
                            bool& at_end) noexcept {
-  fsim_acc_iterator_result_v3 result{};
-  std::uint32_t status{};
-  if (!iterator_call(session, FSIM_ACC_ITERATOR_NEXT, result, status)) {
-    return false;
-  }
-  if (status == FSIM_ACC_VPI_OBJECT_NOT_FOUND) {
-    object = 0;
-    at_end = true;
+  for (;;) {
+    fsim_acc_iterator_result_v3 result{};
+    std::uint32_t status{};
+    if (!iterator_call(session, FSIM_ACC_ITERATOR_NEXT, result, status)) {
+      return false;
+    }
+    if (status == FSIM_ACC_VPI_OBJECT_NOT_FOUND) {
+      object = 0;
+      at_end = true;
+      return true;
+    }
+    if (status != FSIM_ACC_VPI_OBJECT_VALID || result.object == 0 ||
+        result.cursor != session.cursor) {
+      return false;
+    }
+    PLI_INT32 type{};
+    if (!resolve_type(result.object, type)) return false;
+    if (!relation_result_type(session.family, type, session.types)) {
+      // acc_next scans every kind in the scope and returns those asked for.
+      if (session.family == FSIM_ACC_ITERATOR_GENERIC) continue;
+      return false;
+    }
+    object = result.object;
+    at_end = false;
     return true;
   }
-  if (status != FSIM_ACC_VPI_OBJECT_VALID || result.object == 0 ||
-      result.cursor != session.cursor) {
-    return false;
-  }
-  PLI_INT32 type{};
-  if (!resolve_type(result.object, type) ||
-      !relation_result_type(session.family, type, session.types)) {
-    return false;
-  }
-  object = result.object;
-  at_end = false;
-  return true;
 }
 
 [[nodiscard]] handle next_relation(const std::uint32_t family,

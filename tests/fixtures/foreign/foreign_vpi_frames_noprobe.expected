@@ -1,0 +1,8 @@
+#c refused cbStartOfThread: vpi_register_cb: cbStartOfThread needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c refused cbEndOfThread: vpi_register_cb: cbEndOfThread needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c refused cbEnterThread: vpi_register_cb: cbEnterThread needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c refused cbStartOfFrame: vpi_register_cb: cbStartOfFrame needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c refused cbEndOfFrame: vpi_register_cb: cbEndOfFrame needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c refused cbStartOfFrame twice: vpi_register_cb: cbStartOfFrame needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c refused cbCreateObj: vpi_register_cb: cbCreateObj needs the execution probes of simulate --foreign-probes (configuration key simulate.foreign_probes)
+#c done n=106 v=5

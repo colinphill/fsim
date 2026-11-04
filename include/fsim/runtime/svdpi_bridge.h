@@ -67,9 +67,12 @@ typedef struct fsim_svdpi_call_context_v3 {
  * canonical C representation of the element type, leftmost element first
  * (row-major over the unpacked dimensions), `element_bytes` apart.
  * `bounds` holds each unpacked dimension's left and right index, dimension 1
- * first; dimension 0 is the packed part. `element_code` is the element's DPI
+ * first; dimension 0 is the packed part (an open packed array with no
+ * unpacked dimension has `dimensions` 0). `element_code` is the element's DPI
  * type code: b svBit, g svLogic (one byte each), c s i l and C S I L the C
- * integer types, B an svBitVecVal and V an svLogicVecVal array. */
+ * integer types, d double, f float, p void*, B an svBitVecVal and V an
+ * svLogicVecVal array, R a C structure of `element_bytes` bytes (IEEE
+ * 1800-2023 H.7.8, reached through svGetArrElemPtr). */
 #define FSIM_SVDPI_OPEN_ARRAY_MAGIC 0x6f70656eu
 
 typedef struct fsim_svdpi_open_array_v3 {

@@ -1,0 +1,14 @@
+#c id positive=1
+#c ids differ=1
+#c ids increase=1
+#c location outside save: null=1 error=1
+#c put_data outside save: rc=0 error=1
+#c get_data outside restart: rc=0 error=1
+#c register vhpiCbStartOfSave: handle=1 error=0
+#c remove vhpiCbStartOfSave: rc=0
+#c register vhpiCbEndOfSave: handle=1 error=0
+#c remove vhpiCbEndOfSave: rc=0
+#c register vhpiCbEndOfRestart: handle=1 error=0
+#c remove vhpiCbEndOfRestart: rc=0
+#c register vhpiCbStartOfRestart outside save: handle=0 error=1
+#c automatic restore=0

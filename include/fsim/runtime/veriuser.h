@@ -52,10 +52,12 @@ typedef unsigned char PLI_UBYTE8;
 #define XXTERN PLI_EXTERN PLI_DLLISPEC
 #define EETERN PLI_EXTERN PLI_DLLESPEC
 
-/* Historical source aliases are retained for C without hiding C++ keywords. */
+/* Historical source aliases are retained for C without hiding C++ keywords
+   or the C23 keywords bool, true and false. */
 #ifndef PLI_EXTRAS
 #define PLI_EXTRAS
-#if !defined(__cplusplus)
+#if !defined(__cplusplus) \
+    && !(defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L)
 #define bool int
 #define true 1
 #define false 0
@@ -117,8 +119,6 @@ typedef unsigned char PLI_UBYTE8;
 #define TF_NULLPARAM tf_nullparam
 #define tf_string 1
 #define TF_STRING tf_string
-#define tf_specialparam 2
-#define TF_SPECIALPARAM tf_specialparam
 #define tf_readonly 10
 #define TF_READONLY tf_readonly
 #define tf_readwrite 11
@@ -203,7 +203,9 @@ typedef struct t_tfnodeinfo {
 #define userrealfunction 3
 #define USERREALFUNCTION userrealfunction
 
-/* One entry of a PLI 1.0 veriusertfs table; a zero type ends the table. */
+/* One entry of the veriusertfs[] table a PLI 1.0 library exports; a zero
+   type ends the table. IEEE 1364-2001 21.2 leaves the association of
+   applications with task and function names to the vendor. */
 typedef struct t_tfcell {
   PLI_INT16 type;
   PLI_INT16 data;
@@ -248,14 +250,12 @@ XXTERN PLI_BYTE8* tf_getinstance PROTO_PARAMS((void));
 XXTERN PLI_INT32 tf_getlongp
     PROTO_PARAMS((PLI_INT32* high_value, PLI_INT32 pnum));
 XXTERN PLI_INT32 tf_getlongtime PROTO_PARAMS((PLI_INT32* high_time));
-XXTERN PLI_INT32 tf_getlongsimtime PROTO_PARAMS((PLI_INT32* high_time));
 XXTERN PLI_INT32 tf_getnextlongtime
     PROTO_PARAMS((PLI_INT32* low_time, PLI_INT32* high_time));
 XXTERN PLI_INT32 tf_getp PROTO_PARAMS((PLI_INT32 pnum));
 XXTERN PLI_INT32 tf_getpchange PROTO_PARAMS((PLI_INT32 nparam));
 XXTERN double tf_getrealp PROTO_PARAMS((PLI_INT32 pnum));
 XXTERN double tf_getrealtime PROTO_PARAMS((void));
-XXTERN PLI_BYTE8* tf_gettflist PROTO_PARAMS((void));
 XXTERN PLI_INT32 tf_gettime PROTO_PARAMS((void));
 XXTERN PLI_INT32 tf_gettimeprecision PROTO_PARAMS((void));
 XXTERN PLI_INT32 tf_gettimeunit PROTO_PARAMS((void));
@@ -402,15 +402,15 @@ XXTERN void tf_unscale_realdelay
 XXTERN PLI_INT32 tf_warning PROTO_PARAMS((PLI_BYTE8* format, ...));
 XXTERN PLI_INT32 tf_write_save
     PROTO_PARAMS((PLI_BYTE8* block, PLI_INT32 block_length));
-XXTERN PLI_BYTE8* tf_getroutine PROTO_PARAMS((void));
-XXTERN PLI_BYTE8* tf_igetroutine PROTO_PARAMS((PLI_BYTE8* instance));
-EETERN PLI_INT32 err_intercept
-    PROTO_PARAMS((PLI_INT32 level, PLI_BYTE8* facility, PLI_BYTE8* code));
 
 /* Registers each entry of a veriusertfs table as a system task or function
-   through VPI; a VPI startup routine calls it while the module loads. */
+   through VPI. simulate registers the veriusertfs[] table of a library it
+   loads with --vpi, and runs its endofcompile_routines[] once after
+   elaboration; a library may also call this from a startup routine. */
 XXTERN void veriusertfs_register_table PROTO_PARAMS((p_tfcell table));
 
+/* The table a library defines to have simulate register its tasks. */
+PLI_VEXTERN PLI_DLLESPEC s_tfcell veriusertfs[];
 PLI_VEXTERN PLI_DLLESPEC PLI_BYTE8* veriuser_version_str;
 PLI_VEXTERN PLI_DLLESPEC PLI_INT32 (*endofcompile_routines[])(void);
 

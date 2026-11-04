@@ -647,6 +647,7 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
         state.systemc_processes, state.systemc_objects,
         state.signal_names, state.string_names, state.container_names,
         state.code_coverage_inventory, state.signal_driver_inventory,
+        state.verilog_primitives, state.sdf_net_delays,
     };
 }
 

@@ -21,7 +21,7 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL time_callback(
   if (reason == reason_checktf) {
     expected_instance = tf_getinstance();
     callback_ok = callback_ok && tf_gettime() == 0 &&
-                  tf_gettimeunit() == 0 && tf_setdelay(1) != 0;
+                  tf_gettimeunit() == 0 && tf_setdelay(1) == 0;
     return 0;
   }
   ++callback_calls;
@@ -40,9 +40,10 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL time_callback(
                 tf_gettime() == 2 && tf_getlongtime(&high) == 2 && high == 0 &&
                 tf_getrealtime() == 1.5 && tf_gettimeunit() == -9 &&
                 tf_gettimeprecision() == -12 &&
-                tf_getnextlongtime(&next_low, &next_high) == 1 &&
-                next_low == 4 && next_high == 0 &&
-                // In simulation time units, like tf_getlongsimtime.
+                // Not in a read-only synchronize call: code 2, current time.
+                tf_getnextlongtime(&next_low, &next_high) == 2 &&
+                next_low == 2 && next_high == 0 &&
+                // In simulation time units (IEEE 1364-2001 25.54).
                 std::string_view{tf_strgettime()} == "750" &&
                 tf_igettime(instance) == 2 &&
                 tf_igetrealtime(instance) == 1.5 &&
@@ -59,11 +60,11 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL time_callback(
   callback_ok = callback_ok && scaled_low == 1500 && scaled_high == 0 &&
                 unscaled_low == 3 && unscaled_high == 0 &&
                 scaled_real == 625.0 && unscaled_real == 1.25 &&
-                tf_setdelay(3) == 0 && tf_clearalldelays() == 0 &&
-                tf_isetlongdelay(4, 0, instance) == 0 &&
-                tf_isetrealdelay(1.25, instance) == 0 &&
-                tf_setdelay(-1) != 0 &&
-                tf_isetdelay(1, reinterpret_cast<PLI_BYTE8*>(1)) != 0;
+                tf_setdelay(3) == 1 && tf_clearalldelays() == 1 &&
+                tf_isetlongdelay(4, 0, instance) == 1 &&
+                tf_isetrealdelay(1.25, instance) == 1 &&
+                tf_setdelay(-1) == 0 && tf_setlongdelay(0, -1) == 0 &&
+                tf_isetdelay(1, reinterpret_cast<PLI_BYTE8*>(1)) == 0;
   return 0;
 }
 
@@ -72,7 +73,7 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL no_next_callback(
   if (reason != reason_calltf) return 0;
   PLI_INT32 low{1};
   PLI_INT32 high{1};
-  no_next_ok = tf_getnextlongtime(&low, &high) == 0 && low == 0 && high == 0;
+  no_next_ok = tf_getnextlongtime(&low, &high) == 2 && low == 0 && high == 0;
   return 0;
 }
 
@@ -90,9 +91,9 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL capacity_callback(
   if (reason != reason_calltf) return 0;
   for (std::uint32_t index = 0; index < fsim::runtime::kMaxTfDelayRequests;
        ++index) {
-    callback_ok = callback_ok && tf_setdelay(0) == 0;
+    callback_ok = callback_ok && tf_setdelay(0) == 1;
   }
-  callback_ok = callback_ok && tf_setdelay(0) != 0;
+  callback_ok = callback_ok && tf_setdelay(0) == 0;
   return 0;
 }
 
@@ -126,7 +127,7 @@ int main() {
   using fsim::runtime::validate_tf_time_profile;
 
   require(tf_gettime() == 0 && tf_getrealtime() == 0.0 &&
-              tf_setdelay(1) != 0 && tf_strgettime() == nullptr,
+              tf_setdelay(1) == 0 && tf_strgettime() == nullptr,
           "TF time services are neutral outside a callback");
   const TfTimeProfile profile{
       .unit_exponent = -9, .precision_exponent = -12, .tick_multiplier = 2};
@@ -204,7 +205,7 @@ int main() {
           "TF delay requests enforce their fixed per-call ceiling");
   auto no_next = bind_tf_call(registration("$no_next", no_next_callback));
   require(static_cast<bool>(no_next) && no_next.value->invoke() && no_next_ok,
-          "TF next-event queries distinguish an empty scheduler queue");
+          "TF next-event queries outside read-only synchronization return the current time");
   auto throwing = bind_tf_call(registration("$throwing", throwing_callback));
   const auto thrown = throwing.value->invoke();
   require(thrown.error == TfCallError::CallbackException &&

@@ -262,6 +262,24 @@ namespace {
             descriptor.nominal_name = source.class_identity;
             return descriptor;
         }
+        // The built-in classes of package std are class variables too
+        // (IEEE 1800-2023 15.4, 15.3, 9.7, 37.33).
+        if (const auto& spelling = source.target.spelling;
+            spelling == "mailbox" || spelling == "semaphore"
+            || spelling == "process" || spelling.starts_with("std::")) {
+            const auto leaf = spelling.starts_with("std::")
+                ? spelling.substr(5U)
+                : spelling;
+            if (leaf == "mailbox" || leaf == "semaphore" || leaf == "process") {
+                descriptor.kind
+                    = runtime::SystemVerilogVpiDescriptorKind::ClassHandle;
+                descriptor.category
+                    = runtime::SystemVerilogVpiValueCategory::None;
+                descriptor.width = 64U;
+                descriptor.nominal_name = leaf;
+                return descriptor;
+            }
+        }
         if (source.value_form == semantic::sv::TypeForm::string) {
             descriptor.kind = runtime::SystemVerilogVpiDescriptorKind::String;
             descriptor.category
@@ -1403,6 +1421,15 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         if (!vpi_language(specialization.language)) {
             continue;
         }
+        // A UDP instance is a vpiUdp the service builds from the primitive
+        // records, not a module (IEEE 1800-2023 37.36).
+        if (specialization.unit.valid()
+            && specialization.unit.value() < project.semantics.units().size()
+            && project.semantics.units()
+                   .at(specialization.unit.value())
+                   .name.starts_with("$unit$udp$")) {
+            continue;
+        }
         relevant_specializations.insert(specialization.id.value());
         instance_profiles.insert_or_assign(specialization.instance.value(),
             vpi_profile_language(project, specialization));
@@ -2012,55 +2039,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
     }
 
-    // The gate primitive instances of a module (IEEE 1800-2023 28.3, 37.7):
-    // the parser lowers each to continuous assignments labelled with the
-    // instance name and the gate type. An unnamed gate or a gate array is
-    // not published.
-    for (const auto& instance : project.design_ir.instances()) {
-        const auto published = instances.find(instance.id.value());
-        if (published == instances.end()
-            || package_initializer_instances.contains(instance.id.value())) {
-            continue;
-        }
-        const auto& specialization = project.design_ir.specializations().at(
-            instance.specialization.value());
-        const auto unit = std::ranges::find(project.systemverilog_hir.units(),
-            specialization.unit, &semantic::sv::Unit::id);
-        if (unit == project.systemverilog_hir.units().end()) {
-            continue;
-        }
-        const std::string instance_path {
-            project.design_ir.path(instance.path) };
-        for (const auto statement_id : unit->concurrent_statements) {
-            const auto found = hir_statements.find(statement_id.value());
-            if (found == hir_statements.end()
-                || found->second->gate_primitive.empty()
-                || found->second->label.empty()) {
-                continue;
-            }
-            const auto& statement = *found->second;
-            const auto name = statement.label.substr(
-                0U, statement.label.find('$'));
-            const auto path = instance_path + "." + name;
-            if (name.empty() || name.find('[') != std::string::npos
-                || result.registry->find(path)) {
-                continue;
-            }
-            runtime::SystemVerilogVpiTypeInfo gate_type;
-            if (const auto info = result.registry->lookup(published->second);
-                info && info.value->type) {
-                gate_type.language = info.value->type->language;
-            }
-            gate_type.definition_name = statement.gate_primitive;
-            runtime::SystemVerilogVpiObjectDescriptor descriptor;
-            descriptor.kind = runtime::SystemVerilogVpiObjectKind::Gate;
-            descriptor.parent = published->second;
-            descriptor.name = vpi_identifier(name);
-            descriptor.type = std::move(gate_type);
-            (void)create_checked(
-                *result.registry, std::move(descriptor), path);
-        }
-    }
+    // Gates, switches and UDP instances are not registry objects: the
+    // service builds them from the elaborated primitive records (IEEE
+    // 1800-2023 37.35).
 
     std::map<
         std::string,
@@ -2159,6 +2140,15 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 property.type = vpi_descriptor_type(
                     class_descriptor.children[index]);
                 property.type->language = class_profile;
+                // A parameter declared in the class body is a local
+                // parameter (IEEE 1800-2023 37.31 detail 7); a static
+                // property is not automatic.
+                property.type->local_parameter
+                    = source.properties[index].parameter;
+                if (!source.properties[index].static_storage) {
+                    property.type->lifetime
+                        = runtime::SystemVerilogVpiLifetime::Automatic;
+                }
                 apply_vpi_unit_provenance(
                     *property.type, project, unit_identity);
                 apply_vpi_source(
@@ -2248,7 +2238,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             project.design.specializations()[index].instance, index);
     }
     for (const auto& specialization : project.design_ir.specializations()) {
-        if (!vpi_language(specialization.language)) {
+        if (!relevant_specializations.contains(specialization.id.value())) {
             continue;
         }
         const auto owner = instances.find(specialization.instance.value());
@@ -2746,7 +2736,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
         const auto& specialization = project.design_ir.specializations().at(
             object.specialization.value());
-        if (!vpi_language(specialization.language)) {
+        if (!relevant_specializations.contains(specialization.id.value())) {
             continue;
         }
         const auto& instance = project.design_ir.instances().at(
@@ -3066,9 +3056,57 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         result.string_handles.emplace(handle, string_id);
     }
 
+    // The continuous assignments a gate, switch or pull instance is lowered
+    // to are not processes: the instance is a vpiGate or vpiSwitch the
+    // service builds from the primitive records (IEEE 1800-2023 37.35).
+    // Their labels are the instance name, `name[index]` for an array
+    // member, with an optional `$` suffix.
+    std::map<std::uint32_t, std::set<std::string, std::less<>>>
+        primitive_labels;
+    for (const auto& unit : project.systemverilog_hir.units()) {
+        auto& labels = primitive_labels[unit.id.value()];
+        const auto collect
+            = [&](const std::vector<semantic::sv::PrimitiveInstance>& list) {
+                  for (const auto& primitive : list) {
+                      if (primitive.name.empty()) {
+                          continue;
+                      }
+                      labels.insert(primitive.array_member
+                                  && !primitive.name.ends_with(']')
+                              ? primitive.name + "["
+                                  + std::to_string(primitive.array_index) + "]"
+                              : primitive.name);
+                  }
+              };
+        const auto regions
+            = [&](const auto& self,
+                  const std::vector<semantic::sv::GenerateRegion>& list)
+            -> void {
+            for (const auto& region : list) {
+                collect(region.primitives);
+                self(self, region.nested);
+            }
+        };
+        collect(unit.primitives);
+        regions(regions, unit.generates);
+    }
     for (const auto& process : project.design_ir.processes()) {
         if (!relevant_specializations.contains(process.specialization.value())) {
             continue;
+        }
+        if (const auto labels = primitive_labels.find(
+                project.design_ir.specializations()
+                    .at(process.specialization.value())
+                    .unit.value());
+            labels != primitive_labels.end() && !labels->second.empty()) {
+            const auto leaf = process.name.find_last_of('.');
+            auto local = leaf == std::string::npos
+                ? std::string_view { process.name }
+                : std::string_view { process.name }.substr(leaf + 1U);
+            local = local.substr(0U, local.find('$'));
+            if (labels->second.contains(local)) {
+                continue;
+            }
         }
         const auto process_index = static_cast<std::uint32_t>(
             &process - project.design_ir.processes().data());

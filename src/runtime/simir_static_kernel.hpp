@@ -675,10 +675,12 @@ inline void static_kernel_container_operands(
                 visit(container.container);
             }
         } else if constexpr (std::is_same_v<T, ClassStaticMethodCall>) {
-            // A stream actual (kind 2) is a container register.
+            // A stream actual (kind 2 in, kind 3 in and out) is a container
+            // register.
             for (std::size_t index = 0U; index < op.actuals.size()
                  && index < op.actual_kinds.size(); ++index) {
-                if (op.actual_kinds[index] == 2U) {
+                if (op.actual_kinds[index] == 2U
+                    || op.actual_kinds[index] == 3U) {
                     visit(op.actuals[index]);
                 }
             }

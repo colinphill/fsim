@@ -186,6 +186,17 @@ public:
     [[nodiscard]] std::optional<VpiStatementValue> value(
         std::uint64_t serial) const;
 
+    /// The delay of a continuous assignment or one of its bits (IEEE
+    /// 1800-2023 37.47): the rise, fall and turn-off values written, in
+    /// simulation ticks, and the scope object that declares the assignment.
+    /// None for another node and for a delay computed at run time.
+    struct ContinuousDelay {
+        std::vector<std::uint64_t> values;
+        fsim_vpi_handle_v1 scope { };
+    };
+    [[nodiscard]] std::optional<ContinuousDelay> continuous_delay(
+        std::uint64_t serial) const;
+
 private:
     enum class Kind : std::uint8_t {
         process,

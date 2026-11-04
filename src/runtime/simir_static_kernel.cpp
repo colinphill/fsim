@@ -832,16 +832,19 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
             const auto& operations = program.operations();
             const auto expand_started = stage_profile ? std::chrono::steady_clock::now()
                                                       : std::chrono::steady_clock::time_point { };
-            member.operations().reserve(operations.size());
-            for (std::size_t op = 0U; op < operations.size(); ++op) {
-                // A body operation that needs no instance fields copies once,
-                // straight from the shared body (expanded_ref returns it).
-                const auto& expanded = operations.expanded_ref(op, scratch);
-                if (&expanded == &scratch) {
-                    member.operations().push_back(std::move(scratch));
-                } else {
-                    member.operations().push_back(expanded);
-                }
+            // A body operation that needs no instance fields copies once,
+            // straight from the shared body (expanded_ref returns it). The
+            // points only the execution probes use stay out of a kernel
+            // that does not run them, whose code is then that of a program
+            // without them.
+            const auto stripped = copy_member_operations(
+                operations, spec.debug_points, member.operations(), scratch,
+                member.stripped_origin);
+            if (!stripped.empty()) {
+                member.body_begin = stripped_pc(stripped, member.body_begin);
+                member.prologue_end = member.body_begin;
+                member.body_end = stripped_pc(stripped, member.body_end);
+                member.exit_alt = stripped_pc(stripped, member.exit_alt);
             }
             member.body_identity = operations.body_identity();
             if (const auto target = member_spec.conversion_target;
@@ -2367,9 +2370,8 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
 void Interpreter::Impl::StaticKernel::fail(const std::uint32_t member,
     const InstructionIndex instruction, const std::string& message) const
 {
-    const auto& origin = members_[member].origin;
     throw InterpreterError { members_[member].process,
-        instruction < origin.size() ? origin[instruction] : instruction, message };
+        members_[member].original_instruction(instruction), message };
 }
 
 void Interpreter::Impl::StaticKernel::fail_unsettled(
@@ -5862,7 +5864,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                     }
                     if (op.severity == AssertionSeverity::failure) {
                         throw AssertionError(member.process,
-                            pc < member.origin.size() ? member.origin[pc] : pc,
+                            member.original_instruction(pc),
                             std::string { message }, op.severity, op.source);
                     }
                 }
@@ -5904,7 +5906,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_operation(
                 }
                 if (op.severity == AssertionSeverity::failure) {
                     throw AssertionError(member.process,
-                        pc < member.origin.size() ? member.origin[pc] : pc,
+                        member.original_instruction(pc),
                         op.message.empty() ? std::string { "report failure" }
                                            : op.message.str(),
                         op.severity, op.source, true);
@@ -6387,6 +6389,13 @@ void Interpreter::Impl::StaticKernel::commit_pending()
             write_element(entry);
             break;
         }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::publish_pending_outputs()
+{
+    if (!output_queue_.empty()) {
+        publish(true);
     }
 }
 
@@ -7014,6 +7023,7 @@ bool Interpreter::Impl::StaticKernel::activate()
             break;
         }
         warp_time_ = *next;
+        impl_.scheduler.note_warped_cycles(1U);
         nonblocking_committed_ = false;
         if (profile_) {
             profile_warps_ += 1U;

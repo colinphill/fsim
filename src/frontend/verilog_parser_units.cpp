@@ -300,6 +300,9 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
               + unit.name + "'");
     }
   }
+  // A package's exports get no export service: no call chain runs in a
+  // package scope (svGetScopeFromName names module, program, interface and
+  // generate scopes, IEEE 1800-2023 H.9.3).
   resolve_dpi_declarations(
       unit.systemverilog_dpi_declarations,
       unit.functions,
@@ -1056,13 +1059,14 @@ void VerilogParser::parse_generate_branch(
         // An empty generate item (`if (0);`, IEEE 1800-2017 A.4.1.1;
         // generate_block_or_null in IEEE 1364-2005 12.4).
     } else if (is_gate_primitive()) {
-        parse_gate_primitive(body.concurrent_statements, body.signals, { },
+        parse_gate_primitive(body.concurrent_statements,
+            body.verilog_primitives, body.signals, { },
             &body.generate_regions);
     } else if (any_keyword({ "cmos", "rcmos", "nmos", "pmos", "rnmos",
                    "rpmos", "tran", "rtran", "tranif0", "tranif1",
                    "rtranif0", "rtranif1", "pullup", "pulldown" })) {
-        parse_switch_primitive(
-            body.concurrent_statements, body.signals, { });
+        parse_switch_primitive(body.concurrent_statements,
+            body.verilog_primitives, body.signals, { });
     } else if (
         keyword("always") || keyword("always_ff")
         || keyword("always_comb") || keyword("always_latch")) {

@@ -1,0 +1,10 @@
+#c run0 scope=top.u0
+#c note id=0 value=100 total=100
+#c wait id=0 time=4
+#c run0 wait status=0
+#c run1 scope=top.u1
+#c note id=1 value=101 total=101
+#c run1 svSetScope previous=top.u1
+#c note id=1 value=201 total=302
+#c wait id=1 time=14
+#c run1 wait status=0

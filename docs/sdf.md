@@ -74,9 +74,13 @@ object lookup and cannot perturb scheduling.
 
 The CLI, Tcl and C session adapters connect file input to the existing parser,
 resolver, planner and timing application. Their connected target kinds are
-Verilog/SystemVerilog specify paths (`IOPATH`) and timing checks. They reject
-other planned target kinds with `FSIM-SDF-SESSION-003` before publication or
-live commit. The broader interconnect, drive, pulse, VITAL and mixed-language
+Verilog/SystemVerilog specify paths (`IOPATH`) and timing checks. An
+`INTERCONNECT` or `PORT` delay is recorded in the elaborated design (runtime
+schema 99) with its terminals and effective transition delays, and VPI
+publishes it as an intermodule path, delay device and delay terms (IEEE
+1800-2023 37.37, 37.45); the scheduler does not apply it to net propagation.
+They reject other planned target kinds with `FSIM-SDF-SESSION-003` before
+publication or live commit. The broader interconnect, drive, pulse, VITAL and mixed-language
 APIs described above retain their separate source-tree contracts and tests;
 those tests do not establish file-input integration for every family.
 

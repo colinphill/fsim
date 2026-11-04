@@ -880,6 +880,19 @@ private:
         std::string_view path,
         const std::vector<VhdlHirMaterialization>& generated_materializations);
 
+    // A foreign architecture's instance gets one placeholder process whose
+    // driver regions cover its signals and its out, inout and buffer ports
+    // (IEEE 1076-2019 14.5.1, 20.4). The VHPI program that implements the
+    // model drives them through the drivers it creates, so the signals stay
+    // host-driven.
+    void append_vhdl_foreign_architecture_process(
+        const semantic::vhdl::Unit& entity,
+        const semantic::vhdl::Unit& architecture,
+        const semantic::SpecializedHirUnit& specialized,
+        const SignalMap& signals,
+        std::string_view path,
+        SpecializationInfo& specialization);
+
     bool lower_compiled_vhdl_generated_processes(
         std::vector<VhdlHirMaterialization>& materializations,
         const semantic::vhdl::Unit& entity,
@@ -1304,6 +1317,15 @@ private:
         const std::string& path,
         const SignalMap& signals,
         SpecializationInfo& specialization_info);
+
+    // Record the gate, switch and pull instances of one scope for the VPI
+    // primitive objects (IEEE 1800-2023 37.35).
+    void record_verilog_primitives(
+        const std::vector<semantic::sv::PrimitiveInstance>& primitives,
+        const semantic::SpecializedHirUnit& specialization,
+        const std::string& scope_path,
+        const SignalMap& signals,
+        std::span<const runtime::simir::ProcessId> processes);
 
     void activate_compiled_systemverilog_defparams(
         std::span<const semantic::sv::Defparam> defparams,
@@ -1894,6 +1916,12 @@ private:
         const SystemVerilogPackedTypeResolver& packed_type_resolver,
         const SystemVerilogPackedDefaultResolver& packed_default_resolver,
         const SystemVerilogPackedFallbackResolver& packed_fallback_resolver);
+
+    // A class typespec named after the specialization its declaration's
+    // parameterized class type selects (IEEE 1800-2023 8.25, 37.32).
+    [[nodiscard]] std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
+    specialized_class_typespec(const semantic::sv::Declaration& declaration,
+        std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec);
 
     bool materialize_compiled_systemverilog_declaration(
         const semantic::sv::Unit& unit,

@@ -29,6 +29,34 @@ read-write/read-only synchronization. Calls and callbacks pass through one
 scheduler coordinator so deterministic region and stable-order rules apply to
 foreign code as well as HDL.
 
+`tf_asynchon` enables `misctf(reason_paramvc)` for each change of a task or
+function argument, and the call keeps a current and a saved parameter value
+change flag per argument (`tf_copypvc_flag`, `tf_movepvc_flag`,
+`tf_testpvc_flag`, `tf_getpchange`, 25.9 to 25.59). No value change callback
+exists for an instance until it calls `tf_asynchon`, so unused flags cost
+nothing. `tf_strdelputp`, `tf_strlongdelputp` and `tf_strrealdelputp` schedule
+a string value on an argument after a delay in the module's time units, by
+inertial, modified transport or pure transport delay (25.52 to 25.56).
+
+The TF routines follow IEEE 1364-2001 clauses 24 and 25 and Annex F; the
+routine-by-routine status is in the TF section of
+[foreign-interface conformance](foreign-interface-conformance.md). Routines
+that clause 25 does not define are not supplied: `tf_gettflist`,
+`tf_getlongsimtime`, `tf_getroutine`, `tf_igetroutine`, `tf_specialparam` and
+`err_intercept`.
+
+A PLI 1.0 library loaded with `--vpi` associates its applications with names
+through the `veriusertfs[]` table it exports (21.2 leaves the mechanism to the
+vendor), which fsim registers as the library loads; `veriusertfs_register_table`
+does the same from a startup routine. The `endofcompile_routines[]` array of
+Annex F runs once after elaboration and before time 0. A `misctf` routine is
+called for `reason_endofcompile`, `reason_paramvc`, `reason_synch`,
+`reason_rosynch`, `reason_reactivate`, `reason_finish`, `reason_force`,
+`reason_release` and `reason_disable`; the reasons that belong to
+`$reset`, `$save`, `$restart`, `$stop`, `$scope` and driver changes are not
+called yet. `reason_disable` needs `simulate --foreign-probes`. The test is
+`fsim.foreign.pli-mechanism`.
+
 Registration is available only to Verilog and SystemVerilog profiles. Exact
 name and callable kind are significant. VHDL does not inherit the TF
 namespace.
@@ -36,10 +64,20 @@ namespace.
 ## ACC behavior
 
 ACC handles are generation-qualified views of the common hierarchy and VPI
-objects. The standard surface supports scoped/name lookup, object traversal,
-typed reads, deposit/force/release and scheduled updates, timing and path
-objects, value-change links, callbacks, and shared TF/ACC work areas. ACC and
-VPI handles for the same object resolve to the same simulation identity.
+objects. A task or function registered from a `veriusertfs` table gets the
+ACC routines over the VPI: scoped and name lookup, traversal, typed reads,
+deposit, force and release, value-change links, callbacks, and shared TF/ACC
+work areas. ACC and VPI handles for the same object resolve to the same
+simulation identity. The delay and pulse-limit routines
+(`acc_fetch_delays`, `acc_append_delays`, `acc_replace_delays`, the pulse
+routines and `acc_fetch_delay_mode`) work on primitives, module paths and
+timing checks through `vpi_get_delays` and `vpi_put_delays`, honouring
+`accMinTypMaxDelays`, `accPathDelayCount` and `accToHiZDelay`; a change on a
+primitive retimes its later output transitions. Module input ports,
+intermodule paths and `accMapToMipd` are not available, and
+`acc_handle_datapath` and `acc_handle_path` find nothing; the
+[conformance table](foreign-interface-conformance.md#acc-routines-ieee-1364-2001-22-23)
+lists each routine's status.
 
 ## Lifetime and failure containment
 

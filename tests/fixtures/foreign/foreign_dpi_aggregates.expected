@@ -1,0 +1,17 @@
+#c struct in a=7 b=3 r=2.5 v=155 arr=4,5
+#c struct ret=1 a=14 b=4 r=3.0 v=2aa arr=5,4
+#c sized [0] a=7 b=3 r=2.5 v=155 arr=4,5
+#c sized [1] a=14 b=4 r=3.0 v=2aa arr=5,4
+#c struct_sized ret=2
+#c open dimensions=1 low=4 high=5
+#c open [4] a=7
+#c open [5] a=14
+#c struct_open ret=2
+#c dynamic sizes d=4 q=3 rows=2
+#c dynamic d=2,4,6,8 q=64,65,66
+#c dynamic rows=11,12,13,14
+#c dynamic sizes d=4 q=3 rows=2
+#c export_sized v=10,20,30
+#c run w=30,10
+#c export_struct a=9 b=2 r=1.5 v=2a arr=100,200
+#c run struct result=209

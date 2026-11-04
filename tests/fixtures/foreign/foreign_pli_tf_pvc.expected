@@ -1,0 +1,31 @@
+#c pvc before test=0 copy=0 asynchon=0
+#c put inertial=1
+#c put pure=1
+#c put modified=1
+#c put long=1
+#c put real=1
+#c put long instance=1
+#c put errors zero=0 far=0 format=0 negative=0 type=0 bits=0 other=0
+#c put errors real=0 long=0
+#c design o=5a at 2
+#c design p=0f at 3
+#c design p=c8 at 4
+#c design o=a5 at 6
+#c paramvc change=1 argument=1
+#c   copy all=1
+#c   test all=1 1=1 2=0 0=0 3=0 -2=0
+#c   pchange after 0=1 1=0 2=0
+#c design p=0f at 15
+#c paramvc change=2 argument=2
+#c   move 2=1
+#c   test all=1 1=1 2=1 0=0 3=0 -2=0
+#c   pchange after 0=1 1=2 2=0
+#c paramvc change=3 argument=1
+#c   move all=1
+#c   test all=1 1=1 2=0 0=0 3=0 -2=0
+#c   pchange after 0=1 1=0 2=0
+#c paramvc change=4 argument=2
+#c   move 1=0 copy 2=1
+#c   itest 2=1 igetpchange 0=2 null instance=0
+#c   asynchoff=0
+#c design done

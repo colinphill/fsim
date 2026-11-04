@@ -27,6 +27,33 @@ void Interpreter::set_file_root(std::filesystem::path root)
     impl_->set_file_root(std::move(root));
 }
 
+FileHandle Interpreter::mcd_open(const std::string_view name)
+{
+    return impl_->mcd_open(name);
+}
+
+FileHandle Interpreter::mcd_close(const FileHandle descriptor)
+{
+    return impl_->mcd_close(descriptor);
+}
+
+std::optional<std::string> Interpreter::mcd_name(
+    const FileHandle descriptor) const
+{
+    return impl_->mcd_name(descriptor);
+}
+
+bool Interpreter::mcd_write(
+    const FileHandle descriptor, const std::string_view text)
+{
+    return impl_->mcd_write(descriptor, text);
+}
+
+bool Interpreter::mcd_flush(const FileHandle descriptor)
+{
+    return impl_->mcd_flush(descriptor);
+}
+
 void Interpreter::set_operation_budget(const std::uint64_t operations)
 {
     impl_->operation_budget = operations;
@@ -1986,13 +2013,20 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     if (registered_kinds != nullptr) {
         delayed_writer = has_registered_kind.template
             operator()<WriteInertial, WriteInertialSlice>();
-    } else {
+    }
+    // A slotted WriteDelayed (a gate in a run with a foreign library) is
+    // such a writer; the kind alone cannot tell it from a dynamic delay.
+    if (!delayed_writer
+        && (registered_kinds == nullptr
+            || has_registered_kind.template operator()<WriteDelayed>())) {
         for (std::size_t instruction = 0;
              instruction < registered.operations().size() && !delayed_writer;
              ++instruction) {
             const auto& operation = registered.operations()[instruction];
+            const auto* delayed = operation_get_if<WriteDelayed>(&operation);
             delayed_writer = operation_holds<WriteInertial>(operation)
-                || operation_holds<WriteInertialSlice>(operation);
+                || operation_holds<WriteInertialSlice>(operation)
+                || (delayed != nullptr && delayed->slotted);
         }
     }
     std::size_t scalar_cursor = 0U;
@@ -2624,6 +2658,95 @@ std::vector<SimulationTick> Interpreter::module_path_delays(
         throw std::out_of_range("SimIR module path does not exist");
     }
     return impl_->module_paths[path].delays;
+}
+
+bool Interpreter::set_module_path_timing(const std::uint32_t path,
+    const std::span<const SimulationTick> delays,
+    const std::span<const SimulationTick> reject,
+    const std::span<const SimulationTick> error)
+{
+    if (path >= impl_->module_paths.size()) {
+        throw std::out_of_range("SimIR module path does not exist");
+    }
+    if (impl_->started && !impl_->scheduler.at_safe_point()) {
+        return false;
+    }
+    std::vector<ModulePath> replacement = impl_->module_paths;
+    auto& changed = replacement[path];
+    changed.delays.assign(delays.begin(), delays.end());
+    if (!reject.empty() || !error.empty()) {
+        changed.pulse_reject_delays.assign(reject.begin(), reject.end());
+        changed.pulse_error_delays.assign(error.begin(), error.end());
+        changed.pulse_reject_limit.reset();
+        changed.pulse_error_limit.reset();
+    }
+    reannotate_module_timing(replacement, impl_->module_timing_checks);
+    return true;
+}
+
+bool Interpreter::set_driver_delays(
+    const ProcessId process, const TransitionDelays delays)
+{
+    // Only a driver with a slotted delayed write takes new delays. The
+    // static kernel's host member runs the kernel stub on the scheduler; the
+    // program it really runs (and the kernel executes natively) is its
+    // startup program, as in process_program.
+    const Process* const original = impl_->static_kernel
+        ? impl_->static_kernel->startup_program(process) : nullptr;
+    const auto program = original != nullptr
+        ? ProcessProgramView { *original }
+        : impl_->get_process(process).program();
+    bool slotted = false;
+    for (const auto& operation : std::as_const(program.operations())) {
+        const auto* write = operation_get_if<WriteDelayed>(&operation);
+        slotted = slotted || (write != nullptr && write->slotted);
+    }
+    if (!slotted) {
+        return false;
+    }
+    impl_->driver_delay_overrides.insert_or_assign(process, delays);
+    return true;
+}
+
+std::optional<TransitionDelays> Interpreter::driver_delays(
+    const ProcessId process) const
+{
+    const auto found = impl_->driver_delay_overrides.find(process);
+    return found == impl_->driver_delay_overrides.end()
+        ? std::nullopt
+        : std::optional<TransitionDelays> { found->second };
+}
+
+bool Interpreter::set_module_timing_check_limits(
+    const std::uint32_t check, const std::span<const std::int64_t> limits)
+{
+    if (check >= impl_->module_timing_checks.size()) {
+        throw std::out_of_range("SimIR module timing check does not exist");
+    }
+    if (impl_->started && !impl_->scheduler.at_safe_point()) {
+        return false;
+    }
+    // The replacement keeps the topology, so the reannotation validation
+    // checks the new limits against the check's kind.
+    std::vector<ModuleTimingCheck> replacement = impl_->module_timing_checks;
+    replacement[check].limits.assign(limits.begin(), limits.end());
+    reannotate_module_timing(impl_->module_paths, replacement);
+    return true;
+}
+
+std::vector<std::int64_t> Interpreter::module_timing_check_limits(
+    const std::uint32_t check) const
+{
+    if (check >= impl_->module_timing_checks.size()) {
+        throw std::out_of_range("SimIR module timing check does not exist");
+    }
+    return impl_->module_timing_checks[check].limits;
+}
+
+void Interpreter::set_module_timing_violation_hook(
+    std::function<void(std::uint32_t)> hook)
+{
+    impl_->timing_violation_hook = std::move(hook);
 }
 
 bool Interpreter::set_module_path_delays(
@@ -3572,6 +3695,16 @@ RunResult Interpreter::finish()
     return result;
 }
 
+bool Interpreter::can_reset_run_state() const noexcept
+{
+    return false;
+}
+
+bool Interpreter::reset_run_state()
+{
+    return can_reset_run_state();
+}
+
 void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
     const ProcessSchedulingDomain origin_domain)
 {
@@ -3596,6 +3729,68 @@ void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
         && origin_domain == ProcessSchedulingDomain::generic) {
         impl_->static_kernel->host_deposit(signal);
     }
+}
+
+void Interpreter::schedule_host_driver_waveform(const ProcessId process,
+    const SignalId signal, const std::vector<ProjectedWaveformValue>& elements,
+    const std::optional<std::size_t> offset, const SimulationTick rejection,
+    const ProjectedDelayMode mode)
+{
+    if (process >= impl_->processes.size()) {
+        throw std::out_of_range("invalid SimIR process ID");
+    }
+    note_external_signal_write(signal);
+    impl_->schedule_projected_waveform(
+        process, signal, elements, offset, rejection, mode);
+}
+
+void Interpreter::force_host_driver(const ProcessId process,
+    const SignalId signal, PackedLogic4 value, const std::size_t offset,
+    const bool propagate)
+{
+    if (process >= impl_->processes.size()) {
+        throw std::out_of_range("invalid SimIR process ID");
+    }
+    note_external_signal_write(signal);
+    if (propagate) {
+        impl_->force_slice_from_process(
+            process, signal, std::move(value), offset, true);
+    } else {
+        impl_->force_driver_slice(process, signal, std::move(value), offset);
+    }
+}
+
+void Interpreter::deposit_host_driver(const ProcessId process,
+    const SignalId signal, PackedLogic4 value, const std::size_t offset)
+{
+    if (process >= impl_->processes.size()) {
+        throw std::out_of_range("invalid SimIR process ID");
+    }
+    note_external_signal_write(signal);
+    // A deposit into a forced driver has no effect (IEEE 1076-2019 22.5.4).
+    if (signal < impl_->forced_driver_masks.size()
+        && impl_->forced_driver_masks[signal]) {
+        const auto mask = impl_->forced_driver_masks[signal]->find(process);
+        if (mask != impl_->forced_driver_masks[signal]->end()) {
+            const auto& current = impl_->driver_slot(process, signal);
+            for (std::size_t bit = 0U; bit < value.width(); ++bit) {
+                if (mask->second.get(offset + bit) == Logic4::one) {
+                    value.set(bit, current.get(offset + bit));
+                }
+            }
+        }
+    }
+    impl_->commit_driver_slice(process, signal, std::move(value), offset);
+}
+
+void Interpreter::release_host_driver(const ProcessId process,
+    const SignalId signal, const std::size_t offset, const std::size_t width)
+{
+    if (process >= impl_->processes.size()) {
+        throw std::out_of_range("invalid SimIR process ID");
+    }
+    note_external_signal_write(signal);
+    impl_->release_driver_slice(process, signal, offset, width);
 }
 
 void Interpreter::deposit_scalar_signal(
@@ -4232,7 +4427,8 @@ void Interpreter::set_sva_attempt_hook(SvaAttemptHook hook)
 
 PackedLogic4 Interpreter::read_debug_local(
     const ProcessId process,
-    const std::size_t local_index) const
+    const std::size_t local_index,
+    const std::size_t newer_activations) const
 {
     // A kernel thread member, or a fork child of one, owns its registers.
     const auto kernel_owner = impl_->static_kernel
@@ -4248,10 +4444,33 @@ PackedLogic4 Interpreter::read_debug_local(
     }
     const auto& local = program.debug_locals()[local_index];
     if (kernel_member) {
-        return impl_->static_kernel->debug_register(
-            *kernel_owner, local.register_id, local.width);
+        return impl_->static_kernel->debug_register(*kernel_owner,
+            local.register_id, local.width, newer_activations);
     }
     auto& state = impl_->get_process(process);
+    if (newer_activations != 0U) {
+        // Entering an automatic callable again saves the registers of the
+        // activation it shadows (push_callable_frame), newest last, as the
+        // kernel's CallableFramePush does.
+        const auto& frames = state.cold().callable_frames;
+        auto remaining = newer_activations;
+        for (auto frame = frames.rbegin(); frame != frames.rend(); ++frame) {
+            const auto saved = std::ranges::find(frame->packed_ids,
+                local.register_id);
+            if (saved == frame->packed_ids.end() || --remaining != 0U) {
+                continue;
+            }
+            const auto& outer = frame->packed[static_cast<std::size_t>(
+                saved - frame->packed_ids.begin())];
+            if (outer.width() != local.width) {
+                throw std::logic_error {
+                    "SimIR debug local has not been initialized"
+                };
+            }
+            return outer;
+        }
+        throw std::logic_error { "SimIR debug local has no outer activation" };
+    }
     if (state.executor) {
         return state.executor->read_register(
             local.register_id, local.width);
@@ -4428,6 +4647,13 @@ const Scheduler& Interpreter::scheduler() const noexcept
 void Interpreter::set_signal_change_hook(SignalChangeHook hook)
 {
     impl_->signal_change_hook = std::move(hook);
+}
+
+void Interpreter::publish_static_kernel_outputs()
+{
+    if (impl_->static_kernel) {
+        impl_->static_kernel->publish_pending_outputs();
+    }
 }
 
 void Interpreter::set_native_signal_observation_required_hook(

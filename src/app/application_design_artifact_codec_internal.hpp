@@ -1043,7 +1043,7 @@ namespace codec_detail {
         requires std::same_as<std::remove_cv_t<T>, runtime::simir::DebugPoint>
     auto archive_fields(T& value)
     {
-        return std::tie(value.kind, value.source, value.scope);
+        return std::tie(value.kind, value.source, value.scope, value.callee);
     }
 
     template <typename T>

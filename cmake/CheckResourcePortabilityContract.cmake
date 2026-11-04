@@ -4901,12 +4901,10 @@ foreach(FSIM_TF_CONTEXT_POLICY IN ITEMS
     "registration.user_data"
     "tf_mipname"
     "tf_spname"
-    "tf_getroutine"
     "tf_getworkarea"
     "tf_setworkarea"
     "tf_imipname"
     "tf_ispname"
-    "tf_igetroutine"
     "tf_igetworkarea"
     "tf_isetworkarea"
     "instance_calls[0] == 2"
@@ -5284,7 +5282,6 @@ foreach(FSIM_TF_LINK_POLICY IN ITEMS
     "installed TF consumer"
     "fsim/runtime/veriuser.h"
     "target STREQUAL \"fsim_tf\""
-    "err_intercept"
     "veriuser_version_str"
     "fsim.runtime.tf_plugin_link")
   string(TOLOWER

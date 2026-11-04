@@ -187,7 +187,7 @@ string(REPLACE "\r\n" "\n" FSIM_INVENTORY_TEXT "${FSIM_INVENTORY_TEXT}")
 string(REPLACE "\r" "\n" FSIM_INVENTORY_TEXT "${FSIM_INVENTORY_TEXT}")
 string(SHA256 FSIM_ACTUAL_DIGEST "${FSIM_INVENTORY_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "a3bff1ef32fbf3fd412556c63c39e69a45f4efdd5cb599d07b3ac47136b531e0")
+  "c858ffb26c45b0f8fd72e4ab371f0a1cad17b19130e74e38296fb39608fd9479")
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "legacy TF inventory digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_ACTUAL_DIGEST}")
@@ -285,7 +285,7 @@ foreach(FSIM_TOKEN IN ITEMS
     "legacy_tf_inventory.tsv"
     "all eight retained Verilog and SystemVerilog"
     "Vendor extensions are excluded"
-    "a3bff1ef32fbf3fd412556c63c39e69a45f4efdd5cb599d07b3ac47136b531e0")
+    "c858ffb26c45b0f8fd72e4ab371f0a1cad17b19130e74e38296fb39608fd9479")
   string(FIND "${FSIM_FEATURE_README_TEXT}" "${FSIM_TOKEN}"
     FSIM_TOKEN_OFFSET)
   if(FSIM_TOKEN_OFFSET EQUAL -1)
@@ -296,7 +296,7 @@ endforeach()
 
 set(FSIM_EXPECTED_HEADER
   "id\tstandard\thdl_profiles\tdomain\tstate\tchange\tobligation\timplementation_owner\tpositive_evidence\tnegative_evidence\tlinux_evidence\twindows_evidence\tscheduler_evidence\tabi_evidence\tdiagnostic_owner\tresource_owner\textension_policy")
-set(FSIM_EXPECTED_STANDARD "IEEE1364-2005")
+set(FSIM_EXPECTED_STANDARD "IEEE1364-2001")
 set(FSIM_EXPECTED_PROFILES
   "V1995,V2001,V2001NoConfig,V2005,SV2005,SV2009,SV2012,SV2017")
 set(FSIM_EXPECTED_EXTENSION_POLICY "ieee-only-no-vendor-extensions")
@@ -531,7 +531,6 @@ foreach(FSIM_TOKEN IN ITEMS
     "FSIM_NATIVE_PLUGIN_CAPABILITY_TF"
     "standard_tf_symbols"
     "standard_tf_symbols[0])"
-    "err_intercept"
     "veriuser_version_str"
     "fsim.runtime.tf_plugin_link")
   string(FIND "${FSIM_TF_LINK_CONTRACT}" "${FSIM_TOKEN}"
@@ -828,12 +827,10 @@ foreach(FSIM_TOKEN IN ITEMS
     "registration.user_data"
     "tf_mipname"
     "tf_spname"
-    "tf_getroutine"
     "tf_getworkarea"
     "tf_setworkarea"
     "tf_imipname"
     "tf_ispname"
-    "tf_igetroutine"
     "tf_igetworkarea"
     "tf_isetworkarea"
     "instance_calls[0] == 2"

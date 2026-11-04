@@ -656,6 +656,12 @@ const vhdl::Declaration* defined_pure_function(
     const CompiledDesign& design, const DeclarationId id)
 {
     const auto* declaration = find_declaration(design.vhdl_hir, id);
+    // A foreign function's body is never executed, so its calls do not
+    // fold (IEEE 1076-2019 14.4.1, 20.4.2).
+    if (declaration != nullptr && declaration->callable
+        && declaration->callable->foreign) {
+        return nullptr;
+    }
     if (declaration != nullptr && declaration->completion) {
         const auto* completion = find_declaration(
             design.vhdl_hir, *declaration->completion);

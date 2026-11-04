@@ -1,0 +1,40 @@
+#c path 0 type=vpiModPath pathtype=1 polarity=unknown datapolarity=unknown ifnone=0 line=26 module=top.u instance=top.u condition=NULL file=ok
+#c   in top.u.a type=vpiPathTerm direction=input edge=0x0
+#c   in top.u.b type=vpiPathTerm direction=input edge=0x0
+#c   out top.u.q_full type=vpiPathTerm direction=output edge=0x0
+#c path 1 type=vpiModPath pathtype=2 polarity=unknown datapolarity=unknown ifnone=0 line=27 module=top.u instance=top.u condition=NULL file=ok
+#c   in top.u.a type=vpiPathTerm direction=input edge=0x0
+#c   out top.u.q_par type=vpiPathTerm direction=output edge=0x0
+#c path 2 type=vpiModPath pathtype=2 polarity=unknown datapolarity=unknown ifnone=0 line=28 module=top.u instance=top.u condition=NULL file=ok
+#c   in top.u.a type=vpiPathTerm direction=input edge=0x0
+#c   out top.u.q_none type=vpiPathTerm direction=output edge=0x0
+#c path 3 type=vpiModPath pathtype=2 polarity=unknown datapolarity=unknown ifnone=1 line=29 module=top.u instance=top.u condition=NULL file=ok
+#c   in top.u.a type=vpiPathTerm direction=input edge=0x0
+#c   out top.u.q_none type=vpiPathTerm direction=output edge=0x0
+#c path 4 type=vpiModPath pathtype=2 polarity=unknown datapolarity=positive ifnone=0 line=30 module=top.u instance=top.u condition=NULL file=ok
+#c   in top.u.clk type=vpiPathTerm direction=input edge=0xd
+#c   out top.u.q_edge type=vpiPathTerm direction=output edge=0x0
+#c   data top.u.d type=vpiPathTerm direction=input edge=0x0
+#c tchk 0 type=setup(1) object=vpiTchk line=31 module=top.u instance=top.u terms=2 limits=4,0 file=ok
+#c   ref top.u.clk type=vpiTchkTerm edge=0xd condition=NULL
+#c   data top.u.d type=vpiTchkTerm edge=0x0 condition=NULL
+#c   notifier top.u.ntf_setup
+#c tchk 1 type=hold(2) object=vpiTchk line=32 module=top.u instance=top.u terms=2 limits=3,0 file=ok
+#c   ref top.u.clk type=vpiTchkTerm edge=0xd condition=NULL
+#c   data top.u.d type=vpiTchkTerm edge=0x0 condition=NULL
+#c   notifier top.u.ntf_hold
+#c tchk 2 type=setuphold(8) object=vpiTchk line=33 module=top.u instance=top.u terms=2 limits=2,1 file=ok
+#c   ref top.u.clk type=vpiTchkTerm edge=0xd condition=NULL
+#c   data top.u.d type=vpiTchkTerm edge=0x0 condition=NULL
+#c   notifier top.u.ntf_sh
+#c tchk 3 type=width(4) object=vpiTchk line=34 module=top.u instance=top.u terms=1 limits=5,0 file=ok
+#c   ref top.u.clk type=vpiTchkTerm edge=0xd condition=NULL
+#c   data NULL
+#c   notifier top.u.ntf_width
+#c violation all 33 type=setup ref=top.u.clk data=top.u.d notifier=top.u.ntf_setup=0
+#c violation all 36 type=width ref=top.u.clk data=NULL notifier=top.u.ntf_width=0
+#c violation width 36 type=width ref=top.u.clk data=NULL notifier=top.u.ntf_width=0
+#c final top.u.ntf_setup=1
+#c final top.u.ntf_hold=0
+#c final top.u.ntf_sh=0
+#c final top.u.ntf_width=1

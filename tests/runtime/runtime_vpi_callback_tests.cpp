@@ -425,6 +425,70 @@ namespace {
             "VPI value-change callbacks remain active after successful dispatch");
     }
 
+    void test_vpi_value_change_dispatch_pending()
+    {
+        SystemVerilogVpiObjectRegistry registry { 905 };
+        Scheduler scheduler;
+        SystemVerilogVpiTimeService time_service {
+            scheduler, SystemVerilogVpiTimeProfile { -9, -12 }
+        };
+        SystemVerilogVpiCallbackManager manager {
+            registry, scheduler, time_service, 60'000
+        };
+        const auto root = registry.create(
+            SystemVerilogVpiObjectKind::Root, 0, "top");
+        const auto type = callback_logic_type();
+        const auto signal = registry.create(SystemVerilogVpiObjectDescriptor {
+            SystemVerilogVpiObjectKind::Variable,
+            root.value,
+            "signal",
+            std::nullopt,
+            type });
+        const auto zero = callback_scalar(type, Logic9::zero);
+        const auto one = callback_scalar(type, Logic9::one);
+        require_vpi_callback(
+            root && signal
+                && registry.bind_value(signal.value, zero)
+                    == SystemVerilogVpiValueError::None,
+            "VPI pending-dispatch fixture binds one signal");
+
+        std::vector<SystemVerilogVpiStoredValue> seen;
+        SystemVerilogVpiCallbackRegistration registration {
+            SystemVerilogVpiCallbackKind::ValueChange,
+            signal.value,
+            std::nullopt,
+            51,
+            [&](const SystemVerilogVpiCallbackEvent& event) {
+                if (event.value) {
+                    seen.push_back(*event.value);
+                }
+            } };
+        registration.keeps_pending_values = true;
+        const auto link = manager.register_callback(std::move(registration));
+        require_vpi_callback(static_cast<bool>(link),
+            "VPI pending-dispatch fixture registers a value-change callback");
+
+        // A change observed before the removal reaches the callback, with
+        // its own value, before the removal; one after it does not, and the
+        // scheduled dispatch does not repeat it (IEEE 1364-2001 23.97, 23.98).
+        require_vpi_callback(
+            registry.deposit_value(signal.value, one)
+                    == SystemVerilogVpiValueError::None
+                && manager.dispatch_pending(link.value)
+                    == SystemVerilogVpiCallbackError::None
+                && seen.size() == 1U && seen.front() == one,
+            "VPI pending dispatch delivers the change observed before it");
+        require_vpi_callback(
+            manager.remove_callback(link.value)
+                    == SystemVerilogVpiCallbackError::None
+                && registry.deposit_value(signal.value, zero)
+                    == SystemVerilogVpiValueError::None,
+            "VPI pending-dispatch fixture removes the callback");
+        (void)scheduler.run();
+        require_vpi_callback(seen.size() == 1U,
+            "VPI pending dispatch is not repeated and nothing follows removal");
+    }
+
 } // namespace
 
 void test_systemverilog_vpi_callbacks()
@@ -742,6 +806,7 @@ void test_systemverilog_vpi_callbacks()
         "VPI callback handles preserve manager ownership within one simulation");
 
     test_vpi_value_change_registration_index();
+    test_vpi_value_change_dispatch_pending();
     test_foreign_callbacks_across_scheduler_phases();
 }
 void test_systemverilog_vpi_callback_lifecycle()

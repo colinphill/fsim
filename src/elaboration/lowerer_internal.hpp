@@ -4646,14 +4646,21 @@ private:
         frontend::SystemVerilogScalarKind scalar {
             frontend::SystemVerilogScalarKind::None
         };
-        // An unpacked open-array formal (IEEE 1800-2023 35.5.6.1): the
-        // actual's fixed array type; `width` is all its elements' bits,
-        // leftmost element most significant.
+        // An unpacked array or structure formal, open or sized (IEEE
+        // 1800-2023 35.5.6, 35.5.6.1, H.7.8): the actual's container type;
+        // `width` is all its elements' bits, leftmost element most
+        // significant.
         std::optional<runtime::simir::ContainerType> open_array;
-        // A dynamic array or queue actual of an input open-array formal:
-        // its first dimension has its run-time size, and its bits pass as
-        // a bit stream (`width` is 0).
+        // A dynamic array or queue actual of an open-array formal of any
+        // direction: its first dimension has its run-time size, and its
+        // bits pass as a bit stream (`width` is 0).
         bool runtime_extent { };
+    };
+    // Why a DPI import has no profile, when its types are illegal (IEEE
+    // 1800-2023 35.5.5, 35.5.6): the diagnostic code and message.
+    struct HirDpiIssue {
+        std::string code;
+        std::string message;
     };
     struct HirDpiFunctionProfile {
         std::string linkage_name;
@@ -4687,11 +4694,13 @@ private:
         std::optional<semantic::ScopeId> scope = std::nullopt) const;
     [[nodiscard]] std::optional<HirDpiFunctionProfile> hir_dpi_profile(
         const semantic::sv::DpiDeclaration& declaration,
-        std::span<const semantic::ExpressionId> actuals) const;
+        std::span<const semantic::ExpressionId> actuals,
+        HirDpiIssue* issue = nullptr) const;
     [[nodiscard]] std::optional<HirDpiFunctionProfile>
     hir_dpi_function_profile(
         semantic::ExpressionId expression,
-        semantic::ScopeId process_scope) const;
+        semantic::ScopeId process_scope,
+        HirDpiIssue* issue = nullptr) const;
     // Emit the call boundary of a DPI import; the destination register.
     // A string result is written to `string_result`.
     // The hidden task that serves a context import's DPI export calls in
@@ -4699,6 +4708,17 @@ private:
     [[nodiscard]] const semantic::sv::Declaration* hir_dpi_export_hook(
         semantic::ScopeId scope) const;
     bool lowering_dpi_export_hook_ { };
+    // The hidden task that serves the pending export call when the call
+    // chain's scope is this unit's (a package's, or an instance's), if the
+    // unit has exports.
+    [[nodiscard]] const semantic::sv::Declaration* hir_dpi_export_step_hook(
+        semantic::UnitId unit) const;
+    // The foreign arm of a service loop: serves an export call in another
+    // scope by running the step task of every other scope that declares
+    // exports (IEEE 1800-2023 35.5.3).
+    [[nodiscard]] bool lower_hir_dpi_export_foreign();
+    // The instance the first task-call statement lowered next runs in.
+    std::optional<std::string> hir_task_receiver_override_;
     [[nodiscard]] std::optional<RegisterId> emit_hir_dpi_call(
         const HirDpiFunctionProfile& profile,
         const frontend::SourceSpan& span,
@@ -5265,7 +5285,8 @@ private:
         const frontend::SourceSpan& source);
     void emit_debug_point(
         DebugPointKind kind,
-        const frontend::SourceSpan& span);
+        const frontend::SourceSpan& span,
+        std::string_view callee = { });
     [[nodiscard]] std::string debug_scope_name() const;
     /// debug_scope_name() interned; the last result is reused when the
     /// recomputed text is unchanged, which skips the intern table.

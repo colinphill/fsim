@@ -6,6 +6,7 @@
 // join, a halt or $finish; waits on kernel-owned slots and on host inputs, and
 // delays on a kernel timer queue, make it ready again.
 #include "fsim/runtime/file_scanning.hpp"
+#include "fsim/runtime/foreign_call_process.hpp"
 #include "simir_container_ops.hpp"
 #include "simir_execution_shared.hpp"
 #include "simir_static_kernel_state.hpp"
@@ -61,6 +62,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
     thread.suspended = false;
     thread.suspended_wake = false;
     thread.suspended_running = false;
+    thread.entered = false;
     thread.random_state = 0U;
     thread.queued = false;
     thread.reclaim = false;
@@ -126,7 +128,57 @@ std::uint32_t Interpreter::Impl::StaticKernel::spawn_thread(
             debug_children_[id] = member;
         }
     }
+    if (debug_points_ && impl_.execution_point_hook) {
+        notify_thread(index, ExecutionPointKind::thread_start);
+    }
     return index;
+}
+
+void Interpreter::Impl::StaticKernel::notify_thread(
+    const std::uint32_t index, const ExecutionPointKind kind)
+{
+    const auto& thread = threads_[index];
+    const auto& member = members_[thread.member];
+    // A thread is identified as its debugger process is: a member's own by
+    // the member's process, a fork child by its number.
+    const auto identity = [&](const Thread& value) {
+        return value.debug_process != no_slot ? value.debug_process
+                                              : members_[value.member].process;
+    };
+    std::optional<ProcessId> parent;
+    if (kind == ExecutionPointKind::thread_start && thread.parent != no_slot) {
+        parent = identity(threads_[thread.parent]);
+    }
+    // A new thread's origin is its first statement; a thread that ended or
+    // resumed reports the point it last passed.
+    SourceLocation source;
+    std::string scope;
+    const auto operation_count = member.operations().size();
+    const auto pc = thread.pc;
+    const auto take = [&](const std::uint32_t at) {
+        const auto* point = operation_get_if<DebugPoint>(&member.operations()[at]);
+        if (point == nullptr || !debug_point_executable(point->kind)
+            || point->kind == DebugPointKind::frame_entry
+            || point->kind == DebugPointKind::frame_exit
+            || point->kind == DebugPointKind::class_constructed) {
+            return false;
+        }
+        source = point->source;
+        scope = point->scope.str();
+        return true;
+    };
+    if (kind == ExecutionPointKind::thread_start) {
+        for (std::uint32_t at = pc; at < operation_count && at < pc + 8U
+             && !take(at); ++at) {
+        }
+    } else if (thread.last_point < operation_count) {
+        take(thread.last_point);
+    }
+    impl_.notify_execution_point(identity(thread), member.process,
+        program_of(member),
+        static_cast<InstructionIndex>(
+            pc < member.origin.size() ? member.origin[pc] : pc),
+        kind, source, scope, { }, parent);
 }
 
 void Interpreter::Impl::StaticKernel::ready_thread(const std::uint32_t index)
@@ -609,6 +661,9 @@ void Interpreter::Impl::StaticKernel::wake_transaction_waiters()
 void Interpreter::Impl::StaticKernel::release_thread(const std::uint32_t index)
 {
     auto& thread = threads_[index];
+    if (thread.alive && debug_points_ && impl_.execution_point_hook) {
+        notify_thread(index, ExecutionPointKind::thread_end);
+    }
     thread.alive = false;
     thread.call_stack.clear();
     thread.frames.clear();
@@ -1297,6 +1352,9 @@ void Interpreter::Impl::StaticKernel::kill_thread(const std::uint32_t index)
     if (!thread.alive) {
         return;
     }
+    // A process inside a DPI import call chain gives its C code the disable
+    // first (IEEE 1800-2023 35.9).
+    DpiCallProcess::disabled(thread.order);
     if (thread.parent == no_slot && members_[thread.member].program_owner) {
         // A killed program process no longer keeps its program running.
         members_[thread.member].program_ended = true;
@@ -1444,6 +1502,17 @@ Interpreter::Impl::StaticKernel::disable_named_scope(const std::uint32_t index,
                 ? ProcessProgramView { *original }
                 : impl_.processes.program_view(process);
             const auto& operations = program.operations();
+            // A member without the debug plan leaves the probe points out
+            // of its operations; its threads run at those positions.
+            const auto& kept = members_[member].stripped_origin;
+            const auto position = [&](const std::size_t instruction) {
+                return kept.empty()
+                    ? static_cast<InstructionIndex>(instruction)
+                    : static_cast<InstructionIndex>(
+                          std::ranges::lower_bound(kept,
+                              static_cast<InstructionIndex>(instruction))
+                          - kept.begin());
+            };
             std::vector<std::pair<std::string, InstructionIndex>> open;
             for (std::size_t instruction = 0U; instruction < operations.size();
                  ++instruction) {
@@ -1458,14 +1527,13 @@ Interpreter::Impl::StaticKernel::disable_named_scope(const std::uint32_t index,
                     static_cast<InstructionIndex>(instruction), *point);
                 const auto& scope = operations.debug_scope(actual.scope).str();
                 if (point->kind == DebugPointKind::block_entry) {
-                    open.emplace_back(scope,
-                        static_cast<InstructionIndex>(instruction));
+                    open.emplace_back(scope, position(instruction));
                     continue;
                 }
                 for (auto entry = open.rbegin(); entry != open.rend(); ++entry) {
                     if (entry->first == scope) {
                         named[scope].push_back({ member, entry->second,
-                            static_cast<std::uint32_t>(instruction) });
+                            static_cast<std::uint32_t>(position(instruction)) });
                         open.erase(std::next(entry).base());
                         break;
                     }
@@ -1541,6 +1609,7 @@ void Interpreter::Impl::StaticKernel::disable_thread_interval(
     // A suspended owner resumes at the block's end now, not when its wait
     // ends; one already ready (or resuming in the Inactive region) resumes
     // there when it runs.
+    DpiCallProcess::disabled(thread.order);
     thread.pc = end;
     if (!thread.queued
         && std::ranges::find(inactive_threads_, owner) == inactive_threads_.end()) {
@@ -1790,7 +1859,7 @@ void Interpreter::Impl::StaticKernel::report_vhdl(const std::uint32_t member_ind
     const auto& member = members_[member_index];
     impl_.report_vhdl(member.process,
         impl_.processes.program_view(member.process).name(),
-        pc < member.origin.size() ? member.origin[pc] : pc, message, severity,
+        member.original_instruction(pc), message, severity,
         source, standalone, kernel_now(),
         warp_time_ ? 0U : impl_.scheduler.delta());
 }
@@ -3945,9 +4014,19 @@ bool Interpreter::Impl::StaticKernel::debug_point(
     const std::uint32_t thread_index, const std::uint32_t pc)
 {
     auto& thread = threads_[thread_index];
-    thread.last_point = pc;
     auto& member = members_[thread.member];
-    member.debug_pc = pc;
+    // A frame or constructor point only informs the foreign observers: the
+    // debugger's notion of where the thread is stays at its last statement.
+    const auto* const probe_point
+        = operation_get_if<DebugPoint>(&member.operations()[pc]);
+    const bool probe_only = probe_point != nullptr
+        && (probe_point->kind == DebugPointKind::frame_entry
+            || probe_point->kind == DebugPointKind::frame_exit
+            || probe_point->kind == DebugPointKind::class_constructed);
+    if (!probe_only) {
+        thread.last_point = pc;
+        member.debug_pc = pc;
+    }
     if (member.debug_hit.size() != member.operations().size()) {
         member.debug_hit.assign(member.operations().size(), 0U);
     }
@@ -3958,7 +4037,7 @@ bool Interpreter::Impl::StaticKernel::debug_point(
     if (!impl_.execution_point_hook) {
         return false;
     }
-    const auto* point = operation_get_if<DebugPoint>(&member.operations()[pc]);
+    const auto* const point = probe_point;
     if (point == nullptr) {
         return false;
     }
@@ -3984,6 +4063,15 @@ bool Interpreter::Impl::StaticKernel::debug_point(
     case DebugPointKind::call_return:
         kind = ExecutionPointKind::call_return;
         break;
+    case DebugPointKind::frame_entry:
+        kind = ExecutionPointKind::frame_start;
+        break;
+    case DebugPointKind::frame_exit:
+        kind = ExecutionPointKind::frame_end;
+        break;
+    case DebugPointKind::class_constructed:
+        kind = ExecutionPointKind::object_created;
+        break;
     case DebugPointKind::block_entry:
     case DebugPointKind::block_exit:
         return false;
@@ -3996,8 +4084,8 @@ bool Interpreter::Impl::StaticKernel::debug_point(
         thread.debug_process != no_slot ? thread.debug_process : member.process,
         member.process,
         program_of(member), instruction, kind,
-        point->source, point->scope.str());
-    if (!impl_.scheduler.stop_requested()) {
+        point->source, point->scope.str(), point->callee.str());
+    if (probe_only || !impl_.scheduler.stop_requested()) {
         return false;
     }
     debug_stop(thread_index);
@@ -4059,7 +4147,7 @@ bool Interpreter::Impl::StaticKernel::debug_member(
 
 PackedLogic4 Interpreter::Impl::StaticKernel::debug_register(
     const ProcessId process, const RegisterId reg,
-    const std::size_t width) const
+    const std::size_t width, const std::size_t newer_activations) const
 {
     const auto found = std::ranges::find_if(members_, [&](const Member& member) {
         return member.process == process;
@@ -4075,6 +4163,30 @@ PackedLogic4 Interpreter::Impl::StaticKernel::debug_register(
     }
     if (!debug_register_defined(member, reg)) {
         throw std::logic_error { "SimIR debug local has not been initialized" };
+    }
+    if (newer_activations != 0U) {
+        // Entering an automatic callable again saves the registers of the
+        // activation it shadows (CallableFramePush), so the saved values of
+        // the frames that list this register, newest first, are those of the
+        // activations before the current one. Frames of an acyclic call
+        // chain are elided: it has no outer activation of one callable.
+        auto remaining = newer_activations;
+        for (auto frame = member.frames.rbegin(); frame != member.frames.rend();
+             ++frame) {
+            const auto saved = std::ranges::find(frame->ids, reg);
+            if (saved == frame->ids.end() || --remaining != 0U) {
+                continue;
+            }
+            auto outer = frame->values[static_cast<std::size_t>(
+                saved - frame->ids.begin())];
+            if (outer.width() != width) {
+                throw std::logic_error {
+                    "SimIR debug local has not been initialized"
+                };
+            }
+            return outer;
+        }
+        throw std::logic_error { "SimIR debug local has no outer activation" };
     }
     PackedLogic4 value;
     if (member.compiled && !member.generic_mode) {
@@ -4202,6 +4314,10 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
         // 1800-2023 9.7), as the reference's execute does.
         threads_[index].suspended_wake = true;
         return;
+    }
+    if (debug_points_ && impl_.execution_point_hook
+        && std::exchange(threads_[index].entered, true)) {
+        notify_thread(index, ExecutionPointKind::thread_enter);
     }
     const auto member_index = threads_[index].member;
     auto& member = members_[member_index];

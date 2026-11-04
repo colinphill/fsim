@@ -1,0 +1,18 @@
+#c thread start type=vpiThread parent=0 threads=1
+#c frame start depth=1 type=vpiFrame active=1 current=1 thread=1 origin=vpiTaskCall line=24 caller=0
+#c automatics=0
+#c frame start depth=2 type=vpiFrame active=1 current=1 thread=1 origin=vpiTaskCall line=20 caller=20
+#c frame start depth=3 type=vpiFrame active=1 current=1 thread=1 origin=vpiFuncCall line=17 caller=17
+#c twice start depth=3
+#c frame end depth=3 active=1 stmt=14
+#c frame end depth=2 active=1 stmt=17
+#c frame end depth=1 active=1 stmt=20
+#c thread start type=vpiThread parent=1 threads=2
+#c thread end parent=1 children=0
+#c frame start depth=1
+#c frame end depth=1
+#c cbCreateObj type=vpiClassObj typespec=1 id=1
+#c done n=106 v=5
+#c thread end parent=0 children=0
+#c enters=3
+#c stale frame type=-1

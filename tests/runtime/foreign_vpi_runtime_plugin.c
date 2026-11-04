@@ -190,6 +190,27 @@ static PLI_INT32 start(p_cb_data data)
     vpi_printf("#c chk_error after bad get_value=%d\n",
         vpi_chk_error(&info) == vpiError);
     vpi_printf("#c chk_error cleared=%d\n", vpi_chk_error(NULL) == 0);
+    // vpiStringVal onto a real and vpiStrengthVal onto a vector are
+    // illegal; a scalar takes a strength value (IEEE 1800-2023 38.34).
+    {
+        s_vpi_value value = { vpiStringVal, { 0 } };
+        s_vpi_strengthval strength = { vpi1, vpiStrongDrive, vpiStrongDrive };
+        value.value.str = "1.5";
+        vpi_put_value(vpi_handle_by_name("top.r", NULL), &value, NULL,
+            vpiNoDelay);
+        vpi_printf("#c string onto real rejected=%d\n",
+            vpi_chk_error(&info) == vpiError);
+        value.format = vpiStrengthVal;
+        value.value.strength = &strength;
+        vpi_put_value(vpi_handle_by_name("top.v", NULL), &value, NULL,
+            vpiNoDelay);
+        vpi_printf("#c strength onto vector rejected=%d\n",
+            vpi_chk_error(&info) == vpiError);
+        vpi_put_value(vpi_handle_by_name("top.s", NULL), &value, NULL,
+            vpiNoDelay);
+        vpi_printf("#c strength onto scalar error=%d s=%d\n",
+            vpi_chk_error(&info), read_int(vpi_handle_by_name("top.s", NULL)));
+    }
     (void)register_cb(cbValueChange, clk, on_clk, 0U, vpiIntVal);
     (void)register_cb(cbValueChange, q, on_change, 0U, vpiIntVal);
     (void)register_cb(cbValueChange, d, on_change, 0U, vpiIntVal);

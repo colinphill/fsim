@@ -15,9 +15,7 @@ namespace {
 
 using TypePredicate = bool (*)(PLI_INT32);
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 [[nodiscard]] const fsim_acc_handle_context_v3* context() noexcept {
   return fsim::runtime::acc_detail::current_context();

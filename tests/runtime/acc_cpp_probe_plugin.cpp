@@ -13,7 +13,7 @@
 extern "C" FSIM_ACC_PROBE_EXPORT PLI_INT32 fsim_acc_cpp_probe() {
   char enabled[] = "true";
   if (acc_initialize() != 1 || acc_error_flag != 0 ||
-      std::string_view{acc_version()} != "IEEE 1364-2005 ACC" ||
+      std::string_view{acc_version()} != "IEEE 1364-2001 ACC" ||
       std::string_view{acc_product_version()}.empty()) {
     acc_close();
     return 1;

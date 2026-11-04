@@ -666,10 +666,13 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate_scope(
     } else if (type == vpiContAssign) {
         for (const auto id : container->concurrent) {
             const auto* const record = statement(id.value());
+            // A gate is lowered to continuous assignments but is a
+            // primitive, not a continuous assignment (IEEE 1800-2023 37.35).
             if (record != nullptr
                 && record->kind == sv::StatementKind::assignment
                 && record->assignment_kind
-                    == sv::AssignmentKind::continuous) {
+                    == sv::AssignmentKind::continuous
+                && record->gate_primitive.empty()) {
                 found.push_back(node(Kind::cont_assign, id.value(), 0U,
                     scope.handle, scope.handle));
             }
@@ -1126,7 +1129,8 @@ std::vector<fsim_vpi_handle_v1> VpiStatementModel::connections(
     for (const auto id : container->concurrent) {
         const auto* const record = statement(id.value());
         if (record == nullptr || record->kind != sv::StatementKind::assignment
-            || record->assignment_kind != sv::AssignmentKind::continuous) {
+            || record->assignment_kind != sv::AssignmentKind::continuous
+            || !record->gate_primitive.empty()) {
             continue;
         }
         const auto writes = targets_object(record->target, scope.handle, object);
@@ -2830,6 +2834,41 @@ std::optional<std::vector<fsim_vpi_handle_v1>> VpiStatementModel::iterate(
     default:
         return found;
     }
+}
+
+std::optional<VpiStatementModel::ContinuousDelay>
+VpiStatementModel::continuous_delay(const std::uint64_t serial) const
+{
+    const auto& entry = nodes_.at(serial);
+    if (entry.kind != Kind::cont_assign
+        && entry.kind != Kind::cont_assign_bit) {
+        return std::nullopt;
+    }
+    const auto* const record = statement(entry.id);
+    if (record == nullptr) {
+        return std::nullopt;
+    }
+    ContinuousDelay result;
+    result.scope = entry.scope;
+    if (!record->delay) {
+        return result;
+    }
+    const auto add = [&](const semantic::sv::Delay& delay) {
+        if (delay.primary.expression) {
+            return false;
+        }
+        result.values.push_back(delay.primary.magnitude);
+        return true;
+    };
+    if (!add(*record->delay)) {
+        return std::nullopt;
+    }
+    for (const auto& additional : record->delay->additional) {
+        if (!add(additional)) {
+            return std::nullopt;
+        }
+    }
+    return result;
 }
 
 std::optional<VpiStatementValue> VpiStatementModel::value(

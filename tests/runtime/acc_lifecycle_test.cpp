@@ -40,7 +40,7 @@ int main() {
           "the product identifies as a simulator");
   require(std::string_view{acc_product_version()} ==
                   std::string{"fsim "} + std::string{fsim::version} &&
-              std::string_view{acc_version()} == "IEEE 1364-2005 ACC",
+              std::string_view{acc_version()} == "IEEE 1364-2001 ACC",
           "product and ACC interface versions are stable");
 
   std::array<PLI_INT32, 10> items{

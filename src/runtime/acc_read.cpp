@@ -17,9 +17,7 @@ namespace {
 
 thread_local std::string string_buffer;
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 [[nodiscard]] const fsim_acc_handle_context_v3* context() noexcept {
   return fsim::runtime::acc_detail::current_context();
@@ -234,7 +232,12 @@ constexpr std::array type_names{
     FSIM_ACC_TYPE_NAME(accSystemRealFunction), FSIM_ACC_TYPE_NAME(accUserTask),
     FSIM_ACC_TYPE_NAME(accUserFunction), FSIM_ACC_TYPE_NAME(accUserRealFunction),
     FSIM_ACC_TYPE_NAME(accConstant), FSIM_ACC_TYPE_NAME(accConcat),
-    FSIM_ACC_TYPE_NAME(accOperator), FSIM_ACC_TYPE_NAME(accMinTypMax)};
+    FSIM_ACC_TYPE_NAME(accOperator), FSIM_ACC_TYPE_NAME(accMinTypMax),
+    FSIM_ACC_TYPE_NAME(accPath), FSIM_ACC_TYPE_NAME(accWirePath),
+    FSIM_ACC_TYPE_NAME(accCollapsedNet),
+    FSIM_ACC_TYPE_NAME(accNamedBeginStat),
+    FSIM_ACC_TYPE_NAME(accNamedForkStat),
+    FSIM_ACC_TYPE_NAME(accModPathHasIfnone)};
 #undef FSIM_ACC_TYPE_NAME
 
 [[nodiscard]] PLI_INT32 scalar_value(

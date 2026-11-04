@@ -20,7 +20,8 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL control_callback(
   }
   io_printf(text("value=%d"), 7);
   io_mcdprintf(5, text("mcd %s"), text("output"));
-  if (tf_text(text("text %x"), 42) != 0 ||
+  // tf_text stores its text for the next tf_message (IEEE 1364-2001 25.60).
+  if (tf_text(text("text %x;"), 42) != 0 ||
       tf_warning(text("warning %s"), text("value")) != 0 ||
       tf_error(text("error %.1f"), 2.5) != 0 ||
       tf_message(ERR_SYSTEM, text("FAC"), text("E123"),
@@ -52,9 +53,9 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL effect_limit_callback(
   if (reason != reason_calltf) return 0;
   for (std::uint32_t index = 0;
        index < fsim::runtime::kMaxTfControlEffects; ++index) {
-    if (tf_text(text("x")) != 0) return 1;
+    if (tf_warning(text("x")) != 0) return 1;
   }
-  return tf_text(text("overflow"));
+  return tf_warning(text("overflow"));
 }
 
 std::string oversized_text(
@@ -130,27 +131,25 @@ int main() {
           "TF check-time output is captured by the bind transaction");
   const auto invoked = bound.value->invoke();
   require(invoked && invoked.callback_value == 0 &&
-              invoked.control_effects.size() == 8,
+              invoked.control_effects.size() == 7,
           "TF output and controls publish one ordered call transaction");
   const auto& effects = invoked.control_effects;
   require(effects[0].kind == TfControlEffectKind::Output &&
               effects[0].channel == 1 && effects[0].text == "value=7" &&
               effects[1].kind == TfControlEffectKind::Output &&
               effects[1].channel == 5 && effects[1].text == "mcd output" &&
-              effects[2].kind == TfControlEffectKind::Output &&
-              effects[2].text == "text 2a" &&
-              effects[3].kind == TfControlEffectKind::Warning &&
-              effects[3].level == ERR_WARNING &&
-              effects[3].text == "warning value" &&
-              effects[4].kind == TfControlEffectKind::Error &&
-              effects[4].level == ERR_ERROR && effects[4].text == "error 2.5",
+              effects[2].kind == TfControlEffectKind::Warning &&
+              effects[2].level == ERR_WARNING &&
+              effects[2].text == "warning value" &&
+              effects[3].kind == TfControlEffectKind::Error &&
+              effects[3].level == ERR_ERROR && effects[3].text == "error 2.5",
           "TF formatted output preserves channel, severity, text, and order");
-  require(effects[5].kind == TfControlEffectKind::Message &&
-              effects[5].level == ERR_SYSTEM && effects[5].facility == "FAC" &&
-              effects[5].message_number == "E123" &&
-              effects[5].text == "message 9" &&
-              effects[6].kind == TfControlEffectKind::Stop &&
-              effects[7].kind == TfControlEffectKind::Finish,
+  require(effects[4].kind == TfControlEffectKind::Message &&
+              effects[4].level == ERR_SYSTEM && effects[4].facility == "FAC" &&
+              effects[4].message_number == "E123" &&
+              effects[4].text == "text 2a;message 9" &&
+              effects[5].kind == TfControlEffectKind::Stop &&
+              effects[6].kind == TfControlEffectKind::Finish,
           "TF structured messages and stop/finish remain distinct effects");
 
   auto throwing = bind_tf_call(registration(

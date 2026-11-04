@@ -492,6 +492,7 @@ private:
         const frontend::ParsedDesign& parsed);
 
     void rebuild_overload_sets();
+    void mark_foreign_subprograms();
 
     semantic::Model& model_;
 

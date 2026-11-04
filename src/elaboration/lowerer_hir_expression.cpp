@@ -17787,6 +17787,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             if (lower_hir_class_construction(*lowerable, handle,
                     associations, allocation.source, specialization_id)) {
                 class_functions_lowered_ = true;
+                // The constructor chain has completed (IEEE 1800-2023
+                // 38.36.1 cbCreateObj); only the probe plan runs the point.
+                emit_debug_point(DebugPointKind::class_constructed,
+                    hir_source_span(allocation.source), class_identity);
                 return handle;
             }
             rollback_hir_lowering(mark, frames);

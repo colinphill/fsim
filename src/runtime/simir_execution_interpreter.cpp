@@ -2497,6 +2497,15 @@ void Interpreter::Impl::schedule_write_delayed(const ProcessId driver,
     const TransitionDelays& delays)
 {
     if (operation.inertial) {
+        // A slotted write takes the delays put on its driver, if any.
+        if (operation.slotted) {
+            const auto put = driver_delay_overrides.find(driver);
+            if (put != driver_delay_overrides.end()) {
+                schedule_inertial(driver, operation.signal, std::move(value),
+                    operation.offset, put->second, operation.domain);
+                return;
+            }
+        }
         schedule_inertial(driver, operation.signal, std::move(value),
             operation.offset, delays, operation.domain);
     } else {

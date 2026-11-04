@@ -7482,10 +7482,13 @@ private:
             return std::nullopt;
         }
         const auto callable = unit_.find_declaration(callable_id);
+        // A foreign function's body is never executed (IEEE 1076-2019
+        // 14.4.1, 20.4.2), so its result is not an elaboration value.
         if (!callable || callable->vhdl == nullptr
             || !callable->vhdl->callable
             || !callable->vhdl->callable->function
-            || !callable->vhdl->callable->defined) {
+            || !callable->vhdl->callable->defined
+            || callable->vhdl->callable->foreign) {
             return std::nullopt;
         }
         // An impure function is evaluated as well: the body executor reads
@@ -12031,6 +12034,11 @@ private:
             return std::nullopt;
         }
         const auto callable = unit_.find_declaration(*callable_id);
+        if (!callable || callable->vhdl == nullptr
+            || !callable->vhdl->callable
+            || callable->vhdl->callable->foreign) {
+            return std::nullopt;
+        }
         const auto& declaration = *callable->vhdl;
         const auto& formals = declaration.callable->formals;
         if (expression.operands.size() != formals.size()) {

@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#include "vpi_user.h"
 #include "fsim/runtime/veriuser.h"
 #include "fsim/runtime/tf_call_bridge.h"
 #include "fsim/runtime/tf_containment.hpp"
+#include "acc_internal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -11,26 +13,30 @@
 #include <cctype>
 #include <cstdarg>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
-
-// Output outside a TF call goes through VPI (both live in libfsim_tf).
-extern "C" PLI_INT32 vpi_vprintf(PLI_BYTE8* format, va_list arguments);
-extern "C" PLI_INT32 vpi_mcd_vprintf(PLI_UINT32 mcd, PLI_BYTE8* format,
-                                     va_list arguments);
 
 namespace {
 
 thread_local fsim_tf_call_context_v3* current_call_context{};
+// The host services bound to the current call (pvc flags, delayed puts).
+thread_local const fsim_tf_host_bridge_v3* current_host{};
 thread_local s_tfexprinfo expression_info{};
 thread_local s_tfnodeinfo node_info{};
+thread_local s_strengthval strength_value{};
 thread_local p_tfexprinfo last_expression_info{};
 thread_local PLI_INT32 last_expression_parameter{};
 thread_local std::string formatted_value;
+thread_local std::string formatted_cstring;
 thread_local std::string module_instance_name;
 thread_local std::string scope_name;
-thread_local std::string routine_name;
+// Text stored by tf_text, displayed by the next tf_message (IEEE 1364-2001
+// 25.60).
+thread_local std::string pending_text;
 thread_local std::array<PLI_BYTE8, FSIM_TF_CONTROL_MAX_TEXT_SIZE + 1U>
     control_text{};
 
@@ -197,6 +203,91 @@ PLI_INT32 format_control(const uint32_t kind, const PLI_INT32 channel,
                       control_text.data(), static_cast<uint32_t>(formatted));
 }
 
+// Facility and code strings are shorter than 10 characters (IEEE 1364-2001
+// 25.31).
+constexpr uint32_t kMaxMessageTag = 9U;
+
+bool message_tag(const PLI_BYTE8* const tag) {
+  uint32_t size{};
+  return bounded_text_size(tag, kMaxMessageTag, size);
+}
+
+// A tf_message displays the text stored by tf_text first, then clears it.
+PLI_INT32 format_message(const PLI_INT32 level,
+                         const PLI_BYTE8* const facility,
+                         const PLI_BYTE8* const message_number,
+                         const PLI_BYTE8* const format, va_list arguments) {
+  if (format == nullptr || current_call_context == nullptr ||
+      !message_tag(facility) || !message_tag(message_number)) {
+    fail_control();
+    return 1;
+  }
+  uint32_t format_size{};
+  if (!bounded_text_size(format, FSIM_TF_CONTROL_MAX_TEXT_SIZE,
+                         format_size)) {
+    fail_control();
+    return 1;
+  }
+  const auto formatted = std::vsnprintf(control_text.data(),
+                                        control_text.size(), format, arguments);
+  if (formatted < 0 ||
+      static_cast<uint32_t>(formatted) > FSIM_TF_CONTROL_MAX_TEXT_SIZE ||
+      pending_text.size() + static_cast<uint32_t>(formatted) >
+          FSIM_TF_CONTROL_MAX_TEXT_SIZE) {
+    fail_control();
+    return 1;
+  }
+  try {
+    pending_text.append(control_text.data(), static_cast<uint32_t>(formatted));
+    const auto result = emit_control(
+        FSIM_TF_CONTROL_MESSAGE, 0, level, facility, message_number,
+        pending_text.data(), static_cast<uint32_t>(pending_text.size()));
+    pending_text.clear();
+    return result;
+  } catch (...) {
+    pending_text.clear();
+    fail_control();
+    return 1;
+  }
+}
+
+// IEEE 1364-2001 24.3.1 reads an X or Z bit as 0.
+uint32_t known_bits(const s_vecval& word) {
+  return static_cast<PLI_UINT32>(word.avalbits) &
+         ~static_cast<PLI_UINT32>(word.bvalbits);
+}
+
+uint64_t join_long(const PLI_INT32 low, const PLI_INT32 high) {
+  return (static_cast<uint64_t>(static_cast<PLI_UINT32>(high)) << 32u) |
+         static_cast<PLI_UINT32>(low);
+}
+
+void store_long(const uint64_t value, PLI_INT32* const low,
+                PLI_INT32* const high) {
+  *low = static_cast<PLI_INT32>(static_cast<PLI_UINT32>(value));
+  *high = static_cast<PLI_INT32>(static_cast<PLI_UINT32>(value >> 32u));
+}
+
+// The two-operand 64-bit routines update the first operand in place
+// (IEEE 1364-2001 25.4, 25.10, 25.34, 25.57).
+template <typename Operation>
+void update_long(PLI_INT32* const low, PLI_INT32* const high,
+                 const PLI_INT32 low2, const PLI_INT32 high2,
+                 Operation operation) {
+  if (!writable_pointer(low) || !writable_pointer(high)) {
+    return;
+  }
+  store_long(operation(join_long(*low, *high), join_long(low2, high2)), low,
+             high);
+}
+
+// Simulation time in the simulation's time precision, unscaled (IEEE
+// 1364-2001 25.54).
+uint64_t simulation_ticks() {
+  const auto* const time = current_time();
+  return time == nullptr ? 0 : time->scheduler_ticks;
+}
+
 uint64_t time_scale(const fsim_tf_time_bridge_v3& time) {
   uint64_t scale{1};
   for (auto exponent = time.precision_exponent;
@@ -311,6 +402,44 @@ PLI_INT32 append_synchronization(const uint32_t kind) {
   current_call_context->synchronization_kinds
       [current_call_context->synchronization_count++] = kind;
   return 0;
+}
+
+// The argument numbers a pvc routine covers: one argument, or all of them
+// for narg -1 (IEEE 1364-2001 25.9); false for a number outside the call.
+bool pvc_range(const PLI_INT32 narg, uint32_t& first, uint32_t& last) {
+  if (current_host == nullptr || current_host->pvc_count == 0) {
+    return false;
+  }
+  if (narg == -1) {
+    first = 1;
+    last = current_host->pvc_count;
+    return true;
+  }
+  if (narg < 1 || static_cast<uint32_t>(narg) > current_host->pvc_count) {
+    return false;
+  }
+  first = last = static_cast<uint32_t>(narg);
+  return true;
+}
+
+// tf_copypvc_flag and tf_movepvc_flag save the current flag; the value
+// returned is the OR of the flags saved (25.9, 25.33).
+PLI_INT32 save_pvc_flags(const PLI_INT32 narg, const bool clear) {
+  uint32_t first{};
+  uint32_t last{};
+  if (!pvc_range(narg, first, last)) {
+    return 0;
+  }
+  uint8_t any = 0;
+  for (auto number = first; number <= last; ++number) {
+    auto& current = current_host->pvc_current[number - 1];
+    current_host->pvc_saved[number - 1] = current;
+    any |= current;
+    if (clear) {
+      current = 0;
+    }
+  }
+  return any;
 }
 
 bool writable_kind(const PLI_INT32 kind) {
@@ -667,9 +796,24 @@ void FSIM_NATIVE_PLUGIN_CALL fsim_tf_call_context_leave_v3(
     fsim_tf_call_context_v3* const context) {
   if (current_call_context == context) {
     current_call_context = nullptr;
+    current_host = nullptr;
+    pending_text.clear();
     last_expression_info = nullptr;
     last_expression_parameter = 0;
   }
+}
+
+PLI_INT32 FSIM_NATIVE_PLUGIN_CALL fsim_tf_call_host_bind_v3(
+    fsim_tf_call_context_v3* const context,
+    const fsim_tf_host_bridge_v3* const host) {
+  if (context == nullptr || context != current_call_context ||
+      host == nullptr || host->reserved != 0 ||
+      (host->pvc_count != 0 &&
+       (host->pvc_current == nullptr || host->pvc_saved == nullptr))) {
+    return 1;
+  }
+  current_host = host;
+  return 0;
 }
 
 const fsim_tf_call_context_v3* FSIM_NATIVE_PLUGIN_CALL
@@ -711,34 +855,133 @@ void io_printf(PLI_BYTE8* const format, ...) {
   }
   va_end(arguments);
 }
-FSIM_TF_BYTES(mc_scan_plusargs, (PLI_BYTE8*))
-FSIM_TF_INT(tf_add_long, (PLI_INT32*, PLI_INT32*, PLI_INT32, PLI_INT32))
-// tf_asynchon and tf_asynchoff return 1 on success and 0 on error.
-PLI_INT32 tf_asynchoff(void) {
-  return append_synchronization(
-             FSIM_TF_SYNCHRONIZATION_ASYNCHRONOUS_OFF) == 0
-             ? 1
-             : 0;
-}
-PLI_INT32 tf_asynchon(void) {
-  return append_synchronization(
-             FSIM_TF_SYNCHRONIZATION_ASYNCHRONOUS_ON) == 0
-             ? 1
-             : 0;
-}
-PLI_INT32 tf_clearalldelays(void) {
-  auto* const time = current_time();
-  if (current_call_context == nullptr ||
-      !writable_phase(current_call_context->phase) || time == nullptr) {
-    return 1;
+// The first invocation option "+<plusarg>..." that starts with the string
+// returns its remaining text (IEEE 1364-2001 25.3).
+PLI_BYTE8* mc_scan_plusargs(PLI_BYTE8* const plusarg) {
+  uint32_t size{};
+  if (plusarg == nullptr ||
+      !bounded_text_size(plusarg, FSIM_TF_CONTROL_MAX_METADATA_SIZE, size)) {
+    return nullptr;
   }
-  time->delay_count = 0;
+  s_vpi_vlog_info information{};
+  if (vpi_get_vlog_info(&information) == 0 || information.argv == nullptr) {
+    return nullptr;
+  }
+  for (PLI_INT32 index = 0; index < information.argc; ++index) {
+    PLI_BYTE8* const option = information.argv[index];
+    if (option != nullptr && option[0] == '+' &&
+        std::strncmp(option + 1, plusarg, size) == 0) {
+      return option + 1 + size;
+    }
+  }
+  return nullptr;
+}
+PLI_INT32 tf_add_long(PLI_INT32* const low1, PLI_INT32* const high1,
+                      const PLI_INT32 low2, const PLI_INT32 high2) {
+  update_long(low1, high1, low2, high2,
+              [](const uint64_t left, const uint64_t right) {
+                return left + right;
+              });
   return 0;
 }
-FSIM_TF_INT(tf_compare_long,
-            (PLI_UINT32, PLI_UINT32, PLI_UINT32, PLI_UINT32))
-FSIM_TF_INT(tf_copypvc_flag, (PLI_INT32))
-FSIM_TF_VOID(tf_divide_long, (PLI_INT32*, PLI_INT32*, PLI_INT32, PLI_INT32))
+namespace {
+
+// The delayed string puts (IEEE 1364-2001 25.52, 25.55, 25.56) hand the
+// text to the host, which schedules it on the argument by delaytype
+// (Table 196). Argument 0, a real or constant argument, a bad format or
+// delay type, and a non-writable phase are errors.
+PLI_INT32 put_string(const PLI_INT32 narg, const PLI_INT32 bitlength,
+                     const PLI_INT32 format, const PLI_BYTE8* const value,
+                     const bool delay_valid, const uint64_t ticks,
+                     const PLI_INT32 delaytype) {
+  const auto* const argument = current_argument(narg);
+  uint32_t size{};
+  if (current_host == nullptr || current_host->put == nullptr ||
+      !writable_phase(current_call_context->phase) || argument == nullptr ||
+      !writable_kind(argument->kind) || argument->kind == tf_readwritereal ||
+      bitlength <= 0 || !delay_valid || delaytype < 0 || delaytype > 2 ||
+      value == nullptr ||
+      !bounded_text_size(value, FSIM_TF_CONTROL_MAX_TEXT_SIZE, size)) {
+    return 0;
+  }
+  const auto radix = std::tolower(static_cast<unsigned char>(format));
+  if (radix != 'b' && radix != 'o' && radix != 'd' && radix != 'h') {
+    return 0;
+  }
+  return current_host->put(current_host->put_user_data, narg, radix, value,
+                           ticks, delaytype);
+}
+
+// A real delay in the module's units as precision ticks, rounded to the
+// nearest tick; false for a negative, infinite or too large delay.
+bool real_delay_ticks(const double delay, uint64_t& ticks) {
+  const auto* const time = current_time();
+  if (time == nullptr || !std::isfinite(delay) || delay < 0.0) {
+    return false;
+  }
+  const auto scaled = static_cast<long double>(delay) * time_scale(*time) /
+                      time->tick_multiplier;
+  const auto rounded = std::floor(scaled + 0.5L);
+  if (!(rounded < std::ldexp(1.0L, 64))) {
+    return false;
+  }
+  ticks = static_cast<uint64_t>(rounded);
+  return true;
+}
+
+}  // namespace
+
+// tf_asynchon returns 0 on success and 1 on error; tf_asynchoff always
+// returns 0 (IEEE 1364-2001 25.5, 25.6).
+PLI_INT32 tf_asynchoff(void) {
+  (void)append_synchronization(FSIM_TF_SYNCHRONIZATION_ASYNCHRONOUS_OFF);
+  return 0;
+}
+PLI_INT32 tf_asynchon(void) {
+  return append_synchronization(FSIM_TF_SYNCHRONIZATION_ASYNCHRONOUS_ON);
+}
+// Always returns 1 (IEEE 1364-2001 25.7).
+PLI_INT32 tf_clearalldelays(void) {
+  auto* const time = current_time();
+  if (current_call_context != nullptr &&
+      writable_phase(current_call_context->phase) && time != nullptr) {
+    time->delay_count = 0;
+  }
+  return 1;
+}
+// The operands are PLI_UINT32 halves of unsigned 64-bit values (IEEE
+// 1364-2001 25.8).
+PLI_INT32 tf_compare_long(const PLI_UINT32 low1, const PLI_UINT32 high1,
+                          const PLI_UINT32 low2, const PLI_UINT32 high2) {
+  const auto left = join_long(static_cast<PLI_INT32>(low1),
+                              static_cast<PLI_INT32>(high1));
+  const auto right = join_long(static_cast<PLI_INT32>(low2),
+                               static_cast<PLI_INT32>(high2));
+  return left < right ? -1 : (left > right ? 1 : 0);
+}
+// The pvc routines (IEEE 1364-2001 25.9, 25.22, 25.33, 25.59) work on the
+// flags the host keeps for the call's instance; they return 0 where the host
+// keeps none.
+PLI_INT32 tf_copypvc_flag(const PLI_INT32 nparam) {
+  return save_pvc_flags(nparam, false);
+}
+// Two's complement operands (IEEE 1364-2001 25.10); a zero divisor leaves
+// the first operand unchanged because the standard defines no result.
+void tf_divide_long(PLI_INT32* const low1, PLI_INT32* const high1,
+                    const PLI_INT32 low2, const PLI_INT32 high2) {
+  update_long(low1, high1, low2, high2,
+              [](const uint64_t left, const uint64_t right) {
+                const auto dividend = std::bit_cast<int64_t>(left);
+                const auto divisor = std::bit_cast<int64_t>(right);
+                if (divisor == 0) {
+                  return left;
+                }
+                if (divisor == -1) {
+                  return UINT64_C(0) - left;
+                }
+                return std::bit_cast<uint64_t>(dividend / divisor);
+              });
+}
 PLI_INT32 tf_dofinish(void) {
   return emit_control(FSIM_TF_CONTROL_FINISH, 0, 0, nullptr, nullptr, nullptr,
                       0);
@@ -780,14 +1023,17 @@ p_tfexprinfo tf_exprinfo(const PLI_INT32 parameter, p_tfexprinfo info) {
   } else if (!writable_pointer(info)) {
     return nullptr;
   }
+  // A real argument has no vector groups or bits (IEEE 1364-2001 25.15).
+  const bool real = argument->kind == tf_readonlyreal ||
+                    argument->kind == tf_readwritereal;
   *info = {
       static_cast<PLI_INT16>(argument->kind),
       0,
       nullptr,
       0.0,
       argument->expression,
-      static_cast<PLI_INT32>((argument->width + 31u) / 32u),
-      static_cast<PLI_INT32>(argument->width),
+      real ? 0 : static_cast<PLI_INT32>((argument->width + 31u) / 32u),
+      real ? 0 : static_cast<PLI_INT32>(argument->width),
       static_cast<PLI_INT32>(argument->is_signed),
       argument->lhs_select,
       argument->rhs_select,
@@ -810,11 +1056,36 @@ PLI_INT32 tf_evaluatep(const PLI_INT32 parameter) {
   return tf_exprinfo(parameter, &expression_info) == nullptr ? 1 : 0;
 }
 
+// A string argument returns its text; a vector converts byte by byte without
+// leading zeros; a null or real argument returns null (IEEE 1364-2001 25.16).
 PLI_BYTE8* tf_getcstringp(const PLI_INT32 parameter) {
   auto* const value = current_value(parameter);
-  return value == nullptr || value->kind != FSIM_TF_VALUE_STRING
-             ? nullptr
-             : value->string_value;
+  if (value == nullptr) {
+    return nullptr;
+  }
+  if (value->kind == FSIM_TF_VALUE_STRING) {
+    return value->string_value;
+  }
+  if (value->kind != FSIM_TF_VALUE_INTEGRAL || value->word_count == 0) {
+    return nullptr;
+  }
+  try {
+    formatted_cstring.clear();
+    const auto bytes = (value->width + 7u) / 8u;
+    for (uint32_t index = bytes; index != 0; --index) {
+      const auto byte = index - 1u;
+      const auto word = known_bits(value->vector_words[byte / 4u]);
+      const auto character = static_cast<char>((word >> (8u * (byte % 4u))) &
+                                               UINT32_C(0xff));
+      if (character != '\0' || !formatted_cstring.empty()) {
+        formatted_cstring.push_back(character);
+      }
+    }
+    return formatted_cstring.data();
+  } catch (...) {
+    formatted_cstring.clear();
+    return nullptr;
+  }
 }
 PLI_BYTE8* tf_getinstance(void) {
   return current_call_context == nullptr
@@ -834,9 +1105,12 @@ PLI_INT32 tf_getlongp(PLI_INT32* const high_value,
     return 0;
   }
   if (writable_pointer(high_value)) {
-    *high_value = value->word_count > 1 ? value->vector_words[1].avalbits : 0;
+    *high_value = value->word_count > 1
+                      ? static_cast<PLI_INT32>(
+                            known_bits(value->vector_words[1]))
+                      : 0;
   }
-  return value->vector_words[0].avalbits;
+  return static_cast<PLI_INT32>(known_bits(value->vector_words[0]));
 }
 PLI_INT32 tf_getlongtime(PLI_INT32* const high_time) {
   uint64_t local{};
@@ -852,21 +1126,34 @@ PLI_INT32 tf_getlongtime(PLI_INT32* const high_time) {
   }
   return static_cast<PLI_INT32>(local & UINT32_MAX);
 }
+// Table 189 of IEEE 1364-2001 25.20: 0 with the next event time in a read-only
+// synchronize call, 1 with 0 when no event is left, 2 with the current time
+// anywhere else; 2 takes precedence.
 PLI_INT32 tf_getnextlongtime(PLI_INT32* const low_time,
                              PLI_INT32* const high_time) {
-  auto* const time = current_time();
+  const auto* const time = current_time();
+  const bool read_only =
+      time != nullptr &&
+      current_call_context->phase == FSIM_TF_CALL_PHASE_READ_ONLY_SYNCHRONIZE;
+  PLI_INT32 code = 2;
+  uint64_t ticks{};
+  if (read_only) {
+    code = time->has_next_event == 0 ? 1 : 0;
+    ticks = time->next_event_ticks;
+  } else if (time != nullptr) {
+    ticks = time->scheduler_ticks;
+  }
   uint64_t local{};
-  if (time == nullptr || time->has_next_event == 0 ||
-      !local_time(time->next_event_ticks, local)) {
-    if (writable_pointer(low_time)) *low_time = 0;
-    if (writable_pointer(high_time)) *high_time = 0;
-    return 0;
+  if (code == 1 || time == nullptr || !local_time(ticks, local)) {
+    local = 0;
   }
-  if (writable_pointer(low_time)) *low_time = static_cast<PLI_INT32>(local);
+  if (writable_pointer(low_time)) {
+    *low_time = static_cast<PLI_INT32>(static_cast<PLI_UINT32>(local));
+  }
   if (writable_pointer(high_time)) {
-    *high_time = static_cast<PLI_INT32>(local >> 32u);
+    *high_time = static_cast<PLI_INT32>(static_cast<PLI_UINT32>(local >> 32u));
   }
-  return 1;
+  return code;
 }
 PLI_INT32 tf_getp(const PLI_INT32 parameter) {
   auto* const value = current_value(parameter);
@@ -877,12 +1164,30 @@ PLI_INT32 tf_getp(const PLI_INT32 parameter) {
                ? static_cast<PLI_INT32>(std::lround(value->real))
                : 0;
   }
+  if (value != nullptr && value->kind == FSIM_TF_VALUE_STRING) {
+    // A literal string returns a C string pointer (IEEE 1364-2001 25.21),
+    // which a 32-bit result keeps only on a 32-bit host.
+    return static_cast<PLI_INT32>(
+        reinterpret_cast<std::uintptr_t>(value->string_value));
+  }
   return value == nullptr || value->kind != FSIM_TF_VALUE_INTEGRAL ||
                  value->word_count == 0
              ? 0
-             : value->vector_words[0].avalbits;
+             : static_cast<PLI_INT32>(known_bits(value->vector_words[0]));
 }
-FSIM_TF_INT(tf_getpchange, (PLI_INT32))
+// The next argument after nparam whose saved flag is set, else 0 (25.22).
+PLI_INT32 tf_getpchange(const PLI_INT32 nparam) {
+  if (current_host == nullptr || nparam < 0) {
+    return 0;
+  }
+  for (auto number = static_cast<uint32_t>(nparam) + 1U;
+       number <= current_host->pvc_count; ++number) {
+    if (current_host->pvc_saved[number - 1] != 0) {
+      return static_cast<PLI_INT32>(number);
+    }
+  }
+  return 0;
+}
 double tf_getrealp(const PLI_INT32 parameter) {
   auto* const value = current_value(parameter);
   if (value != nullptr && value->kind == FSIM_TF_VALUE_INTEGRAL &&
@@ -892,8 +1197,7 @@ double tf_getrealp(const PLI_INT32 parameter) {
     double result{};
     double scale{1.0};
     for (uint32_t word = 0; word < value->word_count && word < 2u; ++word) {
-      result += static_cast<double>(
-                    static_cast<PLI_UINT32>(value->vector_words[word].avalbits)) *
+      result += static_cast<double>(known_bits(value->vector_words[word])) *
                 scale;
       scale *= 4294967296.0;
     }
@@ -916,17 +1220,7 @@ double tf_getrealtime(void) {
                    static_cast<double>(time->tick_multiplier) /
                    static_cast<double>(time_scale(*time));
 }
-FSIM_TF_BYTES(tf_gettflist, (void))
 PLI_INT32 tf_gettime(void) { return tf_getlongtime(nullptr); }
-// Simulation time in the simulation's time precision, unscaled.
-PLI_INT32 tf_getlongsimtime(PLI_INT32* const high_time) {
-  const auto* const time = current_time();
-  const uint64_t ticks = time == nullptr ? 0 : time->scheduler_ticks;
-  if (writable_pointer(high_time)) {
-    *high_time = static_cast<PLI_INT32>(ticks >> 32u);
-  }
-  return static_cast<PLI_INT32>(ticks & UINT32_MAX);
-}
 PLI_INT32 tf_gettimeprecision(void) {
   const auto* const time = current_time();
   return time == nullptr ? 0 : time->precision_exponent;
@@ -944,12 +1238,14 @@ PLI_INT32 tf_iasynchoff(PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_asynchoff() : 0;
 }
 PLI_INT32 tf_iasynchon(PLI_BYTE8* const instance) {
-  return current_instance_matches(instance) ? tf_asynchon() : 0;
+  return current_instance_matches(instance) ? tf_asynchon() : 1;
 }
 PLI_INT32 tf_iclearalldelays(PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_clearalldelays() : 1;
 }
-FSIM_TF_INT(tf_icopypvc_flag, (PLI_INT32, PLI_BYTE8*))
+PLI_INT32 tf_icopypvc_flag(const PLI_INT32 nparam, PLI_BYTE8* const instance) {
+  return current_instance_matches(instance) ? tf_copypvc_flag(nparam) : 0;
+}
 PLI_INT32 tf_ievaluatep(const PLI_INT32 parameter, PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_evaluatep(parameter) : 1;
 }
@@ -987,7 +1283,9 @@ PLI_INT32 tf_igetlongtime(PLI_INT32* const high_time,
 PLI_INT32 tf_igetp(const PLI_INT32 parameter, PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_getp(parameter) : 0;
 }
-FSIM_TF_INT(tf_igetpchange, (PLI_INT32, PLI_BYTE8*))
+PLI_INT32 tf_igetpchange(const PLI_INT32 nparam, PLI_BYTE8* const instance) {
+  return current_instance_matches(instance) ? tf_getpchange(nparam) : 0;
+}
 double tf_igetrealp(const PLI_INT32 parameter, PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_getrealp(parameter) : 0.0;
 }
@@ -1016,7 +1314,9 @@ PLI_BYTE8* tf_igetworkarea(PLI_BYTE8* const instance) {
 PLI_BYTE8* tf_imipname(PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_mipname() : nullptr;
 }
-FSIM_TF_INT(tf_imovepvc_flag, (PLI_INT32, PLI_BYTE8*))
+PLI_INT32 tf_imovepvc_flag(const PLI_INT32 nparam, PLI_BYTE8* const instance) {
+  return current_instance_matches(instance) ? tf_movepvc_flag(nparam) : 0;
+}
 p_tfnodeinfo tf_inodeinfo(const PLI_INT32 parameter, p_tfnodeinfo info,
                           PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_nodeinfo(parameter, info)
@@ -1048,18 +1348,18 @@ PLI_INT32 tf_irosynchronize(PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_rosynchronize() : 1;
 }
 PLI_INT32 tf_isetdelay(const PLI_INT32 delay, PLI_BYTE8* const instance) {
-  return current_instance_matches(instance) ? tf_setdelay(delay) : 1;
+  return current_instance_matches(instance) ? tf_setdelay(delay) : 0;
 }
 PLI_INT32 tf_isetlongdelay(const PLI_INT32 low, const PLI_INT32 high,
                            PLI_BYTE8* const instance) {
-  return current_instance_matches(instance) ? tf_setlongdelay(low, high) : 1;
+  return current_instance_matches(instance) ? tf_setlongdelay(low, high) : 0;
 }
 PLI_INT32 tf_isetrealdelay(const double delay, PLI_BYTE8* const instance) {
-  return current_instance_matches(instance) ? tf_setrealdelay(delay) : 1;
+  return current_instance_matches(instance) ? tf_setrealdelay(delay) : 0;
 }
 PLI_INT32 tf_isetworkarea(PLI_BYTE8* const work_area,
                           PLI_BYTE8* const instance) {
-  return current_instance_matches(instance) ? tf_setworkarea(work_area) : 1;
+  return current_instance_matches(instance) ? tf_setworkarea(work_area) : 0;
 }
 PLI_INT32 tf_isizep(const PLI_INT32 parameter, PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_sizep(parameter) : 0;
@@ -1067,33 +1367,60 @@ PLI_INT32 tf_isizep(const PLI_INT32 parameter, PLI_BYTE8* const instance) {
 PLI_BYTE8* tf_ispname(PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_spname() : nullptr;
 }
-FSIM_TF_INT(tf_istrdelputp,
-            (PLI_INT32, PLI_INT32, PLI_INT32, PLI_BYTE8*, PLI_INT32,
-             PLI_INT32, PLI_BYTE8*))
+PLI_INT32 tf_istrdelputp(const PLI_INT32 nparam, const PLI_INT32 bitlength,
+                         const PLI_INT32 format, PLI_BYTE8* const value_p,
+                         const PLI_INT32 delay, const PLI_INT32 delaytype,
+                         PLI_BYTE8* const instance) {
+  return current_instance_matches(instance)
+             ? tf_strdelputp(nparam, bitlength, format, value_p, delay,
+                             delaytype)
+             : 0;
+}
 PLI_BYTE8* tf_istrgetp(const PLI_INT32 parameter, const PLI_INT32 format,
                        PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_strgetp(parameter, format)
                                             : nullptr;
 }
-FSIM_TF_INT(tf_istrlongdelputp,
-            (PLI_INT32, PLI_INT32, PLI_INT32, PLI_BYTE8*, PLI_INT32,
-             PLI_INT32, PLI_INT32, PLI_BYTE8*))
-FSIM_TF_INT(tf_istrrealdelputp,
-            (PLI_INT32, PLI_INT32, PLI_INT32, PLI_BYTE8*, double, PLI_INT32,
-             PLI_BYTE8*))
+PLI_INT32 tf_istrlongdelputp(const PLI_INT32 nparam, const PLI_INT32 bitlength,
+                             const PLI_INT32 format, PLI_BYTE8* const value_p,
+                             const PLI_INT32 lowdelay,
+                             const PLI_INT32 highdelay,
+                             const PLI_INT32 delaytype,
+                             PLI_BYTE8* const instance) {
+  return current_instance_matches(instance)
+             ? tf_strlongdelputp(nparam, bitlength, format, value_p, lowdelay,
+                                 highdelay, delaytype)
+             : 0;
+}
+PLI_INT32 tf_istrrealdelputp(const PLI_INT32 nparam, const PLI_INT32 bitlength,
+                             const PLI_INT32 format, PLI_BYTE8* const value_p,
+                             const double realdelay, const PLI_INT32 delaytype,
+                             PLI_BYTE8* const instance) {
+  return current_instance_matches(instance)
+             ? tf_strrealdelputp(nparam, bitlength, format, value_p, realdelay,
+                                 delaytype)
+             : 0;
+}
 PLI_INT32 tf_isynchronize(PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_synchronize() : 1;
 }
-FSIM_TF_INT(tf_itestpvc_flag, (PLI_INT32, PLI_BYTE8*))
+PLI_INT32 tf_itestpvc_flag(const PLI_INT32 nparam, PLI_BYTE8* const instance) {
+  return current_instance_matches(instance) ? tf_testpvc_flag(nparam) : 0;
+}
 PLI_INT32 tf_itypep(const PLI_INT32 parameter, PLI_BYTE8* const instance) {
   return current_instance_matches(instance) ? tf_typep(parameter)
                                             : tf_nullparam;
 }
 
-FSIM_TF_VOID(tf_long_to_real, (PLI_INT32, PLI_INT32, double*))
+// A signed two's complement conversion (IEEE 1364-2001 25.29).
+void tf_long_to_real(const PLI_INT32 low, const PLI_INT32 high,
+                     double* const result) {
+  if (writable_pointer(result)) {
+    *result = static_cast<double>(std::bit_cast<int64_t>(join_long(low, high)));
+  }
+}
 PLI_BYTE8* tf_longtime_tostr(const PLI_INT32 low, const PLI_INT32 high) {
-  const auto value = (static_cast<uint64_t>(static_cast<PLI_UINT32>(high)) << 32u) |
-                     static_cast<PLI_UINT32>(low);
+  const auto value = join_long(low, high);
   try {
     std::array<char, 32> buffer{};
     const auto converted = std::to_chars(
@@ -1110,9 +1437,8 @@ PLI_INT32 tf_message(const PLI_INT32 level, PLI_BYTE8* const facility,
                      PLI_BYTE8* const message, ...) {
   va_list arguments;
   va_start(arguments, message);
-  const auto result = format_control(FSIM_TF_CONTROL_MESSAGE, 0, level,
-                                     facility, message_number, message,
-                                     arguments);
+  const auto result =
+      format_message(level, facility, message_number, message, arguments);
   va_end(arguments);
   return result;
 }
@@ -1122,12 +1448,41 @@ PLI_BYTE8* tf_mipname(void) {
              : context_name(current_call_context->module_instance_name,
                             module_instance_name);
 }
-FSIM_TF_INT(tf_movepvc_flag, (PLI_INT32))
-FSIM_TF_VOID(tf_multiply_long, (PLI_INT32*, PLI_INT32*, PLI_INT32, PLI_INT32))
+PLI_INT32 tf_movepvc_flag(const PLI_INT32 nparam) {
+  return save_pvc_flags(nparam, true);
+}
+void tf_multiply_long(PLI_INT32* const low1, PLI_INT32* const high1,
+                      const PLI_INT32 low2, const PLI_INT32 high2) {
+  update_long(low1, high1, low2, high2,
+              [](const uint64_t left, const uint64_t right) {
+                return left * right;
+              });
+}
+namespace {
+
+// The 0 and 1 strength bit patterns of a net bit (IEEE 1364-2001 25.35,
+// 7.10). The host reports no drive strength, so a known bit is strong, an x
+// is strong on both scales and a z is high impedance on both.
+s_strengthval* scalar_strength(const fsim_tf_value_bridge_v3& value) {
+  constexpr PLI_INT32 strong = 0x40;
+  constexpr PLI_INT32 high_impedance = 0x01;
+  const auto state = value.kind == FSIM_TF_VALUE_INTEGRAL &&
+                             value.word_count != 0
+                         ? logic_character(value.vector_words[0], 0)
+                         : 'x';
+  strength_value = state == '0'   ? s_strengthval{strong, 0}
+                   : state == '1' ? s_strengthval{0, strong}
+                   : state == 'z' ? s_strengthval{high_impedance,
+                                                  high_impedance}
+                                  : s_strengthval{strong, strong};
+  return &strength_value;
+}
+
+}  // namespace
+
 p_tfnodeinfo tf_nodeinfo(const PLI_INT32 parameter, p_tfnodeinfo info) {
   const auto* const argument = current_argument(parameter);
-  if (argument == nullptr || argument->kind == tf_nullparam ||
-      argument->kind == tf_string) {
+  if (argument == nullptr || argument->kind == tf_string) {
     return nullptr;
   }
   if (info == nullptr) {
@@ -1136,27 +1491,38 @@ p_tfnodeinfo tf_nodeinfo(const PLI_INT32 parameter, p_tfnodeinfo info) {
     return nullptr;
   }
   *info = {};
+  if (argument->kind == tf_nullparam) {
+    info->node_type = tf_null_node;
+    return info;
+  }
+  const bool real = argument->kind == tf_readonlyreal ||
+                    argument->kind == tf_readwritereal;
   info->node_symbol = argument->expression;
-  info->node_ngroups = static_cast<PLI_INT32>((argument->width + 31u) / 32u);
-  info->node_vec_size = static_cast<PLI_INT32>(argument->width);
+  // A real node has no vector groups or bits (IEEE 1364-2001 25.35).
+  info->node_ngroups =
+      real ? 0 : static_cast<PLI_INT32>((argument->width + 31u) / 32u);
+  info->node_vec_size = real ? 0 : static_cast<PLI_INT32>(argument->width);
   info->node_sign = static_cast<PLI_INT32>(argument->is_signed);
   info->node_ms_index = argument->lhs_select >= 0
                             ? argument->lhs_select
                             : static_cast<PLI_INT32>(argument->width - 1u);
   info->node_ls_index = argument->rhs_select >= 0 ? argument->rhs_select : 0;
-  if (argument->kind == tf_readonlyreal ||
-      argument->kind == tf_readwritereal) {
+  info->node_lhs_element = argument->lhs_select;
+  info->node_rhs_element = argument->rhs_select;
+  if (real) {
     info->node_type = tf_real_node;
-  } else if (argument->width == 1u) {
-    info->node_type = tf_netscalar_node;
-  } else if (argument->width == 32u && argument->is_signed != 0) {
-    info->node_type = tf_integer_node;
+  } else if (writable_kind(argument->kind)) {
+    info->node_type = argument->width == 32u && argument->is_signed != 0
+                          ? tf_integer_node
+                          : tf_reg_node;
   } else {
-    info->node_type = writable_kind(argument->kind) ? tf_reg_node
-                                                    : tf_netvector_node;
+    info->node_type = argument->width == 1u ? tf_netscalar_node
+                                            : tf_netvector_node;
   }
   if (auto* const value = current_value(parameter); value != nullptr) {
-    if (value->kind == FSIM_TF_VALUE_INTEGRAL) {
+    if (info->node_type == tf_netscalar_node) {
+      info->node_value.strengthval_p = scalar_strength(*value);
+    } else if (value->kind == FSIM_TF_VALUE_INTEGRAL) {
       info->node_value.vecval_p = value->vector_words;
     } else if (value->kind == FSIM_TF_VALUE_REAL) {
       info->node_value.real_val_p = &value->real;
@@ -1184,9 +1550,26 @@ PLI_INT32 tf_propagatep(const PLI_INT32 parameter) {
 }
 namespace {
 
+// An integer written to a real variable converts to real (IEEE 1364-2001
+// 24.3.7); tf_putp passes a 32-bit signed value, tf_putlongp a 64-bit one.
+double integer_to_real(const PLI_UINT32 low, const PLI_UINT32 high,
+                       const bool wide) {
+  return wide ? static_cast<double>(std::bit_cast<int64_t>(
+                    join_long(static_cast<PLI_INT32>(low),
+                              static_cast<PLI_INT32>(high))))
+              : static_cast<double>(std::bit_cast<int32_t>(low));
+}
+
 PLI_INT32 assign_integral_result(const PLI_INT32 parameter,
-                                 const PLI_UINT32 low,
-                                 const PLI_UINT32 high) {
+                                 const PLI_UINT32 low, const PLI_UINT32 high,
+                                 const bool wide) {
+  if (parameter == 0 && current_call_context != nullptr &&
+      current_call_context->phase == FSIM_TF_CALL_PHASE_CALL &&
+      current_call_context->kind == FSIM_TF_CALL_RESULT_REAL) {
+    current_call_context->real = integer_to_real(low, high, wide);
+    current_call_context->assigned = 1;
+    return 0;
+  }
   if (parameter != 0 || current_call_context == nullptr ||
       current_call_context->phase != FSIM_TF_CALL_PHASE_CALL ||
       current_call_context->kind != FSIM_TF_CALL_RESULT_INTEGRAL ||
@@ -1209,8 +1592,14 @@ PLI_INT32 assign_integral_result(const PLI_INT32 parameter,
 
 PLI_INT32 assign_integral_argument(const PLI_INT32 parameter,
                                    const PLI_UINT32 low,
-                                   const PLI_UINT32 high) {
+                                   const PLI_UINT32 high, const bool wide) {
   auto* const value = current_value(parameter);
+  if (value != nullptr && value->kind == FSIM_TF_VALUE_REAL &&
+      value->writable != 0) {
+    value->real = integer_to_real(low, high, wide);
+    value->assigned = 1;
+    return 0;
+  }
   if (value == nullptr || value->kind != FSIM_TF_VALUE_INTEGRAL ||
       value->writable == 0 || value->word_count == 0 ||
       value->vector_words == nullptr) {
@@ -1235,18 +1624,19 @@ PLI_INT32 tf_putlongp(const PLI_INT32 parameter, const PLI_INT32 low,
   return parameter == 0
              ? assign_integral_result(parameter,
                                       static_cast<PLI_UINT32>(low),
-                                      static_cast<PLI_UINT32>(high))
+                                      static_cast<PLI_UINT32>(high), true)
              : assign_integral_argument(parameter,
                                         static_cast<PLI_UINT32>(low),
-                                        static_cast<PLI_UINT32>(high));
+                                        static_cast<PLI_UINT32>(high), true);
 }
 
 PLI_INT32 tf_putp(const PLI_INT32 parameter, const PLI_INT32 value) {
   return parameter == 0
              ? assign_integral_result(parameter,
-                                      static_cast<PLI_UINT32>(value), 0)
+                                      static_cast<PLI_UINT32>(value), 0, false)
              : assign_integral_argument(parameter,
-                                        static_cast<PLI_UINT32>(value), 0);
+                                        static_cast<PLI_UINT32>(value), 0,
+                                        false);
 }
 
 PLI_INT32 tf_putrealp(const PLI_INT32 parameter, const double value) {
@@ -1271,7 +1661,25 @@ PLI_INT32 tf_putrealp(const PLI_INT32 parameter, const double value) {
   return 0;
 }
 FSIM_TF_INT(tf_read_restart, (PLI_BYTE8*, PLI_INT32))
-FSIM_TF_VOID(tf_real_to_long, (double, PLI_INT32*, PLI_INT32*))
+// Rounds to the nearest integer, halves away from zero, saturating (IEEE
+// 1364-2001 25.42 and the Verilog rounding rule of 25.21).
+void tf_real_to_long(const double value, PLI_INT32* const low,
+                     PLI_INT32* const high) {
+  if (!writable_pointer(low) || !writable_pointer(high)) {
+    return;
+  }
+  int64_t converted{};
+  if (std::isnan(value)) {
+    converted = 0;
+  } else if (value >= 9223372036854775808.0) {
+    converted = std::numeric_limits<int64_t>::max();
+  } else if (value <= -9223372036854775808.0) {
+    converted = std::numeric_limits<int64_t>::min();
+  } else {
+    converted = static_cast<int64_t>(std::llround(value));
+  }
+  store_long(std::bit_cast<uint64_t>(converted), low, high);
+}
 PLI_INT32 tf_rosynchronize(void) {
   return append_synchronization(FSIM_TF_SYNCHRONIZATION_READ_ONLY);
 }
@@ -1301,32 +1709,32 @@ void tf_scale_realdelay(PLI_BYTE8* const instance, const double delay,
                       : delay * static_cast<double>(time_scale(*time)) /
                             static_cast<double>(time->tick_multiplier);
 }
+// The delay routines return 1 when the reactivation is scheduled and 0 on
+// error (IEEE 1364-2001 25.46-25.48).
 PLI_INT32 tf_setdelay(const PLI_INT32 delay) {
   uint64_t ticks{};
   return delay < 0 || !delay_ticks(static_cast<uint64_t>(delay), ticks)
-             ? 1
-             : append_delay(ticks);
+             ? 0
+             : static_cast<PLI_INT32>(append_delay(ticks) == 0);
 }
 PLI_INT32 tf_setlongdelay(const PLI_INT32 low, const PLI_INT32 high) {
   uint64_t ticks{};
-  const auto local = (static_cast<uint64_t>(static_cast<PLI_UINT32>(high)) << 32u) |
-                     static_cast<PLI_UINT32>(low);
-  return !delay_ticks(local, ticks) ? 1 : append_delay(ticks);
+  return high < 0 || !delay_ticks(join_long(low, high), ticks)
+             ? 0
+             : static_cast<PLI_INT32>(append_delay(ticks) == 0);
 }
 PLI_INT32 tf_setrealdelay(const double delay) {
-  auto* const time = current_time();
-  if (time == nullptr || !std::isfinite(delay) || delay < 0.0) return 1;
-  const auto scaled = static_cast<long double>(delay) * time_scale(*time) /
-                      time->tick_multiplier;
-  const auto rounded = std::floor(scaled + 0.5L);
-  if (!(rounded < std::ldexp(1.0L, 64))) return 1;
-  return append_delay(static_cast<uint64_t>(rounded));
+  uint64_t ticks{};
+  return !real_delay_ticks(delay, ticks)
+             ? 0
+             : static_cast<PLI_INT32>(append_delay(ticks) == 0);
 }
+// Always returns 0 (IEEE 1364-2001 25.49); outside a call there is no work
+// area to set.
 PLI_INT32 tf_setworkarea(PLI_BYTE8* const work_area) {
-  if (current_call_context == nullptr) {
-    return 1;
+  if (current_call_context != nullptr) {
+    current_call_context->work_area = work_area;
   }
-  current_call_context->work_area = work_area;
   return 0;
 }
 PLI_BYTE8* tf_spname(void) {
@@ -1335,14 +1743,28 @@ PLI_BYTE8* tf_spname(void) {
                                                current_call_context->scope_name,
                                                scope_name);
 }
-FSIM_TF_INT(tf_strdelputp,
-            (PLI_INT32, PLI_INT32, PLI_INT32, PLI_BYTE8*, PLI_INT32,
-             PLI_INT32))
+// The delay is a non-negative count of the module's time units (25.52).
+PLI_INT32 tf_strdelputp(const PLI_INT32 nparam, const PLI_INT32 bitlength,
+                        const PLI_INT32 format, PLI_BYTE8* const value_p,
+                        const PLI_INT32 delay, const PLI_INT32 delaytype) {
+  uint64_t ticks{};
+  const bool valid =
+      delay >= 0 && delay_ticks(static_cast<uint64_t>(delay), ticks);
+  return put_string(nparam, bitlength, format, value_p, valid, ticks,
+                    delaytype);
+}
 PLI_BYTE8* tf_strgetp(const PLI_INT32 parameter, const PLI_INT32 format) {
   const auto* const argument = current_argument(parameter);
   auto* const value = current_value(parameter);
-  if (argument == nullptr || value == nullptr ||
-      value->kind != FSIM_TF_VALUE_INTEGRAL) {
+  if (argument == nullptr || value == nullptr) {
+    return nullptr;
+  }
+  // A string argument returns its text and ignores the format (IEEE
+  // 1364-2001 25.53).
+  if (value->kind == FSIM_TF_VALUE_STRING) {
+    return value->string_value;
+  }
+  if (value->kind != FSIM_TF_VALUE_INTEGRAL) {
     return nullptr;
   }
   try {
@@ -1359,27 +1781,81 @@ PLI_BYTE8* tf_strgettime(void) {
   if (current_time() == nullptr) {
     return nullptr;
   }
-  PLI_INT32 high{};
-  const auto low = tf_getlongsimtime(&high);
-  return tf_longtime_tostr(low, high);
+  const auto ticks = simulation_ticks();
+  return tf_longtime_tostr(static_cast<PLI_INT32>(static_cast<PLI_UINT32>(ticks)),
+                           static_cast<PLI_INT32>(static_cast<PLI_UINT32>(
+                               ticks >> 32u)));
 }
-FSIM_TF_INT(tf_strlongdelputp,
-            (PLI_INT32, PLI_INT32, PLI_INT32, PLI_BYTE8*, PLI_INT32,
-             PLI_INT32, PLI_INT32))
-FSIM_TF_INT(tf_strrealdelputp,
-            (PLI_INT32, PLI_INT32, PLI_INT32, PLI_BYTE8*, double, PLI_INT32))
-FSIM_TF_INT(tf_subtract_long,
-            (PLI_INT32*, PLI_INT32*, PLI_INT32, PLI_INT32))
+PLI_INT32 tf_strlongdelputp(const PLI_INT32 nparam, const PLI_INT32 bitlength,
+                            const PLI_INT32 format, PLI_BYTE8* const value_p,
+                            const PLI_INT32 lowdelay, const PLI_INT32 highdelay,
+                            const PLI_INT32 delaytype) {
+  uint64_t ticks{};
+  const bool valid = highdelay >= 0 &&
+                     delay_ticks(join_long(lowdelay, highdelay), ticks);
+  return put_string(nparam, bitlength, format, value_p, valid, ticks,
+                    delaytype);
+}
+PLI_INT32 tf_strrealdelputp(const PLI_INT32 nparam, const PLI_INT32 bitlength,
+                            const PLI_INT32 format, PLI_BYTE8* const value_p,
+                            const double realdelay, const PLI_INT32 delaytype) {
+  uint64_t ticks{};
+  const bool valid = real_delay_ticks(realdelay, ticks);
+  return put_string(nparam, bitlength, format, value_p, valid, ticks,
+                    delaytype);
+}
+PLI_INT32 tf_subtract_long(PLI_INT32* const low1, PLI_INT32* const high1,
+                           const PLI_INT32 low2, const PLI_INT32 high2) {
+  update_long(low1, high1, low2, high2,
+              [](const uint64_t left, const uint64_t right) {
+                return left - right;
+              });
+  return 0;
+}
 PLI_INT32 tf_synchronize(void) {
   return append_synchronization(FSIM_TF_SYNCHRONIZATION_READ_WRITE);
 }
-FSIM_TF_INT(tf_testpvc_flag, (PLI_INT32))
+// The OR of the saved flags (25.59).
+PLI_INT32 tf_testpvc_flag(const PLI_INT32 nparam) {
+  uint32_t first{};
+  uint32_t last{};
+  if (!pvc_range(nparam, first, last)) {
+    return 0;
+  }
+  uint8_t any = 0;
+  for (auto number = first; number <= last; ++number) {
+    any |= current_host->pvc_saved[number - 1];
+  }
+  return any;
+}
+// Stores the text for the next tf_message (IEEE 1364-2001 25.60).
 PLI_INT32 tf_text(PLI_BYTE8* const format, ...) {
   va_list arguments;
   va_start(arguments, format);
-  const auto result = format_control(FSIM_TF_CONTROL_OUTPUT, 1, 0, nullptr,
-                                     nullptr, format, arguments);
+  PLI_INT32 result = 1;
+  uint32_t format_size{};
+  if (format != nullptr && current_call_context != nullptr &&
+      bounded_text_size(format, FSIM_TF_CONTROL_MAX_TEXT_SIZE, format_size)) {
+    const auto formatted = std::vsnprintf(control_text.data(),
+                                          control_text.size(), format,
+                                          arguments);
+    if (formatted >= 0 &&
+        static_cast<uint32_t>(formatted) <= FSIM_TF_CONTROL_MAX_TEXT_SIZE &&
+        pending_text.size() + static_cast<uint32_t>(formatted) <=
+            FSIM_TF_CONTROL_MAX_TEXT_SIZE) {
+      try {
+        pending_text.append(control_text.data(),
+                            static_cast<uint32_t>(formatted));
+        result = 0;
+      } catch (...) {
+        pending_text.clear();
+      }
+    }
+  }
   va_end(arguments);
+  if (result != 0) {
+    fail_control();
+  }
   return result;
 }
 void tf_unscale_longdelay(PLI_BYTE8* const instance, const PLI_INT32 low,
@@ -1415,15 +1891,6 @@ PLI_INT32 tf_warning(PLI_BYTE8* const format, ...) {
   return result;
 }
 FSIM_TF_INT(tf_write_save, (PLI_BYTE8*, PLI_INT32))
-PLI_BYTE8* tf_getroutine(void) {
-  return current_call_context == nullptr ? nullptr
-                                         : context_name(
-                                               current_call_context->routine_name,
-                                               routine_name);
-}
-PLI_BYTE8* tf_igetroutine(PLI_BYTE8* const instance) {
-  return current_instance_matches(instance) ? tf_getroutine() : nullptr;
-}
 
 #undef FSIM_TF_INT
 #undef FSIM_TF_DOUBLE
@@ -1431,3 +1898,38 @@ PLI_BYTE8* tf_igetroutine(PLI_BYTE8* const instance) {
 #undef FSIM_TF_EXPR
 #undef FSIM_TF_NODE
 #undef FSIM_TF_VOID
+
+namespace fsim::runtime::acc_detail {
+
+std::shared_ptr<void> suspend_tf_call() {
+  struct Suspended {
+    fsim_tf_call_context_v3* context;
+    s_tfexprinfo expression;
+    s_tfnodeinfo node;
+    s_strengthval strength;
+    p_tfexprinfo last_expression;
+    PLI_INT32 last_parameter;
+    std::string text;
+  };
+  auto* const saved = new Suspended{current_call_context, expression_info,
+                                    node_info,           strength_value,
+                                    last_expression_info,
+                                    last_expression_parameter, pending_text};
+  current_call_context = nullptr;
+  last_expression_info = nullptr;
+  last_expression_parameter = 0;
+  pending_text.clear();
+  return std::shared_ptr<void>(saved, [](void* const pointer) {
+    auto* const suspended = static_cast<Suspended*>(pointer);
+    current_call_context = suspended->context;
+    expression_info = suspended->expression;
+    node_info = suspended->node;
+    strength_value = suspended->strength;
+    last_expression_info = suspended->last_expression;
+    last_expression_parameter = suspended->last_parameter;
+    pending_text = std::move(suspended->text);
+    delete suspended;
+  });
+}
+
+}  // namespace fsim::runtime::acc_detail

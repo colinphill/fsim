@@ -27,6 +27,36 @@ governed clause, arbitrary-width, engine, artifact, and public-API evidence.
 | Imported tasks | Declaration-checked `context` task registration, deterministic timed suspension/resume, cancellation, nested callback re-entry, transactional publication, scheduler containment | `runtime_dpi_tests.cpp` |
 | Plug-ins | Relative versioned manifests, language-correct C11/C++20 argv compile/link plans, exact symbols, ABI descriptor, SHA-256 provenance/cache identity, leased lifetime and quarantine | `runtime_dpi_tests.cpp` |
 
+## Live call service: argument types
+
+`fsim simulate` calls an import through libffi
+(`src/app/application_dpi_foreign.cpp`) with the C representation of
+IEEE 1800-2023 Annex H. The lowerer maps each formal to a signature code
+(`hir_dpi_profile` in `lowerer_hir_callable.cpp`, `dpi_c_type.cpp`); the
+service parses the signature once per call site.
+
+| Formal | C representation |
+|---|---|
+| `byte`, `shortint`, `int`, `longint` (and unsigned), `real`, `shortreal`, `chandle`, `string`, scalar `bit`/`logic` | by value for an input, by pointer for an output or inout (H.7.4, H.8) |
+| packed array, packed struct or union, `bit [W-1:0]`, `logic [...]` | `svBitVecVal*` / `svLogicVecVal*` in canonical form (H.7.7); `W` is any constant expression of the declaring scope (a literal, a parameter, `$clog2`, arithmetic) |
+| `integer`, `time` | a 4-state vector of 32 or 64 bits |
+| enumeration | the base type |
+| sized unpacked array `int a [3:0]`, `bit [7:0] b [2][3]` | a pointer to the elements in normalized order: the lowest index is C index 0 in each dimension, row-major, in every direction (H.7.3, H.7.6) |
+| open array (`int a []`, `bit [] v`, `logic [] a [3:1]`) | an `svOpenArrayHandle` (H.12); an unsized unpacked dimension takes the actual's range, an unsized packed dimension its linearized width; `svLeft`, `svRight`, `svLow`, `svHigh`, `svSize`, `svDimensions`, `svGetArrayPtr`, `svGetArrElemPtr*` and the vector accessors work on it |
+| unpacked struct | a pointer to a C structure with the C compiler's layout of the members (H.7.8); nested structures and unpacked-array members included |
+| array of a struct, `real`, `shortreal`, `chandle` or enumeration | as an array of its element type, sized or open |
+
+An open-array formal of any direction accepts a dynamic array or queue
+actual: its size when called is the size of the array, the elements the C code
+writes copy back, and the size is unchanged (35.5.6.1). A dynamic array,
+queue or open array formal is an error in an export, as is a class formal, an
+unpacked union, and a result that is not a small value (`FSIM-SV-SEM-460` to
+`-463`). Exports with sized unpacked or struct formals are called from C with
+the element pointer or the structure pointer as the argument.
+
+Not supported: an array of `string` formals, and a structure with a `string`,
+dynamic array, queue or class member.
+
 ## Negative matrix
 
 | Boundary | Rejected before publication |

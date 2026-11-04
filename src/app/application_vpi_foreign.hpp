@@ -3,7 +3,9 @@
 
 #include "fsim/elaboration/elaborator.hpp"
 
+#include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -71,6 +73,20 @@ public:
     virtual void run_error(std::string_view message) noexcept
     {
         (void)message;
+    }
+    /// The data vpi_put_data stored during the last save, by save/restart
+    /// id, for the save/restart driver to write into the saved state
+    /// (IEEE 1800-2023 38.31).
+    [[nodiscard]] virtual std::map<std::int32_t, std::string> saved_data()
+        const
+    {
+        return { };
+    }
+    /// The data sets a restart read back; vpi_get_data returns them during
+    /// the restart callbacks (IEEE 1800-2023 38.9).
+    virtual void restore_data(std::map<std::int32_t, std::string> data)
+    {
+        (void)data;
     }
     /// Bracket a call of the other interface's callbacks, during which this
     /// service answers calls too.

@@ -14,9 +14,7 @@ using fsim::runtime::TfContainmentError;
 using fsim::runtime::TfNativePointerAccess;
 using fsim::runtime::validate_tf_native_pointer;
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 [[nodiscard]] bool readable(const void* const pointer,
                             const std::size_t size) noexcept {

@@ -1,0 +1,48 @@
+#c module name=top full=top type=20 fulltype=224
+#c top parent (null)
+#c child name=u1 full=top.u1 type=20 fulltype=226
+#c child defname=leaf
+#c children=1
+#c net name=io full=top.io type=25 fulltype=260
+#c net name=out full=top.out type=25 fulltype=260
+#c variable name=stim full=top.stim type=30 fulltype=30
+#c variable name=vec full=top.vec type=30 fulltype=30
+#c variable name=count full=top.count type=281 fulltype=281
+#c parameter name=WIDTH full=top.WIDTH type=220 fulltype=200
+#c parameter value=4 paramtype=200
+#c port name=a full=top.u1.a type=35 fulltype=250
+#c port direction=402 index=0
+#c port name=y full=top.u1.y type=35 fulltype=250
+#c port direction=404 index=1
+#c port name=io full=top.u1.io type=35 fulltype=250
+#c port direction=406 index=2
+#c primitive name=g1 full=top.u1.g1 type=210 fulltype=158
+#c terminal type=45 fulltype=47 direction=404 index=0
+#c terminal type=45 fulltype=46 direction=402 index=1
+#c wire parent name=u1 full=top.u1 type=20 fulltype=226
+#c wire scope name=u1 full=top.u1 type=20 fulltype=226
+#c size=4
+#c range=1 msb=3 lsb=0
+#c vec 1010
+#c oftype reg=1 net=0
+#c type name=accNet
+#c by name local name=out full=top.out type=25 fulltype=260
+#c by name nested name=w full=top.u1.w type=25 fulltype=260
+#c by name absolute name=out full=top.out type=25 fulltype=260
+#c by name missing (null)
+#c by name upward (null)
+#c by object name=y full=top.u1.y type=25 fulltype=260
+#c attribute default=7
+#c configure=1
+#c attribute zero=0
+#c attribute reset=9
+#c error flag=1
+#c error flag=1
+#c assign=0
+#c vec assigned 0101
+#c deassign=0
+#c vec deassigned 0101
+#c vcl added flag=0
+#c vcl tag=link reason=8 value=1
+#c vcl tag=link reason=8 value=0
+#c vcl deleted flag=0

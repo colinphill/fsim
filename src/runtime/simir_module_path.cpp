@@ -48,14 +48,17 @@ std::optional<SimulationTick> module_path_transition_delay(
   if (delays.size() == 1) return delays[0];
   const auto rise = delays[0];
   const auto fall = delays[1];
-  const auto turnoff = delays.size() == 2
-      ? std::min(rise, fall) : delays[2];
+  // Table 30-2 (IEEE 1800-2023 30.5.1): two delays give 0->z and z->1 the
+  // rise delay and 1->z and z->0 the fall delay; three give both turn-off
+  // transitions the third. (The smaller-of-both turn-off is a gate's, 28.16.)
+  const auto to_z_from_zero = delays.size() == 2 ? rise : delays[2];
+  const auto to_z_from_one = delays.size() == 2 ? fall : delays[2];
   const std::array<SimulationTick, 6> direct_delays{
       rise,
       fall,
-      turnoff,
+      to_z_from_zero,
       delays.size() >= 6 ? delays[3] : rise,
-      delays.size() >= 6 ? delays[4] : turnoff,
+      delays.size() >= 6 ? delays[4] : to_z_from_one,
       delays.size() >= 6 ? delays[5] : fall};
   const auto direct = [&](const Logic4 from, const Logic4 to)
       -> std::optional<SimulationTick> {
@@ -284,6 +287,20 @@ void Interpreter::Impl::evaluate_module_timing_checks(
     return transition_matches(event)
         && expression_enabled(event.condition);
   };
+  // The implicit $width data event: the reference signal with the
+  // opposite edge (IEEE 1800-2023 31.4.4).
+  const auto opposite_reference = [&](const ModuleTimingEvent& event) {
+    auto opposite = event;
+    for (auto& descriptor : opposite.edge_descriptors) {
+      std::ranges::reverse(descriptor);
+    }
+    if (event.edge == ModulePathEdge::posedge) {
+      opposite.edge = ModulePathEdge::negedge;
+    } else if (event.edge == ModulePathEdge::negedge) {
+      opposite.edge = ModulePathEdge::posedge;
+    }
+    return matches(opposite);
+  };
   const auto now = scheduler.now();
   for (std::size_t index = 0;
        index < module_timing_checks.size(); ++index) {
@@ -441,13 +458,15 @@ void Interpreter::Impl::evaluate_module_timing_checks(
         }
         break;
       case ModuleTimingCheckKind::width:
-        if (reference) {
-          const auto elapsed = positive_elapsed(
-              state.last_terminal_change);
+        // The reference edge is the timestamp and the opposite edge of
+        // the same signal the timecheck; the threshold defaults to zero
+        // (IEEE 1800-2023 31.4.4).
+        if (state.last_reference && opposite_reference(check.reference)) {
+          const auto elapsed = positive_elapsed(state.last_reference);
           violation = elapsed && *elapsed < check.limits[0]
-              && (!check.threshold
-                  || static_cast<SimulationTick>(*elapsed)
-                      > *check.threshold);
+              && static_cast<SimulationTick>(*elapsed)
+                  > check.threshold.value_or(0);
+          state.last_reference.reset();
         }
         break;
       case ModuleTimingCheckKind::setuphold:
@@ -523,9 +542,6 @@ void Interpreter::Impl::evaluate_module_timing_checks(
     }
     if (reference && timestamp_enabled) state.last_reference = now;
     if (data && timestamp_enabled) state.last_data = now;
-    if (check.reference.terminal.signal == changed) {
-      state.last_terminal_change = now;
-    }
     if (violation) report_module_timing_violation(index);
   }
 }
@@ -533,6 +549,9 @@ void Interpreter::Impl::evaluate_module_timing_checks(
 void Interpreter::Impl::report_module_timing_violation(
     const std::size_t check_index) {
   const auto& check = module_timing_checks.at(check_index);
+  if (timing_violation_hook) {
+    timing_violation_hook(static_cast<std::uint32_t>(check_index));
+  }
   if (report_hook) {
     report_hook(
         0,

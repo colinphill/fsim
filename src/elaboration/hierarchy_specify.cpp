@@ -1265,6 +1265,7 @@ void HierarchyBuilder::validate_verilog_specify(
             }
             normalized.identity = "sdf:timingcheck:" + path + ":"
                 + std::to_string(timing_check_ordinal++);
+            normalized.instance = path;
             const auto normalize_event = [&](
                                              const semantic::sv::TimingCheckEvent&
                                                  event,

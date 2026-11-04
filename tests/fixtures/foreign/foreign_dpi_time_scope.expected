@@ -1,0 +1,10 @@
+#c probe0 scope=top.u0
+#c probe0 time sim=5000 scaled=5.000 null_scaled=5000.000
+#c probe0 scale status=0 unit=-9 precision=-12 null_unit=-12 null_precision=-12
+#c probe0 lookup top=1 other=top.u1 nope=0
+#c probe0 put=0
+#c probe1 scope=top.u1
+#c probe1 time sim=2000000 scaled=2.000 null_scaled=2000000.000
+#c probe1 scale status=0 unit=-6 precision=-9 null_unit=-12 null_precision=-12
+#c probe1 lookup top=1 other=top.u1 nope=0
+#c probe1 user own=1 by_name=1 same=1 u0=0

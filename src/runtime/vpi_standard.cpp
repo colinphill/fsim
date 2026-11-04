@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/vpi_bridge.h"
+#include "acc_internal.hpp"
 
 #include <array>
 #include <atomic>
@@ -64,8 +65,6 @@ enum class Routine : std::uint32_t {
   McdPrint,
   McdVariablePrint,
   McdFlush,
-  FileOpen,
-  GetFile,
 };
 
 enum class ExtensionOperation : std::uint32_t {
@@ -90,11 +89,6 @@ struct ValueArrayArguments {
   p_vpi_arrayvalue value{};
   PLI_INT32* indexes{};
   PLI_UINT32 count{};
-};
-
-struct MultiHandleArguments {
-  vpiHandle second{};
-  va_list* remaining{};
 };
 
 struct AssertionCallbackArguments {
@@ -126,10 +120,6 @@ struct GoToArguments {
 struct FilterArguments {
   PLI_INT32 filter{};
   PLI_INT32 include_matches{};
-};
-
-struct FileOpenArguments {
-  const PLI_BYTE8* mode{};
 };
 
 [[nodiscard]] fsim_vpi_call_context_v1* current_context() noexcept {
@@ -193,6 +183,14 @@ template <typename T>
 [[nodiscard]] std::uint64_t pointer_argument(T* const pointer) noexcept {
   return static_cast<std::uint64_t>(
       reinterpret_cast<std::uintptr_t>(pointer));
+}
+
+// The save/restart id and the byte count travel in the argument: the id is
+// an identifier, not an object handle (IEEE 1800-2023 38.9, 38.31).
+[[nodiscard]] std::uint64_t save_restart_argument(
+    const PLI_INT32 identifier, const PLI_INT32 size) noexcept {
+  return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(size)) << 32U)
+      | static_cast<std::uint32_t>(identifier);
 }
 
 [[nodiscard]] std::uint32_t bounded_text_size(
@@ -351,16 +349,15 @@ vpiHandle vpi_handle_by_multi_index(
 
 vpiHandle vpi_handle_multi(
     const PLI_INT32 type, const vpiHandle first, const vpiHandle second, ...) {
-  va_list arguments;
-  va_start(arguments, second);
-  MultiHandleArguments packed{second, &arguments};
+  // The only multi-reference relation is vpiInterModPath, from an output port
+  // and an input port (IEEE 1800-2023 37.37, 38.22), so the service takes the
+  // two handles and any further references are not read.
   fsim_vpi_service_result_v1 result{};
   const auto request = make_request(
       FSIM_VPI_SERVICE_HIERARCHY, internal_handle(first),
-      static_cast<std::uint64_t>(type), pointer_argument(&packed));
-  const auto ok = invoke(Routine::HandleMulti, request, result);
-  va_end(arguments);
-  return ok ? public_handle(result.handle) : nullptr;
+      static_cast<std::uint64_t>(type), internal_handle(second));
+  return invoke(Routine::HandleMulti, request, result)
+      ? public_handle(result.handle) : nullptr;
 }
 
 vpiHandle vpi_iterate(const PLI_INT32 type, const vpiHandle reference) {
@@ -524,8 +521,8 @@ PLI_INT32 vpi_get_data(
     const PLI_INT32 size) {
   fsim_vpi_service_result_v1 result{};
   const auto request = make_request(
-      FSIM_VPI_SERVICE_VALUE, static_cast<fsim_vpi_handle_v1>(identifier),
-      static_cast<std::uint64_t>(size), pointer_argument(data));
+      FSIM_VPI_SERVICE_VALUE, 0U, save_restart_argument(identifier, size),
+      pointer_argument(data));
   return invoke(Routine::GetData, request, result)
       ? static_cast<PLI_INT32>(result.value) : 0;
 }
@@ -535,8 +532,8 @@ PLI_INT32 vpi_put_data(
     const PLI_INT32 size) {
   fsim_vpi_service_result_v1 result{};
   const auto request = make_request(
-      FSIM_VPI_SERVICE_VALUE, static_cast<fsim_vpi_handle_v1>(identifier),
-      static_cast<std::uint64_t>(size), pointer_argument(data));
+      FSIM_VPI_SERVICE_VALUE, 0U, save_restart_argument(identifier, size),
+      pointer_argument(data));
   return invoke(Routine::PutData, request, result)
       ? static_cast<PLI_INT32>(result.value) : 0;
 }
@@ -667,26 +664,6 @@ PLI_INT32 vpi_mcd_flush(const PLI_UINT32 descriptor) {
   const auto request = make_request(FSIM_VPI_SERVICE_IO, 0U, descriptor);
   return invoke(Routine::McdFlush, request, result)
       ? static_cast<PLI_INT32>(result.value) : 0;
-}
-
-PLI_INT32 vpi_fopen(
-    const PLI_BYTE8* const name, const PLI_BYTE8* const mode) {
-  FileOpenArguments packed{mode};
-  fsim_vpi_service_result_v1 result{};
-  const auto request = make_request(
-      FSIM_VPI_SERVICE_IO, 0U, 0U, pointer_argument(&packed), name);
-  return invoke(Routine::FileOpen, request, result)
-      ? static_cast<PLI_INT32>(result.value) : 0;
-}
-
-FILE* vpi_get_file(const PLI_INT32 descriptor) {
-  fsim_vpi_service_result_v1 result{};
-  const auto request = make_request(
-      FSIM_VPI_SERVICE_IO, 0U, static_cast<std::uint64_t>(descriptor));
-  return invoke(Routine::GetFile, request, result)
-      ? reinterpret_cast<FILE*>(
-            static_cast<std::uintptr_t>(result.user_data))
-      : nullptr;
 }
 
 vpiHandle vpi_register_assertion_cb(
@@ -837,3 +814,26 @@ fsim_vpi_current_call_context_v1(void) {
 }
 
 }  // extern "C"
+
+namespace fsim::runtime::acc_detail {
+
+vpiHandle register_vcl_callback(p_cb_data const callback) {
+  fsim_vpi_service_result_v1 result{};
+  // Extension operation 3: an ACC link's callback.
+  const auto request = make_request(
+      FSIM_VPI_SERVICE_CALLBACK, internal_handle(callback->obj),
+      static_cast<std::uint64_t>(callback->reason), pointer_argument(callback),
+      nullptr, 3U);
+  return invoke(Routine::RegisterCallback, request, result)
+      ? public_handle(result.handle) : nullptr;
+}
+
+bool deliver_vcl_changes(const vpiHandle callback) {
+  fsim_vpi_service_result_v1 result{};
+  // A nonzero argument delivers the pending changes; the callback stays.
+  const auto request = make_request(
+      FSIM_VPI_SERVICE_CALLBACK, internal_handle(callback), 1U);
+  return invoke(Routine::RemoveCallback, request, result);
+}
+
+}  // namespace fsim::runtime::acc_detail

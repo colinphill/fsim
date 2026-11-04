@@ -154,7 +154,9 @@ bool standard_object_type(const PLI_INT32 value) {
        value % 2 == 0) || value == accBitSelect || value == accPartSelect ||
       (value >= accTask && value <= accUserRealFunction && value % 2 == 0) ||
       value == accConstant || value == accConcat || value == accOperator ||
-      value == accMinTypMax) {
+      value == accMinTypMax || value == accPath || value == accWirePath ||
+      value == accCollapsedNet || value == accNamedBeginStat ||
+      value == accNamedForkStat || value == accModPathHasIfnone) {
     return true;
   }
   return false;
@@ -184,7 +186,7 @@ bool standard_behavior(const std::uint32_t kind, const PLI_INT32 value) {
     case FSIM_ACC_STANDARD_EDGE:
       return value >= accNoedge && value <= 63;
     case FSIM_ACC_STANDARD_DELAY_MODE:
-      return value >= accDelayModeNone && value <= accDelayModeVeritime;
+      return value >= accDelayModeNone && value <= accDelayModeMTM;
     case FSIM_ACC_STANDARD_UPDATE:
       return value >= accNoDelay && value <= accDeassignFlag;
     case FSIM_ACC_STANDARD_VALUE_FORMAT:

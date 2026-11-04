@@ -113,7 +113,8 @@ ExecutionPoint::ExecutionPoint(const ProcessId execution_process,
     const InstructionIndex execution_instruction,
     const ExecutionPointKind execution_kind, SourceLocation execution_source,
     std::string execution_scope, std::string execution_language_standard,
-    std::string execution_compatibility_profile)
+    std::string execution_compatibility_profile, std::string execution_callee,
+    std::optional<ProcessId> execution_parent)
     : process(execution_process)
     , design_process(source_process)
     , instruction(execution_instruction)
@@ -122,6 +123,8 @@ ExecutionPoint::ExecutionPoint(const ProcessId execution_process,
     , scope(std::move(execution_scope))
     , language_standard(std::move(execution_language_standard))
     , compatibility_profile(std::move(execution_compatibility_profile))
+    , callee(std::move(execution_callee))
+    , parent_process(execution_parent)
 {
 }
 

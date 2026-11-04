@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <deque>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -137,6 +138,11 @@ struct SystemVerilogVpiCallbackManager::Impl {
         };
         ScheduledTaskHandle scheduler_handle;
         SystemVerilogVpiTimedHandle timed_handle;
+        /// SystemVerilogVpiCallbackRegistration::keeps_pending_values.
+        bool keeps_pending_values { };
+        /// The last change dispatch_pending delivered to it ahead of the
+        /// change's own dispatch.
+        std::uint64_t delivered_through { };
     };
 
     std::uint64_t owner { };
@@ -190,6 +196,15 @@ struct SystemVerilogVpiCallbackManager::Impl {
     /// The order of the value changes observed so far: their callbacks run
     /// in that order.
     std::uint64_t next_change { 1 };
+    /// The objects with a registration that keeps pending values, and how
+    /// many such registrations each has.
+    std::map<fsim_vpi_handle_v1, std::uint32_t> pending_value_objects;
+    /// Their observed changes not yet dispatched, in order, with the value
+    /// of each.
+    std::map<fsim_vpi_handle_v1,
+        std::deque<std::pair<std::uint64_t,
+            std::optional<SystemVerilogVpiStoredValue>>>>
+        pending_values;
     std::array<bool,
         static_cast<std::size_t>(SystemVerilogVpiCallbackKind::EndOfRestart)
             + 1U>
@@ -228,6 +243,15 @@ namespace {
         if (found->second.kind == SystemVerilogVpiCallbackKind::ValueChange
             && found->second.object) {
             unindex_value_change_callback(state, *found->second.object, id);
+            if (found->second.keeps_pending_values) {
+                const auto counted
+                    = state.pending_value_objects.find(*found->second.object);
+                if (counted != state.pending_value_objects.end()
+                    && --counted->second == 0U) {
+                    state.pending_values.erase(counted->first);
+                    state.pending_value_objects.erase(counted);
+                }
+            }
         }
         state.records.erase(found);
         state.set_retired(id, status);
@@ -391,32 +415,59 @@ namespace {
                 return;
             }
             change = state->next_change++;
+            if (!state->pending_value_objects.empty()
+                && state->pending_value_objects.contains(object)) {
+                try {
+                    state->pending_values[object].emplace_back(change, value);
+                } catch (...) {
+                    // The change is still dispatched in its turn.
+                }
+            }
         }
         StableOrder order { };
         if (change > std::numeric_limits<StableOrder>::max()
                 - state->stable_order_base) {
             return;
         }
+
         order = state->stable_order_base + change;
         // The SystemVerilog Active region of the change, ahead of the NBA
         // region of the time slot; the generic queue would run only after
         // the SystemVerilog regions settle (IEEE 1800-2023 4.4.2, 38.36.1).
+        // A registration that received the change from dispatch_pending
+        // does not receive it again.
         const auto current = [](SystemVerilogVpiCallbackManager::Impl& locked,
-                                 const fsim_vpi_handle_v1 watched) {
+                                 const fsim_vpi_handle_v1 watched,
+                                 const std::uint64_t number) {
             std::scoped_lock lock { locked.mutex };
             const auto indexed
                 = locked.value_change_callbacks_by_object.find(watched);
-            return indexed != locked.value_change_callbacks_by_object.end()
+            auto callbacks = indexed != locked.value_change_callbacks_by_object.end()
                 ? indexed->second
                 : std::vector<std::uint64_t> { };
+            if (!locked.pending_values.empty()) {
+                const auto pending = locked.pending_values.find(watched);
+                if (pending != locked.pending_values.end()) {
+                    while (!pending->second.empty()
+                        && pending->second.front().first <= number) {
+                        pending->second.pop_front();
+                    }
+                    std::erase_if(callbacks, [&](const std::uint64_t id) {
+                        const auto found = locked.records.find(id);
+                        return found != locked.records.end()
+                            && found->second.delivered_through >= number;
+                    });
+                }
+            }
+            return callbacks;
         };
         try {
             state->scheduler->schedule_systemverilog(
                 callback_phase(SystemVerilogVpiCallbackKind::ValueChange),
                 order,
-                [weak, object, value, current](Scheduler&) {
+                [weak, object, value, change, current](Scheduler&) {
                     if (const auto locked = weak.lock()) {
-                        const auto callbacks = current(*locked, object);
+                        const auto callbacks = current(*locked, object, change);
                         if (!callbacks.empty()) {
                             (void)dispatch_callbacks(
                                 locked,
@@ -426,7 +477,7 @@ namespace {
                     }
                 });
         } catch (...) {
-            const auto callbacks = current(*state, object);
+            const auto callbacks = current(*state, object, change);
             std::scoped_lock lock { state->mutex };
             for (const auto id : callbacks) {
                 const auto found = state->records.find(id);
@@ -627,6 +678,9 @@ SystemVerilogVpiCallbackManager::register_callback(
             SystemVerilogVpiCallbackStatus::Active,
             { },
             { },
+            registration.kind == SystemVerilogVpiCallbackKind::ValueChange
+                && registration.keeps_pending_values,
+            { },
         });
     if (!inserted) {
         return registration_failure(
@@ -641,6 +695,9 @@ SystemVerilogVpiCallbackManager::register_callback(
             (void)created;
             try {
                 indexed->second.push_back(id);
+                if (registration.keeps_pending_values) {
+                    ++impl_->pending_value_objects[*registration.object];
+                }
             } catch (...) {
                 if (indexed->second.empty()) {
                     impl_->value_change_callbacks_by_object.erase(indexed);
@@ -778,6 +835,43 @@ SystemVerilogVpiCallbackManager::remove_callback(
     }
     if (scheduler_handle) {
         impl_->scheduler->cancel(scheduler_handle);
+    }
+    return SystemVerilogVpiCallbackError::None;
+}
+
+SystemVerilogVpiCallbackError
+SystemVerilogVpiCallbackManager::dispatch_pending(
+    const SystemVerilogVpiCallbackHandle handle)
+{
+    if (!impl_ || !handle) {
+        return SystemVerilogVpiCallbackError::InvalidHandle;
+    }
+    if (handle.owner != impl_->owner) {
+        return SystemVerilogVpiCallbackError::CrossManager;
+    }
+    std::vector<std::optional<SystemVerilogVpiStoredValue>> values;
+    {
+        std::scoped_lock lock { impl_->mutex };
+        const auto found = impl_->records.find(handle.id);
+        if (found == impl_->records.end()
+            || found->second.status != SystemVerilogVpiCallbackStatus::Active) {
+            return SystemVerilogVpiCallbackError::NotActive;
+        }
+        if (!found->second.keeps_pending_values || !found->second.object) {
+            return SystemVerilogVpiCallbackError::InvalidRequest;
+        }
+        const auto pending = impl_->pending_values.find(*found->second.object);
+        if (pending != impl_->pending_values.end()) {
+            for (const auto& [number, value] : pending->second) {
+                if (number > found->second.delivered_through) {
+                    values.push_back(value);
+                    found->second.delivered_through = number;
+                }
+            }
+        }
+    }
+    for (auto& value : values) {
+        dispatch_callback(impl_, handle.id, std::move(value));
     }
     return SystemVerilogVpiCallbackError::None;
 }

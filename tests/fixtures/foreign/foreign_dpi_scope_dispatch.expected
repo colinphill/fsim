@@ -1,0 +1,10 @@
+#c run scope=top
+#c note id=1 value=10 total=10
+#c note id=2 value=20 total=20
+#c note id=1 value=5 total=15
+#c wait id=2 time=8
+#c run wait status=0
+#c pkg scope=null
+#c run scope after=top
+#c run done time=8 pk_total=0
+#c bad scope=top

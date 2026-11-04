@@ -632,9 +632,6 @@ SV_VPI_DLLISPEC vpiHandle vpi_filter(
 /* Compatibility entry points implemented by the fsim link surface. */
 SV_VPI_DLLISPEC PLI_INT32 vpi_vcontrol(
    PLI_INT32 operation, va_list arguments);
-SV_VPI_DLLISPEC PLI_INT32 vpi_fopen(
-   const PLI_BYTE8 *name, const PLI_BYTE8 *mode);
-SV_VPI_DLLISPEC FILE *vpi_get_file(PLI_INT32 descriptor);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/runtime/file_scanning.hpp"
+#include "fsim/runtime/foreign_call_process.hpp"
 #include "fsim/runtime/scope_randomize.hpp"
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
@@ -956,8 +957,11 @@ const char* Interpreter::Impl::run_class_operation(
         const auto actual = operation.actuals[index];
         const auto string_actual = !operation.actual_kinds.empty()
             && operation.actual_kinds[index] == 1U;
+        // A stream actual (kind 2 in, kind 3 in and out) is a container
+        // register of bits.
         const auto stream_actual = !operation.actual_kinds.empty()
-            && operation.actual_kinds[index] == 2U;
+            && (operation.actual_kinds[index] == 2U
+                || operation.actual_kinds[index] == 3U);
         actuals.push_back(string_actual ? PackedLogic4(64)
                 : stream_actual
                 ? bit_stream_value(access.read_container(actual))
@@ -969,6 +973,11 @@ const char* Interpreter::Impl::run_class_operation(
         ? std::string_view { operation.method_identity }.substr(
               systemverilog_dpi_function_prefix.size())
         : std::string_view { operation.method_identity };
+    if (dpi) {
+        // The service keys an import call chain by its process (IEEE
+        // 1800-2023 35.9).
+        DpiCallProcess::set_current(process);
+    }
     auto result = dpi
         ? dpi_function_call_hook(identity, actuals, string_actuals,
               operation.actual_names, operation.actual_directions)
@@ -982,6 +991,10 @@ const char* Interpreter::Impl::run_class_operation(
         if (string_actual) {
             access.string(operation.actuals[index])
                 = std::move(string_actuals[index]);
+        } else if (!operation.actual_kinds.empty()
+            && operation.actual_kinds[index] == 3U) {
+            set_bit_stream(access.container(operation.actuals[index]),
+                actuals[index]);
         } else if (operation.actual_kinds.empty()
             || operation.actual_kinds[index] != 2U) {
             access.write(operation.actuals[index], std::move(actuals[index]));
@@ -2025,9 +2038,16 @@ void Interpreter::Impl::handle_boundary(
         }
         clear_wait_timeout(process);
         auto& cold = process.cold();
-        cold.current_source = actual_point.source;
-        cold.current_scope = process.program().operations().debug_scope(
-            actual_point.scope);
+        // A frame or constructor point only informs the foreign observers:
+        // the process stays at its last statement, as in the kernel.
+        const bool probe_only = actual_point.kind == DebugPointKind::frame_entry
+            || actual_point.kind == DebugPointKind::frame_exit
+            || actual_point.kind == DebugPointKind::class_constructed;
+        if (!probe_only) {
+            cold.current_source = actual_point.source;
+            cold.current_scope = process.program().operations().debug_scope(
+                actual_point.scope);
+        }
         auto kind = ExecutionPointKind::statement;
         switch (actual_point.kind) {
         case DebugPointKind::statement:
@@ -2048,13 +2068,29 @@ void Interpreter::Impl::handle_boundary(
         case DebugPointKind::call_return:
             kind = ExecutionPointKind::call_return;
             break;
+        case DebugPointKind::frame_entry:
+            kind = ExecutionPointKind::frame_start;
+            break;
+        case DebugPointKind::frame_exit:
+            kind = ExecutionPointKind::frame_end;
+            break;
+        case DebugPointKind::class_constructed:
+            kind = ExecutionPointKind::object_created;
+            break;
         case DebugPointKind::block_entry:
         case DebugPointKind::block_exit:
             break;
         }
+        if (probe_only) {
+            notify_execution_point(process, instruction, kind,
+                actual_point.source,
+                process.program().operations().debug_scope(actual_point.scope),
+                actual_point.callee.str());
+            return;
+        }
         notify_execution_point(
             process, instruction, kind, process.cold().current_source,
-            process.cold().current_scope);
+            process.cold().current_scope, actual_point.callee.str());
         if (scheduler.stop_requested()) {
             queue_current(process.id);
         }
@@ -2847,7 +2883,8 @@ void Interpreter::Impl::handle_boundary(
             const auto string_actual = !method->actual_kinds.empty()
                 && method->actual_kinds[index] == 1U;
             const auto stream_actual = !method->actual_kinds.empty()
-                && method->actual_kinds[index] == 2U;
+                && (method->actual_kinds[index] == 2U
+                    || method->actual_kinds[index] == 3U);
             actuals.push_back(
                 string_actual ? PackedLogic4(64)
                 : stream_actual
@@ -2862,6 +2899,9 @@ void Interpreter::Impl::handle_boundary(
             ? std::string_view { method->method_identity }.substr(
                   systemverilog_dpi_function_prefix.size())
             : std::string_view { method->method_identity };
+        if (dpi) {
+            DpiCallProcess::set_current(process.id);
+        }
         write_process_register(
             process,
             method->destination,
@@ -2887,6 +2927,11 @@ void Interpreter::Impl::handle_boundary(
             if (string_actual) {
                 process.executor->write_string_register(
                     method->actuals[index], string_actuals[index]);
+            } else if (!method->actual_kinds.empty()
+                && method->actual_kinds[index] == 3U) {
+                set_bit_stream(
+                    get_container_register(process, method->actuals[index]),
+                    actuals[index]);
             } else if (method->actual_kinds.empty()
                 || method->actual_kinds[index] != 2U) {
                 write_process_register(process, method->actuals[index], actuals[index]);

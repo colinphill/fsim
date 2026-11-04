@@ -47,17 +47,22 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL synchronization_misc(
     read_write_checks[1] = tf_getp(1) == 5;
     read_write_checks[2] = tf_gettime() == 9;
     read_write_checks[3] = tf_putp(1, 9) == 0;
-    read_write_checks[4] = tf_setdelay(2) == 0;
+    read_write_checks[4] = tf_setdelay(2) == 1;
     read_write_checks[5] = tf_rosynchronize() == 0;
     read_write_checks[6] = tf_warning(text("read-write")) == 0;
     return 41;
   }
   if (reason == reason_rosynch) {
+    // Code 1 with time 0 when no event is scheduled (IEEE 1364-2001 25.20).
+    PLI_INT32 next_low{7};
+    PLI_INT32 next_high{7};
     callback_ok = callback_ok && tf_getinstance() == expected_instance &&
                   tf_getp(1) == 9 && tf_gettime() == 12 &&
-                  tf_putp(1, 3) != 0 && tf_setdelay(1) != 0 &&
-                  tf_synchronize() != 0 && tf_rosynchronize() != 0 &&
-                  tf_text(text("read-only")) == 0;
+                  tf_getnextlongtime(&next_low, &next_high) == 1 &&
+                  next_low == 0 && next_high == 0 &&
+                  tf_putp(1, 3) != 0 && tf_setdelay(1) == 0 &&
+                  tf_synchronize() != 0 && tf_rosynchronize() != 0;
+    io_printf(text("read-only"));
     return 42;
   }
   callback_ok = false;

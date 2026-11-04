@@ -1,0 +1,9 @@
+#c run0 state=0
+#c disabling at 5
+#c run0 export status=1 disabled=1
+#c run0 returns 1
+#c run1 state=0
+#c export wait done at 23
+#c run1 export status=0 disabled=0
+#c run1 completed
+#c end at 23

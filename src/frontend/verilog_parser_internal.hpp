@@ -852,6 +852,7 @@ class VerilogParser final : private detail::ParserBase {
   // generate in `regions` (IEEE 1800-2017 28.3.5, 27.4).
   void parse_gate_primitive(
       std::vector<Statement>& statements,
+      std::vector<VerilogPrimitiveInstance>& primitives,
       const std::vector<SignalDeclaration>& signals,
       const std::vector<SignalDeclaration>& ports,
       std::vector<GenerateRegion>* regions = nullptr);
@@ -867,6 +868,7 @@ class VerilogParser final : private detail::ParserBase {
 
   void parse_switch_primitive(
       std::vector<Statement>& statements,
+      std::vector<VerilogPrimitiveInstance>& primitives,
       const std::vector<SignalDeclaration>& signals,
       const std::vector<SignalDeclaration>& ports);
 

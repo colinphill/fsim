@@ -1,0 +1,27 @@
+#c u0.z drivers=0 loads=1
+#c u1.a drivers=2 loads=1
+#c unannotated drivers=0 loads=0
+#c ic in type=vpiDelayTerm delaytype=2
+#c ic in value=1
+#c ic in device type=vpiDelayDevice delaytype=2 module=top in=1 out=1
+#c ic out type=vpiDelayTerm delaytype=2
+#c ic out device type=vpiDelayDevice delaytype=2 module=top in=1 out=1
+#c ic in drivers=0 loads=0
+#c ic out loads=1 drivers=0
+#c port in type=vpiDelayTerm delaytype=3
+#c port in device type=vpiDelayDevice delaytype=3 module=top.u1 in=1 out=1
+#c port out type=vpiDelayTerm delaytype=3
+#c port out device type=vpiDelayDevice delaytype=3 module=top.u1 in=1 out=1
+#c multi type=vpiInterModPath ports=2
+#c multi port=z dir=2
+#c multi port=a dir=1
+#c multi scaled 2.000 3.000 2.000
+#c multi simtime 2000 3000 2000
+#c multi two 2.000 3.000
+#c multi mtm 2.000 2.000 2.000 3.000 3.000 3.000
+#c multi pulse 2.000 2.000 2.000 3.000 3.000 3.000 2.000 2.000 2.000
+#c multi put 5.000 6.000 5.000
+#c multi append 6.000 7.000 6.000
+#c multi swapped=none
+#c multi unannotated=none
+#c multi other type=none

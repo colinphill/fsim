@@ -1,0 +1,16 @@
+#c range v=beef l aval=b bval=2
+#c range ret=beef
+#c open_packed dimensions=0 left=11 right=0 size=12
+#c open_packed ret=abc
+#c open_mixed dimensions=1 packed=4:0 unpacked=3:1 size=3
+#c open_mixed [3] aval=13 bval=a
+#c open_mixed [2] aval=12 bval=0
+#c open_mixed [1] aval=1 bval=0
+#c open_mixed ret=3
+#c sized a=10,11,12,13
+#c sized m=0,1,2,10,11,12
+#c sized ret=7 b0=11 b1=22 m00=100 m12=112
+#c scalars r=1.5,2.5,3.5
+#c scalars h=1,1
+#c scalars c=0,5,6
+#c scalars f0=0.25 f1=0.50 o0=1 o1=0

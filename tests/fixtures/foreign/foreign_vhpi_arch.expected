@@ -1,0 +1,21 @@
+#c cb start-of-elaboration phase=elaboration
+#c elab :top:u1 phase=elaboration reason=1 foreign=1
+#c elab process foreign=1 passive=0 postponed=0
+#c elab second process=0
+#c elab driver y write=1 foreign=1
+#c elab duplicate driver=0
+#c elab driver v members=2
+#c elab driver state=1
+#c elab mixed collection=0
+#c cb end-of-elaboration phase=elaboration
+#c cb start-of-initialization phase=initialization
+#c exec :top:u1 phase=initialization reason=1
+#c exec foreign kind=1
+#c exec schedule y=0 v=0 state=0
+#c 1 ns a=0 y=1 v=10 z=1 state=1
+#c 10 ns a=1 y=0 v=0
+#c 11 ns a=1 y=1 v=01 z=1 state=1
+#c 14 ns a=1 y=0 v=01 z=0 state=1
+#c 20 ns a=0 y=0 v=0
+#c 21 ns a=0 y=0 v=10 z=0 state=1
+#c 24 ns a=0 y=1 v=10 z=1 state=1

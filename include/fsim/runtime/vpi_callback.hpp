@@ -138,6 +138,10 @@ struct SystemVerilogVpiCallbackRegistration {
     /// its time slot (cbAfterDelay, cbAtStartOfSimTime; IEEE 1800-2023
     /// 38.36.2).
     bool at_slot_start { };
+    /// A value change registration whose object's changes keep their values
+    /// until dispatched, for dispatch_pending. Only ACC links ask for it, so
+    /// other registrations pay nothing for it.
+    bool keeps_pending_values { };
 };
 
 struct SystemVerilogVpiCallbackRegistrationResult {
@@ -209,6 +213,12 @@ public:
     [[nodiscard]] SystemVerilogVpiCallbackStatusResult status(
         SystemVerilogVpiCallbackHandle handle) const;
     [[nodiscard]] SystemVerilogVpiCallbackError remove_callback(
+        SystemVerilogVpiCallbackHandle handle);
+    /// Deliver to a value change registration that keeps pending values,
+    /// now, the changes of its object observed and not yet dispatched; their
+    /// own dispatch then skips it (an ACC value change link deleted after a
+    /// change, IEEE 1364-2001 23.97, 23.98).
+    [[nodiscard]] SystemVerilogVpiCallbackError dispatch_pending(
         SystemVerilogVpiCallbackHandle handle);
     [[nodiscard]] SystemVerilogVpiCallbackError dispatch_lifecycle(
         SystemVerilogVpiCallbackKind kind);

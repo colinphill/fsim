@@ -31,14 +31,14 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
     const ScopedCurrentDirectory source_root { directory / "work" };
-    static_assert(app::kRuntimeStateSchema == 97);
-    static_assert(app::kSemanticStateSchema == 4);
+    static_assert(app::kRuntimeStateSchema == 99);
+    static_assert(app::kSemanticStateSchema == 5);
     static_assert(app::kDesignIrStateSchema == 5);
     static_assert(app::kCompiledHirBundleSchema == 3);
     static_assert(app::kSystemVerilogConstraintHirStateSchema == 14);
     static_assert(app::kSystemVerilogCoverageStateSchema == 7);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 9);
+    static_assert(app::kVhdlHirStateSchema == 10);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {

@@ -699,6 +699,12 @@ public:
   /// SchedulerOptions::max_delta_cycles of this scheduler.
   [[nodiscard]] std::uint64_t max_delta_cycles() const noexcept;
   [[nodiscard]] std::uint64_t delta() const noexcept;
+  /// Simulation cycles started so far: one per time slot and per delta cycle
+  /// within it, plus the time steps the static kernel runs itself
+  /// (note_warped_cycles). VHPI vhpi_get_time reports it (IEEE 1076-2019
+  /// 23.18).
+  [[nodiscard]] std::uint64_t cycles() const noexcept;
+  void note_warped_cycles(std::uint64_t count) noexcept;
   [[nodiscard]] std::optional<SchedulerPhase> current_phase() const noexcept;
   /// Monotonic identity changed whenever work enters the phase currently
   /// being executed. Batch executors use it to stop before crossing newly

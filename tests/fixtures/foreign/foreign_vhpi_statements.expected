@@ -268,7 +268,7 @@
 #c handle1 not a collection: handle=null error=1
 #c no member: handle=null error=1
 #c process: handle=null error=1
-#c process message not implemented=1
+#c process message not implemented=0
 #c driver: handle=null error=1
 #c subprogram add1 vhpifuncdeclk params=1 pure=1 return=integer
 #c   param vhpiconstparamdeclk n type=integer

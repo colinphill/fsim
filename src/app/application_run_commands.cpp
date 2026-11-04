@@ -6,6 +6,7 @@
 #include "application_trace_control.hpp"
 #include "application_trace_hierarchy.hpp"
 #include "application_trace_observation.hpp"
+#include "application_workspace_store.hpp"
 #if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
 #  include "allocation_profile.hpp"
 #endif
@@ -19,6 +20,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <utility>
 #if defined(_WIN32)
 #  include <io.h>
 #else
@@ -248,6 +250,13 @@ int run_built_project(
     // static kernel serves them with its default plan (they watch and write
     // its signals at run time).
     plan_kernel_access(built, engine, foreign && config.run.foreign_probes);
+    // Only a run with a library compiles the primitive delay slots in
+    // (vpi_put_delays, acc_replace_delays); the others keep the constant
+    // delayed writes.
+    if (foreign) {
+        built.kernel_access.delay_slots = true;
+        (void)built.design.bind_primitive_delay_slots();
+    }
     if (profile_phases && !built.cone_fusion
         && !built.kernel_access.admit && static_kernel_requested(engine)) {
         // The census counts these runs as kernel-off, by gate.
@@ -313,6 +322,39 @@ int run_built_project(
                     | now.value.low;
             },
             time.profile().precision_exponent,
+            time.profile().unit_exponent,
+            [&simulation](const std::string_view name)
+                -> std::optional<std::string> {
+                const auto found
+                    = simulation.systemverilog_vpi_objects().find(name);
+                if (!found) {
+                    return std::nullopt;
+                }
+                using Kind = runtime::SystemVerilogVpiObjectKind;
+                const auto kind = found.value->kind;
+                // A configured top is published as a Root object.
+                if (kind != Kind::Root && kind != Kind::Module
+                    && kind != Kind::Interface && kind != Kind::Program
+                    && kind != Kind::GenerateScope) {
+                    return std::nullopt;
+                }
+                return found.value->full_name;
+            },
+            [&simulation](std::string_view path)
+                -> std::optional<std::pair<int, int>> {
+                // A generate scope has the time scale of its module.
+                while (true) {
+                    if (const auto scale
+                        = simulation.systemverilog_instance_time_scale(path)) {
+                        return scale;
+                    }
+                    const auto dot = path.rfind('.');
+                    if (dot == std::string_view::npos) {
+                        return std::nullopt;
+                    }
+                    path = path.substr(0U, dot);
+                }
+            },
         });
     }
     // Installed before the foreign libraries load, so a signal trap that
@@ -335,8 +377,13 @@ int run_built_project(
         || (vhpi_modules
             && has_language(semantic::Language::verilog,
                 semantic::Language::system_verilog));
+    // A foreign architecture needs a VHPI program that registers its model
+    // (IEEE 1076-2019 20.2.4); without a module that is an error the VHPI
+    // service reports.
     const bool vhpi_wanted = vhpi_modules
-        || (vpi_modules && has_language(semantic::Language::vhdl));
+        || (vpi_modules && has_language(semantic::Language::vhdl))
+        || (has_language(semantic::Language::vhdl)
+            && design_has_vhdl_foreign_architecture(simulation));
     const auto vhpi_print = [&] {
         return sink == SimulationOutputSink::builtin_stdout
             ? VhpiForeignService::PrintSink { [](const std::string_view text) {
@@ -345,10 +392,27 @@ int run_built_project(
             : VhpiForeignService::PrintSink {
                   [&output](const std::string_view text) { output << text; } };
     };
+    // The workspace's library directories, read only when a VHPI program
+    // asks for a physical name.
+    const auto vhpi_libraries = [root = config.base_directory] {
+        std::vector<std::pair<std::string, std::filesystem::path>> result;
+        std::string failure;
+        if (const auto locations
+            = workspace::Store { root }.library_locations(failure)) {
+            for (const auto& location : *locations) {
+                result.emplace_back(location.name,
+                    location.directory.is_absolute()
+                        ? location.directory
+                        : root / location.directory);
+            }
+        }
+        return result;
+    };
     std::unique_ptr<VhpiForeignService> vhpi_service;
     if (vhpi_wanted && !vhpi_modules) {
         vhpi_service = attach_vhpi_modules(
-            simulation, {}, vhpi_print(), plusargs, diagnostics);
+            simulation, {}, vhpi_print(), plusargs, diagnostics, {},
+            vhpi_libraries);
         if (!vhpi_service) {
             return 1;
         }
@@ -381,7 +445,8 @@ int run_built_project(
     if (vhpi_modules) {
         vhpi_service = attach_vhpi_modules(simulation,
             config.run.vhpi_modules, vhpi_print(), plusargs, diagnostics,
-            vpi_service ? vpi_service->calls() : ForeignCompanion {});
+            vpi_service ? vpi_service->calls() : ForeignCompanion {},
+            vhpi_libraries);
         if (!vhpi_service) {
             return 1;
         }

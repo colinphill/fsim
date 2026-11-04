@@ -404,6 +404,11 @@ inline constexpr std::string_view user_system_call_identity_prefix {
 inline constexpr std::string_view vhdl_foreign_call_identity_prefix {
     "$vhpi:" };
 
+/// Suffix of the name of the placeholder process of a foreign VHDL
+/// architecture's instance, after the instance path (IEEE 1076-2019 20.4).
+inline constexpr std::string_view vhdl_foreign_architecture_process_suffix {
+    ".$foreign" };
+
 /// Parser-free compiled-HIR elaboration. Unsupported residual structures are
 /// diagnosed instead of being reconstructed as syntax nodes.
 [[nodiscard]] ElaborationResult elaborate(
@@ -770,8 +775,12 @@ struct UdpTableInfo {
     std::string digest;
     bool sequential { };
     std::optional<frontend::VerilogUdpOutputSymbol> initial_output;
+    // The output name first, then the input names in port order.
     std::vector<std::string> terminals;
     std::vector<frontend::VerilogUdpTableRow> rows;
+    // The source text of each table entry, such as "0 ? : 1" (IEEE 1800-2023
+    // 29.3, 37.36 table entry).
+    std::vector<std::string> row_text;
 };
 
 struct SystemCPortInfo {
@@ -898,6 +907,100 @@ struct VerilogSpecifyPathInfo {
     frontend::SourceSpan source;
 };
 
+enum class VerilogPrimitiveKind : std::uint8_t {
+    gate,
+    switch_device,
+    pull,
+    udp,
+};
+
+/// One terminal of an elaborated primitive instance (IEEE 1800-2023 37.35
+/// prim term). A terminal that is a static selection of a signal has a
+/// nonzero width; any other expression (a constant or a concatenation) keeps
+/// its source text.
+struct VerilogPrimitiveTerminalInfo {
+    frontend::VerilogPrimitiveTerminalDirection direction {
+        frontend::VerilogPrimitiveTerminalDirection::Input
+    };
+    runtime::simir::SignalId signal { };
+    std::uint32_t offset { };
+    std::uint32_t width { };
+    std::string expression;
+};
+
+/// One transition delay of a primitive in simulation ticks. A delay without
+/// a minimum:typical:maximum triple repeats its value in all three.
+struct VerilogPrimitiveDelayInfo {
+    runtime::SimulationTick minimum { };
+    runtime::SimulationTick typical { };
+    runtime::SimulationTick maximum { };
+};
+
+/// One elaborated gate, switch, pull or UDP instance (IEEE 1800-2023 28, 29,
+/// 37.35). An element of an instance array is one record.
+struct VerilogPrimitiveInfo {
+    // The hierarchical path of the scope that holds the instance.
+    std::string instance;
+    // Empty for an unnamed instance; an array element is named "a[1]".
+    std::string name;
+    std::string full_name;
+    // The name of the instance array an element belongs to.
+    std::string array_name;
+    VerilogPrimitiveKind kind { VerilogPrimitiveKind::gate };
+    // The primitive keyword, or the UDP name.
+    std::string keyword;
+    // The UDP table of a UDP instance.
+    std::optional<UdpTableId> udp_table;
+    bool array_member { };
+    std::int64_t array_index { };
+    std::int64_t array_left { };
+    std::int64_t array_right { };
+    // In LRM order. A UDP instance has the output, then the inputs.
+    std::vector<VerilogPrimitiveTerminalInfo> terminals;
+    // Rise, fall and turn-off delays as written; empty without a delay.
+    std::vector<VerilogPrimitiveDelayInfo> delays;
+    // The drive strengths as frontend::VerilogStrength ranks.
+    std::optional<std::uint8_t> drive_zero;
+    std::optional<std::uint8_t> drive_one;
+    // The processes whose delayed writes (WriteInertial) carry the
+    // primitive's output delay: what vpi_put_delays retimes. Empty for an
+    // instance without a delay or whose delay is not simulated.
+    std::vector<runtime::simir::ProcessId> drivers;
+    frontend::SourceSpan source;
+};
+
+enum class SdfNetDelayKind : std::uint8_t {
+    interconnect,
+    port,
+};
+
+/// One end of an SDF net delay: the port or net an INTERCONNECT or PORT
+/// annotation names. `instance` is the SDF cell instance the annotation is
+/// in and `object` the hierarchical path of the port or net. `select_width`
+/// is the width of a bit or part select, 0 for the whole object.
+struct SdfNetDelayTerminal {
+    std::string instance;
+    std::string object;
+    runtime::simir::SignalId signal { };
+    bool port { };
+    std::uint32_t select_width { };
+};
+
+/// An interconnect or port delay that SDF annotation created (IEEE
+/// 1800-2023 37.37, 37.45). An unannotated design has none. `delays` are the
+/// twelve transition delays in ticks in the order of a module path
+/// (IEEE 1800-2023 30.5.1 Table 30-2). A port delay has one terminal:
+/// `destination` repeats `source`. `instance` is the instance the SDF cell
+/// names, the module the delay device belongs to.
+struct SdfNetDelayInfo {
+    SdfNetDelayKind kind { SdfNetDelayKind::interconnect };
+    std::string instance;
+    std::string identity;
+    SdfNetDelayTerminal source;
+    SdfNetDelayTerminal destination;
+    std::vector<runtime::SimulationTick> delays;
+};
+
 struct ElaboratedDesignState {
     std::string top;
     std::vector<std::string> roots;
@@ -931,6 +1034,8 @@ struct ElaboratedDesignState {
     std::optional<CodeCoverageInventory> code_coverage_inventory;
     std::optional<runtime::simir::SignalDriverInventory>
         signal_driver_inventory;
+    std::vector<VerilogPrimitiveInfo> verilog_primitives;
+    std::vector<SdfNetDelayInfo> sdf_net_delays;
 };
 
 /// One pure acyclic continuous-assignment cone selected for A2 fusion. The
@@ -984,16 +1089,21 @@ struct StaticKernelAccessPlan {
     /// process is a behavioral thread or a hosted process, so each can stop
     /// at a statement, and the members' debug points are executable.
     bool debug { };
+    /// A VPI or PLI library is loaded: the primitive drivers' delayed writes
+    /// are slotted WriteDelayed operations (bind_primitive_delay_slots), so
+    /// the kernel plan differs from the default one.
+    bool delay_slots { };
 
     /// Key text for persisted plans; empty for the default plan.
     [[nodiscard]] std::string identity() const
     {
-        if (!coverage && !debug) {
+        if (!coverage && !debug && !delay_slots) {
             return { };
         }
         std::string text { "access" };
         text += coverage ? ";coverage" : "";
         text += debug ? ";debug" : "";
+        text += delay_slots ? ";delay-slots" : "";
         return text;
     }
 };
@@ -1099,6 +1209,14 @@ public:
     container_aggregate_signal_aliases() const noexcept;
     [[nodiscard]] const std::vector<VhdlProtectedObjectInfo>&
     vhdl_protected_objects() const noexcept;
+    /// For a run with a VPI or PLI library: turn the delayed writes of every
+    /// primitive driver (VerilogPrimitiveInfo::drivers) into slotted
+    /// WriteDelayed operations, so vpi_put_delays and acc_replace_delays can
+    /// retime them (IEEE 1800-2023 38.32). Materializes the process programs
+    /// (their templates are no longer shared), and only when a primitive has
+    /// a driver. Runs without a library never call it and keep the constant
+    /// WriteInertial operations. Returns the operations changed.
+    std::size_t bind_primitive_delay_slots();
     /// Number of runtime processes without materializing artifact-backed rows.
     [[nodiscard]] std::size_t process_count() const noexcept;
     /// Materialize and return the public Process facade. This may allocate for
@@ -1112,6 +1230,10 @@ public:
     verilog_specify_paths() const noexcept;
     [[nodiscard]] const std::vector<runtime::simir::ModuleTimingCheck>&
     verilog_timing_checks() const noexcept;
+    [[nodiscard]] const std::vector<VerilogPrimitiveInfo>&
+    verilog_primitives() const noexcept;
+    [[nodiscard]] const std::vector<SdfNetDelayInfo>&
+    sdf_net_delays() const noexcept;
     [[nodiscard]] const std::vector<SystemCInstanceInfo>&
     systemc_instances() const noexcept;
     [[nodiscard]] const std::vector<SystemCProcessInfo>&
@@ -1321,6 +1443,8 @@ private:
     std::vector<UdpTableInfo> udp_tables_;
     std::vector<VerilogSpecifyPathInfo> verilog_specify_paths_;
     std::vector<runtime::simir::ModuleTimingCheck> verilog_timing_checks_;
+    std::vector<VerilogPrimitiveInfo> verilog_primitives_;
+    std::vector<SdfNetDelayInfo> sdf_net_delays_;
     std::vector<SystemCInstanceInfo> systemc_instances_;
     std::vector<SystemCProcessInfo> systemc_processes_;
     std::vector<SystemCNamedObjectInfo> systemc_objects_;

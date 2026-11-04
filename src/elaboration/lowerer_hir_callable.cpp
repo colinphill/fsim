@@ -8105,6 +8105,12 @@ bool Lowerer::lower_hir_class_task_call(
     if (!profile) {
         return false;
     }
+    // A step task of an export scope runs in that instance (IEEE 1800-2023
+    // 35.5.3).
+    if (hir_task_receiver_override_ && !profile->static_method) {
+        profile->interface_receiver
+            = *std::exchange(hir_task_receiver_override_, std::nullopt);
+    }
     if (!profile->static_method) {
         if (const auto exact = hir_class_receiver_instance_specialization(
                 profile->declaration, profile->specialization,
@@ -17017,7 +17023,8 @@ namespace {
 
 std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
     const semantic::sv::DpiDeclaration& declaration,
-    const std::span<const semantic::ExpressionId> actuals) const
+    const std::span<const semantic::ExpressionId> actuals,
+    HirDpiIssue* const issue) const
 {
     HirDpiFunctionProfile result;
     result.linkage_name = declaration.linkage_name;
@@ -17058,6 +17065,74 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             ? specialized_hir_unit_->evaluate_integral_expression(expression)
             : std::nullopt;
     };
+    // A range spelled in tokens is a constant expression of the
+    // declaration's specialization (IEEE 1800-2023 35.5.6, 6.20).
+    types.constant = [&](const std::string_view name)
+        -> std::optional<std::int64_t> {
+        if (specialized_hir_unit_ == nullptr) {
+            return std::nullopt;
+        }
+        const auto found = resolver.resolve_systemverilog_constant(
+            name, declaration.owner_scope).unique();
+        return found ? specialized_hir_unit_->evaluate_integral_declaration(
+                           *found)
+                     : std::nullopt;
+    };
+    types.class_named = [&](const std::string_view name) {
+        return specialized_hir_unit_ != nullptr
+            && resolver.resolve_systemverilog_class(
+                   name, declaration.owner_scope).unique() != nullptr;
+    };
+    const auto spelling = [](const std::span<const semantic::sv::SourceToken>
+                                 tokens) {
+        std::string text;
+        for (const auto& token : tokens) {
+            text += (text.empty() ? "" : " ") + token.text;
+        }
+        return text;
+    };
+    // An illegal type is a diagnostic, not only an unlowerable call.
+    const auto illegal = [&](const DpiTypeIssue kind,
+                             const std::span<const semantic::sv::SourceToken>
+                                 tokens,
+                             const bool function_result) {
+        if (issue == nullptr) {
+            return;
+        }
+        const auto where = function_result ? std::string { "result" }
+                                           : std::string { "formal argument" };
+        const auto clause = function_result ? std::string { "35.5.5" }
+                                            : std::string { "35.5.6" };
+        switch (kind) {
+        case DpiTypeIssue::class_handle:
+            *issue = { "FSIM-SV-SEM-460", "a DPI " + where
+                + " has the class type '" + spelling(tokens)
+                + "'; class types are not permitted in DPI declarations "
+                  "(IEEE 1800-2023 " + clause + ")" };
+            break;
+        case DpiTypeIssue::unpacked_union:
+            *issue = { "FSIM-SV-SEM-461", "a DPI " + where
+                + " has the unpacked union type '" + spelling(tokens)
+                + "'; only packed unions are permitted (IEEE 1800-2023 "
+                + clause + ")" };
+            break;
+        case DpiTypeIssue::dynamic_array:
+            *issue = { "FSIM-SV-SEM-462", "a DPI " + where
+                + " has the dynamic array, queue or associative array "
+                  "type '" + spelling(tokens)
+                + "'; an imported subroutine uses an open array '[]' "
+                  "instead (IEEE 1800-2023 " + clause + ", 35.5.6.1)" };
+            break;
+        case DpiTypeIssue::not_small_value:
+            *issue = { "FSIM-SV-SEM-463", "the DPI function result type '"
+                + spelling(tokens)
+                + "' is not a small value; a result is void, byte, "
+                  "shortint, int, longint, real, shortreal, chandle, "
+                  "string or a scalar bit or logic (IEEE 1800-2023 "
+                  "35.5.5)" };
+            break;
+        }
+    };
     result.task = declaration.callable_kind
         == semantic::sv::DpiCallableKind::task;
     // A task returns its disable status as a C int; a void function has no
@@ -17077,11 +17152,23 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         // A function result is a small value or a string, never a vector
         // wider than 32 bits (IEEE 1800-2023 35.5.5).
         const auto type = dpi_c_type(declaration.return_type_tokens, types);
-        const bool bit_vector = type && type->code == 'B'
+        if (!type) {
+            if (const auto kind
+                = dpi_type_issue(declaration.return_type_tokens, types)) {
+                illegal(*kind, declaration.return_type_tokens, true);
+            }
+            return std::nullopt;
+        }
+        const bool bit_vector = type->code == 'B'
             && type->width != 0U && type->width <= 32U;
-        if (!type
-            || (!bit_vector && (type->code == 'B' || type->code == 'V'))
-            || (!type->string && type->width == 0U)
+        if (!bit_vector
+            && (type->code == 'B' || type->code == 'V' || type->code == 'R'
+                || type->open_packed)) {
+            illegal(DpiTypeIssue::not_small_value,
+                declaration.return_type_tokens, true);
+            return std::nullopt;
+        }
+        if ((!type->string && type->width == 0U)
             || type->width > std::numeric_limits<std::uint32_t>::max()) {
             return std::nullopt;
         }
@@ -17100,33 +17187,62 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
     if (actuals.size() != declaration.formals.size()) {
         return std::nullopt;
     }
+    constexpr std::uint64_t array_bit_limit = std::uint64_t { 1 } << 24U;
     std::string arguments;
     result.actuals.reserve(actuals.size());
     for (std::size_t index = 0U; index < actuals.size(); ++index) {
         const auto& formal = declaration.formals[index];
-        // Unpacked dimensions of a formal are open (`[]`); the actual is a
-        // fixed-size array of the same rank and element type (IEEE
-        // 1800-2023 35.5.6.1, H.12).
-        std::size_t open_rank { };
-        for (std::size_t token = 0U; token < formal.dimension_tokens.size();
-             token += 2U) {
-            if (token + 1U >= formal.dimension_tokens.size()
-                || formal.dimension_tokens[token].text != "["
-                || formal.dimension_tokens[token + 1U].text != "]") {
-                return std::nullopt;
-            }
-            ++open_rank;
-        }
         const auto type = dpi_c_type(formal.type_tokens, types);
+        const auto dimensions = dpi_unpacked_dimensions(
+            formal.dimension_tokens, types);
         const auto direction = class_method_direction(formal.direction);
-        if (!type || direction == frontend::PortDirection::Unknown
+        if (!type) {
+            if (const auto kind = dpi_type_issue(formal.type_tokens, types)) {
+                illegal(*kind, formal.type_tokens, false);
+            }
+            return std::nullopt;
+        }
+        if (!dimensions) {
+            // `[$]`, `[*]` and `[type]` are dynamic arrays, queues and
+            // associative arrays.
+            if (std::ranges::any_of(formal.dimension_tokens,
+                    [](const semantic::sv::SourceToken& token) {
+                        return token.text == "$" || token.text == "*";
+                    })) {
+                illegal(DpiTypeIssue::dynamic_array, formal.dimension_tokens,
+                    false);
+            }
+            return std::nullopt;
+        }
+        if (direction == frontend::PortDirection::Unknown
             || direction == frontend::PortDirection::Ref
-            || (!type->string
+            || (!type->string && !type->open_packed
                 && (type->width == 0U
                     || type->width
                         > std::numeric_limits<std::uint32_t>::max()))
             || (formal.const_reference
                 && direction != frontend::PortDirection::Input)) {
+            return std::nullopt;
+        }
+        const bool array = !dimensions->empty();
+        const bool open_dimension = std::ranges::any_of(*dimensions,
+            [](const DpiDimension& dimension) { return dimension.open; });
+        // An open array has an unsized dimension, packed or unpacked
+        // (IEEE 1800-2023 35.5.6.1, H.12); a sized array passes by pointer
+        // in its normalized layout (H.7.6).
+        const bool open = open_dimension || type->open_packed;
+        if (type->string && (array || open)) {
+            return std::nullopt;
+        }
+        // An export's result passes as the first formal of its service
+        // import; it is a small value like an import's (IEEE 1800-2023
+        // 35.5.5).
+        if (index == 0U
+            && declaration.linkage_name.starts_with(
+                "__fsim_dpi_export_return_r__")
+            && (open || array || type->code == 'R' || type->code == 'V'
+                || (type->code == 'B' && type->width > 32U))) {
+            illegal(DpiTypeIssue::not_small_value, formal.type_tokens, true);
             return std::nullopt;
         }
         result.actuals.push_back({
@@ -17143,119 +17259,199 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             result.actuals.back().width = 0U;
             result.actuals.back().domain = frontend::ValueDomain::String;
         }
-        if (open_rank != 0U) {
-            if (type->string || type->code == 'd' || type->code == 'f'
-                || type->code == 'p') {
-                return std::nullopt;
-            }
-            auto array = hir_static_container_expression_type(actuals[index]);
-            // An input dynamic array or queue actual (`bit d[][-2:2]`)
-            // supplies its first dimension's size when called; its other
-            // dimensions are fixed (IEEE 1800-2023 35.5.6.1, H.12.2).
-            if (array && !array->fixed && !array->associative
-                && direction == frontend::PortDirection::Input) {
-                const runtime::simir::ContainerType* rows { };
-                if (array->element_kind == ContainerElementKind::Packed
-                    && open_rank == 1U) {
-                    rows = &*array;
-                } else if (array->element_kind
-                        == ContainerElementKind::Container
-                    && array->element_types.size() == 1U
-                    && array->element_types.front().fixed
-                    && !array->element_types.front().queue
-                    && !array->element_types.front().associative
-                    && array->element_types.front().element_kind
-                        == ContainerElementKind::Packed
-                    && array->element_types.front().dimensions.size() + 1U
-                        == open_rank) {
-                    rows = &array->element_types.front();
-                }
-                if (rows == nullptr || rows->element_width != type->width) {
-                    return std::nullopt;
-                }
-                auto& open = result.actuals.back();
-                open.width = 0U;
-                open.domain = rows->two_state ? frontend::ValueDomain::Bit2
-                                              : frontend::ValueDomain::Logic4;
-                open.signed_value = false;
-                open.scalar = frontend::SystemVerilogScalarKind::None;
-                open.runtime_extent = true;
-                if (!arguments.empty()) {
-                    arguments += ',';
-                }
-                arguments += 'A';
-                arguments += type->code;
-                if (type->code == 'B' || type->code == 'V') {
-                    arguments += std::to_string(type->width);
-                }
-                arguments += "/?/?";
-                if (rows != &*array) {
-                    for (const auto& [left, right] : rows->dimensions) {
-                        arguments += '/' + std::to_string(left) + '/'
-                            + std::to_string(right);
-                    }
-                }
-                open.open_array = std::move(*array);
-                continue;
-            }
-            if (!array || !array->fixed || array->queue || array->associative
-                || array->element_kind != ContainerElementKind::Packed
-                || array->dimensions.size() != open_rank
-                || array->element_width != type->width) {
-                return std::nullopt;
-            }
-            std::uint64_t elements = 1U;
-            for (const auto& [left, right] : array->dimensions) {
-                elements *= static_cast<std::uint64_t>(left >= right
-                        ? static_cast<std::int64_t>(left) - right + 1
-                        : static_cast<std::int64_t>(right) - left + 1);
-                if (elements > (std::uint64_t { 1 } << 24U)) {
-                    return std::nullopt;
-                }
-            }
-            const auto bits = elements * type->width;
-            if (bits == 0U || bits > (std::uint64_t { 1 } << 24U)) {
-                return std::nullopt;
-            }
-            auto& open = result.actuals.back();
-            open.width = static_cast<std::size_t>(bits);
-            open.domain = array->two_state ? frontend::ValueDomain::Bit2
-                                           : frontend::ValueDomain::Logic4;
-            open.signed_value = false;
-            open.scalar = frontend::SystemVerilogScalarKind::None;
-            if (!arguments.empty()) {
-                arguments += ',';
-            }
-            // `A`, the element code (and a vector's width), then each
-            // unpacked dimension's `/left/right`.
-            if (direction != frontend::PortDirection::Input) {
-                arguments += '&';
-            }
-            arguments += 'A';
-            arguments += type->code;
-            if (type->code == 'B' || type->code == 'V') {
-                arguments += std::to_string(type->width);
-            }
-            for (const auto& [left, right] : array->dimensions) {
-                arguments += '/' + std::to_string(left) + '/'
-                    + std::to_string(right);
-            }
-            open.open_array = std::move(*array);
-            continue;
-        }
-        // Outputs and inouts pass by reference; vectors always do
-        // (IEEE 1800-2023 H.8.7 to H.8.10).
         if (!arguments.empty()) {
             arguments += ',';
         }
-        const bool vector = type->code == 'B' || type->code == 'V';
-        if (direction != frontend::PortDirection::Input && !vector) {
-            arguments += '&';
+        const bool input = direction == frontend::PortDirection::Input;
+        const auto four_state_domain = [](const DpiCType& element) {
+            return element.domain == frontend::ValueDomain::Logic4
+                ? frontend::ValueDomain::Logic4
+                : frontend::ValueDomain::Bit2;
+        };
+        if (!array && !open && type->code == 'R') {
+            // An unpacked structure (H.7.8): its members as one bit stream.
+            auto container = hir_static_container_expression_type(
+                actuals[index]);
+            if (!container || container->queue || container->associative
+                || !container->dimensions.empty()) {
+                return std::nullopt;
+            }
+            const auto bits = hir_systemverilog_container_bit_width(
+                *container);
+            if (!bits || *bits != type->width
+                || type->width > array_bit_limit) {
+                return std::nullopt;
+            }
+            auto& structure = result.actuals.back();
+            structure.domain = four_state_domain(*type);
+            structure.signed_value = false;
+            structure.scalar = frontend::SystemVerilogScalarKind::None;
+            structure.open_array = std::move(*container);
+            arguments += (input ? "" : "&") + dpi_c_type_signature(*type);
+            continue;
         }
-        arguments += type->code;
-        if (vector) {
-            arguments += std::to_string(type->width);
+        if (!array && !open) {
+            // Outputs and inouts pass by reference; vectors always do
+            // (IEEE 1800-2023 H.8.7 to H.8.10).
+            const bool vector = type->code == 'B' || type->code == 'V';
+            if (!input && !vector) {
+                arguments += '&';
+            }
+            arguments += type->code;
+            if (vector) {
+                arguments += std::to_string(type->width);
+            }
+            continue;
         }
+        // The element type: an open packed dimension takes the actual's
+        // linearized width.
+        auto element = *type;
+        auto container = hir_static_container_expression_type(actuals[index]);
+        if (!array) {
+            // `bit []` with a packed actual.
+            if (container || element.code == 'R' || element.string) {
+                return std::nullopt;
+            }
+            const auto width = hir_expression_width(
+                actuals[index], hir_process_scope_);
+            if (!width || *width == 0U || *width > array_bit_limit) {
+                return std::nullopt;
+            }
+            element.width = *width;
+            element.open_packed = false;
+            auto& packed = result.actuals.back();
+            packed.width = *width;
+            packed.domain = four_state_domain(element);
+            packed.signed_value = false;
+            packed.scalar = frontend::SystemVerilogScalarKind::None;
+            arguments += (input ? "" : "&") + std::string { 'A' }
+                + dpi_c_type_signature(element);
+            continue;
+        }
+        if (!container) {
+            return std::nullopt;
+        }
+        if (container->associative) {
+            // An associative array matches no other array kind (IEEE
+            // 1800-2023 7.6, 7.7).
+            if (issue != nullptr) {
+                *issue = { "FSIM-SV-SEM-464",
+                    "an associative array cannot be the actual of the DPI "
+                    "array formal '" + formal.name
+                    + "'; it is not assignment compatible with an open or "
+                      "sized array (IEEE 1800-2023 7.6, 7.7, 35.5.6.1)" };
+            }
+            return std::nullopt;
+        }
+        const bool aggregate_element = element.code == 'R';
+        const auto fits = [](const std::int64_t value) {
+            return value >= std::numeric_limits<std::int32_t>::min() + 1
+                && value <= std::numeric_limits<std::int32_t>::max();
+        };
+        const runtime::simir::ContainerType* rows = &*container;
+        const bool dynamic = !container->fixed;
+        if (dynamic) {
+            // A dynamic array or queue actual supplies its first dimension's
+            // size when called; its other dimensions are fixed (IEEE
+            // 1800-2023 35.5.6.1, H.12.2).
+            if (aggregate_element || !(*dimensions)[0].open) {
+                return std::nullopt;
+            }
+            if (container->element_kind == ContainerElementKind::Container
+                && container->element_types.size() == 1U
+                && container->element_types.front().fixed
+                && !container->element_types.front().queue
+                && !container->element_types.front().associative
+                && container->element_types.front().dimensions.size() + 1U
+                    == dimensions->size()) {
+                rows = &container->element_types.front();
+            } else if (dimensions->size() != 1U) {
+                return std::nullopt;
+            }
+            if (rows->element_kind != ContainerElementKind::Packed
+                && rows->element_kind != ContainerElementKind::Scalar) {
+                return std::nullopt;
+            }
+        } else if (container->dimensions.size() != dimensions->size()
+            || (!aggregate_element
+                && container->element_kind != ContainerElementKind::Packed
+                && container->element_kind != ContainerElementKind::Scalar)) {
+            return std::nullopt;
+        }
+        if (!aggregate_element) {
+            if (element.open_packed) {
+                element.width = rows->element_width;
+                element.open_packed = false;
+            }
+            if (element.width != rows->element_width) {
+                return std::nullopt;
+            }
+        }
+        // Each dimension's bounds: a sized one is the formal's, an open
+        // one the actual's. The sizes of the two agree.
+        std::vector<std::pair<std::int64_t, std::int64_t>> bounds;
+        std::uint64_t elements = 1U;
+        for (std::size_t dimension = 0U; dimension < dimensions->size();
+             ++dimension) {
+            if (dynamic && dimension == 0U) {
+                bounds.emplace_back(0, 0);
+                continue;
+            }
+            const auto& actual_dimension = rows->dimensions[
+                dynamic ? dimension - 1U : dimension];
+            const auto& declared = (*dimensions)[dimension];
+            std::pair<std::int64_t, std::int64_t> range {
+                actual_dimension.first, actual_dimension.second
+            };
+            const auto actual_extent = index_distance(
+                actual_dimension.first, actual_dimension.second) + 1U;
+            if (!declared.open) {
+                range = { declared.left, declared.right };
+                if (!fits(range.first) || !fits(range.second)
+                    || index_distance(range.first, range.second) + 1U
+                        != actual_extent) {
+                    return std::nullopt;
+                }
+            }
+            if (actual_extent > array_bit_limit
+                || elements > array_bit_limit / actual_extent) {
+                return std::nullopt;
+            }
+            elements *= actual_extent;
+            bounds.push_back(range);
+        }
+        const auto element_bits = dpi_c_type_stream_bits(element);
+        if (element_bits == 0U || elements > array_bit_limit / element_bits) {
+            return std::nullopt;
+        }
+        const auto bits = elements * element_bits;
+        if (aggregate_element) {
+            const auto total = hir_systemverilog_container_bit_width(*container);
+            if (!total || *total != bits) {
+                return std::nullopt;
+            }
+        }
+        auto& entry = result.actuals.back();
+        entry.width = dynamic ? 0U : static_cast<std::size_t>(bits);
+        entry.domain = four_state_domain(element);
+        entry.signed_value = false;
+        entry.scalar = frontend::SystemVerilogScalarKind::None;
+        entry.runtime_extent = dynamic;
+        // `A` (open, passed as a handle) or `D` (sized, passed as a pointer
+        // to the normalized elements), the element's code, then each
+        // unpacked dimension's `/left/right`.
+        arguments += (input ? "" : "&") + std::string { open ? 'A' : 'D' }
+            + dpi_c_type_signature(element);
+        for (std::size_t dimension = 0U; dimension < bounds.size();
+             ++dimension) {
+            if (dynamic && dimension == 0U) {
+                arguments += "/?/?";
+                continue;
+            }
+            arguments += '/' + std::to_string(bounds[dimension].first) + '/'
+                + std::to_string(bounds[dimension].second);
+        }
+        entry.open_array = std::move(*container);
     }
     result.signature = arguments + ':' + result_code
         + (declaration.qualifier == semantic::sv::DpiQualifier::context
@@ -17267,7 +17463,8 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
 std::optional<Lowerer::HirDpiFunctionProfile>
 Lowerer::hir_dpi_function_profile(
     const semantic::ExpressionId expression_id,
-    const semantic::ScopeId process_scope) const
+    const semantic::ScopeId process_scope,
+    HirDpiIssue* const issue) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
@@ -17293,7 +17490,7 @@ Lowerer::hir_dpi_function_profile(
     if (!actuals) {
         return std::nullopt;
     }
-    auto profile = hir_dpi_profile(*declaration, *actuals);
+    auto profile = hir_dpi_profile(*declaration, *actuals, issue);
     // A void function has no value to use in an expression.
     if (!profile || profile->result_void) {
         return std::nullopt;
@@ -20303,11 +20500,17 @@ std::optional<RegisterId> Lowerer::lower_hir_dpi_function_call(
     const semantic::ExpressionId expression_id,
     const std::size_t expected_width)
 {
+    HirDpiIssue issue;
     const auto profile = hir_dpi_function_profile(
-        expression_id, hir_process_scope_);
+        expression_id, hir_process_scope_, &issue);
     const auto expression = specialized_hir_unit_
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
+    if (!profile && !issue.code.empty() && expression
+        && expression->systemverilog != nullptr) {
+        report(issue.code, issue.message,
+            hir_source_span(expression->systemverilog->source));
+    }
     if (!profile || profile->result_string || !expression
         || expression->systemverilog == nullptr) {
         return std::nullopt;
@@ -20325,11 +20528,17 @@ std::optional<RegisterId> Lowerer::lower_hir_dpi_function_call(
 std::optional<StringRegisterId> Lowerer::lower_hir_dpi_string_call(
     const semantic::ExpressionId expression_id)
 {
+    HirDpiIssue issue;
     const auto profile = hir_dpi_function_profile(
-        expression_id, hir_process_scope_);
+        expression_id, hir_process_scope_, &issue);
     const auto expression = specialized_hir_unit_
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
+    if (!profile && !issue.code.empty() && expression
+        && expression->systemverilog != nullptr) {
+        report(issue.code, issue.message,
+            hir_source_span(expression->systemverilog->source));
+    }
     if (!profile || !profile->result_string || !expression
         || expression->systemverilog == nullptr) {
         return std::nullopt;
@@ -20383,7 +20592,9 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
             actual_names.push_back(actual.name);
             actual_directions.push_back(
                 static_cast<std::uint8_t>(actual.direction));
-            actual_kinds.push_back(2U);
+            // Kind 3 hands the bits back: the C code may write them.
+            actual_kinds.push_back(
+                class_method_copy_out(actual.direction) ? 3U : 2U);
             continue;
         }
         if (actual.open_array) {
@@ -20541,6 +20752,21 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
         if (!class_method_copy_out(actual.direction)) {
             continue;
         }
+        if (actual.runtime_extent) {
+            // The bits the C code left in the stream become the array's
+            // elements; its size is the one it had (IEEE 1800-2023
+            // 35.5.6.1, 35.6.2).
+            const auto array = allocate_container_register(*actual.open_array);
+            ContainerBitstream unpack;
+            unpack.operation = ContainerBitstreamOperation::to_container;
+            unpack.bits = actuals[index];
+            unpack.container = array;
+            process_.operations.emplace_back(unpack);
+            if (!lower_hir_container_copy_out(actual.expression, array)) {
+                return std::nullopt;
+            }
+            continue;
+        }
         if (actual.open_array) {
             ContainerType bit_queue;
             bit_queue.element_kind = ContainerElementKind::Packed;
@@ -20593,30 +20819,139 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
     return destination;
 }
 
+namespace {
+
+// The hidden declaration `name` of a unit, if it has one.
+const semantic::sv::Declaration* find_dpi_hidden_declaration(
+    const semantic::CompiledDesign& design, const semantic::UnitId id,
+    const std::string_view name)
+{
+    const auto unit = design.find_unit(id);
+    if (!unit || unit->systemverilog == nullptr) {
+        return nullptr;
+    }
+    for (const auto declaration_id : unit->systemverilog->declarations) {
+        const auto declaration = design.find_declaration(declaration_id);
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->callable
+            && declaration->systemverilog->name == name) {
+            return declaration->systemverilog;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+const semantic::sv::Declaration* Lowerer::hir_dpi_export_step_hook(
+    const semantic::UnitId unit) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return nullptr;
+    }
+    return find_dpi_hidden_declaration(specialized_hir_unit_->design(), unit,
+        "__fsim_dpi_export_step_hook");
+}
+
 const semantic::sv::Declaration* Lowerer::hir_dpi_export_hook(
     const semantic::ScopeId scope) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return nullptr;
     }
-    // The exports an import's C code calls are those of the import's
-    // instance (IEEE 1800-2023 35.5.3).
+    // The exports an import's C code calls are those of the scope its call
+    // chain is in, which starts as the import's instance (IEEE 1800-2023
+    // 35.5.3). An import of the compilation unit or a package has no
+    // instance of its own: it runs in the instance that calls it.
     const auto& design = specialized_hir_unit_->design();
     const auto* const owner = design.find_scope(scope);
-    const auto unit = design.find_unit(
-        owner != nullptr ? owner->unit : specialized_hir_unit_->unit());
-    if (!unit || unit->systemverilog == nullptr) {
-        return nullptr;
+    // An instance without exports of its own serves the exports of the
+    // scope its import's C code sets, so it has a hook only if some unit of
+    // the design declares exports.
+    const auto find_hook = [&](const semantic::UnitId id)
+        -> const semantic::sv::Declaration* {
+        if (const auto* const hook = find_dpi_hidden_declaration(
+                design, id, "__fsim_dpi_export_hook")) {
+            return hook;
+        }
+        const auto* const foreign = find_dpi_hidden_declaration(
+            design, id, "__fsim_dpi_export_hook_foreign");
+        if (foreign == nullptr) {
+            return nullptr;
+        }
+        const auto& units = design.systemverilog_hir.units();
+        return std::ranges::any_of(units,
+                   [&](const semantic::sv::Unit& unit) {
+                       return hir_dpi_export_step_hook(unit.id) != nullptr;
+                   })
+            ? foreign
+            : nullptr;
+    };
+    const auto own = owner != nullptr ? owner->unit
+                                      : specialized_hir_unit_->unit();
+    if (const auto* const hook = find_hook(own)) {
+        return hook;
     }
-    for (const auto id : unit->systemverilog->declarations) {
-        const auto declaration = design.find_declaration(id);
-        if (declaration && declaration->systemverilog != nullptr
-            && declaration->systemverilog->callable
-            && declaration->systemverilog->name == "__fsim_dpi_export_hook") {
-            return declaration->systemverilog;
+    return own != specialized_hir_unit_->unit()
+        ? find_hook(specialized_hir_unit_->unit())
+        : nullptr;
+}
+
+bool Lowerer::lower_hir_dpi_export_foreign()
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return true;
+    }
+    // The call chain's scope is another instance or package: each scope
+    // that declares exports runs its step, and the one the chain is in
+    // serves the call (the runtime matches by scope name).
+    const auto& design = specialized_hir_unit_->design();
+    const auto home = hir_instance_path();
+    std::set<std::string> served;
+    for (const auto& unit : design.systemverilog_hir.units()) {
+        const auto* const step = hir_dpi_export_step_hook(unit.id);
+        if (step == nullptr) {
+            continue;
+        }
+        if (unit.kind == semantic::sv::UnitKind::package) {
+            if (!lower_hir_statements(step->statements)) {
+                return false;
+            }
+            continue;
+        }
+        // A unit's instances are known once the hierarchy is complete
+        // (children are elaborated after their parent's processes), so
+        // the process is lowered on its retry.
+        if (hierarchical_reference_retry_) {
+            hierarchical_reference_missed_ = true;
+            return false;
+        }
+        std::vector<std::string> paths;
+        for (const auto& specialization : design_.specializations_) {
+            if (specialization.source_unit
+                && *specialization.source_unit == unit.id) {
+                paths.push_back(specialization.instance);
+            }
+        }
+        // A top-level module is a root, named by its module name.
+        for (const auto& root : design_.roots_) {
+            if (root == unit.name) {
+                paths.push_back(root);
+            }
+        }
+        for (const auto& path : paths) {
+            if (path == home || !served.insert(path).second) {
+                continue;
+            }
+            hir_task_receiver_override_ = "@instance:" + path;
+            const bool lowered = lower_hir_statements(step->statements);
+            hir_task_receiver_override_.reset();
+            if (!lowered) {
+                return false;
+            }
         }
     }
-    return nullptr;
+    return true;
 }
 
 std::optional<bool> Lowerer::lower_hir_dpi_call_statement(
@@ -20633,10 +20968,14 @@ std::optional<bool> Lowerer::lower_hir_dpi_call_statement(
     // statement discards (IEEE 1800-2023 35.5.4, 13.4.1).
     const auto actuals = bind_dpi_actuals(*declaration, arguments,
         std::span<const semantic::ExpressionId> { });
+    HirDpiIssue issue;
     const auto profile = actuals
-        ? hir_dpi_profile(*declaration, *actuals)
+        ? hir_dpi_profile(*declaration, *actuals, &issue)
         : std::nullopt;
     if (!profile) {
+        if (!issue.code.empty()) {
+            report(issue.code, issue.message, span);
+        }
         return false;
     }
     return emit_hir_dpi_call(*profile, span).has_value();
@@ -24183,13 +24522,17 @@ bool Lowerer::lower_hir_vhdl_foreign_body(
     const auto span = hir_source_span(callable.source);
     const bool function
         = callable.form == semantic::vhdl::DeclarationForm::function;
-    if (function && (frame.type.container || frame.type.string)) {
+    // An array or record result is a packed value the execution function
+    // defines with vhpi_put_value (IEEE 1076-2019 22.5.5); a STRING result
+    // comes back through a trailing string actual.
+    if (function && frame.type.container) {
         report("FSIM-ELAB-HIR-001",
             "foreign function '" + callable.name
                 + "' has a composite result without a fixed shape",
             span);
         return false;
     }
+    const bool string_result = function && frame.type.string;
     // The service names each formal as `<name>\t<declaration>` so its
     // VHPI object takes the formal's declared subtype (20.4.2).
     std::vector<RegisterId> actuals;
@@ -24221,14 +24564,27 @@ bool Lowerer::lower_hir_vhdl_foreign_body(
         directions.push_back(static_cast<std::uint8_t>(
             frame.directions[index]));
     }
+    std::optional<StringRegisterId> text;
+    if (string_result) {
+        text = allocate_string_register();
+        process_.operations.emplace_back(LoadStringConstant { *text, { } });
+        actuals.push_back(*text);
+        kinds.push_back(1U);
+        names.emplace_back("@result-string");
+        directions.push_back(
+            static_cast<std::uint8_t>(frontend::PortDirection::Output));
+    }
+    // The result width closes the identity: a result whose bounds the
+    // execution function sets must fit the call's context.
+    const auto result_width = function && !string_result
+        ? static_cast<std::uint32_t>(register_width(frame.result))
+        : 1U;
     auto identity = std::string { systemverilog_dpi_function_prefix }
         + std::string { vhdl_foreign_call_identity_prefix }
         + std::string { model } + '\t' + callable.name + '\t'
-        + std::to_string(frame.declaration.value()) + '\t' + hierarchy_;
-    const auto result_width = function
-        ? static_cast<std::uint32_t>(register_width(frame.result))
-        : 1U;
-    const auto destination = function
+        + std::to_string(frame.declaration.value()) + '\t' + hierarchy_
+        + '\t' + std::to_string(function && !string_result ? result_width : 0U);
+    const auto destination = function && !string_result
         ? frame.result
         : allocate_register(1U, frontend::ValueDomain::Bit2);
     emit_debug_point(DebugPointKind::call, span);
@@ -24241,6 +24597,10 @@ bool Lowerer::lower_hir_vhdl_foreign_body(
         result_width,
         std::move(kinds),
     });
+    if (text) {
+        process_.operations.emplace_back(CopyStringRegister {
+            frame.string_result, *text });
+    }
     return true;
 }
 
@@ -24919,6 +25279,15 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             task_declaration->name,
             hir_source_span(task_declaration->source), true);
     }
+    // A SystemVerilog callable's frame is activated once its automatic
+    // variables exist (IEEE 1800-2023 37.43); the probe plan of simulate
+    // --foreign-probes reports it, any other plan compiles the point away.
+    const auto* const frame_declaration = declaration->systemverilog;
+    if (frame_declaration != nullptr && declarations_ready) {
+        emit_debug_point(DebugPointKind::frame_entry,
+            hir_source_span(frame_declaration->source),
+            frame_declaration->name);
+    }
     if (declarations_ready && initial_frame->class_receiver) {
         cache_hir_class_container_properties(
             hir_callable_frames_[callable_index].declaration,
@@ -24939,6 +25308,12 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         for (const auto jump :
             hir_callable_frames_[callable_index].return_jumps) {
             process_.operations[jump] = Jump { epilogue };
+        }
+        // Every return reaches the frame's end (IEEE 1800-2023 37.43).
+        if (frame_declaration != nullptr) {
+            emit_debug_point(DebugPointKind::frame_exit,
+                hir_source_span(frame_declaration->source),
+                frame_declaration->name);
         }
         flush_hir_class_container_caches();
         flush_hir_vhdl_protected_caches();

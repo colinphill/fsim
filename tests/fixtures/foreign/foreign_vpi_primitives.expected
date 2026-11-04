@@ -1,0 +1,89 @@
+#c counts primitive=10 gate=6 switch=2 udp=2
+#c counts array=1 gate_array=1 switch_array=0 udp_array=0
+#c unnamed type=vpiGate def=and size=2 value=1
+#c unnamed count=1
+#c g_and type=vpiGate name=g_and full=top.g_and def=and prim=1 s0=64 s1=64 member=0
+#c g_and size=2 line=36
+#c g_and value=0
+#c g_and term[0] type=vpiPrimTerm dir=2 index=0 value=0 expr=top.w_and
+#c g_and term[1] type=vpiPrimTerm dir=1 index=1 value=1 expr=top.d1
+#c g_and term[2] type=vpiPrimTerm dir=1 index=2 value=0 expr=top.d2
+#c g_and terms=3
+#c g_and parent=top module=top
+#c g_and file_ok=1 index=1
+#c scoped g_and type=vpiGate name=g_and full=top.g_and def=and prim=1 s0=64 s1=64 member=0
+#c gen g_or type=vpiGate name=g_or full=top.gen.g_or def=or prim=4 s0=64 s1=64 member=0
+#c gen g_or value=1
+#c g_buf type=vpiGate name=g_buf full=top.g_buf def=bufif1 prim=10 s0=64 s1=64 member=0
+#c g_buf size=2 line=39
+#c g_buf value=1
+#c g_pu type=vpiGate name=g_pu full=top.g_pu def=pullup prim=25 s0=-1 s1=32 member=0
+#c g_pu size=0 line=43
+#c g_pu value=1
+#c g_nmos type=vpiSwitch name=g_nmos full=top.g_nmos def=nmos prim=13 s0=-1 s1=-1 member=0
+#c g_nmos size=2 line=41
+#c g_nmos value=1
+#c g_tran type=vpiSwitch name=g_tran full=top.g_tran def=tranif0 prim=23 s0=-1 s1=-1 member=0
+#c g_tran value=none
+#c g_tran term[0] type=vpiPrimTerm dir=3 index=0 value=1 expr=top.w_tran_a
+#c g_tran term[1] type=vpiPrimTerm dir=3 index=1 value=z expr=top.w_tran_b
+#c g_tran term[2] type=vpiPrimTerm dir=1 index=2 value=1 expr=top.en
+#c g_tran terms=3
+#c ga[1] type=vpiGate name=ga[1] full=top.ga[1] def=and prim=1 s0=64 s1=64 member=1
+#c ga[1] size=2 line=45
+#c ga[1] value=0
+#c ga[1] term[0] type=vpiPrimTerm dir=2 index=0 value=0 expr=top.w_arr[1]
+#c ga[1] term[1] type=vpiPrimTerm dir=1 index=1 value=1 expr=top.arr_a[1]
+#c ga[1] term[2] type=vpiPrimTerm dir=1 index=2 value=0 expr=top.arr_b[1]
+#c ga[1] terms=3
+#c ga[1] index=1
+#c ga[0] type=vpiGate name=ga[0] full=top.ga[0] def=and prim=1 s0=64 s1=64 member=1
+#c ga[0] value=1
+#c array type=vpiGateArray name=ga full=top.ga left=1 right=0 elements=2
+#c u_comb_i type=vpiUdp name=u_comb_i full=top.u_comb_i def=udp_and2 prim=28 s0=64 s1=64 member=0
+#c u_comb_i size=2 line=47
+#c u_comb_i value=0
+#c u_comb_i term[0] type=vpiPrimTerm dir=2 index=0 value=0 expr=-
+#c u_comb_i term[1] type=vpiPrimTerm dir=1 index=1 value=1 expr=top.d1
+#c u_comb_i term[2] type=vpiPrimTerm dir=1 index=2 value=0 expr=top.d2
+#c u_comb_i terms=3
+#c u_comb_i defn type=vpiUdpDefn def=udp_and2 size=2 prim=28 protected=0
+#c u_comb_i entry[0] type=vpiTableEntry size=3 text=0?:0
+#c u_comb_i entry[0] aval=3f003000 bval=00003000
+#c u_comb_i entry[0] int=none
+#c u_comb_i entry[1] type=vpiTableEntry size=3 text=?0:0
+#c u_comb_i entry[2] type=vpiTableEntry size=3 text=11:1
+#c u_comb_i entries=3
+#c u_comb_i initial=- count=0
+#c u_seq_i type=vpiUdp name=u_seq_i full=top.u_seq_i def=udp_dff prim=27 s0=64 s1=64 member=0
+#c u_seq_i size=2 line=48
+#c u_seq_i value=1
+#c u_seq_i term[0] type=vpiPrimTerm dir=2 index=0 value=1 expr=-
+#c u_seq_i term[1] type=vpiPrimTerm dir=1 index=1 value=1 expr=top.d1
+#c u_seq_i term[2] type=vpiPrimTerm dir=1 index=2 value=0 expr=top.clk
+#c u_seq_i terms=3
+#c u_seq_i defn type=vpiUdpDefn def=udp_dff size=2 prim=27 protected=0
+#c u_seq_i entry[0] type=vpiTableEntry size=4 text=0r:?:0
+#c u_seq_i entry[0] aval=72003000 bval=30003f00
+#c u_seq_i entry[0] int=none
+#c u_seq_i entry[1] type=vpiTableEntry size=4 text=1r:?:1
+#c u_seq_i entry[2] type=vpiTableEntry size=4 text=?f:?:-
+#c u_seq_i entry[3] type=vpiTableEntry size=4 text=*?:?:-
+#c u_seq_i entries=4
+#c u_seq_i initial=vpiInitial count=1
+#c udp defns=2
+#c w_and net logic=0 s0=64 s1=1
+#c w_pull net logic=1 s0=1 s1=32
+#c d1 reg logic=1 s0=1 s1=64
+#c arr_a vector strength none
+#c g_and term0 logic=0 s0=64 s1=1
+#c w_and drivers=1 loads=0
+#c w_bufif drivers=1 loads=0
+#c en drivers=0 loads=3
+#c w_and first driver type=vpiPrimTerm
+#c put g_and rejected=1
+#c put u_comb_i rejected=1
+#c put u_seq_i delayed rejected=1
+#c put u_seq_i rejected=0
+#c u_seq_i after put value=0
+#c u_seq net after put value=0

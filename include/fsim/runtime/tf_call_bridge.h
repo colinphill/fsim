@@ -133,10 +133,32 @@ typedef struct fsim_tf_call_context_v3 {
   uint32_t* synchronization_kinds;
 } fsim_tf_call_context_v3;
 
+// Host services of one call that only some hosts provide, bound after the
+// context is entered and dropped when it is left. The pvc arrays hold one
+// byte per argument: the current and the saved parameter value change flag
+// (IEEE 1364-2001 25.9, 25.33). put schedules a delayed string put of
+// argument narg (25.52): format is b, o, d or h, delay_ticks counts the
+// calling module's time precision, and delaytype is Table 196.
+typedef PLI_INT32(FSIM_NATIVE_PLUGIN_CALL* fsim_tf_host_put_v3)(
+    void* user_data, PLI_INT32 narg, PLI_INT32 format, const PLI_BYTE8* text,
+    uint64_t delay_ticks, PLI_INT32 delaytype);
+
+typedef struct fsim_tf_host_bridge_v3 {
+  uint32_t pvc_count;
+  uint32_t reserved;
+  uint8_t* pvc_current;
+  uint8_t* pvc_saved;
+  void* put_user_data;
+  fsim_tf_host_put_v3 put;
+} fsim_tf_host_bridge_v3;
+
 FSIM_TF_BRIDGE_API PLI_INT32 FSIM_NATIVE_PLUGIN_CALL
 fsim_tf_call_context_enter_v3(fsim_tf_call_context_v3* context);
 FSIM_TF_BRIDGE_API void FSIM_NATIVE_PLUGIN_CALL
 fsim_tf_call_context_leave_v3(fsim_tf_call_context_v3* context);
+FSIM_TF_BRIDGE_API PLI_INT32 FSIM_NATIVE_PLUGIN_CALL
+fsim_tf_call_host_bind_v3(fsim_tf_call_context_v3* context,
+                          const fsim_tf_host_bridge_v3* host);
 FSIM_TF_BRIDGE_API const fsim_tf_call_context_v3* FSIM_NATIVE_PLUGIN_CALL
 fsim_tf_current_call_context_v3(void);
 

@@ -7,6 +7,7 @@
 #include "fsim/runtime/scheduler.hpp"
 #include "fsim/runtime/vhpi_bridge.h"
 #include "fsim/support/native_filesystem.hpp"
+#include "fsim/support/path.hpp"
 #include "fsim/support/vhdl_identifier.hpp"
 #include "fsim/version.hpp"
 
@@ -48,6 +49,8 @@ namespace vhdl = semantic::vhdl;
 
 constexpr std::size_t maximum_startup_routines = 4096U;
 constexpr std::size_t maximum_list_size = 1U << 20U;
+// The revision of the standard fsim implements (vhpiVHDLversionP).
+constexpr vhpiIntT vhdl_version = 2019;
 
 [[nodiscard]] std::string upper(std::string_view text)
 {
@@ -195,6 +198,15 @@ struct TypeData {
     std::size_t width { };
     // Scalar types: the range; enumeration types: the literals.
     std::optional<Range> range;
+    // Real types: the bounds, which the integer range cannot carry
+    // (IEEE 1076-2019 19.4.3 vhpiFloatLeftBoundP).
+    std::optional<std::pair<double, double>> real_range;
+    // A subtype with a resolution function, or a type whose subelements
+    // all have one (IEEE 1076-2019 19.4.3 vhpiIsResolvedP).
+    bool resolved { };
+    // A type or subtype no declaration names (IEEE 1076-2019 19.4.3
+    // vhpiIsAnonymousP).
+    bool anonymous { };
     std::vector<std::string> literals;
     std::vector<PhysicalUnit> units;
     // Array types: one range per dimension, unconstrained when empty.
@@ -349,6 +361,14 @@ struct Object final : Handle {
     const semantic::design::InstanceOccurrence* occurrence { };
     // A port association element: the association of the port map.
     const vhdl::Association* port_association { };
+    // A foreign architecture (IEEE 1076-2019 20.4): for the process and
+    // the drivers vhpi_create made, the index of the instance in
+    // foreign_instances_; an architecture body is reached from its
+    // instance.
+    std::optional<std::size_t> foreign;
+    bool foreign_process { };
+    bool created_driver { };
+    Object* instance { };
 
     // Processes and statements (IEEE 1076-2019 19.11): the process, or the
     // statement (for a branch, waveform or alternative, the statement it is
@@ -380,6 +400,18 @@ struct Object final : Handle {
     // that owns it and its debug-local index, found on first use.
     mutable std::optional<std::pair<runtime::simir::ProcessId, std::size_t>> local;
     mutable bool local_resolved { };
+
+    // A stack frame (class stackFrame, IEEE 1076-2019 19.10, Figure 35): the
+    // design process whose call stack it is in, its level there (0 for a call
+    // made by the process) and the call and subprogram it elaborates.
+    bool stack_frame { };
+    runtime::simir::ProcessId frame_process { };
+    std::size_t frame_level { };
+    Object* frame_call { };
+    const vhdl::Declaration* frame_callee { };
+    // A declaration dynamically elaborated for a call (14.6 b): the frame of
+    // that call.
+    Object* activation { };
 
     // Type declarations.
     std::unique_ptr<TypeData> type_data;
@@ -456,8 +488,10 @@ struct Iterator final : Handle {
     {
     }
 
-    std::vector<Object*> items;
+    std::vector<Handle*> items;
     std::size_t next { };
+    // The association it iterates (IEEE 1076-2019 19.16 vhpiIteratorTypeP).
+    vhpiOneToManyT relation { };
 };
 
 // A registered foreign subprogram model (IEEE 1076-2019 23.29
@@ -585,6 +619,11 @@ struct ModuleSpec {
     case vhpiCbStartOfSubpCall:
     case vhpiCbEndOfSubpCall:
     case vhpiCbSensitivity:
+    // The restart callbacks are one-time (IEEE 1076-2019 21.3.8.1).
+    case vhpiCbStartOfSave:
+    case vhpiCbEndOfSave:
+    case vhpiCbStartOfReset:
+    case vhpiCbEndOfReset:
         return true;
     default:
         return false;
@@ -722,7 +761,7 @@ public:
         // Immediately prior to completion of the registration phase
         // (IEEE 1076-2019 21.3.7.2).
         dispatch(vhpiCbStartOfTool);
-        return true;
+        return verify_foreign_architectures(diagnostics);
     }
 
     // Connect the callback dispatch points to the simulation.
@@ -763,7 +802,7 @@ public:
                     return foreign_call(identity.substr(
                             elaboration::vhdl_foreign_call_identity_prefix
                                 .size()),
-                        actuals, names, directions);
+                        actuals, strings, names, directions);
                 }
                 if (!next) {
                     throw std::runtime_error {
@@ -778,6 +817,11 @@ public:
             [this](runtime::Scheduler& scheduler,
                 const runtime::SchedulerPhase phase) {
                 safe_point(scheduler, phase);
+            });
+        simulation_.add_lifecycle_hook(
+            [this](const Simulation::LifecycleEvent event,
+                const std::string_view location) {
+                phase_event(event, location);
             });
     }
 
@@ -802,6 +846,11 @@ public:
             [this] { (void)fsim_vhpi_std_host_enter_v1(&host_); },
             [this] { (void)fsim_vhpi_std_host_leave_v1(&host_); },
         };
+    }
+
+    void set_libraries(VhpiLibraryDirectories libraries)
+    {
+        library_source_ = std::move(libraries);
     }
 
     void set_companion(ForeignCompanion companion) override
@@ -854,8 +903,19 @@ private:
     static Result guarded(void* const user_data, const Result fallback,
         Function&& function)
     {
+        return guarded_on<Result>(
+            user_data, nullptr, fallback, std::forward<Function>(function));
+    }
+
+    // `subject` is the handle the routine was given, the item whose source
+    // location vhpi_check_error reports for an error.
+    template <typename Result, typename Function>
+    static Result guarded_on(void* const user_data, const vhpiHandleT subject,
+        const Result fallback, Function&& function)
+    {
         auto& service = self(user_data);
         service.clear_error();
+        service.error_subject_ = subject;
         auto result = fallback;
         try {
             result = function(service);
@@ -875,78 +935,80 @@ private:
                 [&](LiveService& s) { return s.register_cb(data, flags); });
         };
         host_.remove_cb = [](void* user, vhpiHandleT handle) {
-            return guarded<int>(user, 1,
+            return guarded_on<int>(user, handle, 1,
                 [&](LiveService& s) { return s.remove_cb(handle); });
         };
         host_.disable_cb = [](void* user, vhpiHandleT handle) {
-            return guarded<int>(user, 1, [&](LiveService& s) {
+            return guarded_on<int>(user, handle, 1, [&](LiveService& s) {
                 return s.set_cb_state(handle, vhpiDisable);
             });
         };
         host_.enable_cb = [](void* user, vhpiHandleT handle) {
-            return guarded<int>(user, 1, [&](LiveService& s) {
+            return guarded_on<int>(user, handle, 1, [&](LiveService& s) {
                 return s.set_cb_state(handle, vhpiEnable);
             });
         };
         host_.get_cb_info = [](void* user, vhpiHandleT handle,
                                 vhpiCbDataT* data) {
-            return guarded<int>(user, 1,
+            return guarded_on<int>(user, handle, 1,
                 [&](LiveService& s) { return s.cb_info(handle, data); });
         };
         host_.handle_by_name = [](void* user, const char* name,
                                    vhpiHandleT scope) {
-            return guarded<vhpiHandleT>(user, nullptr,
+            return guarded_on<vhpiHandleT>(user, scope, nullptr,
                 [&](LiveService& s) { return s.handle_by_name(name, scope); });
         };
         host_.handle_by_index = [](void* user, vhpiOneToManyT relation,
                                     vhpiHandleT parent, int32_t index) {
-            return guarded<vhpiHandleT>(user, nullptr, [&](LiveService& s) {
-                return s.handle_by_index(relation, parent, index);
-            });
+            return guarded_on<vhpiHandleT>(user, parent, nullptr,
+                [&](LiveService& s) {
+                    return s.handle_by_index(relation, parent, index);
+                });
         };
         host_.handle = [](void* user, vhpiOneToOneT relation,
                            vhpiHandleT reference) {
-            return guarded<vhpiHandleT>(user, nullptr,
+            return guarded_on<vhpiHandleT>(user, reference, nullptr,
                 [&](LiveService& s) { return s.one(relation, reference); });
         };
         host_.iterator = [](void* user, vhpiOneToManyT relation,
                              vhpiHandleT reference) {
-            return guarded<vhpiHandleT>(user, nullptr, [&](LiveService& s) {
-                return s.iterator(relation, reference);
-            });
+            return guarded_on<vhpiHandleT>(user, reference, nullptr,
+                [&](LiveService& s) {
+                    return s.iterator(relation, reference);
+                });
         };
         host_.scan = [](void* user, vhpiHandleT iterator) {
-            return guarded<vhpiHandleT>(user, nullptr,
+            return guarded_on<vhpiHandleT>(user, iterator, nullptr,
                 [&](LiveService& s) { return s.scan(iterator); });
         };
         host_.get = [](void* user, vhpiIntPropertyT property,
                         vhpiHandleT handle) {
-            return guarded<vhpiIntT>(user, vhpiUndefined,
+            return guarded_on<vhpiIntT>(user, handle, vhpiUndefined,
                 [&](LiveService& s) { return s.get(property, handle); });
         };
         host_.get_str = [](void* user, vhpiStrPropertyT property,
                             vhpiHandleT handle) {
-            return guarded<const vhpiCharT*>(user, nullptr,
+            return guarded_on<const vhpiCharT*>(user, handle, nullptr,
                 [&](LiveService& s) { return s.get_str(property, handle); });
         };
         host_.get_real = [](void* user, vhpiRealPropertyT property,
                              vhpiHandleT handle) {
-            return guarded<vhpiRealT>(user, 0.0,
+            return guarded_on<vhpiRealT>(user, handle, 0.0,
                 [&](LiveService& s) { return s.get_real(property, handle); });
         };
         host_.get_phys = [](void* user, vhpiPhysPropertyT property,
                              vhpiHandleT handle) {
-            return guarded<vhpiPhysT>(user, vhpiPhysT { 0, 0 },
+            return guarded_on<vhpiPhysT>(user, handle, vhpiPhysT { 0, 0 },
                 [&](LiveService& s) { return s.get_phys(property, handle); });
         };
         host_.get_value = [](void* user, vhpiHandleT handle,
                               vhpiValueT* value) {
-            return guarded<int>(user, -1,
+            return guarded_on<int>(user, handle, -1,
                 [&](LiveService& s) { return s.get_value(handle, value); });
         };
         host_.put_value = [](void* user, vhpiHandleT handle, vhpiValueT* value,
                               vhpiPutValueModeT mode) {
-            return guarded<int>(user, 1, [&](LiveService& s) {
+            return guarded_on<int>(user, handle, 1, [&](LiveService& s) {
                 return s.put_value(handle, value, mode);
             });
         };
@@ -977,14 +1039,14 @@ private:
         };
         host_.compare_handles = [](void* user, vhpiHandleT left,
                                     vhpiHandleT right) {
-            return guarded<int>(user, 0,
+            return guarded_on<int>(user, left, 0,
                 [&](LiveService& s) { return s.compare(left, right); });
         };
         host_.check_error = [](void* user, vhpiErrorInfoT* info) {
             return self(user).check_error(info);
         };
         host_.release_handle = [](void* user, vhpiHandleT handle) {
-            return guarded<int>(user, 1,
+            return guarded_on<int>(user, handle, 1,
                 [&](LiveService& s) { return s.release(handle); });
         };
         host_.register_foreignf = [](void* user, vhpiForeignDataT* data) {
@@ -994,16 +1056,20 @@ private:
         };
         host_.get_foreignf_info = [](void* user, vhpiHandleT handle,
                                       vhpiForeignDataT* data) {
-            return guarded<int>(user, 1, [&](LiveService& s) {
+            return guarded_on<int>(user, handle, 1, [&](LiveService& s) {
                 return s.foreign_info(handle, data);
             });
         };
         // A function the tool does not implement raises an error and has no
         // other effect (IEEE 1076-2019 17.3).
-        host_.schedule_transaction = [](void* user, vhpiHandleT, vhpiValueT*,
-                                         uint32_t, vhpiTimeT*, vhpiDelayModeT,
-                                         vhpiTimeT*) {
-            return self(user).not_implemented("vhpi_schedule_transaction", 1);
+        host_.schedule_transaction = [](void* user, vhpiHandleT driver,
+                                         vhpiValueT* values, uint32_t count,
+                                         vhpiTimeT* delay, vhpiDelayModeT mode,
+                                         vhpiTimeT* rejection) {
+            return guarded_on<int>(user, driver, 1, [&](LiveService& s) {
+                return s.schedule_transaction(
+                    driver, values, count, delay, mode, rejection);
+            });
         };
         host_.format_value = [](void* user, const vhpiValueT* in,
                                  vhpiValueT* out) {
@@ -1011,28 +1077,26 @@ private:
                 return s.format_value(in, out);
             });
         };
-        // A foreign process and driver need foreign architectures, which are
-        // not implemented; collections are (IEEE 1076-2019 23.6).
+        // A foreign process and driver of a foreign architecture, and
+        // collections (IEEE 1076-2019 23.6).
         host_.create = [](void* user, vhpiClassKindT kind, vhpiHandleT first,
                            vhpiHandleT second) {
-            if (kind == vhpiProcessStmtK || kind == vhpiDriverK) {
-                return self(user).not_implemented<vhpiHandleT>(
-                    "vhpi_create: creating foreign processes and drivers",
-                    nullptr);
-            }
-            return guarded<vhpiHandleT>(user, nullptr, [&](LiveService& s) {
-                return s.create(kind, first, second);
+            return guarded_on<vhpiHandleT>(user, first, nullptr,
+                [&](LiveService& s) { return s.create(kind, first, second); });
+        };
+        host_.get_data = [](void* user, int32_t id, void* data, size_t size) {
+            return guarded<size_t>(user, 0U, [&](LiveService& s) {
+                return s.get_data(id, data, size);
             });
         };
-        host_.get_data = [](void* user, int32_t, void*, size_t) {
-            return self(user).not_implemented<size_t>("vhpi_get_data", 0U);
-        };
-        host_.put_data = [](void* user, int32_t, void*, size_t) {
-            return self(user).not_implemented<size_t>("vhpi_put_data", 0U);
+        host_.put_data = [](void* user, int32_t id, void* data, size_t size) {
+            return guarded<size_t>(user, 0U, [&](LiveService& s) {
+                return s.put_data(id, data, size);
+            });
         };
         host_.protected_call = [](void* user, vhpiHandleT variable,
                                    vhpiUserFctT function, void* data) {
-            return guarded<int>(user, 1, [&](LiveService& s) {
+            return guarded_on<int>(user, variable, 1, [&](LiveService& s) {
                 return s.protected_call(variable, function, data);
             });
         };
@@ -1050,7 +1114,11 @@ private:
 
     // --- errors and output ---------------------------------------------------------
 
-    void clear_error() noexcept { has_error_ = false; }
+    void clear_error() noexcept
+    {
+        has_error_ = false;
+        error_subject_ = nullptr;
+    }
 
     // An error in a VHPI routine runs the vhpiCbPLIError callbacks as the
     // routine returns; they read it with vhpi_check_error, and the caller
@@ -1063,6 +1131,7 @@ private:
         in_pli_error_ = true;
         const auto severity = error_severity_;
         const auto message = error_message_;
+        const auto subject = error_subject_;
         try {
             dispatch(vhpiCbPLIError);
         } catch (...) {
@@ -1073,6 +1142,7 @@ private:
         has_error_ = true;
         error_severity_ = severity;
         error_message_ = message;
+        error_subject_ = subject;
     }
 
     void error(const vhpiSeverityT severity, std::string message)
@@ -1091,8 +1161,20 @@ private:
             info->severity = error_severity_;
             info->message = error_message_.data();
             info->str = nullptr;
+            // The source of the item the failing routine was given
+            // (IEEE 1076-2019 23.3).
             info->file = nullptr;
-            info->line = 0;
+            info->line = -1;
+            auto* const base = handle_of(error_subject_);
+            if (base != nullptr && base->tag == HandleTag::object) {
+                if (const auto location
+                    = source_location(static_cast<const Object&>(*base))) {
+                    error_file_ = location->first;
+                    info->file = error_file_.data();
+                    info->line = static_cast<decltype(info->line)>(
+                        location->second);
+                }
+            }
         }
         return 1;
     }
@@ -1172,6 +1254,23 @@ private:
             error(vhpiError, "callback data has no routine");
             return nullptr;
         }
+        // A start-of-restart callback is registered during the save phase,
+        // for the restart that uses the saved state (IEEE 1076-2019
+        // 21.3.8.3); a reset the engine cannot perform has no reset phase
+        // to call back (20.1).
+        if (data->reason == vhpiCbStartOfRestart
+            && phase_ != vhpiSavePhase) {
+            error(vhpiError,
+                "vhpiCbStartOfRestart is registered during the save phase");
+            return nullptr;
+        }
+        if ((data->reason == vhpiCbStartOfReset
+                || data->reason == vhpiCbEndOfReset)
+            && !simulation_.reset_supported()) {
+            error(vhpiError, "vhpiCbStartOfReset and vhpiCbEndOfReset are "
+                             "not implemented");
+            return nullptr;
+        }
         auto& callback = allocate_callback();
         // Frees the slot unless registration succeeds.
         struct Pending {
@@ -1225,6 +1324,14 @@ private:
         case vhpiCbQuiescense:
         case vhpiCbPLIError:
         case vhpiCbSigInterrupt:
+        // The obj, time and value members of a save, restart or reset
+        // callback are ignored (IEEE 1076-2019 21.3.8.1).
+        case vhpiCbStartOfSave:
+        case vhpiCbEndOfSave:
+        case vhpiCbStartOfRestart:
+        case vhpiCbEndOfRestart:
+        case vhpiCbStartOfReset:
+        case vhpiCbEndOfReset:
             callback.data.obj = nullptr;
             callback.data.time = nullptr;
             callback.data.value = nullptr;
@@ -1434,7 +1541,13 @@ private:
         // scheduler delta, and a value change or sensitivity callback hears
         // every change of its signals.
         if (data->reason != vhpiCbStartOfSimulation
-            && data->reason != vhpiCbEndOfSimulation) {
+            && data->reason != vhpiCbEndOfSimulation
+            && data->reason != vhpiCbStartOfSave
+            && data->reason != vhpiCbEndOfSave
+            && data->reason != vhpiCbStartOfRestart
+            && data->reason != vhpiCbEndOfRestart
+            && data->reason != vhpiCbStartOfReset
+            && data->reason != vhpiCbEndOfReset) {
             simulation_.open_external_observation();
         }
         if ((data->reason == vhpiCbValueChange || data->reason == vhpiCbSensitivity)
@@ -1656,11 +1769,14 @@ private:
             data.value = &value;
         }
         auto* const previous = dispatching_;
+        auto* const running = current_callback_;
         dispatching_ = data.obj;
+        current_callback_ = to_handle(&callback);
         {
             Scope scope { *this };
             data.cb_rtn(&data);
         }
+        current_callback_ = running;
         dispatching_ = previous;
     }
 
@@ -1694,11 +1810,146 @@ private:
         });
     }
 
+    // vhpi_put_data (IEEE 1076-2019 23.27): bytes of the data set `id`,
+    // appended in call order, during the save phase.
+    [[nodiscard]] std::size_t put_data(
+        const std::int32_t id, void* const data, const std::size_t size)
+    {
+        if (phase_ != vhpiSavePhase) {
+            error(vhpiError, "vhpi_put_data is available only from a "
+                             "vhpiCbStartOfSave or vhpiCbEndOfSave callback");
+            return 0U;
+        }
+        if (!issued_ids_.contains(id)) {
+            error(vhpiError, "vhpi_put_data: the id is not from vhpiIdP");
+            return 0U;
+        }
+        if (data == nullptr || size == 0U) {
+            error(vhpiError, "vhpi_put_data writes a positive number of bytes");
+            return 0U;
+        }
+        save_data_[id].bytes.append(static_cast<const char*>(data), size);
+        return size;
+    }
+
+    // vhpi_get_data (IEEE 1076-2019 23.12): the next bytes of the data set
+    // `id` during the restart phase, zero-filled past its end.
+    [[nodiscard]] std::size_t get_data(
+        const std::int32_t id, void* const data, const std::size_t size)
+    {
+        if (phase_ != vhpiRestartPhase) {
+            error(vhpiError, "vhpi_get_data is available only from a "
+                             "vhpiCbStartOfRestart or vhpiCbEndOfRestart "
+                             "callback");
+            return 0U;
+        }
+        const auto found = save_data_.find(id);
+        if (found == save_data_.end()) {
+            error(vhpiError, "vhpi_get_data: the id has no saved data");
+            return 0U;
+        }
+        if (data == nullptr) {
+            error(vhpiError, "vhpi_get_data needs a destination");
+            return 0U;
+        }
+        auto& saved = found->second;
+        const auto count = std::min(size, saved.bytes.size() - saved.cursor);
+        if (count != 0U) {
+            std::memcpy(data, saved.bytes.data() + saved.cursor, count);
+        }
+        if (count < size) {
+            std::memset(static_cast<char*>(data) + count, 0, size - count);
+            error(vhpiWarning, "vhpi_get_data: fewer bytes remain than "
+                               "requested");
+        }
+        saved.cursor += count;
+        return count;
+    }
+
+    // The save, restart and reset phases (IEEE 1076-2019 20.7-20.9). Without
+    // a save/restart driver only the reset phase occurs.
+    void phase_event(const Simulation::LifecycleEvent event,
+        const std::string_view location)
+    {
+        switch (event) {
+        case Simulation::LifecycleEvent::start_of_save:
+            resumed_phase_ = phase_;
+            phase_ = vhpiSavePhase;
+            save_location_ = std::string { location };
+            save_data_.clear();
+            dispatch(vhpiCbStartOfSave);
+            break;
+        case Simulation::LifecycleEvent::end_of_save:
+            dispatch(vhpiCbEndOfSave);
+            phase_ = resumed_phase_;
+            save_location_.clear();
+            break;
+        case Simulation::LifecycleEvent::start_of_restart:
+            phase_ = vhpiRestartPhase;
+            save_location_ = std::string { location };
+            dispatch(vhpiCbStartOfRestart);
+            break;
+        // The simulation phase follows, with no vhpiCbStartOfSimulation
+        // callbacks (20.8).
+        case Simulation::LifecycleEvent::end_of_restart:
+            dispatch(vhpiCbEndOfRestart);
+            phase_ = vhpiSimulationPhase;
+            save_location_.clear();
+            save_data_.clear();
+            break;
+        case Simulation::LifecycleEvent::start_of_reset:
+            phase_ = vhpiResetPhase;
+            dispatch(vhpiCbStartOfReset);
+            remove_callbacks_but(vhpiCbEndOfReset);
+            break;
+        // The tool then enters the initialization phase again.
+        case Simulation::LifecycleEvent::end_of_reset:
+            dispatch(vhpiCbEndOfReset);
+            restart_initialization();
+            break;
+        }
+    }
+
+    // All callbacks except those of `reason` are removed; their handles
+    // become invalid (IEEE 1076-2019 20.9 b).
+    void remove_callbacks_but(const int32_t reason)
+    {
+        const auto all = callbacks_;
+        for (auto* const callback : all) {
+            if (callback->data.reason != reason) {
+                free_callback(*callback);
+            }
+        }
+    }
+
+    // The state of the cycle machinery a new initialization phase starts
+    // from; the scheduler's own timers went with the reset.
+    void restart_initialization()
+    {
+        if (next_time_) {
+            (void)simulation_.systemverilog_vpi_callbacks().remove_callback(
+                *next_time_);
+            next_time_.reset();
+        }
+        initialized_ = false;
+        cycled_ = false;
+        stopping_ = false;
+        postponed_ = false;
+        time_step_ended_ = false;
+        end_of_time_step_pending_ = false;
+        cycle_started_ = false;
+        awaiting_update_ = false;
+        due_timeouts_.clear();
+        stepped_at_.reset();
+        start_of_simulation();
+    }
+
     // The initialization phase begins before any process runs
     // (IEEE 1076-2019 14.7.5.2 a, b); it completes at the first safe point
     // after the processes have run.
     void start_of_simulation()
     {
+        elaborate_foreign_architectures();
         phase_ = vhpiInitializationPhase;
         dispatch(vhpiCbStartOfInitialization);
         dispatch(vhpiCbStartOfNextCycle);
@@ -1714,6 +1965,9 @@ private:
     void finish_initialization(const runtime::Scheduler* const scheduler)
     {
         initialized_ = true;
+        // Step g): each foreign architecture instance's execution function
+        // (IEEE 1076-2019 14.7.5.2, 20.5).
+        execute_foreign_architectures();
         dispatch(vhpiCbEndOfProcesses);
         dispatch(vhpiCbStartOfPostponed);
         dispatch(vhpiCbEndOfInitialization);
@@ -1816,9 +2070,6 @@ private:
     void safe_point(runtime::Scheduler& scheduler,
         const runtime::SchedulerPhase phase)
     {
-        if (phase == runtime::SchedulerPhase::update) {
-            cycle_counted_ = false;
-        }
         if (interrupt_trap_ && interrupt_trap_->take()) {
             dispatch(vhpiCbSigInterrupt);
             if (!has_callbacks(vhpiCbSigInterrupt)) {
@@ -1976,16 +2227,7 @@ private:
         }
         change_token_ = simulation_.add_signal_change_hook(
             [this](const SignalId signal, const PackedLogic4&,
-                const runtime::SimulationTick time, std::uint64_t) {
-                if (time != cycle_time_) {
-                    cycle_time_ = time;
-                    cycles_ = 0U;
-                    cycle_counted_ = false;
-                }
-                if (!cycle_counted_) {
-                    ++cycles_;
-                    cycle_counted_ = true;
-                }
+                const runtime::SimulationTick, std::uint64_t) {
                 changed_.insert(signal);
             });
     }
@@ -2434,6 +2676,11 @@ private:
             deliver_process(vhpiCbSuspend, point);
             return;
         }
+        if (point.kind == Kind::process_entry) {
+            // A process starts over with no call running.
+            frames_.erase(point.design_process);
+            return;
+        }
         if (point.kind == Kind::call || point.kind == Kind::call_return) {
             deliver_call(point.kind == Kind::call ? vhpiCbStartOfSubpCall
                                                   : vhpiCbEndOfSubpCall,
@@ -2685,6 +2932,13 @@ private:
         const auto here = std::pair { point.source.line, point.source.column };
         Object* call = nullptr;
         bool call_found = false;
+        call_process_ = point.design_process;
+        if (reason == vhpiCbStartOfSubpCall) {
+            // The call's frame exists from its start (IEEE 1076-2019 14.6 b).
+            call_found = true;
+            call = call_at(point);
+            push_frame(call, point);
+        }
         std::vector<std::pair<Callback*, std::uint64_t>> selected;
         for (auto* const callback : callbacks_) {
             if (callback->data.reason != reason) {
@@ -2717,6 +2971,252 @@ private:
                 run(*callback,
                     callback->trigger != nullptr ? callback->reported : call);
             }
+        }
+        // The frame outlives the end-of-call callbacks (21.3.4.6).
+        if (reason == vhpiCbEndOfSubpCall) {
+            pop_frame(point);
+        }
+        call_process_.reset();
+    }
+
+    // A call that enters a subprogram of the design opens a frame on its
+    // process's stack; a predefined operator has none.
+    void push_frame(Object* const call,
+        const runtime::simir::ExecutionPoint& point)
+    {
+        if (call == nullptr) {
+            return;
+        }
+        const auto* const callee = called_declaration(*call);
+        if (callee == nullptr || !callee->callable) {
+            return;
+        }
+        frames_[point.design_process].push_back(CallRecord { call, callee,
+            point.source.line, point.source.column, nullptr });
+    }
+
+    // The return of the call that began where the point is: it and the
+    // frames above it end.
+    void pop_frame(const runtime::simir::ExecutionPoint& point)
+    {
+        const auto found = frames_.find(point.design_process);
+        if (found == frames_.end()) {
+            return;
+        }
+        auto& stack = found->second;
+        for (auto index = stack.size(); index > 0U; --index) {
+            const auto& record = stack[index - 1U];
+            if (record.line == point.source.line
+                && record.column == point.source.column) {
+                stack.resize(index - 1U);
+                break;
+            }
+        }
+        if (stack.empty()) {
+            frames_.erase(found);
+        }
+    }
+
+    // Whether a stack frame object is still on its process's stack.
+    [[nodiscard]] bool frame_alive(const Object& frame) const
+    {
+        const auto found = frames_.find(frame.frame_process);
+        return found != frames_.end() && frame.frame_level < found->second.size()
+            && found->second[frame.frame_level].frame == &frame;
+    }
+
+    // The frame object of a call record, made on first use (class
+    // stackFrame has no class kind in Annex B, so its objects have none).
+    [[nodiscard]] Object* frame_object(
+        const runtime::simir::ProcessId process, const std::size_t level)
+    {
+        auto& record = frames_.at(process).at(level);
+        if (record.frame == nullptr) {
+            auto* const frame = make_object(
+                static_cast<vhpiClassKindT>(0), record.call->name, record.call);
+            frame->stack_frame = true;
+            frame->frame_process = process;
+            frame->frame_level = level;
+            frame->frame_call = record.call;
+            frame->frame_callee = record.callee;
+            record.frame = frame;
+        }
+        return record.frame;
+    }
+
+    // The frame of the latest running execution of a call object, looked
+    // for first in the process whose point is delivered (vhpiCurStackFrame,
+    // Figure 35); none while the call is not running.
+    [[nodiscard]] Object* current_frame(const Object& call)
+    {
+        const auto search = [&](const runtime::simir::ProcessId process,
+                                const std::vector<CallRecord>& stack) -> Object* {
+            for (auto index = stack.size(); index > 0U; --index) {
+                if (stack[index - 1U].call == &call) {
+                    return frame_object(process, index - 1U);
+                }
+            }
+            return nullptr;
+        };
+        if (call_process_) {
+            if (const auto found = frames_.find(*call_process_);
+                found != frames_.end()) {
+                if (auto* const frame = search(found->first, found->second)) {
+                    return frame;
+                }
+            }
+        }
+        for (const auto& [process, stack] : frames_) {
+            if (auto* const frame = search(process, stack)) {
+                return frame;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] static bool is_subprogram_call(const Object& object) noexcept
+    {
+        return object.kind == vhpiFuncCallK
+            || object.kind == vhpiSeqProcCallStmtK
+            || object.kind == vhpiConcProcCallStmtK;
+    }
+
+    // The body object of a subprogram of the design.
+    [[nodiscard]] Object* body_of(const vhdl::Declaration& callee)
+    {
+        for (auto* const body : all_bodies()) {
+            if (body->declaration != nullptr
+                && body->declaration->id == callee.id) {
+                return body;
+            }
+        }
+        return nullptr;
+    }
+
+    // The declaration a frame elaborates for a static declaration of its
+    // subprogram: an object of the same class, with the value the frame
+    // holds (IEEE 1076-2019 14.6 b, 19.4.6).
+    [[nodiscard]] Object* bound_declaration(Object& frame, Object& declaration)
+    {
+        const auto key = "@frame:"
+            + std::to_string(reinterpret_cast<std::uintptr_t>(&declaration));
+        if (const auto found = frame.children.find(key);
+            found != frame.children.end()) {
+            return found->second;
+        }
+        auto* const call = frame.frame_call;
+        auto* const object
+            = make_object(declaration.kind, declaration.name, call);
+        object->case_name = declaration.case_name;
+        object->declaration = declaration.declaration;
+        object->type = declaration.type;
+        object->position = declaration.position;
+        object->source = declaration.source;
+        object->full_name = call->full_name + ":" + object->name;
+        object->full_case_name = call->full_case_name + ":" + object->case_name;
+        object->activation = &frame;
+        frame.children.emplace(key, object);
+        return object;
+    }
+
+    // The declarations a running call elaborates (vhpiParamDecls,
+    // vhpiVarDecls, vhpiConstDecls and vhpiDecls of a subpCall, Figures 8,
+    // 18 and 35): its formals, and the variables and constants of the body.
+    [[nodiscard]] std::vector<Object*> frame_declarations(
+        const vhpiOneToManyT relation, Object& frame)
+    {
+        std::vector<Object*> result;
+        if (frame.frame_callee == nullptr) {
+            return result;
+        }
+        auto* const body = body_of(*frame.frame_callee);
+        if (body == nullptr) {
+            return result;
+        }
+        std::vector<Object*> statics;
+        if (relation == vhpiParamDecls) {
+            if (body->parent != nullptr && body->declaration != nullptr) {
+                if (auto* const subprogram
+                    = declared(*body->parent, *body->declaration)) {
+                    statics = parameter_declarations(*subprogram);
+                }
+            }
+        } else {
+            statics = list(relation, body);
+        }
+        for (auto* const declaration : statics) {
+            if (relation == vhpiParamDecls
+                || declaration->kind == vhpiVarDeclK
+                || declaration->kind == vhpiConstDeclK) {
+                result.push_back(bound_declaration(frame, *declaration));
+            }
+        }
+        return result;
+    }
+
+    // The value a frame holds for a declaration it elaborated: the debug
+    // local the subprogram's lowering named `<subprogram>.<declaration>`,
+    // of this activation when the subprogram runs again deeper in the stack
+    // (IEEE 1076-2019 22.5.2). Only what the lowering keeps a local for is
+    // readable; a function's transient locals and formals are not.
+    [[nodiscard]] std::optional<PackedLogic4> activation_value(
+        const Object& object) const
+    {
+        const auto& frame = *object.activation;
+        if (!frame_alive(frame) || frame.frame_callee == nullptr) {
+            return std::nullopt;
+        }
+        const auto& stack = frames_.at(frame.frame_process);
+        // A call of a subprogram from its own body runs in the second frame
+        // the lowering made for it (the caller's unspecialized frame); the
+        // first call of the chain runs in the first. Each frame keeps its
+        // own locals, so an activation reads the frame it ran in, as the
+        // newer activations of that frame left it.
+        const auto recursive = [&](const std::size_t level) {
+            return level != 0U
+                && stack[level - 1U].callee->id == stack[level].callee->id;
+        };
+        const bool deep = recursive(frame.frame_level);
+        std::size_t newer { };
+        for (auto level = frame.frame_level + 1U; level < stack.size(); ++level) {
+            if (stack[level].callee->id == frame.frame_callee->id
+                && recursive(level) == deep) {
+                ++newer;
+            }
+        }
+        try {
+            const auto& locals
+                = simulation_.process_program(frame.frame_process).debug_locals;
+            if (!object.local_resolved) {
+                object.local_resolved = true;
+                const auto wanted = lower(declared_name(*frame.frame_callee))
+                    + "." + lower(object.name);
+                std::vector<std::size_t> candidates;
+                for (std::size_t index = 0U; index < locals.size(); ++index) {
+                    auto name = lower(locals[index].name);
+                    // A second frame's declaration of the name gets a suffix.
+                    name.resize(std::min(name.size(), name.find('@')));
+                    if (name == wanted
+                        || (name.size() > wanted.size()
+                            && name.ends_with(wanted)
+                            && name[name.size() - wanted.size() - 1U] == '.')) {
+                        candidates.push_back(index);
+                    }
+                }
+                if (!candidates.empty()) {
+                    const auto chosen = deep && candidates.size() > 1U
+                        ? candidates[1U]
+                        : candidates.front();
+                    object.local = std::pair { frame.frame_process, chosen };
+                }
+            }
+            if (!object.local) {
+                return std::nullopt;
+            }
+            return simulation_.read_process_local(
+                object.local->first, object.local->second, newer);
+        } catch (const std::exception&) {
+            return std::nullopt;
         }
     }
 
@@ -2817,10 +3317,10 @@ private:
                     && callback->data.reason != vhpiCbValueChange)
                 || callback->object == nullptr
                 || callback->object->kind != vhpiDriverK
-                || !callback->object->signal || callback->object->parent == nullptr) {
+                || !callback->object->signal) {
                 continue;
             }
-            const auto process = design_process_of(*callback->object->parent);
+            const auto process = driver_process(*callback->object);
             if (process
                 && active.contains(
                     std::pair { *process, *callback->object->signal })) {
@@ -2977,12 +3477,32 @@ private:
 
     void get_time(vhpiTimeT* const time, long* const cycles)
     {
+        // IEEE 1076-2019 23.18: errors.
+        if (time == nullptr && cycles == nullptr) {
+            error(vhpiError, "vhpi_get_time needs a time or a cycle count");
+            return;
+        }
+        // The save, restart and reset callbacks read the time too (IEEE
+        // 1076-2019 21.3.8.2-4).
+        if (phase_ != vhpiInitializationPhase
+            && phase_ != vhpiSimulationPhase && phase_ != vhpiSavePhase
+            && phase_ != vhpiRestartPhase && phase_ != vhpiResetPhase) {
+            error(vhpiError,
+                "vhpi_get_time is available only during initialization, "
+                "simulation, save, restart and reset");
+            return;
+        }
         if (time != nullptr) {
             *time = to_vhpi_time(simulation_.now());
         }
         if (cycles != nullptr) {
-            *cycles = static_cast<long>(
-                simulation_.now() == cycle_time_ ? cycles_ : 0U);
+            // With a time: the delta cycles that have occurred at Tc, the
+            // current cycle included. Without one: every simulation cycle of
+            // the simulation phase (IEEE 1076-2019 23.18).
+            const auto count = phase_ != vhpiSimulationPhase ? 0U
+                : time != nullptr ? simulation_.delta() + 1U
+                                  : simulation_.cycles();
+            *cycles = static_cast<long>(count);
         }
     }
 
@@ -3007,6 +3527,29 @@ private:
 
     [[nodiscard]] int control(const vhpiSimControlT command)
     {
+        // A stop, finish or reset request outside the simulation phase is
+        // an error (IEEE 1076-2019 23.5).
+        if ((command == vhpiStop || command == vhpiFinish
+                || command == vhpiReset)
+            && phase_ != vhpiSimulationPhase) {
+            error(vhpiError,
+                "vhpi_control stop, finish and reset are available only "
+                "during simulation");
+            return 1;
+        }
+        // The tool enters the reset phase once the calling callback returns
+        // (IEEE 1076-2019 23.5, 20.9); with no further argument it goes on
+        // simulating afterwards. A control action the tool does not
+        // implement is an error.
+        if (command == vhpiReset) {
+            if (!simulation_.request_reset(Simulation::ResetRequest { })) {
+                error(vhpiError, "vhpiReset is not implemented: the engine "
+                                 "cannot restore the time-zero state of the "
+                                 "run");
+                return 1;
+            }
+            return 0;
+        }
         switch (command) {
         case vhpiStop:
             stopping_ = true;
@@ -3026,8 +3569,9 @@ private:
             return 0;
         }
         default:
-            error(vhpiError, "unsupported simulation control");
-            return 1;
+            // Any other command is an implementation-defined action, here
+            // none (IEEE 1076-2019 23.5).
+            return 0;
         }
     }
 
@@ -4413,6 +4957,12 @@ private:
                 }
             }
         }
+        // The drivers of foreign processes (IEEE 1076-2019 23.6).
+        for (auto* const driver : created_drivers_) {
+            if (driver->signal == basic.signal && driver->offset == basic.offset) {
+                result.push_back(driver);
+            }
+        }
         return result;
     }
 
@@ -5066,14 +5616,29 @@ private:
             : std::nullopt;
     }
 
+    // The design process that holds a driver: the one that runs its
+    // process or concurrent statement, or the placeholder process of the
+    // foreign architecture a created driver belongs to.
+    [[nodiscard]] std::optional<runtime::simir::ProcessId> driver_process(
+        const Object& driver) const
+    {
+        if (driver.foreign) {
+            return foreign_instances_[*driver.foreign].process;
+        }
+        if (driver.parent == nullptr) {
+            return std::nullopt;
+        }
+        return design_process_of(*driver.parent);
+    }
+
     // The value a driver contributes now (IEEE 1076-2019 14.7.2), as the
     // bits of its basic signal.
     [[nodiscard]] std::optional<PackedLogic4> driver_bits(const Object& driver)
     {
-        if (driver.parent == nullptr || !driver.signal) {
+        if (!driver.signal) {
             return std::nullopt;
         }
-        const auto process = design_process_of(*driver.parent);
+        const auto process = driver_process(driver);
         if (!process) {
             return std::nullopt;
         }
@@ -6061,10 +6626,13 @@ private:
 
     // vhpi_create of a collection: a new one holding the object, or the
     // members of the collection, handle2 names, or `handle1` extended by
-    // them. Foreign processes and drivers are not created (see install).
+    // them; or of a foreign process or driver.
     [[nodiscard]] vhpiHandleT create(const vhpiClassKindT kind,
         const vhpiHandleT first, const vhpiHandleT second)
     {
+        if (kind == vhpiProcessStmtK || kind == vhpiDriverK) {
+            return create_foreign(kind, first, second);
+        }
         if (kind != vhpiAnyCollectionK && kind != vhpiDriverCollectionK) {
             error(vhpiError, "vhpi_create does not create objects of class "
                     + kind_name(kind));
@@ -6104,9 +6672,8 @@ private:
         } else {
             added.push_back(member);
         }
-        // The members of a driverCollection are drivers; whether they are
-        // all drivers of subelements of one signal is not checked, as the
-        // driver objects carry no signal association yet.
+        // The members of a driverCollection are drivers of subelements of
+        // one declared signal (IEEE 1076-2019 23.6).
         if (drivers
             && std::ranges::any_of(added, [](const Object* const candidate) {
                    return candidate->kind != vhpiDriverK;
@@ -6114,6 +6681,22 @@ private:
             error(vhpiError, "vhpi_create: handle2 is neither a driver nor "
                              "a driverCollection");
             return nullptr;
+        }
+        if (drivers && !added.empty()) {
+            const auto* const first_member = collection != nullptr
+                    && !collection->lists[ListKind::members].empty()
+                ? collection->lists[ListKind::members].front()
+                : added.front();
+            if (std::ranges::any_of(added,
+                    [&](const Object* const candidate) {
+                        return !same_declared_signal(
+                            *first_member, *candidate);
+                    })) {
+                error(vhpiError, "vhpi_create: the members of a "
+                                 "driverCollection are not all drivers of "
+                                 "subelements of one declared signal");
+                return nullptr;
+            }
         }
         if (collection == nullptr) {
             collection = make_object(kind, "", nullptr);
@@ -6834,6 +7417,51 @@ private:
         return negative ? -value : value;
     }
 
+    // A real literal, optionally negated.
+    [[nodiscard]] std::optional<double> real_literal(
+        const std::optional<semantic::ExpressionId> id) const
+    {
+        const auto* expression = id ? hir_expression(*id) : nullptr;
+        bool negative = false;
+        if (expression != nullptr
+            && expression->kind == vhdl::ExpressionKind::unary
+            && expression->text == "-" && expression->operands.size() == 1U) {
+            negative = true;
+            expression = hir_expression(expression->operands.front());
+        }
+        if (expression == nullptr
+            || expression->kind != vhdl::ExpressionKind::real_literal) {
+            return std::nullopt;
+        }
+        std::string digits;
+        for (const auto character : expression->text) {
+            if (character != '_') {
+                digits.push_back(character);
+            }
+        }
+        double value { };
+        const auto* const end = digits.data() + digits.size();
+        if (const auto [last, failure]
+            = std::from_chars(digits.data(), end, value);
+            failure != std::errc { } || last != end) {
+            return std::nullopt;
+        }
+        return negative ? -value : value;
+    }
+
+    // The bounds of a floating point range written with real literals
+    // (IEEE 1076-2019 5.2.5.1); none for any other range.
+    [[nodiscard]] std::optional<std::pair<double, double>> real_bounds(
+        const vhdl::RangeConstraint& constraint) const
+    {
+        const auto left = real_literal(constraint.left_expression);
+        const auto right = real_literal(constraint.right_expression);
+        if (!left || !right) {
+            return std::nullopt;
+        }
+        return std::pair { *left, *right };
+    }
+
     // The value elaboration gave a generic of an instance (IEEE 1076-2019
     // 14.3.2): an integer, or a string shown as its literal.
     void elaborated_generic(const Object& region, Object& object)
@@ -7295,6 +7923,7 @@ private:
         auto* const result = make_object(vhpiSubtypeDeclK, "", nullptr);
         result->type_data = std::make_unique<TypeData>(*type.type_data);
         result->type_data->parent = &type;
+        result->type_data->anonymous = true;
         result->name = type.name;
         result->case_name = type.case_name;
         result->full_name = type.full_name;
@@ -7361,6 +7990,8 @@ private:
                 = prefix.full_case_name + "." + field.case_name;
             object->signal = prefix.signal;
             object->constant = prefix.constant;
+            object->call_slot = prefix.call_slot;
+            object->call_result = prefix.call_result;
             object->offset = lsb;
             object->type = field.type;
             object->declaration = prefix.declaration;
@@ -7453,6 +8084,8 @@ private:
         object->full_case_name = prefix.full_case_name + suffix;
         object->signal = prefix.signal;
         object->constant = prefix.constant;
+        object->call_slot = prefix.call_slot;
+        object->call_result = prefix.call_result;
         object->declaration = prefix.declaration;
         object->offset = prefix.offset
             + (count - 1U - static_cast<std::size_t>(*right))
@@ -7521,6 +8154,8 @@ private:
         object->full_case_name = prefix.full_case_name + suffix;
         object->signal = prefix.signal;
         object->constant = prefix.constant;
+        object->call_slot = prefix.call_slot;
+        object->call_result = prefix.call_result;
         object->offset = prefix.offset + (count - 1U - position) * element_width;
         object->type = data.element;
         object->declaration = prefix.declaration;
@@ -7691,6 +8326,11 @@ private:
         if (relation == vhpiTool) {
             return to_handle(tool());
         }
+        // The callback whose routine is running, none otherwise
+        // (IEEE 1076-2019 19.13, Figure 50).
+        if (relation == vhpiCurCallback) {
+            return current_callback_;
+        }
         auto* const object = object_of(reference);
         if (object == nullptr) {
             return nullptr;
@@ -7752,6 +8392,39 @@ private:
                 return prefix == nullptr ? nullptr : to_handle(prefix);
             }
             return nullptr;
+        case vhpiCurStackFrame: {
+            // The frame of a call while it runs (IEEE 1076-2019 19.10,
+            // Figure 35).
+            if (!is_subprogram_call(*object)) {
+                error(vhpiError, "vhpiCurStackFrame needs a subprogram call");
+                return nullptr;
+            }
+            auto* const frame = current_frame(*object);
+            return frame == nullptr ? nullptr : to_handle(frame);
+        }
+        case vhpiUpStack:
+        case vhpiDownStack: {
+            // The frame of the caller, or of the call the frame's call makes.
+            if (!object->stack_frame) {
+                error(vhpiError, "stack relations need a stack frame");
+                return nullptr;
+            }
+            if (!frame_alive(*object)) {
+                error(vhpiError, "the stack frame no longer exists");
+                return nullptr;
+            }
+            const auto depth = frames_.at(object->frame_process).size();
+            if (relation == vhpiUpStack) {
+                return object->frame_level == 0U
+                    ? nullptr
+                    : to_handle(frame_object(
+                          object->frame_process, object->frame_level - 1U));
+            }
+            return object->frame_level + 1U >= depth
+                ? nullptr
+                : to_handle(frame_object(
+                      object->frame_process, object->frame_level + 1U));
+        }
         case vhpiSubpBody: {
             // The body of a subprogram declaration (Figure 34).
             auto* const body
@@ -7985,6 +8658,7 @@ private:
         unit->full_case_name = region.unit->library + "." + unit->case_name;
         unit->unit = region.unit;
         unit->entity = region.entity;
+        unit->instance = &region;
         region.children.emplace("@unit", unit);
         return unit;
     }
@@ -8051,6 +8725,15 @@ private:
             }
         };
         using Form = vhdl::DeclarationForm;
+        // A call that is running has elaborated its formals and the
+        // declarations of its body (IEEE 1076-2019 14.6 b).
+        if (object != nullptr && is_subprogram_call(*object)
+            && (relation == vhpiParamDecls || relation == vhpiDecls
+                || relation == vhpiVarDecls || relation == vhpiConstDecls)) {
+            if (auto* const frame = current_frame(*object)) {
+                return frame_declarations(relation, *frame);
+            }
+        }
         switch (relation) {
         case vhpiDecls:
             generate_parameter();
@@ -8401,9 +9084,36 @@ private:
         return result;
     }
 
+    // The registered foreign models and applications, in registration order
+    // (IEEE 1076-2019 23.24, Figure 52).
+    [[nodiscard]] std::vector<Handle*> foreign_handles() const
+    {
+        std::vector<Handle*> result;
+        result.reserve(foreign_models_.size());
+        for (const auto& model : foreign_models_) {
+            result.push_back(model.get());
+        }
+        return result;
+    }
+
     [[nodiscard]] vhpiHandleT iterator(const vhpiOneToManyT relation,
         const vhpiHandleT reference)
     {
+        if (relation == vhpiForeignfs) {
+            if (reference != nullptr) {
+                error(vhpiError, "vhpiForeignfs is iterated from no handle");
+                return nullptr;
+            }
+            auto foreign = foreign_handles();
+            if (foreign.empty()) {
+                return nullptr;
+            }
+            auto stored = std::make_unique<Iterator>();
+            stored->items = std::move(foreign);
+            stored->relation = relation;
+            iterators_.push_back(std::move(stored));
+            return to_handle(iterators_.back().get());
+        }
         Object* object = nullptr;
         if (reference != nullptr) {
             object = object_of(reference);
@@ -8420,7 +9130,8 @@ private:
             return nullptr;
         }
         auto stored = std::make_unique<Iterator>();
-        stored->items = std::move(items);
+        stored->items = std::vector<Handle*>(items.begin(), items.end());
+        stored->relation = relation;
         iterators_.push_back(std::move(stored));
         return to_handle(iterators_.back().get());
     }
@@ -8442,6 +9153,14 @@ private:
     [[nodiscard]] vhpiHandleT handle_by_index(const vhpiOneToManyT relation,
         const vhpiHandleT parent, const int32_t index)
     {
+        if (relation == vhpiForeignfs) {
+            const auto foreign = foreign_handles();
+            if (parent != nullptr || index < 0
+                || static_cast<std::size_t>(index) >= foreign.size()) {
+                return nullptr;
+            }
+            return to_handle(foreign[static_cast<std::size_t>(index)]);
+        }
         // Package instances and tool arguments have no reference object.
         auto* const object = parent == nullptr
                 && (relation == vhpiPackInsts || relation == vhpiArgvs)
@@ -8620,6 +9339,9 @@ private:
                 type->type_data->parent = base;
                 type->type_data->library = "IEEE";
                 type->type_data->package = "STD_LOGIC_1164";
+                // STD_LOGIC is STD_ULOGIC with the resolution function
+                // RESOLVED (IEEE 1076-2019 16.7).
+                type->type_data->resolved = true;
             }
         } else if (key == "real") {
             type = make_type(vhpiFloatTypeDeclK, "REAL", "std", "standard");
@@ -8720,6 +9442,26 @@ private:
                 *result->type_data = *parent->type_data;
                 result->type_data->parent = parent;
                 result->type_data->base = parent->type_data->base;
+                // The declaration names the subtype; a resolution function
+                // in its indication resolves it (IEEE 1076-2019 6.3).
+                result->type_data->anonymous = false;
+                result->type_data->resolved = result->type_data->resolved
+                    || !declaration.subtype->resolution_function.spelling
+                            .empty();
+                // `type T is range L to R` is kept as a subtype of INTEGER
+                // or REAL, but declares an integer or floating type
+                // (IEEE 1076-2019 5.2.3.1, 5.2.5.1).
+                const auto* const definition = declaration.declared_type
+                    ? hir_.find_type(*declaration.declared_type)
+                    : nullptr;
+                if (definition != nullptr && definition->scalar_type) {
+                    const bool real
+                        = result->type_data->storage == Storage::real;
+                    result->kind
+                        = real ? vhpiFloatTypeDeclK : vhpiIntTypeDeclK;
+                    result->type_data->parent = nullptr;
+                    result->type_data->base = result;
+                }
             }
         } else if (declaration.declared_type) {
             if (const auto* const definition
@@ -8815,11 +9557,19 @@ private:
             break;
         }
         case vhdl::TypeForm::scalar: {
-            result = make_type(vhpiIntTypeDeclK, name, "work", "");
+            // A range with real literal bounds defines a floating point
+            // type (IEEE 1076-2019 5.2.5.1).
+            const auto real = definition.scalar_range
+                ? real_bounds(*definition.scalar_range)
+                : std::nullopt;
+            result = make_type(
+                real ? vhpiFloatTypeDeclK : vhpiIntTypeDeclK, name, "work", "");
             auto& data = *result->type_data;
-            data.storage = Storage::integer;
-            data.width = 32U;
-            if (definition.scalar_range) {
+            data.storage = real ? Storage::real : Storage::integer;
+            data.width = real ? 64U : 32U;
+            if (real) {
+                data.real_range = real;
+            } else if (definition.scalar_range) {
                 data.range = range_of(*definition.scalar_range);
             }
             break;
@@ -8873,6 +9623,7 @@ private:
                 *base->type_data = data;
                 base->type_data->base = base;
                 base->type_data->unconstrained = true;
+                base->type_data->anonymous = true;
                 base->type_data->dimensions.clear();
                 result->kind = vhpiSubtypeDeclK;
                 data.parent = base;
@@ -9048,6 +9799,28 @@ private:
             || mark->type_data == nullptr) {
             return mark;
         }
+        // A constraint on a real type bounds it with real literals.
+        if (subtype.constraints.size() == 1U
+            && mark->type_data->storage == Storage::real) {
+            const auto real = real_bounds(subtype.constraints.front());
+            if (!real || real == mark->type_data->real_range) {
+                return mark;
+            }
+            auto* const constrained_real
+                = make_object(vhpiSubtypeDeclK, "", nullptr);
+            constrained_real->type_data
+                = std::make_unique<TypeData>(*mark->type_data);
+            auto& real_data = *constrained_real->type_data;
+            real_data.parent = mark;
+            real_data.base = mark->type_data->base;
+            real_data.anonymous = true;
+            real_data.real_range = real;
+            constrained_real->name = mark->name;
+            constrained_real->case_name = mark->case_name;
+            constrained_real->full_name = mark->full_name;
+            constrained_real->full_case_name = mark->full_case_name;
+            return constrained_real;
+        }
         // A constraint that repeats the type mark's adds nothing.
         if (subtype.constraints.size() == 1U
             && mark->type_data->storage != Storage::array) {
@@ -9061,6 +9834,9 @@ private:
         result->type_data = std::make_unique<TypeData>(*mark->type_data);
         auto& data = *result->type_data;
         data.parent = mark;
+        data.anonymous = true;
+        data.resolved = data.resolved
+            || !subtype.resolution_function.spelling.empty();
         data.base = mark->type_data->base;
         result->name = mark->name;
         result->case_name = mark->case_name;
@@ -9131,6 +9907,9 @@ private:
                 && data.storage != Storage::array) {
                 list.push_back(range_object(*data.range, type));
             }
+            if (data.real_range && data.storage == Storage::real) {
+                list.push_back(float_range_object(*data.real_range));
+            }
             break;
         case vhpiUnitDecls:
             for (const auto& unit : data.units) {
@@ -9177,13 +9956,260 @@ private:
         return object;
     }
 
+    // The range of a real type or subtype (IEEE 1076-2019 19.4.3).
+    [[nodiscard]] Object* float_range_object(
+        const std::pair<double, double>& bounds)
+    {
+        auto* const object = make_object(vhpiFloatRangeK, "", nullptr);
+        object->type_data = std::make_unique<TypeData>();
+        object->type_data->storage = Storage::real;
+        object->type_data->real_range = bounds;
+        return object;
+    }
+
     // --- properties ------------------------------------------------------------------
+
+    // A resolved subtype, or a composite whose every subelement subtype is
+    // (IEEE 1076-2019 6.3, 19.4.3 vhpiIsResolvedP).
+    [[nodiscard]] static bool type_resolved(const Object& type)
+    {
+        if (type.type_data == nullptr) {
+            return false;
+        }
+        const auto& data = *type.type_data;
+        if (data.resolved) {
+            return true;
+        }
+        if (data.storage == Storage::array) {
+            return data.element != nullptr && type_resolved(*data.element);
+        }
+        if (data.storage == Storage::record) {
+            return !data.fields.empty()
+                && std::ranges::all_of(data.fields, [](const Field& field) {
+                       return field.type != nullptr
+                           && type_resolved(*field.type);
+                   });
+        }
+        return false;
+    }
+
+    // A component instantiation whose binding is the default binding
+    // indication: no configuration specification or declaration names it
+    // (IEEE 1076-2019 7.3.3, 19.4.2 vhpiIsDefaultP).
+    [[nodiscard]] bool default_binding(const Object& instance) const
+    {
+        if (!instance.occurrence->source_instance) {
+            return false;
+        }
+        const auto* const source = semantic::find_by_id(
+            hir_.instances(), *instance.occurrence->source_instance);
+        if (source == nullptr || !source->component || source->configuration) {
+            return false;
+        }
+        for (const auto* region = instance.parent; region != nullptr;
+             region = region->parent) {
+            if (region->unit == nullptr) {
+                continue;
+            }
+            return !std::ranges::any_of(region->unit->component_configurations,
+                [&](const vhdl::ComponentConfiguration& specification) {
+                    return same_name(specification.component.text(),
+                               source->target.text())
+                        && (specification.selection
+                                != vhdl::InstanceSelection::labels
+                            || std::ranges::any_of(specification.labels,
+                                [&](const std::string& label) {
+                                    return same_name(label, source->name);
+                                }));
+                });
+        }
+        return true;
+    }
+
+    // The classes derived from decl (IEEE 1076-2019 19.4, Figure 9).
+    [[nodiscard]] static bool is_declaration_class(
+        const Object& object) noexcept
+    {
+        switch (object.kind) {
+        case vhpiAliasDeclK:
+        case vhpiAttrDeclK:
+        case vhpiCompDeclK:
+        case vhpiConstDeclK:
+        case vhpiConstParamDeclK:
+        case vhpiElemDeclK:
+        case vhpiEnumLiteralK:
+        case vhpiCharLiteralK:
+        case vhpiFileDeclK:
+        case vhpiFileParamDeclK:
+        case vhpiFuncDeclK:
+        case vhpiGenericDeclK:
+        case vhpiGroupDeclK:
+        case vhpiGroupTempDeclK:
+        case vhpiLibraryDeclK:
+        case vhpiPortDeclK:
+        case vhpiProcDeclK:
+        case vhpiSigDeclK:
+        case vhpiSigParamDeclK:
+        case vhpiSubpBodyK:
+        case vhpiUnitDeclK:
+        case vhpiVarDeclK:
+        case vhpiVarParamDeclK:
+        case vhpiProtectedTypeBodyK:
+            return true;
+        default:
+            return object.type_data != nullptr && !is_range(object);
+        }
+    }
+
+    // The parameter of a for generate or for loop is a constant the
+    // statement declares implicitly (IEEE 1076-2019 11.8, 10.10).
+    [[nodiscard]] static bool implicit_parameter(const Object& object)
+    {
+        if (object.parent == nullptr
+            || (object.parent->kind != vhpiForGenerateK
+                && object.parent->kind != vhpiForLoopK)) {
+            return false;
+        }
+        const auto found = object.parent->children.find("@param");
+        return found != object.parent->children.end()
+            && found->second == &object;
+    }
+
+    // The classes derived from objDecl (IEEE 1076-2019 19.4.3, Figure 13).
+    [[nodiscard]] static bool is_object_declaration(
+        const Object& object) noexcept
+    {
+        switch (object.kind) {
+        case vhpiConstDeclK:
+        case vhpiConstParamDeclK:
+        case vhpiFileDeclK:
+        case vhpiFileParamDeclK:
+        case vhpiGenericDeclK:
+        case vhpiPortDeclK:
+        case vhpiSigDeclK:
+        case vhpiSigParamDeclK:
+        case vhpiVarDeclK:
+        case vhpiVarParamDeclK:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // Subprogram parameters and locals and for-loop parameters are
+    // dynamically elaborated; process declarations are not (IEEE 1076-2019
+    // 14.6, 14.5.5).
+    [[nodiscard]] static bool declared_at_run_time(const Object& object) noexcept
+    {
+        if (object.activation != nullptr) {
+            return true;
+        }
+        if (object.parent == nullptr) {
+            return false;
+        }
+        switch (object.parent->kind) {
+        case vhpiSubpBodyK:
+        case vhpiFuncDeclK:
+        case vhpiProcDeclK:
+        case vhpiForLoopK:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // The open mode of a file object (IEEE 1076-2019 5.5.2, 19.4.3): the
+    // one its declaration names, else the one its mode gives, else
+    // READ_MODE; a file parameter has the in or out mode of its interface.
+    [[nodiscard]] vhpiIntT open_mode(const Object& object) const
+    {
+        const auto& declaration = *object.declaration;
+        if (declaration.file_open_kind) {
+            if (const auto* const kind
+                = hir_expression(*declaration.file_open_kind)) {
+                const auto text = lower(kind->text);
+                if (text.ends_with("write_mode")) {
+                    return vhpiWriteOpen;
+                }
+                if (text.ends_with("append_mode")) {
+                    return vhpiAppendOpen;
+                }
+                if (text.ends_with("read_mode")) {
+                    return vhpiReadOpen;
+                }
+            }
+        }
+        const bool parameter = object.kind == vhpiFileParamDeclK;
+        if (declaration.direction == vhdl::Direction::output) {
+            return parameter ? vhpiOutOpen : vhpiWriteOpen;
+        }
+        return parameter ? vhpiInOpen : vhpiReadOpen;
+    }
+
+    struct PredefinedAttribute {
+        std::string_view designator;
+        vhpiAttrKindT kind;
+        vhpiPredefAttrT attribute;
+    };
+
+    // The predefined attribute an attribute name denotes and its kind
+    // (IEEE 1076-2019 16.2, 19.8 Figure 24); none for 'SUBTYPE, 'ELEMENT
+    // and the others vhpiPredefAttrT does not list.
+    [[nodiscard]] static const PredefinedAttribute* predefined_attribute(
+        const vhdl::Expression& expression)
+    {
+        static constexpr std::array<PredefinedAttribute, 31> table { {
+            { "active", vhpiValueAK, vhpiActivePA },
+            { "ascending", vhpiValueAK, vhpiAscendingPA },
+            { "base", vhpiTypeAK, vhpiBasePA },
+            { "delayed", vhpiSignalAK, vhpiDelayedPA },
+            { "driving", vhpiValueAK, vhpiDrivingPA },
+            { "driving_value", vhpiValueAK, vhpiDriving_valuePA },
+            { "event", vhpiValueAK, vhpiEventPA },
+            { "high", vhpiValueAK, vhpiHighPA },
+            { "image", vhpiFunctionAK, vhpiImagePA },
+            { "instance_name", vhpiValueAK, vhpiInstance_namePA },
+            { "last_active", vhpiValueAK, vhpiLast_activePA },
+            { "last_event", vhpiValueAK, vhpiLast_eventPA },
+            { "last_value", vhpiValueAK, vhpiLast_valuePA },
+            { "left", vhpiValueAK, vhpiLeftPA },
+            { "leftof", vhpiFunctionAK, vhpiLeftofPA },
+            { "length", vhpiValueAK, vhpiLengthPA },
+            { "low", vhpiValueAK, vhpiLowPA },
+            { "path_name", vhpiValueAK, vhpiPath_namePA },
+            { "pos", vhpiFunctionAK, vhpiPosPA },
+            { "pred", vhpiFunctionAK, vhpiPredPA },
+            { "quiet", vhpiSignalAK, vhpiQuietPA },
+            { "range", vhpiRangeAK, vhpiRangePA },
+            { "reverse_range", vhpiRangeAK, vhpiReverse_rangePA },
+            { "right", vhpiValueAK, vhpiRightPA },
+            { "rightof", vhpiFunctionAK, vhpiRightofPA },
+            { "simple_name", vhpiValueAK, vhpiSimple_namePA },
+            { "stable", vhpiSignalAK, vhpiStablePA },
+            { "succ", vhpiFunctionAK, vhpiSuccPA },
+            { "transaction", vhpiSignalAK, vhpiTransactionPA },
+            { "val", vhpiFunctionAK, vhpiValPA },
+            { "value", vhpiFunctionAK, vhpiValuePA },
+        } };
+        const auto lowered = lower(std::string_view { expression.text }.substr(
+            expression.text.starts_with('\'') ? 1U : 0U));
+        const std::string_view designator { lowered };
+        const auto found = std::ranges::find(
+            table, designator, &PredefinedAttribute::designator);
+        return found == table.end() ? nullptr : &*found;
+    }
 
     [[nodiscard]] vhpiIntT get(const vhpiIntPropertyT property,
         const vhpiHandleT handle)
     {
         if (property == vhpiPhaseP) {
             return phase_;
+        }
+        // Each call returns a new nonzero identification number for a
+        // saved data set (IEEE 1076-2019 23.27).
+        if (property == vhpiIdP) {
+            issued_ids_.insert(++last_id_);
+            return last_id_;
         }
         auto* const base = handle_of(handle);
         if (base == nullptr) {
@@ -9208,7 +10234,25 @@ private:
             if (property == vhpiKindP) {
                 return vhpiIteratorK;
             }
+            // The association the iterator scans (IEEE 1076-2019 19.16).
+            if (property == vhpiIteratorTypeP) {
+                return static_cast<vhpiIntT>(
+                    static_cast<Iterator&>(*base).relation);
+            }
             error(vhpiError, "unsupported iterator property");
+            return vhpiUndefined;
+        }
+        if (base->tag == HandleTag::foreign) {
+            if (property == vhpiKindP) {
+                return vhpiForeignfK;
+            }
+            // Whether it is a foreign architecture, function, procedure or
+            // application (IEEE 1076-2019 19.17).
+            if (property == vhpiForeignKindP) {
+                return static_cast<vhpiIntT>(
+                    static_cast<ForeignModel&>(*base).data.kind);
+            }
+            error(vhpiError, "unsupported foreign model property");
             return vhpiUndefined;
         }
         if (base->tag != HandleTag::object) {
@@ -9216,13 +10260,52 @@ private:
             return vhpiUndefined;
         }
         auto& object = static_cast<Object&>(*base);
+        if (object.stack_frame) {
+            // Annex B gives class stackFrame no class kind and the model
+            // gives it the one property.
+            if (property != vhpiFrameLevelP) {
+                error(vhpiError,
+                    "a stack frame has only the vhpiFrameLevelP property");
+                return vhpiUndefined;
+            }
+            if (!frame_alive(object)) {
+                error(vhpiError, "the stack frame no longer exists");
+                return vhpiUndefined;
+            }
+            return static_cast<vhpiIntT>(object.frame_level);
+        }
         auto* const type = is_type(object) ? &object : object.type;
+        // The process and drivers vhpi_create made (IEEE 1076-2019 23.6).
+        if (object.foreign_process || object.created_driver) {
+            switch (property) {
+            case vhpiIsForeignP:
+                return 1;
+            case vhpiIsPassiveP:
+            case vhpiIsPostponedP:
+                if (object.foreign_process) {
+                    return 0;
+                }
+                break;
+            case vhpiAccessP:
+                if (object.created_driver) {
+                    return vhpiRead | vhpiWrite | vhpiConnectivity;
+                }
+                break;
+            default:
+                break;
+            }
+        }
         switch (property) {
         case vhpiKindP:
             return object.kind;
         case vhpiCapabilitiesP:
             // Only the capability sets that are fully provided (17.3).
             return vhpiProvidesHierarchy | vhpiProvidesForeignModel;
+        // No part of a foreign program's state is saved or restored for it:
+        // its handles, callbacks and private data go through vhpi_put_data
+        // and vhpi_get_data (IEEE 1076-2019 20.7, 20.8).
+        case vhpiAutomaticRestoreP:
+            return 0;
         case vhpiArgcP:
             return static_cast<vhpiIntT>(arguments_.size());
         case vhpiLineNoP:
@@ -9388,6 +10471,13 @@ private:
             }
             break;
         case vhpiIsForeignP:
+            // An architecture decorated with the 'FOREIGN attribute in a
+            // form 20.2.4 allows, and an instance of one.
+            if (object.kind == vhpiArchBodyK
+                || (is_region(object) && object.generate == nullptr
+                    && object.kind != vhpiPackInstK)) {
+                return foreign_binding(object.unit) != nullptr ? 1 : 0;
+            }
             // A subprogram body of the design is not foreign: the FOREIGN
             // attribute is not retained, and foreign subprograms register
             // through vhpi_register_foreignf (IEEE 1076-2019 20.4).
@@ -9542,6 +10632,102 @@ private:
                     : 0;
             }
             break;
+        case vhpiVHDLversionP:
+            // The revision of the standard the tool implements.
+            if (object.kind == vhpiToolK) {
+                return vhdl_version;
+            }
+            break;
+        case vhpiIsPLIP:
+            // The simulator arguments all go to the VHPI programs; the tool
+            // consumes none of them.
+            if (object.kind == vhpiArgvK) {
+                return 1;
+            }
+            break;
+        case vhpiIsResolvedP:
+            if (object.kind == vhpiSubtypeDeclK && object.type_data != nullptr) {
+                return type_resolved(object) ? 1 : 0;
+            }
+            if (object.kind == vhpiSigParamDeclK) {
+                const auto* const subtype = object.declaration != nullptr
+                        && object.declaration->subtype
+                    ? &*object.declaration->subtype
+                    : nullptr;
+                return (subtype != nullptr
+                           && !subtype->resolution_function.spelling.empty())
+                        || (type != nullptr && type_resolved(*type))
+                    ? 1
+                    : 0;
+            }
+            break;
+        case vhpiIsDefaultP:
+            if (object.kind == vhpiCompInstStmtK
+                && object.occurrence != nullptr) {
+                return default_binding(object) ? 1 : 0;
+            }
+            break;
+        case vhpiIsDeferredP:
+            if (object.kind == vhpiConstDeclK && object.declaration != nullptr) {
+                return object.declaration->deferred ? 1 : 0;
+            }
+            break;
+        case vhpiIsImplicitDeclP:
+            if (is_declaration_class(object)) {
+                return implicit_parameter(object) ? 1 : 0;
+            }
+            break;
+        case vhpiIsAnonymousP:
+            if (is_type(object) && !is_range(object)) {
+                return object.type_data->anonymous ? 1 : 0;
+            }
+            break;
+        case vhpiIsVitalP:
+            // The VITAL attributes are not interpreted.
+            if (object.kind == vhpiGenericDeclK) {
+                return 0;
+            }
+            break;
+        case vhpiIsUninstantiatedP:
+            // Every object of the elaborated design is instantiated.
+            return 0;
+        case vhpiIsDynamicP:
+            if (is_object_declaration(object)) {
+                return declared_at_run_time(object) ? 1 : 0;
+            }
+            break;
+        case vhpiNumPortsP:
+        case vhpiNumGensP:
+            if (object.kind == vhpiRootInstK
+                || object.kind == vhpiCompInstStmtK
+                || object.kind == vhpiBlockStmtK
+                || object.kind == vhpiCompDeclK) {
+                const auto relation = property == vhpiNumPortsP
+                    ? vhpiPortDecls
+                    : vhpiGenericDecls;
+                return static_cast<vhpiIntT>(list(relation, &object).size());
+            }
+            break;
+        case vhpiOpenModeP:
+            if ((object.kind == vhpiFileDeclK
+                    || object.kind == vhpiFileParamDeclK)
+                && object.declaration != nullptr) {
+                return open_mode(object);
+            }
+            break;
+        case vhpiAttrKindP:
+        case vhpiPredefAttrP:
+            if ((object.kind == vhpiSimpAttrNameK
+                    || object.kind == vhpiParamAttrNameK)
+                && object.expression != nullptr) {
+                if (const auto* const attribute
+                    = predefined_attribute(*object.expression)) {
+                    return static_cast<vhpiIntT>(property == vhpiAttrKindP
+                            ? static_cast<int>(attribute->kind)
+                            : static_cast<int>(attribute->attribute));
+                }
+            }
+            break;
         default:
             break;
         }
@@ -9658,6 +10844,18 @@ private:
     [[nodiscard]] const vhpiCharT* get_str(const vhpiStrPropertyT property,
         const vhpiHandleT handle)
     {
+        // The save/restart location exists during the save and restart
+        // phases only (IEEE 1076-2019 19.14).
+        if (property == vhpiSaveRestartLocationP) {
+            if (phase_ != vhpiSavePhase && phase_ != vhpiRestartPhase) {
+                error(vhpiError, "vhpiSaveRestartLocationP is available only "
+                                 "during the save and restart phases");
+                return nullptr;
+            }
+            strings_.push_back(save_location_);
+            return reinterpret_cast<const vhpiCharT*>(
+                strings_.back().c_str());
+        }
         auto* const base = handle_of(handle);
         if (base == nullptr || base->tag != HandleTag::object) {
             error(vhpiError, "missing object handle");
@@ -9724,6 +10922,30 @@ private:
                 scratch = object.type_data ? object.type_data->library : "WORK";
             }
             break;
+        case vhpiLibPhysicalNameP: {
+            // The directory the workspace maps the library to.
+            std::string library;
+            if (object.unit != nullptr && is_design_unit(object)) {
+                library = object.unit->library;
+            } else if (object.type_data != nullptr) {
+                library = object.type_data->library;
+            }
+            if (const auto* const directory = library_directory(library)) {
+                scratch = support::path_to_utf8(*directory);
+                break;
+            }
+            error(vhpiError, "no directory for library '" + library + "'");
+            return nullptr;
+        }
+        case vhpiSignatureNameP:
+            // A subprogram, a call or an enumeration literal (IEEE 1076-2019
+            // 19.4.4).
+            if (auto signature = signature_name(object)) {
+                scratch = std::move(*signature);
+                break;
+            }
+            error(vhpiError, "no signature for " + object.full_name);
+            return nullptr;
         case vhpiUnitNameP:
             // `library.unit[:body]` (IEEE 1076-2019 19.4.5).
             if (object.unit == nullptr || !is_design_unit(object)) {
@@ -9750,6 +10972,81 @@ private:
             text = &strings_.back();
         }
         return reinterpret_cast<const vhpiCharT*>(text->c_str());
+    }
+
+    // The directory a library of the workspace is in, found on first use.
+    [[nodiscard]] const std::filesystem::path* library_directory(
+        const std::string_view name)
+    {
+        if (!library_directories_) {
+            library_directories_.emplace();
+            if (library_source_) {
+                for (auto& [library, directory] : library_source_()) {
+                    library_directories_->emplace(
+                        lower(library), std::move(directory));
+                }
+            }
+        }
+        const auto found = library_directories_->find(lower(name));
+        return found == library_directories_->end() ? nullptr : &found->second;
+    }
+
+    // The name of the base type of a type, as a type mark in a signature.
+    [[nodiscard]] static std::string base_type_mark(const Object& type)
+    {
+        const auto* base = &type;
+        if (type.type_data != nullptr && type.type_data->base != nullptr) {
+            base = type.type_data->base;
+        }
+        return upper(base->name);
+    }
+
+    // `[type_mark {, type_mark} return type_mark]`: the base types of the
+    // parameters and of the result (IEEE 1076-2019 4.5.3, 19.4.4).
+    [[nodiscard]] std::optional<std::string> signature_name(const Object& object)
+    {
+        const auto mark = [&](const vhdl::SubtypeIndication& subtype) {
+            if (const auto* const type = subtype_object(subtype, nullptr)) {
+                return base_type_mark(*type);
+            }
+            return upper(vhdl::without_builtin_prefix(subtype.type_mark.spelling));
+        };
+        if (object.kind == vhpiEnumLiteralK || object.kind == vhpiCharLiteralK) {
+            if (object.type == nullptr) {
+                return std::nullopt;
+            }
+            return "[return " + base_type_mark(*object.type) + "]";
+        }
+        const vhdl::Declaration* subprogram = nullptr;
+        if (object.kind == vhpiFuncDeclK || object.kind == vhpiProcDeclK) {
+            subprogram = object.declaration;
+        } else if (object.kind == vhpiFuncCallK
+            || object.kind == vhpiSeqProcCallStmtK
+            || object.kind == vhpiConcProcCallStmtK) {
+            subprogram = called_declaration(object);
+        }
+        if (subprogram == nullptr || !subprogram->callable) {
+            return std::nullopt;
+        }
+        const auto& callable = *subprogram->callable;
+        std::string result { "[" };
+        bool first = true;
+        for (const auto id : callable.formals) {
+            const auto* const formal = hir_.find_declaration(id);
+            if (formal == nullptr || !formal->subtype) {
+                return std::nullopt;
+            }
+            if (!first) {
+                result += ", ";
+            }
+            result += mark(*formal->subtype);
+            first = false;
+        }
+        if (callable.function && callable.return_type) {
+            result += first ? "return " : " return ";
+            result += mark(*callable.return_type);
+        }
+        return result + "]";
     }
 
     [[nodiscard]] static bool is_design_unit(const Object& object) noexcept
@@ -10102,10 +11399,9 @@ private:
             }
             const auto& data = *type->type_data;
             const auto largest = std::numeric_limits<double>::max();
-            if (data.range) {
-                return static_cast<double>(
-                    property == vhpiFloatLeftBoundP ? data.range->left
-                                                    : data.range->right);
+            if (data.real_range) {
+                return property == vhpiFloatLeftBoundP ? data.real_range->first
+                                                       : data.real_range->second;
             }
             return property == vhpiFloatLeftBoundP ? -largest : largest;
         }
@@ -10231,7 +11527,9 @@ private:
     [[nodiscard]] std::optional<PackedLogic4> element_bits(const Object& object)
     {
         std::optional<PackedLogic4> whole;
-        if (object.kind == vhpiDriverK) {
+        if (object.activation != nullptr) {
+            whole = activation_value(object);
+        } else if (object.kind == vhpiDriverK) {
             whole = driver_bits(object);
         } else if (object.signal) {
             whole = simulation_.read_signal_snapshot(*object.signal);
@@ -10333,6 +11631,9 @@ private:
     [[nodiscard]] static vhpiFormatT object_format(const Object& type)
     {
         const auto& data = *type.type_data;
+        if (is_access_type(type)) {
+            return vhpiPtrVal;
+        }
         if (data.storage != Storage::array) {
             return scalar_format(data);
         }
@@ -10530,6 +11831,20 @@ private:
         const auto& data = *type.type_data;
         if (value.format == vhpiObjTypeVal) {
             value.format = object_format(type);
+        }
+        // An access value is an opaque handle: null reads as a null pointer
+        // (IEEE 1076-2019 22.4).
+        if (value.format == vhpiPtrVal) {
+            if (!is_access_type(type)) {
+                error(vhpiError, object.full_name + " is not of an access type");
+                return -1;
+            }
+            const auto handle = bits->known_unsigned_value();
+            value.value.ptr = handle && *handle != 0U
+                ? reinterpret_cast<void*>(static_cast<std::uintptr_t>(*handle))
+                : nullptr;
+            value.numElems = 1;
+            return 0;
         }
         // The implementation-defined internal representation (IEEE
         // 1076-2019 22.2.8): one byte per scalar bit, the least
@@ -11131,115 +12446,47 @@ private:
         }
     }
 
-    // Write `value` into the element of the signal `object` denotes
-    // (IEEE 1076-2019 23.26 vhpi_put_value). The buffer size gives the
-    // number of array elements written, from the leftmost.
-    [[nodiscard]] int put_value(const vhpiHandleT handle, vhpiValueT* const value,
-        const vhpiPutValueModeT mode)
+    // Convert `value` into the bits of the element of `whole` that `object`
+    // denotes (IEEE 1076-2019 23.26). The buffer size gives the number of
+    // array elements written, from the leftmost. False reports an error.
+    [[nodiscard]] bool store_value(Object* const object,
+        vhpiValueT* const value, PackedLogic4& whole)
     {
-        auto* const object = object_of(handle);
-        if (object == nullptr || value == nullptr) {
-            return 1;
-        }
-        // A variable of a process is updated at once, without activity on
-        // signals, so the phases that refuse that allow it (22.5.2).
-        const auto local = variable_local(*object);
-        if (!local && (time_step_ended_ || postponed_)) {
-            error(vhpiError,
-                "cannot create delta cycle during current simulation phase");
-            return 1;
-        }
-        // No update at the end of simulation (IEEE 1076-2019 21.3.7.6).
-        if (simulation_ending_) {
-            error(vhpiError,
-                "cannot update a value in an end-of-simulation callback");
-            return 1;
-        }
-        if (object->kind == vhpiDriverK) {
-            error(vhpiError, "an ordinary driver has no vhpiWrite access");
-            return 1;
-        }
-        const bool call = object->call_slot || object->call_result;
-        if ((!object->signal && !call && !local) || object->type == nullptr
-            || object->type->type_data == nullptr) {
-            error(vhpiError, object->full_name + " cannot be updated");
-            return 1;
-        }
-        // A variable takes the deposit modes, which are the same for it
-        // (22.5.1, 22.5.2); forcing a variable is not supported.
-        if (local && mode != vhpiDeposit && mode != vhpiDepositPropagate) {
-            error(vhpiError, object->full_name
-                    + ": forcing and releasing a variable are not supported");
-            return 1;
-        }
-        // A foreign subprogram writes its formals of mode out or inout and
-        // its function result (IEEE 1076-2019 20.4.2, 22.5.5).
-        if (call
-            && (active_call_ == nullptr
-                || (object->call_slot
-                    && (*object->call_slot >= active_call_->directions.size()
-                        || (active_call_->directions[*object->call_slot]
-                                != static_cast<std::uint8_t>(
-                                    frontend::PortDirection::Output)
-                            && active_call_->directions[*object->call_slot]
-                                != static_cast<std::uint8_t>(
-                                    frontend::PortDirection::Inout))))
-                || mode == vhpiRelease)) {
-            error(vhpiError, object->full_name + " cannot be updated");
-            return 1;
-        }
-        if (mode == vhpiRelease) {
-            simulation_.release_signal(*object->signal);
-            put_force_event(*object, true, false);
-            return 0;
-        }
-        // Writes to elements of a signal in one cycle merge into the value
-        // the next update phase applies.
-        const bool propagate
-            = mode == vhpiDepositPropagate || mode == vhpiForcePropagate;
-        const auto pending = !call && !local && propagate
-            ? pending_updates_.find(*object->signal)
-            : pending_updates_.end();
-        PackedLogic4 whole;
-        if (local) {
-            auto current = read_local(*local);
-            if (!current) {
-                error(vhpiError, object->full_name + " has no value yet");
-                return 1;
-            }
-            whole = std::move(*current);
-        } else {
-            whole = call
-                ? call_value(*object).value_or(PackedLogic4 {})
-                : pending != pending_updates_.end()
-                ? pending->second.value
-                : simulation_.read_signal_snapshot(*object->signal);
-        }
         const auto& data = *object->type->type_data;
         const auto width = width_of(*object->type);
         if (object->offset + width > whole.width()) {
             error(vhpiError, object->full_name + " has an unexpected layout");
-            return 1;
+            return false;
         }
-        if (data.storage != Storage::array) {
+        if (value->format == vhpiPtrVal) {
+            // An access value is an opaque handle; only null can be made
+            // (IEEE 1076-2019 22.4).
+            if (!is_access_type(*object->type) || value->value.ptr != nullptr) {
+                error(vhpiError, object->full_name
+                        + ": vhpiPtrVal sets an access object to null only");
+                return false;
+            }
+            store_unsigned(whole, object->offset,
+                whole.width() - object->offset, 0U);
+        } else if (data.storage != Storage::array) {
             const auto position = scalar_of(*value);
             if (!position) {
                 error(vhpiError, "unsupported value format "
                         + std::to_string(value->format));
-                return 1;
+                return false;
             }
             if (data.range && data.storage == Storage::integer
                 && (*position < std::min(data.range->left, data.range->right)
                     || *position
                         > std::max(data.range->left, data.range->right))) {
                 error(vhpiError, "value out of range for " + object->full_name);
-                return 1;
+                return false;
             }
             store_scalar(whole, data, object->offset, *position);
         } else {
             if (data.element == nullptr || data.element->type_data == nullptr) {
                 error(vhpiError, "array element type is unknown");
-                return 1;
+                return false;
             }
             const auto& element = *data.element->type_data;
             const auto element_width = width_of(*data.element);
@@ -11271,7 +12518,7 @@ private:
                 if (!scalar_of(*value)) {
                     error(vhpiError, "unsupported value format "
                             + std::to_string(value->format));
-                    return 1;
+                    return false;
                 }
                 break;
             }
@@ -11280,7 +12527,7 @@ private:
                         + std::to_string(elements) + ") for "
                         + object->full_name + " with "
                         + std::to_string(count) + " elements");
-                return 1;
+                return false;
             }
             for (std::size_t position = 0U; position < elements; ++position) {
                 std::int64_t scalar { };
@@ -11309,7 +12556,7 @@ private:
                         if (!parsed) {
                             error(vhpiError, std::string { "invalid logic value '" }
                                     + character + "'");
-                            return 1;
+                            return false;
                         }
                         scalar = static_cast<std::int64_t>(*parsed);
                     } else if (value->format == vhpiBinStrVal) {
@@ -11325,6 +12572,114 @@ private:
                 }
                 store_scalar(whole, element, at(position), scalar);
             }
+        }
+        return true;
+    }
+
+    // Write `value` into the element of the signal `object` denotes
+    // (IEEE 1076-2019 23.26 vhpi_put_value). The buffer size gives the
+    // number of array elements written, from the leftmost.
+    [[nodiscard]] int put_value(const vhpiHandleT handle, vhpiValueT* const value,
+        const vhpiPutValueModeT mode)
+    {
+        auto* const object = object_of(handle);
+        if (object == nullptr || value == nullptr) {
+            return 1;
+        }
+        // A variable of a process is updated at once, without activity on
+        // signals, so the phases that refuse that allow it (22.5.2).
+        const auto local = variable_local(*object);
+        if (!local && (time_step_ended_ || postponed_)) {
+            error(vhpiError,
+                "cannot create delta cycle during current simulation phase");
+            return 1;
+        }
+        // No update at the end of simulation (IEEE 1076-2019 21.3.7.6).
+        if (simulation_ending_) {
+            error(vhpiError,
+                "cannot update a value in an end-of-simulation callback");
+            return 1;
+        }
+        if (object->kind == vhpiDriverK) {
+            return put_driver_value(*object, value, mode);
+        }
+        const bool call = object->call_slot || object->call_result;
+        if ((!object->signal && !call && !local) || object->type == nullptr
+            || object->type->type_data == nullptr) {
+            error(vhpiError, object->full_name + " cannot be updated");
+            return 1;
+        }
+        // A variable takes the deposit modes, which are the same for it
+        // (22.5.1, 22.5.2); forcing a variable is not supported.
+        if (local && mode != vhpiDeposit && mode != vhpiDepositPropagate) {
+            error(vhpiError, object->full_name
+                    + ": forcing and releasing a variable are not supported");
+            return 1;
+        }
+        // A foreign subprogram writes its formals of mode out or inout and
+        // its function result (IEEE 1076-2019 20.4.2, 22.5.5).
+        if (call
+            && (active_call_ == nullptr
+                || (object->call_slot
+                    && (*object->call_slot >= active_call_->directions.size()
+                        || (active_call_->directions[*object->call_slot]
+                                != static_cast<std::uint8_t>(
+                                    frontend::PortDirection::Output)
+                            && active_call_->directions[*object->call_slot]
+                                != static_cast<std::uint8_t>(
+                                    frontend::PortDirection::Inout))))
+                || mode == vhpiRelease)) {
+            error(vhpiError, object->full_name + " cannot be updated");
+            return 1;
+        }
+        // The bounds of an unconstrained array result (IEEE 1076-2019
+        // 22.5.5): numElems elements, defined by the puts that follow.
+        if (mode == vhpiSizeConstraint) {
+            const auto& result = *object->type->type_data;
+            if (object->kind != vhpiFuncCallK
+                || result.storage != Storage::array || !result.dimensions.empty()
+                || result.dimension_count > 1U || result.element == nullptr
+                || value->numElems < 0) {
+                error(vhpiError, object->full_name
+                        + " has no unconstrained array subtype to constrain");
+                return 1;
+            }
+            object->type = array_of_length(
+                *object->type, static_cast<std::size_t>(value->numElems));
+            active_call_->result = PackedLogic4 {
+                std::max<std::size_t>(width_of(*object->type), 1U),
+                Logic4::zero };
+            return 0;
+        }
+        if (mode == vhpiRelease) {
+            simulation_.release_signal(*object->signal);
+            put_force_event(*object, true, false);
+            return 0;
+        }
+        // Writes to elements of a signal in one cycle merge into the value
+        // the next update phase applies.
+        const bool propagate
+            = mode == vhpiDepositPropagate || mode == vhpiForcePropagate;
+        const auto pending = !call && !local && propagate
+            ? pending_updates_.find(*object->signal)
+            : pending_updates_.end();
+        PackedLogic4 whole;
+        if (local) {
+            auto current = read_local(*local);
+            if (!current) {
+                error(vhpiError, object->full_name + " has no value yet");
+                return 1;
+            }
+            whole = std::move(*current);
+        } else {
+            whole = call
+                ? call_value(*object).value_or(PackedLogic4 {})
+                : pending != pending_updates_.end()
+                ? pending->second.value
+                : simulation_.read_signal_snapshot(*object->signal);
+        }
+        if (!store_value(object, value, whole)) {
+            return 1;
         }
         if (call) {
             if (object->call_slot) {
@@ -11434,10 +12789,651 @@ private:
         });
     }
 
+    // --- foreign architectures (IEEE 1076-2019 14.5.1, 20.2.4, 20.4, 20.5) ---------
+
+    // An instance of an architecture decorated with the 'FOREIGN attribute
+    // in the form 20.2.4 describes: the model its attribute value names and
+    // the placeholder process that holds the drivers its VHPI program
+    // creates.
+    struct ForeignInstance {
+        std::string path;
+        const vhdl::ForeignArchitectureBinding* binding { };
+        runtime::simir::ProcessId process { };
+        ForeignModel* model { };
+        // The processStmt vhpi_create made: one per instance, as the
+        // placeholder process is the only process of the instance whose
+        // drivers exist before the simulation starts.
+        Object* created { };
+        // The (signal, offset) pairs the foreign process has a driver for.
+        std::set<std::pair<SignalId, std::size_t>> driven;
+    };
+
+    using ForeignFunction = decltype(vhpiForeignDataT::elabf);
+
+    [[nodiscard]] const vhdl::ForeignArchitectureBinding* foreign_binding(
+        const vhdl::Unit* const unit)
+    {
+        if (unit == nullptr) {
+            return nullptr;
+        }
+        auto [found, inserted] = foreign_bindings_.try_emplace(unit);
+        if (inserted) {
+            found->second = vhdl::foreign_architecture_binding(hir_, *unit);
+        }
+        return found->second ? &*found->second : nullptr;
+    }
+
+    // The instances of foreign architectures, in elaboration order, with
+    // the placeholder process elaboration made for each.
+    void collect_foreign_instances()
+    {
+        if (foreign_collected_) {
+            return;
+        }
+        foreign_collected_ = true;
+        constexpr std::string_view suffix
+            = elaboration::vhdl_foreign_architecture_process_suffix;
+        std::unordered_map<std::string, runtime::simir::ProcessId> placeholders;
+        for (const auto& occurrence : design_.processes()) {
+            if (occurrence.name.size() > suffix.size()
+                && occurrence.name.ends_with(suffix)) {
+                placeholders.emplace(
+                    occurrence.name.substr(
+                        0U, occurrence.name.size() - suffix.size()),
+                    static_cast<runtime::simir::ProcessId>(
+                        occurrence.runtime_index));
+            }
+        }
+        if (placeholders.empty()) {
+            return;
+        }
+        for (const auto& instance : design_.instances()) {
+            const std::string path { design_.path(instance.path) };
+            const auto placeholder = placeholders.find(path);
+            if (placeholder == placeholders.end()) {
+                continue;
+            }
+            const auto& specialization = design_.specializations().at(
+                instance.specialization.value());
+            const auto* const binding
+                = foreign_binding(unit_for(specialization.unit));
+            if (binding == nullptr) {
+                continue;
+            }
+            ForeignInstance entry;
+            entry.path = path;
+            entry.binding = binding;
+            entry.process = placeholder->second;
+            foreign_instances_.push_back(std::move(entry));
+        }
+    }
+
+    // Upon completion of registration, each foreign architecture of the
+    // design needs the execution function of its model (IEEE 1076-2019
+    // 20.2.4.2). The elaboration function is optional.
+    [[nodiscard]] bool verify_foreign_architectures(
+        diagnostic::Engine& diagnostics)
+    {
+        collect_foreign_instances();
+        bool complete = true;
+        for (auto& entry : foreign_instances_) {
+            const auto found = std::ranges::find_if(foreign_models_,
+                [&](const auto& stored) {
+                    return stored->data.kind == vhpiArchF
+                        && !entry.binding->direct
+                        && stored->library == entry.binding->library
+                        && stored->model == entry.binding->model;
+                });
+            if (found != foreign_models_.end()
+                && (*found)->data.execf != nullptr) {
+                entry.model = found->get();
+                continue;
+            }
+            complete = false;
+            diagnostics.error("FSIM-VHPI-LOAD-001",
+                "foreign architecture instance '" + entry.path
+                    + "' (attribute FOREIGN \""
+                    + entry.binding->value
+                    + "\") has no registered foreign architecture with an "
+                      "execution function: "
+                    + (entry.binding->direct
+                            ? std::string { "a VHPIDIRECT binding needs "
+                                            "its object library loaded" }
+                            : "register vhpiArchF with library '"
+                                + entry.binding->library + "' and model '"
+                                + entry.binding->model + "' with a "
+                                  "--vhpi module"));
+        }
+        return complete;
+    }
+
+    // The region object of an elaborated instance, found by its path.
+    [[nodiscard]] Object* region_at(const std::string& path)
+    {
+        // The lookup is the tool's own; it leaves the error state as it was.
+        const auto had_error = has_error_;
+        const auto severity = error_severity_;
+        auto message = error_message_;
+        auto* const handle = handle_by_name(path.c_str(), nullptr);
+        auto* const found = handle != nullptr ? object_of(handle) : nullptr;
+        has_error_ = had_error;
+        error_severity_ = severity;
+        error_message_ = std::move(message);
+        return found;
+    }
+
+    // Call the elaboration or execution function of a foreign architecture
+    // as a callback for `instance` (IEEE 1076-2019 20.4.1, 20.5).
+    void call_foreign(const ForeignFunction function, const int32_t reason,
+        Object& instance)
+    {
+        vhpiCbDataT data { };
+        data.reason = reason;
+        data.cb_rtn = function;
+        data.obj = to_handle(&instance);
+        auto* const previous = dispatching_;
+        dispatching_ = data.obj;
+        {
+            Scope scope { *this };
+            data.cb_rtn(&data);
+        }
+        dispatching_ = previous;
+    }
+
+    // The elaboration phase (IEEE 1076-2019 20.4.1): the start-of-
+    // elaboration callbacks, the elaboration function of each foreign
+    // architecture instance where its statement part would be elaborated
+    // (14.5.1), then the end-of-elaboration callbacks. fsim elaborates
+    // before it loads a tool, so the phase runs again, over the elaborated
+    // design, when the simulation starts.
+    void elaborate_foreign_architectures()
+    {
+        phase_ = vhpiElaborationPhase;
+        dispatch(vhpiCbStartOfElaboration);
+        for (auto& entry : foreign_instances_) {
+            if (entry.model == nullptr || entry.model->data.elabf == nullptr) {
+                continue;
+            }
+            if (auto* const region = region_at(entry.path)) {
+                call_foreign(entry.model->data.elabf,
+                    vhpiCbStartOfElaboration, *region);
+            }
+        }
+        dispatch(vhpiCbEndOfElaboration);
+    }
+
+    // Step g) of the initialization phase (IEEE 1076-2019 14.7.5.2).
+    void execute_foreign_architectures()
+    {
+        for (auto& entry : foreign_instances_) {
+            if (entry.model == nullptr || entry.model->data.execf == nullptr) {
+                continue;
+            }
+            if (auto* const region = region_at(entry.path)) {
+                call_foreign(entry.model->data.execf,
+                    vhpiCbStartOfInitialization, *region);
+            }
+        }
+    }
+
+    // The foreign architecture instance an archBody or an instance object
+    // stands for.
+    [[nodiscard]] std::optional<std::size_t> foreign_index_of(
+        const Object& object)
+    {
+        const Object* const region = object.kind == vhpiArchBodyK
+            ? object.instance
+            : is_region(object) && object.generate == nullptr ? &object
+                                                              : nullptr;
+        if (region == nullptr) {
+            return std::nullopt;
+        }
+        for (std::size_t index { }; index < foreign_instances_.size();
+             ++index) {
+            if (foreign_instances_[index].path == region->path) {
+                return index;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // The object a name of a part of a signal is a part of: the declared
+    // signal.
+    [[nodiscard]] static const Object* declared_signal_root(
+        const Object& object) noexcept
+    {
+        const Object* root = object.basic != nullptr ? object.basic : &object;
+        while (root->parent != nullptr
+            && (root->kind == vhpiIndexedNameK
+                || root->kind == vhpiSelectedNameK
+                || root->kind == vhpiSliceNameK)) {
+            root = root->parent;
+        }
+        return root;
+    }
+
+    // Whether two drivers, or signals, are for subelements of one declared
+    // signal (IEEE 1076-2019 23.6).
+    [[nodiscard]] static bool same_declared_signal(
+        const Object& left, const Object& right) noexcept
+    {
+        const auto* const first = declared_signal_root(left);
+        const auto* const second = declared_signal_root(right);
+        return first == second
+            || (first->declaration != nullptr
+                && first->declaration == second->declaration
+                && declaring_region(*first) == declaring_region(*second));
+    }
+
+    // vhpi_create of a foreign process or driver (IEEE 1076-2019 23.6).
+    [[nodiscard]] vhpiHandleT create_foreign(const vhpiClassKindT kind,
+        const vhpiHandleT first, const vhpiHandleT second)
+    {
+        if (phase_ != vhpiElaborationPhase && phase_ != vhpiInitializationPhase
+            && phase_ != vhpiSimulationPhase) {
+            error(vhpiError, "vhpi_create of a process or driver is available "
+                             "only during the elaboration, initialization and "
+                             "simulation phases");
+            return nullptr;
+        }
+        collect_foreign_instances();
+        auto* const owner = object_of(first);
+        if (owner == nullptr) {
+            return nullptr;
+        }
+        if (kind == vhpiProcessStmtK) {
+            if (second != nullptr) {
+                error(vhpiError, "vhpi_create: handle2 shall be NULL for a "
+                                 "process");
+                return nullptr;
+            }
+            const auto index = foreign_index_of(*owner);
+            if (!index) {
+                error(vhpiError, "vhpi_create: handle1 shall be an archBody "
+                                 "whose IsForeign property is vhpiTrue");
+                return nullptr;
+            }
+            auto& entry = foreign_instances_[*index];
+            if (entry.created != nullptr) {
+                // The placeholder process is the one process of the
+                // instance whose drivers exist from the start; a second one
+                // would need drivers registered at run time.
+                error(vhpiError, "vhpi_create: " + entry.path
+                        + " already has a foreign process; fsim creates one "
+                          "per foreign architecture instance");
+                return nullptr;
+            }
+            auto* const process
+                = make_object(vhpiProcessStmtK, "foreign_process", nullptr);
+            process->foreign = index;
+            process->foreign_process = true;
+            if (auto* const region = region_at(entry.path)) {
+                process->full_name = region->full_name + ":" + process->name;
+                process->full_case_name
+                    = region->full_case_name + ":" + process->case_name;
+            }
+            entry.created = process;
+            return to_handle(process);
+        }
+        // A driver for a basic signal (23.6).
+        if (!is_signal_object(*owner) || owner->type->type_data->storage
+                == Storage::array
+            || owner->type->type_data->storage == Storage::record) {
+            error(vhpiError, "vhpi_create: handle1 shall be a basic signal");
+            return nullptr;
+        }
+        Object* process = nullptr;
+        if (second != nullptr) {
+            process = object_of(second);
+            if (process == nullptr) {
+                return nullptr;
+            }
+            if (!process->foreign_process) {
+                error(vhpiError, "vhpi_create: handle2 shall be a processStmt "
+                                 "whose IsForeign property is vhpiTrue");
+                return nullptr;
+            }
+        }
+        // The instance that declares the signal drives it; a port of mode
+        // out, inout or buffer or a signal of the architecture.
+        const auto index = foreign_index_of_region(declaring_region(*owner));
+        const auto* const root = declared_signal_root(*owner);
+        const auto* const declaration = root->declaration;
+        const bool drivable = declaration != nullptr
+            && (declaration->form == vhdl::DeclarationForm::signal
+                || (declaration->form == vhdl::DeclarationForm::port
+                    && (declaration->direction == vhdl::Direction::output
+                        || declaration->direction == vhdl::Direction::inout
+                        || declaration->direction
+                            == vhdl::Direction::buffer)));
+        if (!index || !drivable) {
+            error(vhpiError, "vhpi_create: " + owner->full_name
+                    + " is not a signal or an out, inout or buffer port of a "
+                      "foreign architecture instance");
+            return nullptr;
+        }
+        auto& entry = foreign_instances_[*index];
+        if (process != nullptr) {
+            if (process->foreign != index) {
+                error(vhpiError, "vhpi_create: the process belongs to another "
+                                 "foreign architecture instance");
+                return nullptr;
+            }
+            // A process has one driver for a basic signal (23.6).
+            if (!entry.driven.emplace(*owner->signal, owner->offset).second) {
+                error(vhpiError, "vhpi_create: the process already has a "
+                                 "driver for " + owner->full_name);
+                return nullptr;
+            }
+        }
+        auto* const driver = make_object(vhpiDriverK, "", process);
+        driver->basic = canonical_basic(*owner);
+        driver->signal = owner->signal;
+        driver->offset = owner->offset;
+        driver->type = owner->type;
+        driver->foreign = index;
+        driver->created_driver = true;
+        if (process != nullptr) {
+            process->lists[ListKind::drivers].push_back(driver);
+        }
+        created_drivers_.push_back(driver);
+        return to_handle(driver);
+    }
+
+    [[nodiscard]] std::optional<std::size_t> foreign_index_of_region(
+        const Object* const region)
+    {
+        if (region == nullptr) {
+            return std::nullopt;
+        }
+        for (std::size_t index { }; index < foreign_instances_.size();
+             ++index) {
+            if (foreign_instances_[index].path == region->path) {
+                return index;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // The scalar value `index` of an array value structure, as a value of
+    // the matching scalar format (IEEE 1076-2019 23.34).
+    [[nodiscard]] bool element_of(const vhpiValueT& vector,
+        const std::size_t index, const Storage storage, vhpiValueT& element)
+    {
+        element = vector;
+        std::size_t count { };
+        const auto buffer = static_cast<std::size_t>(vector.bufSize);
+        switch (vector.format) {
+        case vhpiLogicVecVal:
+            element.format = vhpiLogicVal;
+            count = buffer / sizeof(vhpiEnumT);
+            if (index < count) {
+                element.value.enumv = vector.value.enumvs[index];
+            }
+            break;
+        case vhpiEnumVecVal:
+            element.format = vhpiEnumVal;
+            count = buffer / sizeof(vhpiEnumT);
+            if (index < count) {
+                element.value.enumv = vector.value.enumvs[index];
+            }
+            break;
+        case vhpiSmallEnumVecVal:
+            element.format = vhpiSmallEnumVal;
+            count = buffer / sizeof(vhpiSmallEnumT);
+            if (index < count) {
+                element.value.smallenumv = vector.value.smallenumvs[index];
+            }
+            break;
+        case vhpiIntVecVal:
+            element.format = vhpiIntVal;
+            count = buffer / sizeof(vhpiIntT);
+            if (index < count) {
+                element.value.intg = vector.value.intgs[index];
+            }
+            break;
+        case vhpiRealVecVal:
+            element.format = vhpiRealVal;
+            count = buffer / sizeof(vhpiRealT);
+            if (index < count) {
+                element.value.real = vector.value.reals[index];
+            }
+            break;
+        case vhpiStrVal:
+        case vhpiBinStrVal:
+            // A character is a logic value of a logic type, a bit otherwise.
+            count = buffer == 0U ? 0U : buffer - 1U;
+            if (index < count) {
+                const auto character
+                    = static_cast<char>(vector.value.str[index]);
+                element.format = vhpiEnumVal;
+                if (storage == Storage::logic9) {
+                    const auto parsed = runtime::parse_logic9(character);
+                    if (!parsed) {
+                        return false;
+                    }
+                    element.value.enumv = static_cast<vhpiEnumT>(*parsed);
+                } else if (character == '0' || character == '1') {
+                    element.value.enumv = static_cast<vhpiEnumT>(
+                        character == '1' ? 1 : 0);
+                } else {
+                    return false;
+                }
+            }
+            break;
+        default:
+            break;
+        }
+        return index < count;
+    }
+
+    // The bits a value gives a driver of a basic signal: the driver's
+    // current value with the bits of its signal part replaced.
+    [[nodiscard]] std::optional<PackedLogic4> driver_update(
+        Object& driver, vhpiValueT& value)
+    {
+        const auto process = driver_process(driver);
+        if (!process || !driver.signal || driver.type == nullptr
+            || driver.type->type_data == nullptr) {
+            error(vhpiError, "the driver has no process");
+            return std::nullopt;
+        }
+        PackedLogic4 whole;
+        try {
+            whole = simulation_.read_driver(*process, *driver.signal);
+        } catch (const std::exception& failure) {
+            error(vhpiError, std::string { "cannot read the driver: " }
+                    + failure.what());
+            return std::nullopt;
+        }
+        if (!store_value(&driver, &value, whole)) {
+            return std::nullopt;
+        }
+        return whole.extract_bits(driver.offset, width_of(*driver.type));
+    }
+
+    // vhpi_put_value on a driver (IEEE 1076-2019 22.5.4).
+    [[nodiscard]] int put_driver_value(Object& driver, vhpiValueT* const value,
+        const vhpiPutValueModeT mode)
+    {
+        if (!driver.created_driver) {
+            error(vhpiError, "an ordinary driver has no vhpiWrite access");
+            return 1;
+        }
+        if (phase_ != vhpiInitializationPhase
+            && phase_ != vhpiSimulationPhase) {
+            error(vhpiError, "a driver is updated during the initialization "
+                             "and simulation phases only");
+            return 1;
+        }
+        const auto process = driver_process(driver);
+        if (!process || !driver.signal || driver.type == nullptr) {
+            error(vhpiError, "the driver has no process");
+            return 1;
+        }
+        const auto width = width_of(*driver.type);
+        try {
+            if (mode == vhpiRelease) {
+                simulation_.release_foreign_driver(
+                    *process, *driver.signal, driver.offset, width);
+                return 0;
+            }
+            if (mode != vhpiDeposit && mode != vhpiDepositPropagate
+                && mode != vhpiForce && mode != vhpiForcePropagate) {
+                error(vhpiError, "a driver takes the update modes vhpiDeposit, "
+                                 "vhpiDepositPropagate, vhpiForce, "
+                                 "vhpiForcePropagate and vhpiRelease");
+                return 1;
+            }
+            auto update = driver_update(driver, *value);
+            if (!update) {
+                return 1;
+            }
+            if (mode == vhpiForce || mode == vhpiForcePropagate) {
+                simulation_.force_foreign_driver(*process, *driver.signal,
+                    std::move(*update), driver.offset,
+                    mode == vhpiForcePropagate);
+            } else if (mode == vhpiDeposit) {
+                simulation_.deposit_foreign_driver(*process, *driver.signal,
+                    std::move(*update), driver.offset);
+            } else {
+                // The deposit reaches the driver in the update phase of the
+                // cycle: a transaction with no delay.
+                simulation_.schedule_foreign_transaction(*process,
+                    *driver.signal, std::move(*update), driver.offset, 0U,
+                    0U, false);
+            }
+        } catch (const std::exception& failure) {
+            error(vhpiError, std::string { "the driver cannot be updated: " }
+                    + failure.what());
+            return 1;
+        }
+        return 0;
+    }
+
+    // vhpi_schedule_transaction (IEEE 1076-2019 22.6, 23.34).
+    [[nodiscard]] int schedule_transaction(const vhpiHandleT target,
+        vhpiValueT* const values, const uint32_t count, vhpiTimeT* const delay,
+        const vhpiDelayModeT mode, vhpiTimeT* const rejection)
+    {
+        auto* const object = object_of(target);
+        if (object == nullptr) {
+            return 1;
+        }
+        if (object->kind != vhpiDriverK
+            && object->kind != vhpiDriverCollectionK) {
+            error(vhpiError, "vhpi_schedule_transaction needs a driver or a "
+                             "driverCollection");
+            return 1;
+        }
+        std::vector<Object*> drivers;
+        if (object->kind == vhpiDriverK) {
+            drivers.push_back(object);
+        } else {
+            drivers = object->lists[ListKind::members];
+        }
+        // Each driver needs vhpiWrite access (23.34).
+        if (std::ranges::any_of(drivers, [](const Object* const driver) {
+                return !driver->created_driver;
+            })) {
+            error(vhpiError, "a driver without vhpiWrite access cannot take a "
+                             "transaction");
+            return 1;
+        }
+        if ((phase_ != vhpiInitializationPhase && phase_ != vhpiSimulationPhase)
+            || time_step_ended_ || postponed_ || simulation_ending_) {
+            error(vhpiError, "cannot schedule a transaction during the "
+                             "current simulation phase");
+            return 1;
+        }
+        if (values == nullptr) {
+            // A null transaction disconnects a guarded signal's driver
+            // (22.6); the driver of a foreign process is for a signal that
+            // has no guard here.
+            error(vhpiError, "a null transaction needs a driver for a guarded "
+                             "signal");
+            return 1;
+        }
+        if (count == 0U || drivers.empty()) {
+            error(vhpiError, "no value to schedule");
+            return 1;
+        }
+        if (mode != vhpiInertial && mode != vhpiTransport) {
+            error(vhpiError, "unknown delay mode");
+            return 1;
+        }
+        // The delay and the rejection limit count resolution limits, which
+        // are simulation ticks (22.2.7).
+        const std::uint64_t ticks = delay != nullptr ? from_vhpi_time(*delay) : 0U;
+        std::uint64_t limit = ticks;
+        if (mode == vhpiInertial && rejection != nullptr) {
+            limit = from_vhpi_time(*rejection);
+            if (limit > ticks) {
+                error(vhpiError, "the pulse rejection limit exceeds the delay");
+                return 1;
+            }
+        }
+        // The value of each driver, before any transaction is scheduled.
+        std::vector<PackedLogic4> updates;
+        updates.reserve(drivers.size());
+        for (std::size_t index { }; index < drivers.size(); ++index) {
+            vhpiValueT element { };
+            vhpiValueT* source = nullptr;
+            if (count == drivers.size()) {
+                source = &values[index];
+            } else if (count == 1U && drivers.size() > 1U) {
+                if (!element_of(values[0], index,
+                        drivers[index]->type->type_data->storage, element)) {
+                    error(vhpiError, "the value has fewer elements than the "
+                                     "collection has drivers");
+                    return 1;
+                }
+                source = &element;
+            } else if (drivers.size() == 1U) {
+                source = &values[0];
+            } else {
+                error(vhpiError, "the number of values does not fit the "
+                                 "drivers");
+                return 1;
+            }
+            auto update = driver_update(*drivers[index], *source);
+            if (!update) {
+                return 1;
+            }
+            updates.push_back(std::move(*update));
+        }
+        try {
+            for (std::size_t index { }; index < drivers.size(); ++index) {
+                const auto& driver = *drivers[index];
+                simulation_.schedule_foreign_transaction(
+                    *driver_process(driver), *driver.signal,
+                    std::move(updates[index]), driver.offset, ticks, limit,
+                    mode == vhpiTransport);
+            }
+        } catch (const std::exception& failure) {
+            error(vhpiError, std::string { "cannot schedule the transaction: " }
+                    + failure.what());
+            return 1;
+        }
+        return 0;
+    }
+
     // --- foreign subprograms -------------------------------------------------------
 
     [[nodiscard]] vhpiHandleT register_foreign(vhpiForeignDataT* const data)
     {
+        // IEEE 1076-2019 23.30: errors.
+        if (phase_ != vhpiRegistrationPhase) {
+            error(vhpiError,
+                "vhpi_register_foreignf is available only during the "
+                "registration phase");
+            return nullptr;
+        }
+        if (data != nullptr && data->kind == vhpiLibF) {
+            error(vhpiError, "a library of foreign models cannot be registered "
+                    "with vhpi_register_foreignf");
+            return nullptr;
+        }
         if (data == nullptr || data->libraryName == nullptr
             || data->modelName == nullptr) {
             error(vhpiError, "foreign model data is incomplete");
@@ -11450,11 +13446,17 @@ private:
         }
         const std::string_view library { data->libraryName };
         const std::string_view model { data->modelName };
-        // A library and model name a single registration (20.2.4.2).
-        if (std::ranges::any_of(foreign_models_, [&](const auto& stored) {
-                return stored->data.kind == data->kind
-                    && stored->library == library && stored->model == model;
-            })) {
+        // A foreign model is identified by its library and model name; a
+        // foreign application may be registered again (IEEE 1076-2019
+        // 20.2.1).
+        const auto is_model = [](const vhpiForeignKindT kind) {
+            return kind == vhpiArchF || kind == vhpiFuncF || kind == vhpiProcF;
+        };
+        if (is_model(data->kind)
+            && std::ranges::any_of(foreign_models_, [&](const auto& stored) {
+                   return is_model(stored->data.kind)
+                       && stored->library == library && stored->model == model;
+               })) {
             error(vhpiError, "foreign model '" + std::string { library } + " "
                     + std::string { model } + "' is already registered");
             return nullptr;
@@ -11518,6 +13520,15 @@ private:
         if (element == 0U || width % element != 0U) {
             return type;
         }
+        return array_of_length(*type, width / element);
+    }
+
+    // A one-dimensional array subtype of `count` elements indexed from its
+    // index subtype's left bound.
+    [[nodiscard]] Object* array_of_length(
+        Object& type, const std::size_t count)
+    {
+        const auto& data = *type.type_data;
         const auto* const index = data.index_types.empty()
             ? nullptr
             : data.index_types.front();
@@ -11525,19 +13536,27 @@ private:
                 && index->type_data->range
             ? index->type_data->range->left
             : 0;
-        auto* const result = constrained(*type);
+        auto* const result = constrained(type);
         result->type_data->dimensions = { Range { left,
-            left + static_cast<std::int64_t>(width / element) - 1, false } };
+            left + static_cast<std::int64_t>(count) - 1, false } };
         result->type_data->unconstrained = false;
         return result;
     }
 
+    // An access type or a subtype of one (IEEE 1076-2019 22.4).
+    [[nodiscard]] static bool is_access_type(const Object& type)
+    {
+        return type.type_data != nullptr && type.type_data->base != nullptr
+            && type.type_data->base->kind == vhpiAccessTypeDeclK;
+    }
+
     // Run the execution function of a foreign subprogram for one call
     // (IEEE 1076-2019 20.4.2). `identity` is
-    // `<library>\t<model>\t<name>\t<declaration>\t<scope>`; each name is
-    // `<formal>\t<declaration>`.
+    // `<library>\t<model>\t<name>\t<declaration>\t<scope>\t<result width>`;
+    // each name is `<formal>\t<declaration>`. A STRING result comes back in
+    // the trailing string actual named `@result-string`.
     [[nodiscard]] PackedLogic4 foreign_call(const std::string_view identity,
-        std::vector<PackedLogic4>& actuals,
+        std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings,
         const std::span<const std::string> names,
         const std::span<const std::uint8_t> directions)
     {
@@ -11593,9 +13612,18 @@ private:
             && callable->callable->return_type) {
             call->type = subtype_object(*callable->callable->return_type, nullptr);
         }
+        const bool text_result = !names.empty()
+            && names.back() == "@result-string";
+        const auto formals = names.size() - (text_result ? 1U : 0U);
+        std::size_t expected_width { };
+        if (fields.size() > 5U) {
+            const auto field = fields[5];
+            (void)std::from_chars(
+                field.data(), field.data() + field.size(), expected_width);
+        }
         auto& parameters = call->lists[ListKind::param_decls];
         for (std::size_t index = 0U;
-             index < names.size() && index < actuals.size(); ++index) {
+             index < formals && index < actuals.size(); ++index) {
             const auto name = std::string_view { names[index] };
             const auto tab = name.find('\t');
             const auto* const formal = tab == std::string_view::npos
@@ -11621,12 +13649,22 @@ private:
             }
             parameters.push_back(parameter);
         }
-        if (function && (call->type == nullptr || width_of(*call->type) == 0U)) {
+        // An unconstrained array result takes its bounds from the execution
+        // function (IEEE 1076-2019 22.5.5).
+        const bool open_result = function && call->type != nullptr
+            && call->type->type_data != nullptr
+            && call->type->type_data->storage == Storage::array
+            && width_of(*call->type) == 0U
+            && call->type->type_data->dimension_count <= 1U
+            && call->type->type_data->element != nullptr;
+        if (function && (call->type == nullptr
+                || (width_of(*call->type) == 0U && !open_result))) {
             throw std::runtime_error { "foreign function '"
                 + std::string { fields[2] } + "' has no result subtype" };
         }
         ActiveCall running { &actuals, directions,
-            PackedLogic4 { function ? width_of(*call->type) : 1U,
+            PackedLogic4 { function && !open_result
+                    ? width_of(*call->type) : 1U,
                 Logic4::zero },
             false };
         auto* const previous = active_call_;
@@ -11652,6 +13690,25 @@ private:
             if (!running.has_result) {
                 throw std::runtime_error { "foreign function '"
                     + std::string { fields[2] } + "' provided no result" };
+            }
+            if (text_result) {
+                // The characters, the leftmost in the high bits.
+                const auto count = running.result.width() / 8U;
+                std::string text;
+                for (std::size_t position = 0U; position < count; ++position) {
+                    text.push_back(static_cast<char>(unsigned_bits(
+                        running.result, (count - 1U - position) * 8U, 8U)));
+                }
+                strings.back() = std::move(text);
+                return PackedLogic4 { 1U, Logic4::zero };
+            }
+            if (open_result && expected_width != 0U
+                && running.result.width() != expected_width) {
+                throw std::runtime_error { "foreign function '"
+                    + std::string { fields[2] } + "' returned "
+                    + std::to_string(running.result.width())
+                    + " bits where the call context has "
+                    + std::to_string(expected_width) };
             }
             return std::move(running.result);
         }
@@ -11747,15 +13804,60 @@ private:
     Object* root_ { };
     Object* tool_ { };
     vhpiHandleT dispatching_ { };
+    // The callback whose routine is running.
+    vhpiHandleT current_callback_ { };
+    // The source of the library directories vhpiLibPhysicalNameP reports,
+    // and the directories once read.
+    VhpiLibraryDirectories library_source_;
+    std::optional<std::map<std::string, std::filesystem::path>>
+        library_directories_;
     std::vector<std::unique_ptr<ForeignModel>> foreign_models_;
+    // Foreign architectures (IEEE 1076-2019 20.4): the bindings of the
+    // units that have one, their instances, and the drivers vhpi_create
+    // made.
+    std::map<const vhdl::Unit*, std::optional<vhdl::ForeignArchitectureBinding>>
+        foreign_bindings_;
+    std::vector<ForeignInstance> foreign_instances_;
+    std::vector<Object*> created_drivers_;
+    bool foreign_collected_ { };
     ActiveCall* active_call_ { };
+    // The user-defined subprogram calls running in each design process,
+    // outermost first, kept from the kernel's call and return points while
+    // a statement or subprogram call callback is registered; the frame
+    // objects (IEEE 1076-2019 19.10) are made when a handle asks for one.
+    struct CallRecord {
+        Object* call { };
+        const vhdl::Declaration* callee { };
+        std::uint32_t line { };
+        std::uint32_t column { };
+        Object* frame { };
+    };
+    std::map<runtime::simir::ProcessId, std::vector<CallRecord>> frames_;
+    // The design process of the call point being delivered, where a call
+    // object looks for its frame first.
+    std::optional<runtime::simir::ProcessId> call_process_;
     std::uint64_t safe_point_token_ { };
     std::uint64_t change_token_ { };
     std::uint64_t next_order_ { };
     vhpiPhaseT phase_ { vhpiRegistrationPhase };
+    // The phase a save returns to, the identifiers vhpiIdP issued, and the
+    // data sets of the save in progress or the restart (20.7, 20.8).
+    struct SaveData {
+        std::string bytes;
+        std::size_t cursor { };
+    };
+    vhpiPhaseT resumed_phase_ { vhpiSimulationPhase };
+    std::int32_t last_id_ { };
+    std::set<std::int32_t> issued_ids_;
+    std::map<std::int32_t, SaveData> save_data_;
+    std::string save_location_;
     bool has_error_ { };
     vhpiSeverityT error_severity_ { vhpiNote };
     std::string error_message_;
+    // The handle the failing routine was given, and the file name that
+    // vhpi_check_error hands out for it.
+    vhpiHandleT error_subject_ { };
+    std::string error_file_;
     bool stopping_ { };
     // vhpi_control(vhpiFinish) was called.
     bool finishing_ { };
@@ -11782,15 +13884,21 @@ private:
     // The initialization phase has completed.
     bool initialized_ { };
     bool cycled_ { };
-    // The simulation cycles of the current time step that updated a signal
-    // (IEEE 1076-2019 14.7.5.3): the cycle count vhpi_get_time reports.
-    runtime::SimulationTick cycle_time_ { };
-    std::uint64_t cycles_ { };
-    bool cycle_counted_ { };
     ForeignCompanion companion_;
 };
 
 } // namespace
+
+bool design_has_vhdl_foreign_architecture(const Simulation& simulation)
+{
+    constexpr std::string_view suffix
+        = elaboration::vhdl_foreign_architecture_process_suffix;
+    return std::ranges::any_of(simulation.design_ir().processes(),
+        [&](const auto& occurrence) {
+            return occurrence.name.size() > suffix.size()
+                && occurrence.name.ends_with(suffix);
+        });
+}
 
 std::unique_ptr<VhpiForeignService> attach_vhpi_modules(
     Simulation& simulation,
@@ -11798,11 +13906,13 @@ std::unique_ptr<VhpiForeignService> attach_vhpi_modules(
     VhpiForeignService::PrintSink print,
     const std::span<const std::string> arguments,
     diagnostic::Engine& diagnostics,
-    ForeignCompanion companion)
+    ForeignCompanion companion,
+    VhpiLibraryDirectories libraries)
 {
     auto service = std::make_unique<LiveService>(
         simulation, std::move(print), arguments);
     service->set_companion(std::move(companion));
+    service->set_libraries(std::move(libraries));
     service->attach();
     if (!service->load(modules, diagnostics)) {
         return nullptr;

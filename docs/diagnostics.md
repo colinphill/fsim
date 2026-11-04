@@ -125,7 +125,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-VPI-LOAD-001` | error | A `--vpi` module could not be loaded, or does not export its bootstrap entry point. |
 | `FSIM-DPI-LOAD-001` | error | An `--sv-lib` DPI-C library could not be loaded, or this build has no DPI-C call support (libffi was not found when it was configured). |
 | `FSIM-VPI-001` | error | The code `vpi_chk_error` reports for a failed VPI routine call made by a `--vpi` module (IEEE 1800-2023 38.2). |
-| `FSIM-VHPI-LOAD-001` | error | A `--vhpi` module could not be loaded, or does not export its bootstrap entry point. |
+| `FSIM-VHPI-LOAD-001` | error | A `--vhpi` module could not be loaded, or does not export its bootstrap entry point, or an instance of an architecture decorated with the `FOREIGN` attribute has no registered `vhpiArchF` model with an execution function (IEEE 1076-2019 20.2.4.2). |
 | `FSIM-VHPI-ASSERT` | error | The prefix of a message a `--vhpi` module reports with `vhpi_assert`; error, failure and system severities fail the run (IEEE 1076-2019 23.2). |
 
 ## Code coverage model
@@ -504,7 +504,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-CONTROL-004` | error | SDF control inputs, source bytes, bounded report entries, or immutable semantic identity exceed the configured resource limit. |
 | `FSIM-SDF-SESSION-001` | error | A session SDF input cannot be read within the file-body limit, or the design, time resolution or retained baseline is invalid. |
 | `FSIM-SDF-SESSION-002` | error | Session SDF selection contains no applicable annotations or an invalid selected target scope. |
-| `FSIM-SDF-SESSION-003` | error | A session SDF request contains a planned target family outside connected specify-path and timing-check support. |
+| `FSIM-SDF-SESSION-003` | error | A session SDF request contains a planned target family outside connected specify-path, timing-check, `INTERCONNECT` and `PORT` support, or an `INTERCONNECT` or `PORT` annotation without a complete effective delay. |
 | `FSIM-SDF-EFFECTIVE-001` | error | Effective SDF persistence receives incomplete identities, generation, policy, exact-value records, or producer-relative provenance. |
 | `FSIM-SDF-EFFECTIVE-002` | error | An effective SDF object, design, library, native-cache, or checkpoint archive has a stale schema, wrong artifact kind, malformed/truncated envelope, trailing data, or checksum corruption. |
 | `FSIM-SDF-EFFECTIVE-003` | error | Effective SDF persistence finds duplicate target ownership or a producer, policy, generation, target, or provenance identity incompatible with the consumer. |
@@ -1613,7 +1613,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-214` | error | A transition-bin array expansion exceeds 65,536 sequences or would create an empty expanded bin. |
 | `FSIM-SV-SEM-215` | error | A cross declares the same explicit cross-bin name more than once. |
 | `FSIM-SV-SEM-216` | error | A `binsof` operand or named-bin qualification is empty, unknown, malformed, or ambiguous in its cross. |
-| `FSIM-SV-SEM-222` | error | A DPI declaration uses a link string other than `"DPI-C"`. |
+| `FSIM-SV-SEM-222` | error | A DPI declaration uses a link string other than `"DPI-C"`; the deprecated `"DPI"` string is an error whose message says it is deprecated and should be replaced with `"DPI-C"` and that the switch may require changes in the DPI application's C code (IEEE 1800-2023 35.5.4). |
 | `FSIM-SV-SEM-223` | error | A DPI export incorrectly declares a `pure` or `context` import qualifier. |
 | `FSIM-SV-SEM-224` | error | An imported DPI task is incorrectly declared `pure`. |
 | `FSIM-SV-SEM-225` | error | A pure imported DPI function has a non-input formal. |
@@ -1878,6 +1878,11 @@ scheduler.
 | `FSIM-SV-SEM-391` | error | A specify module path has misplaced polarity or a parallel path has more than one source or destination terminal. |
 | `FSIM-SV-SEM-392` | error | A specify module path mixes simple-path and edge-sensitive topology, or an edge-sensitive path follows `ifnone`. |
 | `FSIM-SV-SEM-393` | error | SystemVerilog DPI imports sharing one C linkage name have incompatible callable profiles. |
+| `FSIM-SV-SEM-460` | error | A DPI import formal argument or function result, or an export's, has a class type (IEEE 1800-2023 35.5.5, 35.5.6). |
+| `FSIM-SV-SEM-461` | error | A DPI formal argument has an unpacked or tagged union type; unions are permitted in their packed form only (IEEE 1800-2023 35.5.6). |
+| `FSIM-SV-SEM-462` | error | A DPI formal argument has a dynamic array, queue or associative array type, or an exported subroutine declares a dynamic array or open array formal; an import uses an open array `[]` instead (IEEE 1800-2023 35.5.6, 35.5.6.1). |
+| `FSIM-SV-SEM-463` | error | A DPI function result, import or export, is not a small value: void, byte, shortint, int, longint, real, shortreal, chandle, string or a scalar bit or logic (IEEE 1800-2023 35.5.5). |
+| `FSIM-SV-SEM-464` | error | An associative array is the actual of a DPI open-array or sized-array formal; it is not assignment compatible with another array kind (IEEE 1800-2023 7.6, 7.7, 35.5.6.1). |
 | `FSIM-SV-UNSUPPORTED-001` | error | Unsupported compilation-unit item. |
 | `FSIM-SV-UNSUPPORTED-002` | error | A raw parser input contains a directive that was not consumed by preprocessing. |
 | `FSIM-SV-UNSUPPORTED-004` | error | Unsupported module item. |

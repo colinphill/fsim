@@ -207,11 +207,14 @@ model `none`; enabled foundation coverage uses
 `fsim-code-coverage-foundation-v3`. Versioned v2 objects and designs are
 rejected directly.
 
-The compiled-HIR bundle is schema 3 and embeds semantic schema 4,
-SystemVerilog HIR schema 14, and VHDL HIR schema 8. The standalone design's
-other current state schemas are runtime 92, DesignIR 5, coverage 7, UVM 3, and
-class specializations (`FSIMSVCS`) 1. Runtime schema 92 stores packed values as
-their width and raw bit planes. The standalone `FSIMSVCH` constraint-HIR state
+The compiled-HIR bundle is schema 3 and embeds semantic schema 5,
+SystemVerilog HIR schema 14, and VHDL HIR schema 10. The standalone design's
+other current state schemas are runtime 99, DesignIR 5, coverage 7, UVM 3, and
+class specializations (`FSIMSVCS`) 1. Runtime schema 99 stores packed values as
+their width and raw bit planes. A debug point carries the callee it belongs to (schema 99), and the point kinds
+`frame_entry`, `frame_exit` and `class_constructed` mark the frame of a
+SystemVerilog callable and a completed constructor for the execution probes.
+The standalone `FSIMSVCH` constraint-HIR state
 is schema 14. The runtime schema carries opaque design-local package owner IDs on package
 string/container objects and initializer process rows. Elaboration derives the
 same token as `UnitId.value() + 1` for both sides, reserving zero for unowned

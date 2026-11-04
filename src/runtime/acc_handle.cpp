@@ -35,9 +35,7 @@ std::map<AccIdentity, handle> handles_by_identity;
 std::map<std::pair<std::uint64_t, std::uint64_t>, std::uint32_t> live_counts;
 thread_local fsim_acc_handle_context_v3* active_context{};
 
-void publish_error(const bool failed) noexcept {
-  acc_error_flag = failed ? 1 : 0;
-}
+using fsim::runtime::acc_detail::publish_error;
 
 [[nodiscard]] bool valid_context(
     const fsim_acc_handle_context_v3* const context) noexcept {
@@ -157,7 +155,8 @@ bool type_matches(const PLI_INT32 actual,
     case accScope:
       return actual == accModule || actual == accTopModule ||
              actual == accModuleInstance || actual == accCellInstance ||
-             actual == accTask || actual == accFunction;
+             actual == accTask || actual == accFunction ||
+             actual == accNamedBeginStat || actual == accNamedForkStat;
     case accNet:
       return actual == accNetBit ||
              (actual >= accWire && actual <= accSupply1);
@@ -180,8 +179,32 @@ bool type_matches(const PLI_INT32 actual,
              actual == accPeriod || actual == accRecovery ||
              actual == accSkew || actual == accNochange ||
              actual == accSetuphold;
+    // Figure 94 names a module path accPath; Table 113 names it accModPath.
+    case accPath:
+      return actual == accModPath || actual == accInterModPath ||
+             actual == accWirePath;
+    case accWirePath: return actual == accInterModPath;
+    case accStatement:
+      return actual == accNamedBeginStat || actual == accNamedForkStat;
+    case accPathTerminal:
+      return actual == accPathInput || actual == accPathOutput;
     default: return false;
   }
+}
+
+std::shared_ptr<void> suspend_acc_call() {
+  struct Suspended {
+    fsim_acc_handle_context_v3* context;
+    PLI_INT32 error_flag;
+  };
+  auto* const saved = new Suspended{active_context, acc_error_flag};
+  active_context = nullptr;
+  return std::shared_ptr<void>(saved, [](void* const pointer) {
+    auto* const suspended = static_cast<Suspended*>(pointer);
+    active_context = suspended->context;
+    acc_error_flag = suspended->error_flag;
+    delete suspended;
+  });
 }
 
 }  // namespace fsim::runtime::acc_detail

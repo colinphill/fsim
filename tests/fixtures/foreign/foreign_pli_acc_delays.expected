@@ -1,0 +1,61 @@
+#c delay mode 0
+#c g_and fetch ok=1 error=0
+#c g_and delays 2.000 3.000
+#c g_buf fetch ok=1 error=0
+#c g_buf delays 2.000 5.000 8.000
+#c u_inv fetch ok=1 error=0
+#c u_inv delays 2.000 3.000
+#c g_buf fetch 2 ok=1 error=0
+#c g_buf delays 2 2.000 5.000
+#c g_and fetch mtm ok=1 error=0
+#c g_and mtm 2.000 2.000 2.000 3.000 3.000 3.000 2.000 2.000 2.000
+#c g_buf fetch mtm ok=1 error=0
+#c g_buf mtm 1.000 2.000 3.000 4.000 5.000 6.000 7.000 8.000 9.000
+#c path fetch 6 ok=1 error=0
+#c path delays 6 6.000 7.000 6.000 6.000 7.000 7.000
+#c path fetch 2 ok=1 error=0
+#c path delays 2 6.000 7.000
+#c path fetch 12 ok=1 error=0
+#c path delays 12 6.000 7.000 6.000 6.000 7.000 7.000 6.000 6.000 7.000 7.000 7.000 6.000
+#c path fetch mtm ok=1 error=0
+#c path mtm 6.000 6.000 6.000 7.000 7.000 7.000
+#c path pulsere ok=1 error=0
+#c path pulsere 6.000 6.000 7.000 7.000
+#c setup fetch ok=1 error=0
+#c setup limit 8.000
+#c fetch on module ok=0 error=1
+#c change y_and 12 1
+#c change y_udp 13 0
+#c change w_path 16 1
+#c change y_udp 22 1
+#c change y_and 23 0
+#c g_and replace ok=1 error=0
+#c g_and fetch ok=1 error=0
+#c g_and delays 10.000 20.000
+#c g_buf append ok=1 error=0
+#c g_buf fetch ok=1 error=0
+#c g_buf delays 3.000 6.000 4.500
+#c u_inv replace mtm ok=1 error=0
+#c u_inv fetch ok=1 error=0
+#c u_inv delays 2.000 5.000
+#c path replace ok=1 error=0
+#c path fetch ok=1 error=0
+#c path delays 9.000 11.000
+#c path replace pulsere ok=1 error=0
+#c path fetch pulsere ok=1 error=0
+#c path pulsere 3.000 4.000 5.000 6.000
+#c path set pulsere ok=1 error=0
+#c path fetch pulsere ok=1 error=0
+#c path pulsere 4.500 9.000 5.500 11.000
+#c path append pulsere ok=1 error=0
+#c path fetch pulsere ok=1 error=0
+#c path pulsere 5.500 9.000 6.500 11.000
+#c setup replace ok=1 error=0
+#c setup fetch ok=1 error=0
+#c setup limit 12.000
+#c negative replace ok=0 error=1
+#c pulsere on gate ok=0 error=1
+#c change w_path 27 0
+#c change y_udp 35 0
+#c change w_path 39 1
+#c change y_and 40 1

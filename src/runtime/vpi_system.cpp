@@ -56,7 +56,7 @@ namespace {
     constexpr auto io_service = FSIM_VPI_SERVICE_IO;
     constexpr auto user_data_service = FSIM_VPI_SERVICE_USER_DATA;
     constexpr auto lifecycle_service = FSIM_VPI_SERVICE_LIFECYCLE;
-    constexpr std::array<Routine, 42> standard_routines { {
+    constexpr std::array<Routine, 40> standard_routines { {
         { RoutineKind::RegisterCallback, "vpi_register_cb", callback_service,
             HandlePolicy::Optional, true, true },
         { RoutineKind::RemoveCallback, "vpi_remove_cb", callback_service,
@@ -108,9 +108,9 @@ namespace {
         { RoutineKind::CompareObjects, "vpi_compare_objects", hierarchy_service,
             HandlePolicy::Required, false, false },
         { RoutineKind::GetData, "vpi_get_data", value_service,
-            HandlePolicy::Required, false, false },
+            HandlePolicy::None, false, false },
         { RoutineKind::PutData, "vpi_put_data", value_service,
-            HandlePolicy::Required, false, false },
+            HandlePolicy::None, false, false },
         { RoutineKind::GetUserData, "vpi_get_userdata", user_data_service,
             HandlePolicy::Required, false, false },
         { RoutineKind::PutUserData, "vpi_put_userdata", user_data_service,
@@ -136,10 +136,6 @@ namespace {
         { RoutineKind::McdVariablePrint, "vpi_mcd_vprintf", io_service,
             HandlePolicy::None, false, false },
         { RoutineKind::McdFlush, "vpi_mcd_flush", io_service,
-            HandlePolicy::None, false, false },
-        { RoutineKind::FileOpen, "vpi_fopen", io_service,
-            HandlePolicy::None, false, false },
-        { RoutineKind::GetFile, "vpi_get_file", io_service,
             HandlePolicy::None, false, false },
     } };
     constexpr std::size_t maximum_routine_text_size = 1U << 20U;

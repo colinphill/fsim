@@ -101,6 +101,17 @@ void visit_instance_delays(
 }
 
 template <typename Function>
+void visit_primitive_delays(
+    std::vector<frontend::VerilogPrimitiveInstance>& primitives,
+    Function& function) {
+  for (auto& primitive : primitives) {
+    if (primitive.delay) {
+      visit_delay(*primitive.delay, function);
+    }
+  }
+}
+
+template <typename Function>
 void visit_specify_delays(
     std::vector<frontend::VerilogSpecifyBlock>& blocks,
     Function& function) {
@@ -185,6 +196,7 @@ void visit_generate_delays(
   const auto visit_body = [&](frontend::GenerateBody& body) {
     visit_signal_delays(body.signals, function);
     visit_instance_delays(body.instances, function);
+    visit_primitive_delays(body.verilog_primitives, function);
     visit_delays(body.concurrent_statements, function);
     for (auto& process : body.processes) {
       visit_delays(process.statements, function);
@@ -1170,6 +1182,7 @@ bool normalize_delays(
     visit_signal_delays(unit.ports, normalize);
     visit_signal_delays(unit.signals, normalize);
     visit_instance_delays(unit.instances, normalize);
+    visit_primitive_delays(unit.verilog_primitives, normalize);
     visit_specify_delays(unit.verilog_specify_blocks, normalize);
     visit_clocking_delays(
         unit.systemverilog_clocking_blocks, normalize);
@@ -1237,6 +1250,7 @@ void select_delay_alternatives(
     visit_signal_delays(unit.ports, select);
     visit_signal_delays(unit.signals, select);
     visit_instance_delays(unit.instances, select);
+    visit_primitive_delays(unit.verilog_primitives, select);
     visit_specify_delays(unit.verilog_specify_blocks, select);
     visit_delays(unit.concurrent_statements, select);
     for (auto& process : unit.processes) {
@@ -1341,6 +1355,48 @@ void visit_systemverilog_hir_delays(
                 visit_skew(signal.skew);
                 visit_skew(signal.output_skew);
             }
+        }
+    }
+}
+
+// The delays of primitive instances normalize like any other, but they keep
+// their minimum, typical and maximum values: the VPI reports all three
+// (IEEE 1800-2023 37.35), so delay-mode selection skips them.
+template<typename Function>
+void visit_systemverilog_primitive_delays(
+    std::vector<semantic::sv::PrimitiveInstance>& primitives,
+    const semantic::ScopeId scope,
+    Function& function)
+{
+    for (auto& primitive : primitives) {
+        if (primitive.delay) {
+            function(*primitive.delay, scope);
+        }
+    }
+}
+
+template<typename Function>
+void visit_systemverilog_generate_primitive_delays(
+    semantic::sv::GenerateRegion& generate,
+    Function& function)
+{
+    visit_systemverilog_primitive_delays(
+        generate.primitives, generate.scope, function);
+    for (auto& nested : generate.nested) {
+        visit_systemverilog_generate_primitive_delays(nested, function);
+    }
+}
+
+template<typename Function>
+void visit_systemverilog_hir_primitive_delays(
+    semantic::sv::Hir& hir,
+    Function&& function)
+{
+    for (auto& unit : hir.mutable_units()) {
+        visit_systemverilog_primitive_delays(
+            unit.primitives, unit.scope, function);
+        for (auto& generate : unit.generates) {
+            visit_systemverilog_generate_primitive_delays(generate, function);
         }
     }
 }
@@ -1496,6 +1552,11 @@ public:
     {
         normalize_vhdl_expressions();
         visit_systemverilog_hir_delays(
+            compiled_.systemverilog_hir,
+            [&](auto& delay, const semantic::ScopeId scope) {
+                normalize_systemverilog(delay, scope);
+            });
+        visit_systemverilog_hir_primitive_delays(
             compiled_.systemverilog_hir,
             [&](auto& delay, const semantic::ScopeId scope) {
                 normalize_systemverilog(delay, scope);

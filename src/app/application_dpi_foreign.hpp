@@ -6,9 +6,11 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::diagnostic {
@@ -27,11 +29,23 @@ public:
     DpiForeignService(const DpiForeignService&) = delete;
     DpiForeignService& operator=(const DpiForeignService&) = delete;
 
-    /// The simulation time in ticks and the exponent of one tick that
-    /// svGetTime and svGetTimePrecision report.
+    /// The simulation time in ticks, the exponents of the simulation time
+    /// unit and of one tick, and the instance scopes of the design that
+    /// svGetTime, svGetTimeUnit, svGetTimePrecision and svGetScopeFromName
+    /// answer from (IEEE 1800-2023 H.9.3, H.13).
     struct Clock {
         std::function<std::uint64_t()> ticks;
         int precision { -12 };
+        int unit { -9 };
+        /// The hierarchical name of the module, program, interface or
+        /// generate scope instance `name` designates, if there is one.
+        std::function<std::optional<std::string>(std::string_view name)>
+            instance;
+        /// The time unit and precision exponents of the scope instance at
+        /// `path` (those of the module that encloses a generate scope).
+        std::function<std::optional<std::pair<int, int>>(
+            std::string_view path)>
+            time_scale;
     };
 
     /// Whether `identity` (`<linkage>#<arguments>:<result>[@c|<instance>|

@@ -5,6 +5,8 @@
 #include "application_foreign_signal.hpp"
 
 #include "application_internal.hpp"
+#include "application_vpi_class_model.hpp"
+#include "application_vpi_frames.hpp"
 #include "application_vpi_statements.hpp"
 #include "fsim/platform/dynamic_library.hpp"
 #include "fsim/runtime/vpi_bridge.h"
@@ -28,6 +30,8 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <iostream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <tuple>
@@ -36,7 +40,12 @@
 #include <stdexcept>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/resource.h>
+#endif
 
 namespace fsim::app::application_detail {
 
@@ -81,6 +90,36 @@ enum class Tag : std::uint64_t {
     // A bit of a vector port (IEEE 1800-2023 37.14 vpiBit): the port's
     // index in the upper bits, the bit's position in the low 24.
     port_bit = 21,
+    // A timing check and its reference or data terminal (IEEE 1800-2023
+    // 37.40): the check's index, and for a terminal (index << 1) | data.
+    tchk = 22,
+    tchk_term = 23,
+    // A class typespec, extends, method, parameter or typedef of the class
+    // model (IEEE 1800-2023 37.31, 37.32).
+    class_model = 24,
+    // A live class object, and a property or constraint of one (IEEE
+    // 1800-2023 37.33); the serial indexes the service's tables.
+    class_object = 25,
+    class_member = 26,
+    // A frame and a thread of a run with the execution probes (IEEE
+    // 1800-2023 37.43, 37.44); the serial names it in the frame model.
+    frame = 27,
+    thread = 28,
+    // A gate, switch or UDP instance, an instance array of them, a prim term,
+    // a UDP definition, one of its table entries and its initial statement
+    // (IEEE 1800-2023 37.35, 37.36).
+    primitive = 40,
+    primitive_array = 41,
+    prim_term = 42,
+    udp_defn = 43,
+    udp_entry = 44,
+    udp_initial = 45,
+    // An intermodule path, a delay device and a delay term that SDF
+    // annotation created (IEEE 1800-2023 37.37, 37.45): the index of the
+    // delay, and for a term (index << 1) | output.
+    inter_mod_path = 50,
+    delay_device = 51,
+    delay_term = 52,
 };
 constexpr std::uint64_t serial_mask = (std::uint64_t { 1 } << 48U) - 1U;
 
@@ -233,8 +272,26 @@ struct ModuleSpec {
     return spec;
 }
 
+// An endofcompile_routines[] entry runs once, after elaboration and before
+// time 0 (IEEE 1364-2001 21.1.4, Annex F).
+PLI_INT32 run_end_of_compile_routines(p_cb_data data)
+{
+    auto* const routines
+        = reinterpret_cast<PLI_INT32 (**)()>(data->user_data);
+    for (std::size_t index = 0U;
+         index < maximum_startup_routines && routines[index] != nullptr;
+         ++index) {
+        (void)routines[index]();
+    }
+    return 0;
+}
+
 // Run a module's startup routines (vlog_startup_routines, IEEE 1800-2023
-// 36.9.1) or its named bootstrap function inside the host's call context.
+// 36.9.1) or its named bootstrap function inside the host's call context. A
+// PLI 1.0 library may instead export veriusertfs[] and
+// endofcompile_routines[] (IEEE 1364-2001 21.2 leaves the association to
+// the vendor; Annex F declares endofcompile_routines): each table cell is
+// registered as the user task or function it describes.
 [[nodiscard]] std::unique_ptr<platform::DynamicLibrary> load_module(
     const ModuleSpec& spec, Host& host, std::string& error)
 {
@@ -256,15 +313,39 @@ struct ModuleSpec {
         reinterpret_cast<void (*)()>(symbol)();
         return library;
     }
-    auto* const table = library->symbol("vlog_startup_routines", error);
-    if (table == nullptr) {
+    std::string table_error;
+    std::string end_error;
+    auto* const startup = library->symbol("vlog_startup_routines", error);
+    auto* const table = library->symbol("veriusertfs", table_error);
+    auto* const end_of_compile
+        = library->symbol("endofcompile_routines", end_error);
+    if (startup == nullptr && table == nullptr && end_of_compile == nullptr) {
         return nullptr;
     }
-    auto* const routines = static_cast<void (**)()>(table);
-    for (std::size_t index = 0U;
-         index < maximum_startup_routines && routines[index] != nullptr;
-         ++index) {
-        routines[index]();
+    error.clear();
+    if (startup != nullptr) {
+        auto* const routines = static_cast<void (**)()>(startup);
+        for (std::size_t index = 0U;
+             index < maximum_startup_routines && routines[index] != nullptr;
+             ++index) {
+            routines[index]();
+        }
+    }
+    if (table != nullptr) {
+        auto* const registrar = platform::DynamicLibrary::default_symbol(
+            "veriusertfs_register_table");
+        if (registrar == nullptr) {
+            error = "veriusertfs_register_table is not available";
+            return nullptr;
+        }
+        reinterpret_cast<void (*)(void*)>(registrar)(table);
+    }
+    if (end_of_compile != nullptr) {
+        s_cb_data callback {};
+        callback.reason = cbEndOfCompile;
+        callback.cb_rtn = &run_end_of_compile_routines;
+        callback.user_data = static_cast<PLI_BYTE8*>(end_of_compile);
+        (void)vpi_register_cb(&callback);
     }
     return library;
 }
@@ -795,6 +876,9 @@ public:
         if (signal_hook_ != 0U) {
             simulation_.remove_safe_point_hook(signal_hook_);
         }
+        if (!tchk_callbacks_.empty()) {
+            simulation_.set_verilog_timing_violation_hook({ });
+        }
         if (force_hook_ != 0U) {
             simulation_.remove_force_statement_hook(force_hook_);
             simulation_.remove_safe_point_hook(force_delivery_hook_);
@@ -804,6 +888,18 @@ public:
         }
         if (disable_hook_ != 0U) {
             simulation_.remove_safe_point_hook(disable_hook_);
+        }
+        if (size_hooked_) {
+            simulation_.set_vpi_size_change_hook({ });
+        }
+        if (reclaim_hooked_) {
+            simulation_.set_class_reclaim_hook({ });
+        }
+        if (frame_hook_ != 0U) {
+            simulation_.remove_execution_point_hook(frame_hook_);
+        }
+        if (create_hooked_) {
+            simulation_.set_class_created_hook({ });
         }
         // The simulation may outlive the service; no foreign routine may
         // run after it is gone.
@@ -848,6 +944,12 @@ public:
     // end-of-compile callbacks (IEEE 1800-2023 38.36.2, 38.36.3).
     void compile(const std::size_t process_count)
     {
+        // A probe run tracks its frames and threads from the start, so a
+        // routine may ask for them at any time (IEEE 1800-2023 37.43,
+        // 37.44).
+        if (simulation_.foreign_probes()) {
+            ensure_frame_hook();
+        }
         // Call sites exist for their compiletf routines here; a call creates
         // its site anyway.
         const bool compiletf = std::ranges::any_of(systfs_,
@@ -932,6 +1034,71 @@ public:
             return PackedLogic4 { 1U, Logic4::one };
         }
         return PackedLogic4 { 1U, Logic4::zero };
+    }
+
+    // The phases the save/restart driver and a reset go through (IEEE
+    // 1800-2023 38.36.3). Without a driver none of them occurs.
+    void lifecycle(const Simulation::LifecycleEvent event,
+        const std::string_view location)
+    {
+        switch (event) {
+        case Simulation::LifecycleEvent::start_of_save:
+            save_phase_ = SavePhase::save;
+            save_location_ = std::string { location };
+            save_data_.clear();
+            deliver_feature(cbStartOfSave);
+            break;
+        case Simulation::LifecycleEvent::end_of_save:
+            deliver_feature(cbEndOfSave);
+            save_phase_ = SavePhase::none;
+            save_location_.clear();
+            break;
+        // Only the restart callbacks exist after a restart, and the user
+        // data of the call handles is gone (38.36.3, 38.14).
+        case Simulation::LifecycleEvent::start_of_restart:
+            drop_callbacks_for_restart();
+            user_data_.clear();
+            save_phase_ = SavePhase::restart;
+            save_location_ = std::string { location };
+            deliver_feature(cbStartOfRestart);
+            break;
+        case Simulation::LifecycleEvent::end_of_restart:
+            deliver_feature(cbEndOfRestart);
+            save_phase_ = SavePhase::none;
+            save_location_.clear();
+            save_data_.clear();
+            break;
+        case Simulation::LifecycleEvent::start_of_reset:
+            deliver_feature(cbStartOfReset);
+            break;
+        // The time and the values are back at zero; the user data is gone
+        // and may be set again from here on (38.14).
+        case Simulation::LifecycleEvent::end_of_reset:
+            user_data_.clear();
+            deliver_feature(cbEndOfReset);
+            break;
+        }
+    }
+
+    [[nodiscard]] std::map<std::int32_t, std::string> saved_data()
+        const override
+    {
+        std::map<std::int32_t, std::string> data;
+        for (const auto& [id, saved] : save_data_) {
+            data.emplace(id, saved.bytes);
+        }
+        return data;
+    }
+
+    // The data sets of a restart, read from the start; later ids continue
+    // after the restored ones.
+    void restore_data(std::map<std::int32_t, std::string> data) override
+    {
+        save_data_.clear();
+        for (auto& [id, bytes] : data) {
+            save_data_[id].bytes = std::move(bytes);
+            last_save_restart_id_ = std::max(last_save_restart_id_, id);
+        }
     }
 
     fsim_vpi_status_v1 invoke(const Routine routine,
@@ -1301,6 +1468,25 @@ private:
         const auto routine = data.cb_rtn;
         CallScope scope { *this };
         routine(&data);
+    }
+
+    // The scheduler's timing-check violation hook: each cbTchkViolation
+    // callback registered for all checks, or for this one, gets the check as
+    // obj (IEEE 1800-2023 38.36.3). It runs before the notifier toggles.
+    void deliver_tchk_violation(const std::uint32_t check)
+    {
+        const auto handle = tagged(Tag::tchk, check);
+        const auto listeners = tchk_callbacks_;
+        for (const auto serial : listeners) {
+            const auto found = callbacks_.find(serial);
+            if (found == callbacks_.end()) {
+                continue;
+            }
+            const auto watched = internal(found->second->data.obj);
+            if (watched == 0U || watched == handle) {
+                fire_statement(serial, handle, std::nullopt);
+            }
+        }
     }
 
     // --- assertions (IEEE 1800-2023 39) -------------------------------------
@@ -1922,6 +2108,11 @@ private:
             error_ = false;
             return register_assertion_callback(request, result);
         }
+        if (request.flags == acc_link_callback_operation
+            && routine == Routine::RegisterCallback) {
+            error_ = false;
+            return register_callback(request, result);
+        }
         if (request.flags != 0U) {
             return FSIM_VPI_STATUS_UNSUPPORTED;
         }
@@ -1935,7 +2126,8 @@ private:
             const auto status = routine == Routine::PutValue
                 ? put_value(request, result)
                 : get_value(request, result);
-            if (status != FSIM_VPI_STATUS_OK) {
+            // Keep the specific message a check gave.
+            if (status != FSIM_VPI_STATUS_OK && !error_) {
                 error_message_ = std::string { routine == Routine::PutValue
                         ? "vpi_put_value"
                         : "vpi_get_value" }
@@ -1963,6 +2155,8 @@ private:
             return handle_by_index(request, result);
         case Routine::HandleByMultiIndex:
             return handle_by_multi_index(request, result);
+        case Routine::HandleMulti:
+            return handle_multi(request, result);
         case Routine::Iterate:
             return iterate(request, result);
         case Routine::Scan:
@@ -2010,6 +2204,10 @@ private:
         case Routine::PutUserData:
             user_data_[request.handle] = pointer<void>(request.user_data);
             return succeed(result, 0U, 1U);
+        case Routine::GetData:
+            return get_data(request, result);
+        case Routine::PutData:
+            return put_data(request, result);
         case Routine::Control:
         case Routine::VariableControl:
             return control(request, result);
@@ -2018,19 +2216,42 @@ private:
             return print(request, result);
         case Routine::McdPrint:
         case Routine::McdVariablePrint:
-            if ((request.argument & 1U) == 0U) {
-                return succeed(result);
-            }
-            return print(request, result);
+            return mcd_print(request, result);
         case Routine::Flush:
-        case Routine::McdFlush:
+            // The simulator's output channel (IEEE 1800-2023 38.5).
             (void)std::fflush(stdout);
+            std::cout.flush();
             return succeed(result);
-        case Routine::McdName:
-            if (request.argument == 1U) {
-                return succeed(result, 0U, 0U, address(store("stdout")));
+        case Routine::McdFlush: {
+            const auto descriptor = static_cast<std::uint32_t>(request.argument);
+            if ((descriptor & 0x80000001U) == 1U) {
+                (void)std::fflush(stdout);
+                std::cout.flush();
             }
-            return FSIM_VPI_STATUS_NOT_FOUND;
+            // 0 if successful (IEEE 1800-2023 38.25).
+            return succeed(result, 0U,
+                simulation_.mcd_flush(descriptor) ? 0U : 1U);
+        }
+        case Routine::McdOpen:
+            if (request.text == nullptr) {
+                return succeed(result, 0U, 0U);
+            }
+            return succeed(result, 0U,
+                simulation_.mcd_open(
+                    std::string_view { request.text, request.text_size }));
+        case Routine::McdClose:
+            return succeed(result, 0U,
+                simulation_.mcd_close(
+                    static_cast<std::uint32_t>(request.argument)));
+        case Routine::McdName: {
+            // The name overwrites the previous one (IEEE 1800-2023 38.26).
+            const auto name = simulation_.mcd_name(
+                static_cast<std::uint32_t>(request.argument));
+            if (!name) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            return succeed(result, 0U, 0U, address(store(*name)));
+        }
         default:
             return FSIM_VPI_STATUS_UNSUPPORTED;
         }
@@ -2062,6 +2283,10 @@ private:
         std::vector<Argument> arguments;
         Value result;
     };
+    /// The extension operation of vpi_register_cb that registers an ACC
+    /// value change link's callback.
+    static constexpr std::uint32_t acc_link_callback_operation = 3U;
+
     struct Callback {
         s_cb_data data { };
         s_vpi_time time { };
@@ -2153,10 +2378,13 @@ private:
     // --- module paths (IEEE 1800-2023 37.39, 38.10, 38.32) ---------------
 
     // One terminal of a module path: its path, direction, and position.
+    // A data term is one of the signals a data source reads
+    // (vpiModDataPathIn).
     struct PathTerm {
         std::uint32_t path { };
         bool output { };
         std::uint32_t index { };
+        bool data { };
     };
 
     [[nodiscard]] std::optional<std::uint32_t> modpath_of(
@@ -2213,8 +2441,8 @@ private:
             || kind == SystemVerilogVpiObjectKind::Program;
     }
 
-    // The vpiPrimType of a gate primitive named by its keyword (IEEE
-    // 1800-2023 28.4, 37.7).
+    // The vpiPrimType of a gate, switch or pull primitive named by its
+    // keyword (IEEE 1800-2023 28.4, 37.35).
     [[nodiscard]] static PLI_INT32 primitive_type(const std::string_view name)
     {
         static constexpr std::pair<std::string_view, PLI_INT32> gates[] = {
@@ -2224,6 +2452,13 @@ private:
             { "buf", vpiBufPrim }, { "not", vpiNotPrim },
             { "bufif0", vpiBufif0Prim }, { "bufif1", vpiBufif1Prim },
             { "notif0", vpiNotif0Prim }, { "notif1", vpiNotif1Prim },
+            { "nmos", vpiNmosPrim }, { "pmos", vpiPmosPrim },
+            { "cmos", vpiCmosPrim }, { "rnmos", vpiRnmosPrim },
+            { "rpmos", vpiRpmosPrim }, { "rcmos", vpiRcmosPrim },
+            { "tran", vpiTranPrim }, { "tranif0", vpiTranif0Prim },
+            { "tranif1", vpiTranif1Prim }, { "rtran", vpiRtranPrim },
+            { "rtranif0", vpiRtranif0Prim }, { "rtranif1", vpiRtranif1Prim },
+            { "pullup", vpiPullupPrim }, { "pulldown", vpiPulldownPrim },
         };
         for (const auto& [gate, type] : gates) {
             if (gate == name) {
@@ -2437,6 +2672,15 @@ private:
 
     [[nodiscard]] fsim_vpi_handle_v1 make_typespec(const TypespecLevel level)
     {
+        // A class named in the source is the class model's typespec; a
+        // built-in class has none (IEEE 1800-2023 37.32 detail 13).
+        if (level.node->kind == TypespecKind::Class && level.dropped == 0U) {
+            if (const auto handle
+                = class_model().typespec_for_name(level.node->name);
+                handle != 0U) {
+                return handle;
+            }
+        }
         const auto key = std::pair { static_cast<const void*>(level.node),
             level.dropped };
         if (const auto found = typespec_index_.find(key);
@@ -2678,6 +2922,11 @@ private:
                 && object->type->descriptor) {
                 typespec = derived_typespec(*object->type->descriptor);
                 typespec.kind = TypespecKind::Array;
+            } else if (object->type->descriptor
+                && object->type->descriptor->kind
+                    == runtime::SystemVerilogVpiDescriptorKind::ClassHandle) {
+                // A class property is a class variable (37.33).
+                typespec = derived_typespec(*object->type->descriptor);
             } else {
                 runtime::SystemVerilogVpiTypeDescriptor scalar;
                 scalar.category = object->type->category;
@@ -2974,7 +3223,8 @@ private:
     {
         return tagged(Tag::pathterm,
             (static_cast<std::uint64_t>(term.path) << 24U)
-                | (term.output ? std::uint64_t { 1 } << 23U : 0U) | term.index);
+                | (term.output ? std::uint64_t { 1 } << 23U : 0U)
+                | (term.data ? std::uint64_t { 1 } << 22U : 0U) | term.index);
     }
 
     [[nodiscard]] std::optional<PathTerm> pathterm_of(
@@ -2986,10 +3236,17 @@ private:
         const auto serial = serial_of(handle);
         PathTerm term { static_cast<std::uint32_t>(serial >> 24U),
             ((serial >> 23U) & 1U) != 0U,
-            static_cast<std::uint32_t>(serial & 0x7FFFFFU) };
+            static_cast<std::uint32_t>(serial & 0x3FFFFFU),
+            ((serial >> 22U) & 1U) != 0U };
         const auto& paths = simulation_.design().verilog_specify_paths();
-        if (term.path >= paths.size()) {
+        if (term.path >= paths.size()
+            || (term.data && term.output)) {
             return std::nullopt;
+        }
+        if (term.data) {
+            return term.index < path_data_signals(term.path).size()
+                ? std::optional<PathTerm> { term }
+                : std::nullopt;
         }
         const auto& terminals = term.output ? paths[term.path].destinations
                                             : paths[term.path].sources;
@@ -2997,6 +3254,24 @@ private:
             return std::nullopt;
         }
         return term;
+    }
+
+    // The signals an edge-sensitive path's data source reads, in program
+    // order without repeats (IEEE 1800-2023 37.39 vpiModDataPathIn).
+    [[nodiscard]] std::vector<runtime::simir::SignalId> path_data_signals(
+        const std::uint32_t path) const
+    {
+        std::vector<runtime::simir::SignalId> signals;
+        for (const auto& node : simulation_.design()
+                 .verilog_specify_paths()[path].data_source_program.nodes) {
+            if (node.operation
+                    == runtime::simir::ModulePathExpressionOperator::terminal
+                && std::ranges::find(signals, node.terminal.signal)
+                    == signals.end()) {
+                signals.push_back(node.terminal.signal);
+            }
+        }
+        return signals;
     }
 
     // The instance that declares a path; its full name is the path's
@@ -3014,12 +3289,47 @@ private:
     [[nodiscard]] fsim_vpi_handle_v1 pathterm_object(const PathTerm& term) const
     {
         const auto& path = simulation_.design().verilog_specify_paths()[term.path];
-        const auto& terminal = term.output ? path.destinations[term.index]
-                                           : path.sources[term.index];
-        const auto instance = path_instance(term.path);
+        const auto signal = term.data
+            ? path_data_signals(term.path)[term.index]
+            : (term.output ? path.destinations[term.index]
+                           : path.sources[term.index]).signal;
+        return signal_object(signal, path_instance(term.path));
+    }
+
+    // `instance` when it is a module, else NULL: an interface is a vpiInstance
+    // but not a vpiModule (IEEE 1800-2023 37.39).
+    // The module instance that contains `scope`, through generate and other
+    // named scopes; a top-level module is published as the Root kind.
+    [[nodiscard]] fsim_vpi_handle_v1 enclosing_module_of(
+        fsim_vpi_handle_v1 scope) const
+    {
+        for (std::size_t depth { }; scope != 0U && depth < 1024U; ++depth) {
+            const auto object = info(scope);
+            if (!object) {
+                return 0U;
+            }
+            if (object->kind == SystemVerilogVpiObjectKind::Module
+                || object->kind == SystemVerilogVpiObjectKind::Root) {
+                return scope;
+            }
+            if (object->kind != SystemVerilogVpiObjectKind::GenerateScope
+                && object->kind != SystemVerilogVpiObjectKind::Begin
+                && object->kind != SystemVerilogVpiObjectKind::Fork) {
+                return 0U;
+            }
+            scope = object->parent;
+        }
+        return 0U;
+    }
+
+    // The net or variable of `signal` published directly in `instance`; a
+    // port stands in only when no net or variable does.
+    [[nodiscard]] fsim_vpi_handle_v1 signal_object(
+        const runtime::simir::SignalId signal,
+        const fsim_vpi_handle_v1 instance) const
+    {
         fsim_vpi_handle_v1 port { };
-        for (const auto handle :
-            simulation_.vpi_signal_object_handles(terminal.signal)) {
+        for (const auto handle : simulation_.vpi_signal_object_handles(signal)) {
             const auto object = info(handle);
             if (!object || instance == 0U || object->parent != instance) {
                 continue;
@@ -3031,6 +3341,1806 @@ private:
         }
         return port;
     }
+
+    // The vpiPolarity/vpiDataPolarity value of a path polarity
+    // (IEEE 1800-2023 37.39).
+    [[nodiscard]] static std::int64_t path_polarity(
+        const frontend::VerilogPathPolarity polarity)
+    {
+        return polarity == frontend::VerilogPathPolarity::Positive
+            ? vpiPositive
+            : polarity == frontend::VerilogPathPolarity::Negative
+            ? vpiNegative
+            : vpiUnknown;
+    }
+
+    // The vpiEdge mask of a path source edge (IEEE 1800-2023 37.39).
+    [[nodiscard]] static std::int64_t path_edge_mask(
+        const frontend::VerilogSpecifyEdge edge)
+    {
+        return edge == frontend::VerilogSpecifyEdge::Posedge ? vpiPosedge
+            : edge == frontend::VerilogSpecifyEdge::Negedge ? vpiNegedge
+            : edge == frontend::VerilogSpecifyEdge::Edge    ? vpiAnyEdge
+                                                            : 0;
+    }
+
+    // vpi_get on a module path (IEEE 1800-2023 37.39). An edge-sensitive
+    // path carries its `+`/`-` on the data source, so it reports the
+    // polarity as vpiDataPolarity and vpiPolarity is unknown.
+    fsim_vpi_status_v1 modpath_property(const std::uint32_t path,
+        const PLI_INT32 property, fsim_vpi_service_result_v1& result) const
+    {
+        const auto& declared = simulation_.design().verilog_specify_paths()[path];
+        const bool edge_sensitive = !declared.data_source_program.empty();
+        std::int64_t value = vpiUndefined;
+        switch (property) {
+        case vpiPathType:
+            value = declared.kind == frontend::VerilogModulePathKind::Full
+                ? vpiPathFull
+                : vpiPathParallel;
+            break;
+        case vpiPolarity:
+            value = edge_sensitive ? vpiUnknown : path_polarity(declared.polarity);
+            break;
+        case vpiDataPolarity:
+            value = edge_sensitive ? path_polarity(declared.polarity) : vpiUnknown;
+            break;
+        case vpiModPathHasIfNone:
+            value = declared.ifnone ? 1 : 0;
+            break;
+        case vpiLineNo:
+            value = static_cast<std::int64_t>(declared.source.begin.line);
+            break;
+        default:
+            break;
+        }
+        return succeed(result, 0U, static_cast<std::uint64_t>(value));
+    }
+
+    // vpi_get on a path term: its direction and, for an input of an
+    // edge-sensitive path, its edge (IEEE 1800-2023 37.39).
+    fsim_vpi_status_v1 pathterm_property(const PathTerm& term,
+        const PLI_INT32 property, fsim_vpi_service_result_v1& result) const
+    {
+        std::int64_t value = vpiUndefined;
+        if (property == vpiDirection) {
+            value = term.output ? vpiOutput : vpiInput;
+        } else if (property == vpiEdge) {
+            value = term.output || term.data
+                ? 0
+                : path_edge_mask(simulation_.design()
+                          .verilog_specify_paths()[term.path].source_edge);
+        }
+        return succeed(result, 0U, static_cast<std::uint64_t>(value));
+    }
+
+    // --- SDF net delays: intermodule paths and delay terminals (IEEE
+    // 1800-2023 37.37, 37.45) ----------------------------------------------
+    //
+    // Only a delay that SDF annotation created is published; a design
+    // without one iterates none. The delay is the SDF effective value and
+    // does not delay the net in simulation.
+
+    [[nodiscard]] const std::vector<elaboration::SdfNetDelayInfo>& net_delays()
+        const
+    {
+        return simulation_.design().sdf_net_delays();
+    }
+
+    [[nodiscard]] std::optional<std::uint32_t> net_delay_index(
+        const fsim_vpi_handle_v1 handle, const Tag tag) const
+    {
+        if (!owned(handle) || tag_of(handle) != tag) {
+            return std::nullopt;
+        }
+        const auto serial
+            = tag == Tag::delay_term ? serial_of(handle) >> 1U : serial_of(handle);
+        return serial < net_delays().size()
+            ? std::optional<std::uint32_t> { static_cast<std::uint32_t>(serial) }
+            : std::nullopt;
+    }
+
+    [[nodiscard]] static fsim_vpi_handle_v1 delay_term_handle(
+        const std::uint32_t delay, const bool output)
+    {
+        return tagged(Tag::delay_term,
+            (static_cast<std::uint64_t>(delay) << 1U) | (output ? 1U : 0U));
+    }
+
+    [[nodiscard]] bool net_delay_handle(const fsim_vpi_handle_v1 handle) const
+    {
+        return net_delay_index(handle, Tag::inter_mod_path)
+            || net_delay_index(handle, Tag::delay_device)
+            || net_delay_index(handle, Tag::delay_term);
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 instance_by_path(
+        const std::string& path) const
+    {
+        const auto found = registry_.find(path);
+        return found && found.value ? found.value->handle : 0U;
+    }
+
+    // The instance that declares the port or net of a terminal: its path
+    // without the last name.
+    [[nodiscard]] fsim_vpi_handle_v1 net_terminal_instance(
+        const elaboration::SdfNetDelayTerminal& terminal) const
+    {
+        const auto dot = terminal.object.rfind('.');
+        return dot == std::string::npos
+            ? instance_by_path(terminal.instance)
+            : instance_by_path(terminal.object.substr(0U, dot));
+    }
+
+    // The net or port a delay terminal names, as published in its instance.
+    [[nodiscard]] fsim_vpi_handle_v1 net_terminal_object(
+        const elaboration::SdfNetDelayTerminal& terminal) const
+    {
+        if (const auto handle = signal_object(
+                terminal.signal, net_terminal_instance(terminal))) {
+            return handle;
+        }
+        const auto handles = simulation_.vpi_signal_object_handles(terminal.signal);
+        return handles.empty() ? 0U : handles.front();
+    }
+
+    // The published port a terminal names; none for a net or a select, since
+    // an intermodule path joins whole ports (IEEE 1800-2023 38.22).
+    [[nodiscard]] std::optional<std::uint32_t> net_terminal_port(
+        const elaboration::SdfNetDelayTerminal& terminal) const
+    {
+        // The published port table decides: the endpoint's port flag is
+        // not set for the signals of SystemVerilog module ports.
+        if (terminal.select_width != 0U) {
+            return std::nullopt;
+        }
+        const auto instance = net_terminal_instance(terminal);
+        const auto dot = terminal.object.rfind('.');
+        const auto name = dot == std::string::npos
+            ? terminal.object
+            : terminal.object.substr(dot + 1U);
+        const auto& ports = simulation_.systemverilog_vpi_ports();
+        for (std::uint32_t index = 0U; index < ports.size(); ++index) {
+            if (!ports[index].io_declaration && ports[index].instance == instance
+                && ports[index].name == name) {
+                return index;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // The output port and the input port of an intermodule path; none when
+    // the delay is not between two ports.
+    [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
+    net_delay_ports(const std::uint32_t delay) const
+    {
+        const auto& declared = net_delays()[delay];
+        if (declared.kind != elaboration::SdfNetDelayKind::interconnect) {
+            return std::nullopt;
+        }
+        const auto output = net_terminal_port(declared.source);
+        const auto input = net_terminal_port(declared.destination);
+        return output && input
+            ? std::optional { std::pair { *output, *input } }
+            : std::nullopt;
+    }
+
+    // vpi_handle_multi(vpiInterModPath, output port, input port) (IEEE
+    // 1800-2023 37.37 detail 1, 38.22).
+    fsim_vpi_status_v1 handle_multi(const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        const auto fail = [&](const char* const message) -> fsim_vpi_status_v1 {
+            error_message_ = message;
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        };
+        if (static_cast<PLI_INT32>(request.argument) != vpiInterModPath) {
+            return fail("vpi_handle_multi: only vpiInterModPath is defined "
+                        "(IEEE 1800-2023 38.22)");
+        }
+        const auto output = resolve(request.handle);
+        const auto input = resolve(request.user_data);
+        if (port_of(output) == nullptr || port_of(input) == nullptr
+            || port_of(output)->io_declaration || port_of(input)->io_declaration) {
+            return fail("vpi_handle_multi: the references must be ports");
+        }
+        const auto sized = [&](const fsim_vpi_handle_v1 handle) {
+            return port_width(*port_of(handle));
+        };
+        if (sized(output) != sized(input)) {
+            return fail("vpi_handle_multi: the ports must be of the same size "
+                        "(IEEE 1800-2023 38.22)");
+        }
+        for (std::uint32_t delay = 0U; delay < net_delays().size(); ++delay) {
+            const auto ports = net_delay_ports(delay);
+            if (ports && ports->first == serial_of(output)
+                && ports->second == serial_of(input)) {
+                return succeed(result, tagged(Tag::inter_mod_path, delay));
+            }
+        }
+        return succeed(result);
+    }
+
+    // The transitions an intermodule path reports: rise, fall and turn-off.
+    // The turn-off delay is the smaller of the 0->z and 1->z delays (IEEE
+    // 1800-2023 30.5.2).
+    [[nodiscard]] std::array<runtime::SimulationTick, 3U> net_delay_triple(
+        const std::vector<runtime::SimulationTick>& table) const
+    {
+        return { table[0], table[1], std::min(table[2], table[4]) };
+    }
+
+    // The delays a caller sees, a vpi_put_delays value first.
+    [[nodiscard]] const std::vector<runtime::SimulationTick>& net_delay_table(
+        const std::uint32_t delay) const
+    {
+        const auto changed = net_delay_overrides_.find(delay);
+        return changed != net_delay_overrides_.end()
+            ? changed->second
+            : net_delays()[delay].delays;
+    }
+
+    // A delay in the requested format, scaled to the time unit of the module
+    // the delay device belongs to (IEEE 1800-2023 38.10).
+    void write_scaled_delay(s_vpi_time& out, const runtime::SimulationTick ticks,
+        const PLI_INT32 type, const fsim_vpi_handle_v1 instance) const
+    {
+        const auto profile = simulation_.systemverilog_vpi_time().profile();
+        const auto quanta = ticks * profile.tick_multiplier;
+        out.type = type;
+        if (type == vpiScaledRealTime) {
+            const auto scale = module_time_scale(instance);
+            const int unit = scale ? scale->first
+                                   : static_cast<int>(profile.unit_exponent);
+            out.real = static_cast<double>(quanta)
+                * std::pow(10.0, static_cast<int>(profile.precision_exponent) - unit);
+            return;
+        }
+        out.high = static_cast<PLI_UINT32>(quanta >> 32U);
+        out.low = static_cast<PLI_UINT32>(quanta & 0xFFFFFFFFU);
+    }
+
+    [[nodiscard]] static bool valid_net_delay_request(const s_vpi_delay* const delays)
+    {
+        return delays != nullptr && delays->da != nullptr
+            && (delays->no_of_delays == 2 || delays->no_of_delays == 3)
+            && (delays->time_type == vpiScaledRealTime
+                || delays->time_type == vpiSimTime);
+    }
+
+    // vpi_get_delays on an intermodule path: two (rise, fall) or three (and
+    // turn-off) delays, each repeated for min, typ and max with mtm_flag and
+    // followed by its reject and error limits with pulsere_flag (IEEE
+    // 1800-2023 38.10 Table 38-2). SDF gives one value per delay, so min, typ
+    // and max are equal, and a pulse is rejected and errors at the delay.
+    fsim_vpi_status_v1 net_get_delays(const std::uint32_t delay,
+        const s_vpi_delay* const delays, fsim_vpi_service_result_v1& result)
+    {
+        if (!valid_net_delay_request(delays)) {
+            error_message_ = "vpi_get_delays: an intermodule path takes two or "
+                             "three delays (IEEE 1800-2023 38.10)";
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        const auto triple = net_delay_triple(net_delay_table(delay));
+        const auto instance = instance_by_path(net_delays()[delay].instance);
+        const std::size_t values = delays->mtm_flag != 0 ? 3U : 1U;
+        const std::size_t kinds = delays->pulsere_flag != 0 ? 3U : 1U;
+        for (std::size_t index = 0U;
+             index < static_cast<std::size_t>(delays->no_of_delays); ++index) {
+            for (std::size_t kind = 0U; kind < kinds; ++kind) {
+                for (std::size_t value = 0U; value < values; ++value) {
+                    write_scaled_delay(
+                        delays->da[(index * kinds + kind) * values + value],
+                        triple[index], delays->time_type, instance);
+                }
+            }
+        }
+        return succeed(result);
+    }
+
+    // vpi_put_delays on an intermodule path replaces, or with append_flag adds
+    // to, the rise and fall delays and, given three, the turn-off delay; the
+    // typical value of each triple is kept (IEEE 1800-2023 38.32).
+    fsim_vpi_status_v1 net_put_delays(const std::uint32_t delay,
+        const s_vpi_delay* const delays, fsim_vpi_service_result_v1& result)
+    {
+        if (!valid_net_delay_request(delays)) {
+            error_message_ = "vpi_put_delays: an intermodule path takes two or "
+                             "three delays (IEEE 1800-2023 38.32)";
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        const auto instance = instance_by_path(net_delays()[delay].instance);
+        const std::size_t count = static_cast<std::size_t>(delays->no_of_delays);
+        const std::size_t values = delays->mtm_flag != 0 ? 3U : 1U;
+        const std::size_t kinds = delays->pulsere_flag != 0 ? 3U : 1U;
+        const auto previous = net_delay_triple(net_delay_table(delay));
+        std::vector<runtime::SimulationTick> table;
+        table.reserve(count);
+        for (std::size_t index = 0U; index < count; ++index) {
+            auto element = delays->da[index * kinds * values + values / 2U];
+            element.type = delays->time_type;
+            const auto converted = simulation_.systemverilog_vpi_time().convert_delay(
+                delay_of(element, instance));
+            if (!converted) {
+                error_message_ = "vpi_put_delays: the delay is not a valid time";
+                error_ = true;
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            table.push_back(delays->append_flag != 0
+                    ? previous[index] + converted.ticks
+                    : converted.ticks);
+        }
+        if (count == 2U) {
+            // Without a turn-off delay it follows from the other two.
+            table.push_back(std::min(table[0], table[1]));
+        }
+        const auto expanded = expanded_path_delays(table);
+        net_delay_overrides_[delay].assign(expanded.begin(), expanded.end());
+        return succeed(result);
+    }
+
+    // The net or port a delay term is on; vpi_get_value reads it (IEEE
+    // 1800-2023 37.45).
+    [[nodiscard]] fsim_vpi_handle_v1 delay_term_object(
+        const fsim_vpi_handle_v1 term) const
+    {
+        const auto delay = net_delay_index(term, Tag::delay_term);
+        if (!delay) {
+            return 0U;
+        }
+        const auto& declared = net_delays()[*delay];
+        return net_terminal_object(
+            (serial_of(term) & 1U) != 0U ? declared.destination : declared.source);
+    }
+
+    // vpi_get on an intermodule path, a delay device or a delay term;
+    // nullopt for any other handle (IEEE 1800-2023 37.37, 37.45).
+    [[nodiscard]] std::optional<std::int64_t> net_delay_property(
+        const fsim_vpi_handle_v1 handle, const PLI_INT32 property) const
+    {
+        if (!net_delay_handle(handle)) {
+            return std::nullopt;
+        }
+        if (property != vpiDelayType || net_delay_index(handle, Tag::inter_mod_path)) {
+            return vpiUndefined;
+        }
+        const auto delay = owned(handle) && tag_of(handle) == Tag::delay_term
+            ? net_delay_index(handle, Tag::delay_term)
+            : net_delay_index(handle, Tag::delay_device);
+        return net_delays()[*delay].kind == elaboration::SdfNetDelayKind::interconnect
+            ? vpiInterModPathDelay
+            : vpiMIPDelay;
+    }
+
+    // vpi_handle on a delay device or a delay term; the device belongs to its
+    // module and a term to its device (IEEE 1800-2023 37.45).
+    [[nodiscard]] fsim_vpi_handle_v1 net_delay_relation(
+        const fsim_vpi_handle_v1 handle, const PLI_INT32 type) const
+    {
+        if (const auto delay = net_delay_index(handle, Tag::delay_term)) {
+            return type == vpiParent ? tagged(Tag::delay_device, *delay) : 0U;
+        }
+        if (const auto delay = net_delay_index(handle, Tag::delay_device)) {
+            const auto instance = instance_by_path(net_delays()[*delay].instance);
+            return type == vpiModule ? enclosing_module_of(instance)
+                : type == vpiParent  ? instance
+                                     : 0U;
+        }
+        return 0U;
+    }
+
+    // vpi_iterate on an intermodule path (its ports), a delay device (its
+    // terms) and a delay term (what drives its net or what it loads); nullopt
+    // for any other reference (IEEE 1800-2023 37.37, 37.45).
+    [[nodiscard]] std::optional<std::vector<fsim_vpi_handle_v1>>
+    net_delay_iteration(const PLI_INT32 type, const fsim_vpi_handle_v1 reference)
+    {
+        std::vector<fsim_vpi_handle_v1> found;
+        if (const auto delay = net_delay_index(reference, Tag::inter_mod_path)) {
+            if (const auto ports = net_delay_ports(*delay); ports && type == vpiPort) {
+                found = { tagged(Tag::port, ports->first),
+                    tagged(Tag::port, ports->second) };
+            }
+        } else if (const auto device = net_delay_index(reference, Tag::delay_device)) {
+            if (type == vpiInTerm || type == vpiOutTerm) {
+                found.push_back(delay_term_handle(*device, type == vpiOutTerm));
+            }
+        } else if (net_delay_index(reference, Tag::delay_term)) {
+            const bool output = (serial_of(reference) & 1U) != 0U;
+            if (type == (output ? vpiLoad : vpiDriver)) {
+                if (const auto net = delay_term_object(reference)) {
+                    found = connections_of(type, net);
+                }
+            }
+        } else {
+            return std::nullopt;
+        }
+        return found;
+    }
+
+    // The delay terms on the net or variable `handle`: an output term drives
+    // it and an input term loads it (IEEE 1800-2023 37.45, 37.46).
+    void append_net_delay_connections(const PLI_INT32 type,
+        const fsim_vpi_handle_v1 handle,
+        std::vector<fsim_vpi_handle_v1>& found) const
+    {
+        const auto& all = net_delays();
+        for (std::uint32_t delay = 0U; delay < all.size(); ++delay) {
+            for (const bool output : { false, true }) {
+                const auto& terminal = output ? all[delay].destination
+                                              : all[delay].source;
+                const bool wanted = type == vpiUse
+                    || (output ? type == vpiDriver || type == vpiLocalDriver
+                               : type == vpiLoad || type == vpiLocalLoad);
+                if (!wanted) {
+                    continue;
+                }
+                const auto handles
+                    = simulation_.vpi_signal_object_handles(terminal.signal);
+                if (std::ranges::find(handles, handle) != handles.end()) {
+                    found.push_back(delay_term_handle(delay, output));
+                }
+            }
+        }
+    }
+
+    // --- timing checks (IEEE 1800-2023 37.40) ------------------------------
+
+    [[nodiscard]] std::optional<std::uint32_t> tchk_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::tchk
+            || serial_of(handle)
+                >= simulation_.design().verilog_timing_checks().size()) {
+            return std::nullopt;
+        }
+        return static_cast<std::uint32_t>(serial_of(handle));
+    }
+
+    // A terminal is the check's index and whether it is the data event.
+    [[nodiscard]] static fsim_vpi_handle_v1 tchkterm_handle(
+        const std::uint32_t check, const bool data)
+    {
+        return tagged(Tag::tchk_term,
+            (static_cast<std::uint64_t>(check) << 1U) | (data ? 1U : 0U));
+    }
+
+    [[nodiscard]] std::optional<std::pair<std::uint32_t, bool>> tchkterm_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::tchk_term) {
+            return std::nullopt;
+        }
+        const auto serial = serial_of(handle);
+        const auto check = static_cast<std::uint32_t>(serial >> 1U);
+        const bool data = (serial & 1U) != 0U;
+        const auto& checks = simulation_.design().verilog_timing_checks();
+        if (check >= checks.size() || (data && !checks[check].data)) {
+            return std::nullopt;
+        }
+        return std::pair { check, data };
+    }
+
+    [[nodiscard]] const runtime::simir::ModuleTimingEvent& tchkterm_event(
+        const std::pair<std::uint32_t, bool>& term) const
+    {
+        const auto& check = simulation_.design().verilog_timing_checks()[term.first];
+        return term.second ? *check.data : check.reference;
+    }
+
+    // The instance that declares a timing check.
+    [[nodiscard]] fsim_vpi_handle_v1 tchk_instance(const std::uint32_t check) const
+    {
+        const auto found = registry_.find(
+            simulation_.design().verilog_timing_checks()[check].instance);
+        return found && found.value ? found.value->handle : 0U;
+    }
+
+    // vpiTchkType of a check kind (IEEE 1800-2023 37.40).
+    [[nodiscard]] static std::int64_t tchk_type(
+        const runtime::simir::ModuleTimingCheckKind kind)
+    {
+        using Kind = runtime::simir::ModuleTimingCheckKind;
+        switch (kind) {
+        case Kind::setup:
+            return vpiSetup;
+        case Kind::hold:
+            return vpiHold;
+        case Kind::recovery:
+            return vpiRecovery;
+        case Kind::removal:
+            return vpiRemoval;
+        case Kind::skew:
+            return vpiSkew;
+        case Kind::period:
+            return vpiPeriod;
+        case Kind::width:
+            return vpiWidth;
+        case Kind::setuphold:
+            return vpiSetupHold;
+        case Kind::recrem:
+            return vpiRecrem;
+        case Kind::timeskew:
+            return vpiTimeskew;
+        case Kind::fullskew:
+            return vpiFullskew;
+        case Kind::nochange:
+            return vpiNoChange;
+        }
+        return vpiUndefined;
+    }
+
+    // vpiEdge of a timing-check terminal: the transitions it selects, from
+    // `posedge`/`negedge` or an `edge` descriptor list (IEEE 1800-2023
+    // 31.5, vpi_user.h). z transitions have no mask bit.
+    [[nodiscard]] static std::int64_t tchk_edge_mask(
+        const runtime::simir::ModuleTimingEvent& event)
+    {
+        using Edge = runtime::simir::ModulePathEdge;
+        if (event.edge == Edge::posedge) {
+            return vpiPosedge;
+        }
+        if (event.edge == Edge::negedge) {
+            return vpiNegedge;
+        }
+        std::int64_t mask = 0;
+        for (const auto& descriptor : event.edge_descriptors) {
+            if (descriptor == "01") {
+                mask |= vpiEdge01;
+            } else if (descriptor == "10") {
+                mask |= vpiEdge10;
+            } else if (descriptor == "0x" || descriptor == "0X") {
+                mask |= vpiEdge0x;
+            } else if (descriptor == "x1" || descriptor == "X1") {
+                mask |= vpiEdgex1;
+            } else if (descriptor == "1x" || descriptor == "1X") {
+                mask |= vpiEdge1x;
+            } else if (descriptor == "x0" || descriptor == "X0") {
+                mask |= vpiEdgex0;
+            }
+        }
+        return mask;
+    }
+
+    fsim_vpi_status_v1 tchk_property(const std::uint32_t check,
+        const PLI_INT32 property, fsim_vpi_service_result_v1& result) const
+    {
+        const auto& declared = simulation_.design().verilog_timing_checks()[check];
+        std::int64_t value = vpiUndefined;
+        if (property == vpiTchkType) {
+            value = tchk_type(declared.kind);
+        } else if (property == vpiLineNo) {
+            value = declared.source.line;
+        }
+        return succeed(result, 0U, static_cast<std::uint64_t>(value));
+    }
+
+    // --- primitives and UDPs (IEEE 1800-2023 37.35, 37.36) ---------------
+
+    // The elaborated primitive records indexed by scope and full name; the
+    // `head` of a primitive is the first element of its instance array.
+    struct PrimitiveIndex {
+        std::unordered_map<std::string, std::uint32_t> by_name;
+        std::unordered_map<std::string, std::vector<std::uint32_t>> by_scope;
+        std::vector<std::uint32_t> head;
+    };
+
+    [[nodiscard]] const std::vector<elaboration::VerilogPrimitiveInfo>&
+    primitives() const
+    {
+        return simulation_.design().verilog_primitives();
+    }
+
+    [[nodiscard]] const PrimitiveIndex& primitive_index() const
+    {
+        if (primitive_index_) {
+            return *primitive_index_;
+        }
+        PrimitiveIndex index;
+        std::unordered_map<std::string, std::uint32_t> arrays;
+        const auto& all = primitives();
+        index.head.resize(all.size());
+        for (std::uint32_t position = 0U; position < all.size(); ++position) {
+            const auto& primitive = all[position];
+            index.by_scope[primitive.instance].push_back(position);
+            if (!primitive.full_name.empty()) {
+                index.by_name.emplace(primitive.full_name, position);
+            }
+            index.head[position] = position;
+            if (primitive.array_member && !primitive.array_name.empty()) {
+                const auto first = arrays.emplace(
+                    primitive.instance + '\n' + primitive.array_name, position);
+                index.head[position] = first.first->second;
+            }
+        }
+        primitive_index_ = std::move(index);
+        return *primitive_index_;
+    }
+
+    [[nodiscard]] const elaboration::VerilogPrimitiveInfo* primitive_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::primitive
+            || serial_of(handle) >= primitives().size()) {
+            return nullptr;
+        }
+        return &primitives()[serial_of(handle)];
+    }
+
+    // An instance array is named by the index of its first element.
+    [[nodiscard]] std::optional<std::uint32_t> primitive_array_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::primitive_array
+            || serial_of(handle) >= primitives().size()) {
+            return std::nullopt;
+        }
+        return static_cast<std::uint32_t>(serial_of(handle));
+    }
+
+    [[nodiscard]] static fsim_vpi_handle_v1 prim_term_handle(
+        const std::uint32_t primitive, const std::uint32_t term)
+    {
+        return tagged(Tag::prim_term,
+            (static_cast<std::uint64_t>(primitive) << 16U) | term);
+    }
+
+    // The primitive and the zero-based terminal of a prim term.
+    [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
+    prim_term_of(const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::prim_term) {
+            return std::nullopt;
+        }
+        const auto primitive = static_cast<std::uint32_t>(serial_of(handle) >> 16U);
+        const auto term = static_cast<std::uint32_t>(serial_of(handle) & 0xFFFFU);
+        if (primitive >= primitives().size()
+            || term >= primitives()[primitive].terminals.size()) {
+            return std::nullopt;
+        }
+        return std::pair { primitive, term };
+    }
+
+    [[nodiscard]] const elaboration::UdpTableInfo* udp_table_of(
+        const fsim_vpi_handle_v1 handle, const Tag tag) const
+    {
+        if (!owned(handle) || tag_of(handle) != tag
+            || serial_of(handle) >= simulation_.design().udp_tables().size()) {
+            return nullptr;
+        }
+        return &simulation_.design().udp_tables()[serial_of(handle)];
+    }
+
+    [[nodiscard]] std::uint64_t udp_table_serial(
+        const elaboration::UdpTableInfo& table) const
+    {
+        return static_cast<std::uint64_t>(
+            &table - simulation_.design().udp_tables().data());
+    }
+
+    // The table and the row of a table entry.
+    [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
+    udp_entry_of(const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::udp_entry) {
+            return std::nullopt;
+        }
+        const auto table = static_cast<std::uint32_t>(serial_of(handle) >> 24U);
+        const auto row = static_cast<std::uint32_t>(serial_of(handle) & 0xFFFFFFU);
+        const auto& tables = simulation_.design().udp_tables();
+        if (table >= tables.size() || row >= tables[table].row_text.size()) {
+            return std::nullopt;
+        }
+        return std::pair { table, row };
+    }
+
+    // The UDP table a UDP instance runs.
+    [[nodiscard]] const elaboration::UdpTableInfo* primitive_table(
+        const elaboration::VerilogPrimitiveInfo& primitive) const
+    {
+        const auto& tables = simulation_.design().udp_tables();
+        return primitive.udp_table && *primitive.udp_table < tables.size()
+            ? &tables[*primitive.udp_table]
+            : nullptr;
+    }
+
+    // vpiGate, vpiSwitch or vpiUdp of a primitive, or the array type of
+    // one (IEEE 1800-2023 37.35); a pullup or pulldown is a gate.
+    [[nodiscard]] static PLI_INT32 primitive_class(
+        const elaboration::VerilogPrimitiveKind kind, const bool array)
+    {
+        switch (kind) {
+        case elaboration::VerilogPrimitiveKind::switch_device:
+            return array ? vpiSwitchArray : vpiSwitch;
+        case elaboration::VerilogPrimitiveKind::udp:
+            return array ? vpiUdpArray : vpiUdp;
+        case elaboration::VerilogPrimitiveKind::gate:
+        case elaboration::VerilogPrimitiveKind::pull:
+            break;
+        }
+        return array ? vpiGateArray : vpiGate;
+    }
+
+    // Whether a primitive of `kind` is of an iteration type.
+    [[nodiscard]] static bool primitive_matches(const PLI_INT32 type,
+        const elaboration::VerilogPrimitiveKind kind)
+    {
+        return type == vpiPrimitive || type == vpiPrimitiveArray
+            || type == primitive_class(kind, false)
+            || type == primitive_class(kind, true);
+    }
+
+    [[nodiscard]] PLI_INT32 primitive_prim_type(
+        const elaboration::VerilogPrimitiveInfo& primitive) const
+    {
+        if (primitive.kind == elaboration::VerilogPrimitiveKind::udp) {
+            const auto* table = primitive_table(primitive);
+            return table == nullptr ? vpiUndefined
+                : table->sequential ? vpiSeqPrim
+                                    : vpiCombPrim;
+        }
+        return primitive_type(primitive.keyword);
+    }
+
+    // vpiSize: the number of inputs, which is every terminal but the
+    // outputs (IEEE 1800-2023 37.35 detail 1).
+    [[nodiscard]] static std::int64_t primitive_size(
+        const elaboration::VerilogPrimitiveInfo& primitive)
+    {
+        return std::ranges::count_if(primitive.terminals, [](const auto& term) {
+            return term.direction
+                != frontend::VerilogPrimitiveTerminalDirection::Output;
+        });
+    }
+
+    // The vpiStrength0/1 constant of a drive-strength rank (IEEE 1800-2023
+    // 38.15 strength coding).
+    [[nodiscard]] static std::int64_t strength_code(const std::size_t rank)
+    {
+        static constexpr std::array<std::int64_t, 8U> codes {
+            vpiHiZ, vpiSmallCharge, vpiMediumCharge, vpiWeakDrive,
+            vpiLargeCharge, vpiPullDrive, vpiStrongDrive, vpiSupplyDrive,
+        };
+        return rank < codes.size() ? codes[rank] : vpiUndefined;
+    }
+
+    // vpiStrength0/1 of a primitive. A gate or UDP without a drive strength
+    // is strong; a pullup has only a 1-strength and a pulldown only a
+    // 0-strength, both pull by default (IEEE 1800-2023 28.8). A switch has
+    // no drive strength.
+    [[nodiscard]] static std::int64_t primitive_strength(
+        const elaboration::VerilogPrimitiveInfo& primitive, const bool one)
+    {
+        constexpr auto strong
+            = static_cast<std::size_t>(frontend::VerilogStrength::Strong);
+        constexpr auto pull
+            = static_cast<std::size_t>(frontend::VerilogStrength::Pull);
+        const auto declared = one ? primitive.drive_one : primitive.drive_zero;
+        switch (primitive.kind) {
+        case elaboration::VerilogPrimitiveKind::switch_device:
+            return vpiUndefined;
+        case elaboration::VerilogPrimitiveKind::pull: {
+            const bool pullup = primitive.keyword == "pullup";
+            return pullup == one ? strength_code(declared ? *declared : pull)
+                                 : vpiUndefined;
+        }
+        case elaboration::VerilogPrimitiveKind::gate:
+        case elaboration::VerilogPrimitiveKind::udp:
+            break;
+        }
+        return strength_code(declared ? *declared : strong);
+    }
+
+    // The value a terminal shows: the bits of its signal it selects. A
+    // terminal that is an expression has no signal here.
+    [[nodiscard]] std::optional<Value> prim_term_value(
+        const elaboration::VerilogPrimitiveTerminalInfo& term) const
+    {
+        if (term.width == 0U) {
+            return std::nullopt;
+        }
+        const auto bits = simulation_.read_signal_snapshot(term.signal);
+        Value value;
+        value.bits = PackedLogic4 { term.width, Logic4::x };
+        for (std::uint32_t bit = 0U; bit < term.width; ++bit) {
+            if (term.offset + bit < bits.width()) {
+                value.bits.set(bit, bits.get(term.offset + bit));
+            }
+        }
+        return value;
+    }
+
+    // The value of a primitive is its output's (IEEE 1800-2023 37.35); a
+    // bidirectional switch has no output.
+    [[nodiscard]] static const elaboration::VerilogPrimitiveTerminalInfo*
+    primitive_output(const elaboration::VerilogPrimitiveInfo& primitive)
+    {
+        for (const auto& term : primitive.terminals) {
+            if (term.direction
+                == frontend::VerilogPrimitiveTerminalDirection::Output) {
+                return &term;
+            }
+        }
+        return nullptr;
+    }
+
+    [[nodiscard]] std::optional<Value> primitive_model_value(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (const auto* primitive = primitive_of(handle)) {
+            const auto* output = primitive_output(*primitive);
+            return output != nullptr ? prim_term_value(*output) : std::nullopt;
+        }
+        if (const auto term = prim_term_of(handle)) {
+            return prim_term_value(
+                primitives()[term->first].terminals[term->second]);
+        }
+        return std::nullopt;
+    }
+
+    // vpi_get_value with vpiStrengthVal on a scalar (IEEE 1800-2023 38.15):
+    // the logic value and the strength of each side from the signal's
+    // drivers. A net or terminal that is not a whole one-bit signal, and a
+    // variable, is strong on the side its value takes ("a reg or variable
+    // is always strong").
+    [[nodiscard]] bool write_strength_value(
+        const fsim_vpi_handle_v1 handle, s_vpi_value& out)
+    {
+        const elaboration::VerilogPrimitiveTerminalInfo* terminal { };
+        if (const auto* primitive = primitive_of(handle)) {
+            terminal = primitive_output(*primitive);
+        } else if (const auto term = prim_term_of(handle)) {
+            terminal = &primitives()[term->first].terminals[term->second];
+        }
+        std::optional<runtime::simir::SignalId> signal;
+        std::optional<Value> value;
+        if (terminal != nullptr) {
+            value = prim_term_value(*terminal);
+            if (terminal->width == 1U
+                && simulation_.read_signal_snapshot(terminal->signal).width() == 1U) {
+                signal = terminal->signal;
+            }
+        } else if (!owned(handle)) {
+            const auto object = info(handle);
+            if (!object || !object->type || object->type->width != 1U
+                || (object->kind != SystemVerilogVpiObjectKind::Net
+                    && object->kind != SystemVerilogVpiObjectKind::Variable)) {
+                return false;
+            }
+            value = object_value(handle);
+            if (object->kind == SystemVerilogVpiObjectKind::Net) {
+                signal = simulation_.find_signal(object->full_name);
+                if (signal
+                    && simulation_.read_signal_snapshot(*signal).width() != 1U) {
+                    signal.reset();
+                }
+            }
+        }
+        if (!value || value->kind != Value::Kind::bits
+            || value->bits.width() == 0U) {
+            return false;
+        }
+        const auto bit = value->bits.get(0U);
+        constexpr auto strong
+            = static_cast<std::size_t>(runtime::simir::StrengthRank::strong);
+        std::size_t zero = bit == Logic4::zero || bit == Logic4::x ? strong : 0U;
+        std::size_t one = bit == Logic4::one || bit == Logic4::x ? strong : 0U;
+        if (signal) {
+            const auto drive = simulation_.read_signal_strength(*signal);
+            zero = static_cast<std::size_t>(drive.zero);
+            one = static_cast<std::size_t>(drive.one);
+        }
+        auto& slot = strengths_[strength_cursor_++ % strengths_.size()];
+        slot.logic = bit == Logic4::zero ? vpi0
+            : bit == Logic4::one         ? vpi1
+            : bit == Logic4::z           ? vpiZ
+                                         : vpiX;
+        slot.s0 = static_cast<PLI_INT32>(strength_code(zero));
+        slot.s1 = static_cast<PLI_INT32>(strength_code(one));
+        out.value.strength = &slot;
+        return true;
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 primitive_scope(
+        const elaboration::VerilogPrimitiveInfo& primitive) const
+    {
+        const auto scope = registry_.find(primitive.instance);
+        return scope && scope.value ? scope.value->handle : 0U;
+    }
+
+    // The net a terminal connects, or the select of it the terminal names
+    // (IEEE 1800-2023 37.35 vpiExpr). A terminal that is an expression has
+    // no object.
+    [[nodiscard]] fsim_vpi_handle_v1 prim_term_expression(
+        const elaboration::VerilogPrimitiveInfo& primitive,
+        const elaboration::VerilogPrimitiveTerminalInfo& term)
+    {
+        if (term.width == 0U) {
+            return 0U;
+        }
+        const auto net = signal_object(term.signal, primitive_scope(primitive));
+        const auto object = info(net);
+        if (!object || !object->type) {
+            return 0U;
+        }
+        if (term.offset == 0U && term.width == object->type->width) {
+            return net;
+        }
+        const auto range = declared_range(net);
+        if (!range) {
+            return 0U;
+        }
+        const auto [msb, lsb] = *range;
+        const auto index_of = [&](const std::uint32_t position) {
+            return msb >= lsb ? lsb + static_cast<std::int64_t>(position)
+                              : lsb - static_cast<std::int64_t>(position);
+        };
+        return make_select(net, index_of(term.offset + term.width - 1U),
+            index_of(term.offset), term.width == 1U);
+    }
+
+    [[nodiscard]] static std::string udp_defn_name(
+        const elaboration::UdpTableInfo& table)
+    {
+        const auto separator = table.identity.rfind('.');
+        return separator == std::string::npos
+            ? table.identity
+            : table.identity.substr(separator + 1U);
+    }
+
+    // The number of symbols of a table entry: the inputs, the current
+    // state of a sequential UDP, and the output (IEEE 1800-2023 37.36).
+    [[nodiscard]] static std::int64_t udp_entry_size(
+        const elaboration::UdpTableInfo& table, const std::size_t row)
+    {
+        return static_cast<std::int64_t>(table.rows[row].inputs.size()
+            + (table.rows[row].current_state ? 1U : 0U) + 1U);
+    }
+
+    // The entry's symbols as characters: an edge `(01)` is the two
+    // characters 01 (IEEE 1800-2023 29.3.6).
+    [[nodiscard]] static std::vector<std::string> udp_entry_symbols(
+        const std::string_view text)
+    {
+        std::vector<std::string> symbols;
+        std::size_t position = 0U;
+        while (position < text.size()) {
+            const auto end = std::min(text.find(' ', position), text.size());
+            auto token = std::string { text.substr(position, end - position) };
+            position = end + 1U;
+            if (token.empty() || token == ":") {
+                continue;
+            }
+            if (token.size() > 2U && token.front() == '(' && token.back() == ')') {
+                token = token.substr(1U, token.size() - 2U);
+            }
+            symbols.push_back(std::move(token));
+        }
+        return symbols;
+    }
+
+    // vpi_get_value on a table entry: only the string (decompilation) and
+    // vector (ASCII values) formats exist (IEEE 1800-2023 37.36 detail 1,
+    // 38.15). A symbol takes two bytes, its first character in the high
+    // one; they pack two to a 32-bit field, the a-field of each vecval
+    // before its b-field.
+    [[nodiscard]] bool write_entry_value(
+        const std::uint32_t table, const std::uint32_t row, s_vpi_value& out)
+    {
+        const auto& text = simulation_.design().udp_tables()[table].row_text[row];
+        if (out.format == vpiStringVal) {
+            std::string compact;
+            std::ranges::copy_if(text, std::back_inserter(compact),
+                [](const char character) { return character != ' '; });
+            out.value.str = const_cast<PLI_BYTE8*>(store(std::move(compact)));
+            return true;
+        }
+        if (out.format != vpiVectorVal) {
+            return false;
+        }
+        const auto symbols = udp_entry_symbols(text);
+        auto& words = vectors_[vector_cursor_++ % vectors_.size()];
+        words.assign((symbols.size() + 3U) / 4U, s_vpi_vecval { 0, 0 });
+        for (std::size_t index = 0U; index < symbols.size(); ++index) {
+            const auto first = static_cast<PLI_UINT32>(
+                static_cast<unsigned char>(symbols[index][0]));
+            const auto second = symbols[index].size() > 1U
+                ? static_cast<PLI_UINT32>(
+                      static_cast<unsigned char>(symbols[index][1]))
+                : 0U;
+            const auto field = index / 2U;
+            auto& word = words[field / 2U];
+            auto& part = field % 2U == 0U ? word.aval : word.bval;
+            part |= ((first << 8U) | second) << (16U * (index % 2U));
+        }
+        out.value.vector = words.data();
+        return true;
+    }
+
+    // vpi_get on a primitive-model handle; nullopt when it is none.
+    [[nodiscard]] std::optional<std::int64_t> primitive_model_property(
+        const fsim_vpi_handle_v1 handle, const PLI_INT32 property) const
+    {
+        std::int64_t value = vpiUndefined;
+        if (const auto* primitive = primitive_of(handle)) {
+            switch (property) {
+            case vpiPrimType:
+                value = primitive_prim_type(*primitive);
+                break;
+            case vpiSize:
+                value = primitive_size(*primitive);
+                break;
+            case vpiStrength0:
+                value = primitive_strength(*primitive, false);
+                break;
+            case vpiStrength1:
+                value = primitive_strength(*primitive, true);
+                break;
+            case vpiArray:
+            case vpiArrayMember:
+                value = primitive->array_member ? 1 : 0;
+                break;
+            case vpiLineNo:
+                value = static_cast<std::int64_t>(primitive->source.begin.line);
+                break;
+            default:
+                break;
+            }
+        } else if (primitive_array_of(handle)) {
+            return value;
+        } else if (const auto term = prim_term_of(handle)) {
+            const auto& terminal = primitives()[term->first].terminals[term->second];
+            using Direction = frontend::VerilogPrimitiveTerminalDirection;
+            if (property == vpiDirection) {
+                value = terminal.direction == Direction::Output ? vpiOutput
+                    : terminal.direction == Direction::Inout    ? vpiInout
+                                                                : vpiInput;
+            } else if (property == vpiTermIndex) {
+                value = term->second;
+            }
+        } else if (const auto* table = udp_table_of(handle, Tag::udp_defn)) {
+            switch (property) {
+            case vpiSize:
+                value = static_cast<std::int64_t>(table->terminals.size()) - 1;
+                break;
+            case vpiPrimType:
+                value = table->sequential ? vpiSeqPrim : vpiCombPrim;
+                break;
+            // The source of a UDP is never protected here (IEEE 1800-2023
+            // 37.36).
+            case vpiProtected:
+                value = 0;
+                break;
+            default:
+                break;
+            }
+        } else if (const auto entry = udp_entry_of(handle)) {
+            if (property == vpiSize) {
+                value = udp_entry_size(
+                    simulation_.design().udp_tables()[entry->first], entry->second);
+            }
+        } else if (udp_table_of(handle, Tag::udp_initial) == nullptr) {
+            return std::nullopt;
+        }
+        return value;
+    }
+
+    // vpi_get_str on a primitive-model handle; nullopt when it has none.
+    [[nodiscard]] std::optional<std::string> primitive_model_string(
+        const fsim_vpi_handle_v1 handle, const PLI_INT32 property) const
+    {
+        if (const auto* primitive = primitive_of(handle)) {
+            switch (property) {
+            case vpiName:
+                return primitive->name.empty() ? std::nullopt
+                    : std::optional { primitive->name };
+            case vpiFullName:
+                return primitive->full_name.empty() ? std::nullopt
+                    : std::optional { primitive->full_name };
+            case vpiDefName:
+                return primitive->keyword;
+            case vpiFile:
+                return primitive->source.source_name.str();
+            default:
+                return std::nullopt;
+            }
+        }
+        if (const auto head = primitive_array_of(handle)) {
+            const auto& first = primitives()[*head];
+            if (property == vpiName) {
+                return first.array_name;
+            }
+            if (property == vpiFullName) {
+                return first.instance.empty()
+                    ? first.array_name
+                    : first.instance + "." + first.array_name;
+            }
+            return std::nullopt;
+        }
+        if (const auto* table = udp_table_of(handle, Tag::udp_defn)) {
+            return property == vpiDefName
+                ? std::optional { udp_defn_name(*table) }
+                : std::nullopt;
+        }
+        return std::nullopt;
+    }
+
+    // The relation `type` of a primitive-model handle (IEEE 1800-2023
+    // 37.35, 37.36).
+    [[nodiscard]] fsim_vpi_handle_v1 primitive_model_relation(
+        const fsim_vpi_handle_v1 handle, const PLI_INT32 type)
+    {
+        const auto scope_relation
+            = [&](const elaboration::VerilogPrimitiveInfo& primitive)
+            -> fsim_vpi_handle_v1 {
+            const auto scope = primitive_scope(primitive);
+            return type == vpiModule ? enclosing_module_of(scope)
+                : type == vpiParent || type == vpiInstance || type == vpiScope
+                ? scope
+                : 0U;
+        };
+        if (const auto* primitive = primitive_of(handle)) {
+            if (type == vpiUdpDefn && primitive->udp_table) {
+                return tagged(Tag::udp_defn, *primitive->udp_table);
+            }
+            // The index within an instance array, NULL outside one (IEEE
+            // 1800-2023 37.35 detail 4).
+            if (type == vpiIndex) {
+                return primitive->array_member
+                    ? make_constant(primitive->array_index)
+                    : 0U;
+            }
+            if (type == vpiPrimitiveArray) {
+                return primitive->array_member
+                    ? tagged(Tag::primitive_array,
+                          primitive_index().head[serial_of(handle)])
+                    : 0U;
+            }
+            return scope_relation(*primitive);
+        }
+        if (const auto head = primitive_array_of(handle)) {
+            const auto& first = primitives()[*head];
+            if (type == vpiLeftRange) {
+                return make_constant(first.array_left);
+            }
+            if (type == vpiRightRange) {
+                return make_constant(first.array_right);
+            }
+            return scope_relation(first);
+        }
+        if (const auto term = prim_term_of(handle)) {
+            const auto& primitive = primitives()[term->first];
+            if (type == vpiExpr) {
+                return prim_term_expression(
+                    primitive, primitive.terminals[term->second]);
+            }
+            return type == vpiPrimitive || type == vpiParent
+                ? tagged(Tag::primitive, term->first)
+                : 0U;
+        }
+        if (const auto* table = udp_table_of(handle, Tag::udp_defn)) {
+            return type == vpiInitial && table->initial_output
+                ? tagged(Tag::udp_initial, udp_table_serial(*table))
+                : 0U;
+        }
+        if (const auto entry = udp_entry_of(handle)) {
+            return type == vpiUdpDefn || type == vpiParent
+                ? tagged(Tag::udp_defn, entry->first)
+                : 0U;
+        }
+        if (const auto* table = udp_table_of(handle, Tag::udp_initial)) {
+            return type == vpiUdpDefn || type == vpiParent
+                ? tagged(Tag::udp_defn, udp_table_serial(*table))
+                : 0U;
+        }
+        return 0U;
+    }
+
+    // The objects of an iteration over primitives, prim terms, UDP
+    // definitions, table entries or initial statements; nullopt when the
+    // reference has none (IEEE 1800-2023 37.35, 37.36).
+    [[nodiscard]] std::optional<std::vector<fsim_vpi_handle_v1>>
+    primitive_iteration(const PLI_INT32 type, const fsim_vpi_handle_v1 reference)
+    {
+        std::vector<fsim_vpi_handle_v1> found;
+        const bool element_type = type == vpiPrimitive || type == vpiGate
+            || type == vpiSwitch || type == vpiUdp;
+        const bool array_type = type == vpiPrimitiveArray || type == vpiGateArray
+            || type == vpiSwitchArray || type == vpiUdpArray;
+        if (owned(reference)
+            ? tag_of(reference) != Tag::primitive
+                && tag_of(reference) != Tag::primitive_array
+                && tag_of(reference) != Tag::udp_defn
+            : reference == 0U ? type != vpiUdpDefn
+                              : !element_type && !array_type) {
+            return std::nullopt;
+        }
+        const auto& all = primitives();
+        const auto& index = primitive_index();
+        if (reference == 0U) {
+            std::vector<bool> used(simulation_.design().udp_tables().size());
+            for (const auto& primitive : all) {
+                if (primitive.udp_table && *primitive.udp_table < used.size()
+                    && !used[*primitive.udp_table]) {
+                    used[*primitive.udp_table] = true;
+                    found.push_back(tagged(Tag::udp_defn, *primitive.udp_table));
+                }
+            }
+            return found;
+        }
+        if (owned(reference)) {
+            if (const auto head = primitive_array_of(reference)) {
+                const auto& first = all[*head];
+                if (type == vpiRange) {
+                    found.push_back(make_range(
+                        reference, first.array_left, first.array_right));
+                } else if (const auto scope = index.by_scope.find(first.instance);
+                           element_type && scope != index.by_scope.end()) {
+                    for (const auto position : scope->second) {
+                        if (all[position].array_member
+                            && index.head[position] == *head
+                            && primitive_matches(type, all[position].kind)) {
+                            found.push_back(tagged(Tag::primitive, position));
+                        }
+                    }
+                }
+                return found;
+            }
+            if (const auto* primitive = primitive_of(reference)) {
+                if (type == vpiPrimTerm) {
+                    for (std::uint32_t term = 0U;
+                         term < primitive->terminals.size(); ++term) {
+                        found.push_back(prim_term_handle(
+                            static_cast<std::uint32_t>(serial_of(reference)), term));
+                    }
+                }
+                return found;
+            }
+            if (const auto* table = udp_table_of(reference, Tag::udp_defn)) {
+                const auto serial = udp_table_serial(*table);
+                if (type == vpiTableEntry) {
+                    for (std::size_t row = 0U; row < table->row_text.size(); ++row) {
+                        found.push_back(
+                            tagged(Tag::udp_entry, (serial << 24U) | row));
+                    }
+                } else if (type == vpiInitial && table->initial_output) {
+                    found.push_back(tagged(Tag::udp_initial, serial));
+                }
+                return found;
+            }
+            return std::nullopt;
+        }
+        const auto scope = info(reference);
+        if (!scope) {
+            return std::nullopt;
+        }
+        const auto members = index.by_scope.find(scope->full_name);
+        if (members == index.by_scope.end()) {
+            return found;
+        }
+        for (const auto position : members->second) {
+            const auto& primitive = all[position];
+            if (!primitive_matches(type, primitive.kind)) {
+                continue;
+            }
+            if (element_type) {
+                found.push_back(tagged(Tag::primitive, position));
+            } else if (primitive.array_member && index.head[position] == position) {
+                // Each instance array once, at its first element.
+                found.push_back(tagged(Tag::primitive_array, position));
+            }
+        }
+        return found;
+    }
+
+    // The primitive terminals that drive or load the net or variable
+    // `handle` (IEEE 1800-2023 37.35, 37.16): an output terminal drives
+    // its signal, an input loads it, an inout does both.
+    void append_primitive_connections(const PLI_INT32 type,
+        const fsim_vpi_handle_v1 handle,
+        std::vector<fsim_vpi_handle_v1>& found) const
+    {
+        using Direction = frontend::VerilogPrimitiveTerminalDirection;
+        const auto& all = primitives();
+        for (std::uint32_t position = 0U; position < all.size(); ++position) {
+            const auto& terminals = all[position].terminals;
+            for (std::uint32_t term = 0U; term < terminals.size(); ++term) {
+                const auto& terminal = terminals[term];
+                const bool wanted = type == vpiDriver || type == vpiLocalDriver
+                    ? terminal.direction != Direction::Input
+                    : type == vpiLoad || type == vpiLocalLoad
+                    ? terminal.direction != Direction::Output
+                    : true;
+                if (!wanted || terminal.width == 0U) {
+                    continue;
+                }
+                const auto handles
+                    = simulation_.vpi_signal_object_handles(terminal.signal);
+                if (std::ranges::find(handles, handle) != handles.end()) {
+                    found.push_back(prim_term_handle(position, term));
+                }
+            }
+        }
+    }
+
+    // vpi_put_value on a primitive: only a sequential UDP takes a value,
+    // set at once whatever the instance's delay (IEEE 1800-2023 37.35
+    // detail 2, 38.34).
+    fsim_vpi_status_v1 put_primitive_value(
+        const elaboration::VerilogPrimitiveInfo& primitive, const PLI_INT32 flags,
+        const s_vpi_value* const input, fsim_vpi_service_result_v1& result)
+    {
+        const auto fail = [&](const char* const message) -> fsim_vpi_status_v1 {
+            error_message_ = message;
+            error_ = true;
+            return FSIM_VPI_STATUS_INVALID_ARGUMENT;
+        };
+        const auto* table = primitive_table(primitive);
+        if (table == nullptr || !table->sequential) {
+            return fail("vpi_put_value: only a sequential UDP takes a value "
+                        "(IEEE 1800-2023 37.35 detail 2)");
+        }
+        if ((flags & 0xFFF) != vpiNoDelay) {
+            return fail("vpi_put_value: a UDP instance takes only vpiNoDelay "
+                        "(IEEE 1800-2023 38.34)");
+        }
+        if (read_only_) {
+            return fail("vpi_put_value: no write in a cbReadOnlySynch callback");
+        }
+        const auto value = input != nullptr ? input_value(*input, 1U)
+                                            : std::nullopt;
+        if (!value || value->kind != Value::Kind::bits
+            || primitive.terminals.empty() || primitive.terminals.front().width == 0U) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        // The state is 0, 1 or x; z is not a UDP value (IEEE 1800-2023 29.3).
+        auto bit = value_bits(*value, 1U).get(0U);
+        if (bit == Logic4::z) {
+            bit = Logic4::x;
+        }
+        simulation_.deposit_signal(
+            primitive.terminals.front().signal, PackedLogic4 { 1U, bit });
+        return succeed(result);
+    }
+
+    // --- vpi_get_delays and vpi_put_delays (IEEE 1800-2023 38.10, 38.32) ---
+
+    // One delay of an object in signed scheduler ticks ($setuphold limits may
+    // be negative): its minimum, typical and maximum values, the one the
+    // simulation uses, and for a path the reject and error limits.
+    struct DelayRow {
+        std::array<std::int64_t, 3U> delay { };
+        std::int64_t applied { };
+        std::array<std::int64_t, 3U> reject { };
+        std::array<std::int64_t, 3U> error { };
+        // The reject and error limits were put; otherwise a path's follow
+        // its delay.
+        bool limits_set { };
+    };
+    using DelayRows = std::vector<DelayRow>;
+
+    fsim_vpi_status_v1 fail_delays(const char* const message)
+    {
+        error_message_ = message;
+        error_ = true;
+        return FSIM_VPI_STATUS_NOT_FOUND;
+    }
+
+    [[nodiscard]] static bool valid_delay_time_type(const PLI_INT32 type)
+    {
+        return type == vpiScaledRealTime || type == vpiSimTime
+            || type == vpiSuppressTime;
+    }
+
+    // One time in the requested format; vpiScaledRealTime is in the time unit
+    // of `scale_object`'s module, and vpiSuppressTime returns no value
+    // (IEEE 1800-2023 38.10).
+    void write_delay_time(s_vpi_time& out, const std::int64_t ticks,
+        const PLI_INT32 type, const fsim_vpi_handle_v1 scale_object) const
+    {
+        out.type = type;
+        if (type == vpiSuppressTime) {
+            return;
+        }
+        const auto profile = simulation_.systemverilog_vpi_time().profile();
+        const auto quanta
+            = ticks * static_cast<std::int64_t>(profile.tick_multiplier);
+        if (type == vpiScaledRealTime) {
+            const auto scale = module_time_scale(scale_object);
+            const int unit = scale ? scale->first
+                                   : static_cast<int>(profile.unit_exponent);
+            out.real = static_cast<double>(quanta)
+                * std::pow(10.0, static_cast<int>(profile.precision_exponent) - unit);
+            return;
+        }
+        const auto bits = static_cast<std::uint64_t>(quanta);
+        out.high = static_cast<PLI_UINT32>(bits >> 32U);
+        out.low = static_cast<PLI_UINT32>(bits & 0xFFFFFFFFU);
+    }
+
+    // One time of a vpi_put_delays array in scheduler ticks, in the format
+    // delay_p->time_type names; none for vpiSuppressTime (no value to write)
+    // and for a time outside the 64-bit range.
+    [[nodiscard]] std::optional<std::int64_t> delay_ticks(const s_vpi_time& time,
+        const PLI_INT32 type, const fsim_vpi_handle_v1 scale_object) const
+    {
+        const auto profile = simulation_.systemverilog_vpi_time().profile();
+        const auto multiplier = static_cast<std::int64_t>(
+            std::max<std::uint64_t>(profile.tick_multiplier, 1U));
+        if (type == vpiSimTime) {
+            const auto whole = (static_cast<std::uint64_t>(time.high) << 32U)
+                | static_cast<std::uint64_t>(time.low);
+            if (whole > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int64_t>::max() / 2)) {
+                return std::nullopt;
+            }
+            return (static_cast<std::int64_t>(whole) + multiplier / 2)
+                / multiplier;
+        }
+        if (type != vpiScaledRealTime || !std::isfinite(time.real)) {
+            return std::nullopt;
+        }
+        const auto scale = module_time_scale(scale_object);
+        const int unit = scale ? scale->first
+                               : static_cast<int>(profile.unit_exponent);
+        const auto ticks = std::llround(time.real
+            * std::pow(10.0, unit - static_cast<int>(profile.precision_exponent))
+            / static_cast<double>(multiplier));
+        if (ticks > std::numeric_limits<std::int64_t>::max() / 2
+            || ticks < std::numeric_limits<std::int64_t>::min() / 2) {
+            return std::nullopt;
+        }
+        return static_cast<std::int64_t>(ticks);
+    }
+
+    // Fill da in the order of Table 38-2: each delay as its minimum, typical
+    // and maximum values when mtm_flag is set (else the one the simulation
+    // uses), each followed by its reject and error limits in the same form
+    // when pulsere_flag is set.
+    void fill_delays(const DelayRows& rows, const s_vpi_delay& delays,
+        const fsim_vpi_handle_v1 scale_object) const
+    {
+        const std::size_t values = delays.mtm_flag != 0 ? 3U : 1U;
+        const std::size_t kinds = delays.pulsere_flag != 0 ? 3U : 1U;
+        for (std::size_t index = 0U;
+             index < static_cast<std::size_t>(delays.no_of_delays); ++index) {
+            const auto& row = rows[index];
+            const std::array<const std::array<std::int64_t, 3U>*, 3U> sets {
+                &row.delay, &row.reject, &row.error
+            };
+            for (std::size_t kind = 0U; kind < kinds; ++kind) {
+                for (std::size_t value = 0U; value < values; ++value) {
+                    const auto ticks = values == 3U
+                        ? (*sets[kind])[value]
+                        : kind == 0U ? row.applied : (*sets[kind])[1U];
+                    write_delay_time(
+                        delays.da[(index * kinds + kind) * values + value],
+                        ticks, delays.time_type, scale_object);
+                }
+            }
+        }
+    }
+
+    // The rows vpi_put_delays writes: the da array read in the same order. A
+    // delay without minimum and maximum repeats its value in all three. With
+    // append_flag the values add to `current`; without pulsere_flag the
+    // reject and error limits keep their values (IEEE 1800-2023 38.32).
+    [[nodiscard]] std::optional<DelayRows> incoming_delay_rows(
+        const s_vpi_delay& delays, const DelayRows& current,
+        const fsim_vpi_handle_v1 scale_object) const
+    {
+        const bool mtm = delays.mtm_flag != 0;
+        const bool pulses = delays.pulsere_flag != 0;
+        const std::size_t values = mtm ? 3U : 1U;
+        const std::size_t kinds = pulses ? 3U : 1U;
+        const auto count = static_cast<std::size_t>(delays.no_of_delays);
+        DelayRows rows(count);
+        for (std::size_t index = 0U; index < count; ++index) {
+            auto& row = rows[index];
+            row.reject = current[index].reject;
+            row.error = current[index].error;
+            row.limits_set = pulses || current[index].limits_set;
+            const std::array<std::array<std::int64_t, 3U>*, 3U> sets {
+                &row.delay, &row.reject, &row.error
+            };
+            for (std::size_t kind = 0U; kind < kinds; ++kind) {
+                for (std::size_t value = 0U; value < values; ++value) {
+                    const auto ticks = delay_ticks(
+                        delays.da[(index * kinds + kind) * values + value],
+                        delays.time_type, scale_object);
+                    if (!ticks) {
+                        return std::nullopt;
+                    }
+                    (*sets[kind])[value] = *ticks;
+                }
+                if (!mtm) {
+                    (*sets[kind])[1U] = (*sets[kind])[0U];
+                    (*sets[kind])[2U] = (*sets[kind])[0U];
+                }
+            }
+            if (delays.append_flag != 0) {
+                for (std::size_t value = 0U; value < 3U; ++value) {
+                    row.delay[value] += current[index].delay[value];
+                    if (pulses) {
+                        row.reject[value] += current[index].reject[value];
+                        row.error[value] += current[index].error[value];
+                    }
+                }
+            }
+            row.applied = row.delay[1U];
+        }
+        return rows;
+    }
+
+    // --- primitives ---------------------------------------------------------
+
+    [[nodiscard]] fsim_vpi_handle_v1 primitive_instance(
+        const elaboration::VerilogPrimitiveInfo& primitive) const
+    {
+        const auto found = registry_.find(primitive.instance);
+        return found && found.value ? found.value->handle : 0U;
+    }
+
+    // The rise, fall and turn-off delays of a primitive. A gate declared with
+    // one delay falls and turns off at it, and one declared with two turns
+    // off at the smaller (IEEE 1800-2023 28.3.3, 28.16). The value in effect
+    // is the driver's own; vpi_put_delays with mtm_flag keeps all three
+    // values it was given.
+    [[nodiscard]] DelayRows primitive_rows(const std::uint32_t index) const
+    {
+        const auto& primitive = primitives()[index];
+        DelayRows rows(3U);
+        const auto written = [&](const std::size_t position) {
+            const auto& value = primitive.delays[position];
+            return std::array<std::int64_t, 3U> {
+                static_cast<std::int64_t>(value.minimum),
+                static_cast<std::int64_t>(value.typical),
+                static_cast<std::int64_t>(value.maximum)
+            };
+        };
+        if (!primitive.delays.empty()) {
+            rows[0].delay = written(0U);
+            rows[1].delay = primitive.delays.size() > 1U ? written(1U)
+                                                         : rows[0].delay;
+            if (primitive.delays.size() > 2U) {
+                rows[2].delay = written(2U);
+            } else {
+                for (std::size_t value = 0U; value < 3U; ++value) {
+                    rows[2].delay[value] = std::min(
+                        rows[0].delay[value], rows[1].delay[value]);
+                }
+            }
+        }
+        for (auto& row : rows) {
+            row.applied = row.delay[1U];
+        }
+        if (!primitive.drivers.empty()) {
+            if (const auto live
+                = simulation_.verilog_driver_delays(primitive.drivers.front())) {
+                rows[0].applied = static_cast<std::int64_t>(live->rise);
+                rows[1].applied = static_cast<std::int64_t>(live->fall);
+                rows[2].applied = static_cast<std::int64_t>(live->turnoff);
+            }
+        }
+        // A put's rows hold until the value in effect changes under them.
+        if (const auto stored = primitive_delay_rows_.find(index);
+            stored != primitive_delay_rows_.end()) {
+            bool fresh = true;
+            for (std::size_t position = 0U; position < 3U; ++position) {
+                fresh = fresh
+                    && stored->second[position].applied == rows[position].applied;
+            }
+            if (fresh) {
+                return stored->second;
+            }
+        }
+        return rows;
+    }
+
+    // vpi_get_delays on a gate, switch or UDP instance: 2 or 3 delays, rise
+    // then fall then turn-off (IEEE 1800-2023 38.10). A primitive has no
+    // pulse limits, so pulsere_flag is an error.
+    fsim_vpi_status_v1 primitive_get_delays(const std::uint32_t index,
+        const s_vpi_delay& delays, fsim_vpi_service_result_v1& result)
+    {
+        if (delays.da == nullptr || delays.pulsere_flag != 0
+            || (delays.no_of_delays != 2 && delays.no_of_delays != 3)
+            || !valid_delay_time_type(delays.time_type)) {
+            return fail_delays("vpi_get_delays: a primitive takes 2 or 3 delays "
+                               "without pulse limits");
+        }
+        fill_delays(primitive_rows(index), delays,
+            primitive_instance(primitives()[index]));
+        return succeed(result);
+    }
+
+    // vpi_put_delays on a primitive: the delay of its driver changes for the
+    // transitions after the call (IEEE 1800-2023 38.32). The simulation uses
+    // the typical value of each minimum:typical:maximum triple. Two delays
+    // leave the turn-off delay at the smaller of rise and fall (28.16).
+    fsim_vpi_status_v1 primitive_put_delays(const std::uint32_t index,
+        const s_vpi_delay& delays, fsim_vpi_service_result_v1& result)
+    {
+        const auto& primitive = primitives()[index];
+        if (delays.da == nullptr || delays.pulsere_flag != 0
+            || (delays.no_of_delays != 2 && delays.no_of_delays != 3)
+            || !valid_delay_time_type(delays.time_type)) {
+            return fail_delays("vpi_put_delays: a primitive takes 2 or 3 delays "
+                               "without pulse limits");
+        }
+        if (primitive.drivers.empty()) {
+            return fail_delays("vpi_put_delays: the primitive has no delayed "
+                               "driver to retime");
+        }
+        auto rows = primitive_rows(index);
+        const auto incoming = incoming_delay_rows(
+            delays, rows, primitive_instance(primitive));
+        if (!incoming) {
+            return fail_delays("vpi_put_delays: the delay is not a valid time");
+        }
+        const auto count = static_cast<std::size_t>(delays.no_of_delays);
+        for (std::size_t position = 0U; position < count; ++position) {
+            rows[position] = (*incoming)[position];
+        }
+        if (count == 2U) {
+            for (std::size_t value = 0U; value < 3U; ++value) {
+                rows[2].delay[value]
+                    = std::min(rows[0].delay[value], rows[1].delay[value]);
+            }
+            rows[2].applied = std::min(rows[0].applied, rows[1].applied);
+        }
+        if (std::ranges::any_of(rows, [](const DelayRow& row) {
+                return row.delay[0] < 0 || row.delay[1] < 0
+                    || row.delay[2] < 0 || row.applied < 0;
+            })) {
+            return fail_delays("vpi_put_delays: a primitive delay cannot be negative");
+        }
+        const runtime::simir::TransitionDelays applied {
+            static_cast<runtime::SimulationTick>(rows[0].applied),
+            static_cast<runtime::SimulationTick>(rows[1].applied),
+            static_cast<runtime::SimulationTick>(rows[2].applied)
+        };
+        for (const auto driver : primitive.drivers) {
+            if (!simulation_.set_verilog_driver_delays(driver, applied)) {
+                return fail_delays("vpi_put_delays: the primitive's driver has "
+                                   "no delay slot in this run");
+            }
+        }
+        primitive_delay_rows_[index] = std::move(rows);
+        return succeed(result);
+    }
+
+    // --- continuous assignments ---------------------------------------------
+
+    // vpi_get_delays on a continuous assignment (IEEE 1800-2023 37.47): the
+    // delays as written, rise, fall and turn-off, with the fall of a single
+    // delay equal to its rise and the turn-off of fewer than three the
+    // smaller of rise and fall (10.3.3). The model gives it no
+    // vpi_put_delays, and the standard does not state its count.
+    fsim_vpi_status_v1 continuous_get_delays(
+        const VpiStatementModel::ContinuousDelay& assignment,
+        const s_vpi_delay& delays, fsim_vpi_service_result_v1& result)
+    {
+        if (delays.da == nullptr || delays.pulsere_flag != 0
+            || delays.no_of_delays < 1 || delays.no_of_delays > 3
+            || !valid_delay_time_type(delays.time_type)) {
+            return fail_delays("vpi_get_delays: a continuous assignment takes 1 "
+                               "to 3 delays without pulse limits");
+        }
+        const auto& written = assignment.values;
+        const std::int64_t rise = written.empty()
+            ? 0 : static_cast<std::int64_t>(written[0]);
+        const std::int64_t fall = written.size() > 1U
+            ? static_cast<std::int64_t>(written[1]) : rise;
+        const std::int64_t turnoff = written.size() > 2U
+            ? static_cast<std::int64_t>(written[2]) : std::min(rise, fall);
+        DelayRows rows(3U);
+        const std::array<std::int64_t, 3U> ticks { rise, fall, turnoff };
+        for (std::size_t position = 0U; position < 3U; ++position) {
+            rows[position].delay = { ticks[position], ticks[position],
+                ticks[position] };
+            rows[position].applied = ticks[position];
+        }
+        fill_delays(rows, delays, assignment.scope);
+        return succeed(result);
+    }
+
+    // --- timing checks ------------------------------------------------------
+
+    // The limits of a check in effect: a put waiting for a safe point counts.
+    [[nodiscard]] std::vector<std::int64_t> check_limits_now(
+        const std::uint32_t check) const
+    {
+        const auto queued = queued_check_limits_.find(check);
+        return queued != queued_check_limits_.end()
+            ? queued->second
+            : simulation_.verilog_timing_check_limits(check);
+    }
+
+    // One delay per limit, in the order written ($setuphold: setup then
+    // hold). The check keeps one value per limit, so a get repeats it for
+    // min, typ and max unless a put gave three.
+    [[nodiscard]] DelayRows check_rows(const std::uint32_t check) const
+    {
+        const auto limits = check_limits_now(check);
+        DelayRows rows(limits.size());
+        for (std::size_t index = 0U; index < limits.size(); ++index) {
+            rows[index].delay = { limits[index], limits[index], limits[index] };
+            rows[index].applied = limits[index];
+        }
+        if (const auto stored = check_delay_rows_.find(check);
+            stored != check_delay_rows_.end()
+            && stored->second.size() == rows.size()
+            && std::ranges::equal(stored->second, rows,
+                [](const DelayRow& left, const DelayRow& right) {
+                    return left.applied == right.applied;
+                })) {
+            return stored->second;
+        }
+        return rows;
+    }
+
+    // vpi_get_delays on a timing check: no_of_delays matches the check's
+    // limits (IEEE 1800-2023 38.10); there are no pulse limits.
+    fsim_vpi_status_v1 tchk_get_delays(const std::uint32_t check,
+        const s_vpi_delay& delays, fsim_vpi_service_result_v1& result)
+    {
+        const auto rows = check_rows(check);
+        if (delays.da == nullptr || delays.pulsere_flag != 0
+            || static_cast<std::size_t>(std::max(delays.no_of_delays, 0))
+                != rows.size()
+            || !valid_delay_time_type(delays.time_type)) {
+            return fail_delays("vpi_get_delays: the timing-check delay request "
+                               "is unsupported");
+        }
+        fill_delays(rows, delays, tchk_instance(check));
+        return succeed(result);
+    }
+
+    // vpi_put_delays on a timing check: one value per limit; the typical
+    // value of each triple is the limit the check applies (IEEE 1800-2023
+    // 38.32). The check takes it at the next safe point when the scheduler
+    // is running.
+    fsim_vpi_status_v1 tchk_put_delays(const std::uint32_t check,
+        const s_vpi_delay& delays, fsim_vpi_service_result_v1& result)
+    {
+        auto rows = check_rows(check);
+        if (delays.da == nullptr || delays.pulsere_flag != 0
+            || static_cast<std::size_t>(std::max(delays.no_of_delays, 0))
+                != rows.size()
+            || !valid_delay_time_type(delays.time_type)) {
+            return fail_delays("vpi_put_delays: the timing-check delay request "
+                               "is unsupported");
+        }
+        const auto incoming = incoming_delay_rows(
+            delays, rows, tchk_instance(check));
+        if (!incoming) {
+            return fail_delays("vpi_put_delays: the delay is not a valid time");
+        }
+        std::vector<std::int64_t> limits;
+        limits.reserve(incoming->size());
+        for (const auto& row : *incoming) {
+            limits.push_back(row.applied);
+        }
+        try {
+            if (simulation_.set_verilog_timing_check_limits(check, limits)) {
+                queued_check_limits_.erase(check);
+            } else {
+                queued_check_limits_[check] = limits;
+                arm_timing_hook();
+            }
+        } catch (const std::invalid_argument&) {
+            return fail_delays("vpi_put_delays: the limits do not suit the "
+                               "timing check");
+        }
+        check_delay_rows_[check] = *incoming;
+        return succeed(result);
+    }
+
+    // --- module paths -------------------------------------------------------
 
     // The path's delays expanded to the twelve-transition form, in the
     // order 0->1, 1->0, 0->z, z->1, 1->z, z->0, 0->x, x->1, 1->x, x->0,
@@ -3062,53 +5172,18 @@ private:
     {
         const auto queued = queued_path_delays_.find(path);
         return queued != queued_path_delays_.end()
-            ? queued->second
+            ? queued->second.delays
             : simulation_.verilog_module_path_delays(path);
     }
 
-    // A delay in the requested format, scaled to the declaring module's
-    // time unit for vpiScaledRealTime (IEEE 1800-2023 38.10).
-    void write_path_delay(s_vpi_time& out, const runtime::SimulationTick ticks,
-        const PLI_INT32 type, const std::uint32_t path) const
+    // The twelve transitions of a path with their reject and error limits.
+    // Absent explicit limits, a path rejects and errors at its delay (IEEE
+    // 1800-2023 30.7.1). The path keeps one value per delay, so min, typ and
+    // max repeat it unless a put gave three.
+    [[nodiscard]] DelayRows path_rows(const std::uint32_t path) const
     {
-        const auto profile = simulation_.systemverilog_vpi_time().profile();
-        const auto quanta = ticks * profile.tick_multiplier;
-        out.type = type;
-        if (type == vpiScaledRealTime) {
-            const auto scale = module_time_scale(path_instance(path));
-            const int unit = scale ? scale->first
-                                   : static_cast<int>(profile.unit_exponent);
-            out.real = static_cast<double>(quanta)
-                * std::pow(10.0, static_cast<int>(profile.precision_exponent) - unit);
-            return;
-        }
-        out.high = static_cast<PLI_UINT32>(quanta >> 32U);
-        out.low = static_cast<PLI_UINT32>(quanta & 0xFFFFFFFFU);
-    }
-
-    // vpi_get_delays on a module path: 1, 2, 3, 6 or 12 delays in the
-    // transition order above, each followed by its reject and error limits
-    // when pulsere_flag is set, and with min, typ and max values when
-    // mtm_flag is set (IEEE 1800-2023 38.10 Table 38-2). The path keeps one
-    // value per delay, so min, typ and max are equal.
-    fsim_vpi_status_v1 get_delays(const fsim_vpi_service_request_v1& request,
-        fsim_vpi_service_result_v1& result)
-    {
-        auto* const delays = pointer<s_vpi_delay>(request.user_data);
-        const auto path = modpath_of(resolve(request.handle));
-        if (!path || delays == nullptr || delays->da == nullptr
-            || !valid_path_delay_count(delays->no_of_delays)
-            || (delays->time_type != vpiScaledRealTime
-                && delays->time_type != vpiSimTime)) {
-            error_message_ = "vpi_get_delays: the object or delay request is unsupported";
-            error_ = true;
-            return FSIM_VPI_STATUS_NOT_FOUND;
-        }
-        const auto& declared = simulation_.design().verilog_specify_paths()[*path];
-        const auto table = path_delay_table(*path);
-        const auto expanded = expanded_path_delays(table);
-        // Absent explicit limits, a path rejects and errors at its delay
-        // (IEEE 1800-2023 30.7.1).
+        const auto& declared = simulation_.design().verilog_specify_paths()[path];
+        const auto expanded = expanded_path_delays(path_delay_table(path));
         const auto limits = [&](const std::vector<runtime::SimulationTick>& limit_table,
                                 const std::optional<runtime::SimulationTick>& limit) {
             if (!limit_table.empty()) {
@@ -3124,21 +5199,48 @@ private:
             declared.pulse_reject_delays, declared.pulse_reject_limit);
         const auto error = limits(
             declared.pulse_error_delays, declared.pulse_error_limit);
-        const std::size_t values = delays->mtm_flag != 0 ? 3U : 1U;
-        const std::size_t kinds = delays->pulsere_flag != 0 ? 3U : 1U;
-        for (std::size_t index = 0U;
-             index < static_cast<std::size_t>(delays->no_of_delays); ++index) {
-            const std::array<runtime::SimulationTick, 3U> ticks {
-                expanded[index], reject[index], error[index]
-            };
-            for (std::size_t kind = 0U; kind < kinds; ++kind) {
-                for (std::size_t value = 0U; value < values; ++value) {
-                    write_path_delay(
-                        delays->da[(index * kinds + kind) * values + value],
-                        ticks[kind], delays->time_type, *path);
+        DelayRows rows(expanded.size());
+        for (std::size_t index = 0U; index < rows.size(); ++index) {
+            const auto delay = static_cast<std::int64_t>(expanded[index]);
+            const auto low = static_cast<std::int64_t>(reject[index]);
+            const auto high = static_cast<std::int64_t>(error[index]);
+            rows[index].delay = { delay, delay, delay };
+            rows[index].applied = delay;
+            rows[index].reject = { low, low, low };
+            rows[index].error = { high, high, high };
+        }
+        // A put's rows hold until the delays change under them.
+        if (const auto stored = path_delay_rows_.find(path);
+            stored != path_delay_rows_.end()) {
+            bool fresh = true;
+            for (std::size_t index = 0U; index < stored->second.size(); ++index) {
+                fresh = fresh && stored->second[index].applied == rows[index].applied;
+            }
+            for (std::size_t index = 0U; fresh && index < stored->second.size();
+                 ++index) {
+                const auto& kept = stored->second[index];
+                rows[index].delay = kept.delay;
+                if (kept.limits_set) {
+                    rows[index].reject = kept.reject;
+                    rows[index].error = kept.error;
                 }
             }
         }
+        return rows;
+    }
+
+    // vpi_get_delays on a module path: 1, 2, 3, 6 or 12 delays in the
+    // transition order above, each followed by its reject and error limits
+    // when pulsere_flag is set, and with min, typ and max values when
+    // mtm_flag is set (IEEE 1800-2023 38.10 Table 38-2).
+    fsim_vpi_status_v1 path_get_delays(const std::uint32_t path,
+        const s_vpi_delay& delays, fsim_vpi_service_result_v1& result)
+    {
+        if (delays.da == nullptr || !valid_path_delay_count(delays.no_of_delays)
+            || !valid_delay_time_type(delays.time_type)) {
+            return fail_delays("vpi_get_delays: the object or delay request is unsupported");
+        }
+        fill_delays(path_rows(path), delays, path_instance(path));
         return succeed(result);
     }
 
@@ -3149,67 +5251,135 @@ private:
     }
 
     // vpi_put_delays on a module path replaces, or with append_flag adds to,
-    // the first no_of_delays transitions; the typical value of each
-    // min:typ:max triple is kept, and the pulse limits retain their values
-    // (IEEE 1800-2023 38.32). The change reaches
-    // the scheduler at its next safe point, so a call made from a system task
-    // still leaves the in-flight path events on the old timing.
+    // the first no_of_delays transitions, and with pulsere_flag their reject
+    // and error limits; the typical value of each min:typ:max triple is the
+    // one the path applies, and without pulsere_flag the pulse limits retain
+    // their values (IEEE 1800-2023 38.32). The change reaches the scheduler
+    // at its next safe point, so a call made from a system task still leaves
+    // the in-flight path events on the old timing.
+    fsim_vpi_status_v1 path_put_delays(const std::uint32_t path,
+        const s_vpi_delay& delays, fsim_vpi_service_result_v1& result)
+    {
+        if (delays.da == nullptr || !valid_path_delay_count(delays.no_of_delays)
+            || !valid_delay_time_type(delays.time_type)) {
+            return fail_delays("vpi_put_delays: the object or delay request is unsupported");
+        }
+        const auto incoming = incoming_delay_rows(
+            delays, path_rows(path), path_instance(path));
+        if (!incoming) {
+            return fail_delays("vpi_put_delays: the delay is not a valid time");
+        }
+        PathTimingUpdate update;
+        for (const auto& row : *incoming) {
+            if (row.applied < 0
+                || (delays.pulsere_flag != 0
+                    && (row.reject[1U] < 0 || row.error[1U] < row.reject[1U]))) {
+                return fail_delays("vpi_put_delays: a path delay or pulse limit "
+                                   "is negative or its reject limit exceeds its error limit");
+            }
+            update.delays.push_back(static_cast<runtime::SimulationTick>(row.applied));
+            if (delays.pulsere_flag != 0) {
+                update.reject.push_back(static_cast<runtime::SimulationTick>(row.reject[1U]));
+                update.error.push_back(static_cast<runtime::SimulationTick>(row.error[1U]));
+            }
+        }
+        try {
+            if (simulation_.set_verilog_module_path_timing(
+                    path, update.delays, update.reject, update.error)) {
+                queued_path_delays_.erase(path);
+            } else {
+                queued_path_delays_[path] = std::move(update);
+                arm_timing_hook();
+            }
+        } catch (const std::invalid_argument&) {
+            return fail_delays("vpi_put_delays: the delays do not suit the path");
+        }
+        path_delay_rows_[path] = *incoming;
+        return succeed(result);
+    }
+
+    // --- dispatch -----------------------------------------------------------
+
+    fsim_vpi_status_v1 get_delays(const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        auto* const delays = pointer<s_vpi_delay>(request.user_data);
+        if (delays != nullptr) {
+            if (primitive_of(request.handle) != nullptr) {
+                return primitive_get_delays(
+                    static_cast<std::uint32_t>(serial_of(request.handle)),
+                    *delays, result);
+            }
+            if (const auto node = node_of(request.handle)) {
+                if (const auto assignment
+                    = statement_model().continuous_delay(*node)) {
+                    return continuous_get_delays(*assignment, *delays, result);
+                }
+            }
+            if (const auto delay = net_delay_index(
+                    resolve(request.handle), Tag::inter_mod_path)) {
+                return net_get_delays(*delay, delays, result);
+            }
+            if (const auto check = tchk_of(resolve(request.handle))) {
+                return tchk_get_delays(*check, *delays, result);
+            }
+            if (const auto path = modpath_of(resolve(request.handle))) {
+                return path_get_delays(*path, *delays, result);
+            }
+        }
+        return fail_delays("vpi_get_delays: the object or delay request is unsupported");
+    }
+
     fsim_vpi_status_v1 put_delays(const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
         const auto* const delays = pointer<const s_vpi_delay>(request.user_data);
-        const auto path = modpath_of(resolve(request.handle));
-        if (!path || delays == nullptr || delays->da == nullptr
-            || !valid_path_delay_count(delays->no_of_delays)
-            || (delays->time_type != vpiScaledRealTime
-                && delays->time_type != vpiSimTime)) {
-            error_message_ = "vpi_put_delays: the object or delay request is unsupported";
-            error_ = true;
-            return FSIM_VPI_STATUS_NOT_FOUND;
-        }
-        const std::size_t count = static_cast<std::size_t>(delays->no_of_delays);
-        const std::size_t values = delays->mtm_flag != 0 ? 3U : 1U;
-        const std::size_t kinds = delays->pulsere_flag != 0 ? 3U : 1U;
-        const auto previous = expanded_path_delays(path_delay_table(*path));
-        std::vector<runtime::SimulationTick> table;
-        table.reserve(count);
-        for (std::size_t index = 0U; index < count; ++index) {
-            auto element = delays->da[index * kinds * values + values / 2U];
-            element.type = delays->time_type;
-            const auto converted
-                = simulation_.systemverilog_vpi_time().convert_delay(
-                    delay_of(element, path_instance(*path)));
-            if (!converted) {
-                error_message_ = "vpi_put_delays: the delay is not a valid time";
-                error_ = true;
-                return FSIM_VPI_STATUS_NOT_FOUND;
+        if (delays != nullptr) {
+            if (primitive_of(request.handle) != nullptr) {
+                return primitive_put_delays(
+                    static_cast<std::uint32_t>(serial_of(request.handle)),
+                    *delays, result);
             }
-            table.push_back(delays->append_flag != 0
-                    ? previous[index] + converted.ticks
-                    : converted.ticks);
-        }
-        if (!simulation_.set_verilog_module_path_delays(*path, table)) {
-            queued_path_delays_[*path] = std::move(table);
-            if (path_delay_hook_ == 0U) {
-                path_delay_hook_ = simulation_.add_safe_point_hook(
-                    [this](runtime::Scheduler&, runtime::SchedulerPhase) {
-                        commit_queued_path_delays();
-                    });
+            if (const auto delay = net_delay_index(
+                    resolve(request.handle), Tag::inter_mod_path)) {
+                return net_put_delays(*delay, delays, result);
             }
-        } else {
-            queued_path_delays_.erase(*path);
+            if (const auto check = tchk_of(resolve(request.handle))) {
+                return tchk_put_delays(*check, *delays, result);
+            }
+            if (const auto path = modpath_of(resolve(request.handle))) {
+                return path_put_delays(*path, *delays, result);
+            }
         }
-        return succeed(result);
+        return fail_delays("vpi_put_delays: the object or delay request is unsupported");
     }
 
-    void commit_queued_path_delays()
+    // The safe-point hook that applies the path delays and check limits a
+    // put could not apply while the scheduler was running.
+    void arm_timing_hook()
     {
-        auto queued = std::move(queued_path_delays_);
-        queued_path_delays_.clear();
-        for (const auto& [path, table] : queued) {
-            (void)simulation_.set_verilog_module_path_delays(path, table);
+        if (path_delay_hook_ == 0U) {
+            path_delay_hook_ = simulation_.add_safe_point_hook(
+                [this](runtime::Scheduler&, runtime::SchedulerPhase) {
+                    commit_queued_timing();
+                });
         }
-        // The hook is one-shot: it removes itself once the table is applied.
+    }
+
+    void commit_queued_timing()
+    {
+        auto paths = std::move(queued_path_delays_);
+        queued_path_delays_.clear();
+        for (const auto& [path, update] : paths) {
+            (void)simulation_.set_verilog_module_path_timing(
+                path, update.delays, update.reject, update.error);
+        }
+        auto checks = std::move(queued_check_limits_);
+        queued_check_limits_.clear();
+        for (const auto& [check, limits] : checks) {
+            (void)simulation_.set_verilog_timing_check_limits(check, limits);
+        }
+        // The hook is one-shot: it removes itself once the timing is applied.
         simulation_.remove_safe_point_hook(
             std::exchange(path_delay_hook_, std::uint64_t { }));
     }
@@ -4494,6 +6664,1011 @@ private:
         return *statement_model_;
     }
 
+    // --- classes (IEEE 1800-2023 37.31 to 37.33) ---------------------------
+
+    // The class defns and class typespecs of the design, built on first
+    // use from the SystemVerilog HIR and the class specializations.
+    [[nodiscard]] VpiClassModel& class_model()
+    {
+        if (!class_model_) {
+            VpiClassModel::Hooks hooks;
+            hooks.handle = [](const std::uint64_t serial) {
+                return tagged(Tag::class_model, serial);
+            };
+            hooks.defn = [this](const std::string& identity) {
+                return class_defn_handle(identity);
+            };
+            hooks.members = [this](const std::string& identity,
+                                const PLI_INT32 type) {
+                return class_members(identity, type);
+            };
+            hooks.full_name = [this](const fsim_vpi_handle_v1 handle) {
+                const auto object = info(handle);
+                return object ? object->full_name : std::string { };
+            };
+            class_model_ = std::make_unique<VpiClassModel>(
+                simulation_.systemverilog_hir(), simulation_.semantics(),
+                simulation_.class_specializations(), std::move(hooks));
+        }
+        return *class_model_;
+    }
+
+    // The declaration identity a class defn object was published for.
+    [[nodiscard]] static std::optional<std::string> class_identity(
+        const runtime::SystemVerilogVpiObjectInfo& object)
+    {
+        if (object.kind != SystemVerilogVpiObjectKind::Class || !object.type
+            || !object.type->descriptor) {
+            return std::nullopt;
+        }
+        return object.type->descriptor->nominal_name;
+    }
+
+    // A variable of a class type: a class property, or a variable whose
+    // typespec is a class (IEEE 1800-2023 37.33).
+    [[nodiscard]] static bool class_variable(
+        const runtime::SystemVerilogVpiObjectInfo& object)
+    {
+        if (!object.type) {
+            return false;
+        }
+        if (object.type->descriptor
+            && object.type->descriptor->kind
+                == runtime::SystemVerilogVpiDescriptorKind::ClassHandle) {
+            return true;
+        }
+        return object.kind == SystemVerilogVpiObjectKind::Variable
+            && object.type->typespec
+            && object.type->typespec->kind == TypespecKind::Class;
+    }
+
+    [[nodiscard]] bool class_variable_handle(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto object = handle != 0U && !owned(handle)
+            ? info(handle)
+            : std::nullopt;
+        return object && class_variable(*object);
+    }
+
+    // A handle of the class model, a class defn or one of its properties:
+    // none holds a value (IEEE 1800-2023 37.31 detail 2).
+    [[nodiscard]] bool class_scope_object(const fsim_vpi_handle_v1 handle) const
+    {
+        if (owned(handle)) {
+            return tag_of(handle) == Tag::class_model;
+        }
+        const auto object = info(handle);
+        return object
+            && (object->kind == SystemVerilogVpiObjectKind::Class
+                || object->kind == SystemVerilogVpiObjectKind::ClassProperty);
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 class_defn_handle(
+        const std::string& identity)
+    {
+        if (!class_defns_built_) {
+            class_defns_built_ = true;
+            for (const auto handle : drain(registry_.iterate_objects(
+                     SystemVerilogVpiObjectKind::Class))) {
+                if (const auto object = info(handle)) {
+                    if (auto name = class_identity(*object)) {
+                        class_defns_.emplace(std::move(*name), handle);
+                    }
+                }
+            }
+        }
+        const auto found = class_defns_.find(identity);
+        return found == class_defns_.end() ? fsim_vpi_handle_v1 { }
+                                           : found->second;
+    }
+
+    // The objects under a class defn that iterate as `type`.
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> class_members(
+        const std::string& identity, const PLI_INT32 type)
+    {
+        std::vector<fsim_vpi_handle_v1> objects;
+        const auto defn = class_defn_handle(identity);
+        if (defn == 0U) {
+            return objects;
+        }
+        for (const auto handle : drain(registry_.iterate_children(defn))) {
+            if (const auto object = info(handle);
+                object && matches(type, *object)) {
+                objects.push_back(handle);
+            }
+        }
+        return objects;
+    }
+
+    // --- class objects (IEEE 1800-2023 37.33) --------------------------------
+
+    // A property or a constraint of a class object as a handle.
+    struct ClassMember {
+        bool constraint { };
+        runtime::SystemVerilogClassHandle object { };
+        // The property's index in the object.
+        std::size_t property { };
+        // The class model's constraint.
+        fsim_vpi_handle_v1 model { };
+    };
+
+    // vpiObjId: the object's heap slot, unique among the live objects and
+    // reused once the object is gone (37.33 detail 1).
+    [[nodiscard]] static std::int64_t class_object_id(
+        const runtime::SystemVerilogClassHandle object) noexcept
+    {
+        return static_cast<std::int64_t>(object & 0xFFFFFFFFU);
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 class_object_handle(
+        const runtime::SystemVerilogClassHandle object)
+    {
+        if (!simulation_.class_heap().contains(object)) {
+            return 0U;
+        }
+        auto found = class_object_serials_.find(object);
+        if (found == class_object_serials_.end()) {
+            class_objects_.push_back(object);
+            found = class_object_serials_
+                        .emplace(object, class_objects_.size() - 1U)
+                        .first;
+        }
+        return tagged(Tag::class_object, found->second);
+    }
+
+    // The heap's handle of a class obj while the object is alive, else 0.
+    [[nodiscard]] runtime::SystemVerilogClassHandle class_object_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::class_object
+            || serial_of(handle) >= class_objects_.size()) {
+            return 0U;
+        }
+        const auto object = class_objects_[serial_of(handle)];
+        return simulation_.class_heap().contains(object) ? object : 0U;
+    }
+
+    [[nodiscard]] static bool class_live_tag(const fsim_vpi_handle_v1 handle)
+    {
+        return owned(handle)
+            && (tag_of(handle) == Tag::class_object
+                || tag_of(handle) == Tag::class_member);
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 class_member_handle(
+        const ClassMember& member)
+    {
+        const auto key = std::tuple { member.object, member.constraint,
+            member.property, member.model };
+        auto found = class_member_index_.find(key);
+        if (found == class_member_index_.end()) {
+            class_members_.push_back(member);
+            found = class_member_index_.emplace(key, class_members_.size() - 1U)
+                        .first;
+        }
+        return tagged(Tag::class_member, found->second);
+    }
+
+    [[nodiscard]] const ClassMember* class_member_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        if (!owned(handle) || tag_of(handle) != Tag::class_member
+            || serial_of(handle) >= class_members_.size()) {
+            return nullptr;
+        }
+        const auto& member = class_members_[serial_of(handle)];
+        return simulation_.class_heap().contains(member.object) ? &member
+                                                                : nullptr;
+    }
+
+    // The object a class variable refers to: its value is the heap's handle,
+    // or 0 for null (37.33 detail 2).
+    [[nodiscard]] runtime::SystemVerilogClassHandle class_variable_object(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto value = object_value(handle);
+        if (!value || value->kind != Value::Kind::bits
+            || value->bits.width() == 0U) {
+            return 0U;
+        }
+        const auto word = value->bits.low_word();
+        return word.bval == 0U && simulation_.class_heap().contains(word.aval)
+            ? word.aval
+            : 0U;
+    }
+
+    [[nodiscard]] static std::string class_property_name(
+        const std::string& identity)
+    {
+        const auto separator = identity.rfind("::");
+        return separator == std::string::npos ? identity
+                                              : identity.substr(separator + 2U);
+    }
+
+    // The registry's class property object a live property is typed by.
+    [[nodiscard]] fsim_vpi_handle_v1 class_property_object(
+        const ClassMember& member)
+    {
+        const auto& object = simulation_.class_heap().object(member.object);
+        const auto& identity = object.property_names.at(member.property);
+        const auto separator = identity.rfind("::");
+        const auto owner = separator == std::string::npos
+            ? object.dynamic_type
+            : identity.substr(0U, separator);
+        const auto name = class_property_name(identity);
+        for (const auto handle : class_members(owner, vpiVariables)) {
+            if (const auto declared = info(handle);
+                declared && declared->name == name) {
+                return handle;
+            }
+        }
+        return 0U;
+    }
+
+    [[nodiscard]] const runtime::SystemVerilogClassPropertyValue&
+    class_property_stored(const ClassMember& member) const
+    {
+        return simulation_.class_heap()
+            .object(member.object)
+            .properties.at(member.property);
+    }
+
+    // The value of a class property of a live object; none for a class
+    // handle or a container (37.33).
+    [[nodiscard]] std::optional<Value> class_property_value(
+        const ClassMember& member)
+    {
+        using Kind = runtime::SystemVerilogClassPropertyKind;
+        const auto& stored = class_property_stored(member);
+        Value value;
+        switch (stored.kind) {
+        case Kind::String:
+            value.kind = Value::Kind::string;
+            value.text = stored.string;
+            return value;
+        case Kind::Bit2:
+        case Kind::Logic4:
+        case Kind::Logic9:
+        case Kind::Integer:
+            if (stored.packed.width() == 0U) {
+                return std::nullopt;
+            }
+            value.bits = stored.packed.is_logic9()
+                ? runtime::collapse_to_logic4(stored.packed)
+                : stored.packed;
+            if (const auto declared = info(class_property_object(member));
+                declared && declared->type) {
+                value.is_signed = declared->type->is_signed;
+            }
+            return value;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    fsim_vpi_status_v1 get_class_value(const fsim_vpi_handle_v1 handle,
+        s_vpi_value& out, fsim_vpi_service_result_v1& result)
+    {
+        const auto* member = class_member_of(handle);
+        const auto value = member != nullptr && !member->constraint
+            ? class_property_value(*member)
+            : std::nullopt;
+        if (!value || !write_value(*value, out)) {
+            out.format = vpiSuppressVal;
+            std::memset(&out.value, 0, sizeof(out.value));
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        return succeed(result);
+    }
+
+    fsim_vpi_status_v1 put_class_value(const fsim_vpi_handle_v1 handle,
+        const p_vpi_value input, const PLI_INT32 mode,
+        fsim_vpi_service_result_v1& result)
+    {
+        using Kind = runtime::SystemVerilogClassPropertyKind;
+        const auto* member = class_member_of(handle);
+        if (member == nullptr || member->constraint || input == nullptr) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        if (mode != vpiNoDelay) {
+            error_message_ = "vpi_put_value: a class property takes only "
+                             "vpiNoDelay";
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        auto& stored = simulation_.class_heap()
+                           .object(member->object)
+                           .properties.at(member->property);
+        if (stored.kind == Kind::String) {
+            if (input->format != vpiStringVal) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            stored.string = input->value.str != nullptr ? input->value.str : "";
+            return succeed(result);
+        }
+        if ((stored.kind != Kind::Bit2 && stored.kind != Kind::Logic4
+                && stored.kind != Kind::Logic9 && stored.kind != Kind::Integer)
+            || stored.packed.width() == 0U) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        const auto width = stored.packed.width();
+        const auto value = input_value(*input, width);
+        if (!value) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        auto bits = value_bits(*value, width);
+        if (stored.kind == Kind::Bit2) {
+            for (std::size_t bit = 0U; bit < width; ++bit) {
+                if (bits.get(bit) != Logic4::one) {
+                    bits.set(bit, Logic4::zero);
+                }
+            }
+        }
+        if (stored.packed.is_logic9()) {
+            PackedLogic4 nine { width };
+            for (std::size_t bit = 0U; bit < width; ++bit) {
+                nine.set_logic9(bit, runtime::to_logic9(bits.get(bit)));
+            }
+            bits = std::move(nine);
+        }
+        stored.packed = std::move(bits);
+        return succeed(result);
+    }
+
+    // The enabled state of a constraint of a live object (18.9).
+    [[nodiscard]] bool class_constraint_enabled(const ClassMember& member)
+    {
+        const auto named
+            = class_model().constraint_identity(serial_of(member.model));
+        if (!named) {
+            return true;
+        }
+        const auto& modes
+            = simulation_.class_heap().object(member.object).constraint_modes;
+        if (const auto found = modes.find(named->first); found != modes.end()) {
+            return found->second;
+        }
+        for (const auto& [identity, enabled] : modes) {
+            if (class_property_name(identity) == named->second) {
+                return enabled;
+            }
+        }
+        return true;
+    }
+
+    // The class typespec of a live object: the class it was created as
+    // (37.33 detail 5).
+    [[nodiscard]] fsim_vpi_handle_v1 class_object_typespec(
+        const runtime::SystemVerilogClassHandle object)
+    {
+        const auto& stored = simulation_.class_heap().object(object);
+        auto handle = class_model().typespec_for_name(
+            stored.specialization_identity);
+        if (handle == 0U) {
+            handle = class_model().typespec_for_name(stored.dynamic_type);
+        }
+        return handle;
+    }
+
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> class_object_iterate(
+        const fsim_vpi_handle_v1 handle, const PLI_INT32 type)
+    {
+        std::vector<fsim_vpi_handle_v1> objects;
+        if (tag_of(handle) == Tag::class_member) {
+            const auto* member = class_member_of(handle);
+            if (member != nullptr && member->constraint) {
+                objects = class_model()
+                              .iterate(serial_of(member->model), type)
+                              .value_or(objects);
+            }
+            return objects;
+        }
+        const auto object = class_object_of(handle);
+        if (object == 0U) {
+            return objects;
+        }
+        // The automatic properties; a static property is not part of the
+        // object and is not listed.
+        if (type == vpiVariables) {
+            const auto count
+                = simulation_.class_heap().object(object).properties.size();
+            for (std::size_t index = 0U; index < count; ++index) {
+                objects.push_back(class_member_handle(
+                    ClassMember { false, object, index, 0U }));
+            }
+            return objects;
+        }
+        const auto spec = class_object_typespec(object);
+        if (spec == 0U) {
+            return objects;
+        }
+        auto declared = class_model()
+                            .iterate(serial_of(spec), type)
+                            .value_or(std::vector<fsim_vpi_handle_v1> { });
+        if (type != vpiConstraint) {
+            return declared;
+        }
+        for (const auto model : declared) {
+            objects.push_back(class_member_handle(
+                ClassMember { true, object, 0U, model }));
+        }
+        return objects;
+    }
+
+    fsim_vpi_status_v1 class_object_relation(
+        const fsim_vpi_service_request_v1& request,
+        const fsim_vpi_handle_v1 object_handle, const PLI_INT32 type,
+        fsim_vpi_service_result_v1& result)
+    {
+        if (tag_of(object_handle) == Tag::class_object) {
+            const auto object = class_object_of(object_handle);
+            return succeed(result,
+                object != 0U && type == vpiClassTypespec
+                    ? class_object_typespec(object)
+                    : 0U);
+        }
+        const auto* member = class_member_of(object_handle);
+        if (member == nullptr) {
+            return succeed(result);
+        }
+        if (type == vpiParent || type == vpiScope) {
+            return succeed(result, class_object_handle(member->object));
+        }
+        if (member->constraint) {
+            return succeed(result,
+                class_model().relation(serial_of(member->model), type));
+        }
+        if (type == vpiClassObj) {
+            const auto& stored = class_property_stored(*member);
+            return succeed(result,
+                stored.kind
+                        == runtime::SystemVerilogClassPropertyKind::ClassHandle
+                    ? class_object_handle(stored.handle)
+                    : 0U);
+        }
+        auto inner = request;
+        inner.handle = class_property_object(*member);
+        return inner.handle == 0U ? succeed(result) : handle(inner, result);
+    }
+
+    fsim_vpi_status_v1 class_object_property(
+        const fsim_vpi_handle_v1 object_handle, const PLI_INT32 what,
+        fsim_vpi_service_result_v1& result)
+    {
+        const auto undefined = static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(vpiUndefined));
+        const auto integer = [&](const std::int64_t value) {
+            return succeed(result, 0U, static_cast<std::uint64_t>(value));
+        };
+        // A live object and its parts are dynamic (37.3.7).
+        if (what == vpiAllocScheme) {
+            return class_object_of(object_handle) != 0U
+                    || class_member_of(object_handle) != nullptr
+                ? integer(vpiDynamicScheme)
+                : succeed(result, 0U, undefined);
+        }
+        if (tag_of(object_handle) == Tag::class_object) {
+            const auto object = class_object_of(object_handle);
+            return object != 0U && what == vpiObjId
+                ? integer(class_object_id(object))
+                : succeed(result, 0U, undefined);
+        }
+        const auto* member = class_member_of(object_handle);
+        if (member == nullptr) {
+            return succeed(result, 0U, undefined);
+        }
+        if (member->constraint) {
+            if (what == vpiIsConstraintEnabled) {
+                return integer(class_constraint_enabled(*member) ? 1 : 0);
+            }
+            const auto value
+                = class_model().property(serial_of(member->model), what);
+            return value ? integer(*value) : succeed(result, 0U, undefined);
+        }
+        const auto& stored = class_property_stored(*member);
+        if (what == vpiObjId) {
+            return stored.kind
+                    == runtime::SystemVerilogClassPropertyKind::ClassHandle
+                ? integer(class_object_id(
+                    simulation_.class_heap().contains(stored.handle)
+                        ? stored.handle
+                        : 0U))
+                : succeed(result, 0U, undefined);
+        }
+        const auto declared = class_property_object(*member);
+        if (declared == 0U) {
+            return succeed(result, 0U, undefined);
+        }
+        fsim_vpi_service_request_v1 inner { };
+        inner.handle = declared;
+        inner.argument = static_cast<std::uint64_t>(what);
+        return property(inner, result);
+    }
+
+    fsim_vpi_status_v1 class_object_string(
+        const fsim_vpi_handle_v1 object_handle, const PLI_INT32 what,
+        fsim_vpi_service_result_v1& result)
+    {
+        const auto* member = class_member_of(object_handle);
+        if (member == nullptr || tag_of(object_handle) != Tag::class_member) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        if (member->constraint) {
+            auto value
+                = class_model().string_property(serial_of(member->model), what);
+            return value ? succeed(result, 0U, 0U,
+                       address(store(std::move(*value))))
+                         : FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        // A non-static data member has no vpiFullName (37.33 detail 9).
+        if (what != vpiName) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        return succeed(result, 0U, 0U,
+            address(store(class_property_name(
+                simulation_.class_heap()
+                    .object(member->object)
+                    .property_names.at(member->property)))));
+    }
+
+    // --- class object callbacks ---------------------------------------------
+
+    // A callback of an object: obj is the object, with no value (IEEE
+    // 1800-2023 38.36.1).
+    void fire_object(
+        const std::uint64_t serial, const fsim_vpi_handle_v1 object)
+    {
+        const auto found = callbacks_.find(serial);
+        if (found == callbacks_.end()) {
+            return;
+        }
+        const auto& stored = *found->second;
+        auto data = stored.data;
+        auto time = stored.time;
+        data.obj = reinterpret_cast<vpiHandle>(
+            static_cast<std::uintptr_t>(object));
+        data.time = nullptr;
+        data.value = nullptr;
+        data.index = 0;
+        if (stored.has_time && stored.time.type != vpiSuppressTime) {
+            fill_time(time, object);
+            data.time = &time;
+        }
+        const auto routine = data.cb_rtn;
+        CallScope scope { *this };
+        routine(&data);
+    }
+
+    void ensure_size_hook()
+    {
+        if (size_hooked_) {
+            return;
+        }
+        size_hooked_ = true;
+        simulation_.set_vpi_size_change_hook(
+            [this](const fsim_vpi_handle_v1 memory, std::size_t, std::size_t) {
+                const auto listeners = size_callbacks_;
+                for (const auto& listener : listeners) {
+                    if (listener.object == memory) {
+                        fire_object(listener.serial, memory);
+                    }
+                }
+            });
+    }
+
+    void ensure_reclaim_hook()
+    {
+        if (reclaim_hooked_) {
+            return;
+        }
+        reclaim_hooked_ = true;
+        simulation_.set_class_reclaim_hook([this]() { reclaim_class_objects(); });
+    }
+
+    // Whether a reclaim callback registered on `target` (a class typespec or
+    // a class obj) hears of `object`: any object of the class typespec's
+    // type (38.36.1).
+    [[nodiscard]] bool class_reclaim_matches(const fsim_vpi_handle_v1 target,
+        const runtime::SystemVerilogClassHandle object,
+        const fsim_vpi_handle_v1 handle)
+    {
+        if (target == handle) {
+            return true;
+        }
+        if (!owned(target) || tag_of(target) != Tag::class_model) {
+            return false;
+        }
+        const auto named = class_model().typespec_class(serial_of(target));
+        if (!named) {
+            return false;
+        }
+        // The class of a design element instance is generated from the
+        // specialization the typespec names (6.22).
+        const auto& stored = simulation_.class_heap().object(object);
+        return stored.dynamic_type == named->first
+            && (named->second.empty()
+                || semantic::sv::generated_specialization_source(
+                       stored.specialization_identity)
+                    == named->second);
+    }
+
+    // No collector runs, so the objects still alive at the end of the
+    // simulation are the reclaimed ones: each is announced once, before the
+    // end of simulation callbacks, and its handle is invalid afterwards
+    // (IEEE 1800-2023 38.36.1 cbReclaimObj, cbEndOfObject).
+    void reclaim_class_objects()
+    {
+        if (reclaim_callbacks_.empty()) {
+            return;
+        }
+        for (const auto object : simulation_.class_heap().live_handles()) {
+            if (!simulation_.class_heap().contains(object)) {
+                continue;
+            }
+            const auto handle = class_object_handle(object);
+            const auto listeners = reclaim_callbacks_;
+            for (const auto& listener : listeners) {
+                if (class_reclaim_matches(listener.object, object, handle)) {
+                    fire_object(listener.serial, handle);
+                }
+            }
+            if (const auto found = class_object_serials_.find(object);
+                found != class_object_serials_.end()) {
+                class_objects_[found->second] = 0U;
+                class_object_serials_.erase(found);
+            }
+        }
+        for (const auto& listener : reclaim_callbacks_) {
+            callbacks_.erase(listener.serial);
+        }
+        reclaim_callbacks_.clear();
+    }
+
+    // --- frames, threads and object creation (IEEE 1800-2023 37.43, 37.44) ---
+
+    [[nodiscard]] static const char* callback_reason_name(const PLI_INT32 reason)
+    {
+        switch (reason) {
+        case cbStartOfFrame:
+            return "cbStartOfFrame";
+        case cbEndOfFrame:
+            return "cbEndOfFrame";
+        case cbStartOfThread:
+            return "cbStartOfThread";
+        case cbEndOfThread:
+            return "cbEndOfThread";
+        case cbEnterThread:
+            return "cbEnterThread";
+        default:
+            return "cbCreateObj";
+        }
+    }
+
+    [[nodiscard]] static bool frame_tag(const fsim_vpi_handle_v1 handle)
+    {
+        return owned(handle)
+            && (tag_of(handle) == Tag::frame || tag_of(handle) == Tag::thread);
+    }
+
+    // A frame or thread handle names its object until the end callbacks of
+    // the object have run (37.3.7, 37.3.8).
+    [[nodiscard]] const VpiFrameModel::Frame* frame_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        return frames_ && owned(handle) && tag_of(handle) == Tag::frame
+            ? frames_->frame(serial_of(handle))
+            : nullptr;
+    }
+
+    [[nodiscard]] const VpiFrameModel::Thread* thread_of(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        return frames_ && owned(handle) && tag_of(handle) == Tag::thread
+            ? frames_->thread(serial_of(handle))
+            : nullptr;
+    }
+
+    void ensure_frame_hook()
+    {
+        if (frame_hook_ != 0U) {
+            return;
+        }
+        if (!frames_) {
+            frames_ = std::make_unique<VpiFrameModel>();
+        }
+        frame_hook_ = simulation_.add_execution_point_hook(
+            [this](auto&, const runtime::simir::ExecutionPoint& point) {
+                deliver_frame_point(point);
+            });
+    }
+
+    void ensure_create_hook()
+    {
+        if (create_hooked_) {
+            return;
+        }
+        create_hooked_ = true;
+        ensure_frame_hook();
+        simulation_.set_class_created_hook(
+            [this](const runtime::SystemVerilogClassHandle object) {
+                deliver_created(object);
+            });
+    }
+
+    // Whether the thread belongs to a process of the design's source: the
+    // kernel's own startup and initializer processes are no threads.
+    [[nodiscard]] bool thread_has_source(
+        const runtime::simir::ProcessId design_process)
+    {
+        if (!thread_sources_built_) {
+            thread_sources_built_ = true;
+            for (const auto& occurrence : simulation_.design_ir().processes()) {
+                if (occurrence.source_process) {
+                    thread_sources_.insert(static_cast<runtime::simir::ProcessId>(
+                        occurrence.runtime_index));
+                }
+            }
+        }
+        return thread_sources_.contains(design_process);
+    }
+
+    void deliver_frame_point(const runtime::simir::ExecutionPoint& point)
+    {
+        using Kind = runtime::simir::ExecutionPointKind;
+        if (point.kind == Kind::object_created) {
+            // A lowered constructor completed (38.36.1 cbCreateObj).
+            deliver_created(simulation_.take_constructed_class_object());
+            return;
+        }
+        if (point.kind == Kind::thread_start
+            && !thread_has_source(point.design_process)) {
+            return;
+        }
+        for (const auto& occurrence : frames_->apply(point)) {
+            deliver_frame_occurrence(occurrence);
+            frames_->retire(occurrence);
+        }
+    }
+
+    [[nodiscard]] static bool callee_matches(
+        const std::string& name, const std::string& callee)
+    {
+        return name == callee || name.ends_with("." + callee)
+            || name.ends_with("::" + callee);
+    }
+
+    void deliver_frame_occurrence(const VpiFrameModel::Occurrence& occurrence)
+    {
+        using Event = VpiFrameModel::Event;
+        const bool frame_event = occurrence.event == Event::frame_start
+            || occurrence.event == Event::frame_end;
+        PLI_INT32 reason = cbStartOfThread;
+        switch (occurrence.event) {
+        case Event::thread_start:
+            reason = cbStartOfThread;
+            break;
+        case Event::thread_end:
+            reason = cbEndOfThread;
+            break;
+        case Event::thread_enter:
+            reason = cbEnterThread;
+            break;
+        case Event::frame_start:
+            reason = cbStartOfFrame;
+            break;
+        case Event::frame_end:
+            reason = cbEndOfFrame;
+            break;
+        }
+        const auto object = frame_event
+            ? tagged(Tag::frame, occurrence.frame)
+            : tagged(Tag::thread, occurrence.thread);
+        const auto* const frame = frame_event ? frames_->frame(occurrence.frame)
+                                              : nullptr;
+        const auto listeners = frame_callbacks_;
+        for (const auto& listener : listeners) {
+            if (listener.reason != reason) {
+                continue;
+            }
+            if (listener.object != 0U) {
+                // A task or function, a frame or a thread.
+                if (!listener.callee.empty()) {
+                    if (frame == nullptr
+                        || !callee_matches(listener.callee, frame->callee)) {
+                        continue;
+                    }
+                } else if (listener.object != object) {
+                    continue;
+                }
+            }
+            fire_object(listener.serial, object);
+        }
+    }
+
+    // The class object a completed constructor made: each cbCreateObj
+    // callback on its class typespec hears of it (38.36.1).
+    void deliver_created(const runtime::SystemVerilogClassHandle object)
+    {
+        if (object == 0U || !simulation_.class_heap().contains(object)) {
+            return;
+        }
+        const auto handle = class_object_handle(object);
+        const auto listeners = create_callbacks_;
+        for (const auto& listener : listeners) {
+            if (class_reclaim_matches(listener.object, object, handle)) {
+                fire_object(listener.serial, handle);
+            }
+        }
+    }
+
+    // The statement model's node for the statement that starts at a point
+    // of a process; 0 when none does.
+    [[nodiscard]] fsim_vpi_handle_v1 statement_at_location(
+        const runtime::simir::ProcessId design_process,
+        const runtime::simir::SourceLocation& where)
+    {
+        const auto source = source_process(design_process);
+        if (!source) {
+            return 0U;
+        }
+        return statement_model()
+            .statement_at(source->first, source->second, where.path.str(),
+                where.line, where.column)
+            .statement;
+    }
+
+    // The task or function call at or below `node` that calls `callee`
+    // (37.43 detail 6): the statement of a task call, or the call within
+    // an expression.
+    [[nodiscard]] fsim_vpi_handle_v1 find_call(const fsim_vpi_handle_v1 node,
+        const std::string& callee, const std::size_t depth)
+    {
+        const auto serial = node_of(node);
+        if (!serial || depth > 8U) {
+            return 0U;
+        }
+        const auto type = statement_model_->type(*serial);
+        if (type == vpiTaskCall || type == vpiMethodTaskCall) {
+            return node;
+        }
+        if (type == vpiFuncCall || type == vpiMethodFuncCall) {
+            const auto name
+                = statement_model_->string_property(*serial, vpiName);
+            if (name && callee_matches(*name, callee)) {
+                return node;
+            }
+        }
+        std::vector<fsim_vpi_handle_v1> next;
+        for (const auto relation : { vpiRhs, vpiLhs, vpiExpr, vpiCondition }) {
+            if (const auto child = statement_model_->relation(*serial, relation);
+                child && *child != 0U) {
+                next.push_back(*child);
+            }
+        }
+        for (const auto iteration : { vpiOperand, vpiArgument }) {
+            if (auto children = statement_model_->iterate(*serial, iteration)) {
+                next.insert(next.end(), children->begin(), children->end());
+            }
+        }
+        for (const auto child : next) {
+            if (const auto found = find_call(child, callee, depth + 1U);
+                found != 0U) {
+                return found;
+            }
+        }
+        return 0U;
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 frame_relation(
+        const VpiFrameModel::Frame& frame, const PLI_INT32 type)
+    {
+        switch (type) {
+        case vpiParent:
+            return frame.parent != 0U && frames_->frame(frame.parent) != nullptr
+                ? tagged(Tag::frame, frame.parent)
+                : 0U;
+        case vpiThread:
+            return tagged(Tag::thread, frame.thread);
+        // The call that activated the frame (37.43 detail 6).
+        case vpiOrigin: {
+            if (!frame.has_origin) {
+                return 0U;
+            }
+            const auto statement
+                = statement_at_location(frame.design_process, frame.origin);
+            return statement == 0U ? 0U
+                                   : find_call(statement, frame.callee, 0U);
+        }
+        // The statement the frame executes (37.43 detail 4).
+        case vpiStmt:
+            return frame.has_statement
+                ? statement_at_location(frame.design_process, frame.statement)
+                : 0U;
+        default:
+            return 0U;
+        }
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 thread_relation(
+        const VpiFrameModel::Thread& thread, const PLI_INT32 type)
+    {
+        switch (type) {
+        case vpiParent:
+            return thread.parent != 0U
+                    && frames_->thread(thread.parent) != nullptr
+                ? tagged(Tag::thread, thread.parent)
+                : 0U;
+        // vpi_handle(vpiFrame, thread): the frame that is active (37.44).
+        case vpiFrame: {
+            const auto active = frames_->active_frame(thread.serial);
+            return active == 0U ? 0U : tagged(Tag::frame, active);
+        }
+        // The first statement the thread runs (37.44).
+        case vpiOrigin:
+            return statement_at_location(thread.design_process, thread.origin);
+        default:
+            return 0U;
+        }
+    }
+
+    // vpi_handle(vpiFrame, NULL): the active frame of the running thread
+    // (37.43 detail 4).
+    [[nodiscard]] fsim_vpi_handle_v1 current_frame_handle() const
+    {
+        if (!frames_) {
+            return 0U;
+        }
+        const auto active
+            = frames_->active_frame(frames_->current_thread());
+        return active == 0U ? 0U : tagged(Tag::frame, active);
+    }
+
+    // vpi_iterate(vpiThread, NULL | thread): every live thread, or the
+    // threads a thread forked (37.44).
+    [[nodiscard]] std::vector<fsim_vpi_handle_v1> thread_iterate(
+        const fsim_vpi_handle_v1 reference) const
+    {
+        std::vector<fsim_vpi_handle_v1> objects;
+        if (!frames_) {
+            return objects;
+        }
+        if (reference == 0U) {
+            for (const auto serial : frames_->threads()) {
+                objects.push_back(tagged(Tag::thread, serial));
+            }
+        } else if (const auto* const parent = thread_of(reference)) {
+            for (const auto serial : parent->children) {
+                objects.push_back(tagged(Tag::thread, serial));
+            }
+        }
+        return objects;
+    }
+
+    fsim_vpi_status_v1 frame_property(const fsim_vpi_handle_v1 handle,
+        const PLI_INT32 what, fsim_vpi_service_result_v1& result)
+    {
+        const auto undefined = static_cast<std::uint64_t>(
+            static_cast<std::int64_t>(vpiUndefined));
+        // A frame is active while it is its thread's innermost one (37.43
+        // detail 4). The standard gives a thread's vpiActive no meaning
+        // beyond its type, so it stays undefined.
+        if (what == vpiActive) {
+            if (const auto* const frame = frame_of(handle)) {
+                return succeed(result, 0U,
+                    frames_->active_frame(frame->thread) == frame->serial
+                        ? 1U
+                        : 0U);
+            }
+        }
+        // Frames and threads are transient (37.3.7).
+        if (what == vpiAllocScheme) {
+            return succeed(result, 0U,
+                static_cast<std::uint64_t>(vpiOtherScheme));
+        }
+        return succeed(result, 0U, undefined);
+    }
+
     [[nodiscard]] std::optional<std::uint64_t> node_of(
         const fsim_vpi_handle_v1 handle) const
     {
@@ -4508,9 +7683,9 @@ private:
     // assignments, assignment statements, forces and procedural assigns of
     // its declaring scope that write, read or mention it, and the ports that
     // connect it (IEEE 1800-2023 37.21, 37.46, 37.58). A port drives the side
-    // it is an input to and loads the side it is an output from. Primitive
-    // terminals are not modelled, and statements of other scopes that name the
-    // object hierarchically are not found.
+    // it is an input to and loads the side it is an output from. A net also
+    // has the primitive terminals on it. Statements of other scopes that name
+    // the object hierarchically are not found.
     [[nodiscard]] std::vector<fsim_vpi_handle_v1> connections_of(
         const PLI_INT32 type, const fsim_vpi_handle_v1 handle)
     {
@@ -4557,6 +7732,14 @@ private:
                 found.push_back(tagged(Tag::port, index));
             }
         }
+        // The terminals of the gates, switches and UDPs on a net or variable.
+        if (object->kind == SystemVerilogVpiObjectKind::Net
+            || object->kind == SystemVerilogVpiObjectKind::Variable) {
+            append_primitive_connections(type, handle, found);
+        }
+        // A net or variable a port connects is published as a port object;
+        // its SDF delay terms count whatever the kind.
+        append_net_delay_connections(type, handle, found);
         return found;
     }
 
@@ -4814,7 +7997,8 @@ private:
             || data->reason == cbExitInteractive
             || data->reason == cbInteractiveScopeChange
             || data->reason == cbUnresolvedSystf
-            || data->reason == cbSignal;
+            || data->reason == cbSignal
+            || data->reason == cbReclaimObj || data->reason == cbEndOfObject;
         if (!action_reason && data->time != nullptr) {
             stored->time = *data->time;
             stored->has_time = true;
@@ -4870,6 +8054,21 @@ private:
         case cbPLIError:
             pli_error_callbacks_.push_back(serial);
             break;
+        // `obj` may name one timing check; NULL watches them all. The
+        // scheduler hook exists only while a callback does.
+        case cbTchkViolation:
+            if (object != 0U && !tchk_of(object)) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            tchk_callbacks_.push_back(serial);
+            if (tchk_callbacks_.size() == 1U) {
+                simulation_.set_verilog_timing_violation_hook(
+                    [this](const std::uint32_t check) {
+                        deliver_tchk_violation(check);
+                    });
+                simulation_.open_external_observation();
+            }
+            break;
         // A call site whose system task or function the modules have not
         // registered in this run (IEEE 1800-2023 38.36.2).
         case cbUnresolvedSystf:
@@ -4891,6 +8090,16 @@ private:
             }
             break;
         }
+        // The save, restart and reset phases fire these (IEEE 1800-2023
+        // 38.36.3); nothing here but the phase driver triggers them.
+        case cbStartOfSave:
+        case cbEndOfSave:
+        case cbStartOfRestart:
+        case cbEndOfRestart:
+        case cbStartOfReset:
+        case cbEndOfReset:
+            feature_callbacks_[data->reason].push_back(serial);
+            break;
         case cbValueChange:
             if (object == 0U) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
@@ -4983,6 +8192,99 @@ private:
             assertion_system_callbacks_.push_back(serial);
             ensure_assertion_system_hooks();
             break;
+        // After a dynamic array or queue was resized (IEEE 1800-2023 37.17
+        // detail 14, 38.36.1); strings and associative arrays are not
+        // announced.
+        case cbSizeChange: {
+            const auto target = info(object);
+            if (!target || target->kind != SystemVerilogVpiObjectKind::Memory
+                || !target->type || !target->type->descriptor
+                || (target->type->descriptor->kind
+                        != runtime::SystemVerilogVpiDescriptorKind::DynamicArray
+                    && target->type->descriptor->kind
+                        != runtime::SystemVerilogVpiDescriptorKind::Queue)) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            size_callbacks_.push_back({ serial, object });
+            ensure_size_hook();
+            break;
+        }
+        // Before a class object is reclaimed: a class typespec hears of each
+        // object of its class, a class obj of itself (IEEE 1800-2023
+        // 38.36.1). Objects are reclaimed at the end of the simulation.
+        case cbReclaimObj:
+        case cbEndOfObject: {
+            const bool typespec = owned(object)
+                && tag_of(object) == Tag::class_model
+                && class_model().owns(serial_of(object))
+                && class_model().typespec_class(serial_of(object));
+            if (!typespec
+                && (!owned(object) || tag_of(object) != Tag::class_object)) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            reclaim_callbacks_.push_back({ serial, object });
+            ensure_reclaim_hook();
+            break;
+        }
+        // Frames, threads and class construction are reported only when
+        // the run keeps its execution probes, which the user asks for
+        // (IEEE 1800-2023 37.43, 37.44, 38.36.1).
+        case cbStartOfFrame:
+        case cbEndOfFrame:
+        case cbStartOfThread:
+        case cbEndOfThread:
+        case cbEnterThread:
+        case cbCreateObj: {
+            if (!simulation_.foreign_probes()) {
+                error_message_ = std::string { "vpi_register_cb: " }
+                    + callback_reason_name(data->reason)
+                    + " needs the execution probes of simulate "
+                      "--foreign-probes (configuration key "
+                      "simulate.foreign_probes)";
+                error_ = true;
+                return FSIM_VPI_STATUS_UNSUPPORTED;
+            }
+            if (data->reason == cbCreateObj) {
+                // The object is a class typespec: any object of its class
+                // is announced (38.36.1).
+                const bool typespec = owned(object)
+                    && tag_of(object) == Tag::class_model
+                    && class_model().owns(serial_of(object))
+                    && class_model().typespec_class(serial_of(object));
+                if (!typespec) {
+                    return FSIM_VPI_STATUS_NOT_FOUND;
+                }
+                create_callbacks_.push_back({ serial, object });
+                ensure_create_hook();
+                break;
+            }
+            FrameCallback listener { serial, data->reason, object, { } };
+            const bool frame_reason = data->reason == cbStartOfFrame
+                || data->reason == cbEndOfFrame;
+            if (object != 0U) {
+                // A frame callback names a task or function, and may name
+                // a frame it ends; a thread callback names a thread. Every
+                // thread creation is reported, so cbStartOfThread names
+                // nothing.
+                const auto type = handle_type(object);
+                if (frame_reason && (type == vpiTask || type == vpiFunction)) {
+                    const auto target = info(object);
+                    if (!target) {
+                        return FSIM_VPI_STATUS_NOT_FOUND;
+                    }
+                    listener.callee = target->name;
+                } else if (!(data->reason == cbEndOfFrame
+                                 && frame_of(object) != nullptr)
+                    && !((data->reason == cbEndOfThread
+                             || data->reason == cbEnterThread)
+                        && thread_of(object) != nullptr)) {
+                    return FSIM_VPI_STATUS_NOT_FOUND;
+                }
+            }
+            frame_callbacks_.push_back(std::move(listener));
+            ensure_frame_hook();
+            break;
+        }
         case cbAfterDelay:
             if (!stored->has_time) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
@@ -5052,6 +8354,11 @@ private:
             registration.delay = delay;
             registration.at_slot_start = data->reason == cbAfterDelay
                 || data->reason == cbAtStartOfSimTime;
+            // An ACC link's changes keep their values until dispatched
+            // (remove_callback, IEEE 1364-2001 23.97).
+            registration.keeps_pending_values
+                = request.flags == acc_link_callback_operation
+                && *kind == runtime::SystemVerilogVpiCallbackKind::ValueChange;
             registration.callback
                 = [this, serial](
                       const runtime::SystemVerilogVpiCallbackEvent& event) {
@@ -5082,11 +8389,30 @@ private:
                 ? succeed(result, 0U, 1U)
                 : FSIM_VPI_STATUS_NOT_FOUND;
         }
+        // A nonzero argument, from the ACC link host before it deletes a
+        // link, delivers the changes observed so far and keeps the callback.
+        if (request.argument != 0U) {
+            if (!found->second->managed) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            const auto managed = *found->second->managed;
+            // What the running process changed before the call is observed
+            // first.
+            simulation_.publish_kernel_outputs();
+            return simulation_.systemverilog_vpi_callbacks().dispatch_pending(
+                       managed)
+                    == runtime::SystemVerilogVpiCallbackError::None
+                ? succeed(result, 0U, 1U)
+                : FSIM_VPI_STATUS_NOT_FOUND;
+        }
         if (found->second->managed) {
             (void)simulation_.systemverilog_vpi_callbacks().remove_callback(
                 *found->second->managed);
         }
         std::erase(end_of_compile_, found->first);
+        for (auto& [reason, serials] : feature_callbacks_) {
+            std::erase(serials, found->first);
+        }
         std::erase(run_error_callbacks_, found->first);
         std::erase(unresolved_callbacks_, found->first);
         std::erase(force_callbacks_, found->first);
@@ -5094,9 +8420,25 @@ private:
             return listener.serial == found->first;
         });
         std::erase(disable_callbacks_, found->first);
+        std::erase_if(size_callbacks_, [&](const auto& listener) {
+            return listener.serial == found->first;
+        });
+        std::erase_if(reclaim_callbacks_, [&](const auto& listener) {
+            return listener.serial == found->first;
+        });
+        std::erase_if(create_callbacks_, [&](const auto& listener) {
+            return listener.serial == found->first;
+        });
+        std::erase_if(frame_callbacks_, [&](const auto& listener) {
+            return listener.serial == found->first;
+        });
         std::erase(assertion_system_callbacks_, found->first);
         signal_traps_.erase(found->first);
         std::erase(pli_error_callbacks_, found->first);
+        if (std::erase(tchk_callbacks_, found->first) != 0U
+            && tchk_callbacks_.empty()) {
+            simulation_.set_verilog_timing_violation_hook({ });
+        }
         callbacks_.erase(found);
         return succeed(result, 0U, 1U);
     }
@@ -5173,7 +8515,10 @@ private:
             } else {
                 const auto changed = stored_to_value(*event->value,
                     object && object->type && object->type->is_signed);
-                if (changed && write_value(*changed, value)) {
+                // A class variable's value is opaque: the callback gets a
+                // NULL value (IEEE 1800-2023 38.36.1).
+                if (changed && !(object && class_variable(*object))
+                    && write_value(*changed, value)) {
                     data.value = &value;
                 }
                 // An array word reports its index (IEEE 1800-2023 38.36.1).
@@ -5366,12 +8711,23 @@ private:
             }
             return variable_type();
         case SystemVerilogVpiObjectKind::Variable:
+            if (class_variable(object)) {
+                return vpiClassVar;
+            }
             if (object.type && object.type->declared) {
                 return declared_type(*object.type->declared, false);
             }
             return variable_type();
         case SystemVerilogVpiObjectKind::Parameter:
             return vpiParameter;
+        // A class and its properties (IEEE 1800-2023 37.31).
+        case SystemVerilogVpiObjectKind::Class:
+            return vpiClassDefn;
+        case SystemVerilogVpiObjectKind::ClassProperty:
+            if (object.type && object.type->local_parameter) {
+                return vpiParameter;
+            }
+            return class_variable(object) ? vpiClassVar : variable_type();
         // An unpacked array is a vpiRegArray, and its words are variables
         // of their own type; vpiMemory and vpiMemoryWord remain only as
         // iteration relations (IEEE 1800-2023 37.17 detail 4, 37.20).
@@ -5451,6 +8807,29 @@ private:
         if (reference_of(handle) != nullptr) {
             return vpiRefObj;
         }
+        if (owned(handle) && tag_of(handle) == Tag::class_object) {
+            return vpiClassObj;
+        }
+        // A frame or thread that has ended no longer exists (37.3.7).
+        if (frame_tag(handle)) {
+            return frame_of(handle) != nullptr ? vpiFrame
+                : thread_of(handle) != nullptr ? vpiThread
+                                               : vpiUndefined;
+        }
+        if (owned(handle) && tag_of(handle) == Tag::class_member) {
+            const auto* member = class_member_of(handle);
+            if (member == nullptr) {
+                return vpiUndefined;
+            }
+            return member->constraint
+                ? vpiConstraint
+                : handle_type(const_cast<LiveService*>(this)
+                                  ->class_property_object(*member));
+        }
+        if (owned(handle) && tag_of(handle) == Tag::class_model
+            && class_model_ && class_model_->owns(serial_of(handle))) {
+            return class_model_->type(serial_of(handle));
+        }
         if (const auto* level = typespec_of(handle)) {
             return typespec_type(*level->node);
         }
@@ -5462,6 +8841,39 @@ private:
         }
         if (pathterm_of(handle)) {
             return vpiPathTerm;
+        }
+        if (const auto* primitive = primitive_of(handle)) {
+            return primitive_class(primitive->kind, false);
+        }
+        if (const auto head = primitive_array_of(handle)) {
+            return primitive_class(primitives()[*head].kind, true);
+        }
+        if (prim_term_of(handle)) {
+            return vpiPrimTerm;
+        }
+        if (udp_table_of(handle, Tag::udp_defn) != nullptr) {
+            return vpiUdpDefn;
+        }
+        if (udp_entry_of(handle)) {
+            return vpiTableEntry;
+        }
+        if (udp_table_of(handle, Tag::udp_initial) != nullptr) {
+            return vpiInitial;
+        }
+        if (tchk_of(handle)) {
+            return vpiTchk;
+        }
+        if (tchkterm_of(handle)) {
+            return vpiTchkTerm;
+        }
+        if (net_delay_index(handle, Tag::inter_mod_path)) {
+            return vpiInterModPath;
+        }
+        if (net_delay_index(handle, Tag::delay_device)) {
+            return vpiDelayDevice;
+        }
+        if (net_delay_index(handle, Tag::delay_term)) {
+            return vpiDelayTerm;
         }
         if (owned(handle)) {
             switch (tag_of(handle)) {
@@ -5578,7 +8990,7 @@ private:
                 || actual == vpiBitVar || actual == vpiStringVar
                 || actual == vpiStructVar || actual == vpiUnionVar
                 || actual == vpiEnumVar || actual == vpiPackedArrayVar
-                || actual == vpiShortRealVar;
+                || actual == vpiShortRealVar || actual == vpiClassVar;
         // The words of an unpacked array iterate as vpiReg whatever their
         // element type (int, bit, real words included).
         case vpiReg:
@@ -5644,6 +9056,42 @@ private:
         if (const auto serial = node_of(reference)) {
             return succeed(result, make_iterator(
                 statement_model_->iterate(*serial, type).value_or(objects)));
+        }
+        // The members of a class obj (IEEE 1800-2023 37.33).
+        if (class_live_tag(reference)) {
+            return succeed(
+                result, make_iterator(class_object_iterate(reference, type)));
+        }
+        // The threads of the run, or those a thread forked (37.44).
+        if (type == vpiThread
+            && (request.handle == 0U || thread_of(reference) != nullptr)) {
+            return succeed(result, make_iterator(thread_iterate(reference)));
+        }
+        // A frame's automatic variables are not modelled: the standard's
+        // frame values have no counterpart in the kernel's call stack.
+        if (type == vpiAutomatics && frame_of(reference) != nullptr) {
+            error_message_ = "vpi_iterate: vpiAutomatics of a frame is not "
+                             "supported";
+            error_ = true;
+            return FSIM_VPI_STATUS_UNSUPPORTED;
+        }
+        // The members of a class typespec, and of a class defn (IEEE
+        // 1800-2023 37.31, 37.32).
+        if (owned(reference) && tag_of(reference) == Tag::class_model
+            && class_model().owns(serial_of(reference))) {
+            return succeed(result,
+                make_iterator(class_model()
+                                  .iterate(serial_of(reference), type)
+                                  .value_or(objects)));
+        }
+        if (reference != 0U && !owned(reference)) {
+            if (const auto object = info(reference)) {
+                if (const auto identity = class_identity(*object)) {
+                    if (auto own = class_model().defn_iterate(*identity, type)) {
+                        return succeed(result, make_iterator(std::move(*own)));
+                    }
+                }
+            }
         }
         // The typedefs an instance declares (IEEE 1800-2023 37.5, 37.12,
         // 37.25); those of generate blocks, packages and $unit are not
@@ -5787,6 +9235,9 @@ private:
             || type == vpiIODecl) {
             if (reference != 0U && !owned(reference)) {
                 objects = ports_of(type, reference);
+            } else if (auto path_ports = net_delay_iteration(type, reference)) {
+                // An intermodule path's two ports (37.37).
+                objects = std::move(*path_ports);
             }
             return succeed(result, make_iterator(std::move(objects)));
         }
@@ -5839,6 +9290,15 @@ private:
             }
             return succeed(result, make_iterator(std::move(objects)));
         }
+        // The primitives and instance arrays of a scope, their prim terms,
+        // and the table entries of a UDP definition (IEEE 1800-2023 37.35,
+        // 37.36).
+        if (auto delay_objects = net_delay_iteration(type, reference)) {
+            return succeed(result, make_iterator(std::move(*delay_objects)));
+        }
+        if (auto primitive_objects = primitive_iteration(type, reference)) {
+            return succeed(result, make_iterator(std::move(*primitive_objects)));
+        }
         // A module's paths, and a path's input and output terminals.
         if (type == vpiModPath && reference != 0U && !owned(reference)) {
             const auto module = info(reference);
@@ -5853,15 +9313,42 @@ private:
             return succeed(result, make_iterator(std::move(objects)));
         }
         if (const auto path = modpath_of(reference)) {
-            if (type == vpiModPathIn || type == vpiModPathOut) {
+            if (type == vpiModPathIn || type == vpiModPathOut
+                || type == vpiModDataPathIn) {
                 const auto& info_path
                     = simulation_.design().verilog_specify_paths()[*path];
                 const bool output = type == vpiModPathOut;
-                const auto size = output ? info_path.destinations.size()
-                                         : info_path.sources.size();
+                const bool data = type == vpiModDataPathIn;
+                const auto size = data ? path_data_signals(*path).size()
+                    : output           ? info_path.destinations.size()
+                                       : info_path.sources.size();
                 for (std::size_t index = 0U; index < size; ++index) {
-                    objects.push_back(pathterm_handle(
-                        { *path, output, static_cast<std::uint32_t>(index) }));
+                    objects.push_back(pathterm_handle({ *path, output,
+                        static_cast<std::uint32_t>(index), data }));
+                }
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
+        // A module's timing checks, and a check's terminals: the reference
+        // and data events (IEEE 1800-2023 37.40 detail 2). The limits and
+        // the notifier are not objects here.
+        if (type == vpiTchk && reference != 0U && !owned(reference)) {
+            const auto module = info(reference);
+            if (module && module->kind == SystemVerilogVpiObjectKind::Module) {
+                const auto& checks = simulation_.design().verilog_timing_checks();
+                for (std::size_t index = 0U; index < checks.size(); ++index) {
+                    if (checks[index].instance == module->full_name) {
+                        objects.push_back(tagged(Tag::tchk, index));
+                    }
+                }
+            }
+            return succeed(result, make_iterator(std::move(objects)));
+        }
+        if (const auto check = tchk_of(reference)) {
+            if (type == vpiExpr) {
+                objects.push_back(tchkterm_handle(*check, false));
+                if (simulation_.design().verilog_timing_checks()[*check].data) {
+                    objects.push_back(tchkterm_handle(*check, true));
                 }
             }
             return succeed(result, make_iterator(std::move(objects)));
@@ -6008,6 +9495,26 @@ private:
             return succeed(result,
                 statement_model_->relation(*serial, type).value_or(0U));
         }
+        if (class_live_tag(reference)) {
+            return class_object_relation(request, reference, type, result);
+        }
+        // vpi_handle(vpiFrame, NULL) is the active frame of the running
+        // thread (IEEE 1800-2023 37.43 detail 4); a frame and a thread
+        // relate as 37.43 and 37.44 show.
+        if (type == vpiFrame && request.handle == 0U) {
+            return succeed(result, current_frame_handle());
+        }
+        if (const auto* const frame = frame_of(reference)) {
+            return succeed(result, frame_relation(*frame, type));
+        }
+        if (const auto* const thread = thread_of(reference)) {
+            return succeed(result, thread_relation(*thread, type));
+        }
+        if (owned(reference) && tag_of(reference) == Tag::class_model
+            && class_model().owns(serial_of(reference))) {
+            return succeed(
+                result, class_model().relation(serial_of(reference), type));
+        }
         // A function's return type range (IEEE 1800-2023 37.41).
         if ((type == vpiLeftRange || type == vpiRightRange) && reference != 0U
             && !owned(reference)) {
@@ -6047,7 +9554,10 @@ private:
             = typespec_part_of(reference, Tag::enum_const)) {
             return succeed(result, type == vpiParent ? constant->parent : 0U);
         }
-        if (type == vpiTypespec
+        // A class variable's class typespec is the one it was declared with
+        // (IEEE 1800-2023 37.33 detail 5).
+        if ((type == vpiTypespec
+                || (type == vpiClassTypespec && class_variable_handle(reference)))
             && (!owned(reference) || select_of(reference) != nullptr)) {
             const auto level = object_typespec(reference);
             return succeed(result, level ? make_typespec(*level) : 0U);
@@ -6140,16 +9650,66 @@ private:
                 return succeed(result);
             }
         }
+        if (net_delay_handle(reference)) {
+            return succeed(result, net_delay_relation(reference, type));
+        }
+        if (primitive_of(reference) != nullptr || primitive_array_of(reference)
+            || prim_term_of(reference)
+            || udp_table_of(reference, Tag::udp_defn) != nullptr
+            || udp_entry_of(reference)
+            || udp_table_of(reference, Tag::udp_initial) != nullptr) {
+            return succeed(result, primitive_model_relation(reference, type));
+        }
         if (const auto term = pathterm_of(reference)) {
             return succeed(result,
                 type == vpiExpr ? pathterm_object(*term)
-                : type == vpiModPath ? tagged(Tag::modpath, term->path)
-                                     : 0U);
+                : type == vpiModPath || type == vpiParent
+                    ? tagged(Tag::modpath, term->path)
+                    : 0U);
         }
+        // A path's condition is a scheduler program, not an expression
+        // object, so vpiCondition is NULL (IEEE 1800-2023 37.39).
         if (const auto path = modpath_of(reference)) {
+            if (type == vpiModule) {
+                return succeed(result, enclosing_module_of(path_instance(*path)));
+            }
             return succeed(result,
-                type == vpiModule || type == vpiScope || type == vpiParent
+                type == vpiInstance || type == vpiScope || type == vpiParent
                     ? path_instance(*path)
+                    : 0U);
+        }
+        if (const auto check = tchk_of(reference)) {
+            const auto& declared
+                = simulation_.design().verilog_timing_checks()[*check];
+            switch (type) {
+            case vpiTchkRefTerm:
+                return succeed(result, tchkterm_handle(*check, false));
+            case vpiTchkDataTerm:
+                return succeed(result,
+                    declared.data ? tchkterm_handle(*check, true) : 0U);
+            case vpiTchkNotifier:
+                return succeed(result,
+                    declared.notifier
+                        ? signal_object(*declared.notifier, tchk_instance(*check))
+                        : 0U);
+            case vpiModule:
+                return succeed(result, enclosing_module_of(tchk_instance(*check)));
+            case vpiInstance:
+            case vpiScope:
+            case vpiParent:
+                return succeed(result, tchk_instance(*check));
+            default:
+                return succeed(result);
+            }
+        }
+        // A terminal's condition, like a path's, has no expression object.
+        if (const auto term = tchkterm_of(reference)) {
+            const auto& event = tchkterm_event(*term);
+            return succeed(result,
+                type == vpiExpr
+                    ? signal_object(event.terminal.signal, tchk_instance(term->first))
+                : type == vpiTchk || type == vpiParent
+                    ? tagged(Tag::tchk, term->first)
                     : 0U);
         }
         if (const auto object = reference != 0U && !owned(reference)
@@ -6243,6 +9803,18 @@ private:
             && (type == vpiDefaultClocking || type == vpiGlobalClocking)) {
             return succeed(result,
                 clocking_declared(*object, type == vpiGlobalClocking));
+        }
+        if (type == vpiExtends) {
+            if (const auto identity = class_identity(*object)) {
+                return succeed(
+                    result, class_model().defn_relation(*identity, type));
+            }
+        }
+        // The object a class variable references; NULL when it refers to
+        // none (IEEE 1800-2023 37.33 detail 5).
+        if (type == vpiClassObj && class_variable(*object)) {
+            return succeed(
+                result, class_object_handle(class_variable_object(reference)));
         }
         switch (type) {
         case vpiScope:
@@ -6430,6 +10002,11 @@ private:
         const auto found = registry_.find(name);
         if (found && found.value) {
             return labelled_assertion(found.value->handle);
+        }
+        // A named gate, switch or UDP instance (IEEE 1800-2023 37.35).
+        if (const auto primitive = primitive_index().by_name.find(name);
+            primitive != primitive_index().by_name.end()) {
+            return tagged(Tag::primitive, primitive->second);
         }
         // `$unit` is the compilation-unit package (IEEE 1800-2023 3.12.1,
         // 37.10), published under the unit's own name; the first unit that
@@ -6846,6 +10423,11 @@ private:
         const auto integer = [&](const std::int64_t value) {
             return succeed(result, 0U, static_cast<std::uint64_t>(value));
         };
+        // Each call returns a new identifier for a data set of vpi_put_data
+        // (IEEE 1800-2023 38.9, 38.31).
+        if (property == vpiSaveRestartID) {
+            return integer(++last_save_restart_id_);
+        }
         if (property == vpiTimeUnit || property == vpiTimePrecision) {
             // An object answers with its module's `timescale; a null
             // handle with the simulation time unit (IEEE 1800-2023 38.6).
@@ -6859,6 +10441,18 @@ private:
         }
         if (property == vpiType) {
             return integer(handle_type(request.handle));
+        }
+        if (class_live_tag(request.handle)) {
+            return class_object_property(request.handle, property, result);
+        }
+        if (frame_tag(request.handle)) {
+            return frame_property(request.handle, property, result);
+        }
+        if (owned(request.handle) && tag_of(request.handle) == Tag::class_model
+            && class_model().owns(serial_of(request.handle))) {
+            const auto value
+                = class_model().property(serial_of(request.handle), property);
+            return value ? integer(*value) : succeed(result, 0U, undefined);
         }
         if (const auto serial = node_of(request.handle)) {
             auto value = statement_model_->property(*serial, property);
@@ -6877,10 +10471,36 @@ private:
             }
             return value ? integer(*value) : succeed(result, 0U, undefined);
         }
+        if (const auto value = primitive_model_property(request.handle, property)) {
+            return integer(*value);
+        }
+        if (const auto value = net_delay_property(request.handle, property)) {
+            return integer(*value);
+        }
+        if (const auto path = modpath_of(request.handle)) {
+            return modpath_property(*path, property, result);
+        }
+        if (const auto term = pathterm_of(request.handle)) {
+            return pathterm_property(*term, property, result);
+        }
+        if (const auto check = tchk_of(request.handle)) {
+            return tchk_property(*check, property, result);
+        }
+        if (const auto term = tchkterm_of(request.handle)) {
+            return integer(property == vpiEdge
+                    ? tchk_edge_mask(tchkterm_event(*term))
+                    : vpiUndefined);
+        }
         if (const auto* level = typespec_of(request.handle)) {
             const auto& node = *level->node;
             bool empty = false;
             switch (property) {
+            // A class named in the source that has no declaration: a
+            // built-in class (IEEE 1800-2023 37.32).
+            case vpiClassType:
+                return node.kind == TypespecKind::Class
+                    ? integer(VpiClassModel::class_type_of(node.name))
+                    : succeed(result, 0U, undefined);
             case vpiSigned:
                 return integer(node.is_signed ? 1 : 0);
             case vpiPacked:
@@ -7084,6 +10704,31 @@ private:
                             ? 1
                             : 0));
         }
+        // A class defn's properties, and a class property's (IEEE 1800-2023
+        // 37.17, 37.31). The object a class variable references is live
+        // state, which is not published: vpiObjId is 0, no object.
+        if (const auto identity = class_identity(*object)) {
+            if (const auto value
+                = class_model().defn_property(*identity, property)) {
+                return integer(*value);
+            }
+        }
+        if (object->kind == SystemVerilogVpiObjectKind::ClassProperty) {
+            if (const auto owner = info(object->parent)) {
+                if (const auto identity = class_identity(*owner)) {
+                    if (const auto value = class_model().member_property(
+                            *identity, object->name, property)) {
+                        return integer(*value);
+                    }
+                }
+            }
+        }
+        // The identifier of the object a class variable refers to, 0 for
+        // none (IEEE 1800-2023 37.33 detail 2).
+        if (property == vpiObjId && class_variable(*object)) {
+            return integer(
+                class_object_id(class_variable_object(request.handle)));
+        }
         // A task's or function's own properties (IEEE 1800-2023 37.41).
         if ((object->kind == SystemVerilogVpiObjectKind::Task
                 || object->kind == SystemVerilogVpiObjectKind::Function)
@@ -7154,7 +10799,11 @@ private:
                     return integer(block->line);
                 }
             }
-            return integer(object->source ? object->source->line : 0);
+            if (object->source) {
+                return integer(object->source->line);
+            }
+            // A class keeps its declaration's place on its type.
+            return integer(object->type ? object->type->source_line : 0U);
         case vpiPrimType:
             return object->kind == SystemVerilogVpiObjectKind::Gate
                     && object->type
@@ -7232,7 +10881,9 @@ private:
             }
             return succeed(result, 0U, undefined);
         case vpiLocalParam:
-            if (object->kind != SystemVerilogVpiObjectKind::Parameter) {
+            if (object->kind != SystemVerilogVpiObjectKind::Parameter
+                && !(object->kind == SystemVerilogVpiObjectKind::ClassProperty
+                    && object->type && object->type->local_parameter)) {
                 return succeed(result, 0U, undefined);
             }
             return integer(
@@ -7761,9 +11412,25 @@ private:
         const auto text = [&](std::string value) {
             return succeed(result, 0U, 0U, address(store(std::move(value))));
         };
+        // The location exists only while the tool saves or restarts
+        // (IEEE 1800-2023 38.9, 38.31).
+        if (property == vpiSaveRestartLocation) {
+            return save_phase_ == SavePhase::none
+                ? FSIM_VPI_STATUS_NOT_FOUND
+                : text(save_location_);
+        }
         if (property == vpiType) {
             const auto* const name = type_name(handle_type(request.handle));
             return name == nullptr ? FSIM_VPI_STATUS_NOT_FOUND : text(name);
+        }
+        if (class_live_tag(request.handle)) {
+            return class_object_string(request.handle, property, result);
+        }
+        if (owned(request.handle) && tag_of(request.handle) == Tag::class_model
+            && class_model().owns(serial_of(request.handle))) {
+            auto value = class_model().string_property(
+                serial_of(request.handle), property);
+            return value ? text(std::move(*value)) : FSIM_VPI_STATUS_NOT_FOUND;
         }
         if (const auto serial = node_of(request.handle)) {
             auto value = statement_model_->string_property(*serial, property);
@@ -7808,6 +11475,27 @@ private:
         if (const auto* port = port_of(request.handle)) {
             return property == vpiName ? text(port->name)
                                        : FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        if (const auto value = primitive_model_string(request.handle, property)) {
+            return text(*value);
+        }
+        if (primitive_of(request.handle) != nullptr
+            || primitive_array_of(request.handle)
+            || udp_table_of(request.handle, Tag::udp_defn) != nullptr) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        // A path or a timing check names the file that declares it.
+        if (const auto path = modpath_of(request.handle)) {
+            return property == vpiFile
+                ? text(simulation_.design().verilog_specify_paths()[*path]
+                           .source.source_name.str())
+                : FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        if (const auto check = tchk_of(request.handle)) {
+            return property == vpiFile
+                ? text(simulation_.design().verilog_timing_checks()[*check]
+                           .source.path.str())
+                : FSIM_VPI_STATUS_NOT_FOUND;
         }
         if (port_bit_of(request.handle)) {
             return FSIM_VPI_STATUS_NOT_FOUND;
@@ -8071,6 +11759,9 @@ private:
             }
             return value;
         }
+        if (const auto value = primitive_model_value(handle)) {
+            return value;
+        }
         if (owned(handle)) {
             return std::nullopt;
         }
@@ -8216,11 +11907,43 @@ private:
         if (out == nullptr) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
+        // A delay term has the value of its net (IEEE 1800-2023 37.45).
+        if (net_delay_index(request.handle, Tag::delay_term)) {
+            auto redirected = request;
+            redirected.handle = delay_term_object(request.handle);
+            return redirected.handle != 0U ? get_value(redirected, result)
+                                           : FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        // A live class property has a value; a class obj, a class variable
+        // and a constraint have none (IEEE 1800-2023 37.33, 38.36.1).
+        if (class_live_tag(request.handle)) {
+            return get_class_value(request.handle, *out, result);
+        }
+        // A table entry has a string and a vector value only (IEEE 1800-2023
+        // 37.36 detail 1).
+        if (const auto entry = udp_entry_of(request.handle)) {
+            if (!write_entry_value(entry->first, entry->second, *out)) {
+                out->format = vpiSuppressVal;
+                std::memset(&out->value, 0, sizeof(out->value));
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            return succeed(result);
+        }
+        // A scalar's strength (IEEE 1800-2023 38.15).
+        if (out->format == vpiStrengthVal) {
+            if (!write_strength_value(request.handle, *out)) {
+                out->format = vpiSuppressVal;
+                std::memset(&out->value, 0, sizeof(out->value));
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
+            return succeed(result);
+        }
         // A select expression reads the object it selects (IEEE 1800-2023
         // 37.19, 37.59).
         const auto selected = select_expression_object(request.handle);
         const auto source = selected != 0U ? selected : request.handle;
-        const auto value = valueless(resolve(source))
+        const auto value = valueless(resolve(source)) || class_scope_object(source)
+                || class_variable_handle(resolve(source))
             ? std::nullopt
             : object_value(source);
         if (!value || !write_value(*value, *out)) {
@@ -8259,6 +11982,18 @@ private:
                     : input.value.scalar == vpi0  ? Logic4::zero
                     : input.value.scalar == vpiZ  ? Logic4::z
                                                   : Logic4::x);
+            return value;
+        case vpiStrengthVal:
+            // Only a scalar takes a strength value (IEEE 1800-2023 38.34);
+            // the put writes its logic value.
+            if (input.value.strength == nullptr || width != 1U) {
+                return std::nullopt;
+            }
+            value.bits = PackedLogic4 { 1U,
+                input.value.strength->logic == vpi1       ? Logic4::one
+                    : input.value.strength->logic == vpi0 ? Logic4::zero
+                    : input.value.strength->logic == vpiZ ? Logic4::z
+                                                          : Logic4::x };
             return value;
         case vpiIntVal:
             value.bits = resized(
@@ -8397,6 +12132,15 @@ private:
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
             auto& site = calls_[serial_of(request.handle)];
+            // A string is no value of a real function (IEEE 1800-2023 38.34).
+            if (arguments->value->format == vpiStringVal
+                && systfs_[site.systf].data.sysfunctype == vpiRealFunc) {
+                error_message_ = "vpi_put_value: vpiStringVal cannot be put "
+                                 "to a vpiRealFunc system function "
+                                 "(IEEE 1800-2023 38.34)";
+                error_ = true;
+                return FSIM_VPI_STATUS_INVALID_ARGUMENT;
+            }
             const auto value = input_value(*arguments->value, site.width);
             if (!value || !site.function) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
@@ -8405,11 +12149,29 @@ private:
             site.result.bits = value_bits(*value, site.width);
             return succeed(result);
         }
+        if (const auto* primitive = primitive_of(request.handle)) {
+            return put_primitive_value(*primitive, flags, arguments->value, result);
+        }
         auto object = resolve(request.handle);
         const auto requested = object;
+        if (class_live_tag(object)) {
+            return put_class_value(object, arguments->value, mode, result);
+        }
+        if (class_variable_handle(object)) {
+            error_message_ = "vpi_put_value: the value of a class variable is "
+                             "opaque (IEEE 1800-2023 38.36.1)";
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
         if (valueless(object)) {
             error_message_ = "vpi_put_value: an unpacked structure or union "
                              "has no value (IEEE 1800-2023 37.17)";
+            error_ = true;
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        if (class_scope_object(object)) {
+            error_message_ = "vpi_put_value: a class defn's variables hold no "
+                             "value (IEEE 1800-2023 37.31 detail 2)";
             error_ = true;
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
@@ -8464,6 +12226,29 @@ private:
             = target->kind == SystemVerilogVpiObjectKind::NamedEvent;
         if (!event && arguments->value == nullptr) {
             return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        // A string onto a real variable and a strength onto a vector are
+        // illegal (IEEE 1800-2023 38.34).
+        if (!event) {
+            using Category = runtime::SystemVerilogVpiValueCategory;
+            const auto format = arguments->value->format;
+            const bool real = target->type->category == Category::Real
+                || target->type->category == Category::ShortReal;
+            const auto width = select_of(requested) != nullptr
+                ? select_of(requested)->width
+                : target->type->width;
+            if (format == vpiStringVal && real) {
+                error_message_ = "vpi_put_value: vpiStringVal cannot be put "
+                                 "to a real variable (IEEE 1800-2023 38.34)";
+                error_ = true;
+                return FSIM_VPI_STATUS_INVALID_ARGUMENT;
+            }
+            if (format == vpiStrengthVal && width > 1U) {
+                error_message_ = "vpi_put_value: vpiStrengthVal cannot be put "
+                                 "to a vector (IEEE 1800-2023 38.34)";
+                error_ = true;
+                return FSIM_VPI_STATUS_INVALID_ARGUMENT;
+            }
         }
         std::optional<runtime::SystemVerilogVpiStoredValue> stored;
         if (event) {
@@ -8900,9 +12685,22 @@ private:
         if (assertion_control_operation(operation)) {
             return assertion_control(operation, request, result);
         }
+        if (operation == vpiReset) {
+            return reset_control(request, result);
+        }
         if (operation != vpiFinish && operation != vpiStop) {
             return FSIM_VPI_STATUS_UNSUPPORTED;
         }
+        // The extra argument is the diagnostic level of $stop and $finish
+        // (IEEE 1800-2023 38.4, 20.2).
+        std::int32_t level = 1;
+        if (auto* const arguments = pointer<va_list>(request.user_data)) {
+            va_list copy;
+            va_copy(copy, *arguments);
+            level = va_arg(copy, int);
+            va_end(copy);
+        }
+        report_diagnostics(operation == vpiFinish ? "$finish" : "$stop", level);
         // Inside calltf the calling process ends at the call (the lowered
         // call stops on the result); elsewhere the request ends the current
         // time step (IEEE 1800-2023 38.4).
@@ -8920,34 +12718,226 @@ private:
             : FSIM_VPI_STATUS_NOT_FOUND;
     }
 
+    // The callbacks of one save, restart or reset reason run once each; a
+    // routine may register another for the next occurrence.
+    void deliver_feature(const PLI_INT32 reason)
+    {
+        const auto found = feature_callbacks_.find(reason);
+        if (found == feature_callbacks_.end()) {
+            return;
+        }
+        const auto serials = std::exchange(found->second, { });
+        for (const auto serial : serials) {
+            fire(serial, std::nullopt);
+        }
+    }
+
+    // When an implementation restarts, the only VPI callbacks that exist
+    // are those for cbStartOfRestart and cbEndOfRestart (IEEE 1800-2023
+    // 38.36.3).
+    void drop_callbacks_for_restart()
+    {
+        std::vector<std::uint64_t> doomed;
+        for (const auto& [serial, stored] : callbacks_) {
+            if (stored->data.reason != cbStartOfRestart
+                && stored->data.reason != cbEndOfRestart) {
+                doomed.push_back(serial);
+            }
+        }
+        for (const auto& [serial, stored] : assertion_callbacks_) {
+            (void)stored;
+            doomed.push_back(serial);
+        }
+        for (const auto serial : doomed) {
+            fsim_vpi_service_request_v1 request { };
+            request.handle = tagged(Tag::callback, serial);
+            fsim_vpi_service_result_v1 ignored { };
+            (void)remove_callback(request, ignored);
+        }
+    }
+
+    // vpi_control(vpiReset, stop_value, reset_value, diagnostics_value)
+    // executes $reset once the calling routine returns (IEEE 1800-2023
+    // 38.4, D.8); the engine performs it at the next safe point.
+    fsim_vpi_status_v1 reset_control(
+        const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        auto* const arguments = pointer<va_list>(request.user_data);
+        if (arguments == nullptr) {
+            return FSIM_VPI_STATUS_NOT_FOUND;
+        }
+        Simulation::ResetRequest reset;
+        va_list copy;
+        va_copy(copy, *arguments);
+        reset.stop_value = va_arg(copy, int);
+        reset.reset_value = va_arg(copy, int);
+        reset.diagnostics_value = va_arg(copy, int);
+        va_end(copy);
+        if (!simulation_.request_reset(reset)) {
+            error_message_ = "vpi_control: vpiReset needs an engine that "
+                             "restores the time-zero state of the run";
+            error_ = true;
+            return FSIM_VPI_STATUS_UNSUPPORTED;
+        }
+        report_diagnostics("$reset", reset.diagnostics_value);
+        return succeed(result, 0U, 1U);
+    }
+
+    // --- save, restart and reset (IEEE 1800-2023 38.9, 38.31, 38.36.3) ----
+
+    fsim_vpi_status_v1 get_data(const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        const auto id = static_cast<std::int32_t>(
+            static_cast<std::uint32_t>(request.argument));
+        const auto size = static_cast<std::int32_t>(
+            static_cast<std::uint32_t>(request.argument >> 32U));
+        auto* const out = pointer<std::byte>(request.user_data);
+        // Only a cbStartOfRestart or cbEndOfRestart routine reads saved
+        // data; 0 is the failure return.
+        if (save_phase_ != SavePhase::restart || out == nullptr || size <= 0) {
+            return succeed(result, 0U, 0U);
+        }
+        const auto found = save_data_.find(id);
+        if (found == save_data_.end()) {
+            return succeed(result, 0U, 0U);
+        }
+        // What is left of the data set, zero-filled beyond it; each call
+        // starts where the last one ended.
+        auto& data = found->second;
+        const auto wanted = static_cast<std::size_t>(size);
+        const auto left = data.bytes.size() - data.cursor;
+        const auto count = std::min(wanted, left);
+        if (count != 0U) {
+            std::memcpy(out, data.bytes.data() + data.cursor, count);
+        }
+        std::memset(out + count, 0, wanted - count);
+        data.cursor += count;
+        return succeed(result, 0U, count);
+    }
+
+    fsim_vpi_status_v1 put_data(const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        const auto id = static_cast<std::int32_t>(
+            static_cast<std::uint32_t>(request.argument));
+        const auto size = static_cast<std::int32_t>(
+            static_cast<std::uint32_t>(request.argument >> 32U));
+        const auto* const in = pointer<const std::byte>(request.user_data);
+        // Only a cbStartOfSave or cbEndOfSave routine writes saved data,
+        // and numOfBytes is greater than zero; 0 is the failure return.
+        if (save_phase_ != SavePhase::save || in == nullptr || size <= 0) {
+            return succeed(result, 0U, 0U);
+        }
+        auto& data = save_data_[id];
+        data.bytes.append(reinterpret_cast<const char*>(in),
+            static_cast<std::size_t>(size));
+        return succeed(result, 0U, static_cast<std::uint64_t>(size));
+    }
+
+    // Table 20-1: level 0 prints nothing, 1 the simulation time and the
+    // location, 2 also the memory use. The fsim $finish/$stop statements
+    // print nothing, so this is the only place the levels have an effect.
+    void report_diagnostics(
+        const std::string_view task, const std::int32_t level)
+    {
+        if (level < 1) {
+            return;
+        }
+        s_vpi_time time { };
+        time.type = vpiSimTime;
+        fill_time(time, 0U);
+        const auto ticks = (static_cast<std::uint64_t>(time.high) << 32U)
+            | time.low;
+        std::string text { task };
+        text += " called at time " + std::to_string(ticks);
+        if (!call_stack_.empty()) {
+            const auto& site = calls_[call_stack_.back()];
+            if (!site.file.empty()) {
+                text += " (" + site.file + ":" + std::to_string(site.line) + ")";
+            }
+        }
+        text += '\n';
+#if defined(__unix__) || defined(__APPLE__)
+        if (level >= 2) {
+            rusage usage { };
+            if (getrusage(RUSAGE_SELF, &usage) == 0) {
+                text += "  memory: " + std::to_string(usage.ru_maxrss)
+                    + " peak resident set (platform units)\n";
+            }
+        }
+#endif
+        print_(text);
+    }
+
+    // The text a printf-style request formats, or nothing on a format error.
+    [[nodiscard]] static std::optional<std::string> format_text(
+        const fsim_vpi_service_request_v1& request)
+    {
+        auto* const arguments = pointer<va_list>(request.user_data);
+        std::string format { request.text, request.text_size };
+        if (arguments == nullptr) {
+            return format;
+        }
+        va_list measure;
+        va_copy(measure, *arguments);
+        const auto size = std::vsnprintf(nullptr, 0U, format.c_str(), measure);
+        va_end(measure);
+        if (size < 0) {
+            return std::nullopt;
+        }
+        std::string text;
+        text.resize(std::min<std::size_t>(
+            static_cast<std::size_t>(size), maximum_printed_bytes));
+        va_list copy;
+        va_copy(copy, *arguments);
+        (void)std::vsnprintf(text.data(), text.size() + 1U, format.c_str(), copy);
+        va_end(copy);
+        return text;
+    }
+
     fsim_vpi_status_v1 print(const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
         if (request.text == nullptr) {
             return succeed(result);
         }
-        auto* const arguments = pointer<va_list>(request.user_data);
-        std::string format { request.text, request.text_size };
-        std::string text;
-        if (arguments == nullptr) {
-            text = format;
-        } else {
-            va_list measure;
-            va_copy(measure, *arguments);
-            const auto size = std::vsnprintf(nullptr, 0U, format.c_str(), measure);
-            va_end(measure);
-            if (size < 0) {
-                return succeed(result);
-            }
-            text.resize(std::min<std::size_t>(
-                static_cast<std::size_t>(size), maximum_printed_bytes));
-            va_list copy;
-            va_copy(copy, *arguments);
-            (void)std::vsnprintf(text.data(), text.size() + 1U, format.c_str(), copy);
-            va_end(copy);
+        const auto text = format_text(request);
+        if (!text) {
+            return succeed(result);
         }
-        print_(text);
-        return succeed(result, 0U, text.size());
+        print_(*text);
+        return succeed(result, 0U, text->size());
+    }
+
+    // vpi_mcd_printf writes channel 1 to the output channel and the other
+    // channels to their files, but never an fd (IEEE 1800-2023 38.28). The
+    // result is the character count, or EOF when a write failed.
+    fsim_vpi_status_v1 mcd_print(const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        if (request.text == nullptr) {
+            return succeed(result);
+        }
+        const auto descriptor = static_cast<std::uint32_t>(request.argument);
+        // The set MSB marks an fd, whose low bits are not channels.
+        if ((descriptor & 0x80000000U) != 0U) {
+            return succeed(result);
+        }
+        const auto text = format_text(request);
+        if (!text) {
+            return succeed(result, 0U, static_cast<std::uint64_t>(
+                static_cast<std::int64_t>(-1)));
+        }
+        if ((descriptor & 1U) != 0U) {
+            print_(*text);
+        }
+        if (!simulation_.mcd_write(descriptor, *text)) {
+            return succeed(result, 0U, static_cast<std::uint64_t>(
+                static_cast<std::int64_t>(-1)));
+        }
+        return succeed(result, 0U, text->size());
     }
 
     Simulation& simulation_;
@@ -8963,10 +12953,26 @@ private:
     std::uint64_t next_callback_ { };
     std::unordered_map<std::uint64_t, std::unique_ptr<Callback>> callbacks_;
     std::vector<std::uint64_t> end_of_compile_;
+    // The save, restart and reset callbacks by reason.
+    std::map<PLI_INT32, std::vector<std::uint64_t>> feature_callbacks_;
+    // The phase of the save/restart driver; vpi_put_data and vpi_get_data
+    // are legal only in its save and restart phases.
+    enum class SavePhase : std::uint8_t { none, save, restart };
+    // The bytes of one save/restart id, and how many vpi_get_data has read.
+    struct SaveData {
+        std::string bytes;
+        std::size_t cursor { };
+    };
+    SavePhase save_phase_ { SavePhase::none };
+    std::string save_location_;
+    std::map<std::int32_t, SaveData> save_data_;
+    std::int32_t last_save_restart_id_ { };
     // The cbError and cbPLIError callbacks, which run on every error.
     std::vector<std::uint64_t> run_error_callbacks_;
     std::vector<std::uint64_t> unresolved_callbacks_;
     std::vector<std::uint64_t> pli_error_callbacks_;
+    // The cbTchkViolation callbacks (IEEE 1800-2023 38.36.3).
+    std::vector<std::uint64_t> tchk_callbacks_;
     bool in_pli_error_ { };
     // The cbSignal callbacks and their traps, delivered at safe points.
     std::map<std::uint64_t, std::unique_ptr<ForeignSignalTrap>> signal_traps_;
@@ -8981,6 +12987,46 @@ private:
     std::vector<ClockingSkewHandle> clocking_skews_;
     std::vector<fsim_vpi_handle_v1> clocking_events_;
     std::unique_ptr<VpiStatementModel> statement_model_;
+    std::unique_ptr<VpiClassModel> class_model_;
+    // The registry's class defn object of each declaration identity.
+    std::map<std::string, fsim_vpi_handle_v1> class_defns_;
+    bool class_defns_built_ { };
+    // The live class objects handed out as handles, by serial: the class
+    // heap's handle, 0 once the object was reclaimed (IEEE 1800-2023 37.33).
+    std::vector<runtime::SystemVerilogClassHandle> class_objects_;
+    std::unordered_map<runtime::SystemVerilogClassHandle, std::size_t>
+        class_object_serials_;
+    std::vector<ClassMember> class_members_;
+    std::map<std::tuple<runtime::SystemVerilogClassHandle, bool, std::size_t,
+                 fsim_vpi_handle_v1>,
+        std::size_t>
+        class_member_index_;
+    // A callback on a dynamic array or queue (cbSizeChange) or on a class
+    // typespec or object (cbReclaimObj, cbEndOfObject).
+    struct ObjectCallback {
+        std::uint64_t serial { };
+        fsim_vpi_handle_v1 object { };
+    };
+    std::vector<ObjectCallback> size_callbacks_;
+    std::vector<ObjectCallback> reclaim_callbacks_;
+    std::vector<ObjectCallback> create_callbacks_;
+    bool size_hooked_ { };
+    bool reclaim_hooked_ { };
+    bool create_hooked_ { };
+    // The frames and threads of a probe run, and the callbacks on them: the
+    // reason, the object they were placed on (0 for all), and for a task or
+    // function the name of its callee.
+    struct FrameCallback {
+        std::uint64_t serial { };
+        PLI_INT32 reason { };
+        fsim_vpi_handle_v1 object { };
+        std::string callee;
+    };
+    std::unique_ptr<VpiFrameModel> frames_;
+    std::vector<FrameCallback> frame_callbacks_;
+    std::uint64_t frame_hook_ { };
+    std::unordered_set<runtime::simir::ProcessId> thread_sources_;
+    bool thread_sources_built_ { };
     // A force or release a process executed, waiting for the next safe
     // point.
     struct ForceEvent {
@@ -9039,11 +13085,29 @@ private:
         derived_typespecs_;
     // vpi_put_delays tables awaiting the next scheduler safe point, and the
     // safe-point hook that applies them.
-    std::map<std::uint32_t, std::vector<runtime::SimulationTick>> queued_path_delays_;
+    // A path's delay table and pulse tables a put waits to apply.
+    struct PathTimingUpdate {
+        std::vector<runtime::SimulationTick> delays;
+        std::vector<runtime::SimulationTick> reject;
+        std::vector<runtime::SimulationTick> error;
+    };
+    std::map<std::uint32_t, PathTimingUpdate> queued_path_delays_;
+    std::map<std::uint32_t, std::vector<std::int64_t>> queued_check_limits_;
+    // What the last vpi_put_delays gave each object, kept for the minimum,
+    // typical and maximum values the simulation does not use.
+    std::unordered_map<std::uint32_t, DelayRows> primitive_delay_rows_;
+    std::unordered_map<std::uint32_t, DelayRows> path_delay_rows_;
+    std::unordered_map<std::uint32_t, DelayRows> check_delay_rows_;
+    // The twelve delays vpi_put_delays gave an SDF net delay, by its index.
+    std::map<std::uint32_t, std::vector<runtime::SimulationTick>> net_delay_overrides_;
     std::uint64_t path_delay_hook_ { };
     std::size_t string_cursor_ { };
     std::array<std::vector<s_vpi_vecval>, 16> vectors_;
     std::size_t vector_cursor_ { };
+    std::array<s_vpi_strengthval, 16> strengths_ { };
+    std::size_t strength_cursor_ { };
+    // Built on first use from the elaborated primitive records.
+    mutable std::optional<PrimitiveIndex> primitive_index_;
     std::array<s_vpi_time, 16> times_ { };
     std::size_t time_cursor_ { };
     std::vector<std::string> argv_storage_;
@@ -9178,6 +13242,11 @@ std::unique_ptr<VpiForeignService> attach_vpi_modules(
                 return dpi->call(identity, actuals, strings);
             }
             return dpi->call(identity, actuals, strings);
+        });
+    simulation.add_lifecycle_hook(
+        [live](const Simulation::LifecycleEvent event,
+            const std::string_view location) {
+            live->lifecycle(event, location);
         });
     service->compile(process_count);
     return service;

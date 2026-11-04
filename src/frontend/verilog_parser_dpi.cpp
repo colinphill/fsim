@@ -169,7 +169,16 @@ void VerilogParser::structure_dpi_declaration(
   const auto& tokens = declaration.tokens;
   declaration.link_name_token = tokens[1];
   declaration.link_name = string_literal_text(tokens[1]);
-  if (declaration.link_name != "DPI-C") {
+  if (declaration.link_name == "DPI") {
+    // The deprecated string is an error here; the message carries both
+    // items the LRM requires (IEEE 1800-2023 35.5.4).
+    error(
+        tokens[1],
+        "FSIM-SV-SEM-222",
+        "\"DPI\" is deprecated and should be replaced with \"DPI-C\"; use of "
+        "the \"DPI-C\" string may require changes in the DPI application's "
+        "C code");
+  } else if (declaration.link_name != "DPI-C") {
     error(
         tokens[1],
         "FSIM-SV-SEM-222",
@@ -625,12 +634,15 @@ void VerilogParser::resolve_dpi_declarations(
 }
 
 void VerilogParser::generate_dpi_export_service(DesignUnit& unit) {
-  // A context import's C code may call the exports of its instance (IEEE
-  // 1800-2023 35.5.3). Each export gets a hidden task that takes its
-  // actuals from the pending C call, calls the export, and hands its
-  // result and outputs back; the service task runs those tasks until the
-  // import's C code returns. The `__fsim_dpi_export_` imports are served by
-  // the DPI runtime, not by C code.
+  // A context import's C code may call the exports of the scope its call
+  // chain is in (IEEE 1800-2023 35.5.3). Each export gets a hidden task that
+  // takes its actuals from the pending C call, calls the export, and hands
+  // its result and outputs back; the service task runs those tasks until the
+  // import's C code returns. An export call in another scope (after
+  // svSetScope) takes the foreign arm: the lowerer runs the step task of
+  // every other scope that declares exports, and the one whose scope the
+  // call chain is in serves it. The `__fsim_dpi_export_` imports are served
+  // by the DPI runtime, not by C code.
   const auto words = [](const std::vector<Token>& tokens) {
     std::string text;
     for (const auto& token : tokens) {
@@ -649,12 +661,22 @@ void VerilogParser::generate_dpi_export_service(DesignUnit& unit) {
   };
   // Functions serve function exports, so that an import function called
   // from a function can call them (13.4.4); task exports need tasks.
-  const bool task_exports = std::ranges::any_of(
+  // A unit with context import tasks and no exports of its own serves
+  // the exports of other scopes, which may be tasks.
+  const bool has_exports = std::ranges::any_of(
       unit.systemverilog_dpi_declarations,
       [](const SystemVerilogDpiDeclaration& declaration) {
-        return declaration.direction == SystemVerilogDpiDirection::Export
-            && declaration.callable_kind
-                == SystemVerilogDpiCallableKind::Task;
+        return declaration.direction == SystemVerilogDpiDirection::Export;
+      });
+  const bool task_exports = std::ranges::any_of(
+      unit.systemverilog_dpi_declarations,
+      [&](const SystemVerilogDpiDeclaration& declaration) {
+        return declaration.callable_kind
+                == SystemVerilogDpiCallableKind::Task
+            && (declaration.direction == SystemVerilogDpiDirection::Export
+                || (!has_exports
+                    && declaration.qualifier
+                        == SystemVerilogDpiQualifier::Context));
       });
   const std::string callable =
       task_exports ? "task automatic " : "function automatic void ";
@@ -664,6 +686,18 @@ void VerilogParser::generate_dpi_export_service(DesignUnit& unit) {
   std::string linkages;
   std::size_t exports {};
   std::optional<SourceSpan> span;
+  // A module with a context import needs the service even without exports
+  // of its own: the C code may set the scope of another instance.
+  const bool package = unit.kind == UnitKind::SystemVerilogPackage;
+  bool context_import {};
+  for (const auto& declaration : unit.systemverilog_dpi_declarations) {
+    if (declaration.direction == SystemVerilogDpiDirection::Import
+        && declaration.qualifier == SystemVerilogDpiQualifier::Context
+        && declaration.validated) {
+      context_import = true;
+      if (!span) span = declaration.span;
+    }
+  }
   for (const auto& declaration : unit.systemverilog_dpi_declarations) {
     if (declaration.direction != SystemVerilogDpiDirection::Export
         || !declaration.validated) {
@@ -701,6 +735,33 @@ void VerilogParser::generate_dpi_export_service(DesignUnit& unit) {
     }
     const auto& tokens = recorded->second;
     if (formals.size() != tokens.formals.size()) continue;
+    // It is erroneous to declare an exported subroutine's formal as a
+    // dynamic array; an open array is an import's alone (IEEE 1800-2023
+    // 35.5.6, 35.5.6.1).
+    const auto dynamic_dimension = [](const std::vector<Token>& dimension) {
+      for (std::size_t at = 0; at + 1U < dimension.size(); ++at) {
+        if (dimension[at].kind == TokenKind::LeftBracket
+            && (dimension[at + 1U].kind == TokenKind::RightBracket
+                || dimension[at + 1U].text == "$"
+                || dimension[at + 1U].text == "*")) {
+          return true;
+        }
+      }
+      return false;
+    };
+    if (std::ranges::any_of(tokens.formals, [&](const auto& formal) {
+          return dynamic_dimension(formal.first)
+              || dynamic_dimension(formal.second);
+        })) {
+      error(
+          *declaration.systemverilog_name_token,
+          "FSIM-SV-SEM-462",
+          "the exported DPI subroutine '" + name
+              + "' has a dynamic array or open array formal argument; "
+                "only imports can have open arrays (IEEE 1800-2023 35.5.6, "
+                "35.5.6.1)");
+      continue;
+    }
     const bool result = function_export
         && !(tokens.result.size() == 1U
             && dpi_word(tokens.result.front(), "void"));
@@ -747,11 +808,17 @@ void VerilogParser::generate_dpi_export_service(DesignUnit& unit) {
     if (!span) span = declaration.span;
   }
   callable_type_tokens_.clear();
-  if (exports == 0) {
+  if (exports == 0 && (package || !context_import)) {
     return;
   }
+  // The scope the step task serves: a package is its own scope; an
+  // instance's is the instance the step runs in (empty here).
+  const auto scope = package ? unit.name : std::string { };
   text += "import \"DPI-C\" context function int __fsim_dpi_export_next("
           "input string names);\n"
+          "import \"DPI-C\" context function int __fsim_dpi_export_serve("
+          "input string names, input string scope);\n"
+          "import \"DPI-C\" function void __fsim_dpi_export_foreign();\n"
       + callable + "__fsim_dpi_export_service();\n"
           "int __k;\n"
           "__k = __fsim_dpi_export_next(\"" + linkages + "\");\n"
@@ -767,10 +834,39 @@ void VerilogParser::generate_dpi_export_service(DesignUnit& unit) {
     rest = space == std::string_view::npos ? std::string_view { }
                                            : rest.substr(space + 1U);
   }
-  text += "endcase\n"
+  text += "default: __fsim_dpi_export_foreign();\n"
+          "endcase\n"
           "__k = __fsim_dpi_export_next(\"" + linkages + "\");\n"
           "end\n"
-      + end_callable + callable + "__fsim_dpi_export_hook();\n"
+      + end_callable;
+  if (exports != 0) {
+    // One step: serves the pending export call if the call chain is in
+    // this scope, and does nothing otherwise.
+    text += callable + "__fsim_dpi_export_step();\n"
+            "int __k;\n"
+            "__k = __fsim_dpi_export_serve(\"" + linkages + "\", \"" + scope
+            + "\");\n"
+            "case (__k)\n";
+    ordinal = 0;
+    rest = linkages;
+    while (!rest.empty()) {
+      const auto space = rest.find(' ');
+      const auto linkage = rest.substr(0, space);
+      text += std::to_string(++ordinal) + ": __fsim_dpi_export_call__"
+          + std::string { linkage } + "();\n";
+      rest = space == std::string_view::npos ? std::string_view { }
+                                             : rest.substr(space + 1U);
+    }
+    text += "default: __k = 0;\n"
+            "endcase\n"
+        + end_callable + callable + "__fsim_dpi_export_step_hook();\n"
+        + "__fsim_dpi_export_step();\n" + end_callable;
+  }
+  // The hook a context import's call site lowers; an instance without
+  // exports of its own has the foreign arm only.
+  text += callable
+      + (exports != 0 ? "__fsim_dpi_export_hook();\n"
+                      : "__fsim_dpi_export_hook_foreign();\n")
       + "__fsim_dpi_export_service();\n" + end_callable;
   parse_generated_items(synthetic_tokens(text, *span), *span, unit);
 }

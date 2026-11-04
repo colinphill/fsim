@@ -59,6 +59,12 @@ fsim_safe_point_kind_t convert_safe_point_kind(
       return FSIM_SAFE_POINT_PROCESS_SUSPEND;
     // Not delivered to the API (Simulation::install_execution_point_hooks).
     case Kind::call_return:
+    case Kind::frame_start:
+    case Kind::frame_end:
+    case Kind::thread_start:
+    case Kind::thread_end:
+    case Kind::thread_enter:
+    case Kind::object_created:
       return FSIM_SAFE_POINT_CALL;
   }
   return FSIM_SAFE_POINT_SCHEDULER;

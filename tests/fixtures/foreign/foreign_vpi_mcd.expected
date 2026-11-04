@@ -1,0 +1,19 @@
+#c open mcd=2
+#c reopen same=1
+#c name mcd=mcd_out.txt
+#c name 1=stdout
+#c close 1=1
+#c name fd=fd_out.txt
+#c fd mcd_printf=0
+#c mcd printf=15
+#c to-both 8
+#c both printf=13
+#c flush=0
+#c close=0
+#c name closed=(null)
+#c close again=2
+#c close fd=0
+#c file: design one
+#c file: from plug-in 7
+#c file: #c to-both 8
+#c file: design two

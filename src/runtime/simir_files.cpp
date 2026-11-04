@@ -6,6 +6,7 @@
 #include "simir_internal.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -333,26 +334,29 @@ Interpreter::Impl::FileState& Interpreter::Impl::checked_file(
     return found->second;
 }
 
+void Interpreter::Impl::close_file_state(FileState& file)
+{
+    // A successful read through EOF leaves eofbit/failbit set. Clear those
+    // input-status bits before close so they cannot masquerade as a close
+    // failure.
+    file.stream->clear();
+    if (file.writable)
+        file.stream->flush();
+    file.stream->close();
+    const bool failed = file.stream->fail();
+    file.stream.reset();
+    file.closed = true;
+    if (failed) {
+        file.last_error = "failed to close text file";
+        throw std::runtime_error { file.last_error };
+    }
+}
+
 void Interpreter::Impl::close_file(
     const ProcessId process,
     const FileHandle handle)
 {
-    const auto close_one = [](FileState& file) {
-        // A successful read through EOF leaves eofbit/failbit set. Clear those
-        // input-status bits before close so they cannot masquerade as a close
-        // failure.
-        file.stream->clear();
-        if (file.writable)
-            file.stream->flush();
-        file.stream->close();
-        const bool failed = file.stream->fail();
-        file.stream.reset();
-        file.closed = true;
-        if (failed) {
-            file.last_error = "failed to close text file";
-            throw std::runtime_error { file.last_error };
-        }
-    };
+    const auto close_one = [](FileState& file) { close_file_state(file); };
     const bool systemverilog = processes.scheduling_domain(process)
         == ProcessSchedulingDomain::systemverilog;
     if ((handle & file_descriptor_flag) != 0) {
@@ -482,6 +486,153 @@ void Interpreter::Impl::write_file(
     }
     for (auto* file : selected)
         write_one(*file);
+}
+
+FileHandle Interpreter::Impl::mcd_open(const std::string_view name)
+{
+    // An already open file keeps its descriptor, whether $fopen or an earlier
+    // vpi_mcd_open opened it (IEEE 1800-2023 38.27).
+    try {
+        const auto wanted = fsim::support::path_from_utf8(name).lexically_normal();
+        for (std::uint32_t channel = 1; channel < 31U; ++channel) {
+            const auto bit = FileHandle { 1U } << channel;
+            const auto found = files.find(bit);
+            if (found != files.end() && !found->second.closed
+                && found->second.stream && !found->second.vhdl
+                && fsim::support::path_from_utf8(found->second.logical_name)
+                        .lexically_normal()
+                    == wanted) {
+                return bit;
+            }
+        }
+        // The call has no process; the owner only names the opener.
+        return open_file_unchecked(
+            ProcessId { }, name, multichannel_write_mode, false);
+    } catch (const std::exception&) {
+        // The routine returns 0 on error (IEEE 1800-2023 38.27).
+        return 0;
+    }
+}
+
+FileHandle Interpreter::Impl::mcd_close(const FileHandle descriptor)
+{
+    if ((descriptor & file_descriptor_flag) != 0) {
+        // An fd from $fopen closes too; the preopened descriptors do not.
+        const auto found = files.find(descriptor);
+        if (found == files.end() || found->second.closed
+            || !found->second.stream) {
+            return descriptor;
+        }
+        try {
+            close_file_state(found->second);
+        } catch (const std::exception&) {
+            return descriptor;
+        }
+        return 0;
+    }
+    FileHandle unclosed = descriptor & 1U;
+    for (std::uint32_t channel = 1; channel < 31U; ++channel) {
+        const auto bit = FileHandle { 1U } << channel;
+        if ((descriptor & bit) == 0) {
+            continue;
+        }
+        const auto found = files.find(bit);
+        if (found == files.end() || found->second.closed
+            || !found->second.stream) {
+            unclosed |= bit;
+            continue;
+        }
+        try {
+            close_file_state(found->second);
+        } catch (const std::exception&) {
+            unclosed |= bit;
+        }
+    }
+    return unclosed;
+}
+
+std::optional<std::string> Interpreter::Impl::mcd_name(
+    const FileHandle descriptor) const
+{
+    if ((descriptor & file_descriptor_flag) != 0) {
+        switch (descriptor) {
+        case file_descriptor_flag:
+            return "stdin";
+        case file_descriptor_flag | 1U:
+            return "stdout";
+        case file_descriptor_flag | 2U:
+            return "stderr";
+        default:
+            break;
+        }
+    } else if (descriptor == 1U) {
+        return "stdout";
+    }
+    // Only a single channel or a file descriptor names a file.
+    if (descriptor == 0 || ((descriptor & file_descriptor_flag) == 0
+                               && std::popcount(descriptor) != 1)) {
+        return std::nullopt;
+    }
+    const auto found = files.find(descriptor);
+    if (found == files.end() || found->second.closed
+        || !found->second.stream) {
+        return std::nullopt;
+    }
+    return found->second.logical_name;
+}
+
+bool Interpreter::Impl::mcd_write(
+    const FileHandle descriptor, const std::string_view text)
+{
+    // An fd is not written by the mcd routines (IEEE 1800-2023 38.28), and
+    // channel 1 is the caller's to write.
+    if ((descriptor & file_descriptor_flag) != 0) {
+        return true;
+    }
+    bool ok = true;
+    for (std::uint32_t channel = 1; channel < 31U; ++channel) {
+        const auto bit = FileHandle { 1U } << channel;
+        if ((descriptor & bit) == 0) {
+            continue;
+        }
+        const auto found = files.find(bit);
+        if (found == files.end() || found->second.closed
+            || !found->second.stream || !found->second.writable) {
+            continue;
+        }
+        // Flushing each write keeps $fdisplay and VPI output in order.
+        auto& stream = *found->second.stream;
+        stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+        stream.flush();
+        ok = ok && stream.good();
+    }
+    return ok;
+}
+
+bool Interpreter::Impl::mcd_flush(const FileHandle descriptor)
+{
+    bool ok = true;
+    for (std::uint32_t channel = 1; channel < 31U; ++channel) {
+        const auto bit = FileHandle { 1U } << channel;
+        if ((descriptor & file_descriptor_flag) != 0 || (descriptor & bit) == 0) {
+            continue;
+        }
+        const auto found = files.find(bit);
+        if (found != files.end() && !found->second.closed
+            && found->second.stream && found->second.writable) {
+            found->second.stream->flush();
+            ok = ok && found->second.stream->good();
+        }
+    }
+    if ((descriptor & file_descriptor_flag) != 0) {
+        const auto found = files.find(descriptor);
+        if (found != files.end() && !found->second.closed
+            && found->second.stream && found->second.writable) {
+            found->second.stream->flush();
+            ok = ok && found->second.stream->good();
+        }
+    }
+    return ok;
 }
 
 bool Interpreter::Impl::soft_unreadable_file(

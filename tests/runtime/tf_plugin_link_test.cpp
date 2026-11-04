@@ -20,12 +20,12 @@ constexpr const char* standard_tf_symbols[] = {
     "tf_error", "tf_evaluatep", "tf_exprinfo", "tf_getcstringp",
     "tf_getinstance", "tf_getlongp", "tf_getlongtime",
     "tf_getnextlongtime", "tf_getp", "tf_getpchange", "tf_getrealp",
-    "tf_getrealtime", "tf_getroutine", "tf_gettflist", "tf_gettime",
+    "tf_getrealtime", "tf_gettime",
     "tf_gettimeprecision", "tf_gettimeunit", "tf_getworkarea",
     "tf_iasynchoff", "tf_iasynchon", "tf_iclearalldelays",
     "tf_icopypvc_flag", "tf_ievaluatep", "tf_iexprinfo",
     "tf_igetcstringp", "tf_igetlongp", "tf_igetlongtime", "tf_igetp",
-    "tf_igetpchange", "tf_igetrealp", "tf_igetrealtime", "tf_igetroutine",
+    "tf_igetpchange", "tf_igetrealp", "tf_igetrealtime",
     "tf_igettime", "tf_igettimeprecision", "tf_igettimeunit",
     "tf_igetworkarea", "tf_imipname", "tf_imovepvc_flag", "tf_inodeinfo",
     "tf_inump", "tf_ipropagatep", "tf_iputlongp", "tf_iputp",
@@ -47,7 +47,7 @@ constexpr const char* standard_tf_symbols[] = {
 };
 
 static_assert(sizeof(standard_tf_symbols) / sizeof(standard_tf_symbols[0]) ==
-              107);
+              104);
 
 bool require(const bool condition, const char* const message) {
   if (!condition) {
@@ -82,8 +82,11 @@ int main() {
       return 1;
     }
   }
+  // Plug-in-owned symbols and routines outside IEEE 1364-2001 clause 25.
   for (const char* const forbidden : {
-           "err_intercept", "veriuser_version_str", "endofcompile_routines"}) {
+           "veriuser_version_str", "endofcompile_routines", "err_intercept",
+           "tf_gettflist", "tf_getlongsimtime", "tf_getroutine",
+           "tf_igetroutine"}) {
     if (!require(link_library->symbol(forbidden, error) == nullptr &&
                      !error.empty(),
                  "TF link library exports a plugin-owned or vendor symbol")) {

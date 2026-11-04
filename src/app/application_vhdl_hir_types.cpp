@@ -115,6 +115,7 @@ namespace fsim::app::application_detail {
     definition.id = type_id;
     definition.declaration = id;
     definition.form = type_form(input.declaration_kind);
+    definition.scalar_type = input.vhdl_scalar_type;
     definition.name = input.name;
     definition.base = *output.subtype;
     definition.source = output.source;

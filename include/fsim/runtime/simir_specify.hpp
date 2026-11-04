@@ -134,6 +134,9 @@ struct ModuleTimingCheck {
     /// Instance-qualified declaration identity reserved for SDF annotation.
     /// Unlike the dense runtime ID, this is stable when unrelated roots change.
     std::string identity;
+    /// Full hierarchical path of the instance whose specify block declares
+    /// the check (IEEE 1800-2023 37.40 vpiModule/vpiInstance).
+    std::string instance;
     ModuleTimingCheckKind kind { ModuleTimingCheckKind::setup };
     ModuleTimingEvent reference;
     std::optional<ModuleTimingEvent> data;

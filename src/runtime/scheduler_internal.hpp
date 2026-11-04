@@ -1453,6 +1453,8 @@ struct Scheduler::Impl {
     FutureMap::node_type reusable_future_node;
     std::optional<CurrentSlot> current;
     SimulationTick now { };
+    // Simulation cycles started (a plain increment per time slot and delta).
+    std::uint64_t cycles { };
     std::uint64_t callbacks { };
     std::uint64_t next_sequence { };
     std::uint64_t next_systemverilog_group_batch_reservation_id { 1U };
@@ -2417,6 +2419,7 @@ struct Scheduler::Impl {
         slot.end_of_slot.swap(first->second.end_of_slot);
         retain_future_node(first);
         now = slot.time;
+        ++cycles;
     }
 
     [[nodiscard]] std::vector<StableOrder> pending_next_orders() const

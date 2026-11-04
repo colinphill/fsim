@@ -104,9 +104,11 @@ Simulation::scalar_signal_snapshots() const
 
 PackedLogic4 Simulation::read_process_local(
     const runtime::simir::ProcessId process,
-    const std::size_t local_index) const
+    const std::size_t local_index,
+    const std::size_t newer_activations) const
 {
-    return impl_->interpreter->read_debug_local(process, local_index);
+    return impl_->interpreter->read_debug_local(
+        process, local_index, newer_activations);
 }
 
 void Simulation::write_process_local(
@@ -130,6 +132,64 @@ void Simulation::deposit_signal(
 {
     impl_->validate_external_value(signal, value, "deposit");
     impl_->interpreter->deposit_signal(signal, std::move(value));
+    impl_->refresh_observation_hooks();
+}
+
+void Simulation::schedule_foreign_transaction(
+    const runtime::simir::ProcessId process,
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::size_t offset,
+    const runtime::SimulationTick delay,
+    const runtime::SimulationTick rejection,
+    const bool transport)
+{
+    const auto& info = impl_->built.design.signals().at(signal);
+    if (value.width() == 0U || offset > info.width
+        || value.width() > info.width - offset) {
+        throw std::invalid_argument(
+            "foreign transaction lies outside signal '" + info.name + "'");
+    }
+    // The projected waveform of the driver; a transport transaction has no
+    // pulse to reject (IEEE 1076-2019 10.5.2.1).
+    impl_->interpreter->schedule_host_driver_waveform(process, signal,
+        { runtime::simir::ProjectedWaveformValue { std::move(value), delay } },
+        offset, transport ? 0U : rejection,
+        transport ? runtime::simir::ProjectedDelayMode::transport
+                  : runtime::simir::ProjectedDelayMode::inertial);
+    impl_->refresh_observation_hooks();
+}
+
+void Simulation::force_foreign_driver(
+    const runtime::simir::ProcessId process,
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::size_t offset,
+    const bool propagate)
+{
+    impl_->interpreter->force_host_driver(
+        process, signal, std::move(value), offset, propagate);
+    impl_->refresh_observation_hooks();
+}
+
+void Simulation::deposit_foreign_driver(
+    const runtime::simir::ProcessId process,
+    const SignalId signal,
+    PackedLogic4 value,
+    const std::size_t offset)
+{
+    impl_->interpreter->deposit_host_driver(
+        process, signal, std::move(value), offset);
+    impl_->refresh_observation_hooks();
+}
+
+void Simulation::release_foreign_driver(
+    const runtime::simir::ProcessId process,
+    const SignalId signal,
+    const std::size_t offset,
+    const std::size_t width)
+{
+    impl_->interpreter->release_host_driver(process, signal, offset, width);
     impl_->refresh_observation_hooks();
 }
 

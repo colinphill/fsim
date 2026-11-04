@@ -54,6 +54,7 @@ Expression conditional(
 
 void VerilogParser::parse_switch_primitive(
     std::vector<Statement>& statements,
+    std::vector<VerilogPrimitiveInstance>& primitives,
     const std::vector<SignalDeclaration>& signals,
     const std::vector<SignalDeclaration>& ports) {
   const auto start = advance();
@@ -345,6 +346,35 @@ void VerilogParser::parse_switch_primitive(
                 ? terminal
                 : terminal_for(
                     terminal, ordinal, instance_indices[ordinal]));
+      }
+      {
+        VerilogPrimitiveInstance primitive;
+        primitive.kind = pull ? VerilogPrimitiveClass::Pull
+                              : VerilogPrimitiveClass::Switch;
+        primitive.keyword = operation;
+        primitive.name = instance_name;
+        if (switch_array) {
+          primitive.array_member = true;
+          primitive.array_index = instance_indices[ordinal];
+          primitive.array_left = instance_indices.front();
+          primitive.array_right = instance_indices.back();
+        }
+        // Outputs and bidirectional terminals first, then the data and
+        // control inputs (IEEE 1800-2023 28.8 to 28.10).
+        for (std::size_t terminal = 0U; terminal < mapped.size();
+             ++terminal) {
+          primitive.terminals.push_back({
+              terminal == 0U && !bidirectional
+                  ? VerilogPrimitiveTerminalDirection::Output
+              : bidirectional && terminal < 2U
+                  ? VerilogPrimitiveTerminalDirection::Inout
+                  : VerilogPrimitiveTerminalDirection::Input,
+              mapped[terminal] });
+        }
+        primitive.delay = delay;
+        primitive.drive_strength = strength;
+        primitive.span = cover(start.span, previous().span);
+        primitives.push_back(std::move(primitive));
       }
       const auto saved_name = instance_name;
       if (switch_array) {

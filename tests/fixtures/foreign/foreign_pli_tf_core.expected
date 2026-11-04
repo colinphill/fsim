@@ -1,0 +1,37 @@
+#c add rc=0 hi=00000001 lo=00000000
+#c subtract rc=0 hi=00000000 lo=ffffffff
+#c multiply hi=00000001 lo=00000000
+#c divide hi=00000000 lo=10000000
+#c divide signed hi=ffffffff lo=fffffff2
+#c compare -1 0 1
+#c long_to_real 4294967296.0
+#c real_to_long hi=ffffffff lo=fffffffd
+#c real_to_long hi=00000000 lo=00000002
+#c longtime_tostr 8589934591
+#c plusarg tfcore -> =abc
+#c plusarg tfcore= -> abc
+#c plusarg tfcore=abc -> []
+#c plusarg TFCORE -> (null)
+#c plusarg absent -> (null)
+#c asynchon=0 asynchoff=0
+#c setdelay=1 negative=0 long=1 real=1
+#c clearalldelays=1
+#c setworkarea=0 same=1
+#c nump=8
+#c getp x=138 bits=10xz1010
+#c getlongp hi=00000012 lo=3456780a
+#c getrealp wide=78187493386.0
+#c real getp=10 getrealp=9.6 typep=16
+#c cstring vector=AB string=text real=(null)
+#c exprinfo real type=16 ngroups=0 size=0 value=9.6
+#c nodeinfo real type=107 ngroups=0 size=0
+#c nodeinfo reg type=101 ngroups=1 size=8
+#c nodeinfo scalar type=105 strength0=0 strength1=64
+#c putp real rc=0
+#c putlongp real rc=0
+#c nextlongtime code=2 hi=0 lo=5
+#c time=5 long=5 real=5.0 str=5
+#c unit=-9 precision=-9 simulation=-9,-9
+#c text rc=0
+#c message rc=0
+#c design r2=5.0 r3=4294967296.0
