@@ -15003,6 +15003,17 @@ Lowerer::hir_interface_function_profile(
         return std::nullopt;
     }
     const auto& call = *expression->systemverilog;
+    // The step function of another instance's exports runs in that
+    // instance (IEEE 1800-2023 35.5.3).
+    if (hir_interface_receiver_override_
+        && hir_interface_receiver_override_->starts_with("@instance:")
+        && call.kind == semantic::sv::ExpressionKind::call
+        && call.text == "__fsim_dpi_export_step") {
+        if (const auto callee = hir_referenced_declaration(expression_id)) {
+            return HirInterfaceFunctionProfile {
+                *callee, *hir_interface_receiver_override_, { } };
+        }
+    }
     // An unqualified call from a function or task of a module instance
     // called by its path to another of that module runs on the same
     // instance (IEEE 1800-2023 23.8), as a task call does.
@@ -20943,9 +20954,14 @@ bool Lowerer::lower_hir_dpi_export_foreign()
             if (path == home || !served.insert(path).second) {
                 continue;
             }
-            hir_task_receiver_override_ = "@instance:" + path;
+            // A unit with function exports only has a step function
+            // (13.4.4); task exports need a step task.
+            auto& receiver = step->callable && step->callable->function
+                ? hir_interface_receiver_override_
+                : hir_task_receiver_override_;
+            receiver = "@instance:" + path;
             const bool lowered = lower_hir_statements(step->statements);
-            hir_task_receiver_override_.reset();
+            receiver.reset();
             if (!lowered) {
                 return false;
             }

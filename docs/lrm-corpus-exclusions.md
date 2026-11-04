@@ -12,7 +12,7 @@ Exclusions never count as closures.
 |---|---:|---:|
 | sv-tests | 0 | 2 |
 | verilator | 63 | 297 |
-| ivtest | 7 | 303 |
+| ivtest | 7 | 304 |
 | vests | 2 | 0 |
 | nvc | 225 | 0 |
 | vhdl-compliance | 7 | 0 |
@@ -696,6 +696,7 @@ Exclusions never count as closures.
 | `vpi_pr2971220` | out of scope | gold holds the file name as given on Icarus's command line |
 | `vpi_pr723` | out of scope | gold holds Icarus's $fclose and $fdisplay warning text and its descriptor numbering (IEEE 1800-2023 21.3.1 leaves the values to the tool) |
 | `vpi_ro_synch` | out of scope | gold holds Icarus's error message text for a read-only synch write |
+| `vpi_timescale` | out of scope | calls tf_getlongsimtime, which the TF routines of IEEE 1364-2001 clause 25 do not include |
 | `vpi_value_change_cb1` | out of scope | gold reports the whole variable's value for a value-change callback on a part-select (p4[1:0] = 10); IEEE 1800-2023 38.36.1 reports the expression's value |
 | `vpi_value_change_cb2` | out of scope | gold reports the whole variable's value for a value-change callback on a part-select (p4[1:0] = 10); IEEE 1800-2023 38.36.1 reports the expression's value |
 | `vpi_value_change_cb3` | out of scope | gold reports the whole variable's value for a value-change callback on a part-select (p4[1:0] = 10); IEEE 1800-2023 38.36.1 reports the expression's value |

@@ -2,7 +2,7 @@
 #c exec grow: errors=0
 #c exec text: errors=0
 #c exec pair: errors=0
-#c cycles at d3: high=0 low=1000000 delta cycles=4 total>=5=1
+#c cycles at d3: high=0 low=1000000 delta cycles=3 total>=5=1
 #c ptr: error=0 nonnull=1 elems=1
 #c ptr set null: error=0 null=1
 #c nib=1010

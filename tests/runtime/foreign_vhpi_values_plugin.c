@@ -100,8 +100,9 @@ static void register_function(char* name, void (*routine)(const vhpiCbDataT*))
     (void)vhpi_register_foreignf(&model);
 }
 
-// The delta cycles of the time step, the cycle in progress included, and the
-// cycles of the simulation phase (IEEE 1076-2019 23.18).
+// The delta cycles of the time step (the cycle that advanced time is not
+// one, IEEE 1076-2019 14.7.5.1) and the cycles of the simulation phase
+// (IEEE 1076-2019 23.18).
 static void on_d3(const vhpiCbDataT* data)
 {
     vhpiTimeT now;

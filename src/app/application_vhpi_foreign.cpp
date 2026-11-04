@@ -3496,11 +3496,12 @@ private:
             *time = to_vhpi_time(simulation_.now());
         }
         if (cycles != nullptr) {
-            // With a time: the delta cycles that have occurred at Tc, the
-            // current cycle included. Without one: every simulation cycle of
-            // the simulation phase (IEEE 1076-2019 23.18).
+            // With a time: the delta cycles that have occurred at Tc; the
+            // cycle that advanced to Tc is not one (IEEE 1076-2019 14.7.5.1).
+            // Without one: every simulation cycle of the simulation phase
+            // (IEEE 1076-2019 23.18).
             const auto count = phase_ != vhpiSimulationPhase ? 0U
-                : time != nullptr ? simulation_.delta() + 1U
+                : time != nullptr ? simulation_.delta()
                                   : simulation_.cycles();
             *cycles = static_cast<long>(count);
         }

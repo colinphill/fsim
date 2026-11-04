@@ -1833,6 +1833,8 @@ IVTEST_VPI_NONSTANDARD = {
     **{name: "registers cbNextSimTime with a vpiSuppressTime or NULL time; IEEE "
        "1800-2023 38.36.2 makes that an error that creates no callback"
        for name in ("nextsimtime_cb3", "nextsimtime_cb4")},
+    "timescale": "calls tf_getlongsimtime, which the TF routines of IEEE 1364-2001 "
+        "clause 25 do not include",
 }
 
 
