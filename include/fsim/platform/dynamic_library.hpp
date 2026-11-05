@@ -22,8 +22,8 @@ public:
     [[nodiscard]] static std::unique_ptr<DynamicLibrary> open(
         const std::filesystem::path& path, std::string& error,
         bool global = false);
-    /// A symbol of the program or of any globally loaded library; null
-    /// when none defines it.
+    /// A symbol of the program or of any globally loaded library (on
+    /// Windows, of any module of the process); null when none defines it.
     [[nodiscard]] static void* default_symbol(std::string_view name);
     [[nodiscard]] static bool is_loaded(
         const std::filesystem::path& path) noexcept;

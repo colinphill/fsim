@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include <atomic>
 #include <cstdint>
 
 namespace fsim::runtime {
@@ -11,38 +10,22 @@ namespace fsim::runtime {
 /// and tells the service before a disable ends or redirects a process, so
 /// that the service can hand the disable to the C code of the import call
 /// chain that process is suspended in. Nothing is installed (and a notice is
-/// one atomic load) unless a DPI library is loaded.
+/// one atomic load) unless a DPI library is loaded. The state lives in
+/// fsim_runtime: header-inline storage would give each Windows DLL its own
+/// copy, and the kernel would never see the service's notice.
 class DpiCallProcess {
 public:
     using Notice = void (*)(void* user_data, std::uint64_t process);
 
     /// The process that makes the DPI call being dispatched on this thread.
-    static void set_current(const std::uint64_t process) noexcept
-    {
-        current_ = process;
-    }
-    [[nodiscard]] static std::uint64_t current() noexcept { return current_; }
+    static void set_current(std::uint64_t process) noexcept;
+    [[nodiscard]] static std::uint64_t current() noexcept;
 
-    static void install(const Notice notice, void* const user_data) noexcept
-    {
-        user_data_.store(user_data, std::memory_order_release);
-        notice_.store(notice, std::memory_order_release);
-    }
+    static void install(Notice notice, void* user_data) noexcept;
 
     /// A disable ends or redirects `process`, which may be inside an import
     /// call chain.
-    static void disabled(const std::uint64_t process)
-    {
-        const auto notice = notice_.load(std::memory_order_acquire);
-        if (notice != nullptr) {
-            notice(user_data_.load(std::memory_order_acquire), process);
-        }
-    }
-
-private:
-    static inline thread_local std::uint64_t current_ {};
-    static inline std::atomic<Notice> notice_ {};
-    static inline std::atomic<void*> user_data_ {};
+    static void disabled(std::uint64_t process);
 };
 
 } // namespace fsim::runtime

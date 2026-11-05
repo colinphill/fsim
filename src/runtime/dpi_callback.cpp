@@ -1,13 +1,43 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/dpi_callback.hpp"
+#include "fsim/runtime/foreign_call_process.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <exception>
 #include <limits>
 #include <utility>
 
 namespace fsim::runtime {
+namespace {
+
+thread_local std::uint64_t dpi_call_process {};
+std::atomic<DpiCallProcess::Notice> dpi_disable_notice {};
+std::atomic<void*> dpi_disable_user_data {};
+
+}  // namespace
+
+void DpiCallProcess::set_current(const std::uint64_t process) noexcept {
+  dpi_call_process = process;
+}
+
+std::uint64_t DpiCallProcess::current() noexcept {
+  return dpi_call_process;
+}
+
+void DpiCallProcess::install(const Notice notice,
+                             void* const user_data) noexcept {
+  dpi_disable_user_data.store(user_data, std::memory_order_release);
+  dpi_disable_notice.store(notice, std::memory_order_release);
+}
+
+void DpiCallProcess::disabled(const std::uint64_t process) {
+  const auto notice = dpi_disable_notice.load(std::memory_order_acquire);
+  if (notice != nullptr) {
+    notice(dpi_disable_user_data.load(std::memory_order_acquire), process);
+  }
+}
 
 SystemVerilogDpiCallbackContext::SystemVerilogDpiCallbackContext(
     const SystemVerilogDpiScopeRegistry& scopes) noexcept
