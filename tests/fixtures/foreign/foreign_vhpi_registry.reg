@@ -1,0 +1,8 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- A tabular registry (IEEE 1076-2019 20.2.2) for
+-- foreign_vhpi_registry_plugin.c.
+
+  fsim_foreign_vhpi_registry_plugin inv vhpiArchF registry_elab registry_exec
+fsim_foreign_vhpi_registry_plugin   answer vhpiFuncF null null  -- by model name
+fsim_foreign_vhpi_registry_plugin app vhpiAppF registry_application null
+fsim_foreign_vhpi_registry_plugin null vhpiLibF registry_library null

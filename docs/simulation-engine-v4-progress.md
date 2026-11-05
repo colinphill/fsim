@@ -138,6 +138,110 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-04: Foreign-interface closure after Phase B (`7fa5f19d`, `5de6fd3d` and this commit, sweeps `fc7g`, `fc7ga`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md`, the work after Phase B. Conformance inventory: `docs/foreign-interface-conformance.md`.
+
+**What landed:**
+- **`7fa5f19d`: worker packages w1–w22**, merged and fixed in the tree:
+  - **PLI 1.0 TF and ACC**, audited against IEEE 1364-2001:
+    - parameter value-change flags and delayed puts;
+    - a change made in the same process step is delivered inside `acc_vcl_delete` (23.97);
+    - ACC delays and pulse limits, and the legacy TF inventory.
+  - **DPI:**
+    - aggregate arguments (structs, sized and open arrays);
+    - export dispatch by scope (35.5.3; `svGetScopeFromName` names no package, H.9.3);
+    - disable, time scope, and type checks (FSIM-SV-SEM-460..464).
+  - **VPI:**
+    - delays of primitives, paths and timing checks;
+    - SDF delay terms, devices and intermodule paths;
+    - module paths use the turn-off delays of Table 30-2.
+  - **VHPI:** foreign architectures, dynamic elaboration frames, driver deposit taking effect immediately (22.5.4), statements, errors, values, and save/restart.
+  - **v4:**
+    - A value-change callback registered after a write of the running activation no longer sees that write.
+    - Probe-only debug points are stripped from kernel members.
+  - Runtime state schema 99.
+- **`5de6fd3d`: fixes for the `fc1` sweep losses:**
+  - `vhpi_get_time` counts the delta cycles at Tc. The cycle that advanced to Tc is not one of them (IEEE 1076-2019 23.18, 14.7.5.1).
+  - The step of another instance's exports runs in that instance when the unit has only function exports (IEEE 1800-2023 35.5.3).
+  - `ivtest/vpi_timescale` is out of scope: it calls `tf_getlongsimtime`, which IEEE 1364-2001 clause 25 does not define.
+- **This commit (archive `fc7`):**
+  - **VHPI registry and VHPIDIRECT:**
+    - `simulate --vhpi-registry FILE` (key `simulate.vhpi_registry`) reads the tabular registry of IEEE 1076-2019 20.2.2, with every entry kind.
+    - The standard direct binding `VHPIDIRECT library ...` (20.2.4.3) works for foreign architectures and subprograms.
+  - **`vhpiLineOffsetP`:** analysis records declaration and statement columns. `vhpi_get` returns the number of characters before the object on its line, and `vhpiUndefined` where `vhpiLineNoP` is undefined.
+  - **Strict DPI results (IEEE 1800-2023 35.5.5):**
+    - A bit-vector or packed-aggregate function result is an error (SEM-463).
+    - `--dpi-header` emits struct typedefs. Each typedef gets its own tag, even when two typedefs share a layout.
+    - `verilator/t_dpi_result_type` is now excluded for this reason.
+  - **Reference-stable SignalInfoTable:**
+    - The table is chunked while the design is built and flattened when building ends.
+    - This replaces the per-site copies that made `nvc/issue1240` hang in elaboration.
+    - Heavy-set elaboration did not regress.
+  - **Foreign-run cost:** the A-G7 targets are idle library ≤1.25× and clock watch ≤1.5×. The `fc3` gate check measured idle at 2.41×. Fixes:
+    - `kernel_access.delay_slots` is set only when the design binds primitive delay slots. Previously every foreign run changed the plan key.
+    - **Deferred generate scopes:** B6 published every generate block occurrence, which grew original_throughput from 12.6k to 142k VPI objects.
+      - A scope that holds no published object is now created on first access, beneath its nearest published ancestor (`SystemVerilogVpiDeferredGenerateScope`).
+      - Its processes, parameters, genvar and array object are created with it.
+      - A published scope's parameters and genvar also wait for first access.
+    - **VPI iteration order stays as before:**
+      - Each recorded scope reserves its place and its parameters' places (`reserve_ordinals`). Children are kept sorted by place.
+      - Every site that creates a generate scope uses the reserved place, including the two signal-publication sites.
+      - Without this, `ivtest/vpi_genblk_unnamed` listed scopes in a different order.
+    - The VPI object publication order computes each object's path and depth once.
+    - **Result (archive `fc7`, original_throughput, interleaved, median of 5, CPU 9):**
+      - Idle library: 1.53 s against 1.25 s with no library (1.22×).
+      - Clock watch: 1.82 s (1.46×).
+      - In the same run, `cb1` measured 1.24× and 1.46×.
+      - The margin is thin. Host noise is about ±0.05 s per run, so any new object published up front breaks the idle target.
+    - **Delayed gate netlist (41k gates, task 124):** idle library 1.16× (`cb1` 1.07×).
+
+**Gate:**
+- Archive `fc7`.
+- ct4:
+  - normal, strict and verify: 1210/1210.
+  - mt4 (gate run): 1207/1210. `fsim.application.systemc_matrix_core` aborted building its multi-library SystemC project, and the two closure tests that depend on it were not run.
+  - The test passed alone three times under the same settings, and the full mt4 pass re-run gave 1210/1210.
+  - The cause is not known: the test printed nothing about the failed build. The test now prints the build's diagnostics, so a recurrence shows its cause.
+- cocotb suite against `pb3`: +0 −0 in all four configurations.
+- Sweeps `fc7g` and `fc7ga`: 0 losses against `pb3g` and `pb3ga`, apart from the two intended exclusions (`ivtest/vpi_timescale`, `verilator/t_dpi_result_type`).
+- Census: 0 losses in both modes.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, every seed collapses (4183 kept).
+
+| Suite | pb3g passed / in scope | fc7g passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2637 / 2637 | 2636 / 2636 | 275 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2071 / 2071 | 2070 / 2070 | 345 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+| cocotb 2.1 Verilog | 708 / 708 | 708 / 708 | 1 |
+| cocotb 2.1 VHDL | 646 / 646 | 646 / 646 | 1 |
+| cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
+| cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
+
+**D6 campaign `fc7-g5b`** (`perf.sh`, 3 samples, CPU 9, ASLR off, xsim in the same session): geomean e2e 3.78× (`pb3-g5` 3.78×), minimum simulate 3.62× (mixed_codec; `pb3-g5` 3.52×). Both floors hold.
+- The first campaign, `fc7-g5`, measured 3.43× and 2.16× while host memory was fragmented: each simulate stalled in kernel compaction (about 1.8 s of system time on original_codec).
+- Under those conditions `pb3` timed the same as `fc7` (3.7 s each).
+- After the owner dropped caches and compacted memory, both archives ran original_codec simulate in about 1.95 s, and `fc7-g5b` was run.
+
+| Case | fsim e2e | xsim e2e | e2e × | fsim sim | xsim sim | sim × |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 10.363 | 28.213 | 2.72 | 1.881 | 7.398 | 3.93 |
+| original_throughput | 4.794 | 15.722 | 3.28 | 1.230 | 7.395 | 6.01 |
+| mixed_codec | 8.782 | 24.217 | 2.76 | 1.781 | 6.442 | 3.62 |
+| mixed_throughput | 4.267 | 12.437 | 2.91 | 1.378 | 5.991 | 4.35 |
+| codex_reference_mode0_frames1 | 2.008 | 9.128 | 4.55 | 0.127 | 3.786 | 29.88 |
+| codex_reference_mode0_frames2 | 2.012 | 9.182 | 4.56 | 0.126 | 3.786 | 30.10 |
+| codex_reference_mode1_frames1 | 2.112 | 9.684 | 4.59 | 0.127 | 3.786 | 29.92 |
+| codex_reference_mode1_frames2 | 2.112 | 9.731 | 4.61 | 0.125 | 3.786 | 30.19 |
+| codex_throughput_default | 2.211 | 9.835 | 4.45 | 0.277 | 3.936 | 14.22 |
+| codex_throughput_direct_syndrome | 2.016 | 8.630 | 4.28 | 0.276 | 3.886 | 14.07 |
+
+**Open after this gate:** tasks 108 (remaining foreign model), 109, 119, 128–130, 133 and 139–142.
+
 ### 2026-11-04: cocotb integration, cocotb plan Phase B (B3–B8) (`38c37c6b`, sweeps `pb3g`, `pb3ga`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md`. User documentation: `docs/cocotb.md`.

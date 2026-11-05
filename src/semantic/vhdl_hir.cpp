@@ -31,6 +31,53 @@ bool operator_designator(std::string_view name)
             });
 }
 
+std::optional<ForeignDirectBinding> foreign_direct_binding(
+    const std::string_view value, const bool architecture)
+{
+    // The fields are separated by SPACE or NBSP characters; in the object
+    // library path a backslash escapes the next SPACE or backslash
+    // (IEEE 1076-2019 20.2.4.3).
+    std::vector<std::string> words;
+    std::string word;
+    bool open { };
+    for (std::size_t index { }; index < value.size(); ++index) {
+        const auto character = value[index];
+        if (character == '\\' && index + 1U < value.size()
+            && (value[index + 1U] == ' ' || value[index + 1U] == '\\')) {
+            word.push_back(value[++index]);
+            open = true;
+        } else if (character == ' ' || character == '\xa0') {
+            if (open) {
+                words.push_back(std::move(word));
+                word.clear();
+                open = false;
+            }
+        } else {
+            word.push_back(character);
+            open = true;
+        }
+    }
+    if (open) {
+        words.push_back(std::move(word));
+    }
+    // VHPIDIRECT and null are case sensitive.
+    if (words.empty() || words.front() != "VHPIDIRECT"
+        || words.size() != (architecture ? 4U : 3U)) {
+        return std::nullopt;
+    }
+    ForeignDirectBinding binding;
+    binding.library = std::move(words[1]);
+    if (architecture) {
+        if (words[2] != "null") {
+            binding.elaboration = std::move(words[2]);
+        }
+        binding.execution = std::move(words[3]);
+    } else {
+        binding.execution = std::move(words[2]);
+    }
+    return binding;
+}
+
 std::optional<ForeignArchitectureBinding> foreign_architecture_binding(
     const Hir& hir, const Unit& architecture)
 {
@@ -62,11 +109,16 @@ std::optional<ForeignArchitectureBinding> foreign_architecture_binding(
         if (value == expressions.end() || !value->decoded_string) {
             return std::nullopt;
         }
+        const auto& text = *value->decoded_string;
+        if (const auto direct = foreign_direct_binding(text, true)) {
+            return ForeignArchitectureBinding { text, true, direct->library,
+                architecture.name, direct->elaboration, direct->execution };
+        }
         // Identifiers separated by one or more SPACE or NBSP characters,
         // with leading and trailing ones ignored (20.2.4.1).
         std::vector<std::string> words;
         std::string word;
-        for (const auto character : *value->decoded_string) {
+        for (const auto character : text) {
             if (character == ' ' || character == '\xa0') {
                 if (!word.empty()) {
                     words.push_back(std::move(word));
@@ -79,14 +131,10 @@ std::optional<ForeignArchitectureBinding> foreign_architecture_binding(
         if (!word.empty()) {
             words.push_back(std::move(word));
         }
-        // The reserved words are case sensitive (20.2.4.2, 20.2.4.3).
+        // The reserved words are case sensitive (20.2.4.2).
         if (words.size() == 3U && words.front() == "VHPI") {
-            return ForeignArchitectureBinding { *value->decoded_string, false,
-                words[1], words[2] };
-        }
-        if (words.size() == 4U && words.front() == "VHPIDIRECT") {
-            return ForeignArchitectureBinding { *value->decoded_string, true,
-                { }, { } };
+            return ForeignArchitectureBinding { text, false, words[1],
+                words[2], { }, { } };
         }
         return std::nullopt;
     }

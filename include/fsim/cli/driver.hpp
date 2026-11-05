@@ -130,6 +130,8 @@ struct Invocation {
   std::vector<std::string> sv_libs;
   // VHPI modules (`LIB[:BOOTSTRAP]`, IEEE 1076-2019 20.2).
   std::vector<std::string> vhpi_modules;
+  // VHPI tabular registry files (IEEE 1076-2019 20.2.2).
+  std::vector<std::string> vhpi_registries;
   std::vector<std::string> trace_filters;
   std::optional<std::string> duration;
   std::optional<std::uint64_t> max_deltas;

@@ -1279,6 +1279,29 @@ private:
     std::uint64_t revision_ { };
 };
 
+/// The fields of a standard direct binding (IEEE 1076-2019 20.2.4.3).
+struct ForeignDirectBinding {
+    /// The object library path with its escapes resolved, or "null" when
+    /// the object library specifier is null (the tool finds the library).
+    std::string library;
+    /// The elaboration function of an architecture binding; empty when the
+    /// elaboration specifier is null, and for a subprogram binding.
+    std::string elaboration;
+    /// The execution function name as written; "null" for a subprogram
+    /// binding names the subprogram designator instead, which the caller
+    /// resolves.
+    std::string execution;
+};
+
+/// Parse the value of a 'FOREIGN attribute as a standard direct binding:
+/// `VHPIDIRECT library elaboration execution` for an architecture, or
+/// `VHPIDIRECT library execution` for a subprogram (IEEE 1076-2019
+/// 20.2.4.3). The fields are separated by SPACE or NBSP characters; in the
+/// object library path "\ " is a space and "\\" a backslash. Returns
+/// nullopt for any other value.
+[[nodiscard]] std::optional<ForeignDirectBinding> foreign_direct_binding(
+    std::string_view value, bool architecture);
+
 /// How an architecture's 'FOREIGN attribute binds it to a VHPI program
 /// (IEEE 1076-2019 20.2.4).
 struct ForeignArchitectureBinding {
@@ -1286,11 +1309,15 @@ struct ForeignArchitectureBinding {
     std::string value;
     /// A standard indirect binding names the registered model
     /// ("VHPI library model", 20.2.4.2); a standard direct binding names
-    /// entry points instead ("VHPIDIRECT ...", 20.2.4.3) and leaves the
-    /// library and model empty.
+    /// entry points instead ("VHPIDIRECT ...", 20.2.4.3): its library is
+    /// the object library path ("null" for a null specifier), its model the
+    /// simple name of the architecture body, and `elaboration` and
+    /// `execution` the entry points (`elaboration` is empty for none).
     bool direct { };
     std::string library;
     std::string model;
+    std::string elaboration;
+    std::string execution;
 };
 
 /// The 'FOREIGN binding of an architecture in one of the forms 20.2.4

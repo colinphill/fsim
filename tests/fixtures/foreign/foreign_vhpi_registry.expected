@@ -1,0 +1,5 @@
+#c application phase=registration
+#c library phase=registration registered=1
+#c elab :top:u1 phase=elaboration
+#c exec :top:u1 phase=initialization
+#c end r=49

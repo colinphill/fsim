@@ -35,25 +35,25 @@
 #c signature drive=[std_ulogic, bit]
 #c literal red=[return color]
 #c unit physical name set=1
-#c decl vhpienumtypedeclk color line=9 file=foreign_vhpi_model.vhd
-#c decl vhpiconstdeclk k line=10 file=foreign_vhpi_model.vhd
-#c decl vhpisigdeclk v line=11 file=foreign_vhpi_model.vhd
-#c decl vhpisigdeclk c line=12 file=foreign_vhpi_model.vhd
-#c decl vhpisigdeclk r line=13 file=foreign_vhpi_model.vhd
-#c decl vhpialiasdeclk hi line=14 file=foreign_vhpi_model.vhd
-#c decl vhpifuncdeclk twice line=16 file=foreign_vhpi_model.vhd
-#c decl vhpifuncdeclk twice line=20 file=foreign_vhpi_model.vhd
-#c decl vhpiprocdeclk nop line=24 file=foreign_vhpi_model.vhd
-#c decl vhpicompdeclk leaf line=27 file=foreign_vhpi_model.vhd
-#c decl vhpiattrdeclk note line=30 file=foreign_vhpi_model.vhd
-#c decl vhpiattrspeck note line=31 file=foreign_vhpi_model.vhd
-#c decl vhpigrouptempdeclk pair line=32 file=foreign_vhpi_model.vhd
-#c decl vhpigroupdeclk vr line=33 file=foreign_vhpi_model.vhd
-#c decl vhpifloattypedeclk volts line=34 file=foreign_vhpi_model.vhd
-#c decl vhpisubtypedeclk unit_volts line=35 file=foreign_vhpi_model.vhd
-#c decl vhpisubtypedeclk resolved_bit line=36 file=foreign_vhpi_model.vhd
-#c decl vhpisubtypedeclk quad line=37 file=foreign_vhpi_model.vhd
-#c decl vhpifiletypedeclk int_file line=38 file=foreign_vhpi_model.vhd
-#c decl vhpifiledeclk fi line=39 file=foreign_vhpi_model.vhd
-#c decl vhpiprocdeclk drive line=40 file=foreign_vhpi_model.vhd
-#c root kind=vhpirootinstk line=8 unit line=8
+#c decl vhpienumtypedeclk color line=9 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpiconstdeclk k line=10 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpisigdeclk v line=11 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpisigdeclk c line=12 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpisigdeclk r line=13 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpialiasdeclk hi line=14 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpifuncdeclk twice line=16 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpifuncdeclk twice line=20 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpiprocdeclk nop line=24 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpicompdeclk leaf line=27 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpiattrdeclk note line=30 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpiattrspeck note line=31 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpigrouptempdeclk pair line=32 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpigroupdeclk vr line=33 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpifloattypedeclk volts line=34 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpisubtypedeclk unit_volts line=35 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpisubtypedeclk resolved_bit line=36 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpisubtypedeclk quad line=37 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpifiletypedeclk int_file line=38 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpifiledeclk fi line=39 offset=2 file=foreign_vhpi_model.vhd
+#c decl vhpiprocdeclk drive line=40 offset=2 file=foreign_vhpi_model.vhd
+#c root kind=vhpirootinstk line=8 offset=0 unit line=8

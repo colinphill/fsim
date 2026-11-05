@@ -10,6 +10,9 @@
 # FSIM_ELABORATE_PLUGIN also loads the VPI plug-in at `fsim elaborate`; a
 # non-empty FSIM_SDF names an SDF file that elaboration annotates.
 # FSIM_SIMULATE_MESSAGE, when set, is text `fsim simulate` must report.
+# FSIM_DPI_HEADER, when set, is the header `fsim compile --dpi-header` must
+# write, and FSIM_ELABORATE_MESSAGE text a failing `fsim elaborate` must
+# report; either ends the case there.
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -41,6 +44,10 @@ function(fsim_step FSIM_STEP_NAME)
   if(FSIM_STEP_NAME STREQUAL "simulate" AND DEFINED FSIM_SIMULATE_STATUS
       AND NOT FSIM_SIMULATE_STATUS STREQUAL "")
     set(FSIM_WANTED "${FSIM_SIMULATE_STATUS}")
+  elseif(FSIM_STEP_NAME STREQUAL "elaborate"
+      AND DEFINED FSIM_ELABORATE_MESSAGE
+      AND NOT FSIM_ELABORATE_MESSAGE STREQUAL "")
+    set(FSIM_WANTED 1)
   endif()
   if(NOT FSIM_RESULT EQUAL FSIM_WANTED)
     message(FATAL_ERROR
@@ -50,9 +57,22 @@ function(fsim_step FSIM_STEP_NAME)
   set(FSIM_STEP_ERROR "${FSIM_ERROR}" PARENT_SCOPE)
 endfunction()
 
+set(FSIM_COMPILE_ARGUMENTS "")
+if(DEFINED FSIM_DPI_HEADER AND NOT FSIM_DPI_HEADER STREQUAL "")
+  set(FSIM_COMPILE_ARGUMENTS --dpi-header dpi.h)
+endif()
 foreach(FSIM_SOURCE_NAME IN LISTS FSIM_SOURCE_NAMES)
-  fsim_step(compile compile "${FSIM_SOURCE_NAME}")
+  fsim_step(compile compile ${FSIM_COMPILE_ARGUMENTS} "${FSIM_SOURCE_NAME}")
 endforeach()
+if(DEFINED FSIM_DPI_HEADER AND NOT FSIM_DPI_HEADER STREQUAL "")
+  file(READ "${FSIM_WORK_DIR}/dpi.h" FSIM_HEADER)
+  file(READ "${FSIM_DPI_HEADER}" FSIM_EXPECTED_HEADER)
+  if(NOT FSIM_HEADER STREQUAL FSIM_EXPECTED_HEADER)
+    message(FATAL_ERROR
+      "DPI header differs from ${FSIM_DPI_HEADER}\n--- actual\n${FSIM_HEADER}--- expected\n${FSIM_EXPECTED_HEADER}")
+  endif()
+  return()
+endif()
 set(FSIM_ELABORATE_ARGUMENTS "")
 if(DEFINED FSIM_SDF AND NOT "${FSIM_SDF}" STREQUAL "")
   get_filename_component(FSIM_SDF_NAME "${FSIM_SDF}" NAME)
@@ -64,6 +84,15 @@ if(FSIM_ELABORATE_PLUGIN)
     ${FSIM_ELABORATE_ARGUMENTS} "${FSIM_TOP}")
 else()
   fsim_step(elaborate elaborate ${FSIM_ELABORATE_ARGUMENTS} "${FSIM_TOP}")
+endif()
+if(DEFINED FSIM_ELABORATE_MESSAGE AND NOT FSIM_ELABORATE_MESSAGE STREQUAL "")
+  string(FIND "${FSIM_STEP_OUTPUT}${FSIM_STEP_ERROR}"
+    "${FSIM_ELABORATE_MESSAGE}" FSIM_MESSAGE_OFFSET)
+  if(FSIM_MESSAGE_OFFSET EQUAL -1)
+    message(FATAL_ERROR
+      "fsim elaborate did not report \"${FSIM_ELABORATE_MESSAGE}\":\n${FSIM_STEP_OUTPUT}${FSIM_STEP_ERROR}")
+  endif()
+  return()
 endif()
 separate_arguments(FSIM_SIMULATE_ARGUMENTS UNIX_COMMAND "${FSIM_SIMULATE_ARGS}")
 if(FSIM_INTERFACE STREQUAL "mixed")

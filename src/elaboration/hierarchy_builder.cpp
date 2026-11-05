@@ -590,7 +590,7 @@ std::optional<std::map<SignalId, SignalId>>
 make_systemverilog_template_signal_remap(
     const std::span<const SystemVerilogTemplateSignalRole> source_roles,
     const std::span<const SystemVerilogTemplateSignalRole> target_roles,
-    const std::span<const SignalInfo> signal_info,
+    const SignalInfoView signal_info,
     const std::span<const Signal> signals)
 {
     using RoleKey = std::pair<std::uint32_t,
@@ -711,7 +711,7 @@ bool remap_systemverilog_template_process(
     const std::map<SignalId, SignalId>& signal_remap,
     const std::string_view from_hierarchy,
     const std::string_view to_hierarchy,
-    const std::span<const SignalInfo> signal_info)
+    const SignalInfoView signal_info)
 {
     if (process.switch_source || process.switch_target
         || process.switch_control) {
@@ -779,7 +779,7 @@ bool remap_systemverilog_template_process(
     const std::map<SignalId, SignalId>& signal_remap,
     const std::string_view from_hierarchy,
     const std::string_view to_hierarchy,
-    const std::span<const SignalInfo> signal_info)
+    const SignalInfoView signal_info)
 {
     return remap_systemverilog_template_process<Process>(
         process, signal_remap, from_hierarchy, to_hierarchy, signal_info);

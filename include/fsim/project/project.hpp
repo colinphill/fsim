@@ -216,6 +216,8 @@ struct RunSection {
   std::vector<std::string> vpi_modules;
   std::vector<std::string> sv_libs;
   std::vector<std::string> vhpi_modules;
+  // VHPI tabular registry files (IEEE 1076-2019 20.2.2).
+  std::vector<std::string> vhpi_registries;
   // Statement, call and suspend probes for the foreign libraries
   // (cbStmt, vhpiCbStmt and the like); the kernel keeps its debug points.
   bool foreign_probes{false};

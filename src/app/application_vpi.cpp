@@ -14,6 +14,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <ranges>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -1226,6 +1227,7 @@ namespace {
                 descriptor.name,
                 std::move(descriptor.source),
                 std::move(descriptor.type),
+                descriptor.ordinal,
             });
         if (!created) {
             const auto existing = registry.find(identity);
@@ -1401,6 +1403,346 @@ create_systemverilog_vpi_driver(
             handle, process.runtime_index, strength } };
 }
 
+// A parameter whose value elaboration recorded beneath a generate block
+// or a package, published under `parent` (IEEE 1800-2023 37.28).
+void publish_recorded_vpi_parameter(
+    runtime::SystemVerilogVpiObjectRegistry& registry,
+    const BuiltProject& project, const fsim_vpi_handle_v1 parent,
+    const std::string& path, const std::string& name,
+    const std::string& identity, const semantic::DeclarationId declaration_id,
+    const bool local, const runtime::SystemVerilogVpiTypeInfo& owner_type,
+    const std::optional<std::uint64_t> ordinal = std::nullopt)
+{
+    const auto* const declaration
+        = project.systemverilog_hir.find_declaration(declaration_id);
+    if (declaration == nullptr
+        || registry.find_child(parent, vpi_identifier(name))) {
+        return;
+    }
+    const semantic::design::ParameterValue parameter {
+        name, identity, identity, declaration_id
+    };
+    auto decoded = decode_vpi_parameter(
+        parameter, *declaration, semantic::Language::system_verilog);
+    if (!decoded) {
+        return;
+    }
+    if (declaration->initializer && declaration->type
+        && declaration->type->target.spelling == "implicit") {
+        const auto* const initializer
+            = project.systemverilog_hir.find_expression(
+                *declaration->initializer);
+        decoded->type.string_literal = initializer != nullptr
+            && initializer->kind
+                == semantic::sv::ExpressionKind::string_literal;
+    }
+    auto type = std::move(decoded->type);
+    type.local_parameter = local;
+    type.language = owner_type.language;
+    if (owner_type.semantic_unit_id) {
+        type.semantic_unit_id = owner_type.semantic_unit_id;
+        type.semantic_unit = owner_type.semantic_unit;
+        type.standard = owner_type.standard;
+        type.compatibility_profile = owner_type.compatibility_profile;
+        apply_vpi_source(type, project, declaration->source);
+        if (type.source_path.empty()) {
+            type.source_id = owner_type.source_id;
+            type.source_path = owner_type.source_path;
+            type.source_line = owner_type.source_line;
+            type.source_column = owner_type.source_column;
+        }
+    }
+    runtime::SystemVerilogVpiObjectDescriptor descriptor;
+    descriptor.kind = runtime::SystemVerilogVpiObjectKind::Parameter;
+    descriptor.parent = parent;
+    descriptor.name = vpi_identifier(name);
+    descriptor.type = std::move(type);
+    descriptor.ordinal = ordinal;
+    const auto handle
+        = create_checked(registry, std::move(descriptor), path);
+    const auto bound = registry.bind_value(
+        handle, std::move(decoded->value));
+    if (bound != runtime::SystemVerilogVpiValueError::None) {
+        throw std::logic_error {
+            "failed to bind VPI parameter '" + path + "' with error "
+            + std::to_string(static_cast<unsigned>(bound))
+        };
+    }
+}
+
+struct VpiGenvarMatch {
+    const semantic::sv::GenerateRegion* region { };
+    std::int64_t value { };
+};
+
+// The loop generate region whose genvar the generate block occurrence at
+// `remainder` within its instance holds, with the genvar's value; none for
+// any other occurrence.
+std::optional<VpiGenvarMatch> vpi_genvar_region(
+    const std::vector<semantic::sv::GenerateRegion>& generates,
+    const std::string_view remainder)
+{
+    const auto* regions = &generates;
+    const semantic::sv::GenerateRegion* region = nullptr;
+    std::int64_t value { };
+    bool matched = true;
+    std::size_t begin = 0U;
+    while (matched && begin <= remainder.size()) {
+        const auto dot = remainder.find('.', begin);
+        const auto component = remainder.substr(begin,
+            dot == std::string_view::npos ? std::string_view::npos
+                                          : dot - begin);
+        const auto open = component.find('[');
+        const auto label = component.substr(0U, open);
+        region = nullptr;
+        for (const auto& candidate : *regions) {
+            if (!label.empty()
+                && (candidate.label == label
+                    || candidate.alternative_label == label
+                    || std::ranges::any_of(candidate.alternatives,
+                        [&](const auto& alternative) {
+                            return alternative.label == label;
+                        }))) {
+                region = &candidate;
+                break;
+            }
+        }
+        if (region == nullptr) {
+            matched = false;
+            break;
+        }
+        if (open != std::string_view::npos && component.back() == ']') {
+            const auto digits = component.substr(
+                open + 1U, component.size() - open - 2U);
+            const auto parsed = std::from_chars(digits.data(),
+                digits.data() + digits.size(), value, 10);
+            if (parsed.ec != std::errc { }
+                || parsed.ptr != digits.data() + digits.size()) {
+                matched = false;
+                break;
+            }
+        } else {
+            value = 0;
+        }
+        regions = &region->nested;
+        if (dot == std::string_view::npos) {
+            break;
+        }
+        begin = dot + 1U;
+    }
+    if (!matched || region == nullptr || region->iterator.empty()
+        || region->kind != semantic::sv::GenerateKind::iterative
+        || remainder.empty() || remainder.back() != ']') {
+        return std::nullopt;
+    }
+    return VpiGenvarMatch { region, value };
+}
+
+// A genvar's references within the scope `remainder` of an instance that
+// an iteration generates are local parameters of that scope (IEEE
+// 1800-2023 37.85 detail 3): one int `vpiParameter` named like the genvar,
+// holding the iteration's value, which is the index of the scope's name
+// (27.4). Scopes of a block without a label take an implicit name and are
+// not matched.
+void publish_vpi_genvar(runtime::SystemVerilogVpiObjectRegistry& registry,
+    const std::vector<semantic::sv::GenerateRegion>& generates,
+    const std::string_view remainder, const std::string& path,
+    const fsim_vpi_handle_v1 scope_handle)
+{
+    if (registry.kind_of(scope_handle)
+        != runtime::SystemVerilogVpiObjectKind::GenerateScope) {
+        return;
+    }
+    const auto match = vpi_genvar_region(generates, remainder);
+    if (!match) {
+        return;
+    }
+    const auto* const region = match->region;
+    const auto value = match->value;
+    const auto parameter_path = path + "." + region->iterator;
+    if (registry.find_child(scope_handle, vpi_identifier(region->iterator))) {
+        return;
+    }
+    runtime::SystemVerilogVpiTypeInfo type;
+    if (auto scope = registry.lookup(scope_handle);
+        scope && scope.value->type) {
+        type = std::move(*scope.value->type);
+    }
+    type.category = runtime::SystemVerilogVpiValueCategory::Integer2;
+    type.width = 32U;
+    type.is_signed = true;
+    type.is_constant = true;
+    type.local_parameter = true;
+    type.descriptor = nullptr;
+    type.declared = nullptr;
+    type.typespec = nullptr;
+    std::string bits(32U, '0');
+    const auto pattern = static_cast<std::uint32_t>(value);
+    for (unsigned bit = 0U; bit < 32U; ++bit) {
+        if (((pattern >> bit) & 1U) != 0U) {
+            bits[31U - bit] = '1';
+        }
+    }
+    runtime::SystemVerilogVpiObjectDescriptor descriptor;
+    descriptor.kind = runtime::SystemVerilogVpiObjectKind::Parameter;
+    descriptor.parent = scope_handle;
+    descriptor.name = vpi_identifier(region->iterator);
+    descriptor.type = std::move(type);
+    const auto handle
+        = create_checked(registry, std::move(descriptor), parameter_path);
+    const auto bound = registry.bind_value(handle,
+        systemverilog_vpi_signal_value(
+            runtime::PackedLogic4::from_msb_string(bits),
+            runtime::SystemVerilogScalarKind::None,
+            runtime::SystemVerilogVpiValueCategory::Integer2));
+    if (bound != runtime::SystemVerilogVpiValueError::None) {
+        throw std::logic_error {
+            "failed to bind VPI genvar '" + parameter_path + "'"
+        };
+    }
+}
+
+// Create the deferred generate scopes beneath `parent`, each with the
+// scopes above it, its parameters, then the arrays of the new scopes and
+// their genvars, the order the design publication creates them in.
+void materialize_vpi_generate_scopes(
+    runtime::SystemVerilogVpiObjectRegistry& registry,
+    const BuiltProject& project, const fsim_vpi_handle_v1 parent,
+    const std::vector<SystemVerilogVpiDeferredGenerateScope>& scopes)
+{
+    runtime::SystemVerilogVpiTypeInfo scope_type;
+    if (auto info = registry.lookup(parent); info && info.value->type) {
+        scope_type = std::move(*info.value->type);
+    }
+    scope_type.is_cell = false;
+    struct Created {
+        fsim_vpi_handle_v1 handle { };
+        fsim_vpi_handle_v1 parent { };
+        std::string path;
+        // The length of the instance's path, which `path` begins with.
+        std::size_t instance { };
+        std::optional<std::uint32_t> unit;
+        // A published scope whose parameters and genvar were deferred.
+        bool existing { };
+    };
+    std::vector<Created> created;
+    const auto& recorded_specializations = project.design.specializations();
+    // The reserved places of the scopes by path within their instance, for
+    // the scopes between a deferred scope and the parent.
+    std::unordered_map<std::string_view, std::uint64_t> places;
+    for (const auto& deferred : scopes) {
+        places.try_emplace(recorded_specializations.at(deferred.specialization)
+                               .vpi_generate_scopes.at(deferred.scope)
+                               .path,
+            deferred.ordinal);
+    }
+    for (const auto& deferred : scopes) {
+        const auto& recorded
+            = recorded_specializations.at(deferred.specialization);
+        const auto& scope = recorded.vpi_generate_scopes.at(deferred.scope);
+        const std::string_view scope_path { scope.path };
+        auto handle = parent;
+        if (deferred.offset >= scope_path.size()) {
+            // The parent is the scope: only its parameters and genvar wait.
+            if (auto info = registry.lookup(parent); info) {
+                created.push_back({ parent, info.value->parent,
+                    recorded.instance + "." + scope.path,
+                    recorded.instance.size(), deferred.unit, true });
+            }
+        }
+        bool blocked { };
+        for (std::size_t offset = deferred.offset;
+             offset < scope_path.size();) {
+            const auto separator = scope_path.find('.', offset);
+            const auto end = separator == std::string_view::npos
+                ? scope_path.size()
+                : separator;
+            const auto segment = scope_path.substr(offset, end - offset);
+            if (const auto existing = registry.find_child(handle, segment)) {
+                if (existing.value->kind
+                    != runtime::SystemVerilogVpiObjectKind::GenerateScope) {
+                    blocked = true;
+                    break;
+                }
+                handle = existing.value->handle;
+            } else {
+                auto path = recorded.instance + ".";
+                path.append(scope_path.substr(0U, end));
+                runtime::SystemVerilogVpiObjectDescriptor descriptor;
+                descriptor.kind
+                    = runtime::SystemVerilogVpiObjectKind::GenerateScope;
+                descriptor.parent = handle;
+                descriptor.name = std::string { segment };
+                descriptor.type = scope_type;
+                if (const auto place = places.find(scope_path.substr(0U, end));
+                    place != places.end()) {
+                    descriptor.ordinal = place->second;
+                }
+                const auto made
+                    = create_checked(registry, std::move(descriptor), path);
+                created.push_back({ made, handle, std::move(path),
+                    recorded.instance.size(), deferred.unit, false });
+                handle = made;
+            }
+            offset = end + 1U;
+        }
+        if (blocked) {
+            continue;
+        }
+        for (const auto& process : deferred.processes) {
+            (void)create_systemverilog_vpi_process(registry, project,
+                project.design_ir.processes().at(process.process), handle,
+                process.name, process.path);
+        }
+        if (scope.parameters.empty()) {
+            continue;
+        }
+        runtime::SystemVerilogVpiTypeInfo owner_type;
+        if (auto info = registry.lookup(handle); info && info.value->type) {
+            owner_type = std::move(*info.value->type);
+        }
+        const auto full_path = recorded.instance + "." + scope.path;
+        auto parameter_place = deferred.ordinal;
+        for (const auto& parameter : scope.parameters) {
+            publish_recorded_vpi_parameter(registry, project, handle,
+                full_path + "." + parameter.name, parameter.name,
+                parameter.identity, parameter.declaration, parameter.local,
+                owner_type, ++parameter_place);
+        }
+    }
+    // The elements `name[i]` of a generate scope array share an array
+    // object `name` beside them (IEEE 1800-2023 37.11, 37.85).
+    for (const auto& scope : created) {
+        if (scope.existing) {
+            continue;
+        }
+        const auto leaf = scope.path.rfind('.');
+        const auto name = std::string_view { scope.path }.substr(leaf + 1U);
+        const auto open = name.find('[');
+        if (open == std::string_view::npos || open == 0U
+            || name.back() != ']'
+            || registry.find_child(scope.parent, name.substr(0U, open))) {
+            continue;
+        }
+        runtime::SystemVerilogVpiObjectDescriptor descriptor;
+        descriptor.kind
+            = runtime::SystemVerilogVpiObjectKind::GenerateScopeArray;
+        descriptor.parent = scope.parent;
+        descriptor.name = std::string { name.substr(0U, open) };
+        descriptor.type = scope_type;
+        (void)create_checked(registry, std::move(descriptor),
+            scope.path.substr(0U, leaf + 1U + open));
+    }
+    const auto& units = project.systemverilog_hir.units();
+    for (const auto& scope : created) {
+        if (scope.unit) {
+            publish_vpi_genvar(registry, units.at(*scope.unit).generates,
+                std::string_view { scope.path }.substr(scope.instance + 1U),
+                scope.path, scope.handle);
+        }
+    }
+}
+
 } // namespace
 
 SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
@@ -1410,9 +1752,16 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     SystemVerilogVpiPublishedDesign result;
     result.registry = make_empty_systemverilog_vpi_registry();
     // About one object per design object, and a few per instance (scopes,
-    // parameters, ports).
+    // parameters, ports), plus every generate block occurrence with its
+    // parameters.
+    std::size_t generate_objects { };
+    for (const auto& recorded : project.design.specializations()) {
+        for (const auto& scope : recorded.vpi_generate_scopes) {
+            generate_objects += 1U + scope.parameters.size();
+        }
+    }
     result.registry->reserve(project.design_ir.objects().size()
-        + 4U * project.design_ir.instances().size());
+        + 4U * project.design_ir.instances().size() + generate_objects);
 
     std::set<std::uint32_t> relevant_specializations;
     std::map<std::uint32_t, runtime::SystemVerilogVpiLanguage>
@@ -1877,80 +2226,79 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
     }
 
-    // A parameter whose value elaboration recorded beneath a generate block
-    // or a package, published under `parent` (IEEE 1800-2023 37.28).
-    const auto publish_recorded_parameter
-        = [&](const fsim_vpi_handle_v1 parent, const std::string& path,
-              const std::string& name, const std::string& identity,
-              const semantic::DeclarationId declaration_id, const bool local,
-              const runtime::SystemVerilogVpiTypeInfo& owner_type) {
-              const auto* const declaration
-                  = project.systemverilog_hir.find_declaration(declaration_id);
-              if (declaration == nullptr || result.registry->find(path)) {
-                  return;
-              }
-              const semantic::design::ParameterValue parameter {
-                  name, identity, identity, declaration_id
-              };
-              auto decoded = decode_vpi_parameter(
-                  parameter, *declaration, semantic::Language::system_verilog);
-              if (!decoded) {
-                  return;
-              }
-              if (declaration->initializer && declaration->type
-                  && declaration->type->target.spelling == "implicit") {
-                  const auto* const initializer
-                      = project.systemverilog_hir.find_expression(
-                          *declaration->initializer);
-                  decoded->type.string_literal = initializer != nullptr
-                      && initializer->kind
-                          == semantic::sv::ExpressionKind::string_literal;
-              }
-              auto type = std::move(decoded->type);
-              type.local_parameter = local;
-              type.language = owner_type.language;
-              if (owner_type.semantic_unit_id) {
-                  type.semantic_unit_id = owner_type.semantic_unit_id;
-                  type.semantic_unit = owner_type.semantic_unit;
-                  type.standard = owner_type.standard;
-                  type.compatibility_profile = owner_type.compatibility_profile;
-                  apply_vpi_source(type, project, declaration->source);
-                  if (type.source_path.empty()) {
-                      type.source_id = owner_type.source_id;
-                      type.source_path = owner_type.source_path;
-                      type.source_line = owner_type.source_line;
-                      type.source_column = owner_type.source_column;
-                  }
-              }
-              runtime::SystemVerilogVpiObjectDescriptor descriptor;
-              descriptor.kind = runtime::SystemVerilogVpiObjectKind::Parameter;
-              descriptor.parent = parent;
-              descriptor.name = vpi_identifier(name);
-              descriptor.type = std::move(type);
-              const auto handle = create_checked(
-                  *result.registry, std::move(descriptor), path);
-              const auto bound = result.registry->bind_value(
-                  handle, std::move(decoded->value));
-              if (bound != runtime::SystemVerilogVpiValueError::None) {
-                  throw std::logic_error {
-                      "failed to bind VPI parameter '" + path + "' with error "
-                      + std::to_string(static_cast<unsigned>(bound))
-                  };
-              }
-          };
-
+    // The generate block occurrences elaboration recorded, by instance:
+    // each one's path within the instance, sorted, and the place among the
+    // objects that it and its parameters take, reserved here where the
+    // publication reaches them. A scope that holds a published object is
+    // published with it; the others are deferred (see below).
+    struct RecordedGenerateScope {
+        std::string_view path;
+        std::uint64_t ordinal { };
+    };
+    std::unordered_map<std::string_view, std::vector<RecordedGenerateScope>>
+        recorded_generate_scopes;
+    // The place of each specialization's first recorded scope.
+    std::vector<std::uint64_t> generate_scope_ordinals;
+    {
+        const auto& recorded_specializations = project.design.specializations();
+        std::uint64_t places { };
+        for (const auto& recorded : recorded_specializations) {
+            for (const auto& scope : recorded.vpi_generate_scopes) {
+                places += 1U + scope.parameters.size();
+            }
+        }
+        auto next = result.registry->reserve_ordinals(places);
+        generate_scope_ordinals.reserve(recorded_specializations.size());
+        for (const auto& recorded : recorded_specializations) {
+            generate_scope_ordinals.push_back(next);
+            if (recorded.vpi_generate_scopes.empty()) {
+                continue;
+            }
+            auto& paths = recorded_generate_scopes[recorded.instance];
+            for (const auto& scope : recorded.vpi_generate_scopes) {
+                paths.push_back({ scope.path, next });
+                next += 1U + scope.parameters.size();
+            }
+        }
+        for (auto& entry : recorded_generate_scopes) {
+            std::ranges::sort(
+                entry.second, { }, &RecordedGenerateScope::path);
+        }
+    }
+    // The recorded generate scope at `relative` beneath an instance.
+    const auto find_recorded_generate_scope
+        = [&](const std::string_view instance_path,
+              const std::string_view relative)
+        -> const RecordedGenerateScope* {
+        const auto recorded = recorded_generate_scopes.find(instance_path);
+        if (recorded == recorded_generate_scopes.end()) {
+            return nullptr;
+        }
+        const auto found = std::ranges::lower_bound(recorded->second,
+            relative, { }, &RecordedGenerateScope::path);
+        return found != recorded->second.end() && found->path == relative
+            ? &*found
+            : nullptr;
+    };
+    // The type of a generate scope beneath `owner`: the owner's, without
+    // the cell flag.
+    const auto generate_scope_type = [&](const fsim_vpi_handle_v1 owner) {
+        runtime::SystemVerilogVpiTypeInfo scope_type;
+        if (const auto owner_info = result.registry->lookup(owner);
+            owner_info && owner_info.value->type) {
+            scope_type = std::move(*owner_info.value->type);
+        }
+        scope_type.is_cell = false;
+        return scope_type;
+    };
     // The scope of a generate block occurrence at `relative` beneath an
     // instance, with the scopes between them (IEEE 1800-2023 27.5, 37.85).
     // None when a name on the way is not a scope.
     const auto ensure_generate_scope
         = [&](const std::string& instance_path, const std::string& relative,
-              const fsim_vpi_handle_v1 owner) -> fsim_vpi_handle_v1 {
-        runtime::SystemVerilogVpiTypeInfo scope_type;
-        if (const auto owner_info = result.registry->lookup(owner);
-            owner_info && owner_info.value->type) {
-            scope_type = *owner_info.value->type;
-        }
-        scope_type.is_cell = false;
+              const fsim_vpi_handle_v1 owner,
+              const runtime::SystemVerilogVpiTypeInfo& scope_type)
+        -> fsim_vpi_handle_v1 {
         auto parent = owner;
         auto prefix = instance_path;
         std::size_t offset = 0U;
@@ -1974,6 +2322,11 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 scope.parent = parent;
                 scope.name = relative.substr(offset, end - offset);
                 scope.type = scope_type;
+                if (const auto* const recorded = find_recorded_generate_scope(
+                        instance_path,
+                        std::string_view { relative }.substr(0U, end))) {
+                    scope.ordinal = recorded->ordinal;
+                }
                 parent = create_checked(
                     *result.registry, std::move(scope), prefix);
                 published_scopes.emplace(prefix, parent);
@@ -1986,37 +2339,40 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         return parent;
     };
 
-    // Every generate block occurrence is a scope, whatever it holds, and
-    // the parameters it declares are its children (IEEE 1800-2023 27.6,
-    // 37.28, 37.85).
-    for (const auto& recorded : project.design.specializations()) {
-        if (recorded.vpi_generate_scopes.empty()) {
-            continue;
+    // The recorded generate scope at `path` beneath the instance at
+    // `instance_path`.
+    const auto recorded_generate_scope
+        = [&](const std::string& instance_path, const std::string_view path)
+        -> const RecordedGenerateScope* {
+        if (path.size() <= instance_path.size() + 1U
+            || !path.starts_with(instance_path)
+            || path[instance_path.size()] != '.') {
+            return nullptr;
         }
-        const auto owner = instance_paths.find(recorded.instance);
-        if (owner == instance_paths.end()) {
-            continue;
+        return find_recorded_generate_scope(
+            instance_path, path.substr(instance_path.size() + 1U));
+    };
+    // Publish the recorded generate scope at `path` beneath an instance, if
+    // there is one, with the scopes between them.
+    const auto ensure_recorded_generate_scope
+        = [&](const std::string& instance_path, const std::string_view path,
+              const fsim_vpi_handle_v1 owner) {
+        if (const auto* const recorded
+            = recorded_generate_scope(instance_path, path)) {
+            (void)ensure_generate_scope(instance_path,
+                std::string { recorded->path }, owner,
+                generate_scope_type(owner));
         }
-        for (const auto& scope : recorded.vpi_generate_scopes) {
-            const auto handle = ensure_generate_scope(
-                recorded.instance, scope.path, owner->second);
-            if (handle == 0U) {
-                continue;
-            }
-            const auto scope_path = recorded.instance + "." + scope.path;
-            runtime::SystemVerilogVpiTypeInfo owner_type;
-            if (const auto info = result.registry->lookup(handle);
-                info && info.value->type) {
-                owner_type = *info.value->type;
-            }
-            for (const auto& parameter : scope.parameters) {
-                publish_recorded_parameter(handle,
-                    scope_path + "." + parameter.name, parameter.name,
-                    parameter.identity, parameter.declaration, parameter.local,
-                    owner_type);
-            }
-        }
-    }
+    };
+    // The processes of generate scopes that hold no published object, by
+    // the scope's recorded path string, with the instance that holds them
+    // when the scope is not published; they are created with their scope.
+    struct GenerateScopeProcesses {
+        fsim_vpi_handle_v1 instance { };
+        std::vector<SystemVerilogVpiDeferredProcess> processes;
+    };
+    std::unordered_map<const char*, GenerateScopeProcesses>
+        generate_scope_processes;
 
     // The parameters of a package or of `$unit` are children of the package
     // object, named `pkg::name` (IEEE 1800-2023 3.12.1, 37.10, 37.28).
@@ -2030,7 +2386,8 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             if (!package_info) {
                 continue;
             }
-            publish_recorded_parameter(package->second,
+            publish_recorded_vpi_parameter(*result.registry, project,
+                package->second,
                 package_info.value->full_name + parameter.name,
                 parameter.name, parameter.identity, parameter.declaration,
                 parameter.local,
@@ -2509,23 +2866,36 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
         vpi_objects.push_back(&object);
     }
-    std::ranges::stable_sort(vpi_objects, [&](const auto* lhs, const auto* rhs) {
+    {
         // Aliases name their canonical DesignIR object through parent_object.
         // Publish every canonical signal before considering path depth so an
         // alias that shadows a generated instance scope can reuse its handle.
-        if (lhs->parent_object.has_value()
-            != rhs->parent_object.has_value()) {
-            return !lhs->parent_object.has_value();
+        struct OrderKey {
+            bool alias { };
+            std::ptrdiff_t depth { };
+            std::string_view path;
+            const semantic::design::Object* object { };
+        };
+        std::vector<OrderKey> keys;
+        keys.reserve(vpi_objects.size());
+        for (const auto* const object : vpi_objects) {
+            const auto path = project.design_ir.path(object->path);
+            keys.push_back({ object->parent_object.has_value(),
+                std::ranges::count(path, '.'), path, object });
         }
-        const auto lhs_path = project.design_ir.path(lhs->path);
-        const auto rhs_path = project.design_ir.path(rhs->path);
-        const auto lhs_depth = std::ranges::count(lhs_path, '.');
-        const auto rhs_depth = std::ranges::count(rhs_path, '.');
-        if (lhs_depth != rhs_depth) {
-            return lhs_depth < rhs_depth;
+        std::ranges::stable_sort(keys, [](const auto& lhs, const auto& rhs) {
+            if (lhs.alias != rhs.alias) {
+                return !lhs.alias;
+            }
+            if (lhs.depth != rhs.depth) {
+                return lhs.depth < rhs.depth;
+            }
+            return lhs.path < rhs.path;
+        });
+        for (std::size_t index = 0U; index < keys.size(); ++index) {
+            vpi_objects[index] = keys[index].object;
         }
-        return lhs_path < rhs_path;
-    });
+    }
     for (const auto* object_pointer : vpi_objects) {
         const auto& object = *object_pointer;
         const auto& specialization = project.design_ir.specializations().at(
@@ -2623,6 +2993,13 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                             scope_type.language
                                 = vpi_profile_language(project, specialization);
                             scope.type = scope_type;
+                            if (const auto* const recorded
+                                = recorded_generate_scope(
+                                    std::string { project.design_ir.path(
+                                        instance.path) },
+                                    prefix)) {
+                                scope.ordinal = recorded->ordinal;
+                            }
                             object_parent = create_checked(*result.registry,
                                 std::move(scope), prefix);
                             published_scopes.emplace(prefix, object_parent);
@@ -2789,6 +3166,13 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                         scope_type.language
                             = vpi_profile_language(project, specialization);
                         scope.type = scope_type;
+                        if (const auto* const recorded
+                            = recorded_generate_scope(
+                                std::string { project.design_ir.path(
+                                    instance.path) },
+                                prefix)) {
+                            scope.ordinal = recorded->ordinal;
+                        }
                         parent = create_checked(*result.registry,
                             std::move(scope), prefix);
                         published_scopes.emplace(prefix, parent);
@@ -3009,7 +3393,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 && parent_path[instance_path.size()] == '.') {
                 parent = ensure_generate_scope(instance_path,
                     parent_path.substr(instance_path.size() + 1U),
-                    owner->second);
+                    owner->second, generate_scope_type(owner->second));
                 if (parent == 0U) {
                     continue;
                 }
@@ -3140,10 +3524,35 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         descriptor.name = leaf == std::string::npos
             ? path
             : path.substr(leaf + 1U);
+        const auto asserted = specialization.language
+                == semantic::Language::system_verilog
+            && (process.observed || assertion_source != nullptr);
+        const auto instance_path = vpi_scope_path(instance);
+        // An asserted process is published now, and with it the generate
+        // scope holding it or named like it.
+        if (asserted) {
+            ensure_recorded_generate_scope(
+                instance_path, path, descriptor.parent);
+            if (leaf != std::string::npos) {
+                ensure_recorded_generate_scope(instance_path,
+                    std::string_view { path }.substr(0U, leaf),
+                    descriptor.parent);
+            }
+        }
+        // Another process of a generate scope that holds no published
+        // object is created with the scope.
+        const RecordedGenerateScope* holder { };
         if (const auto matching_scope = published_scopes.find(path);
             matching_scope != published_scopes.end()) {
             if (descriptor.name != "<process>") {
                 descriptor.parent = matching_scope->second;
+            }
+            descriptor.name
+                = "$process_" + std::to_string(process.runtime_index);
+        } else if (const auto* const scope
+                   = recorded_generate_scope(instance_path, path)) {
+            if (descriptor.name != "<process>") {
+                holder = scope;
             }
             descriptor.name
                 = "$process_" + std::to_string(process.runtime_index);
@@ -3160,11 +3569,17 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 = published_paths.find(parent_path);
                 parent_object != published_paths.end()) {
                 descriptor.parent = parent_object->second.second;
+            } else {
+                holder = recorded_generate_scope(instance_path, parent_path);
             }
         }
-        const auto asserted = specialization.language
-                == semantic::Language::system_verilog
-            && (process.observed || assertion_source != nullptr);
+        if (holder != nullptr) {
+            auto& held = generate_scope_processes[holder->path.data()];
+            held.instance = descriptor.parent;
+            held.processes.push_back(
+                { process_index, std::move(descriptor.name), path });
+            continue;
+        }
         if (!asserted) {
             result.deferred[descriptor.parent].processes.push_back(
                 { process_index, std::move(descriptor.name), path });
@@ -3413,13 +3828,13 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             || open == 0U || (dot != std::string::npos && open == dot + 1U)) {
             return;
         }
-        const auto element = result.registry->lookup(handle);
+        const auto element = result.registry->kind_of(handle);
         if (!element) {
             return;
         }
         using Kind = runtime::SystemVerilogVpiObjectKind;
         Kind kind { };
-        switch (element.value->kind) {
+        switch (*element) {
         case Kind::GenerateScope:
             kind = Kind::GenerateScopeArray;
             break;
@@ -3458,11 +3873,7 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         (void)create_checked(*result.registry, std::move(descriptor), path);
     }
 
-    // A genvar's references within the scope an iteration generates are
-    // local parameters of that scope (IEEE 1800-2023 37.85 detail 3): one
-    // int `vpiParameter` named like the genvar, holding the iteration's
-    // value, which is the index of the scope's name (27.4). Scopes of a
-    // block without a label take an implicit name and are not matched.
+    // The genvar of each published generate scope (see publish_vpi_genvar).
     for (const auto& instance : project.design_ir.instances()) {
         const auto published = instances.find(instance.id.value());
         if (published == instances.end()
@@ -3487,105 +3898,191 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             candidates.emplace_back(at->first, at->second);
         }
         for (const auto& [path, scope_handle] : candidates) {
-            const auto scope = result.registry->lookup(scope_handle);
-            if (!scope
-                || scope.value->kind
-                    != runtime::SystemVerilogVpiObjectKind::GenerateScope) {
+            // A recorded scope's genvar waits with its parameters (below).
+            if (instance_paths.contains(instance_path)
+                && find_recorded_generate_scope(instance_path,
+                    std::string_view { path }.substr(prefix.size()))) {
                 continue;
             }
-            const std::string_view remainder
-                = std::string_view { path }.substr(prefix.size());
-            const auto* regions = &unit->generates;
-            const semantic::sv::GenerateRegion* region = nullptr;
-            std::int64_t value { };
-            bool matched = true;
-            std::size_t begin = 0U;
-            while (matched && begin <= remainder.size()) {
-                const auto dot = remainder.find('.', begin);
-                const auto component = remainder.substr(begin,
-                    dot == std::string_view::npos ? std::string_view::npos
-                                                  : dot - begin);
-                const auto open = component.find('[');
-                const auto label = component.substr(0U, open);
-                region = nullptr;
-                for (const auto& candidate : *regions) {
-                    if (!label.empty()
-                        && (candidate.label == label
-                            || candidate.alternative_label == label
-                            || std::ranges::any_of(candidate.alternatives,
-                                [&](const auto& alternative) {
-                                    return alternative.label == label;
-                                }))) {
-                        region = &candidate;
+            publish_vpi_genvar(*result.registry, unit->generates,
+                std::string_view { path }.substr(prefix.size()), path,
+                scope_handle);
+        }
+    }
+
+    // Every generate block occurrence is a scope, whatever it holds, and
+    // the parameters it declares are its children (IEEE 1800-2023 27.6,
+    // 37.28, 37.85). One that holds no published object is created on first
+    // access beneath its nearest published ancestor, with its genvar and
+    // array (see SystemVerilogVpiDeferredGenerateScope).
+    {
+        std::unordered_map<std::string, std::uint32_t> generate_units;
+        const auto& units = project.systemverilog_hir.units();
+        for (const auto& instance : project.design_ir.instances()) {
+            const auto& specialization = project.design_ir.specializations().at(
+                instance.specialization.value());
+            const auto unit = std::ranges::find(
+                units, specialization.unit, &semantic::sv::Unit::id);
+            if (unit != units.end() && !unit->generates.empty()) {
+                generate_units.emplace(
+                    std::string { project.design_ir.path(instance.path) },
+                    static_cast<std::uint32_t>(unit - units.begin()));
+            }
+        }
+        // The published scopes and instances by path, a scope before an
+        // instance of the same path.
+        std::unordered_map<std::string_view, fsim_vpi_handle_v1> published;
+        published.reserve(published_scopes.size() + instance_paths.size());
+        for (const auto& [path, handle] : published_scopes) {
+            published.try_emplace(path, handle);
+        }
+        for (const auto& [path, handle] : instance_paths) {
+            published.try_emplace(path, handle);
+        }
+        // The names of the children each scope will create, and of arrays
+        // that exist already.
+        std::map<fsim_vpi_handle_v1, std::map<std::string_view, bool>>
+            deferred_names;
+        std::string prefix;
+        const auto defer_processes = [&](const fsim_vpi_handle_v1 holder,
+                                         std::vector<SystemVerilogVpiDeferredProcess>&
+                                             processes) {
+            for (auto& process : processes) {
+                defer_child(*result.registry, holder, process.path);
+                result.deferred[holder].processes.push_back(std::move(process));
+            }
+        };
+        const auto& recorded_specializations = project.design.specializations();
+        for (std::size_t index = 0U; index < recorded_specializations.size();
+             ++index) {
+            const auto& recorded = recorded_specializations[index];
+            if (recorded.vpi_generate_scopes.empty()) {
+                continue;
+            }
+            const auto owner = instance_paths.find(recorded.instance);
+            if (owner == instance_paths.end()) {
+                continue;
+            }
+            std::optional<std::uint32_t> unit;
+            if (const auto found = generate_units.find(recorded.instance);
+                found != generate_units.end()) {
+                unit = found->second;
+            }
+            auto place = generate_scope_ordinals.at(index);
+            for (std::size_t position = 0U;
+                 position < recorded.vpi_generate_scopes.size(); ++position) {
+                const auto& scope = recorded.vpi_generate_scopes[position];
+                const auto scope_place = place;
+                place += 1U + scope.parameters.size();
+                const std::string_view scope_path { scope.path };
+                auto parent = owner->second;
+                prefix = recorded.instance;
+                std::optional<std::size_t> missing;
+                bool blocked { };
+                std::size_t offset = 0U;
+                while (offset < scope_path.size()) {
+                    const auto separator = scope_path.find('.', offset);
+                    const auto segment = scope_path.substr(offset,
+                        separator == std::string_view::npos
+                            ? std::string_view::npos
+                            : separator - offset);
+                    prefix.push_back('.');
+                    prefix.append(segment);
+                    if (const auto existing = published.find(prefix);
+                        existing != published.end()) {
+                        parent = existing->second;
+                    } else {
+                        blocked = result.registry->contains(prefix);
+                        missing = offset;
                         break;
                     }
-                }
-                if (region == nullptr) {
-                    matched = false;
-                    break;
-                }
-                if (open != std::string_view::npos && component.back() == ']') {
-                    const auto digits = component.substr(
-                        open + 1U, component.size() - open - 2U);
-                    const auto parsed = std::from_chars(digits.data(),
-                        digits.data() + digits.size(), value, 10);
-                    if (parsed.ec != std::errc { }
-                        || parsed.ptr != digits.data() + digits.size()) {
-                        matched = false;
+                    if (separator == std::string_view::npos) {
                         break;
                     }
-                } else {
-                    value = 0;
+                    offset = separator + 1U;
                 }
-                regions = &region->nested;
-                if (dot == std::string_view::npos) {
-                    break;
+                auto processes = generate_scope_processes.extract(
+                    scope_path.data());
+                if (processes && (blocked || !missing)) {
+                    // The processes of a published scope, or of a name
+                    // that is not a scope, are deferred as usual.
+                    defer_processes(blocked ? processes.mapped().instance
+                                            : parent,
+                        processes.mapped().processes);
                 }
-                begin = dot + 1U;
-            }
-            if (!matched || region == nullptr || region->iterator.empty()
-                || region->kind != semantic::sv::GenerateKind::iterative
-                || path.back() != ']') {
-                continue;
-            }
-            const auto parameter_path = path + "." + region->iterator;
-            if (result.registry->find(parameter_path)) {
-                continue;
-            }
-            runtime::SystemVerilogVpiTypeInfo type;
-            if (scope.value->type) {
-                type = *scope.value->type;
-            }
-            type.category = runtime::SystemVerilogVpiValueCategory::Integer2;
-            type.width = 32U;
-            type.is_signed = true;
-            type.is_constant = true;
-            type.local_parameter = true;
-            type.descriptor = nullptr;
-            type.declared = nullptr;
-            type.typespec = nullptr;
-            std::string bits(32U, '0');
-            const auto pattern = static_cast<std::uint32_t>(value);
-            for (unsigned bit = 0U; bit < 32U; ++bit) {
-                if (((pattern >> bit) & 1U) != 0U) {
-                    bits[31U - bit] = '1';
+                if (blocked) {
+                    continue;
                 }
+                if (!missing) {
+                    // A published scope's parameters and genvar are created
+                    // on first access, in their places.
+                    const auto genvar = unit
+                        && result.registry->kind_of(parent)
+                            == runtime::SystemVerilogVpiObjectKind::GenerateScope
+                        && vpi_genvar_region(units.at(*unit).generates,
+                            scope_path);
+                    const auto count = scope.parameters.size()
+                        + (genvar ? 1U : 0U);
+                    if (count == 0U) {
+                        continue;
+                    }
+                    result.deferred[parent].generate_scopes.push_back({
+                        static_cast<std::uint32_t>(index),
+                        static_cast<std::uint32_t>(position),
+                        static_cast<std::uint32_t>(scope_path.size()),
+                        scope_place,
+                        unit,
+                        { },
+                    });
+                    if (result.registry->defer_children(
+                            parent, static_cast<std::uint32_t>(count))
+                        != runtime::SystemVerilogVpiObjectError::None) {
+                        throw std::logic_error {
+                            "failed to defer the parameters of a VPI generate "
+                            "scope"
+                        };
+                    }
+                    continue;
+                }
+                const auto first_end = scope_path.find('.', *missing);
+                const auto first = scope_path.substr(*missing,
+                    first_end == std::string_view::npos
+                        ? std::string_view::npos
+                        : first_end - *missing);
+                auto& names = deferred_names[parent];
+                names.insert_or_assign(first, true);
+                if (const auto open = first.find('[');
+                    open != std::string_view::npos && open != 0U
+                    && first.back() == ']') {
+                    if (const auto [array, inserted]
+                        = names.try_emplace(first.substr(0U, open), false);
+                        inserted) {
+                        array->second = !result.registry->contains(prefix.substr(
+                            0U, prefix.size() - first.size() + open));
+                    }
+                }
+                result.deferred[parent].generate_scopes.push_back({
+                    static_cast<std::uint32_t>(index),
+                    static_cast<std::uint32_t>(position),
+                    static_cast<std::uint32_t>(*missing),
+                    scope_place,
+                    unit,
+                    processes ? std::move(processes.mapped().processes)
+                              : std::vector<SystemVerilogVpiDeferredProcess> { },
+                });
             }
-            runtime::SystemVerilogVpiObjectDescriptor descriptor;
-            descriptor.kind = runtime::SystemVerilogVpiObjectKind::Parameter;
-            descriptor.parent = scope_handle;
-            descriptor.name = vpi_identifier(region->iterator);
-            descriptor.type = std::move(type);
-            const auto handle = create_checked(
-                *result.registry, std::move(descriptor), parameter_path);
-            const auto bound = result.registry->bind_value(handle,
-                systemverilog_vpi_signal_value(
-                    runtime::PackedLogic4::from_msb_string(bits),
-                    runtime::SystemVerilogScalarKind::None,
-                    runtime::SystemVerilogVpiValueCategory::Integer2));
-            if (bound != runtime::SystemVerilogVpiValueError::None) {
+        }
+        // Processes whose scope was not reached stay with their instance.
+        for (auto& [scope, held] : generate_scope_processes) {
+            defer_processes(held.instance, held.processes);
+        }
+        for (const auto& [parent, names] : deferred_names) {
+            if (result.registry->defer_children(parent,
+                    static_cast<std::uint32_t>(std::ranges::count(
+                        names | std::views::values, true)))
+                != runtime::SystemVerilogVpiObjectError::None) {
                 throw std::logic_error {
-                    "failed to bind VPI genvar '" + parameter_path + "'"
+                    "failed to defer the generate scopes of a VPI scope"
                 };
             }
         }
@@ -3807,6 +4304,10 @@ SystemVerilogVpiMaterializedChildren materialize_systemverilog_vpi_children(
                 interpreter, parent, project.design_ir.drivers().at(driver))) {
             result.drivers.push_back(std::move(*created));
         }
+    }
+    if (!deferred.generate_scopes.empty()) {
+        materialize_vpi_generate_scopes(
+            registry, project, parent, deferred.generate_scopes);
     }
     return result;
 }

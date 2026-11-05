@@ -49,8 +49,16 @@ public:
 [[nodiscard]] bool design_has_vhdl_foreign_architecture(
     const Simulation& simulation);
 
+/// Whether the analyzed design declares a foreign VHDL subprogram (IEEE
+/// 1076-2019 14.4.1, 20.2.4): a standard direct binding needs the VHPI
+/// service to bind its execution function even when no module is given.
+/// The answer comes from the HIR, never from a scan of compiled code.
+[[nodiscard]] bool design_has_vhdl_foreign_subprogram(
+    const Simulation& simulation);
+
 /// Load the modules (`lib[:bootstrap]`) into a constructed, not yet started
-/// simulation and run their registration routines (IEEE 1076-2019 20.2).
+/// simulation and run their registration routines, then register what the
+/// tabular registry files list (IEEE 1076-2019 20.2).
 /// `arguments` are the simulator arguments the tool object reports;
 /// `libraries` lists, on first use, the library directories that
 /// vhpiLibPhysicalNameP names.
@@ -59,6 +67,7 @@ using VhpiLibraryDirectories = std::function<
 [[nodiscard]] std::unique_ptr<VhpiForeignService> attach_vhpi_modules(
     Simulation& simulation,
     std::span<const std::string> modules,
+    std::span<const std::string> registries,
     VhpiForeignService::PrintSink print,
     std::span<const std::string> arguments,
     diagnostic::Engine& diagnostics,

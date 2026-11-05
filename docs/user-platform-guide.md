@@ -117,6 +117,14 @@ libraries; `elaborate --vpi` also registers a library's system tasks and
 functions for the design. `docs/foreign-interface-conformance.md` lists what
 each interface implements.
 
+`simulate --vhpi-registry FILE` (key `simulate.vhpi_registry`) reads a VHPI
+tabular registry (IEEE 1076-2019 20.2.2): each line registers a foreign
+architecture, subprogram, application or library of foreign models by its
+entry points. fsim finds the object library a line names among the `--vhpi`
+modules (a file named `NAME` or `libNAME`), then as `NAME`, `NAME.vhpi`,
+`NAME.so` or `libNAME.so` next to the registry file, then as `libNAME.so`
+on the system library path.
+
 The callbacks that run at a point inside a process need the compiled kernel to
 keep its statement probes. They are VPI `cbStmt` and VHPI `vhpiCbStmt`, and
 later the call, suspend and resume reasons. Ask for them with

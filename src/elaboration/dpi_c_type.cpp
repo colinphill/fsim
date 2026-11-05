@@ -8,7 +8,10 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <map>
+#include <memory>
 #include <set>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -625,7 +628,8 @@ std::optional<DpiCType> dpi_reference_c_type(
 // A member that is a string, dynamic or a class handle has no mapping.
 std::optional<DpiCType> dpi_struct_c_type(
     const semantic::sv::TypeDefinition& definition,
-    const DpiTypeContext& context, const std::size_t depth)
+    const std::string_view spelling, const DpiTypeContext& context,
+    const std::size_t depth)
 {
     if (definition.members.empty()) {
         return std::nullopt;
@@ -647,6 +651,7 @@ std::optional<DpiCType> dpi_struct_c_type(
             return std::nullopt;
         }
         DpiCMember entry;
+        entry.name = member.name;
         std::uint64_t count = 1U;
         for (const auto& range : declared.unpacked_dimensions) {
             const auto bounds = dpi_range_bounds(range, context);
@@ -675,6 +680,9 @@ std::optional<DpiCType> dpi_struct_c_type(
         aggregate.members.push_back(std::move(entry));
     }
     aggregate.width = static_cast<std::size_t>(bits);
+    if (context.struct_tag) {
+        aggregate.tag = context.struct_tag(definition.id, spelling);
+    }
     return aggregate;
 }
 
@@ -810,7 +818,8 @@ std::optional<DpiCType> dpi_reference_c_type_impl(
         text.string = true;
         element = text;
     } else if (definition->form == Form::unpacked_structure) {
-        element = dpi_struct_c_type(*definition, context, depth);
+        element = dpi_struct_c_type(
+            *definition, type.target.spelling, context, depth);
     } else if (definition->form != Form::unpacked_union
         && definition->form != Form::tagged_union
         && definition->form != Form::class_handle
@@ -869,7 +878,17 @@ std::optional<DpiCType> dpi_c_type(
         }
     }
     const auto type = context.named_type(tokens.back().text);
-    return type ? dpi_reference_c_type(*type, context, 0U) : std::nullopt;
+    if (!type) {
+        return std::nullopt;
+    }
+    auto result = dpi_reference_c_type(*type, context, 0U);
+    // The typedef the declaration names gives its structure the C name.
+    if (result && result->code == 'R' && context.struct_tag
+        && type->target.target.valid()) {
+        result->tag
+            = context.struct_tag(type->target.target, tokens.back().text);
+    }
+    return result;
 }
 
 std::optional<DpiCType> dpi_c_type(
@@ -1008,6 +1027,94 @@ DpiTypeContext dpi_hir_type_context(
                 return declaration.name == name;
             });
     };
+    // A structure's C name is its typedef name qualified by the unit that
+    // declares it (a package or module), so equal names of different
+    // scopes stay distinct; a clash that remains takes the type's id.
+    struct Tags {
+        // By typedef declaration, or by type for a structure no typedef
+        // names.
+        std::map<std::pair<bool, std::uint64_t>, std::string> by_owner;
+        std::set<std::string, std::less<>> used;
+    };
+    const auto tags = std::make_shared<Tags>();
+    context.struct_tag = [&hir, tags](const semantic::TypeId type,
+                             const std::string_view spelling) {
+        // A structure body is anonymous and shared by equal layouts: the
+        // typedef the reference names gives its name, else the first
+        // typedef declaring it.
+        using Form = semantic::sv::DeclarationForm;
+        std::string_view name = spelling;
+        if (const auto qualifier = name.rfind("::");
+            qualifier != std::string_view::npos) {
+            name.remove_prefix(qualifier + 2U);
+        }
+        while (!name.empty() && name.front() == ' ') {
+            name.remove_prefix(1U);
+        }
+        name = name.substr(0U, name.find_first_of(" ["));
+        const auto* const definition = hir.find_type(type);
+        const auto* declaration = definition != nullptr
+            ? hir.find_declaration(definition->declaration)
+            : nullptr;
+        if (declaration == nullptr
+            || declaration->form != Form::typedef_declaration
+            || (!name.empty() && declaration->name != name)) {
+            const semantic::sv::Declaration* first { };
+            const semantic::sv::Declaration* named { };
+            for (const auto& candidate : hir.declarations()) {
+                if (candidate.form != Form::typedef_declaration
+                    || (candidate.declared_type != type
+                        && (!candidate.type
+                            || candidate.type->target.target != type))) {
+                    continue;
+                }
+                if (first == nullptr) {
+                    first = &candidate;
+                }
+                if (candidate.name == name) {
+                    named = &candidate;
+                    break;
+                }
+            }
+            if (named != nullptr || first != nullptr) {
+                declaration = named != nullptr ? named : first;
+            }
+        }
+        const bool by_typedef = declaration != nullptr
+            && declaration->form == Form::typedef_declaration;
+        const std::pair key { by_typedef,
+            by_typedef ? static_cast<std::uint64_t>(declaration->id.value())
+                       : static_cast<std::uint64_t>(type.value()) };
+        if (const auto found = tags->by_owner.find(key);
+            found != tags->by_owner.end()) {
+            return found->second;
+        }
+        std::string base = "fsim_dpi_";
+        if (declaration != nullptr) {
+            for (const auto& unit : hir.units()) {
+                if (unit.scope == declaration->scope) {
+                    base += unit.name + '_';
+                    break;
+                }
+            }
+        }
+        base += by_typedef
+            ? declaration->name
+            : definition != nullptr && !definition->name.empty()
+            ? definition->name
+            : std::string { "struct" };
+        for (auto& character : base) {
+            if (std::isalnum(static_cast<unsigned char>(character)) == 0) {
+                character = '_';
+            }
+        }
+        if (!tags->used.insert(base).second) {
+            base += '_' + std::to_string(key.second);
+            tags->used.insert(base);
+        }
+        tags->by_owner.emplace(key, base);
+        return base;
+    };
     return context;
 }
 
@@ -1050,12 +1157,11 @@ std::string dpi_c_scalar(const char code)
 }
 
 // The C type of one value or array element: a vector is its canonical
-// type, an unpacked structure an opaque aggregate whose layout is the C
-// compiler's (H.7.8).
+// type, an unpacked structure its generated typedef (H.7.8).
 std::string dpi_c_element(const DpiCType& type)
 {
     if (type.code == 'R') {
-        return "fsim_dpi_aggregate";
+        return type.tag;
     }
     if (type.code == 'B') {
         return "svBitVecVal";
@@ -1099,13 +1205,10 @@ std::optional<std::string> dpi_c_parameter(
     return element + (input ? " " : "* ") + name;
 }
 
-// A function result is a small value: a packed bit array of at most 32
-// bits returns as an svBitVecVal (IEEE 1800-2023 H.7.4).
+// A function result is a small value, never a packed vector (IEEE
+// 1800-2023 35.5.5).
 std::optional<std::string> dpi_c_result(const std::optional<DpiCType>& type)
 {
-    if (type && type->code == 'B' && type->width <= 32U) {
-        return "svBitVecVal";
-    }
     if (!type || type->code == 'B' || type->code == 'V'
         || type->code == 'R' || type->open_packed) {
         return std::nullopt;
@@ -1119,6 +1222,8 @@ struct DpiCSignature {
     std::string result;
     std::vector<std::string> parameters;
     std::vector<std::string> names;
+    // The unpacked structures the formals use, for their typedefs.
+    std::vector<DpiCType> aggregates;
 };
 
 std::optional<DpiCSignature> dpi_c_signature(
@@ -1127,6 +1232,7 @@ std::optional<DpiCSignature> dpi_c_signature(
 {
     std::vector<std::string> names;
     std::vector<std::string> parameters;
+    std::vector<DpiCType> aggregates;
     std::string result;
     const bool task
         = declaration.callable_kind == semantic::sv::DpiCallableKind::task;
@@ -1161,11 +1267,14 @@ std::optional<DpiCSignature> dpi_c_signature(
             }
             element.unpacked_dimensions.clear();
             element.container_form.reset();
-            const auto parameter = dpi_c_parameter(
-                dpi_c_type(element, context), formal.direction, false,
-                sized_array, formal.name);
+            const auto formal_type = dpi_c_type(element, context);
+            const auto parameter = dpi_c_parameter(formal_type,
+                formal.direction, false, sized_array, formal.name);
             if (!parameter) {
                 return std::nullopt;
+            }
+            if (formal_type->code == 'R') {
+                aggregates.push_back(*formal_type);
             }
             parameters.push_back(*parameter);
             names.push_back(formal.name);
@@ -1204,11 +1313,51 @@ std::optional<DpiCSignature> dpi_c_signature(
             if (!parameter) {
                 return std::nullopt;
             }
+            if (type->code == 'R') {
+                aggregates.push_back(*type);
+            }
             parameters.push_back(*parameter);
             names.push_back(formal.name);
         }
     }
-    return DpiCSignature { result, parameters, names };
+    return DpiCSignature { result, parameters, names, aggregates };
+}
+
+// The C member declaration of one structure member: a scalar by its C
+// type, a packed vector as an array of 32-bit chunks, a nested structure by
+// its typedef, each followed by the member's unpacked dimensions (H.7.8).
+std::string dpi_c_member(const DpiCMember& member)
+{
+    std::string text = "    " + dpi_c_element(member.type) + ' ' + member.name;
+    if (member.type.code == 'B' || member.type.code == 'V') {
+        text += '[' + std::to_string((member.type.width + 31U) / 32U) + ']';
+    }
+    for (const auto& [left, right] : member.dimensions) {
+        text += '[' + std::to_string((left >= right ? left - right
+                                                    : right - left) + 1)
+            + ']';
+    }
+    return text + ";\n";
+}
+
+// The typedef of an unpacked structure after those of its nested
+// structures, once per tag (IEEE 1800-2023 H.7.8).
+void dpi_c_struct_typedef(const DpiCType& type,
+    std::set<std::string, std::less<>>& declared, std::string& out)
+{
+    for (const auto& member : type.members) {
+        if (member.type.code == 'R') {
+            dpi_c_struct_typedef(member.type, declared, out);
+        }
+    }
+    if (!declared.insert(type.tag).second) {
+        return;
+    }
+    out += "typedef struct " + type.tag + " {\n";
+    for (const auto& member : type.members) {
+        out += dpi_c_member(member);
+    }
+    out += "} " + type.tag + ";\n";
 }
 
 std::string dpi_c_declarator(
@@ -1280,6 +1429,10 @@ std::string systemverilog_dpi_header(const semantic::sv::Hir& hir)
           "#include \"svdpi.h\"\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n"
           "extern int fsim_svdpi_export_call_v3(const char* name, "
           "void** arguments, void* result);\n";
+    // The structure typedefs precede the prototypes that use them.
+    std::string types;
+    std::string body;
+    std::set<std::string, std::less<>> typedefs;
     std::string stubs;
     std::set<std::string, std::less<>> declared;
     for (const auto* const entry : declarations) {
@@ -1298,18 +1451,23 @@ std::string systemverilog_dpi_header(const semantic::sv::Hir& hir)
             ? std::optional { dpi_c_declarator(
                   *signature, declaration.linkage_name) }
             : std::nullopt;
+        if (signature) {
+            for (const auto& aggregate : signature->aggregates) {
+                dpi_c_struct_typedef(aggregate, typedefs, types);
+            }
+        }
         if (!import && signature) {
             stubs += dpi_export_stub(*signature, declaration.linkage_name,
                 declaration.callable_kind
                     == semantic::sv::DpiCallableKind::task);
         }
         if (!prototype) {
-            result += "/* " + std::string { import ? "import" : "export" }
+            body += "/* " + std::string { import ? "import" : "export" }
                 + ' ' + declaration.linkage_name
                 + ": no C prototype for its types */\n";
             continue;
         }
-        result += "/* " + std::string { import ? "Imported" : "Exported" }
+        body += "/* " + std::string { import ? "Imported" : "Exported" }
             + " " + (declaration.callable_kind
                     == semantic::sv::DpiCallableKind::task
                 ? "task" : "function")
@@ -1317,17 +1475,10 @@ std::string systemverilog_dpi_header(const semantic::sv::Hir& hir)
             + *prototype + ";\n";
     }
     if (!stubs.empty()) {
-        result += "#ifndef FSIM_DPI_NO_EXPORT_STUBS\n" + stubs + "#endif\n";
+        body += "#ifndef FSIM_DPI_NO_EXPORT_STUBS\n" + stubs + "#endif\n";
     }
-    if (result.find("fsim_dpi_aggregate") != std::string::npos) {
-        // An unpacked structure has the C compiler's layout of its members
-        // (IEEE 1800-2023 H.7.8); declare the matching struct in C.
-        const auto position = result.find("extern int fsim_svdpi_export_call_v3");
-        result.insert(position, "typedef struct fsim_dpi_aggregate "
-            "fsim_dpi_aggregate; /* H.7.8: the C layout of an unpacked "
-            "structure */\n");
-    }
-    return result + "#ifdef __cplusplus\n}\n#endif\n#endif\n";
+    return result + types + body
+        + "#ifdef __cplusplus\n}\n#endif\n#endif\n";
 }
 
 }  // namespace fsim::elaboration

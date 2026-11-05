@@ -1,0 +1,7 @@
+#c startup phase=registration
+#c foreignf null model kind=1
+#c foreignf fsim_foreign_vhpi_direct_plugin seven kind=2
+#c foreignf null Answer kind=2
+#c elab :top:u1 phase=elaboration
+#c exec :top:u1 phase=initialization
+#c end r=49

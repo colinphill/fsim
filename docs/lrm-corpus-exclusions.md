@@ -11,7 +11,7 @@ Exclusions never count as closures.
 | suite | not run | out of scope |
 |---|---:|---:|
 | sv-tests | 0 | 2 |
-| verilator | 63 | 297 |
+| verilator | 63 | 298 |
 | ivtest | 7 | 304 |
 | vests | 2 | 0 |
 | nvc | 225 | 0 |
@@ -115,6 +115,7 @@ Exclusions never count as closures.
 | `t_dpi_lib` | out of scope | reads 40-bit part-selects with svGetPartselBit and svGetPartselLogic, which IEEE 1800-2023 H.10.1.2 limits to w <= 32 |
 | `t_dpi_open` | out of scope | passes packed vectors (bit [7:0] i_oba_b8) to the open unpacked-array formals of dpii_oba; an unsized formal dimension matches only an actual unpacked dimension (IEEE 1800-2023 35.5.6.1) |
 | `t_dpi_qw` | out of scope | an imported function calls an exported task; IEEE 1800-2023 35.8 makes that never legal |
+| `t_dpi_result_type` | out of scope | imports functions returning bit [0:0], bit [31:0] and packed structures and unions; a function result is a small value: void, byte, shortint, int, longint, real, shortreal, chandle, string or a scalar bit or logic (IEEE 1800-2023 35.5.5; the bit [15:0] result of 35.5.4 is an informative example) |
 | `t_dpi_sys` | out of scope | calls imports named with escaped identifiers such as \$dpii_sys as system tasks, which only Verilator supports (the test `error's for other simulators) |
 | `t_dpi_vams` | not run | needs the Verilator C++ model API |
 | `t_dpi_var` | not run | needs the Verilator C++ model API |

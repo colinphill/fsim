@@ -4675,9 +4675,6 @@ private:
         frontend::SystemVerilogScalarKind result_scalar {
             frontend::SystemVerilogScalarKind::None
         };
-        // A packed bit-array result of at most 32 bits returns as a C
-        // svBitVecVal, 32 bits wide (IEEE 1800-2023 H.7.4).
-        std::optional<std::size_t> result_c_width;
         // A string result (`result_domain` String): it returns in a
         // string register, and the destination is a placeholder.
         bool result_string { };

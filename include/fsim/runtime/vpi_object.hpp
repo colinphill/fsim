@@ -310,6 +310,9 @@ struct SystemVerilogVpiObjectDescriptor {
     std::string name;
     std::optional<SystemVerilogVpiSourceLocation> source;
     std::optional<SystemVerilogVpiTypeInfo> type;
+    /// A place from reserve_ordinals: the object takes it among its
+    /// siblings and in iterations instead of coming last.
+    std::optional<std::uint64_t> ordinal { };
 };
 
 struct SystemVerilogVpiObjectInfo {
@@ -449,6 +452,9 @@ public:
         SystemVerilogVpiObjectDescriptor&& descriptor);
     /// Room for this many more objects without rehashing the name indexes.
     void reserve(std::size_t objects);
+    /// `count` consecutive places in creation order for objects created
+    /// later (see SystemVerilogVpiObjectDescriptor::ordinal); the first.
+    [[nodiscard]] std::uint64_t reserve_ordinals(std::uint64_t count);
     [[nodiscard]] SystemVerilogVpiObjectLookupResult lookup(
         fsim_vpi_handle_v1 handle) const;
     [[nodiscard]] SystemVerilogVpiObjectLookupResult find(
@@ -458,6 +464,9 @@ public:
     /// The kind of a live object, without copying its record.
     [[nodiscard]] std::optional<SystemVerilogVpiObjectKind> kind_of(
         fsim_vpi_handle_v1 handle) const;
+    /// Whether a live object has this full name now, without creating
+    /// deferred children or copying the record.
+    [[nodiscard]] bool contains(const std::string& full_name) const;
     [[nodiscard]] SystemVerilogVpiTypeLookupResult type_info(
         fsim_vpi_handle_v1 handle) const;
     [[nodiscard]] static SystemVerilogVpiObjectCapabilities capabilities()

@@ -310,14 +310,14 @@ static void start(const vhpiCbDataT* data)
     while (iterator != NULL && (k = vhpi_scan(iterator)) != NULL) {
         const vhpiCharT* file = vhpi_get_str(vhpiFileNameP, k);
         const char* base = file != NULL ? strrchr((const char*)file, '/') : NULL;
-        printf("#c decl %s %s line=%d file=%s\n",
+        printf("#c decl %s %s line=%d offset=%d file=%s\n",
             text_property(k, vhpiKindStrP), text_property(k, vhpiNameP),
-            (int)vhpi_get(vhpiLineNoP, k),
+            (int)vhpi_get(vhpiLineNoP, k), (int)vhpi_get(vhpiLineOffsetP, k),
             base != NULL ? base + 1 : (file != NULL ? (const char*)file : "-"));
     }
-    printf("#c root kind=%s line=%d unit line=%d\n",
+    printf("#c root kind=%s line=%d offset=%d unit line=%d\n",
         text_property(root, vhpiKindStrP), (int)vhpi_get(vhpiLineNoP, root),
-        (int)vhpi_get(vhpiLineNoP, unit));
+        (int)vhpi_get(vhpiLineOffsetP, root), (int)vhpi_get(vhpiLineNoP, unit));
     fflush(stdout);
 }
 

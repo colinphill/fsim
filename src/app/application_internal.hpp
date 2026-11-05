@@ -150,7 +150,8 @@ struct SystemVerilogVpiLiveMemory {
 // or an iteration of its children), not when the design is published; the
 // registry counts them as live children of the parent meanwhile. They are
 // the words of a fixed memory without element signals, the anonymous
-// processes of a scope, and the drivers of an object.
+// processes of a scope, the drivers of an object, and the generate scopes
+// that hold no published object.
 struct SystemVerilogVpiDeferredMemory {
     runtime::simir::ContainerObjectId container { };
     std::string path;
@@ -168,11 +169,29 @@ struct SystemVerilogVpiDeferredProcess {
     std::string path;
 };
 
+// A generate block occurrence that holds no published object, created
+// beneath its nearest published ancestor from the segment of its recorded
+// path at `offset` on, with its processes, parameters, genvar and array.
+struct SystemVerilogVpiDeferredGenerateScope {
+    // Indices into the design's specializations and their recorded scopes.
+    std::uint32_t specialization { };
+    std::uint32_t scope { };
+    std::uint32_t offset { };
+    // The place reserved for the scope; its parameters follow it.
+    std::uint64_t ordinal { };
+    // Index into the SystemVerilog units, for the genvar; none when the
+    // instance's unit has no generate regions.
+    std::optional<std::uint32_t> unit;
+    // The scope's processes, created with it.
+    std::vector<SystemVerilogVpiDeferredProcess> processes;
+};
+
 struct SystemVerilogVpiDeferredChildren {
     std::optional<SystemVerilogVpiDeferredMemory> memory;
     std::vector<SystemVerilogVpiDeferredProcess> processes;
     // Indices into the design's drivers.
     std::vector<std::uint32_t> drivers;
+    std::vector<SystemVerilogVpiDeferredGenerateScope> generate_scopes;
 };
 
 struct SystemVerilogVpiMaterializedChildren {
@@ -229,7 +248,7 @@ struct SystemVerilogVpiPublishedDesign {
 
 // Create the deferred children of `parent` with their current values: the
 // words first, then the processes, then the drivers, the order the design
-// publication would have created them in.
+// publication would have created them in, then the generate scopes.
 [[nodiscard]] SystemVerilogVpiMaterializedChildren
 materialize_systemverilog_vpi_children(
     runtime::SystemVerilogVpiObjectRegistry& registry,

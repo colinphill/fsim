@@ -1026,12 +1026,20 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
     set(FSIM_ENGINES v4)
   endif()
   # After those, MESSAGE gives text `fsim simulate` must report and SDF names
-  # an SDF file annotated at elaboration.
-  cmake_parse_arguments(PARSE_ARGV 9 FSIM_OPTION "" "MESSAGE;SDF" "")
+  # an SDF file annotated at elaboration; ELABORATE_MESSAGE is text a failing
+  # `fsim elaborate` must report and DPI_HEADER the header `fsim compile
+  # --dpi-header` must write.
+  cmake_parse_arguments(PARSE_ARGV 9 FSIM_OPTION ""
+    "MESSAGE;SDF;ELABORATE_MESSAGE;DPI_HEADER" "")
   set(FSIM_SIMULATE_MESSAGE "${FSIM_OPTION_MESSAGE}")
   set(FSIM_SDF_PATH "")
   if(NOT "${FSIM_OPTION_SDF}" STREQUAL "")
     set(FSIM_SDF_PATH "${FSIM_FOREIGN_FIXTURES}/${FSIM_OPTION_SDF}")
+  endif()
+  set(FSIM_DPI_HEADER_PATH "")
+  if(NOT "${FSIM_OPTION_DPI_HEADER}" STREQUAL "")
+    set(FSIM_DPI_HEADER_PATH
+      "${FSIM_FOREIGN_FIXTURES}/${FSIM_OPTION_DPI_HEADER}")
   endif()
   foreach(FSIM_ENGINE IN LISTS FSIM_ENGINES)
     add_test(
@@ -1050,6 +1058,8 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
         "-DFSIM_SIMULATE_MESSAGE=${FSIM_SIMULATE_MESSAGE}"
         "-DFSIM_ELABORATE_PLUGIN=${FSIM_ELABORATE_PLUGIN}"
         "-DFSIM_SDF=${FSIM_SDF_PATH}"
+        "-DFSIM_ELABORATE_MESSAGE=${FSIM_OPTION_ELABORATE_MESSAGE}"
+        "-DFSIM_DPI_HEADER=${FSIM_DPI_HEADER_PATH}"
         "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/foreign/${FSIM_NAME}-${FSIM_ENGINE}"
         -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunForeignConformanceCase.cmake")
     set_tests_properties(
@@ -1201,6 +1211,24 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   dpi-aggregates dpi foreign_dpi_aggregates.sv foreign_dpi_aggregates.expected
   "" fsim_foreign_dpi_aggregates_plugin)
+# A DPI function result is a small value, never a packed vector, even of
+# one bit (IEEE 1800-2023 35.5.5).
+fsim_add_foreign_conformance_test(
+  dpi-result-vector dpi foreign_dpi_result_vector.sv
+  foreign_dpi_result_vector.expected "" fsim_foreign_dpi_types_plugin ""
+  OFF v4 ELABORATE_MESSAGE
+  "the DPI function result type 'bit [ 7 : 0 ]' is not a small value")
+fsim_add_foreign_conformance_test(
+  dpi-result-bit1 dpi foreign_dpi_result_vector.sv
+  foreign_dpi_result_vector.expected "" fsim_foreign_dpi_types_plugin ""
+  OFF v4 ELABORATE_MESSAGE
+  "the DPI function result type 'bit [ 0 : 0 ]' is not a small value")
+# `fsim compile --dpi-header` declares an unpacked structure a formal uses
+# as a C structure of its members (IEEE 1800-2023 H.7.8, H.10.1).
+fsim_add_foreign_conformance_test(
+  dpi-header dpi foreign_dpi_header.sv foreign_dpi_header.expected ""
+  fsim_foreign_dpi_types_plugin "" OFF v4
+  DPI_HEADER foreign_dpi_header.expected)
 fsim_add_foreign_conformance_test(
   mixed-model mixed "foreign_mixed_model.vhd|foreign_mixed_model.sv"
   foreign_mixed_model.expected "" fsim_foreign_mixed_model_plugin)
@@ -1489,6 +1517,39 @@ fsim_add_foreign_conformance_test(
   foreign_vhpi_arch_missing.expected ""
   fsim_foreign_vhpi_arch_missing_plugin 1 OFF v4
   MESSAGE "has no registered foreign architecture with an execution function")
+# Registration through a tabular registry (IEEE 1076-2019 20.2.2).
+add_library(fsim_foreign_vhpi_registry_plugin SHARED
+  foreign_vhpi_registry_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_registry_plugin)
+target_link_libraries(fsim_foreign_vhpi_registry_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_registry_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-registry vhpi foreign_vhpi_registry.vhd foreign_vhpi_registry.expected
+  "--vhpi-registry ${FSIM_FOREIGN_FIXTURES}/foreign_vhpi_registry.reg"
+  fsim_foreign_vhpi_registry_plugin 0 OFF v4)
+fsim_add_foreign_conformance_test(
+  vhpi-registry-bad vhpi foreign_vhpi_registry.vhd
+  foreign_vhpi_registry_bad.expected
+  "--vhpi-registry ${FSIM_FOREIGN_FIXTURES}/foreign_vhpi_registry_bad.reg"
+  fsim_foreign_vhpi_registry_plugin 1 OFF v4
+  MESSAGE "line 4: 'vhpiarchf' is not vhpiArchF")
+# Standard direct bindings (IEEE 1076-2019 20.2.4.3), and the error of one
+# whose execution function the object library lacks.
+add_library(fsim_foreign_vhpi_direct_plugin SHARED
+  foreign_vhpi_direct_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_direct_plugin)
+target_link_libraries(fsim_foreign_vhpi_direct_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_direct_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-direct vhpi foreign_vhpi_direct.vhd foreign_vhpi_direct.expected ""
+  fsim_foreign_vhpi_direct_plugin 0 OFF v4)
+fsim_add_foreign_conformance_test(
+  vhpi-direct-missing vhpi foreign_vhpi_direct_missing.vhd
+  foreign_vhpi_direct_missing.expected ""
+  fsim_foreign_vhpi_direct_plugin 1 OFF v4
+  MESSAGE "no execution function 'no_such_function'")
 # Processes and statements (IEEE 1076-2019 19.4.2, 19.11).
 add_library(fsim_foreign_vhpi_statements_plugin SHARED
   foreign_vhpi_statements_plugin.c)

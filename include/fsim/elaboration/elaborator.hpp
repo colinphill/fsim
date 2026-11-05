@@ -12,8 +12,10 @@
 
 #include <algorithm>
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -399,8 +401,11 @@ inline constexpr std::string_view user_system_call_identity_prefix {
 
 /// Identity prefix, after the DPI function prefix, of a call of a foreign
 /// VHDL subprogram's VHPI execution function. The full identity is
-/// `$vhpi:<library>\t<model>\t<name>\t<declaration>\t<scope>`, and each
-/// actual name is `<formal>\t<declaration>`.
+/// `$vhpi:<library>\t<model>\t<name>\t<declaration>\t<scope>\t<width>`, and
+/// each actual name is `<formal>\t<declaration>`. A standard direct
+/// binding (IEEE 1076-2019 20.2.4.3) adds `\t=<execution function>`: its
+/// library is the object library path ("null" for a null specifier) and its
+/// model the subprogram designator.
 inline constexpr std::string_view vhdl_foreign_call_identity_prefix {
     "$vhpi:" };
 
@@ -505,6 +510,147 @@ struct SignalInfo {
     // 37.25); empty when its type has no typespec model.
     std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
         vpi_typespec { };
+};
+
+/// The signal descriptions of a design. While elaboration builds the design
+/// the table grows in fixed blocks, so a reference to a description stays
+/// valid when later signals are added (lowering adds implicit and package
+/// constant signals while it holds descriptions). `seal` moves the
+/// descriptions into one contiguous vector for the finished design.
+class SignalInfoTable final {
+public:
+    SignalInfoTable() = default;
+    explicit SignalInfoTable(std::vector<SignalInfo> sealed) noexcept;
+    SignalInfoTable(const SignalInfoTable& other);
+    SignalInfoTable(SignalInfoTable&& other) noexcept;
+    SignalInfoTable& operator=(const SignalInfoTable& other);
+    SignalInfoTable& operator=(SignalInfoTable&& other) noexcept;
+    ~SignalInfoTable();
+
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+    [[nodiscard]] bool empty() const noexcept { return size_ == 0U; }
+    [[nodiscard]] SignalInfo& operator[](const std::size_t index) noexcept
+    {
+        return sealed_flag_ ? sealed_[index]
+                            : blocks_[index >> block_bits][index & block_mask];
+    }
+    [[nodiscard]] const SignalInfo& operator[](
+        const std::size_t index) const noexcept
+    {
+        return sealed_flag_ ? sealed_[index]
+                            : blocks_[index >> block_bits][index & block_mask];
+    }
+    [[nodiscard]] SignalInfo& at(std::size_t index);
+    [[nodiscard]] const SignalInfo& at(std::size_t index) const;
+    void push_back(const SignalInfo& signal);
+    void push_back(SignalInfo&& signal);
+    void pop_back();
+
+    /// True once the descriptions are contiguous.
+    [[nodiscard]] bool sealed() const noexcept { return sealed_flag_; }
+    void seal();
+    /// The contiguous descriptions; the table must be sealed.
+    [[nodiscard]] const std::vector<SignalInfo>& contiguous() const;
+    [[nodiscard]] std::vector<SignalInfo> to_vector() const;
+    [[nodiscard]] std::vector<SignalInfo> take_vector() &&;
+
+    template <typename Table, typename Value>
+    class basic_iterator {
+    public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = SignalInfo;
+        using difference_type = std::ptrdiff_t;
+        using pointer = Value*;
+        using reference = Value&;
+        basic_iterator() = default;
+        basic_iterator(Table* table, const std::size_t index) noexcept
+            : table_ { table }, index_ { index }
+        {
+        }
+        [[nodiscard]] reference operator*() const noexcept
+        {
+            return (*table_)[index_];
+        }
+        [[nodiscard]] pointer operator->() const noexcept
+        {
+            return &(*table_)[index_];
+        }
+        basic_iterator& operator++() noexcept
+        {
+            ++index_;
+            return *this;
+        }
+        basic_iterator operator++(int) noexcept
+        {
+            auto previous = *this;
+            ++index_;
+            return previous;
+        }
+        [[nodiscard]] friend bool operator==(
+            const basic_iterator& left, const basic_iterator& right) noexcept
+        {
+            return left.index_ == right.index_;
+        }
+
+    private:
+        Table* table_ { };
+        std::size_t index_ { };
+    };
+    using iterator = basic_iterator<SignalInfoTable, SignalInfo>;
+    using const_iterator
+        = basic_iterator<const SignalInfoTable, const SignalInfo>;
+    [[nodiscard]] iterator begin() noexcept { return { this, 0U }; }
+    [[nodiscard]] iterator end() noexcept { return { this, size_ }; }
+    [[nodiscard]] const_iterator begin() const noexcept
+    {
+        return { this, 0U };
+    }
+    [[nodiscard]] const_iterator end() const noexcept
+    {
+        return { this, size_ };
+    }
+
+private:
+    static constexpr std::size_t block_bits = 8U;
+    static constexpr std::size_t block_size = std::size_t { 1 } << block_bits;
+    static constexpr std::size_t block_mask = block_size - 1U;
+    void clear_blocks() noexcept;
+    SignalInfo& append_slot();
+
+    // Uninitialized storage for `block_size` descriptions each; the first
+    // `size_` slots in order hold constructed descriptions.
+    std::vector<SignalInfo*> blocks_;
+    std::vector<SignalInfo> sealed_;
+    std::size_t size_ { };
+    bool sealed_flag_ { };
+};
+
+/// Read access to signal descriptions in a table or a contiguous range.
+class SignalInfoView final {
+public:
+    SignalInfoView(const SignalInfoTable& table) noexcept
+        : table_ { &table }, size_ { table.size() }
+    {
+    }
+    SignalInfoView(const std::span<const SignalInfo> signals) noexcept
+        : span_ { signals }, size_ { signals.size() }
+    {
+    }
+    SignalInfoView(const std::vector<SignalInfo>& signals) noexcept
+        : SignalInfoView { std::span<const SignalInfo> { signals } }
+    {
+    }
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+    [[nodiscard]] const SignalInfo& operator[](
+        const std::size_t index) const noexcept
+    {
+        return table_ != nullptr ? (*table_)[index] : span_[index];
+    }
+
+private:
+    const SignalInfoTable* table_ { };
+    std::span<const SignalInfo> span_;
+    std::size_t size_ { };
 };
 
 /// One explicit cross-language scalar or vector boundary conversion.
@@ -1196,7 +1342,7 @@ public:
     /// spellings under different IDs, as in a canonical artifact table.
     [[nodiscard]] bool remap_path_table(
         semantic::HierarchyPathTable paths);
-    [[nodiscard]] const std::vector<SignalInfo>& signals() const noexcept;
+    [[nodiscard]] const std::vector<SignalInfo>& signals() const;
     [[nodiscard]] const std::vector<BoundaryConversionInfo>&
     boundary_conversions() const noexcept;
     [[nodiscard]] const std::vector<StringObjectInfo>&
@@ -1381,7 +1527,7 @@ private:
     std::vector<std::string> roots_;
     std::vector<SdfAnnotationRequest> sdf_annotation_requests_;
     std::vector<UserSystemTask> user_system_tasks_;
-    std::vector<SignalInfo> signal_info_;
+    SignalInfoTable signal_info_;
     std::vector<BoundaryConversionInfo> boundary_conversions_;
     std::vector<runtime::simir::Signal> signals_;
     std::vector<StringObjectInfo> string_object_info_;

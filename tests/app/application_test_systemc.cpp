@@ -503,6 +503,15 @@ multi_library_config.source_sets.push_back(
 fsim::diagnostic::Engine multi_library_diagnostics;
 auto multi_library = fsim::app::build_project(
     multi_library_config, multi_library_diagnostics);
+if (!multi_library) {
+  for (const auto& diagnostic : multi_library_diagnostics.diagnostics()) {
+    std::cerr << diagnostic.code << ": "
+              << diagnostic.message << '\n';
+    for (const auto& note : diagnostic.notes) {
+      std::cerr << note.message << '\n';
+    }
+  }
+}
 assert(multi_library);
 assert(multi_library->systemc_plugins.size() == 2);
 assert(multi_library->systemc_hierarchies.size() == 2);

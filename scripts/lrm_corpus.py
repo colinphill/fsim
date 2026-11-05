@@ -1293,7 +1293,13 @@ VERILATOR_NONSTANDARD = {
     "t_dpi_import": "declares pure void functions with output formals; only "
         "nonvoid functions without output or inout formals can be pure "
         "(IEEE 1800-2023 35.5.2)",
-    "t_dpi_sys": "calls imports named with escaped identifiers such as "
+    "t_dpi_result_type": "imports functions returning bit [0:0], "
+        "bit [31:0] and packed structures and unions; a function result is "
+        "a small value: void, byte, shortint, int, longint, real, "
+        "shortreal, chandle, string or a scalar bit or logic (IEEE "
+        "1800-2023 35.5.5; the bit [15:0] result of 35.5.4 is an "
+        "informative example)",
+    "t_dpi_sys":"calls imports named with escaped identifiers such as "
         "\\$dpii_sys as system tasks, which only Verilator supports (the test "
         "`error's for other simulators)",
 }

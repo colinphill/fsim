@@ -51,7 +51,7 @@ resolve_systemverilog_template_element_signals(
         element_aliases,
     std::span<const runtime::simir::ContainerAggregateSignalAlias>
         aggregate_aliases,
-    std::span<const SignalInfo> signal_info,
+    SignalInfoView signal_info,
     std::span<const runtime::simir::Signal> signals);
 
 [[nodiscard]] std::optional<std::map<runtime::simir::SignalId,
@@ -59,7 +59,7 @@ resolve_systemverilog_template_element_signals(
 make_systemverilog_template_signal_remap(
     std::span<const SystemVerilogTemplateSignalRole> source_roles,
     std::span<const SystemVerilogTemplateSignalRole> target_roles,
-    std::span<const SignalInfo> signal_info,
+    SignalInfoView signal_info,
     std::span<const runtime::simir::Signal> signals);
 
 // Rewrites the signal operands of `operation` through `rename`, and its
@@ -80,6 +80,6 @@ make_systemverilog_template_signal_remap(
                    runtime::simir::SignalId>& signal_remap,
     std::string_view from_hierarchy,
     std::string_view to_hierarchy,
-    std::span<const SignalInfo> signal_info);
+    SignalInfoView signal_info);
 
 } // namespace fsim::elaboration

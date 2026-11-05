@@ -1,0 +1,28 @@
+/* DPI-C prototypes of the design's imports and exports (IEEE 1800-2023 35, Annex H). */
+#ifndef FSIM_DPI_HEADER_H
+#define FSIM_DPI_HEADER_H
+#include "svdpi.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern int fsim_svdpi_export_call_v3(const char* name, void** arguments, void* result);
+typedef struct fsim_dpi_dpi_shapes_sample_t {
+    int count;
+    char tag;
+    double scale;
+} fsim_dpi_dpi_shapes_sample_t;
+typedef struct fsim_dpi_dpi_shapes_reading_t {
+    int count;
+    char tag;
+    double scale;
+} fsim_dpi_dpi_shapes_reading_t;
+/* Imported function dpi_take_sample */
+extern int dpi_take_sample(const fsim_dpi_dpi_shapes_sample_t* value, fsim_dpi_dpi_shapes_sample_t* copy);
+/* Imported function dpi_count */
+extern void dpi_count(int value);
+/* Imported function dpi_take_reading */
+extern void dpi_take_reading(const fsim_dpi_dpi_shapes_reading_t* value);
+#ifdef __cplusplus
+}
+#endif
+#endif

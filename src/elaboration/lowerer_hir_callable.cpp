@@ -17160,8 +17160,9 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             result_code = 'v';
         }
     } else {
-        // A function result is a small value or a string, never a vector
-        // wider than 32 bits (IEEE 1800-2023 35.5.5).
+        // A function result is a small value or a string, never a packed
+        // vector of any width (IEEE 1800-2023 35.5.5; the 35.5.4 example
+        // returning `bit [15:0]` is informative).
         const auto type = dpi_c_type(declaration.return_type_tokens, types);
         if (!type) {
             if (const auto kind
@@ -17170,11 +17171,8 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             }
             return std::nullopt;
         }
-        const bool bit_vector = type->code == 'B'
-            && type->width != 0U && type->width <= 32U;
-        if (!bit_vector
-            && (type->code == 'B' || type->code == 'V' || type->code == 'R'
-                || type->open_packed)) {
+        if (type->code == 'B' || type->code == 'V' || type->code == 'R'
+            || type->open_packed) {
             illegal(DpiTypeIssue::not_small_value,
                 declaration.return_type_tokens, true);
             return std::nullopt;
@@ -17190,10 +17188,6 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         result.result_signed = type->signed_value;
         result.result_scalar = type->scalar;
         result_code = type->code;
-        if (bit_vector) {
-            result.result_c_width = 32U;
-            result_code = 'I';
-        }
     }
     if (actuals.size() != declaration.formals.size()) {
         return std::nullopt;
@@ -17252,7 +17246,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             && declaration.linkage_name.starts_with(
                 "__fsim_dpi_export_return_r__")
             && (open || array || type->code == 'R' || type->code == 'V'
-                || (type->code == 'B' && type->width > 32U))) {
+                || type->code == 'B')) {
             illegal(DpiTypeIssue::not_small_value, formal.type_tokens, true);
             return std::nullopt;
         }
@@ -18962,7 +18956,11 @@ Lowerer::lower_hir_function_call_value(
     const semantic::ExpressionId expression_id,
     const std::size_t expected_width)
 {
-    if (hir_dpi_function_profile(expression_id, hir_process_scope_)) {
+    // An import whose types are illegal is reported by the DPI lowering
+    // (IEEE 1800-2023 35.5.5, 35.5.6), not as an unsupported call.
+    HirDpiIssue issue;
+    if (hir_dpi_function_profile(expression_id, hir_process_scope_, &issue)
+        || !issue.code.empty()) {
         const auto value = lower_hir_dpi_function_call(
             expression_id, expected_width);
         return value
@@ -20710,8 +20708,7 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
             frontend::PortDirection::Output));
         actual_kinds.push_back(1U);
     }
-    const auto call_width
-        = profile.result_c_width.value_or(profile.result_width);
+    const auto call_width = profile.result_width;
     // A context import of a unit with DPI exports starts its C call, serves
     // the export calls the C code makes from the calling process (IEEE
     // 1800-2023 35.5.3), and then finishes the call.
@@ -24493,6 +24490,20 @@ std::optional<std::string> Lowerer::hir_vhdl_foreign_model(
                 || !value->vhdl->decoded_string) {
                 return std::nullopt;
             }
+            // Standard direct binding: "VHPIDIRECT <library> <execution>"
+            // (20.2.4.3). The model is the subprogram designator, and a
+            // null execution specifier names the execution function after
+            // it. The identity carries the function as a third field.
+            if (const auto direct = semantic::vhdl::foreign_direct_binding(
+                    *value->vhdl->decoded_string, false)) {
+                // The designator keeps the letter case of the declaration.
+                const auto& designator = callable.spelling.empty()
+                    ? callable.name
+                    : callable.spelling;
+                return direct->library + '\t' + designator + "\t="
+                    + (direct->execution == "null" ? designator
+                                                   : direct->execution);
+            }
             // Standard indirect binding: "VHPI <library> <model>", the
             // words separated by spaces (20.2.4.1). Any other value
             // names no VHPI model.
@@ -24595,11 +24606,23 @@ bool Lowerer::lower_hir_vhdl_foreign_body(
     const auto result_width = function && !string_result
         ? static_cast<std::uint32_t>(register_width(frame.result))
         : 1U;
+    // A direct binding's model carries the execution function as a third
+    // field, which closes the identity (20.2.4.3).
+    auto target = model;
+    std::string_view execution;
+    if (const auto first = model.find('\t'); first != std::string_view::npos) {
+        if (const auto second = model.find('\t', first + 1U);
+            second != std::string_view::npos) {
+            target = model.substr(0U, second);
+            execution = model.substr(second);
+        }
+    }
     auto identity = std::string { systemverilog_dpi_function_prefix }
         + std::string { vhdl_foreign_call_identity_prefix }
-        + std::string { model } + '\t' + callable.name + '\t'
+        + std::string { target } + '\t' + callable.name + '\t'
         + std::to_string(frame.declaration.value()) + '\t' + hierarchy_
-        + '\t' + std::to_string(function && !string_result ? result_width : 0U);
+        + '\t' + std::to_string(function && !string_result ? result_width : 0U)
+        + std::string { execution };
     const auto destination = function && !string_result
         ? frame.result
         : allocate_register(1U, frontend::ValueDomain::Bit2);

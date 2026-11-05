@@ -1,0 +1,4 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- The reserved words of a tabular registry are case sensitive (IEEE
+-- 1076-2019 20.2.2).
+fsim_foreign_vhpi_registry_plugin inv vhpiarchf registry_elab registry_exec

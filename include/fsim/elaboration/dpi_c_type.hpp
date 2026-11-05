@@ -40,11 +40,15 @@ struct DpiCType {
     // An unpacked structure: `width` is the bits of all its members as
     // one stream, the first member first.
     std::vector<DpiCMember> members;
+    // An unpacked structure: the name of its C typedef in a generated
+    // header, from DpiTypeContext::struct_tag; empty when there is none.
+    std::string tag;
 };
 
 // One member of an unpacked structure; its unpacked dimensions, as (left,
 // right) pairs outermost first, are those of the member declaration.
 struct DpiCMember {
+    std::string name;
     DpiCType type;
     std::vector<std::pair<std::int64_t, std::int64_t>> dimensions;
 };
@@ -68,6 +72,11 @@ struct DpiTypeContext {
     std::function<std::optional<std::int64_t>(std::string_view)> constant;
     // Whether a name denotes a class.
     std::function<bool(std::string_view)> class_named;
+    // The C typedef name of an unpacked structure type referenced with
+    // `spelling`, unique per SystemVerilog typedef: typedefs of equal
+    // layout share one structure type but keep their own C names.
+    std::function<std::string(semantic::TypeId, std::string_view spelling)>
+        struct_tag;
 };
 
 // The value of a constant integral expression spelled in tokens: decimal
@@ -128,7 +137,9 @@ enum class DpiTypeIssue : std::uint8_t {
     const semantic::sv::Hir& hir, semantic::ScopeId scope);
 
 // A C header declaring every validated DPI-C import and export with its
-// Annex H C prototype, like other simulators' DPI header generation. A
+// Annex H C prototype, like other simulators' DPI header generation. Each
+// unpacked structure a formal uses, directly or nested, has a C typedef
+// with its members in declaration order (IEEE 1800-2023 H.7.8). A
 // declaration whose types this mapping cannot spell is listed in a comment.
 [[nodiscard]] std::string systemverilog_dpi_header(
     const semantic::sv::Hir& hir);

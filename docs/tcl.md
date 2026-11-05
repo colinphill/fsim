@@ -189,6 +189,7 @@ to apply them.
 | `simulate.trace_report_limit` | integer | `4096` | trace diagnostics reported before the rest are counted |
 | `simulate.vhpi` | list |  | VHPI modules LIB[:BOOTSTRAP] loaded for simulation |
 | `simulate.vhpi_end_of_step_timers` | boolean | `false` | accept VHPI timers registered at the end of a time step |
+| `simulate.vhpi_registry` | list |  | VHPI tabular registry files read for simulation |
 | `simulate.vpi` | list |  | VPI modules LIB[:BOOTSTRAP] loaded for simulation |
 | `systemc.compile_options` | list |  | options passed to the SystemC compiler |
 | `systemc.compiler` | text |  | SystemC C++ compiler |

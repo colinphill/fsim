@@ -239,7 +239,8 @@ int run_built_project(
     // stay published and the fused nets visible.
     const bool vpi_modules = !config.run.vpi_modules.empty();
     // A DPI context import may use the VPI too.
-    const bool vhpi_modules = !config.run.vhpi_modules.empty();
+    const bool vhpi_modules = !config.run.vhpi_modules.empty()
+        || !config.run.vhpi_registries.empty();
     const bool foreign = vpi_modules || vhpi_modules
         || !config.run.sv_libs.empty();
     const bool trace_output
@@ -252,10 +253,10 @@ int run_built_project(
     plan_kernel_access(built, engine, foreign && config.run.foreign_probes);
     // Only a run with a library compiles the primitive delay slots in
     // (vpi_put_delays, acc_replace_delays); the others keep the constant
-    // delayed writes.
-    if (foreign) {
+    // delayed writes. A design without primitives keeps the kernel planned
+    // at elaboration.
+    if (foreign && built.design.bind_primitive_delay_slots() != 0U) {
         built.kernel_access.delay_slots = true;
-        (void)built.design.bind_primitive_delay_slots();
     }
     if (profile_phases && !built.cone_fusion
         && !built.kernel_access.admit && static_kernel_requested(engine)) {
@@ -383,7 +384,8 @@ int run_built_project(
     const bool vhpi_wanted = vhpi_modules
         || (vpi_modules && has_language(semantic::Language::vhdl))
         || (has_language(semantic::Language::vhdl)
-            && design_has_vhdl_foreign_architecture(simulation));
+            && (design_has_vhdl_foreign_architecture(simulation)
+                || design_has_vhdl_foreign_subprogram(simulation)));
     const auto vhpi_print = [&] {
         return sink == SimulationOutputSink::builtin_stdout
             ? VhpiForeignService::PrintSink { [](const std::string_view text) {
@@ -411,7 +413,7 @@ int run_built_project(
     std::unique_ptr<VhpiForeignService> vhpi_service;
     if (vhpi_wanted && !vhpi_modules) {
         vhpi_service = attach_vhpi_modules(
-            simulation, {}, vhpi_print(), plusargs, diagnostics, {},
+            simulation, {}, {}, vhpi_print(), plusargs, diagnostics, {},
             vhpi_libraries);
         if (!vhpi_service) {
             return 1;
@@ -444,7 +446,8 @@ int run_built_project(
     }
     if (vhpi_modules) {
         vhpi_service = attach_vhpi_modules(simulation,
-            config.run.vhpi_modules, vhpi_print(), plusargs, diagnostics,
+            config.run.vhpi_modules, config.run.vhpi_registries, vhpi_print(),
+            plusargs, diagnostics,
             vpi_service ? vpi_service->calls() : ForeignCompanion {},
             vhpi_libraries);
         if (!vhpi_service) {

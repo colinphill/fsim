@@ -5,6 +5,7 @@
 #include "application_internal.hpp"
 #include "fsim/platform/dynamic_library.hpp"
 #include "fsim/runtime/scheduler.hpp"
+#include "fsim/runtime/simir_class.hpp"
 #include "fsim/runtime/vhpi_bridge.h"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
@@ -23,7 +24,9 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -505,7 +508,67 @@ struct ForeignModel final : Handle {
     vhpiForeignDataT data { };
     std::string library;
     std::string model;
+    // A standard direct binding (IEEE 1076-2019 20.2.4.3) names its entry
+    // points: the library is the object library path ("null" for a null
+    // specifier), the model the architecture name or subprogram
+    // designator, and the model holds the functions found by name.
+    bool direct { };
+    std::string elaboration;
+    std::string execution;
 };
+
+// The fields of an identity of a foreign subprogram call, separated by
+// tabs (see elaboration::vhdl_foreign_call_identity_prefix).
+[[nodiscard]] std::vector<std::string_view> split_identity(
+    std::string_view identity)
+{
+    std::vector<std::string_view> fields;
+    for (;;) {
+        const auto tab = identity.find('\t');
+        fields.push_back(identity.substr(0U, tab));
+        if (tab == std::string_view::npos) {
+            return fields;
+        }
+        identity.remove_prefix(tab + 1U);
+    }
+}
+
+// Visit the identity, after the DPI and VHPI prefixes, of each call of a
+// foreign VHDL subprogram in the design's processes (IEEE 1076-2019
+// 20.4.2) until `visit` returns false.
+template <typename Visit>
+void visit_foreign_calls(const Simulation& simulation, Visit&& visit)
+{
+    for (const auto& occurrence : simulation.design_ir().processes()) {
+        const auto& program = simulation.process_program(
+            static_cast<runtime::simir::ProcessId>(occurrence.runtime_index));
+        for (std::size_t index { }; index < program.operations.size();
+             ++index) {
+            const auto* const call = runtime::simir::operation_get_if<
+                runtime::simir::ClassStaticMethodCall>(
+                &program.operations[index]);
+            if (call == nullptr) {
+                continue;
+            }
+            auto identity = std::string_view { call->method_identity };
+            if (!identity.starts_with(
+                    runtime::simir::systemverilog_dpi_function_prefix)) {
+                continue;
+            }
+            identity.remove_prefix(
+                runtime::simir::systemverilog_dpi_function_prefix.size());
+            if (!identity.starts_with(
+                    elaboration::vhdl_foreign_call_identity_prefix)) {
+                continue;
+            }
+            identity.remove_prefix(
+                elaboration::vhdl_foreign_call_identity_prefix.size());
+            if (!visit(identity)) {
+                return;
+            }
+        }
+    }
+}
 
 [[nodiscard]] Handle* handle_of(const vhpiHandleT handle) noexcept
 {
@@ -555,6 +618,118 @@ struct ModuleSpec {
         spec.path = std::filesystem::absolute(spec.path, error);
     }
     return spec;
+}
+
+// One entry of a tabular registry (IEEE 1076-2019 20.2.2): its five
+// fields, an extended identifier without its delimiters.
+struct RegistryEntry {
+    std::size_t line { };
+    std::array<std::string, 5U> fields;
+    std::array<bool, 5U> extended { };
+};
+
+[[nodiscard]] bool is_c_identifier(const std::string_view text) noexcept
+{
+    const auto letter = [](const char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+    };
+    return !text.empty() && letter(text.front())
+        && std::ranges::all_of(text.substr(1U), [&](const char c) {
+               return letter(c) || (c >= '0' && c <= '9');
+           });
+}
+
+// The entries of a tabular registry file. Fields are separated by SPACE
+// or NBSP; a comment runs from "--" to the end of the line (20.2.2).
+[[nodiscard]] std::optional<std::vector<RegistryEntry>> parse_registry(
+    const std::string_view text, std::string& error)
+{
+    std::vector<RegistryEntry> entries;
+    std::size_t number { };
+    std::size_t start { };
+    while (start <= text.size()) {
+        auto end = text.find('\n', start);
+        if (end == std::string_view::npos) {
+            end = text.size();
+        }
+        auto line = text.substr(start, end - start);
+        if (line.ends_with('\r')) {
+            line.remove_suffix(1U);
+        }
+        start = end + 1U;
+        ++number;
+        const auto space = [&](const std::size_t at) -> std::size_t {
+            if (line[at] == ' ') {
+                return 1U;
+            }
+            if (line.substr(at).starts_with("\xC2\xA0")) {
+                return 2U;
+            }
+            return line[at] == '\xA0' ? 1U : 0U;
+        };
+        RegistryEntry entry;
+        entry.line = number;
+        std::size_t count { };
+        std::size_t at { };
+        while (at < line.size()) {
+            if (const auto width = space(at); width != 0U) {
+                at += width;
+                continue;
+            }
+            if (line.substr(at).starts_with("--")) {
+                break;
+            }
+            std::string field;
+            bool extended { };
+            if (line[at] == '\\') {
+                // An extended identifier; a doubled backslash stands for
+                // one (15.4.3).
+                extended = true;
+                ++at;
+                bool closed { };
+                while (at < line.size()) {
+                    if (line[at] == '\\') {
+                        if (at + 1U < line.size() && line[at + 1U] == '\\') {
+                            field += '\\';
+                            at += 2U;
+                            continue;
+                        }
+                        ++at;
+                        closed = true;
+                        break;
+                    }
+                    field += line[at++];
+                }
+                if (!closed || field.empty()) {
+                    error = "line " + std::to_string(number)
+                        + ": unterminated extended identifier";
+                    return std::nullopt;
+                }
+            } else {
+                while (at < line.size() && space(at) == 0U
+                    && !line.substr(at).starts_with("--")) {
+                    field += line[at++];
+                }
+            }
+            if (count == entry.fields.size()) {
+                error = "line " + std::to_string(number)
+                    + ": an entry has five fields";
+                return std::nullopt;
+            }
+            entry.extended[count] = extended;
+            entry.fields[count++] = std::move(field);
+        }
+        if (count == 0U) {
+            continue;
+        }
+        if (count != entry.fields.size()) {
+            error = "line " + std::to_string(number)
+                + ": an entry has five fields";
+            return std::nullopt;
+        }
+        entries.push_back(std::move(entry));
+    }
+    return entries;
 }
 
 // The femtoseconds in one simulation tick of resolution `text` ("1fs").
@@ -716,6 +891,7 @@ public:
     }
 
     [[nodiscard]] bool load(const std::span<const std::string> modules,
+        const std::span<const std::string> registries,
         diagnostic::Engine& diagnostics)
     {
         for (const auto& module : modules) {
@@ -756,12 +932,189 @@ public:
                     routines[index]();
                 }
             }
+            auto stem = support::path_to_utf8(spec.path.stem());
+            module_libraries_.emplace_back(std::move(stem), library.get());
             libraries_.push_back(std::move(library));
+        }
+        for (const auto& registry : registries) {
+            if (!load_registry(support::path_from_utf8(registry), diagnostics)) {
+                return false;
+            }
+        }
+        if (!bind_direct_foreign(diagnostics)) {
+            return false;
         }
         // Immediately prior to completion of the registration phase
         // (IEEE 1076-2019 21.3.7.2).
         dispatch(vhpiCbStartOfTool);
         return verify_foreign_architectures(diagnostics);
+    }
+
+    // The physical library of an object library name (IEEE 1076-2019
+    // 20.2.2 leaves the mapping to the tool): a loaded VHPI module named
+    // NAME or libNAME; then NAME, NAME.vhpi, NAME.so or libNAME.so beside
+    // the registry file; then libNAME.so where the system loader looks.
+    [[nodiscard]] platform::DynamicLibrary* registry_library(
+        const std::string& name, const std::filesystem::path& directory,
+        std::string& error)
+    {
+        for (const auto& [stem, library] : module_libraries_) {
+            if (stem == name || stem == "lib" + name) {
+                return library;
+            }
+        }
+        std::error_code status;
+        std::filesystem::path found;
+        for (const auto& candidate : { name, name + ".vhpi", name + ".so",
+                 "lib" + name + ".so" }) {
+            auto path = directory / support::path_from_utf8(candidate);
+            if (support::native_fs::exists(path, status)) {
+                found = std::move(path);
+                break;
+            }
+        }
+        if (found.empty()) {
+            found = support::path_from_utf8("lib" + name + ".so");
+        }
+        auto library = platform::DynamicLibrary::open(found, error, true);
+        if (!library) {
+            return nullptr;
+        }
+        auto* const result = library.get();
+        module_libraries_.emplace_back(name, result);
+        libraries_.push_back(std::move(library));
+        return result;
+    }
+
+    // Register the foreign models, applications and libraries of foreign
+    // models that a tabular registry lists (IEEE 1076-2019 20.2.2).
+    [[nodiscard]] bool load_registry(const std::filesystem::path& file,
+        diagnostic::Engine& diagnostics)
+    {
+        const auto name = support::path_to_utf8(file);
+        const auto fail = [&](const std::string& message) {
+            diagnostics.error("FSIM-VHPI-LOAD-001",
+                "VHPI registry '" + name + "': " + message);
+            return false;
+        };
+        auto input = support::native_fs::open_ifstream(file, std::ios::binary);
+        if (!input) {
+            return fail("cannot read the file");
+        }
+        const std::string text { std::istreambuf_iterator<char> { input },
+            std::istreambuf_iterator<char> { } };
+        std::string error;
+        const auto entries = parse_registry(text, error);
+        if (!entries) {
+            return fail(error);
+        }
+        std::error_code status;
+        const auto directory
+            = std::filesystem::absolute(file, status).parent_path();
+        for (const auto& entry : *entries) {
+            const auto& fields = entry.fields;
+            const auto at = "line " + std::to_string(entry.line) + ": ";
+            const auto reserved = [&](const std::size_t index,
+                                      const std::string_view word) {
+                return !entry.extended[index] && fields[index] == word;
+            };
+            const auto identifier = [&](const std::size_t index) {
+                return entry.extended[index] || is_c_identifier(fields[index]);
+            };
+            const auto function = [&](const std::size_t index) {
+                return !entry.extended[index] && !reserved(index, "null")
+                    && is_c_identifier(fields[index]);
+            };
+            // The reserved words are case sensitive (20.2.2).
+            vhpiForeignKindT kind { };
+            if (reserved(2U, "vhpiArchF")) {
+                kind = vhpiArchF;
+            } else if (reserved(2U, "vhpiFuncF")) {
+                kind = vhpiFuncF;
+            } else if (reserved(2U, "vhpiProcF")) {
+                kind = vhpiProcF;
+            } else if (reserved(2U, "vhpiAppF")) {
+                kind = vhpiAppF;
+            } else if (reserved(2U, "vhpiLibF")) {
+                kind = vhpiLibF;
+            } else {
+                return fail(at + "'" + fields[2]
+                    + "' is not vhpiArchF, vhpiFuncF, vhpiProcF, vhpiAppF "
+                      "or vhpiLibF");
+            }
+            const bool model = kind == vhpiArchF || kind == vhpiFuncF
+                || kind == vhpiProcF;
+            const bool well_formed = identifier(0U) && !reserved(0U, "null")
+                && (kind == vhpiLibF
+                        ? reserved(1U, "null")
+                        : identifier(1U) && !reserved(1U, "null"))
+                && (kind == vhpiArchF
+                        ? (reserved(3U, "null") || function(3U)) && function(4U)
+                        : model
+                        ? reserved(3U, "null")
+                            && (reserved(4U, "null") || function(4U))
+                        : function(3U) && reserved(4U, "null"));
+            if (!well_formed) {
+                return fail(at + "the entry does not have the form of a "
+                                 "registry entry for " + fields[2]);
+            }
+            auto* const library = registry_library(fields[0], directory, error);
+            if (library == nullptr) {
+                return fail(at + "cannot load object library '" + fields[0]
+                    + "': " + error);
+            }
+            const auto entry_point = [&](const std::string& symbol) {
+                return library->symbol(symbol, error);
+            };
+            if (model) {
+                // An execution specifier of null names the function after
+                // the model (20.2.2).
+                const auto& execution = reserved(4U, "null") ? fields[1]
+                                                            : fields[4];
+                auto* const execf = entry_point(execution);
+                if (execf == nullptr) {
+                    return fail(at + "no execution function '" + execution
+                        + "' in '" + fields[0] + "': " + error);
+                }
+                void* elabf { };
+                if (kind == vhpiArchF && !reserved(3U, "null")) {
+                    elabf = entry_point(fields[3]);
+                    if (elabf == nullptr) {
+                        return fail(at + "no elaboration function '"
+                            + fields[3] + "' in '" + fields[0] + "': " + error);
+                    }
+                }
+                auto library_name = fields[0];
+                auto model_name = fields[1];
+                vhpiForeignDataT data { };
+                data.kind = kind;
+                data.libraryName = library_name.data();
+                data.modelName = model_name.data();
+                data.elabf = reinterpret_cast<ForeignFunction>(elabf);
+                data.execf = reinterpret_cast<ForeignFunction>(execf);
+                if (register_foreign(&data) == nullptr) {
+                    return fail(at + error_message_);
+                }
+                continue;
+            }
+            // A foreign application or library of foreign models registers
+            // once per registration function (20.2.1).
+            if (!registry_functions_
+                     .emplace(kind, fields[0], fields[1], fields[3])
+                     .second) {
+                return fail(at + "'" + fields[0] + "' is already registered "
+                                 "with registration function '"
+                    + fields[3] + "'");
+            }
+            auto* const registration = entry_point(fields[3]);
+            if (registration == nullptr) {
+                return fail(at + "no registration function '" + fields[3]
+                    + "' in '" + fields[0] + "': " + error);
+            }
+            Scope scope { *this };
+            reinterpret_cast<vhpiRegistrationFctT>(registration)();
+        }
+        return true;
     }
 
     // Connect the callback dispatch points to the simulation.
@@ -1169,10 +1522,10 @@ private:
             if (base != nullptr && base->tag == HandleTag::object) {
                 if (const auto location
                     = source_location(static_cast<const Object&>(*base))) {
-                    error_file_ = location->first;
+                    error_file_ = location->file;
                     info->file = error_file_.data();
                     info->line = static_cast<decltype(info->line)>(
-                        location->second);
+                        location->line);
                 }
             }
         }
@@ -7235,9 +7588,16 @@ private:
         return *all_bodies_;
     }
 
+    // The file, line and column where an object begins.
+    struct ObjectLocation {
+        std::string file;
+        std::uint32_t line { };
+        std::uint32_t column { };
+    };
+
     // Where an object is: its own statement, its declaration, its block or
     // generate statement, or its design unit (IEEE 1076-2019 Figure 14).
-    [[nodiscard]] std::optional<std::pair<std::string, std::uint32_t>>
+    [[nodiscard]] std::optional<ObjectLocation>
     source_location(const Object& object) const
     {
         auto source = object.source;
@@ -7259,14 +7619,14 @@ private:
         }
         const auto& span = semantics.source_spans().at(source->value());
         if (!span.logical_name.empty()) {
-            return std::pair { span.logical_name, span.begin.line };
+            return ObjectLocation {
+                span.logical_name, span.begin.line, span.begin.column };
         }
         if (span.file.valid()
             && span.file.value() < semantics.source_files().size()) {
-            return std::pair {
+            return ObjectLocation {
                 semantics.source_files().at(span.file.value()).physical_name,
-                span.begin.line
-            };
+                span.begin.line, span.begin.column };
         }
         return std::nullopt;
     }
@@ -10311,7 +10671,16 @@ private:
             return static_cast<vhpiIntT>(arguments_.size());
         case vhpiLineNoP:
             if (const auto location = source_location(object)) {
-                return static_cast<vhpiIntT>(location->second);
+                return static_cast<vhpiIntT>(location->line);
+            }
+            return vhpiUndefined;
+        // The characters before the object on its line: 0 at the start of
+        // a line (IEEE 1076-2019 19.6, 19.11 LineOffset; source columns count
+        // from 1).
+        case vhpiLineOffsetP:
+            if (const auto location = source_location(object);
+                location && location->column != 0U) {
+                return static_cast<vhpiIntT>(location->column - 1U);
             }
             return vhpiUndefined;
         case vhpiIsUpP:
@@ -10905,7 +11274,7 @@ private:
             break;
         case vhpiFileNameP:
             if (const auto location = source_location(object)) {
-                scratch = location->first;
+                scratch = location->file;
                 break;
             }
             return nullptr;
@@ -12881,9 +13250,11 @@ private:
             const auto found = std::ranges::find_if(foreign_models_,
                 [&](const auto& stored) {
                     return stored->data.kind == vhpiArchF
-                        && !entry.binding->direct
+                        && stored->direct == entry.binding->direct
                         && stored->library == entry.binding->library
-                        && stored->model == entry.binding->model;
+                        && stored->model == entry.binding->model
+                        && stored->elaboration == entry.binding->elaboration
+                        && stored->execution == entry.binding->execution;
                 });
             if (found != foreign_models_.end()
                 && (*found)->data.execf != nullptr) {
@@ -12898,12 +13269,155 @@ private:
                     + "\") has no registered foreign architecture with an "
                       "execution function: "
                     + (entry.binding->direct
-                            ? std::string { "a VHPIDIRECT binding needs "
-                                            "its object library loaded" }
+                            ? std::string { "its VHPIDIRECT entry points "
+                                            "were not bound" }
                             : "register vhpiArchF with library '"
                                 + entry.binding->library + "' and model '"
                                 + entry.binding->model + "' with a "
                                   "--vhpi module"));
+        }
+        return complete;
+    }
+
+    // The symbol of an object library for a standard direct binding
+    // (IEEE 1076-2019 20.2.4.3). A path is interpreted as a registry
+    // library name is (see registry_library) relative to the working
+    // directory; a null specifier finds the symbol in the loaded VHPI
+    // libraries, then in the program and its global libraries.
+    [[nodiscard]] void* direct_symbol(const std::string& library,
+        const std::string& name, std::string& error)
+    {
+        if (library == "null") {
+            for (const auto& [stem, loaded] : module_libraries_) {
+                if (auto* const symbol = loaded->symbol(name, error)) {
+                    return symbol;
+                }
+            }
+            if (auto* const symbol
+                = platform::DynamicLibrary::default_symbol(name)) {
+                return symbol;
+            }
+            error = "not found in the loaded VHPI libraries or the program";
+            return nullptr;
+        }
+        std::error_code status;
+        auto* const loaded = registry_library(
+            library, std::filesystem::current_path(status), error);
+        return loaded != nullptr ? loaded->symbol(name, error) : nullptr;
+    }
+
+    // The foreign model of a standard direct binding, registered on first
+    // use with the entry points the object library provides; null, with a
+    // diagnostic, when one is missing (IEEE 1076-2019 20.2.4.3). The
+    // model is identified by its library, model name and functions, as two
+    // architectures of one name may bind different functions.
+    [[nodiscard]] ForeignModel* bind_direct_model(
+        diagnostic::Engine& diagnostics, const vhpiForeignKindT kind,
+        const std::string& library, const std::string& model,
+        const std::string& elaboration, const std::string& execution,
+        const std::string& subject)
+    {
+        const auto found = std::ranges::find_if(foreign_models_,
+            [&](const auto& stored) {
+                return stored->direct && stored->data.kind == kind
+                    && stored->library == library && stored->model == model
+                    && stored->elaboration == elaboration
+                    && stored->execution == execution;
+            });
+        if (found != foreign_models_.end()) {
+            return found->get();
+        }
+        const auto fail = [&](const std::string& what,
+                              const std::string& error) -> ForeignModel* {
+            diagnostics.error("FSIM-VHPI-LOAD-001",
+                "cannot bind " + subject + " to object library '" + library
+                    + "' (VHPIDIRECT): " + what + ": " + error);
+            return nullptr;
+        };
+        std::string error;
+        auto* const execf = direct_symbol(library, execution, error);
+        if (execf == nullptr) {
+            return fail("no execution function '" + execution + "'", error);
+        }
+        void* elabf { };
+        if (!elaboration.empty()) {
+            elabf = direct_symbol(library, elaboration, error);
+            if (elabf == nullptr) {
+                return fail(
+                    "no elaboration function '" + elaboration + "'", error);
+            }
+        }
+        auto stored = std::make_unique<ForeignModel>();
+        stored->library = library;
+        stored->model = model;
+        stored->direct = true;
+        stored->elaboration = elaboration;
+        stored->execution = execution;
+        stored->data.kind = kind;
+        stored->data.libraryName = stored->library.data();
+        stored->data.modelName = stored->model.data();
+        stored->data.elabf = reinterpret_cast<ForeignFunction>(elabf);
+        stored->data.execf = reinterpret_cast<ForeignFunction>(execf);
+        foreign_models_.push_back(std::move(stored));
+        (void)to_handle(foreign_models_.back().get());
+        return foreign_models_.back().get();
+    }
+
+    // Bind each standard direct binding of the design: the foreign
+    // architectures of its instances and the foreign subprograms it calls
+    // (IEEE 1076-2019 20.2.4.3). Their models register with the library
+    // path and the architecture or designator name, as a model registered
+    // by a VHPI program does (23.14).
+    [[nodiscard]] bool bind_direct_foreign(diagnostic::Engine& diagnostics)
+    {
+        collect_foreign_instances();
+        bool complete = true;
+        for (const auto& entry : foreign_instances_) {
+            if (!entry.binding->direct) {
+                continue;
+            }
+            complete = bind_direct_model(diagnostics, vhpiArchF,
+                           entry.binding->library, entry.binding->model,
+                           entry.binding->elaboration,
+                           entry.binding->execution,
+                           "foreign architecture instance '" + entry.path
+                               + "' (attribute FOREIGN \""
+                               + entry.binding->value + "\")")
+                    != nullptr
+                && complete;
+        }
+        // Compiled code is read for call identities only when the analyzed
+        // design declares a foreign subprogram.
+        std::set<std::string> calls;
+        if (design_has_vhdl_foreign_subprogram(simulation_)) {
+            visit_foreign_calls(simulation_,
+                [&](const std::string_view identity) {
+                    const auto fields = split_identity(identity);
+                    if (fields.size() > 6U && fields[6].starts_with('=')) {
+                        calls.emplace(identity);
+                    }
+                    return true;
+                });
+        }
+        for (const auto& identity : calls) {
+            const auto fields = split_identity(identity);
+            std::uint32_t value { };
+            const auto declaration = std::from_chars(fields[3].data(),
+                fields[3].data() + fields[3].size(), value).ec == std::errc { }
+                ? hir_.find_declaration(
+                    semantic::DeclarationId::from_index(value))
+                : nullptr;
+            const auto kind = declaration != nullptr
+                    && declaration->form == vhdl::DeclarationForm::procedure
+                ? vhpiProcF
+                : vhpiFuncF;
+            complete = bind_direct_model(diagnostics, kind,
+                           std::string { fields[0] }, std::string { fields[1] },
+                           { }, std::string { fields[6].substr(1U) },
+                           "foreign subprogram '" + std::string { fields[2] }
+                               + "'")
+                    != nullptr
+                && complete;
         }
         return complete;
     }
@@ -13553,32 +14067,30 @@ private:
 
     // Run the execution function of a foreign subprogram for one call
     // (IEEE 1076-2019 20.4.2). `identity` is
-    // `<library>\t<model>\t<name>\t<declaration>\t<scope>\t<result width>`;
-    // each name is `<formal>\t<declaration>`. A STRING result comes back in
-    // the trailing string actual named `@result-string`.
+    // `<library>\t<model>\t<name>\t<declaration>\t<scope>\t<result width>`,
+    // followed by `\t=<execution function>` for a direct binding; each name
+    // is `<formal>\t<declaration>`. A STRING result comes back in the
+    // trailing string actual named `@result-string`.
     [[nodiscard]] PackedLogic4 foreign_call(const std::string_view identity,
         std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings,
         const std::span<const std::string> names,
         const std::span<const std::uint8_t> directions)
     {
-        std::vector<std::string_view> fields;
-        for (auto rest = identity;;) {
-            const auto tab = rest.find('\t');
-            fields.push_back(rest.substr(0U, tab));
-            if (tab == std::string_view::npos) {
-                break;
-            }
-            rest.remove_prefix(tab + 1U);
-        }
+        const auto fields = split_identity(identity);
         if (fields.size() < 4U) {
             throw std::runtime_error { "malformed foreign subprogram call" };
         }
+        // A standard direct binding names its execution function in the
+        // seventh field (20.2.4.3).
+        const bool direct = fields.size() > 6U && fields[6].starts_with('=');
         const auto found = std::ranges::find_if(foreign_models_,
             [&](const auto& stored) {
                 return (stored->data.kind == vhpiProcF
                            || stored->data.kind == vhpiFuncF)
                     && stored->library == fields[0]
-                    && stored->model == fields[1];
+                    && stored->model == fields[1]
+                    && stored->direct == direct
+                    && (!direct || stored->execution == fields[6].substr(1U));
             });
         if (found == foreign_models_.end()) {
             throw std::runtime_error { "foreign subprogram '"
@@ -13731,6 +14243,14 @@ private:
     fsim_vhpi_std_host_v1 host_ { };
     std::vector<std::string> arguments_;
     std::vector<std::unique_ptr<platform::DynamicLibrary>> libraries_;
+    // The loaded libraries by object library name (the file stem of a
+    // VHPI module) and the registration functions a tabular registry
+    // called, by kind, library, name and function (IEEE 1076-2019 20.2).
+    std::vector<std::pair<std::string, platform::DynamicLibrary*>>
+        module_libraries_;
+    std::set<std::tuple<vhpiForeignKindT, std::string, std::string,
+        std::string>>
+        registry_functions_;
     std::vector<std::unique_ptr<Object>> objects_;
     // The sequence numbers of the loop statements of the processes, and
     // the objects of integer literals, by expression.
@@ -13901,9 +14421,18 @@ bool design_has_vhdl_foreign_architecture(const Simulation& simulation)
         });
 }
 
+bool design_has_vhdl_foreign_subprogram(const Simulation& simulation)
+{
+    return std::ranges::any_of(simulation.vhdl_hir().declarations(),
+        [](const auto& declaration) {
+            return declaration.callable && declaration.callable->foreign;
+        });
+}
+
 std::unique_ptr<VhpiForeignService> attach_vhpi_modules(
     Simulation& simulation,
     const std::span<const std::string> modules,
+    const std::span<const std::string> registries,
     VhpiForeignService::PrintSink print,
     const std::span<const std::string> arguments,
     diagnostic::Engine& diagnostics,
@@ -13915,7 +14444,7 @@ std::unique_ptr<VhpiForeignService> attach_vhpi_modules(
     service->set_companion(std::move(companion));
     service->set_libraries(std::move(libraries));
     service->attach();
-    if (!service->load(modules, diagnostics)) {
+    if (!service->load(modules, registries, diagnostics)) {
         return nullptr;
     }
     return service;

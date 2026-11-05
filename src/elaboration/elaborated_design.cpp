@@ -22,6 +22,184 @@
 
 namespace fsim::elaboration {
 
+SignalInfoTable::SignalInfoTable(std::vector<SignalInfo> sealed) noexcept
+    : sealed_ { std::move(sealed) }
+    , size_ { sealed_.size() }
+    , sealed_flag_ { true }
+{
+}
+
+SignalInfoTable::SignalInfoTable(const SignalInfoTable& other)
+{
+    if (other.sealed_flag_) {
+        sealed_ = other.sealed_;
+        size_ = sealed_.size();
+        sealed_flag_ = true;
+        return;
+    }
+    for (std::size_t index { }; index < other.size_; ++index) {
+        push_back(other[index]);
+    }
+}
+
+SignalInfoTable::SignalInfoTable(SignalInfoTable&& other) noexcept
+    : blocks_ { std::move(other.blocks_) }
+    , sealed_ { std::move(other.sealed_) }
+    , size_ { std::exchange(other.size_, 0U) }
+    , sealed_flag_ { std::exchange(other.sealed_flag_, false) }
+{
+    other.blocks_.clear();
+    other.sealed_.clear();
+}
+
+SignalInfoTable& SignalInfoTable::operator=(const SignalInfoTable& other)
+{
+    if (this != &other) {
+        *this = SignalInfoTable { other };
+    }
+    return *this;
+}
+
+SignalInfoTable& SignalInfoTable::operator=(SignalInfoTable&& other) noexcept
+{
+    if (this != &other) {
+        clear_blocks();
+        blocks_ = std::move(other.blocks_);
+        sealed_ = std::move(other.sealed_);
+        size_ = std::exchange(other.size_, 0U);
+        sealed_flag_ = std::exchange(other.sealed_flag_, false);
+        other.blocks_.clear();
+        other.sealed_.clear();
+    }
+    return *this;
+}
+
+SignalInfoTable::~SignalInfoTable()
+{
+    clear_blocks();
+}
+
+void SignalInfoTable::clear_blocks() noexcept
+{
+    if (!sealed_flag_) {
+        for (std::size_t index { }; index < size_; ++index) {
+            std::destroy_at(&(*this)[index]);
+        }
+    }
+    std::allocator<SignalInfo> allocator;
+    for (auto* const block : blocks_) {
+        allocator.deallocate(block, block_size);
+    }
+    blocks_.clear();
+}
+
+SignalInfo& SignalInfoTable::append_slot()
+{
+    if ((size_ >> block_bits) == blocks_.size()) {
+        std::allocator<SignalInfo> allocator;
+        auto* const block = allocator.allocate(block_size);
+        try {
+            blocks_.push_back(block);
+        } catch (...) {
+            allocator.deallocate(block, block_size);
+            throw;
+        }
+    }
+    return blocks_[size_ >> block_bits][size_ & block_mask];
+}
+
+void SignalInfoTable::push_back(const SignalInfo& signal)
+{
+    push_back(SignalInfo { signal });
+}
+
+void SignalInfoTable::push_back(SignalInfo&& signal)
+{
+    if (sealed_flag_) {
+        sealed_.push_back(std::move(signal));
+        size_ = sealed_.size();
+        return;
+    }
+    std::construct_at(&append_slot(), std::move(signal));
+    ++size_;
+}
+
+void SignalInfoTable::pop_back()
+{
+    if (size_ == 0U) {
+        throw std::logic_error { "pop_back on an empty signal table" };
+    }
+    if (sealed_flag_) {
+        sealed_.pop_back();
+    } else {
+        std::destroy_at(&(*this)[size_ - 1U]);
+    }
+    --size_;
+}
+
+SignalInfo& SignalInfoTable::at(const std::size_t index)
+{
+    if (index >= size_) {
+        throw std::out_of_range { "signal index out of range" };
+    }
+    return (*this)[index];
+}
+
+const SignalInfo& SignalInfoTable::at(const std::size_t index) const
+{
+    if (index >= size_) {
+        throw std::out_of_range { "signal index out of range" };
+    }
+    return (*this)[index];
+}
+
+void SignalInfoTable::seal()
+{
+    if (sealed_flag_) {
+        return;
+    }
+    std::vector<SignalInfo> sealed;
+    sealed.reserve(size_);
+    for (std::size_t index { }; index < size_; ++index) {
+        sealed.push_back(std::move((*this)[index]));
+    }
+    clear_blocks();
+    sealed_ = std::move(sealed);
+    sealed_flag_ = true;
+}
+
+const std::vector<SignalInfo>& SignalInfoTable::contiguous() const
+{
+    if (!sealed_flag_) {
+        throw std::logic_error {
+            "the signal table is read as a vector before elaboration sealed it"
+        };
+    }
+    return sealed_;
+}
+
+std::vector<SignalInfo> SignalInfoTable::to_vector() const
+{
+    if (sealed_flag_) {
+        return sealed_;
+    }
+    std::vector<SignalInfo> result;
+    result.reserve(size_);
+    for (std::size_t index { }; index < size_; ++index) {
+        result.push_back((*this)[index]);
+    }
+    return result;
+}
+
+std::vector<SignalInfo> SignalInfoTable::take_vector() &&
+{
+    seal();
+    auto result = std::move(sealed_);
+    sealed_.clear();
+    size_ = 0U;
+    return result;
+}
+
 namespace {
 
 template<typename T, typename Allocator>
@@ -449,10 +627,9 @@ void ElaboratedDesign::freeze_hierarchy_paths()
     class_specializations_.reset();
 }
 
-const std::vector<SignalInfo>&
-ElaboratedDesign::signals() const noexcept
+const std::vector<SignalInfo>& ElaboratedDesign::signals() const
 {
-    return signal_info_;
+    return signal_info_.contiguous();
 }
 
 const std::optional<runtime::simir::SignalDriverInventory>&
@@ -1432,8 +1609,8 @@ ElaboratedDesignState ElaboratedDesign::state() const&
         driver_inventory = &*computed_inventory;
     }
     ElaboratedDesignState result {
-        top_, roots_, signal_info_, boundary_conversions_, signals_,
-        string_object_info_, string_objects_,
+        top_, roots_, signal_info_.to_vector(), boundary_conversions_,
+        signals_, string_object_info_, string_objects_,
         { container_object_info_.begin(), container_object_info_.end() },
         container_objects_, container_signal_aliases_,
         container_element_signal_aliases_, container_aggregate_signal_aliases_,
@@ -1489,7 +1666,7 @@ detail::ElaboratedDesignProcessAccess::artifact_state(
         driver_inventory = &*computed_inventory;
     }
     ElaboratedDesignState result {
-        design.top_, design.roots_, design.signal_info_,
+        design.top_, design.roots_, design.signal_info_.to_vector(),
         design.boundary_conversions_, design.signals_,
         design.string_object_info_, design.string_objects_,
         { design.container_object_info_.begin(),
@@ -1543,7 +1720,7 @@ detail::ElaboratedDesignProcessAccess::take_artifact_state(
     }
     ElaboratedDesignState result {
         design.top_, std::move(design.roots_),
-        std::move(design.signal_info_),
+        std::move(design.signal_info_).take_vector(),
         std::move(design.boundary_conversions_),
         std::move(design.signals_),
         std::move(design.string_object_info_),
@@ -1616,7 +1793,8 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         process_rows_.reset();
     }
     ElaboratedDesignState result {
-        std::move(top_), std::move(roots_), std::move(signal_info_),
+        std::move(top_), std::move(roots_),
+        std::move(signal_info_).take_vector(),
         std::move(boundary_conversions_), std::move(signals_),
         std::move(string_object_info_), std::move(string_objects_),
         { std::make_move_iterator(container_object_info_.begin()),
@@ -2232,7 +2410,7 @@ ElaboratedDesign::from_state_with_process_rows(
     ElaboratedDesign result;
     result.top_ = std::move(state.top);
     result.roots_ = std::move(state.roots);
-    result.signal_info_ = std::move(state.signal_info);
+    result.signal_info_ = SignalInfoTable { std::move(state.signal_info) };
     result.boundary_conversions_ = std::move(state.boundary_conversions);
     result.signals_ = std::move(state.signals);
     result.string_object_info_ = std::move(state.string_object_info);

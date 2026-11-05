@@ -35205,6 +35205,9 @@ void HierarchyBuilder::finalize()
     append_toggle_coverage_monitors();
     append_fsm_coverage_monitors();
     finish();
+    // Lowering is over: nothing holds a description any more, so the table
+    // becomes the finished design's vector.
+    design_.signal_info_.seal();
 }
 
 std::vector<SelectedSystemVerilogClass>

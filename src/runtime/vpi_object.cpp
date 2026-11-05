@@ -750,6 +750,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         std::string { name },
         std::nullopt,
         default_type(kind),
+        std::nullopt,
     });
 }
 
@@ -757,6 +758,15 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
     const SystemVerilogVpiObjectDescriptor& descriptor)
 {
     return create(SystemVerilogVpiObjectDescriptor { descriptor });
+}
+
+std::uint64_t SystemVerilogVpiObjectRegistry::reserve_ordinals(
+    const std::uint64_t count)
+{
+    std::scoped_lock lock { mutex_ };
+    const auto first = next_ordinal_;
+    next_ordinal_ += count;
+    return first;
 }
 
 void SystemVerilogVpiObjectRegistry::reserve(const std::size_t objects)
@@ -863,7 +873,9 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
             break;
         }
     }
-    const auto ordinal = next_ordinal_++;
+    const auto ordinal = descriptor.ordinal && *descriptor.ordinal < next_ordinal_
+        ? *descriptor.ordinal
+        : next_ordinal_++;
     if (reused) {
         auto& record = records_[slot];
         ++record.epoch;
@@ -877,7 +889,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
         record.name = std::move(normalized_name);
         record.full_name = std::move(full_name);
         record.source = std::move(descriptor.source);
-        record.type = owned_type;
+        record.type = std::move(owned_type);
         record.forced_value.reset();
         record.value.reset();
         record.initial_value.reset();
@@ -898,7 +910,7 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
             std::move(normalized_name),
             std::move(full_name),
             std::move(descriptor.source),
-            owned_type,
+            std::move(owned_type),
             std::nullopt,
             std::nullopt,
             std::nullopt,
@@ -911,8 +923,21 @@ SystemVerilogVpiObjectResult SystemVerilogVpiObjectRegistry::create(
     siblings_.emplace(std::move(key), handle);
     full_names_.emplace(records_[slot].full_name, handle);
     if (!top_level) {
-        ++records_[parent_slot].live_children;
-        records_[parent_slot].children.push_back(slot);
+        auto& parent = records_[parent_slot];
+        ++parent.live_children;
+        // Children stay in ordinal order; only a reserved place is earlier
+        // than the last.
+        if (parent.children.empty()
+            || records_[parent.children.back()].ordinal < ordinal) {
+            parent.children.push_back(slot);
+        } else {
+            parent.children.insert(
+                std::ranges::upper_bound(parent.children, ordinal, { },
+                    [this](const std::uint32_t child) {
+                        return records_[child].ordinal;
+                    }),
+                slot);
+        }
     }
     return { handle, { } };
 }
@@ -975,6 +1000,13 @@ SystemVerilogVpiObjectLookupResult SystemVerilogVpiObjectRegistry::lookup(
 {
     std::scoped_lock lock { mutex_ };
     return lookup_locked(handle);
+}
+
+bool SystemVerilogVpiObjectRegistry::contains(
+    const std::string& full_name) const
+{
+    std::scoped_lock lock { mutex_ };
+    return valid() && full_names_.contains(full_name);
 }
 
 std::optional<SystemVerilogVpiObjectKind>
@@ -2057,7 +2089,10 @@ SystemVerilogVpiObjectRegistry::iterate_objects(
     } else if (kind == SystemVerilogVpiObjectKind::Variable
         || kind == SystemVerilogVpiObjectKind::Net
         || kind == SystemVerilogVpiObjectKind::Process
-        || kind == SystemVerilogVpiObjectKind::Driver) {
+        || kind == SystemVerilogVpiObjectKind::Driver
+        || kind == SystemVerilogVpiObjectKind::GenerateScope
+        || kind == SystemVerilogVpiObjectKind::GenerateScopeArray
+        || kind == SystemVerilogVpiObjectKind::Parameter) {
         materialize_all();
     }
     std::scoped_lock lock { mutex_ };
@@ -2222,7 +2257,8 @@ fsim_vpi_handle_v1 SystemVerilogVpiObjectRegistry::deferred_owner(
         return 0U;
     }
     // A deferred child's name is its parent's name with an index suffix or
-    // a `.name` segment.
+    // a `.name` segment. The elements `name[i]` of an array are not its
+    // children but its siblings, so the search goes on past an array.
     for (auto split = candidate.find_last_of("[."); split != std::string::npos
          && split != 0U;
          split = candidate.find_last_of("[.", split - 1U)) {
@@ -2233,11 +2269,19 @@ fsim_vpi_handle_v1 SystemVerilogVpiObjectRegistry::deferred_owner(
         }
         std::uint32_t slot { };
         if (resolve_object(found->second, slot)
-                == SystemVerilogVpiObjectError::None
-            && records_[slot].pending_children != 0U) {
+            != SystemVerilogVpiObjectError::None) {
+            return 0U;
+        }
+        const auto& record = records_[slot];
+        if (record.pending_children != 0U) {
             return found->second;
         }
-        return 0U;
+        if (record.kind != SystemVerilogVpiObjectKind::GenerateScopeArray
+            && record.kind != SystemVerilogVpiObjectKind::ModuleArray
+            && record.kind != SystemVerilogVpiObjectKind::InterfaceArray
+            && record.kind != SystemVerilogVpiObjectKind::ProgramArray) {
+            return 0U;
+        }
     }
     return 0U;
 }

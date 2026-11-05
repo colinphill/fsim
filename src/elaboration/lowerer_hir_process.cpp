@@ -3082,7 +3082,7 @@ resolve_systemverilog_template_element_signals(
     const std::span<const ContainerObject> objects,
     const std::span<const ContainerElementSignalAlias> element_aliases,
     const std::span<const ContainerAggregateSignalAlias> aggregate_aliases,
-    const std::span<const SignalInfo> signal_info,
+    const SignalInfoView signal_info,
     const std::span<const Signal> signals)
 {
     const auto declaration_binding = bindings.find(declaration.value());
@@ -5154,9 +5154,8 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             *description.input_actual_string_object, *text });
     } else if (description.input_actual) {
         const auto destination = *description.input_actual_destination;
-        // An implicit signal created while the actual is lowered may
-        // reallocate the signal table, so a conversion program keeps its
-        // own copy of the destination's description.
+        // A conversion program keeps its own copy of the destination's
+        // description, narrowed to the member it converts.
         std::optional<SignalInfo> destination_copy;
         if (description.input_actual_program) {
             destination_copy = design_.signal_info_[destination];

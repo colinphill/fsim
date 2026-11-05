@@ -468,6 +468,7 @@ namespace {
         config.run.vpi_modules = invocation.vpi_modules;
         config.run.sv_libs = invocation.sv_libs;
         config.run.vhpi_modules = invocation.vhpi_modules;
+        config.run.vhpi_registries = invocation.vhpi_registries;
         if (invocation.uvm_release.has_value()) {
             for (auto& source_set : config.source_sets) {
                 if (source_set.language == project::Language::system_verilog) {
@@ -558,6 +559,7 @@ namespace {
         config.run.vpi_modules = invocation.vpi_modules;
         config.run.sv_libs = invocation.sv_libs;
         config.run.vhpi_modules = invocation.vhpi_modules;
+        config.run.vhpi_registries = invocation.vhpi_registries;
         if (invocation.systemc_compiler.has_value()) {
             config.systemc.compiler = *invocation.systemc_compiler;
         }
@@ -683,6 +685,8 @@ namespace {
             << "      --sv-lib LIB         Load a DPI-C library; repeatable\n"
             << "      --vhpi LIB[:BOOTSTRAP]\n"
             << "                           Load a VHPI module; repeatable (simulate)\n"
+            << "      --vhpi-registry FILE Read a VHPI tabular registry; repeatable\n"
+            << "                           (simulate)\n"
             << "      --foreign-probes     Give VPI/VHPI libraries statement, call and\n"
             << "                           suspend callbacks (cbStmt, vhpiCbStmt, ...)\n"
             << "      --vhpi-end-of-step-timers\n"
@@ -909,6 +913,7 @@ namespace {
             "--vpi",
             "--sv-lib",
             "--vhpi",
+            "--vhpi-registry",
             "--cache",
             "--aot-scope",
             "--compiled-processes",
@@ -1294,6 +1299,15 @@ std::optional<Invocation> parse_arguments(
                         : vhpi ? invocation.vhpi_modules
                                : invocation.sv_libs)
                     .emplace_back(*value);
+            } else if (is_option(argument, "", "--vhpi-registry")) {
+                const auto value = take_value(
+                    index, argc, argv, argument, "--vhpi-registry", diagnostics);
+                if (!value.has_value() || value->empty()) {
+                    argument_error(
+                        diagnostics, "--vhpi-registry requires a file path");
+                    return std::nullopt;
+                }
+                invocation.vhpi_registries.emplace_back(*value);
             } else if (is_option(argument, "", "--link-library")) {
                 const auto value = take_value(
                     index, argc, argv, argument, "--link-library", diagnostics);
@@ -2108,6 +2122,11 @@ std::optional<Invocation> parse_arguments(
         argument_error(diagnostics, "--vhpi requires simulate, debug, or tcl");
         return std::nullopt;
     }
+    if (!invocation.vhpi_registries.empty() && !snapshot_consumer) {
+        argument_error(
+            diagnostics, "--vhpi-registry requires simulate, debug, or tcl");
+        return std::nullopt;
+    }
     if (invocation.foreign_probes.has_value() && !snapshot_consumer) {
         argument_error(
             diagnostics, "--foreign-probes requires simulate, debug, or tcl");
@@ -2555,6 +2574,7 @@ void apply_configuration_defaults(
             }
         }
         fill_list(invocation.vhpi_modules, "simulate.vhpi");
+        fill_list(invocation.vhpi_registries, "simulate.vhpi_registry");
         fill_list(invocation.vpi_modules, "simulate.vpi");
         break;
     case Command::systemc_compile:
