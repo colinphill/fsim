@@ -773,6 +773,7 @@ add_library(
     src/runtime/constraint_bounds.cpp
     src/runtime/constraint_expression.cpp
     src/runtime/constraint_solver.cpp
+    src/runtime/foreign_call_process.cpp
   src/runtime/vhpi_composite.cpp
   src/runtime/vhpi_special.cpp
   src/runtime/vhpi_driver.cpp

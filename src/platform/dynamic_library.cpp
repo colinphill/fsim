@@ -9,6 +9,11 @@
 #    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <windows.h>
+#  if !defined(PSAPI_VERSION)
+#    define PSAPI_VERSION 2
+#  endif
+#  include <psapi.h>
+#  include <vector>
 #else
 #  include <dlfcn.h>
 #endif
@@ -111,10 +116,32 @@ void* DynamicLibrary::default_symbol(const std::string_view name) {
     if (name.empty() || name.find('\0') != std::string_view::npos) {
         return nullptr;
     }
+    const std::string owned_name{name};
 #if defined(_WIN32)
+    // Windows has no global symbol namespace: search the program, then every
+    // other module of the process in load order.
+    const auto process = GetCurrentProcess();
+    std::vector<HMODULE> modules(64);
+    DWORD needed = 0;
+    while (true) {
+        const auto capacity =
+            static_cast<DWORD>(modules.size() * sizeof(HMODULE));
+        if (!K32EnumProcessModules(process, modules.data(), capacity, &needed)) {
+            return nullptr;
+        }
+        if (needed <= capacity) {
+            break;
+        }
+        modules.resize(needed / sizeof(HMODULE));
+    }
+    modules.resize(needed / sizeof(HMODULE));
+    for (const auto module : modules) {
+        if (const auto address = GetProcAddress(module, owned_name.c_str())) {
+            return reinterpret_cast<void*>(address);
+        }
+    }
     return nullptr;
 #else
-    const std::string owned_name{name};
     return dlsym(RTLD_DEFAULT, owned_name.c_str());
 #endif
 }

@@ -1108,6 +1108,7 @@ src/runtime/constraint_expression.cpp
 src/runtime/constraint_solver.cpp
 src/runtime/coverage_aggregation.cpp
 src/runtime/coverage_line_state.cpp
+src/runtime/foreign_call_process.cpp
 src/runtime/fst_change_encoder.cpp
 src/runtime/fst_compression.cpp
 src/runtime/fst_reader.cpp
