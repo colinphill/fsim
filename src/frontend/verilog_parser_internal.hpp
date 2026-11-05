@@ -975,8 +975,42 @@ class VerilogParser final : private detail::ParserBase {
   };
   std::unordered_map<std::string, CallableTypeTokens> callable_type_tokens_;
   // Declares hidden module items through which a context import's C code
-  // calls the unit's DPI exports (IEEE 1800-2023 35.5.3, 35.9).
-  void generate_dpi_export_service(DesignUnit& unit);
+  // calls the unit's DPI exports (IEEE 1800-2023 35.5.3, 35.9). The
+  // compilation unit's exports are those of its package, declared at the
+  // top level (35.5.2).
+  void generate_dpi_export_service(
+      DesignUnit& unit,
+      const std::vector<SystemVerilogDpiDeclaration>& declarations,
+      const std::unordered_map<std::string, CallableTypeTokens>& tokens,
+      bool compilation_unit);
+  // The hidden imports and call task of one export (IEEE 1800-2023 35.5.3).
+  bool dpi_export_wrapper(
+      const SystemVerilogDpiDeclaration& declaration,
+      const std::vector<std::pair<PortDirection, bool>>& formals,
+      const CallableTypeTokens& tokens,
+      std::string_view tag,
+      std::string_view callable,
+      std::string_view end_callable,
+      std::string& text);
+  // The exports declared in a generate block, which export the callables of
+  // that block (IEEE 1800-2023 35.7): the block gets its own export service.
+  void finish_generate_block_dpi_exports(
+      GenerateBody& body,
+      std::vector<SystemVerilogDpiDeclaration> exports);
+  // The compilation unit's callables, whose type tokens the module parses
+  // that follow would otherwise discard.
+  std::unordered_map<std::string, CallableTypeTokens>
+      compilation_unit_callable_tokens_;
+  void record_compilation_unit_callable(const std::string& name) {
+    if (const auto found = callable_type_tokens_.find(name);
+        found != callable_type_tokens_.end()) {
+      compilation_unit_callable_tokens_[name] = found->second;
+    }
+  }
+  // The DPI exports of the generate block being parsed, and a counter that
+  // names the services of the blocks apart.
+  std::vector<SystemVerilogDpiDeclaration> block_dpi_exports_;
+  std::size_t dpi_export_block_tag_ {};
   // The monitor sites of `expect` statements (16.17).
   std::uint32_t expect_sites_ {};
   // Assignments nested in expressions (IEEE 1800-2017 11.3.6) run as

@@ -1597,7 +1597,26 @@ private:
             error(vhpiError, "invalid object handle");
             return nullptr;
         }
-        return static_cast<Object*>(base);
+        auto* const object = static_cast<Object*>(base);
+        if (registration_restricted(*object)) {
+            return nullptr;
+        }
+        return object;
+    }
+
+    // During the registration phase only the objects of the tool and argv
+    // classes are available; accessing any other part of the information
+    // model is an error (IEEE 1076-2019 20.2.1).
+    [[nodiscard]] bool registration_restricted(const Object& object)
+    {
+        if (phase_ != vhpiRegistrationPhase || object.kind == vhpiToolK
+            || object.kind == vhpiArgvK) {
+            return false;
+        }
+        error(vhpiError,
+            "only the tool and argv classes are available during the "
+            "registration phase");
+        return true;
     }
 
     [[nodiscard]] vhpiHandleT register_cb(
@@ -8535,6 +8554,11 @@ private:
             error(vhpiError, "missing name");
             return nullptr;
         }
+        if (phase_ == vhpiRegistrationPhase) {
+            error(vhpiError,
+                "names are not available during the registration phase");
+            return nullptr;
+        }
         std::string_view name { text };
         Object* scope = nullptr;
         if (scope_handle != nullptr) {
@@ -8679,7 +8703,12 @@ private:
         const vhpiHandleT reference)
     {
         if (relation == vhpiRootInst) {
+            // The root instance is outside the tool and argv classes, the
+            // only objects of the registration phase (IEEE 1076-2019 20.2.1).
             if (phase_ == vhpiRegistrationPhase) {
+                error(vhpiError,
+                    "vhpiRootInst is not available during the registration "
+                    "phase");
                 return nullptr;
             }
             return to_handle(root());
@@ -8848,8 +8877,43 @@ private:
             return process == nullptr ? nullptr : to_handle(process);
         }
         case vhpiSimNet:
-            // No object is selected to represent a simulated net, so none
-            // is the target of a SimNet association (19.12.2.4).
+            // No net is collapsed, so every signal is the representative of
+            // its own simulated net (19.12.2.4).
+            return is_signal_object(*object) ? to_handle(object) : nullptr;
+        case vhpiLibraryDecl:
+            // The library a design unit is in (Figure 4).
+            return object->unit != nullptr && is_design_unit(*object)
+                ? to_handle(library_object(object->unit->library))
+                : nullptr;
+        case vhpiCompDecl: {
+            // The component a component instantiation instantiates
+            // (Figure 11).
+            auto* const component = component_declaration(*object);
+            return component == nullptr ? nullptr : to_handle(component);
+        }
+        case vhpiFuncDecl:
+        case vhpiSubpDecl: {
+            // The declaration of the subprogram a call calls (Figure 35);
+            // a function call has a funcDecl, a procedure call a procDecl.
+            if (!is_subprogram_call(*object)
+                || (relation == vhpiFuncDecl && object->kind != vhpiFuncCallK)) {
+                return nullptr;
+            }
+            const auto* const callee = called_declaration(*object);
+            auto* const declaration = callee == nullptr
+                ? nullptr
+                : declaration_object(*object, *callee);
+            return declaration == nullptr ? nullptr : to_handle(declaration);
+        }
+        case vhpiLeftExpr:
+        case vhpiRightExpr:
+            // The bounds of an integer range (Figure 7) as literals.
+            if (object->kind == vhpiIntRangeK && object->type_data != nullptr
+                && object->type_data->range) {
+                const auto& range = *object->type_data->range;
+                return to_handle(integer_value_object(
+                    relation == vhpiLeftExpr ? range.left : range.right));
+            }
             return nullptr;
         case vhpiConstraint: {
             if (object->kind == vhpiForLoopK) {
@@ -9046,6 +9110,140 @@ private:
         return entity;
     }
 
+    // The library declaration of a library (IEEE 1076-2019 19.4.5, Figure
+    // 4), created on first use.
+    [[nodiscard]] Object* library_object(const std::string_view library)
+    {
+        const auto key = lower(library);
+        if (const auto found = library_decls_.find(key);
+            found != library_decls_.end()) {
+            return found->second;
+        }
+        auto* const object
+            = make_object(vhpiLibraryDeclK, upper(library), nullptr);
+        object->case_name = std::string { library };
+        object->full_name = object->name;
+        object->full_case_name = object->case_name;
+        library_decls_.emplace(key, object);
+        return object;
+    }
+
+    // The libraries of the design's units, in the order they first appear.
+    [[nodiscard]] std::vector<Object*> library_objects()
+    {
+        std::vector<Object*> result;
+        for (const auto& unit : hir_.units()) {
+            auto* const library = library_object(unit.library);
+            if (std::ranges::find(result, library) == result.end()) {
+                result.push_back(library);
+            }
+        }
+        return result;
+    }
+
+    // The design unit object of an entity, architecture or package of a
+    // library (vhpiDesignUnits); other units have none.
+    [[nodiscard]] Object* library_unit_object(const vhdl::Unit& unit)
+    {
+        if (const auto found = library_units_.find(&unit);
+            found != library_units_.end()) {
+            return found->second;
+        }
+        auto kind = vhpiEntityDeclK;
+        switch (unit.kind) {
+        case vhdl::UnitKind::entity:
+            break;
+        case vhdl::UnitKind::architecture:
+            kind = vhpiArchBodyK;
+            break;
+        case vhdl::UnitKind::package:
+            kind = vhpiPackDeclK;
+            break;
+        default:
+            return nullptr;
+        }
+        auto* const object = make_object(kind, unit.name, nullptr);
+        object->full_name = upper(unit.library) + "." + object->name;
+        object->full_case_name = unit.library + "." + object->case_name;
+        object->unit = &unit;
+        object->entity = entity_of(unit);
+        library_units_.emplace(&unit, object);
+        return object;
+    }
+
+    // The design units of a library (vhpiDesignUnits).
+    [[nodiscard]] std::vector<Object*> library_units(const Object& library)
+    {
+        std::vector<Object*> result;
+        for (const auto& unit : hir_.units()) {
+            if (!same_name(unit.library, library.case_name)) {
+                continue;
+            }
+            if (auto* const object = library_unit_object(unit)) {
+                result.push_back(object);
+            }
+        }
+        return result;
+    }
+
+    // The component declaration a component instantiation names, found in
+    // the declarative parts of the regions around it; none for an entity or
+    // configuration instantiation, and for a component a package declares.
+    [[nodiscard]] Object* component_declaration(Object& instance)
+    {
+        const auto* const source = instantiation_of(instance);
+        if (source == nullptr || !source->component) {
+            return nullptr;
+        }
+        const auto name = source->target.text();
+        for (auto* scope = instance.parent; scope != nullptr;
+             scope = scope->parent) {
+            if (!is_declarative(*scope)) {
+                continue;
+            }
+            for (const auto* const declaration : scope->region_declarations) {
+                if (declaration->form == vhdl::DeclarationForm::component
+                    && same_name(declared_name(*declaration), name)) {
+                    return declared(*scope, *declaration);
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    // The instantiation statement a component instantiation object is for.
+    [[nodiscard]] const vhdl::Instance* instantiation_of(
+        const Object& instance) const
+    {
+        if (instance.kind != vhpiCompInstStmtK || instance.occurrence == nullptr
+            || !instance.occurrence->source_instance) {
+            return nullptr;
+        }
+        return semantic::find_by_id(
+            hir_.instances(), *instance.occurrence->source_instance);
+    }
+
+    // The object of a declaration that a call names: the declaration in the
+    // region around the call, or in a package instance.
+    [[nodiscard]] Object* declaration_object(
+        Object& from, const vhdl::Declaration& declaration)
+    {
+        for (auto* scope = &from; scope != nullptr; scope = scope->parent) {
+            if (is_declarative(*scope)
+                && std::ranges::find(scope->region_declarations, &declaration)
+                    != scope->region_declarations.end()) {
+                return declared(*scope, declaration);
+            }
+        }
+        for (auto* const package : package_instances()) {
+            if (std::ranges::find(package->region_declarations, &declaration)
+                != package->region_declarations.end()) {
+                return declared(*package, declaration);
+            }
+        }
+        return nullptr;
+    }
+
     [[nodiscard]] Object* tool()
     {
         if (tool_ == nullptr) {
@@ -9236,6 +9434,7 @@ private:
             }
             break;
         case DEPRECATED_vhpiSensitivitys:
+        case vhpiSensitivities:
         case vhpiSigNames:
             if (object != nullptr) {
                 result = sensitivity_objects(*object);
@@ -9298,6 +9497,7 @@ private:
                 result = port_associations(*object);
             }
             break;
+        case DEPRECATED_vhpiContributors:
         case vhpiLocalContributors:
             // The drivers, the ports and conversions associated with the
             // signal, and a default expression when it has no source
@@ -9347,6 +9547,44 @@ private:
         case vhpiOptimizedContributors:
         case vhpiOptimizedLoads:
             // No contributor or load is optimized away (19.12.2.1).
+            break;
+        case vhpiDrivenSigs:
+            // The signals a procedure call drives through its out and inout
+            // signal parameters, as signal declarations (Figure 35).
+            if (object != nullptr
+                && (object->kind == vhpiSeqProcCallStmtK
+                    || object->kind == vhpiConcProcCallStmtK)
+                && object->statement != nullptr) {
+                auto* scope = object->parent;
+                while (scope != nullptr && !is_declarative(*scope)) {
+                    scope = scope->parent;
+                }
+                if (scope == nullptr) {
+                    break;
+                }
+                std::vector<Object*> leaves;
+                collect_call_targets(*scope, *object->statement, leaves);
+                for (auto* signal : leaves) {
+                    while ((signal->kind == vhpiIndexedNameK
+                               || signal->kind == vhpiSelectedNameK
+                               || signal->kind == vhpiSliceNameK)
+                        && signal->parent != nullptr) {
+                        signal = signal->parent;
+                    }
+                    if (signal->kind == vhpiSigDeclK
+                        && std::ranges::find(result, signal) == result.end()) {
+                        result.push_back(signal);
+                    }
+                }
+            }
+            break;
+        case vhpiLibraryDecls:
+            result = library_objects();
+            break;
+        case vhpiDesignUnits:
+            if (object != nullptr && object->kind == vhpiLibraryDeclK) {
+                result = library_units(*object);
+            }
             break;
         case vhpiArgvs:
             result = argv_objects();
@@ -9481,8 +9719,20 @@ private:
             if (object == nullptr) {
                 return nullptr;
             }
-        } else if (relation != vhpiArgvs) {
+        } else if (relation != vhpiArgvs && relation != vhpiLibraryDecls) {
+            if (phase_ == vhpiRegistrationPhase) {
+                error(vhpiError,
+                    "only vhpiArgvs and vhpiForeignfs are iterated during the "
+                    "registration phase");
+                return nullptr;
+            }
             object = root();
+        } else if (relation == vhpiLibraryDecls
+            && phase_ == vhpiRegistrationPhase) {
+            error(vhpiError,
+                "library declarations are not available during the "
+                "registration phase");
+            return nullptr;
         }
         auto items = list(relation, object);
         // An association with no target objects, like an unsupported one,
@@ -9523,15 +9773,21 @@ private:
             return to_handle(foreign[static_cast<std::size_t>(index)]);
         }
         // Package instances and tool arguments have no reference object.
-        auto* const object = parent == nullptr
-                && (relation == vhpiPackInsts || relation == vhpiArgvs)
-            ? nullptr
-            : object_of(parent);
+        const bool rootless = relation == vhpiPackInsts || relation == vhpiArgvs
+            || relation == vhpiLibraryDecls;
+        if (rootless && relation != vhpiArgvs && parent == nullptr
+            && phase_ == vhpiRegistrationPhase) {
+            error(vhpiError,
+                "only vhpiArgvs and vhpiForeignfs are indexed during the "
+                "registration phase");
+            return nullptr;
+        }
+        auto* const object
+            = parent == nullptr && rootless ? nullptr : object_of(parent);
         if (object == nullptr && parent != nullptr) {
             return nullptr;
         }
-        if (object == nullptr && relation != vhpiPackInsts
-            && relation != vhpiArgvs) {
+        if (object == nullptr && !rootless) {
             return nullptr;
         }
         const auto items = list(relation, object);
@@ -11031,6 +11287,13 @@ private:
                     : 0;
             }
             break;
+        case vhpiCompInstKindP:
+            if (const auto* const source = instantiation_of(object)) {
+                return source->component    ? vhpiComp
+                    : source->configuration ? vhpiConfig
+                                            : vhpiDirect;
+            }
+            break;
         case vhpiIsDefaultP:
             if (object.kind == vhpiCompInstStmtK
                 && object.occurrence != nullptr) {
@@ -11232,6 +11495,9 @@ private:
             return nullptr;
         }
         auto& object = static_cast<Object&>(*base);
+        if (registration_restricted(object)) {
+            return nullptr;
+        }
         const std::string* text = nullptr;
         std::string scratch;
         switch (property) {
@@ -11286,7 +11552,9 @@ private:
             break;
         case vhpiLibLogicalNameP:
             // A design unit's library (IEEE 1076-2019 19.4.5).
-            if (object.unit != nullptr && is_design_unit(object)) {
+            if (object.kind == vhpiLibraryDeclK) {
+                scratch = object.name;
+            } else if (object.unit != nullptr && is_design_unit(object)) {
                 scratch = upper(object.unit->library);
             } else {
                 scratch = object.type_data ? object.type_data->library : "WORK";
@@ -11295,7 +11563,9 @@ private:
         case vhpiLibPhysicalNameP: {
             // The directory the workspace maps the library to.
             std::string library;
-            if (object.unit != nullptr && is_design_unit(object)) {
+            if (object.kind == vhpiLibraryDeclK) {
+                library = object.name;
+            } else if (object.unit != nullptr && is_design_unit(object)) {
                 library = object.unit->library;
             } else if (object.type_data != nullptr) {
                 library = object.type_data->library;
@@ -11315,6 +11585,28 @@ private:
                 break;
             }
             error(vhpiError, "no signature for " + object.full_name);
+            return nullptr;
+        case vhpiCompNameP: {
+            // The name of the component a component instantiation
+            // instantiates (Figure 11).
+            const auto* const source = instantiation_of(object);
+            if (source == nullptr || !source->component) {
+                error(vhpiError,
+                    "vhpiCompNameP needs a component instantiation of a "
+                    "component");
+                return nullptr;
+            }
+            scratch = std::string { source->target.text() };
+            break;
+        }
+        case DEPRECATED_vhpiOpNameP:
+            // The symbol of an operator call (19.4.3).
+            if (object.kind == vhpiFuncCallK
+                && get(vhpiIsOperatorP, handle) == 1) {
+                text = &object.name;
+                break;
+            }
+            error(vhpiError, "vhpiOpNameP needs an operator call");
             return nullptr;
         case vhpiUnitNameP:
             // `library.unit[:body]` (IEEE 1076-2019 19.4.5).
@@ -14274,6 +14566,8 @@ private:
     std::deque<std::string> strings_;
     std::map<std::string, Object*, std::less<>> instances_;
     std::map<std::string, Object*, std::less<>> standard_types_;
+    std::map<std::string, Object*, std::less<>> library_decls_;
+    std::map<const vhdl::Unit*, Object*> library_units_;
     std::unordered_map<std::uint32_t, Object*> declared_types_;
     std::unordered_map<std::uint32_t, Object*> defined_types_;
     std::vector<Object*> argvs_;

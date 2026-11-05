@@ -2901,6 +2901,7 @@ void Interpreter::Impl::handle_boundary(
             : std::string_view { method->method_identity };
         if (dpi) {
             DpiCallProcess::set_current(process.id);
+            DpiCallProcess::set_position(DpiCallProcess::unknown_position);
         }
         write_process_register(
             process,

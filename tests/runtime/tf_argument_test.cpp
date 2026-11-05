@@ -28,7 +28,8 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL inspect_callback(
   inspection_ok = inspection_ok && tf_nump() == 4 &&
                   tf_typep(1) == tf_readonly && tf_sizep(1) == 8 &&
                   tf_typep(2) == tf_rwpartselect && tf_sizep(2) == 4 &&
-                  tf_typep(3) == tf_readonlyreal && tf_sizep(3) == 64 &&
+                  // A real argument has size 0 (IEEE 1364-2001 25.50).
+                  tf_typep(3) == tf_readonlyreal && tf_sizep(3) == 0 &&
                   tf_typep(4) == tf_nullparam && tf_sizep(4) == 0 &&
                   tf_typep(0) == tf_nullparam && tf_sizep(5) == 0 &&
                   tf_exprinfo(0, nullptr) == nullptr && returned == &info &&

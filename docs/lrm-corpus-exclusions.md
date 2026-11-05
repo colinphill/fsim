@@ -12,7 +12,7 @@ Exclusions never count as closures.
 |---|---:|---:|
 | sv-tests | 0 | 2 |
 | verilator | 63 | 298 |
-| ivtest | 7 | 304 |
+| ivtest | 7 | 305 |
 | vests | 2 | 0 |
 | nvc | 225 | 0 |
 | vhdl-compliance | 7 | 0 |
@@ -676,6 +676,7 @@ Exclusions never count as closures.
 | `v2005_math` | out of scope | Icarus syntax extension |
 | `vcd-dup` | out of scope | compares array-word VCD output with Icarus |
 | `vpi_br_gh1041` | out of scope | Icarus syntax extension |
+| `vpi_br_gh117` | out of scope | registers cbAfterDelay from a vlog_startup_routines entry; IEEE 1800-2023 36.10.2 allows only the end-of-compile, simulation, systf and error reasons there |
 | `vpi_br_gh169a` | out of scope | gold lists objects in Icarus's iteration order; IEEE 1800-2023 38.23 and 38.40 define no order for an iteration |
 | `vpi_br_gh169b` | out of scope | gold lists objects in Icarus's iteration order; IEEE 1800-2023 38.23 and 38.40 define no order for an iteration |
 | `vpi_br_gh59` | out of scope | gold prints zz for a conditional with a z condition and z operands; IEEE 1800-2023 11.4.11 Table 11-20 gives x |

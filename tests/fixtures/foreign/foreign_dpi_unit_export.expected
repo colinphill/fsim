@@ -1,0 +1,6 @@
+#c run scope=top
+#c unit note value=1
+#c run svSetScope previous=top
+#c unit note value=2
+#c local id=1 value=3
+#c run done

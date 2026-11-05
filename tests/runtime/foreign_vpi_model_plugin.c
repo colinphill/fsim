@@ -480,6 +480,10 @@ static void late_checks(void)
     }
     object = vpi_handle(vpiTypespec, vpi_handle_by_name("top.NP", NULL));
     typespec_chain("NP", object);
+    object = vpi_handle_by_name("top.NP", NULL);
+    vpi_printf("#c NP type=%s local=%d size=%d\n",
+        text(vpi_get_str(vpiType, object)), (int)vpi_get(vpiLocalParam, object),
+        (int)vpi_get(vpiSize, object));
 }
 
 static PLI_INT32 start(p_cb_data data)

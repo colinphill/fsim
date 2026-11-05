@@ -23,10 +23,10 @@ ABI174-C03	source-hidden	covered	fsim.source-hidden-relocation-contract	FSIM-SC-
 ABI174-C03	toolchain	covered	fsim.mixed-toolchain-install-contract	FSIM-SC-I001	include/fsim/systemc_abi.h	tests/systemc/kernel_backend_protocol_test.cpp
 ABI174-C03	platform	covered	fsim.windows-llvm-contract	FSIM-SC-I001	include/fsim/systemc_abi.h	cmake/CheckWindowsLlvmContract.cmake
 ABI174-C04	positive	covered	fsim.foreign-abi-freeze	FSIM-UVM-FOREIGN-001	include/fsim/runtime/dpi_plugin_abi.h	tests/runtime/runtime_foreign_abi_cpp_test.cpp
-ABI174-C04	single-field-mutation	covered	fsim.foreign-abi-freeze	FSIM-UVM-FOREIGN-001	include/fsim/runtime/dpi_plugin_abi.h	tests/runtime/runtime_dpi_tests.cpp
-ABI174-C04	stale-future-version	covered	fsim.schema-producer-diagnostics	FSIM-UVM-FOREIGN-001	include/fsim/runtime/dpi_plugin_abi.h	tests/runtime/runtime_dpi_tests.cpp
-ABI174-C04	corruption	covered	fsim.foreign-abi-freeze	FSIM-UVM-FOREIGN-001	include/fsim/runtime/dpi_plugin_abi.h	tests/runtime/runtime_dpi_tests.cpp
-ABI174-C04	truncation	covered	fsim.foreign-abi-freeze	FSIM-UVM-FOREIGN-001	include/fsim/runtime/dpi_plugin_abi.h	tests/runtime/runtime_dpi_tests.cpp
+ABI174-C04	single-field-mutation	covered	fsim.foreign-abi-freeze	FSIM-UVM-FOREIGN-001	include/fsim/runtime/vpi_abi.h	tests/runtime/runtime_vpi_tests.cpp
+ABI174-C04	stale-future-version	covered	fsim.schema-producer-diagnostics	FSIM-UVM-FOREIGN-001	include/fsim/runtime/vpi_abi.h	tests/runtime/runtime_vpi_tests.cpp
+ABI174-C04	corruption	covered	fsim.foreign-abi-freeze	FSIM-UVM-FOREIGN-001	include/fsim/runtime/vpi_abi.h	tests/runtime/runtime_vpi_tests.cpp
+ABI174-C04	truncation	covered	fsim.foreign-abi-freeze	FSIM-UVM-FOREIGN-001	include/fsim/runtime/vpi_abi.h	tests/runtime/runtime_vpi_tests.cpp
 ABI174-C04	resource	covered	fsim.contract.foreign-abi-lifetime	FSIM-UVM-FOREIGN-001	include/fsim/runtime/dpi_plugin_abi.h	tests/feature_matrix/current_resource_domains.tsv
 ABI174-C04	relocation	covered	fsim.source-hidden-relocation-contract	FSIM-UVM-FOREIGN-001	include/fsim/runtime/dpi_plugin_abi.h	tests/feature_matrix/foreign_abi_contract.tsv
 ABI174-C04	read-only	covered	fsim.source-hidden-relocation-contract	FSIM-UVM-FOREIGN-001	include/fsim/runtime/dpi_plugin_abi.h	tests/feature_matrix/foreign_abi_contract.tsv

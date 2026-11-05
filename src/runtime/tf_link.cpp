@@ -19,6 +19,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -285,7 +286,20 @@ void update_long(PLI_INT32* const low, PLI_INT32* const high,
 // 1364-2001 25.54).
 uint64_t simulation_ticks() {
   const auto* const time = current_time();
+  if (time != nullptr && current_host != nullptr &&
+      current_host->has_simulation_precision != 0) {
+    return current_host->simulation_ticks;
+  }
   return time == nullptr ? 0 : time->scheduler_ticks;
+}
+
+// The simulation time unit: the smallest precision of the design, which is
+// the module's own where the host reports no other (IEEE 1364-2001 25.26,
+// 25.27).
+PLI_INT32 simulation_precision(const fsim_tf_time_bridge_v3& time) {
+  return current_host != nullptr && current_host->has_simulation_precision != 0
+             ? current_host->simulation_precision_exponent
+             : time.precision_exponent;
 }
 
 uint64_t time_scale(const fsim_tf_time_bridge_v3& time) {
@@ -555,6 +569,82 @@ bool format_radix(const fsim_tf_value_bridge_v3& value,
   return true;
 }
 
+// The decimal text of a vector of any width (IEEE 1364-2001 25.53, 17.1.1.2):
+// x or z when every bit is that value, X or Z when only some are (x ruling
+// z), else the number, negative when the argument is signed and its sign bit
+// is set.
+bool format_decimal(const fsim_tf_argument_bridge_v3& argument,
+                    const fsim_tf_value_bridge_v3& value) {
+  uint32_t x_bits{};
+  uint32_t z_bits{};
+  std::vector<uint32_t> magnitude(value.word_count, 0u);
+  for (uint32_t bit = 0; bit < value.width; ++bit) {
+    const auto state = logic_character(
+        value.vector_words[bit / 32u], bit % 32u);
+    if (state == 'x') {
+      ++x_bits;
+    } else if (state == 'z') {
+      ++z_bits;
+    } else if (state == '1') {
+      magnitude[bit / 32u] |= UINT32_C(1) << (bit % 32u);
+    }
+  }
+  if (x_bits != 0 || z_bits != 0) {
+    const bool x_rules = x_bits != 0;
+    const auto count = x_rules ? x_bits : z_bits;
+    const char lower = x_rules ? 'x' : 'z';
+    formatted_value.assign(
+        1, count == value.width ? lower
+                                : static_cast<char>(std::toupper(
+                                      static_cast<unsigned char>(lower))));
+    return true;
+  }
+  const bool negative =
+      argument.is_signed != 0 && value.width != 0 &&
+      ((magnitude[(value.width - 1u) / 32u] >> ((value.width - 1u) % 32u)) &
+       1u) != 0;
+  if (negative) {
+    // Two's complement negation over the whole width.
+    uint32_t carry = 1u;
+    for (auto& word : magnitude) {
+      const uint64_t sum = static_cast<uint64_t>(~word) + carry;
+      word = static_cast<uint32_t>(sum);
+      carry = static_cast<uint32_t>(sum >> 32u);
+    }
+    const auto remainder = value.width % 32u;
+    if (remainder != 0u) {
+      magnitude.back() &= (UINT32_C(1) << remainder) - UINT32_C(1);
+    }
+  }
+  // Repeated division by 10^9, least significant group first.
+  std::string reversed;
+  while (std::any_of(magnitude.begin(), magnitude.end(),
+                     [](const uint32_t word) { return word != 0u; })) {
+    uint64_t remainder{};
+    for (auto word = magnitude.size(); word-- > 0;) {
+      const uint64_t current = (remainder << 32u) | magnitude[word];
+      magnitude[word] = static_cast<uint32_t>(current / 1000000000u);
+      remainder = current % 1000000000u;
+    }
+    auto group = static_cast<uint32_t>(remainder);
+    for (int digit = 0; digit < 9; ++digit) {
+      reversed.push_back(static_cast<char>('0' + group % 10u));
+      group /= 10u;
+    }
+  }
+  while (reversed.size() > 1u && reversed.back() == '0') {
+    reversed.pop_back();
+  }
+  if (reversed.empty()) {
+    reversed = "0";
+  }
+  if (negative) {
+    reversed.push_back('-');
+  }
+  formatted_value.assign(reversed.rbegin(), reversed.rend());
+  return true;
+}
+
 bool format_integral(const fsim_tf_argument_bridge_v3& argument,
                      const fsim_tf_value_bridge_v3& value,
                      const PLI_INT32 format) {
@@ -574,38 +664,10 @@ bool format_integral(const fsim_tf_argument_bridge_v3& argument,
   if (character == 'h') {
     return format_radix(value, 4);
   }
-  if (character != 'd' || value.width > 64u) {
+  if (character != 'd') {
     return false;
   }
-  uint64_t number{};
-  bool unknown{};
-  for (uint32_t bit = 0; bit < value.width; ++bit) {
-    const auto state = logic_character(
-        value.vector_words[bit / 32u], bit % 32u);
-    if (state == 'x' || state == 'z') {
-      unknown = true;
-      break;
-    }
-    number |= static_cast<uint64_t>(state == '1') << bit;
-  }
-  if (unknown) {
-    formatted_value = "x";
-    return true;
-  }
-  std::array<char, 32> buffer{};
-  if (argument.is_signed != 0 && value.width != 0 && value.width < 64u &&
-      (number & (UINT64_C(1) << (value.width - 1u))) != 0) {
-    number |= ~((UINT64_C(1) << value.width) - UINT64_C(1));
-  }
-  const auto converted = argument.is_signed != 0
-      ? std::to_chars(buffer.data(), buffer.data() + buffer.size(),
-                      std::bit_cast<int64_t>(number))
-      : std::to_chars(buffer.data(), buffer.data() + buffer.size(), number);
-  if (converted.ec != std::errc{}) {
-    return false;
-  }
-  formatted_value.assign(buffer.data(), converted.ptr);
-  return true;
+  return format_decimal(argument, value);
 }
 
 }  // namespace
@@ -1008,9 +1070,21 @@ PLI_INT32 tf_typep(const PLI_INT32 parameter) {
   return argument == nullptr ? tf_nullparam : argument->kind;
 }
 
+// The bit length of a vector argument; the length of a literal string; 0 for
+// a real or null argument or an error (IEEE 1364-2001 25.50).
 PLI_INT32 tf_sizep(const PLI_INT32 parameter) {
   const auto* const argument = current_argument(parameter);
-  return argument == nullptr ? 0 : static_cast<PLI_INT32>(argument->width);
+  if (argument == nullptr || argument->kind == tf_nullparam ||
+      argument->kind == tf_readonlyreal || argument->kind == tf_readwritereal) {
+    return 0;
+  }
+  if (argument->kind == tf_string) {
+    const auto* const value = current_value(parameter);
+    return static_cast<PLI_INT32>(value != nullptr && value->string_value != nullptr
+                                      ? value->string_size
+                                      : argument->width / 8u);
+  }
+  return static_cast<PLI_INT32>(argument->width);
 }
 
 p_tfexprinfo tf_exprinfo(const PLI_INT32 parameter, p_tfexprinfo info) {
@@ -1298,13 +1372,16 @@ PLI_INT32 tf_igettime(PLI_BYTE8* const instance) {
 // A null instance asks for the simulation time unit, the smallest
 // precision of the design.
 PLI_INT32 tf_igettimeprecision(PLI_BYTE8* const instance) {
-  return current_instance_matches(instance) || instance == nullptr
-             ? tf_gettimeprecision()
-             : 0;
+  if (instance == nullptr) {
+    const auto* const time = current_time();
+    return time == nullptr ? 0 : simulation_precision(*time);
+  }
+  return current_instance_matches(instance) ? tf_gettimeprecision() : 0;
 }
 PLI_INT32 tf_igettimeunit(PLI_BYTE8* const instance) {
   if (instance == nullptr) {
-    return tf_gettimeprecision();
+    const auto* const time = current_time();
+    return time == nullptr ? 0 : simulation_precision(*time);
   }
   return current_instance_matches(instance) ? tf_gettimeunit() : 0;
 }
@@ -1460,12 +1537,23 @@ void tf_multiply_long(PLI_INT32* const low1, PLI_INT32* const high1,
 }
 namespace {
 
-// The 0 and 1 strength bit patterns of a net bit (IEEE 1364-2001 25.35,
-// 7.10). The host reports no drive strength, so a known bit is strong, an x
-// is strong on both scales and a z is high impedance on both.
-s_strengthval* scalar_strength(const fsim_tf_value_bridge_v3& value) {
+// The 0 and 1 strength bit patterns of a scalar net (IEEE 1364-2001 25.35,
+// 7.10). The host reports the strengths of the net's drivers when it can; a
+// host that cannot gets the strong strength for a known bit, strong on both
+// scales for an x, and high impedance on both for a z.
+s_strengthval* scalar_strength(const PLI_INT32 parameter,
+                               const fsim_tf_value_bridge_v3& value) {
   constexpr PLI_INT32 strong = 0x40;
   constexpr PLI_INT32 high_impedance = 0x01;
+  if (current_host != nullptr && current_host->strength != nullptr) {
+    PLI_INT32 zero{};
+    PLI_INT32 one{};
+    if (current_host->strength(current_host->put_user_data, parameter, &zero,
+                               &one) == 0) {
+      strength_value = s_strengthval{zero, one};
+      return &strength_value;
+    }
+  }
   const auto state = value.kind == FSIM_TF_VALUE_INTEGRAL &&
                              value.word_count != 0
                          ? logic_character(value.vector_words[0], 0)
@@ -1497,20 +1585,35 @@ p_tfnodeinfo tf_nodeinfo(const PLI_INT32 parameter, p_tfnodeinfo info) {
   }
   const bool real = argument->kind == tf_readonlyreal ||
                     argument->kind == tf_readwritereal;
+  // The host's facts about the node: its class, declared bounds and, for a
+  // memory, its size (IEEE 1364-2001 25.35, Table 192).
+  const fsim_tf_host_node_v3* const given =
+      current_host != nullptr && current_host->nodes != nullptr &&
+              static_cast<uint32_t>(parameter) <= current_host->node_count &&
+              current_host->nodes[parameter - 1].node_type != 0
+          ? &current_host->nodes[parameter - 1]
+          : nullptr;
   info->node_symbol = argument->expression;
   // A real node has no vector groups or bits (IEEE 1364-2001 25.35).
   info->node_ngroups =
       real ? 0 : static_cast<PLI_INT32>((argument->width + 31u) / 32u);
   info->node_vec_size = real ? 0 : static_cast<PLI_INT32>(argument->width);
   info->node_sign = static_cast<PLI_INT32>(argument->is_signed);
-  info->node_ms_index = argument->lhs_select >= 0
-                            ? argument->lhs_select
-                            : static_cast<PLI_INT32>(argument->width - 1u);
-  info->node_ls_index = argument->rhs_select >= 0 ? argument->rhs_select : 0;
+  // The msb and lsb of the vector, not of a select of it.
+  info->node_ms_index =
+      given != nullptr ? given->ms_index
+      : argument->lhs_select >= 0
+          ? argument->lhs_select
+          : static_cast<PLI_INT32>(argument->width - 1u);
+  info->node_ls_index = given != nullptr ? given->ls_index
+                        : argument->rhs_select >= 0 ? argument->rhs_select
+                                                    : 0;
   info->node_lhs_element = argument->lhs_select;
   info->node_rhs_element = argument->rhs_select;
   if (real) {
     info->node_type = tf_real_node;
+  } else if (given != nullptr) {
+    info->node_type = static_cast<PLI_INT16>(given->node_type);
   } else if (writable_kind(argument->kind)) {
     info->node_type = argument->width == 32u && argument->is_signed != 0
                           ? tf_integer_node
@@ -1519,9 +1622,25 @@ p_tfnodeinfo tf_nodeinfo(const PLI_INT32 parameter, p_tfnodeinfo info) {
     info->node_type = argument->width == 1u ? tf_netscalar_node
                                             : tf_netvector_node;
   }
+  if (info->node_type == tf_memory_node) {
+    // A memory has no vector groups: each element is its aval bytes then its
+    // bval bytes, and node_ngroups counts the bytes of each (Figure 169).
+    info->node_mem_size = given != nullptr ? given->mem_size : 0;
+    uint32_t group_bytes{};
+    uint32_t count{};
+    const PLI_BYTE8* data{};
+    if (current_host != nullptr && current_host->memory != nullptr &&
+        current_host->memory(current_host->put_user_data, parameter,
+                             &group_bytes, &count, &data) == 0) {
+      info->node_ngroups = static_cast<PLI_INT32>(group_bytes);
+      info->node_mem_size = static_cast<PLI_INT32>(count);
+      info->node_value.memoryval_p = const_cast<PLI_BYTE8*>(data);
+    }
+    return info;
+  }
   if (auto* const value = current_value(parameter); value != nullptr) {
     if (info->node_type == tf_netscalar_node) {
-      info->node_value.strengthval_p = scalar_strength(*value);
+      info->node_value.strengthval_p = scalar_strength(parameter, *value);
     } else if (value->kind == FSIM_TF_VALUE_INTEGRAL) {
       info->node_value.vecval_p = value->vector_words;
     } else if (value->kind == FSIM_TF_VALUE_REAL) {

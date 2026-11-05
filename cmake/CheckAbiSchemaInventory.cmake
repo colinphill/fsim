@@ -25,7 +25,7 @@ foreach(FSIM_INPUT IN ITEMS "${FSIM_INVENTORY}" "${FSIM_PLAN}" "${FSIM_TEST_CMAK
 endforeach()
 
 set(FSIM_EXPECTED_DIGEST
-  "afc475ddff8aeb0649a46cb0a787f23c1d28b226edc92b3c14c06b81695ceecf")
+  "a1943eff6382efe22b01bbc2315003df5e2e220225af0d985863014d4fe2916c")
 set(FSIM_COMPLETED_CHANGE 19)
 # Change 9 (project-manifest stale-schema policy) was retired with the
 # project manifest; its obligation no longer exists, so it has no row.

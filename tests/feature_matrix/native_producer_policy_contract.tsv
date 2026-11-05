@@ -24,8 +24,6 @@ incremental-plugin	invalid-native	stale-target-with-checksummed-non-library-payl
 systemc-loader	host	ABI,extent,registrar-callbacks,SCV-identity	host-rejects-before-DynamicLibrary-open
 vpi-loader	host	ABI,extent,required-callbacks	host-rejects-before-DynamicLibrary-open
 vhpi-loader	host	ABI,extent,required-callbacks	host-rejects-before-DynamicLibrary-open
-dpi-loader	manifest	planned-symbol-and-signature-identity	plan-rejects-before-build-or-load
-dpi-loader	descriptor	ABI-version,extent,flags,manifest-digest	descriptor-rejects-before-symbol-admission
 uvm-foreign	callbacks	borrowed-capture-copy-release-ownership	no-separate-dynamic-image-or-cache-fallback
 llvm-jit	cache-key	object-schema,LLVM,optimization,JIT-runtime-frame-resume-ABI	exact-target-layout-CPU-features-and-process-semantics
 llvm-jit	object-admission	checksummed-key,relocatable-format,address-width,architecture	invalid-object-becomes-miss-without-execution

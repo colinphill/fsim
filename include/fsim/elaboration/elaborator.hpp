@@ -1182,6 +1182,10 @@ struct ElaboratedDesignState {
         signal_driver_inventory;
     std::vector<VerilogPrimitiveInfo> verilog_primitives;
     std::vector<SdfNetDelayInfo> sdf_net_delays;
+    /// The value of each virtual interface handle and the path of the
+    /// interface instance it denotes, sorted by path (37.29 vpiActual).
+    std::vector<std::pair<std::string, std::uint64_t>>
+        systemverilog_interface_handles;
 };
 
 /// One pure acyclic continuous-assignment cone selected for A2 fusion. The
@@ -1302,6 +1306,15 @@ public:
 
     [[nodiscard]] const std::string& top() const noexcept;
     [[nodiscard]] const std::vector<std::string>& roots() const noexcept;
+    /// The value of a virtual interface handle to the hierarchical path of
+    /// the interface instance it denotes (IEEE 1800-2023 25.9, 37.29
+    /// vpiActual); the elaborator's own table, moved here when lowering is
+    /// over.
+    [[nodiscard]] const std::unordered_map<std::string, std::uint64_t>&
+    systemverilog_interface_handles() const noexcept
+    {
+        return systemverilog_interface_handles_;
+    }
     /// A procedural `$sdf_annotate` call found while lowering: the SDF file
     /// and the hierarchical scope its cells are relative to (IEEE 1364-2005
     /// 17.4.6 / IEEE 1800-2017 32.5). Elaboration applies it as an SDF
@@ -1525,6 +1538,9 @@ private:
 
     std::string top_;
     std::vector<std::string> roots_;
+    // Instance path to virtual interface handle, kept for VPI.
+    std::unordered_map<std::string, std::uint64_t>
+        systemverilog_interface_handles_;
     std::vector<SdfAnnotationRequest> sdf_annotation_requests_;
     std::vector<UserSystemTask> user_system_tasks_;
     SignalInfoTable signal_info_;

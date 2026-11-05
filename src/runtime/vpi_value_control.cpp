@@ -378,6 +378,10 @@ SystemVerilogVpiWriteControlError SystemVerilogVpiValueControl::forget(
   }
   if (found->second.status
       == SystemVerilogVpiScheduledWriteStatus::Pending) {
+    // A released handle of a pending event is no longer valid (38.38).
+    if (!found->second.retained) {
+      return SystemVerilogVpiWriteControlError::NotFound;
+    }
     found->second.retained = false;
   } else {
     impl_->records.erase(found);

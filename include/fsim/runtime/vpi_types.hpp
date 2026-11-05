@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fsim::runtime {
@@ -153,6 +154,9 @@ enum class SystemVerilogVpiTypespecKind {
     PackedArray,
     Array,
     Class,
+    // An interface or a modport of one, as the type of a virtual interface
+    // (IEEE 1800-2023 37.30).
+    Interface,
 };
 
 // The vpiArrayType of an array typespec (IEEE 1800-2023 37.25).
@@ -185,11 +189,37 @@ struct SystemVerilogVpiTypespec {
     // The key type of an associative array (at most one element; none for
     // the wildcard index, IEEE 1800-2023 37.25 detail 2 vpiIndexTypespec).
     std::vector<SystemVerilogVpiTypespec> index;
+    // An interface typespec's vpiDefName: the interface declaration's
+    // identifier, or the modport's for a modport typespec, whose `element`
+    // then holds the interface's typespec (its vpiParent, 37.30 details 1
+    // and 2).
+    std::string def_name;
 
     friend bool operator==(
         const SystemVerilogVpiTypespec&,
         const SystemVerilogVpiTypespec&) = default;
 };
+
+// The typespec of `virtual interface_name.modport` (IEEE 1800-2023 37.30);
+// `name` is the typedef's when the type was named through one.
+[[nodiscard]] inline SystemVerilogVpiTypespec
+make_systemverilog_vpi_interface_typespec(const std::string_view interface_name,
+    const std::string_view modport, const std::string_view name)
+{
+    SystemVerilogVpiTypespec interface;
+    interface.kind = SystemVerilogVpiTypespecKind::Interface;
+    interface.def_name = std::string { interface_name };
+    if (modport.empty()) {
+        interface.name = std::string { name };
+        return interface;
+    }
+    SystemVerilogVpiTypespec result;
+    result.kind = SystemVerilogVpiTypespecKind::Interface;
+    result.name = std::string { name };
+    result.def_name = std::string { modport };
+    result.element.push_back(std::move(interface));
+    return result;
+}
 
 struct SystemVerilogVpiDriverRange {
     std::uint32_t offset { };

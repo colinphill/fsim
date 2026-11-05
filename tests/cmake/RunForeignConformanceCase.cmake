@@ -13,6 +13,8 @@
 # FSIM_DPI_HEADER, when set, is the header `fsim compile --dpi-header` must
 # write, and FSIM_ELABORATE_MESSAGE text a failing `fsim elaborate` must
 # report; either ends the case there.
+# FSIM_ELABORATE_ARGS holds more `fsim elaborate` arguments, separated as a
+# shell would.
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -78,6 +80,10 @@ if(DEFINED FSIM_SDF AND NOT "${FSIM_SDF}" STREQUAL "")
   get_filename_component(FSIM_SDF_NAME "${FSIM_SDF}" NAME)
   configure_file("${FSIM_SDF}" "${FSIM_WORK_DIR}/${FSIM_SDF_NAME}" COPYONLY)
   list(APPEND FSIM_ELABORATE_ARGUMENTS --sdf "${FSIM_SDF_NAME}")
+endif()
+if(DEFINED FSIM_ELABORATE_ARGS AND NOT "${FSIM_ELABORATE_ARGS}" STREQUAL "")
+  separate_arguments(FSIM_ELABORATE_EXTRA UNIX_COMMAND "${FSIM_ELABORATE_ARGS}")
+  list(APPEND FSIM_ELABORATE_ARGUMENTS ${FSIM_ELABORATE_EXTRA})
 endif()
 if(FSIM_ELABORATE_PLUGIN)
   fsim_step(elaborate elaborate --vpi "${FSIM_PLUGIN}"

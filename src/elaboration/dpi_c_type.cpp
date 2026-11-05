@@ -1198,6 +1198,12 @@ std::optional<std::string> dpi_c_parameter(
     if (element.empty()) {
         return std::nullopt;
     }
+    if (type->string && sized_array) {
+        // The elements are `const char*` (H.7.4); the pointer array is
+        // read-only for an input.
+        return std::string { input ? "const char* const* " : "const char** " }
+            + name;
+    }
     if (sized_array || type->code == 'B' || type->code == 'V'
         || type->code == 'R') {
         return (input ? "const " : "") + element + "* " + name;
@@ -1268,6 +1274,10 @@ std::optional<DpiCSignature> dpi_c_signature(
             element.unpacked_dimensions.clear();
             element.container_form.reset();
             const auto formal_type = dpi_c_type(element, context);
+            // An export has no array of strings (35.5.6).
+            if (sized_array && formal_type && formal_type->string) {
+                return std::nullopt;
+            }
             const auto parameter = dpi_c_parameter(formal_type,
                 formal.direction, false, sized_array, formal.name);
             if (!parameter) {

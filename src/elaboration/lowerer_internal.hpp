@@ -4655,6 +4655,11 @@ private:
         // direction: its first dimension has its run-time size, and its
         // bits pass as a bit stream (`width` is 0).
         bool runtime_extent { };
+        // An array of strings (IEEE 1800-2023 35.5.6, H.7.4): the number
+        // of elements, each passed as one string actual, leftmost first;
+        // `open_array` is the actual's container type. 0 for any other
+        // formal.
+        std::size_t string_elements { };
     };
     // Why a DPI import has no profile, when its types are illegal (IEEE
     // 1800-2023 35.5.5, 35.5.6): the diagnostic code and message.
@@ -4714,6 +4719,12 @@ private:
     // scope by running the step task of every other scope that declares
     // exports (IEEE 1800-2023 35.5.3).
     [[nodiscard]] bool lower_hir_dpi_export_foreign();
+    // The foreign arm's steps of the generate blocks that declare exports.
+    [[nodiscard]] bool lower_hir_dpi_block_exports_foreign();
+    // Whether some generate block of the design declares DPI exports, so
+    // that its service hook exists (IEEE 1800-2023 35.7).
+    [[nodiscard]] bool hir_dpi_block_hooks_exist() const;
+    mutable std::optional<bool> dpi_block_hooks_exist_;
     // The instance the first task-call statement lowered next runs in.
     std::optional<std::string> hir_task_receiver_override_;
     [[nodiscard]] std::optional<RegisterId> emit_hir_dpi_call(

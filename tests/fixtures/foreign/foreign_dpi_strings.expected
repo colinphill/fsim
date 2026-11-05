@@ -1,0 +1,15 @@
+#c sized in alpha,beta,gamma
+#c sized ret=3 o=out0,out1
+#c open d dimensions=1 left=4 right=2 low=2 high=4 size=3
+#c open d[2]=two
+#c open d[3]=three
+#c open d[4]=four
+#c open m dimensions=2
+#c open m[1][0]=a
+#c open m[1][1]=b
+#c open m[2][0]=c
+#c open m[2][1]=d
+#c open ret=7
+#c swap in x=x1,x0 y=y1,y0
+#c swap x=x1,x0 y=y1,y0
+#c fill r=low,high

@@ -88,6 +88,19 @@ std::shared_ptr<const runtime::SystemVerilogVpiTypespec> vpi_typespec(
     const semantic::sv::Declaration& declaration,
     const semantic::sv::TypeReference& type)
 {
+    // A virtual interface variable's type is an interface typespec, named
+    // by its typedef when it was declared through one (IEEE 1800-2023
+    // 37.29, 37.30).
+    if (type.virtual_interface && !type.container_form
+        && type.unpacked_dimensions.empty()) {
+        const auto typedef_name = type.target.target.valid()
+                && type.target.spelling != type.interface_type
+            ? std::string_view { type.target.spelling }
+            : std::string_view { };
+        return std::make_shared<const runtime::SystemVerilogVpiTypespec>(
+            runtime::make_systemverilog_vpi_interface_typespec(
+                type.interface_type, type.interface_modport, typedef_name));
+    }
     if (!type.target.target.valid()
         && builtin_type_spelling(type.target.spelling)
         && type.packed_dimensions.size() <= 1U

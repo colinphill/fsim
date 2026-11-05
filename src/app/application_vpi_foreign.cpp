@@ -197,6 +197,65 @@ public:
     // The VHPI service that answers calls too while a routine or callback
     // of a loaded library runs.
     ForeignCompanion companion;
+
+    // True while the vlog_startup_routines[] entries (or a named bootstrap
+    // function) run.
+    bool startup_phase { false };
+
+    // Only vpi_register_systf() and vpi_register_cb() can be called then,
+    // and vpi_register_cb() only for cbEndOfCompile, cbStartOfSimulation,
+    // cbEndOfSimulation, cbUnresolvedSystf, cbError and cbPLIError
+    // (IEEE 1800-2023 36.10.2). vpi_chk_error() stays available so the
+    // application can read why a call was refused (36.10.1), and
+    // vpi_printf()/vpi_vprintf() so it can report its own setup (owner
+    // decision, beyond 36.10.2).
+    [[nodiscard]] static bool startup_allows(const Routine routine,
+        const fsim_vpi_service_request_v1& request)
+    {
+        switch (routine) {
+        case Routine::RegisterSystemTaskFunction:
+        case Routine::CheckError:
+        case Routine::Print:
+        case Routine::VariablePrint:
+            return true;
+        case Routine::RegisterCallback: {
+            if (request.flags != 0U) {
+                return false;
+            }
+            const auto* const data = pointer<s_cb_data>(request.user_data);
+            if (data == nullptr) {
+                return true;
+            }
+            switch (data->reason) {
+            case cbEndOfCompile:
+            case cbStartOfSimulation:
+            case cbEndOfSimulation:
+            case cbUnresolvedSystf:
+            case cbError:
+            case cbPLIError:
+                return true;
+            default:
+                return false;
+            }
+        }
+        default:
+            return false;
+        }
+    }
+
+    [[nodiscard]] static std::string startup_refusal(const Routine routine)
+    {
+        const auto* const descriptor
+            = runtime::find_systemverilog_vpi_2023_routine(routine);
+        return std::string { descriptor != nullptr
+                       ? descriptor->name
+                       : std::string_view { "VPI routine" } }
+            + ": only vpi_register_systf, vpi_register_cb (for"
+              " cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation,"
+              " cbUnresolvedSystf, cbError, cbPLIError), vpi_chk_error and"
+              " vpi_printf can be called from vlog_startup_routines"
+              " (IEEE 1800-2023 36.10.2)";
+    }
 };
 
 class CallScope final {
@@ -310,7 +369,9 @@ PLI_INT32 run_end_of_compile_routines(p_cb_data data)
         if (symbol == nullptr) {
             return nullptr;
         }
+        host.startup_phase = true;
         reinterpret_cast<void (*)()>(symbol)();
+        host.startup_phase = false;
         return library;
     }
     std::string table_error;
@@ -325,11 +386,13 @@ PLI_INT32 run_end_of_compile_routines(p_cb_data data)
     error.clear();
     if (startup != nullptr) {
         auto* const routines = static_cast<void (**)()>(startup);
+        host.startup_phase = true;
         for (std::size_t index = 0U;
              index < maximum_startup_routines && routines[index] != nullptr;
              ++index) {
             routines[index]();
         }
+        host.startup_phase = false;
     }
     if (table != nullptr) {
         auto* const registrar = platform::DynamicLibrary::default_symbol(
@@ -390,6 +453,17 @@ public:
         const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result) override
     {
+        // vpi_chk_error reports the previous routine's error, and any other
+        // routine clears it (IEEE 1800-2023 38.2).
+        if (routine == Routine::CheckError) {
+            return check_error(request, result);
+        }
+        error_ = false;
+        if (startup_phase && !startup_allows(routine, request)) {
+            error_message_ = startup_refusal(routine);
+            error_ = true;
+            return FSIM_VPI_STATUS_UNSUPPORTED;
+        }
         if (request.flags != 0U) {
             return FSIM_VPI_STATUS_UNSUPPORTED;
         }
@@ -441,6 +515,29 @@ public:
     }
 
 private:
+    // The previous routine's error for vpi_chk_error (IEEE 1800-2023
+    // 38.2).
+    fsim_vpi_status_v1 check_error(const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        if (!error_) {
+            return succeed(result, 0U, 0U);
+        }
+        if (auto* const out = pointer<s_vpi_error_info>(request.user_data)) {
+            out->state = vpiCompile;
+            out->level = vpiError;
+            out->message = error_message_.data();
+            out->product = product_.data();
+            out->code = error_code_.data();
+            out->file = nullptr;
+            out->line = 0;
+        }
+        return succeed(result, 0U, static_cast<std::uint64_t>(vpiError));
+    }
+
+    bool error_ { };
+    std::string error_message_;
+    std::string error_code_ { "FSIM-VPI-001" };
     std::uint64_t callbacks_ { };
     std::string program_ { "fsim" };
     std::array<char*, 2> argv_ { program_.data(), nullptr };
@@ -1109,6 +1206,12 @@ public:
         // routine clears it (IEEE 1800-2023 38.2).
         if (routine != Routine::CheckError) {
             error_ = false;
+        }
+        if (startup_phase && !startup_allows(routine, request)) {
+            error_message_ = startup_refusal(routine);
+            error_ = true;
+            pli_error();
+            return FSIM_VPI_STATUS_UNSUPPORTED;
         }
         const auto status = route(routine, request, result);
         if (status != FSIM_VPI_STATUS_OK && routine != Routine::CheckError
@@ -2182,15 +2285,43 @@ private:
             return check_error(request, result);
         case Routine::FreeObject:
         case Routine::ReleaseHandle:
-            if (owned(request.handle) && tag_of(request.handle) == Tag::iterator) {
-                iterators_.erase(serial_of(request.handle));
+            // vpi_release_handle fails on a handle that is no longer valid
+            // (IEEE 1800-2023 38.38): a NULL handle, an iterator that
+            // vpi_scan already freed or that was released, a scheduled
+            // event or a fired one-shot callback already released.
+            if (request.handle == 0U) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
             }
-            // Freeing a vpiSchedEvent handle does not affect the event
-            // (IEEE 1800-2023 38.34).
-            if (owned(request.handle)
-                && tag_of(request.handle) == Tag::scheduled) {
-                (void)simulation_.systemverilog_vpi_values().forget(
-                    scheduled_write(request.handle));
+            if (owned(request.handle)) {
+                const auto serial = serial_of(request.handle);
+                switch (tag_of(request.handle)) {
+                case Tag::iterator:
+                    if (iterators_.erase(serial) == 0U) {
+                        return FSIM_VPI_STATUS_NOT_FOUND;
+                    }
+                    break;
+                // The handle of a fired one-shot callback ends here; a
+                // handle of a registered callback leaves the callback
+                // registered.
+                case Tag::callback:
+                    if (fired_callbacks_.erase(serial) == 0U
+                        && !callbacks_.contains(serial)
+                        && !assertion_callbacks_.contains(serial)) {
+                        return FSIM_VPI_STATUS_NOT_FOUND;
+                    }
+                    break;
+                // Freeing a vpiSchedEvent handle frees the handle and
+                // does not affect the event (IEEE 1800-2023 38.34).
+                case Tag::scheduled:
+                    if (simulation_.systemverilog_vpi_values().forget(
+                            scheduled_write(request.handle))
+                        != runtime::SystemVerilogVpiWriteControlError::None) {
+                        return FSIM_VPI_STATUS_NOT_FOUND;
+                    }
+                    break;
+                default:
+                    break;
+                }
             }
             return succeed(result, 0U, 1U);
         case Routine::CompareObjects:
@@ -2270,6 +2401,9 @@ private:
         bool expression { };
         bool string_literal { };
         bool real { };
+        // An omitted argument, `$f(a,,b)`: a null operation (IEEE 1364-2001
+        // 26.6.5, 25.36).
+        bool omitted { };
         Value value;
     };
     struct CallSite {
@@ -2303,6 +2437,9 @@ private:
     struct Iterator {
         std::vector<fsim_vpi_handle_v1> objects;
         std::size_t cursor { };
+        // The reference object vpi_iterate was given (IEEE 1800-2023
+        // 38.23); 0 for a NULL reference.
+        fsim_vpi_handle_v1 reference { };
     };
     // A bit-select or part-select of a vector (IEEE 1800-2023 37.18):
     // `width` bits of the parent starting `offset` bits above its LSB.
@@ -3057,6 +3194,8 @@ private:
             return vpiArrayTypespec;
         case TypespecKind::Class:
             return vpiClassTypespec;
+        case TypespecKind::Interface:
+            return vpiInterfaceTypespec;
         }
         return vpiUndefined;
     }
@@ -3135,6 +3274,13 @@ private:
         case vpiBaseTypespec:
             return succeed(result,
                 node.kind == TypespecKind::Enum && !node.element.empty()
+                    ? make_typespec({ &node.element.front(), 0U })
+                    : 0U);
+        // The interface typespec of a modport typespec; none for an
+        // interface's own (IEEE 1800-2023 37.30 detail 2).
+        case vpiParent:
+            return succeed(result,
+                node.kind == TypespecKind::Interface && !node.element.empty()
                     ? make_typespec({ &node.element.front(), 0U })
                     : 0U);
         case vpiTypedefAlias:
@@ -6523,8 +6669,22 @@ private:
                                 : "[" + std::to_string(left) + ":"
                                     + std::to_string(right) + "]");
                     if (const auto parent = find_in_scope(site.scope, base)) {
-                        argument.object = make_select(parent, left, right,
-                            fields.substr(third + 1U) == "b");
+                        const bool bit = fields.substr(third + 1U) == "b";
+                        // An index of an array names its element, a memory
+                        // word (IEEE 1800-2023 37.17; 1364-2001 25.35).
+                        const auto object = info(parent);
+                        if (bit && object
+                            && (object->kind == SystemVerilogVpiObjectKind::Memory
+                                || object->kind
+                                    == SystemVerilogVpiObjectKind::Array)
+                            && left >= std::numeric_limits<PLI_INT32>::min()
+                            && left <= std::numeric_limits<PLI_INT32>::max()) {
+                            argument.object = index_handle(
+                                parent, static_cast<PLI_INT32>(left));
+                        } else {
+                            argument.object = make_select(
+                                parent, left, right, bit);
+                        }
                     }
                 }
                 if (argument.object == 0U) {
@@ -6541,6 +6701,7 @@ private:
                 argument.value.is_signed = name.starts_with("e:s:");
                 argument.text = name.size() > 4U ? name.substr(4U) : "";
             } else {
+                argument.omitted = name == "-";
                 argument.value.bits = PackedLogic4 { 1U, Logic4::x };
             }
             site.arguments.push_back(std::move(argument));
@@ -6720,6 +6881,47 @@ private:
         return object.kind == SystemVerilogVpiObjectKind::Variable
             && object.type->typespec
             && object.type->typespec->kind == TypespecKind::Class;
+    }
+
+    // A virtual interface variable: a variable or class property whose
+    // typespec is an interface typespec (IEEE 1800-2023 37.29).
+    [[nodiscard]] static bool virtual_interface_variable(
+        const runtime::SystemVerilogVpiObjectInfo& object)
+    {
+        return (object.kind == SystemVerilogVpiObjectKind::Variable
+                   || object.kind == SystemVerilogVpiObjectKind::ClassProperty)
+            && object.type && object.type->typespec
+            && object.type->typespec->kind == TypespecKind::Interface;
+    }
+
+    // The interface instance a virtual interface handle value denotes, found
+    // by the path the elaborator numbered it with; none for null (37.29
+    // vpiActual, vpiExpr).
+    [[nodiscard]] fsim_vpi_handle_v1 interface_of_handle_value(
+        const std::uint64_t value) const
+    {
+        if (value == 0U) {
+            return 0U;
+        }
+        for (const auto& [path, handle] :
+            simulation_.design().systemverilog_interface_handles()) {
+            if (handle == value) {
+                const auto found = registry_.find(path);
+                return found ? found.value->handle : fsim_vpi_handle_v1 { };
+            }
+        }
+        return 0U;
+    }
+
+    [[nodiscard]] fsim_vpi_handle_v1 virtual_interface_instance(
+        const fsim_vpi_handle_v1 handle) const
+    {
+        const auto value = object_value(handle);
+        if (!value || value->kind != Value::Kind::bits
+            || value->bits.width() == 0U || value->bits.low_word().bval != 0U) {
+            return 0U;
+        }
+        return interface_of_handle_value(value->bits.low_word().aval);
     }
 
     [[nodiscard]] bool class_variable_handle(
@@ -7126,6 +7328,19 @@ private:
                         == runtime::SystemVerilogClassPropertyKind::ClassHandle
                     ? class_object_handle(stored.handle)
                     : 0U);
+        }
+        // The interface instance a virtual interface property holds (37.29).
+        if (type == vpiActual) {
+            if (const auto declared = info(class_property_object(*member));
+                declared && virtual_interface_variable(*declared)) {
+                const auto& stored = class_property_stored(*member);
+                return succeed(result,
+                    stored.packed.width() == 0U
+                            || stored.packed.low_word().bval != 0U
+                        ? 0U
+                        : interface_of_handle_value(
+                              stored.packed.low_word().aval));
+            }
         }
         auto inner = request;
         inner.handle = class_property_object(*member);
@@ -8111,6 +8326,18 @@ private:
                 stored->selected = object;
                 stored->selected_last = object_value(object);
                 watched = select->parent;
+            } else if (const auto term = prim_term_of(object)) {
+                // A primitive terminal is a driver or a load of the signal
+                // it connects to: its value changes with the signal's (IEEE
+                // 1364-2001 21.3.2, reason_paramdrc).
+                const auto& terminal
+                    = primitives()[term->first].terminals[term->second];
+                const auto handles
+                    = simulation_.vpi_signal_object_handles(terminal.signal);
+                if (terminal.width == 0U || handles.empty()) {
+                    return FSIM_VPI_STATUS_NOT_FOUND;
+                }
+                watched = handles.front();
             } else if (owned(object)) {
                 return FSIM_VPI_STATUS_NOT_FOUND;
             }
@@ -8385,6 +8612,12 @@ private:
         }
         const auto found = callbacks_.find(serial_of(request.handle));
         if (found == callbacks_.end()) {
+            // A one-shot callback that has fired is not registered any
+            // more, so there is nothing to remove; the call still ends the
+            // handle (IEEE 1800-2023 38.39).
+            if (fired_callbacks_.erase(serial_of(request.handle)) != 0U) {
+                return FSIM_VPI_STATUS_NOT_FOUND;
+            }
             return remove_assertion_callback(serial_of(request.handle))
                 ? succeed(result, 0U, 1U)
                 : FSIM_VPI_STATUS_NOT_FOUND;
@@ -8451,11 +8684,12 @@ private:
             || tag_of(request.handle) != Tag::callback) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
-        const auto found = callbacks_.find(serial_of(request.handle));
-        if (found == callbacks_.end()) {
+        const auto live = callbacks_.find(serial_of(request.handle));
+        const auto fired = fired_callbacks_.find(serial_of(request.handle));
+        if (live == callbacks_.end() && fired == fired_callbacks_.end()) {
             return FSIM_VPI_STATUS_NOT_FOUND;
         }
-        auto& stored = *found->second;
+        auto& stored = live != callbacks_.end() ? *live->second : *fired->second;
         *data = stored.data;
         data->time = stored.has_time ? &stored.time : nullptr;
         data->value = stored.has_value ? &stored.value : nullptr;
@@ -8544,7 +8778,29 @@ private:
         }
         read_only_ = read_only;
         if (one_shot) {
-            callbacks_.erase(serial);
+            retire_fired(serial);
+        }
+    }
+
+    // A one-shot callback that has fired is no longer registered, but its
+    // handle stays valid until the application releases it or removes it
+    // (IEEE 1800-2023 38.38, 38.39), so vpi_get_cb_info still describes it.
+    // Only its s_cb_data is kept, and only the most recent
+    // `maximum_fired_callbacks` of them, so a program that never releases
+    // them cannot grow without bound.
+    void retire_fired(const std::uint64_t serial)
+    {
+        const auto found = callbacks_.find(serial);
+        if (found == callbacks_.end()) {
+            return;
+        }
+        auto stored = std::move(found->second);
+        callbacks_.erase(found);
+        stored->managed.reset();
+        stored->selected_last.reset();
+        fired_callbacks_.emplace(serial, std::move(stored));
+        while (fired_callbacks_.size() > maximum_fired_callbacks) {
+            fired_callbacks_.erase(fired_callbacks_.begin());
         }
     }
 
@@ -8711,6 +8967,9 @@ private:
             }
             return variable_type();
         case SystemVerilogVpiObjectKind::Variable:
+            if (virtual_interface_variable(object)) {
+                return vpiVirtualInterfaceVar;
+            }
             if (class_variable(object)) {
                 return vpiClassVar;
             }
@@ -8726,6 +8985,9 @@ private:
         case SystemVerilogVpiObjectKind::ClassProperty:
             if (object.type && object.type->local_parameter) {
                 return vpiParameter;
+            }
+            if (virtual_interface_variable(object)) {
+                return vpiVirtualInterfaceVar;
             }
             return class_variable(object) ? vpiClassVar : variable_type();
         // An unpacked array is a vpiRegArray, and its words are variables
@@ -8763,8 +9025,10 @@ private:
             if (named->object != 0U) {
                 return handle_type(named->object);
             }
-            return named->expression && !literal(named->text) ? vpiOperation
-                                                              : vpiConstant;
+            return named->omitted
+                    || (named->expression && !literal(named->text))
+                ? vpiOperation
+                : vpiConstant;
         }
         if (const auto* subarray = subarray_of(handle)) {
             const auto memory = info(subarray->memory);
@@ -8990,7 +9254,8 @@ private:
                 || actual == vpiBitVar || actual == vpiStringVar
                 || actual == vpiStructVar || actual == vpiUnionVar
                 || actual == vpiEnumVar || actual == vpiPackedArrayVar
-                || actual == vpiShortRealVar || actual == vpiClassVar;
+                || actual == vpiShortRealVar || actual == vpiClassVar
+                || actual == vpiVirtualInterfaceVar;
         // The words of an unpacked array iterate as vpiReg whatever their
         // element type (int, bit, real words included).
         case vpiReg:
@@ -9043,11 +9308,28 @@ private:
             return 0U;
         }
         const auto serial = ++next_iterator_;
-        iterators_.emplace(serial, Iterator { std::move(objects), 0U });
+        iterators_.emplace(serial, Iterator { std::move(objects), 0U, 0U });
         return tagged(Tag::iterator, serial);
     }
 
+    // The iterator remembers its reference object, which vpi_handle(vpiUse,
+    // iterator) returns (IEEE 1800-2023 38.23).
     fsim_vpi_status_v1 iterate(const fsim_vpi_service_request_v1& request,
+        fsim_vpi_service_result_v1& result)
+    {
+        const auto status = iterate_objects(request, result);
+        if (status == FSIM_VPI_STATUS_OK && owned(result.handle)
+            && tag_of(result.handle) == Tag::iterator) {
+            if (const auto found = iterators_.find(serial_of(result.handle));
+                found != iterators_.end()) {
+                found->second.reference = request.handle;
+            }
+        }
+        return status;
+    }
+
+    fsim_vpi_status_v1 iterate_objects(
+        const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
         const auto type = static_cast<PLI_INT32>(request.argument);
@@ -9468,6 +9750,14 @@ private:
         fsim_vpi_service_result_v1& result)
     {
         const auto type = static_cast<PLI_INT32>(request.argument);
+        // The reference object of an iterator (IEEE 1800-2023 38.23).
+        if (type == vpiUse && owned(request.handle)
+            && tag_of(request.handle) == Tag::iterator) {
+            const auto found = iterators_.find(serial_of(request.handle));
+            return found == iterators_.end()
+                ? FSIM_VPI_STATUS_NOT_FOUND
+                : succeed(result, found->second.reference);
+        }
         if (type == vpiSysTfCall && request.handle == 0U) {
             return succeed(result,
                 call_stack_.empty() ? 0U
@@ -9809,6 +10099,11 @@ private:
                 return succeed(
                     result, class_model().defn_relation(*identity, type));
             }
+        }
+        // The interface instance a virtual interface variable refers to now;
+        // NULL when none (IEEE 1800-2023 37.29 detail 1).
+        if (type == vpiActual && virtual_interface_variable(*object)) {
+            return succeed(result, virtual_interface_instance(reference));
         }
         // The object a class variable references; NULL when it refers to
         // none (IEEE 1800-2023 37.33 detail 5).
@@ -10160,13 +10455,10 @@ private:
         }
         const auto scoped = scope->full_name
             + (scope->full_name.ends_with("::") ? "" : ".") + name;
-        if (const auto handle = found_or_folded(scoped)) {
-            return succeed(result, handle);
-        }
-        const auto found = registry_.find(name);
-        return succeed(result, found && found.value
-                ? labelled_assertion(found.value->handle)
-                                                    : find_declared_path(name));
+        // With a scope the name is searched for within that scope only; a
+        // name that is not there is not looked up from the top (IEEE
+        // 1800-2023 38.21).
+        return succeed(result, found_or_folded(scoped));
     }
 
     fsim_vpi_status_v1 handle_by_index(const fsim_vpi_service_request_v1& request,
@@ -10320,23 +10612,26 @@ private:
         return make_select(base, left, right, false);
     }
 
-    // The element of a multidimensional array at one index per unpacked
-    // dimension, left to right (IEEE 1800-2023 38.24).
+    // The subobject an index list names: one index per array dimension,
+    // leftmost first, optionally followed by a bit-select index (IEEE
+    // 1800-2023 38.20). Each index is applied as vpi_handle_by_index applies
+    // it to the handle before, so an index that does not make a legal index
+    // select (out of range, too many indexes, an object with no access by
+    // index) gives a null handle.
     fsim_vpi_status_v1 handle_by_multi_index(
         const fsim_vpi_service_request_v1& request,
         fsim_vpi_service_result_v1& result)
     {
-        const auto object = info(resolve(request.handle));
         const auto* const indexes = pointer<PLI_INT32>(request.user_data);
-        if (!object || indexes == nullptr) {
+        const auto count = static_cast<PLI_INT32>(request.argument);
+        if (indexes == nullptr || count < 1) {
             return succeed(result);
         }
-        auto name = object->full_name;
-        for (std::uint64_t index = 0U; index < request.argument; ++index) {
-            name += "[" + std::to_string(indexes[index]) + "]";
+        auto current = resolve(request.handle);
+        for (PLI_INT32 step = 0; step < count && current != 0U; ++step) {
+            current = index_handle(current, indexes[step]);
         }
-        const auto found = registry_.find(name);
-        return succeed(result, found && found.value ? found.value->handle : 0U);
+        return succeed(result, current);
     }
 
     // A port's size follows the formal; a port without a low connection
@@ -10501,6 +10796,10 @@ private:
                 return node.kind == TypespecKind::Class
                     ? integer(VpiClassModel::class_type_of(node.name))
                     : succeed(result, 0U, undefined);
+            case vpiIsModPort:
+                return node.kind == TypespecKind::Interface
+                    ? integer(node.element.empty() ? 0 : 1)
+                    : succeed(result, 0U, undefined);
             case vpiSigned:
                 return integer(node.is_signed ? 1 : 0);
             case vpiPacked:
@@ -10628,6 +10927,11 @@ private:
                 return integer(vpiDecConst);
             case vpiSigned:
                 return integer(named->value.is_signed ? 1 : 0);
+            case vpiOpType:
+                if (named->omitted) {
+                    return integer(vpiNullOp);
+                }
+                return succeed(result, 0U, undefined);
             default:
                 return succeed(result, 0U, undefined);
             }
@@ -10722,6 +11026,10 @@ private:
                     }
                 }
             }
+        }
+        // Whether a virtual interface variable is of a modport (37.29).
+        if (property == vpiIsModPort && virtual_interface_variable(*object)) {
+            return integer(object->type->typespec->element.empty() ? 0 : 1);
         }
         // The identifier of the object a class variable refers to, 0 for
         // none (IEEE 1800-2023 37.33 detail 2).
@@ -11452,6 +11760,11 @@ private:
         // A typespec is named by its typedef (IEEE 1800-2023 37.25 detail
         // 1); a member and an enumeration constant by their own names.
         if (const auto* level = typespec_of(request.handle)) {
+            // The definition name of an interface typespec (37.30 detail 1).
+            if (property == vpiDefName
+                && level->node->kind == TypespecKind::Interface) {
+                return text(level->node->def_name);
+            }
             return property == vpiName && level->dropped == 0U
                     && !level->node->name.empty()
                 ? text(level->node->name)
@@ -11929,9 +12242,10 @@ private:
             }
             return succeed(result);
         }
-        // A scalar's strength (IEEE 1800-2023 38.15).
+        // A scalar's strength (IEEE 1800-2023 38.15); an argument that
+        // names a net has the net's.
         if (out->format == vpiStrengthVal) {
-            if (!write_strength_value(request.handle, *out)) {
+            if (!write_strength_value(resolve(request.handle), *out)) {
                 out->format = vpiSuppressVal;
                 std::memset(&out->value, 0, sizeof(out->value));
                 return FSIM_VPI_STATUS_NOT_FOUND;
@@ -12952,6 +13266,9 @@ private:
     bool finish_requested_ { };
     std::uint64_t next_callback_ { };
     std::unordered_map<std::uint64_t, std::unique_ptr<Callback>> callbacks_;
+    // Fired one-shot callbacks whose handles are still held, by serial.
+    std::map<std::uint64_t, std::unique_ptr<Callback>> fired_callbacks_;
+    static constexpr std::size_t maximum_fired_callbacks = 4096U;
     std::vector<std::uint64_t> end_of_compile_;
     // The save, restart and reset callbacks by reason.
     std::map<PLI_INT32, std::vector<std::uint64_t>> feature_callbacks_;

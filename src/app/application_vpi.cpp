@@ -674,8 +674,22 @@ namespace {
             return std::nullopt;
         }
 
+        // A parameter declared with a typedef name takes its width, sign
+        // and domain from the canonical value; the typedef's own structure
+        // is the parameter's typespec (IEEE 1800-2023 37.28).
+        const auto typedef_type = [&] {
+            if (!declaration.type || !declaration.type->target.target.valid()) {
+                return false;
+            }
+            using Form = semantic::sv::TypeForm;
+            const auto& form = declaration.type->value_form;
+            return !form || *form == Form::alias || *form == Form::enumeration
+                || *form == Form::packed_structure
+                || *form == Form::packed_union
+                || *form == Form::packed_integral;
+        }();
         if (!declaration.type
-            || (declaration.type->value_form
+            || (!typedef_type && declaration.type->value_form
                 && declaration.type->value_form
                     != semantic::sv::TypeForm::packed_integral)
             || declaration.type->container_form
@@ -683,7 +697,7 @@ namespace {
             return std::nullopt;
         }
         const bool implicit_type
-            = declaration.type->target.spelling == "implicit";
+            = declaration.type->target.spelling == "implicit" || typedef_type;
         if (!implicit_type
             && (!declaration.type->executable_width
                 || *declaration.type->executable_width != width
@@ -2497,6 +2511,17 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
                 property.type = vpi_descriptor_type(
                     class_descriptor.children[index]);
                 property.type->language = class_profile;
+                // A virtual interface property's type is an interface
+                // typespec (IEEE 1800-2023 37.29).
+                if (const auto& declared = source.properties[index].type;
+                    declared.virtual_interface && !declared.container_form
+                    && declared.unpacked_dimensions.empty()) {
+                    property.type->typespec = std::make_shared<
+                        const runtime::SystemVerilogVpiTypespec>(
+                        runtime::make_systemverilog_vpi_interface_typespec(
+                            declared.interface_type, declared.interface_modport,
+                            { }));
+                }
                 // A parameter declared in the class body is a local
                 // parameter (IEEE 1800-2023 37.31 detail 7); a static
                 // property is not automatic.

@@ -89,6 +89,10 @@ struct Instance {
   std::vector<uint8_t> pvc_saved;
   // Design time ticks per tick of the module's precision.
   uint64_t precision_factor{1};
+  // The node facts of each argument that tf_nodeinfo reports, and the bytes
+  // of the memory argument it last read (IEEE 1364-2001 25.35).
+  std::vector<fsim_tf_host_node_v3> nodes;
+  std::vector<PLI_BYTE8> memory_bytes;
   AccState acc;
 };
 
@@ -144,6 +148,27 @@ bool is_null_argument(const vpiHandle handle) {
          vpi_get(vpiOpType, handle) == vpiNullOp;
 }
 
+// The index of an array word: tf_exprinfo and tf_nodeinfo give it as the
+// select of a memory word (IEEE 1364-2001 25.15, 25.35).
+void word_index(const vpiHandle word, fsim_tf_argument_bridge_v3& argument) {
+  // The index of a one-dimensional array's word, else the first of the
+  // indices of a multidimensional one (IEEE 1800-2023 37.17).
+  if (const auto index = vpi_handle(vpiIndex, word)) {
+    s_vpi_value bound{vpiIntVal, {}};
+    vpi_get_value(index, &bound);
+    argument.lhs_select = argument.rhs_select = bound.value.integer;
+    return;
+  }
+  if (const auto iterator = vpi_iterate(vpiIndex, word)) {
+    if (const auto index = vpi_scan(iterator)) {
+      s_vpi_value bound{vpiIntVal, {}};
+      vpi_get_value(index, &bound);
+      argument.lhs_select = argument.rhs_select = bound.value.integer;
+      (void)vpi_free_object(iterator);
+    }
+  }
+}
+
 // The tf_typep class of an argument (IEEE 1364-2001 25.61, Tables 187 and 202).
 fsim_tf_argument_bridge_v3 classify(const vpiHandle handle) {
   fsim_tf_argument_bridge_v3 argument{};
@@ -193,10 +218,14 @@ fsim_tf_argument_bridge_v3 classify(const vpiHandle handle) {
     argument.kind = parent != nullptr && vpi_get(vpiType, parent) == vpiRegArray
         ? tf_rwmemselect
         : tf_readwrite;
+    if (argument.kind == tf_rwmemselect) {
+      word_index(handle, argument);
+    }
     break;
   }
   case vpiMemoryWord:
     argument.kind = tf_rwmemselect;
+    word_index(handle, argument);
     break;
   case vpiBitSelect:
   case vpiNetBit:
@@ -225,6 +254,14 @@ fsim_tf_argument_bridge_v3 classify(const vpiHandle handle) {
   case vpiRegArray:
   case vpiMemory:
     argument.kind = tf_rwmemselect;
+    // The element's width: tf_nodeinfo reads each word of the memory.
+    if (const auto iterator = vpi_iterate(vpiReg, handle)) {
+      if (const auto word = vpi_scan(iterator)) {
+        const auto element = vpi_get(vpiSize, word);
+        argument.width = element > 0 ? static_cast<uint32_t>(element) : 32u;
+        (void)vpi_free_object(iterator);
+      }
+    }
     break;
   default: {
     // An expression is real when its value is (IEEE 1364-2001 25.61, Tables 187 and 202).
@@ -240,6 +277,73 @@ fsim_tf_argument_bridge_v3 classify(const vpiHandle handle) {
   }
   }
   return argument;
+}
+
+// The msb and lsb a vector declares; its width less one and 0 where the VPI
+// names no range.
+void declared_bounds(const vpiHandle vector, fsim_tf_host_node_v3& node) {
+  const auto size = vpi_get(vpiSize, vector);
+  node.ms_index = size > 0 ? size - 1 : 0;
+  node.ls_index = 0;
+  const auto left = vpi_handle(vpiLeftRange, vector);
+  const auto right = vpi_handle(vpiRightRange, vector);
+  if (left != nullptr && right != nullptr) {
+    s_vpi_value bound{vpiIntVal, {}};
+    vpi_get_value(left, &bound);
+    node.ms_index = bound.value.integer;
+    bound = {vpiIntVal, {}};
+    vpi_get_value(right, &bound);
+    node.ls_index = bound.value.integer;
+  }
+}
+
+// What tf_nodeinfo reports of an argument beyond the argument bridge: the
+// node class (Table 192), the declared bounds of a vector and the size of a
+// memory (IEEE 1364-2001 25.35); all zero for an argument that is no node.
+fsim_tf_host_node_v3 node_facts(const vpiHandle handle,
+                                const fsim_tf_argument_bridge_v3& argument) {
+  fsim_tf_host_node_v3 node{0, 0, 0, 0};
+  if (handle == nullptr || argument.kind == tf_nullparam ||
+      argument.kind == tf_string || argument.kind == tf_readonlyreal ||
+      argument.kind == tf_readwritereal) {
+    return node;
+  }
+  auto type = vpi_get(vpiType, handle);
+  auto vector = handle;
+  if (type == vpiBitSelect || type == vpiNetBit || type == vpiRegBit ||
+      type == vpiPartSelect) {
+    // A select takes the class and bounds of the vector it selects from.
+    const auto parent = vpi_handle(vpiParent, handle);
+    if (parent == nullptr) {
+      return node;
+    }
+    vector = parent;
+    type = vpi_get(vpiType, parent);
+    if (type == vpiNet) {
+      node.node_type = vpi_get(vpiType, handle) == vpiPartSelect
+          ? tf_netvector_node
+          : tf_netscalar_node;
+      declared_bounds(vector, node);
+      return node;
+    }
+  }
+  switch (type) {
+  case vpiIntegerVar: node.node_type = tf_integer_node; break;
+  case vpiTimeVar: node.node_type = tf_time_node; break;
+  case vpiReg: case vpiMemoryWord: node.node_type = tf_reg_node; break;
+  case vpiRegArray:
+  case vpiMemory:
+    node.node_type = tf_memory_node;
+    node.mem_size = std::max(vpi_get(vpiSize, handle), 0);
+    return node;
+  case vpiNet:
+    node.node_type = argument.width == 1u ? tf_netscalar_node
+                                          : tf_netvector_node;
+    break;
+  default: return node;
+  }
+  declared_bounds(vector, node);
+  return node;
 }
 
 // A function's result width; sizetf is called once per cell (21.1.1).
@@ -293,6 +397,8 @@ Instance& instance_for(const vpiHandle call, const p_tfcell cell) {
             static_cast<uint32_t>(stored.size() + 1u);
       }
       created->arguments.push_back(classified);
+      created->nodes.push_back(node_facts(omitted ? nullptr : argument,
+                                          created->arguments.back()));
     }
   }
   created->result_width = function_width(cell);
@@ -973,9 +1079,13 @@ uint32_t FSIM_NATIVE_PLUGIN_CALL acc_object_query(
       }
     }
     return FSIM_ACC_VPI_OBJECT_NOT_FOUND;
-  // Data paths and intermodule paths have no VPI relation to start from.
-  case FSIM_ACC_OBJECT_DATAPATH:
+  // An intermodule path joins an output port to an input port (23.55).
   case FSIM_ACC_OBJECT_INTERMODULE_PATH:
+    return object_result(
+        vpi_handle_multi(vpiInterModPath, first, vpi_object(query->second)),
+        handle);
+  // A data path has no VPI object to start from.
+  case FSIM_ACC_OBJECT_DATAPATH:
   default: return FSIM_ACC_VPI_OBJECT_NOT_FOUND;
   }
 }
@@ -1007,36 +1117,60 @@ bool variable_type(const PLI_INT32 type) {
          type == accTimeVar || type == accRegBit;
 }
 
-// An object's attribute by name (IEEE 1364-2001 23.12): the value as each
-// ACC routine reads it, or NOT_FOUND when the object carries no such one.
+// An object's attribute by name (IEEE 1364-2001 23.10-23.12): a parameter or
+// specparam of the module the object is in, named as the attribute string
+// followed by the object's name (a specific attribute), else as the attribute
+// string alone (a general attribute). A module is also searched for its own.
+// The value is returned as each ACC routine reads it, or NOT_FOUND.
 uint32_t read_attribute(const vpiHandle object, const PLI_BYTE8* const name,
                         const uint32_t name_size,
                         fsim_acc_read_result_v3* const result) {
   const std::string wanted{name, name_size};
-  for (const auto attribute : members(vpiAttribute, object)) {
-    if (text_of(vpiName, attribute) != wanted) {
-      continue;
+  const auto object_name = acc_local_name(object);
+  std::vector<vpiHandle> scopes;
+  if (const auto parent = acc_parent(object)) {
+    scopes.push_back(parent);
+  }
+  if (vpi_get(vpiType, object) == vpiModule) {
+    scopes.push_back(object);
+  }
+  for (const auto scope : scopes) {
+    auto declared = members(vpiParameter, scope);
+    for (const auto specparam : members(vpiSpecParam, scope)) {
+      declared.push_back(specparam);
     }
-    auto& storage = acc_read_storage();
-    s_vpi_value as_integer{vpiIntVal, {}};
-    vpi_get_value(attribute, &as_integer);
-    s_vpi_value as_real{vpiRealVal, {}};
-    vpi_get_value(attribute, &as_real);
-    s_vpi_value as_string{vpiStringVal, {}};
-    vpi_get_value(attribute, &as_string);
-    result->attribute_integer = as_integer.value.integer;
-    result->attribute_real = as_real.format == vpiRealVal
-                                 ? as_real.value.real
-                                 : static_cast<double>(
-                                       as_integer.value.integer);
-    storage.text[10] = as_string.format == vpiStringVal &&
-                               as_string.value.str != nullptr
-                           ? as_string.value.str
-                           : "";
-    result->attribute_string = storage.text[10].c_str();
-    result->attribute_string_size =
-        static_cast<uint32_t>(storage.text[10].size());
-    return FSIM_ACC_VPI_OBJECT_VALID;
+    for (const auto& candidate :
+         {object_name.empty() ? std::string{} : wanted + object_name,
+          wanted}) {
+      if (candidate.empty()) {
+        continue;
+      }
+      for (const auto attribute : declared) {
+        if (text_of(vpiName, attribute) != candidate) {
+          continue;
+        }
+        auto& storage = acc_read_storage();
+        s_vpi_value as_integer{vpiIntVal, {}};
+        vpi_get_value(attribute, &as_integer);
+        s_vpi_value as_real{vpiRealVal, {}};
+        vpi_get_value(attribute, &as_real);
+        s_vpi_value as_string{vpiStringVal, {}};
+        vpi_get_value(attribute, &as_string);
+        result->attribute_integer = as_integer.value.integer;
+        result->attribute_real = as_real.format == vpiRealVal
+                                     ? as_real.value.real
+                                     : static_cast<double>(
+                                           as_integer.value.integer);
+        storage.text[10] = as_string.format == vpiStringVal &&
+                                   as_string.value.str != nullptr
+                               ? as_string.value.str
+                               : "";
+        result->attribute_string = storage.text[10].c_str();
+        result->attribute_string_size =
+            static_cast<uint32_t>(storage.text[10].size());
+        return FSIM_ACC_VPI_OBJECT_VALID;
+      }
+    }
   }
   return FSIM_ACC_VPI_OBJECT_NOT_FOUND;
 }
@@ -1965,6 +2099,105 @@ PLI_INT32 FSIM_NATIVE_PLUGIN_CALL put_string_argument(
   return vpi_chk_error(nullptr) == 0 ? 1 : 0;
 }
 
+// The strength bit patterns of a scalar net argument (tf_nodeinfo, IEEE
+// 1364-2001 25.35, 7.10): bit n of each pattern is strength level n of its
+// scale, the encoding of the VPI strength constants. A known value has the
+// strength of its side only, a z is high impedance on both sides, and an
+// unknown value spans its level and every weaker one.
+PLI_INT32 FSIM_NATIVE_PLUGIN_CALL read_strength_argument(
+    void* const user_data, const PLI_INT32 narg, PLI_INT32* const zero,
+    PLI_INT32* const one) {
+  auto& instance = *static_cast<Instance*>(user_data);
+  if (narg < 1 ||
+      static_cast<std::size_t>(narg) > instance.handles.size() ||
+      instance.handles[static_cast<std::size_t>(narg - 1)] == nullptr) {
+    return 1;
+  }
+  s_vpi_value value{vpiStrengthVal, {}};
+  vpi_get_value(instance.handles[static_cast<std::size_t>(narg - 1)], &value);
+  if (value.format != vpiStrengthVal || value.value.strength == nullptr) {
+    return 1;
+  }
+  const auto& scalar = *value.value.strength;
+  constexpr PLI_INT32 high_impedance = 0x01;
+  const auto level = [](const PLI_INT32 strength) {
+    return strength & 0xff;
+  };
+  const auto span = [&](const PLI_INT32 strength) {
+    const auto bits = level(strength);
+    return bits == 0 ? high_impedance : (bits << 1) - 1;
+  };
+  switch (scalar.logic) {
+  case vpi0:
+    *zero = level(scalar.s0) == 0 ? high_impedance : level(scalar.s0);
+    *one = 0;
+    break;
+  case vpi1:
+    *zero = 0;
+    *one = level(scalar.s1) == 0 ? high_impedance : level(scalar.s1);
+    break;
+  case vpiZ:
+    *zero = *one = high_impedance;
+    break;
+  case vpiH:
+    *zero = high_impedance;
+    *one = span(scalar.s1);
+    break;
+  case vpiL:
+    *zero = span(scalar.s0);
+    *one = high_impedance;
+    break;
+  default:
+    *zero = span(scalar.s0);
+    *one = span(scalar.s1);
+    break;
+  }
+  return 0;
+}
+
+// The words of a memory argument, each as its aval bytes then its bval bytes
+// (tf_nodeinfo, Figure 169): the byte count of one group, the element count
+// and the data. The lowest address comes first.
+PLI_INT32 FSIM_NATIVE_PLUGIN_CALL read_memory_argument(
+    void* const user_data, const PLI_INT32 narg, uint32_t* const group_bytes,
+    uint32_t* const count, const PLI_BYTE8** const data) {
+  auto& instance = *static_cast<Instance*>(user_data);
+  if (narg < 1 ||
+      static_cast<std::size_t>(narg) > instance.handles.size() ||
+      instance.handles[static_cast<std::size_t>(narg - 1)] == nullptr) {
+    return 1;
+  }
+  const auto memory = instance.handles[static_cast<std::size_t>(narg - 1)];
+  auto words = members(vpiReg, memory);
+  if (words.empty()) {
+    words = members(vpiMemoryWord, memory);
+  }
+  const auto width = instance.arguments[static_cast<std::size_t>(narg - 1)].width;
+  const auto bytes = (width + 7u) / 8u;
+  instance.memory_bytes.assign(
+      static_cast<std::size_t>(words.size()) * bytes * 2u, PLI_BYTE8{0});
+  for (std::size_t element = 0; element < words.size(); ++element) {
+    s_vpi_value read{vpiVectorVal, {}};
+    vpi_get_value(words[element], &read);
+    if (read.value.vector == nullptr) {
+      continue;
+    }
+    for (uint32_t byte = 0; byte < bytes; ++byte) {
+      const auto group = read.value.vector[byte / 4u];
+      const auto shift = (byte % 4u) * 8u;
+      const auto base = element * bytes * 2u;
+      instance.memory_bytes[base + byte] =
+          static_cast<PLI_BYTE8>((group.aval >> shift) & 0xffu);
+      instance.memory_bytes[base + bytes + byte] =
+          static_cast<PLI_BYTE8>((group.bval >> shift) & 0xffu);
+    }
+  }
+  *group_bytes = bytes;
+  *count = static_cast<uint32_t>(words.size());
+  *data = instance.memory_bytes.data();
+  return 0;
+}
+
 PLI_INT32 synchronized(p_cb_data data);
 PLI_INT32 reactivated(p_cb_data data);
 PLI_INT32 parameter_changed(p_cb_data data);
@@ -2016,6 +2249,8 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
   fsim_tf_time_bridge_v3 time{};
   std::array<uint64_t, 16> delays{};
   uint64_t precision_factor{1};
+  int design_exponent{};
+  uint64_t design_ticks{};
   if (runtime_phase(phase)) {
     const bool writable = writable_phase(phase);
     for (uint32_t index = 0; index < count; ++index) {
@@ -2046,7 +2281,10 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
       } else {
         const auto words = (argument.width + 31u) / 32u;
         s_vpi_value read{vpiVectorVal, {}};
-        vpi_get_value(handle, &read);
+        // A whole memory has no vector value; tf_nodeinfo reads its words.
+        if (instance.nodes[index].node_type != tf_memory_node) {
+          vpi_get_value(handle, &read);
+        }
         vectors[index].assign(words, t_vecval{});
         for (uint32_t word = 0; word < words && read.value.vector != nullptr;
              ++word) {
@@ -2072,6 +2310,8 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
         vpi_get(vpiTimePrecision, instance.module), design_precision, 0);
     const auto unit = std::clamp(
         vpi_get(vpiTimeUnit, instance.module), precision, 0);
+    design_exponent = design_precision;
+    design_ticks = (static_cast<uint64_t>(now.high) << 32u) | now.low;
     for (auto exponent = design_precision; exponent < precision; ++exponent) {
       precision_factor *= 10u;
     }
@@ -2098,6 +2338,17 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
   host.pvc_saved = instance.pvc_saved.data();
   host.put_user_data = &instance;
   host.put = &put_string_argument;
+  host.node_count = static_cast<uint32_t>(instance.nodes.size());
+  host.nodes = instance.nodes.data();
+  host.strength = &read_strength_argument;
+  host.memory = &read_memory_argument;
+  if (runtime_phase(phase)) {
+    // The routines see the module's precision; the simulation's is the
+    // design's (IEEE 1364-2001 25.26, 25.27, 25.54).
+    host.simulation_precision_exponent = static_cast<int16_t>(design_exponent);
+    host.has_simulation_precision = 1u;
+    host.simulation_ticks = design_ticks;
+  }
   (void)fsim_tf_call_host_bind_v3(&context, &host);
   routine_active = true;
   auto acc = std::make_unique<AccCall>(instance, context);
@@ -2214,6 +2465,28 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
         callback.value = &value;
         callback.user_data = reinterpret_cast<PLI_BYTE8*>(&watch);
         (void)vpi_register_cb(&callback);
+        // A change on a driver of a net argument calls misctf with
+        // reason_paramdrc (IEEE 1364-2001 21.3.2, 21.3.3, Table 88). A driver
+        // is watched through the signal it drives; a driver the VPI cannot
+        // watch (a continuous assignment) is not.
+        const auto type = vpi_get(vpiType, handle);
+        if (type != vpiNet && type != vpiNetBit) {
+          continue;
+        }
+        for (const auto driver : members(vpiDriver, handle)) {
+          auto& driver_watch = instance.watches.emplace_back(Watch{
+              &instance, static_cast<PLI_INT32>(argument + 1u),
+              reason_paramdrc});
+          s_cb_data driver_callback{};
+          driver_callback.reason = cbValueChange;
+          driver_callback.cb_rtn = &parameter_changed;
+          driver_callback.obj = driver;
+          driver_callback.time = &at;
+          driver_callback.value = &value;
+          driver_callback.user_data =
+              reinterpret_cast<PLI_BYTE8*>(&driver_watch);
+          (void)vpi_register_cb(&driver_callback);
+        }
       }
       continue;
     }
@@ -2257,17 +2530,19 @@ PLI_INT32 synchronized(const p_cb_data data) {
   return 0;
 }
 
-// misctf(reason_paramvc) for a changed argument (tf_asynchon), after any
-// routine in progress returns.
+// misctf(reason_paramvc) for a changed argument, or reason_paramdrc for a
+// changed driver of one (tf_asynchon), after any routine in progress returns.
 PLI_INT32 parameter_changed(const p_cb_data data) {
   const auto watch = *reinterpret_cast<Watch*>(data->user_data);
   if (!watch.instance->asynchronous) {
     return 0;
   }
   // The software product sets the current flag once tf_asynchon enabled it
-  // (IEEE 1364-2001 25.33).
-  watch.instance->pvc_current[static_cast<std::size_t>(watch.parameter - 1)] =
-      1u;
+  // (IEEE 1364-2001 25.33); a driver change is no change of the parameter.
+  if (watch.reason == reason_paramvc) {
+    watch.instance
+        ->pvc_current[static_cast<std::size_t>(watch.parameter - 1)] = 1u;
+  }
   pending_changes.push_back(watch);
   if (!routine_active) {
     drain_changes();
@@ -2280,7 +2555,8 @@ void drain_changes() {
     if (!pending_changes.empty()) {
       const auto next = pending_changes.front();
       pending_changes.pop_front();
-      if (next.reason != reason_paramvc || next.instance->asynchronous) {
+      if ((next.reason != reason_paramvc && next.reason != reason_paramdrc) ||
+          next.instance->asynchronous) {
         run(*next.instance, FSIM_TF_CALL_PHASE_SYNCHRONIZE, next.reason,
             next.parameter);
       }
@@ -2531,23 +2807,30 @@ PLI_INT32 end_of_compile_disables(const p_cb_data) {
   return 0;
 }
 
-// The statement watches of the misctf reasons; installed once, and only when
-// a cell has a misctf routine, so a design without one pays nothing.
-void watch_statements() {
-  static bool installed{};
-  if (installed) {
-    return;
-  }
-  installed = true;
+// The statement watches of the misctf reasons run at the end of compile: the
+// force and assign reasons cannot be registered from a startup routine (IEEE
+// 1800-2023 36.10.2), and veriusertfs_register_table is called from one.
+PLI_INT32 install_statement_watches(p_cb_data data) {
   for (const auto reason : {cbForce, cbAssign, cbRelease, cbDeassign}) {
     s_cb_data callback{};
     callback.reason = reason;
     callback.cb_rtn = &forced;
     (void)vpi_register_cb(&callback);
   }
+  return end_of_compile_disables(data);
+}
+
+// Installed once, and only when a cell has a misctf routine, so a design
+// without one pays nothing.
+void watch_statements() {
+  static bool installed{};
+  if (installed) {
+    return;
+  }
+  installed = true;
   s_cb_data callback{};
   callback.reason = cbEndOfCompile;
-  callback.cb_rtn = &end_of_compile_disables;
+  callback.cb_rtn = &install_statement_watches;
   (void)vpi_register_cb(&callback);
 }
 

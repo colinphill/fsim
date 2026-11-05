@@ -918,6 +918,8 @@ void VerilogParser::parse_generate_branch(
   }
   const auto parent_generate_ordinal = next_implicit_generate_scope_;
   next_implicit_generate_scope_ = 1;
+  auto outer_dpi_exports = std::move(block_dpi_exports_);
+  block_dpi_exports_.clear();
   std::vector<std::string> local_names;
   std::vector<std::string> local_genvars;
   bool parsed_direct_item = false;
@@ -1098,7 +1100,11 @@ void VerilogParser::parse_generate_branch(
         // is declared with its module's other subroutines.
         const bool import = dpi_declaration_start("import");
         const auto declaration = advance();
-        parse_dpi_declaration(generate_dpi_declarations_, declaration,
+        // An export is in the scope of the function it exports (35.7), so
+        // it is collected for the end of the block.
+        parse_dpi_declaration(
+            import ? generate_dpi_declarations_ : block_dpi_exports_,
+            declaration,
             import ? SystemVerilogDpiDirection::Import
                    : SystemVerilogDpiDirection::Export,
             SystemVerilogDpiOwnerKind::DesignUnit, std::string { });
@@ -1140,6 +1146,8 @@ void VerilogParser::parse_generate_branch(
     }
   }
   next_implicit_generate_scope_ = parent_generate_ordinal;
+  finish_generate_block_dpi_exports(body, std::move(block_dpi_exports_));
+  block_dpi_exports_ = std::move(outer_dpi_exports);
 }
 
 void VerilogParser::parse_generate_typedef(

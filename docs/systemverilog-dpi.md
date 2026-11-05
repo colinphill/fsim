@@ -19,13 +19,13 @@ governed clause, arbitrary-width, engine, artifact, and public-API evidence.
 | Area | Supported behavior | Primary evidence |
 |---|---|---|
 | Declarations | `import`/`export "DPI-C"`, `pure`/`context`, functions/tasks, optional C aliases and formal names, input defaults, exact owner/tokens/spans, compatible shared C-linkage profiles, typed export resolution | `frontend_dpi_tests.cpp` |
-| Standard C layer | Installed root-level `svdpi.h`, canonical scalar/vector/time layouts, four-state constants, packed-word helpers, complete nondeprecated open-array/scope/context/time declarations, and exported version/bit-select/part-select utilities | `runtime_dpi_abi_c_test.c`, `runtime_foreign_abi_cpp_test.cpp`, `runtime_dpi_tests.cpp` |
-| Scalars | Arbitrary bounded two-/four-state aval/bval planes, shortreal/real/realtime exact bits, strict UTF-8 strings, simulation-owned chandle identities | `runtime_dpi_tests.cpp` |
-| Composites | Recursive fixed arrays, structs, arbitrary-width two-/four-state enums with exact literal identity, canonical flattened leaves, checked layout and resource budgets | `runtime_dpi_tests.cpp` |
-| Open arrays | Declared range direction, multidimensional indices, contiguous and element pointers, direction-aware mutation, epoch lifetime | `runtime_dpi_tests.cpp` |
-| Scope and callbacks | Exact simulation-owned `svScope`, bounded reentrant foreign-call contexts, context-local set/restore, caller/time/user-data services, declaration-checked exported callbacks, disabled-state acknowledgement, exception rollback | `runtime_dpi_tests.cpp`, `dpi_test_plugin_c.c` |
-| Imported tasks | Declaration-checked `context` task registration, deterministic timed suspension/resume, cancellation, nested callback re-entry, transactional publication, scheduler containment | `runtime_dpi_tests.cpp` |
-| Plug-ins | Relative versioned manifests, language-correct C11/C++20 argv compile/link plans, exact symbols, ABI descriptor, SHA-256 provenance/cache identity, leased lifetime and quarantine | `runtime_dpi_tests.cpp` |
+| Standard C layer | Installed root-level `svdpi.h`, canonical scalar/vector/time layouts, four-state constants, packed-word helpers, complete nondeprecated open-array/scope/context/time declarations, and exported version/bit-select/part-select utilities | `runtime_dpi_abi_c_test.c`, `runtime_foreign_abi_cpp_test.cpp`, `fsim.foreign.dpi-types` |
+| Scalars and vectors | Two-/four-state `svBit`/`svLogic` and packed `svBitVecVal`/`svLogicVecVal` planes, shortreal/real, strings, chandles; bit-vector function results rejected (35.5.5) | `fsim.foreign.dpi-types`, `fsim.foreign.dpi-strings`, `fsim.foreign.dpi-result-vector` |
+| Composites | Unpacked structures, fixed arrays and enumerations in the Annex H normalized layout | `fsim.foreign.dpi-aggregates`, `fsim.foreign.dpi-types` |
+| Open arrays | Declared ranges, multidimensional indices, element pointers, direction-aware mutation, dynamic-array and queue actuals | `fsim.foreign.dpi-aggregates` |
+| Scope and exports | `svScope` set/get, caller and time services, exported functions and tasks in module, `$unit` and generate scopes | `fsim.foreign.dpi-scope-*`, `fsim.foreign.dpi-time-scope`, `fsim.foreign.dpi-unit-export`, `fsim.foreign.dpi-generate-export` |
+| Imported tasks | `context` tasks that suspend in exported tasks, disable with `svIsDisabledState`/`svAckDisabledState` | `fsim.foreign.dpi-disable`, `fsim.foreign.dpi-disable-export` |
+| Libraries | C and C++ shared libraries given with `--sv-lib`, resolved by C name at elaboration and called through libffi | `fsim.foreign.dpi-*` |
 
 ## Live call service: argument types
 
@@ -54,8 +54,46 @@ unpacked union, and a result that is not a small value (`FSIM-SV-SEM-460` to
 `-463`). Exports with sized unpacked or struct formals are called from C with
 the element pointer or the structure pointer as the argument.
 
-Not supported: an array of `string` formals, and a structure with a `string`,
+An array of `string` formals, sized (`string s [3]`) or open (`string s []`),
+passes one `const char*` per element: a sized array as a pointer to the
+elements, lowest index first in every dimension, an open array as an
+`svOpenArrayHandle` whose elements `svGetArrElemPtr*` returns as `const
+char**` (H.7.4, H.12). The actual is a fixed-size unpacked array of strings of
+any rank, and the direction may be input, output or inout.
+
+Not supported: a dynamic array or queue of strings as the actual of an array
+formal, an array of strings in an export, and a structure with a `string`,
 dynamic array, queue or class member.
+
+## Export scopes and the disable protocol
+
+An export called from the C code of a context import runs in the scope the
+call chain is in: the scope of the import declaration, or the one `svSetScope`
+names (35.5.3). Three kinds of declaration have a scope:
+
+| Export declared in | Scope that serves it |
+| --- | --- |
+| a module, program or interface | each instance, named by its hierarchical path |
+| a generate block (35.7: in the scope of the function it exports) | each instance of the block, named by its path (`top.h.blk`, `top.h.lp[1]`), also an iteration of a loop generate |
+| the compilation unit (35.5.2) | every scope: a chain in any scope may call it |
+
+A package's exports have no export service: `svGetScopeFromName` names no
+package (H.9.3), so no call chain runs in one, and a context import declared
+in a package runs in the instance that calls it (35.5.3). This is the strict
+reading; an export of a package is reached through none of the DPI scope
+utilities. An export called from a VPI callback outside a context-import call
+chain is an error with a diagnostic, also after `svSetScope`.
+
+An export whose callable is not defined in the generate block that declares it
+is bound to the module's callable of that name, as before. The generate
+block's export is not part of the module's DPI declarations: `--dpi-header`
+does not list it.
+
+A `disable` that covers the import call (a `disable fork`, a kill, or a named
+block that holds the call) puts the import in the disabled state (35.9). A
+`disable` that covers only the exported subroutine the import is suspended in
+targets the export itself: it returns 0, `svIsDisabledState()` stays 0, and the
+import continues.
 
 ## Negative matrix
 
@@ -100,17 +138,16 @@ release obligation.
 
 ## Source inventory
 
-- Public ABI/runtime: `dpi_plugin_abi.h`, `dpi_marshalling.hpp`,
-  `dpi_scope.hpp`, `dpi_callback.hpp`, `dpi_task.hpp`, `dpi_plugin.hpp`, and the
-  installed `svdpi.h` standard C surface.
-- Runtime implementations: `dpi_marshalling.cpp`, `dpi_composite.cpp`,
-  `dpi_open_array.cpp`, `dpi_scope.cpp`, `dpi_callback.cpp`, `dpi_task.cpp`,
-  `dpi_plugin.cpp`, and `svdpi.cpp`.
+- Public ABI/runtime: `dpi_plugin_abi.h` (frozen layout) and the installed
+  `svdpi.h` standard C surface.
+- Runtime implementations: `svdpi.cpp` (standard C layer) and the live call
+  service `application_dpi_foreign.cpp`, with C type mapping in
+  `dpi_c_type.cpp`.
 - Frontend: `verilog_parser_dpi.cpp` plus DPI declaration ownership in
   `design.hpp` and parser integration in the Verilog parser core/units.
-- Evidence: `frontend_dpi_tests.cpp`, `runtime_dpi_tests.cpp`, the independent
-  `dpi_test_plugin.cpp`/`dpi_test_plugin_c.c` fixture, and
-  `dpi_bad_abi_plugin.cpp`.
+- Evidence: `frontend_dpi_tests.cpp`, the ABI probes, and the
+  `fsim.foreign.dpi-*` tests (`tests/fixtures/foreign/foreign_dpi_*.sv` with
+  their `tests/runtime/foreign_dpi_*_plugin.c` libraries).
 
 The deprecated implementation-representation portion of historical `svdpi.h`
 interfaces is intentionally omitted; the canonical representation remains the

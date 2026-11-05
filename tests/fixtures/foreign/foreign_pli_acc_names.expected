@@ -1,0 +1,8 @@
+#c attribute specific=2.5
+#c attribute general=1.0
+#c attribute int=11
+#c attribute int default=-1
+#c attribute str=gen
+#c attribute str default=none
+#c attribute zero=0.0
+#c path none

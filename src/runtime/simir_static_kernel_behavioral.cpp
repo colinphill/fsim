@@ -1609,7 +1609,7 @@ void Interpreter::Impl::StaticKernel::disable_thread_interval(
     // A suspended owner resumes at the block's end now, not when its wait
     // ends; one already ready (or resuming in the Inactive region) resumes
     // there when it runs.
-    DpiCallProcess::disabled(thread.order);
+    DpiCallProcess::disabled(thread.order, begin, end);
     thread.pc = end;
     if (!thread.queued
         && std::ranges::find(inactive_threads_, owner) == inactive_threads_.end()) {
@@ -2940,6 +2940,9 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             }
             if (!disconnected) {
                 MemberContainerAccess access { *this, member_index, pc };
+                // A DPI call names its position for the disable protocol
+                // (IEEE 1800-2023 35.9).
+                DpiCallProcess::set_position(pc);
                 if (const auto* error = impl_.run_class_operation(access, op,
                         running_process(member_index))) {
                     fail(member_index, pc, error);

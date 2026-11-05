@@ -35,8 +35,6 @@ set(FSIM_UVM_C_PROBE
   "${FSIM_SOURCE_DIR}/tests/runtime/runtime_uvm_foreign_abi_c_test.c")
 set(FSIM_CPP_PROBE
   "${FSIM_SOURCE_DIR}/tests/runtime/runtime_foreign_abi_cpp_test.cpp")
-set(FSIM_DPI_TESTS
-  "${FSIM_SOURCE_DIR}/tests/runtime/runtime_dpi_tests.cpp")
 set(FSIM_VPI_TESTS
   "${FSIM_SOURCE_DIR}/tests/runtime/runtime_vpi_tests.cpp")
 set(FSIM_VPI_STARTUP_FIXTURE
@@ -45,7 +43,6 @@ set(FSIM_VHPI_TESTS
   "${FSIM_SOURCE_DIR}/tests/runtime/runtime_vhpi_tests.cpp")
 set(FSIM_UVM_TESTS
   "${FSIM_SOURCE_DIR}/tests/app/application_test_classes.cpp")
-set(FSIM_DPI_LOADER "${FSIM_SOURCE_DIR}/src/runtime/dpi_plugin.cpp")
 set(FSIM_VPI_LOADER "${FSIM_SOURCE_DIR}/src/runtime/vpi_plugin.cpp")
 set(FSIM_VHPI_LOADER "${FSIM_SOURCE_DIR}/src/runtime/vhpi_plugin.cpp")
 set(FSIM_UVM_HOST "${FSIM_SOURCE_DIR}/src/runtime/uvm_foreign.cpp")
@@ -70,12 +67,10 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_VHPI_C_PROBE}"
     "${FSIM_UVM_C_PROBE}"
     "${FSIM_CPP_PROBE}"
-    "${FSIM_DPI_TESTS}"
     "${FSIM_VPI_TESTS}"
     "${FSIM_VPI_STARTUP_FIXTURE}"
     "${FSIM_VHPI_TESTS}"
     "${FSIM_UVM_TESTS}"
-    "${FSIM_DPI_LOADER}"
     "${FSIM_VPI_LOADER}"
     "${FSIM_VHPI_LOADER}"
     "${FSIM_UVM_HOST}"
@@ -91,15 +86,15 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "121bff0ce429135089c6e68212398ee54a273e5cb509edbff4b289729ad67b60")
+  "2f0362af30feb49a2868407d70f55b45a5a765b720b5568854f821f338058e8f")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "foreign ABI contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 37)
-  message(FATAL_ERROR "foreign ABI contract requires 37 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 35)
+  message(FATAL_ERROR "foreign ABI contract requires 35 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -107,7 +102,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
    NOT FSIM_HEADER STREQUAL "kind\tname\tcontract")
   message(FATAL_ERROR "foreign ABI contract header or SPDX policy changed")
 endif()
-foreach(FSIM_INDEX RANGE 2 36)
+foreach(FSIM_INDEX RANGE 2 34)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -238,13 +233,6 @@ fsim_require_foreign_tokens("${FSIM_CPP_PROBE}"
   "std::is_same_v<fsim_vhpi_execute_tool_v3"
   "std::is_same_v<fsim_uvm_foreign_activity_callback_v1")
 
-fsim_require_foreign_tokens("${FSIM_DPI_TESTS}"
-  "test_systemverilog_dpi_scalar_marshalling"
-  "test_systemverilog_dpi_composite_marshalling"
-  "test_systemverilog_dpi_open_arrays"
-  "loaded foreign C code uses the standard DPI context surface"
-  "one-byte truncated prefix"
-  "future append-only extents")
 fsim_require_foreign_tokens("${FSIM_VPI_TESTS}"
   ".unopened-truncated-host"
   "before opening an image"
@@ -261,9 +249,6 @@ fsim_require_foreign_tokens("${FSIM_UVM_TESTS}"
   "FSIM_UVM_FOREIGN_BUFFER_TOO_SMALL"
   "FSIM_UVM_FOREIGN_STALE_HANDLE")
 
-fsim_require_foreign_tokens("${FSIM_DPI_LOADER}"
-  "validate_systemverilog_dpi_plugin_descriptor"
-  "FSIM_DPI_PLUGIN_DESCRIPTOR_SYMBOL")
 fsim_require_foreign_tokens("${FSIM_VPI_LOADER}"
   "validate_systemverilog_vpi_host(host)"
   "FSIM_VPI_PLUGIN_BIND_SYMBOL")
@@ -276,11 +261,11 @@ fsim_require_foreign_tokens("${FSIM_UVM_HOST}"
 fsim_require_foreign_tokens("${FSIM_RUNTIME_BUILD}"
   "runtime_dpi_abi_c_test.c"
   "runtime_foreign_abi_cpp_test.cpp"
-  "target_link_libraries(fsim_dpi_test_plugin PRIVATE fsim_tf)"
+  "target_link_libraries(fsim_foreign_dpi_types_plugin PRIVATE fsim_tf)"
   "fsim_vpi_standard_startup_plugin")
 fsim_require_foreign_tokens("${FSIM_TEST_BUILD}"
   "NAME fsim.foreign-abi-freeze"
   "CheckForeignAbiFreeze.cmake")
 
 message(STATUS
-  "DPI/VPI/VHPI/UVM foreign ABI freeze passed: rows=35 digest=${FSIM_CONTRACT_DIGEST}")
+  "DPI/VPI/VHPI/UVM foreign ABI freeze passed: rows=33 digest=${FSIM_CONTRACT_DIGEST}")

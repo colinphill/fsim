@@ -153,6 +153,34 @@ static vhpiHandleT phase_cb(int32_t reason, void (*routine)(const vhpiCbDataT*))
     return vhpi_register_cb(&data, vhpiReturnCb);
 }
 
+// During the registration phase only the tool and argv classes are
+// available; any other access is an error (IEEE 1076-2019 20.2.1).
+static void registration_access(void)
+{
+    vhpiHandleT root = vhpi_handle(vhpiRootInst, NULL);
+    int root_failed = vhpi_check_error(NULL) != 0;
+    vhpiHandleT named = vhpi_handle_by_name("top.v", NULL);
+    int named_failed = vhpi_check_error(NULL) != 0;
+    vhpiHandleT packages = vhpi_iterator(vhpiPackInsts, NULL);
+    int packages_failed = vhpi_check_error(NULL) != 0;
+    vhpiHandleT tool = vhpi_handle(vhpiTool, NULL);
+    int tool_failed = vhpi_check_error(NULL) != 0;
+    int tool_kind = tool != NULL && vhpi_get(vhpiKindP, tool) == vhpiToolK;
+    int tool_kind_failed = vhpi_check_error(NULL) != 0;
+    vhpiHandleT arguments = vhpi_iterator(vhpiArgvs, NULL);
+    int arguments_failed = vhpi_check_error(NULL) != 0;
+    (void)arguments;
+    printf("#c registration root: null=%d error=%d\n", root == NULL,
+        root_failed);
+    printf("#c registration name: null=%d error=%d\n", named == NULL,
+        named_failed);
+    printf("#c registration packages: null=%d error=%d\n", packages == NULL,
+        packages_failed);
+    printf("#c registration tool: null=%d kind=%d error=%d\n", tool == NULL,
+        tool_kind, tool_failed || tool_kind_failed);
+    printf("#c registration argvs: error=%d\n", arguments_failed);
+}
+
 static void startup(void)
 {
     int rc;
@@ -170,6 +198,7 @@ static void startup(void)
     printf("#c registration control finish: rc=%d error=%d\n", rc, failed);
     printf("#c registration curcallback null=%d\n",
         vhpi_handle(vhpiCurCallback, NULL) == NULL);
+    registration_access();
     initialization_handle
         = phase_cb(vhpiCbStartOfInitialization, initialization);
     simulation_handle = phase_cb(vhpiCbStartOfSimulation, simulation);

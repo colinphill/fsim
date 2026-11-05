@@ -1,0 +1,11 @@
+#c run scope=top
+#c run in=top.h.blk
+#c blk note value=5 total=5
+#c blk note value=7 total=12
+#c run in=top.h.lp[1]
+#c lp[1] wait time=4
+#c run wait status=0
+#c run in=top.h.lp[0]
+#c lp[0] wait time=6
+#c run wait status=0
+#c run done

@@ -143,6 +143,36 @@ typedef PLI_INT32(FSIM_NATIVE_PLUGIN_CALL* fsim_tf_host_put_v3)(
     void* user_data, PLI_INT32 narg, PLI_INT32 format, const PLI_BYTE8* text,
     uint64_t delay_ticks, PLI_INT32 delaytype);
 
+// Node facts of argument narg that the argument bridge does not carry
+// (tf_nodeinfo, IEEE 1364-2001 25.35). A node_type of 0 means the host gave
+// none for that argument and the routine derives the node from the
+// argument's class and width; otherwise node_type is a tf_*_node constant,
+// ms_index and ls_index are the declared bounds of a vector node and
+// mem_size is the element count of a memory node.
+typedef struct fsim_tf_host_node_v3 {
+  PLI_INT32 node_type;
+  PLI_INT32 ms_index;
+  PLI_INT32 ls_index;
+  PLI_INT32 mem_size;
+} fsim_tf_host_node_v3;
+
+// strength reads the strength bit patterns of scalar net argument narg
+// (25.35, 7.10): bit n of strength0 and of strength1 is set for strength
+// level n of that scale; returns 0 when it filled both. memory reads the
+// whole of memory argument narg, one element after another in address
+// order, each element its aval bytes then its bval bytes (Figure 169); data
+// stays valid until the call returns; returns 0 when it filled the outputs.
+typedef PLI_INT32(FSIM_NATIVE_PLUGIN_CALL* fsim_tf_host_strength_v3)(
+    void* user_data, PLI_INT32 narg, PLI_INT32* strength0,
+    PLI_INT32* strength1);
+typedef PLI_INT32(FSIM_NATIVE_PLUGIN_CALL* fsim_tf_host_memory_v3)(
+    void* user_data, PLI_INT32 narg, uint32_t* group_bytes, uint32_t* count,
+    const PLI_BYTE8** data);
+
+// simulation_precision_exponent is the simulation time unit, the smallest
+// precision of the design (25.26, 25.27), and simulation_ticks the current
+// time counted in it (25.54), when has_simulation_precision is set; the time
+// bridge's precision is then the calling module's own.
 typedef struct fsim_tf_host_bridge_v3 {
   uint32_t pvc_count;
   uint32_t reserved;
@@ -150,6 +180,13 @@ typedef struct fsim_tf_host_bridge_v3 {
   uint8_t* pvc_saved;
   void* put_user_data;
   fsim_tf_host_put_v3 put;
+  uint32_t node_count;
+  int16_t simulation_precision_exponent;
+  uint16_t has_simulation_precision;
+  uint64_t simulation_ticks;
+  const fsim_tf_host_node_v3* nodes;
+  fsim_tf_host_strength_v3 strength;
+  fsim_tf_host_memory_v3 memory;
 } fsim_tf_host_bridge_v3;
 
 FSIM_TF_BRIDGE_API PLI_INT32 FSIM_NATIVE_PLUGIN_CALL

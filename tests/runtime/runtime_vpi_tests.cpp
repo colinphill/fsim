@@ -517,7 +517,7 @@ void test_systemverilog_vpi_host_abi() {
   }
 
   const auto missing_bind = load_systemverilog_vpi_plugin(
-      FSIM_DPI_TEST_PLUGIN_PATH, host);
+      FSIM_DPI_ONLY_PLUGIN_PATH, host);
   require(
       !missing_bind
           && missing_bind.error

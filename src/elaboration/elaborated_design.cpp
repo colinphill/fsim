@@ -1224,6 +1224,17 @@ ElaboratedDesign::find_container(
 
 namespace {
 
+// The virtual interface handle table as artifact rows, in path order so the
+// artifact bytes do not depend on hashing.
+std::vector<std::pair<std::string, std::uint64_t>> interface_handle_rows(
+    const std::unordered_map<std::string, std::uint64_t>& handles)
+{
+    std::vector<std::pair<std::string, std::uint64_t>> result(
+        handles.begin(), handles.end());
+    std::ranges::sort(result);
+    return result;
+}
+
 // The paths of a by-path object index with their objects, in lexical order.
 template <typename Object, typename ByPath>
 std::vector<std::pair<std::string, Object>> sorted_object_paths(
@@ -1621,6 +1632,7 @@ ElaboratedDesignState ElaboratedDesign::state() const&
         systemc_instances_, systemc_processes_, systemc_objects_, { }, { },
         { }, code_coverage_inventory_, *driver_inventory,
         verilog_primitives_, sdf_net_delays_,
+        interface_handle_rows(systemverilog_interface_handles_),
     };
     if (process_rows_) {
         result.processes.reserve(process_rows_->rows.size());
@@ -1682,6 +1694,7 @@ detail::ElaboratedDesignProcessAccess::artifact_state(
         design.systemc_objects_, { }, { }, { },
         design.code_coverage_inventory_, *driver_inventory,
         design.verilog_primitives_, design.sdf_net_delays_,
+        interface_handle_rows(design.systemverilog_interface_handles_),
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1743,6 +1756,7 @@ detail::ElaboratedDesignProcessAccess::take_artifact_state(
                            : std::move(*design.signal_driver_inventory_),
         std::move(design.verilog_primitives_),
         std::move(design.sdf_net_delays_),
+        interface_handle_rows(design.systemverilog_interface_handles_),
     };
     result.signal_names.reserve(design.signal_by_path_.size());
     for (const auto& [path, signal] : design.signal_by_path_) {
@@ -1811,6 +1825,7 @@ ElaboratedDesignState ElaboratedDesign::state() &&
         std::move(code_coverage_inventory_),
         std::move(driver_inventory_value),
         std::move(verilog_primitives_), std::move(sdf_net_delays_),
+        interface_handle_rows(systemverilog_interface_handles_),
     };
     result.signal_names.reserve(signal_by_path_.size());
     for (const auto& [path, signal] : signal_by_path_) {
@@ -2436,6 +2451,10 @@ ElaboratedDesign::from_state_with_process_rows(
     result.verilog_timing_checks_ = std::move(state.verilog_timing_checks);
     result.verilog_primitives_ = std::move(state.verilog_primitives);
     result.sdf_net_delays_ = std::move(state.sdf_net_delays);
+    for (auto& [path, handle] : state.systemverilog_interface_handles) {
+        result.systemverilog_interface_handles_.emplace(
+            std::move(path), handle);
+    }
     result.systemc_instances_ = std::move(state.systemc_instances);
     result.systemc_processes_ = std::move(state.systemc_processes);
     result.systemc_objects_ = std::move(state.systemc_objects);

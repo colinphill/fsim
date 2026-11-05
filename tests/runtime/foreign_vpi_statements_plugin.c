@@ -250,17 +250,16 @@ static PLI_INT32 forced(p_cb_data data)
     return 0;
 }
 
-static void startup(void)
+// These reasons cannot be registered from a startup routine (IEEE 1800-2023
+// 36.10.2), so the end of compile registers them.
+static PLI_INT32 register_statement_callbacks(p_cb_data compiled)
 {
     static s_vpi_time time = { vpiSimTime, 0, 0, 0.0 };
     static s_vpi_value value = { vpiBinStrVal, { 0 } };
     static const PLI_INT32 reasons[] = { cbForce, cbRelease, cbAssign, cbDeassign };
     s_cb_data data;
     size_t index;
-    memset(&data, 0, sizeof data);
-    data.reason = cbStartOfSimulation;
-    data.cb_rtn = start;
-    (void)vpi_register_cb(&data);
+    (void)compiled;
     for (index = 0; index < sizeof reasons / sizeof reasons[0]; ++index) {
         memset(&data, 0, sizeof data);
         data.reason = reasons[index];
@@ -269,6 +268,20 @@ static void startup(void)
         data.value = &value;
         (void)vpi_register_cb(&data);
     }
+    return 0;
+}
+
+static void startup(void)
+{
+    s_cb_data data;
+    memset(&data, 0, sizeof data);
+    data.reason = cbStartOfSimulation;
+    data.cb_rtn = start;
+    (void)vpi_register_cb(&data);
+    memset(&data, 0, sizeof data);
+    data.reason = cbEndOfCompile;
+    data.cb_rtn = register_statement_callbacks;
+    (void)vpi_register_cb(&data);
 }
 
 FSIM_VPI_EXPORT void (*vlog_startup_routines[])(void) = { startup, 0 };

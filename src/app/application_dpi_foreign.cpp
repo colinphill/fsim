@@ -61,6 +61,11 @@ struct Parameter {
     char element { };
     std::vector<std::int32_t> bounds;
     std::shared_ptr<const CType> layout;
+    // The first of the actuals this formal takes and how many: a formal
+    // is one actual, except an array of strings, which is one string
+    // actual per element, leftmost element first (IEEE 1800-2023 H.7.4).
+    std::size_t first_actual { };
+    std::size_t actual_count { 1U };
 };
 
 // The bound of a dimension whose size the actual gives at run time.
@@ -72,6 +77,8 @@ struct Signature {
     std::vector<Parameter> parameters;
     char result { };
     bool context { };
+    // The actuals of all formals; a string result follows them.
+    std::size_t actual_total { };
 };
 
 [[nodiscard]] std::size_t code_width(const char code)
@@ -165,7 +172,13 @@ void finish_type(CType& type)
         return;
     }
     const auto words = (type.width + 31U) / 32U;
-    if (type.code == 'B') {
+    if (type.code == 'z') {
+        // A string is a `const char*` (H.7.4).
+        type.width = sizeof(const char*) * 8U;
+        type.bits = type.width;
+        type.size = sizeof(const char*);
+        type.align = type.size;
+    } else if (type.code == 'B') {
         type.bits = type.width;
         type.size = words * sizeof(std::uint32_t);
         type.align = sizeof(std::uint32_t);
@@ -180,6 +193,13 @@ void finish_type(CType& type)
         type.size = std::max<std::size_t>(type.bits / 8U, 1U);
         type.align = type.size;
     }
+}
+
+// A sized or open array whose elements are strings.
+[[nodiscard]] bool is_string_array(const Parameter& parameter)
+{
+    return (parameter.code == 'A' || parameter.code == 'D')
+        && parameter.element == 'z';
 }
 
 [[noreturn]] void malformed_identity(const std::string_view identity)
@@ -338,6 +358,18 @@ void finish_type(CType& type)
         } else {
             parameter.width = code_width(parameter.code);
         }
+        parameter.first_actual = signature.actual_total;
+        if (is_string_array(parameter)) {
+            // The strings pass one per actual, so every dimension is sized.
+            if (std::ranges::any_of(parameter.bounds,
+                    [](const std::int32_t bound) {
+                        return bound == runtime_extent;
+                    })) {
+                malformed();
+            }
+            parameter.actual_count = element_count(parameter.bounds);
+        }
+        signature.actual_total += parameter.actual_count;
         signature.parameters.push_back(std::move(parameter));
     }
     return signature;
@@ -489,6 +521,9 @@ struct Slot {
     std::vector<unsigned char> bytes;
     std::vector<std::int32_t> bounds;
     fsim_svdpi_open_array_v3 open { };
+    // An array of strings: the C pointer of each element (IEEE 1800-2023
+    // H.7.4); an open array's `bytes` is unused.
+    std::vector<const char*> texts;
 };
 
 void store_actual(Slot& slot, const Parameter& parameter, const PackedLogic4& value,
@@ -625,6 +660,73 @@ void decode_value(const CType& type, const unsigned char* const source,
     }
 }
 
+// The pointer a sized array passes, or the handle of an open array over
+// `data`.
+void publish_array(Slot& slot, const Parameter& parameter, void* const data)
+{
+    const auto& layout = *parameter.layout;
+    const auto stride = layout.size;
+    if (parameter.code != 'A') {
+        slot.scalar.pointer = data;
+        return;
+    }
+    slot.open.magic = FSIM_SVDPI_OPEN_ARRAY_MAGIC;
+    slot.open.struct_size = static_cast<std::uint32_t>(sizeof(slot.open));
+    slot.open.dimensions = static_cast<std::int32_t>(slot.bounds.size() / 2U);
+    const bool vector = layout.code == 'B' || layout.code == 'V';
+    slot.open.packed_left
+        = vector ? static_cast<std::int32_t>(layout.width) - 1 : 0;
+    slot.open.packed_right = 0;
+    slot.open.element_code = static_cast<std::uint32_t>(layout.code);
+    slot.open.element_width = static_cast<std::uint32_t>(layout.bits);
+    slot.open.element_bytes = static_cast<std::uint32_t>(stride);
+    slot.open.data = data;
+    slot.open.bounds = slot.bounds.data();
+    slot.scalar.pointer = &slot.open;
+}
+
+// The elements of an array of strings (IEEE 1800-2023 35.5.6, H.7.4): one
+// `const char*` each, in the order of an array of any other element (a
+// sized array normalized, an open array in the actual's order). The
+// strings are the formal's actuals, leftmost element first.
+void store_strings(Slot& slot, const Parameter& parameter,
+    const std::vector<std::string>& strings)
+{
+    const auto count = parameter.actual_count;
+    if (parameter.first_actual + count > strings.size()) {
+        throw std::runtime_error {
+            "DPI string-array actual does not match its dimensions" };
+    }
+    slot.bounds = parameter.bounds;
+    slot.texts.assign(count, nullptr);
+    const bool open = parameter.code == 'A';
+    for (std::size_t ordinal = 0U; ordinal < count; ++ordinal) {
+        const auto place = open ? ordinal
+                                : c_position(slot.bounds, ordinal, true);
+        slot.texts[place] = strings[parameter.first_actual + ordinal].c_str();
+    }
+    publish_array(slot, parameter, slot.texts.data());
+}
+
+// The strings the C code left in an output or inout array of strings. All
+// are read before any is stored: the C code may have exchanged elements.
+void load_strings(const Slot& slot, const Parameter& parameter,
+    std::vector<std::string>& strings)
+{
+    const auto count = parameter.actual_count;
+    std::vector<std::string> result(count);
+    const bool open = parameter.code == 'A';
+    for (std::size_t ordinal = 0U; ordinal < count; ++ordinal) {
+        const auto place = open ? ordinal
+                                : c_position(slot.bounds, ordinal, true);
+        const auto* const text = slot.texts[place];
+        result[ordinal] = text == nullptr ? std::string { } : text;
+    }
+    for (std::size_t ordinal = 0U; ordinal < count; ++ordinal) {
+        strings[parameter.first_actual + ordinal] = std::move(result[ordinal]);
+    }
+}
+
 // The elements of an array actual, leftmost element in the most significant
 // bits of `value`, in their C layout (H.12.1). An open array keeps the
 // actual's own order under its original bounds; a sized one is normalized.
@@ -668,23 +770,7 @@ void store_array(Slot& slot, const Parameter& parameter,
         encode_value(layout, value, position,
             slot.bytes.data() + place * stride);
     }
-    if (!open) {
-        slot.scalar.pointer = slot.bytes.data();
-        return;
-    }
-    slot.open.magic = FSIM_SVDPI_OPEN_ARRAY_MAGIC;
-    slot.open.struct_size = static_cast<std::uint32_t>(sizeof(slot.open));
-    slot.open.dimensions = static_cast<std::int32_t>(slot.bounds.size() / 2U);
-    const bool vector = layout.code == 'B' || layout.code == 'V';
-    slot.open.packed_left
-        = vector ? static_cast<std::int32_t>(layout.width) - 1 : 0;
-    slot.open.packed_right = 0;
-    slot.open.element_code = static_cast<std::uint32_t>(layout.code);
-    slot.open.element_width = static_cast<std::uint32_t>(layout.bits);
-    slot.open.element_bytes = static_cast<std::uint32_t>(stride);
-    slot.open.data = slot.bytes.data();
-    slot.open.bounds = slot.bounds.data();
-    slot.scalar.pointer = &slot.open;
+    publish_array(slot, parameter, slot.bytes.data());
 }
 
 [[nodiscard]] PackedLogic4 load_array(
@@ -1027,8 +1113,10 @@ private:
         Scope* saved_scope { };
         std::string saved_file;
         int saved_line { };
-        // The process the call chain runs for.
+        // The process the call chain runs for, and the position of its
+        // import call in the process's operations.
         std::uint64_t process { };
+        std::uint32_t position { };
         // The call chain's current scope while the simulation side runs
         // the export (IEEE 1800-2023 35.5.3): it starts as the scope of the
         // import declaration and svSetScope changes it.
@@ -1055,7 +1143,8 @@ private:
         // A string result returns in one more string actual after the
         // formals (IEEE 1800-2023 H.7.4: const char*).
         const bool string_result = import.signature.result == 'z';
-        if (actuals.size() != parameters.size() + (string_result ? 1U : 0U)
+        if (actuals.size()
+                != import.signature.actual_total + (string_result ? 1U : 0U)
             || (string_result && strings.size() != actuals.size())) {
             throw std::runtime_error { "DPI import '"
                 + import.signature.linkage + "' actual count mismatch" };
@@ -1065,8 +1154,14 @@ private:
         for (std::size_t index = 0U; index < parameters.size(); ++index) {
             const auto& parameter = parameters[index];
             auto& slot = call.slots[index];
-            store_actual(slot, parameter, actuals[index],
-                index < strings.size() ? strings[index] : empty_);
+            if (is_string_array(parameter)) {
+                store_strings(slot, parameter, strings);
+            } else {
+                store_actual(slot, parameter, actuals[parameter.first_actual],
+                    parameter.first_actual < strings.size()
+                        ? strings[parameter.first_actual]
+                        : empty_);
+            }
             if (parameter.reference && !by_pointer(parameter.code)) {
                 slot.reference = &slot.scalar;
                 call.values[index] = &slot.reference;
@@ -1104,13 +1199,19 @@ private:
                 continue;
             }
             if (parameter.code == 'z') {
-                if (index < strings.size()) {
+                if (parameter.first_actual < strings.size()) {
                     const auto* const text = call.slots[index].scalar.text;
-                    strings[index] = text == nullptr ? std::string { } : text;
+                    strings[parameter.first_actual]
+                        = text == nullptr ? std::string { } : text;
                 }
                 continue;
             }
-            actuals[index] = load_actual(call.slots[index], parameter);
+            if (is_string_array(parameter)) {
+                load_strings(call.slots[index], parameter, strings);
+                continue;
+            }
+            actuals[parameter.first_actual]
+                = load_actual(call.slots[index], parameter);
         }
         Slot returned;
         const auto code = import.signature.result;
@@ -1166,6 +1267,7 @@ private:
         state.saved_file = file_;
         state.saved_line = line_;
         state.process = runtime::DpiCallProcess::current();
+        state.position = runtime::DpiCallProcess::position();
         if (const auto caller = caller_of(identity)) {
             scope_ = &scope_named(caller->instance);
             file_ = std::string { caller->file };
@@ -1228,10 +1330,20 @@ private:
     // C code gets the disabled state: the export call returns 1 and
     // svIsDisabledState() is true. The C code runs to the end of the import
     // now, and the protocol it has to follow is checked.
-    void process_disabled(const std::uint64_t process)
+    void process_disabled(const std::uint64_t process,
+        const std::uint32_t begin, const std::uint32_t end)
     {
         const auto found = find_flight(process);
         if (found == flights_.end()) {
+            return;
+        }
+        // A disable that does not cover the import call but the export call
+        // inside it targets the exported subroutine itself: the export
+        // returns 0 and the import is not in the disabled state (IEEE
+        // 1800-2023 35.9).
+        const auto position = (*found)->position;
+        if (position != runtime::DpiCallProcess::unknown_position
+            && (position < begin || position >= end)) {
             return;
         }
         auto flight = std::move(*found);
@@ -1273,10 +1385,11 @@ private:
         }
     }
 
-    static void process_disabled_notice(
-        void* const user_data, const std::uint64_t process)
+    static void process_disabled_notice(void* const user_data,
+        const std::uint64_t process, const std::uint32_t begin,
+        const std::uint32_t end)
     {
-        self(user_data).process_disabled(process);
+        self(user_data).process_disabled(process, begin, end);
     }
 
     // The last call chain started for `process`.
@@ -1391,18 +1504,21 @@ private:
                 return from_bits(0U, 32U);
             }
             // The export call is served by the scope the call chain is in
-            // (IEEE 1800-2023 35.5.3): the scope of this service's
-            // instance, or the package a step names.
+            // (IEEE 1800-2023 35.5.3): the scope of this service's instance
+            // or generate block instance, or any scope for the exports of
+            // the compilation unit, which a step names `$unit` (35.5.2).
             const auto caller = caller_of(identity);
-            const std::string_view package
+            const std::string_view scope_text
                 = name == "serve" && strings.size() > 1U
                 ? std::string_view { strings[1U] }
                 : std::string_view { };
-            const std::string_view own = !package.empty() ? package
-                : caller                                  ? caller->instance
-                                                          : std::string_view { };
-            const bool local
-                = flight.scope != nullptr && flight.scope->name == own;
+            const bool any_scope = scope_text == "$unit";
+            const std::string_view own
+                = !scope_text.empty() && !any_scope ? scope_text
+                : caller                            ? caller->instance
+                                                    : std::string_view { };
+            const bool local = any_scope
+                || (flight.scope != nullptr && flight.scope->name == own);
             if (name == "next" && flight.handed) {
                 // A step of every other scope has run and none served the
                 // call.
@@ -1413,16 +1529,9 @@ private:
                         + "', which does not declare it (IEEE 1800-2023 "
                           "35.5.3)");
             }
-            if (!local) {
-                if (name == "next") {
-                    flight.handed = true;
-                    return from_bits(0xFFFFFFFFU, 32U);
-                }
-                return from_bits(0U, 32U);
-            }
             std::string_view names { strings.empty() ? empty_ : strings.front() };
             std::uint64_t ordinal { };
-            while (!names.empty()) {
+            while (local && !names.empty()) {
                 ++ordinal;
                 const auto space = names.find(' ');
                 if (names.substr(0U, space) == flight.name) {
@@ -1433,10 +1542,14 @@ private:
                     ? std::string_view { }
                     : names.substr(space + 1U);
             }
-            return reject(flight, "DPI export '" + flight.name
-                    + "' is not exported by the scope '"
-                    + flight.scope->name + "' of the calling import (IEEE "
-                      "1800-2023 35.5.3)");
+            if (name == "next") {
+                // The scope does not declare the export: the steps of the
+                // other scopes, and of the compilation unit, get to serve
+                // it.
+                flight.handed = true;
+                return from_bits(0xFFFFFFFFU, 32U);
+            }
+            return from_bits(0U, 32U);
         }
         Import hidden;
         hidden.signature = signature;

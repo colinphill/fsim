@@ -163,9 +163,14 @@ uses the test directory, where `make` runs. The runner flow uses
 - **Name case of VHDL declarations:** `vhpiCaseNameP` gives the spelling of
   a name's first declaration in its design unit. If two scopes of one unit
   spell the same name differently, both report the first spelling.
-- **Generic overrides:** `--generic` accepts integer, boolean and string
-  values, and STD_ULOGIC character literals. Overrides of real, time,
-  character and array generics are not yet supported.
+- **Generic overrides:** `--generic` takes, for a VHDL generic, an integer,
+  BOOLEAN, STRING, real literal (`2.5`), physical literal (`1.5ns`,
+  `3 cm`), enumeration or character literal (`blue`, `'z'`), or a BIT or
+  STD_ULOGIC array as its characters, a string literal or a bit string
+  literal (`x"A5"`). An unconstrained array takes the index range of a
+  string literal (NATURAL indexes start at 0). For a SystemVerilog parameter
+  it takes an integer, a real literal or a quoted string. Arrays of other
+  element types and records cannot be overridden.
 - **Simulator selection by name:** cocotb's `Makefile.sim` and its pytest
   plug-in (`--cocotb-simulator fsim`) know only the simulators cocotb lists.
   Use the include form or `import fsim_cocotb` instead.

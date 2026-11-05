@@ -15008,7 +15008,7 @@ Lowerer::hir_interface_function_profile(
     if (hir_interface_receiver_override_
         && hir_interface_receiver_override_->starts_with("@instance:")
         && call.kind == semantic::sv::ExpressionKind::call
-        && call.text == "__fsim_dpi_export_step") {
+        && call.text.starts_with("__fsim_dpi_export_step")) {
         if (const auto callee = hir_referenced_declaration(expression_id)) {
             return HirInterfaceFunctionProfile {
                 *callee, *hir_interface_receiver_override_, { } };
@@ -17236,7 +17236,10 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         // (IEEE 1800-2023 35.5.6.1, H.12); a sized array passes by pointer
         // in its normalized layout (H.7.6).
         const bool open = open_dimension || type->open_packed;
-        if (type->string && (array || open)) {
+        // An array of strings passes one `const char*` per element (IEEE
+        // 1800-2023 35.5.6, H.7.4); an export has none.
+        if (type->string && array
+            && declaration.linkage_name.starts_with("__fsim_dpi_export_")) {
             return std::nullopt;
         }
         // An export's result passes as the first formal of its service
@@ -17349,6 +17352,7 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             return std::nullopt;
         }
         const bool aggregate_element = element.code == 'R';
+        const bool string_element = element.string;
         const auto fits = [](const std::int64_t value) {
             return value >= std::numeric_limits<std::int32_t>::min() + 1
                 && value <= std::numeric_limits<std::int32_t>::max();
@@ -17359,7 +17363,8 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             // A dynamic array or queue actual supplies its first dimension's
             // size when called; its other dimensions are fixed (IEEE
             // 1800-2023 35.5.6.1, H.12.2).
-            if (aggregate_element || !(*dimensions)[0].open) {
+            if (aggregate_element || string_element
+                || !(*dimensions)[0].open) {
                 return std::nullopt;
             }
             if (container->element_kind == ContainerElementKind::Container
@@ -17378,12 +17383,14 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
                 return std::nullopt;
             }
         } else if (container->dimensions.size() != dimensions->size()
-            || (!aggregate_element
+            || (string_element
+                && container->element_kind != ContainerElementKind::String)
+            || (!aggregate_element && !string_element
                 && container->element_kind != ContainerElementKind::Packed
                 && container->element_kind != ContainerElementKind::Scalar)) {
             return std::nullopt;
         }
-        if (!aggregate_element) {
+        if (!aggregate_element && !string_element) {
             if (element.open_packed) {
                 element.width = rows->element_width;
                 element.open_packed = false;
@@ -17425,7 +17432,9 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             elements *= actual_extent;
             bounds.push_back(range);
         }
-        const auto element_bits = dpi_c_type_stream_bits(element);
+        // A string element is one pointer; it has no bit-stream form.
+        const auto element_bits
+            = string_element ? 64U : dpi_c_type_stream_bits(element);
         if (element_bits == 0U || elements > array_bit_limit / element_bits) {
             return std::nullopt;
         }
@@ -17442,6 +17451,11 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         entry.signed_value = false;
         entry.scalar = frontend::SystemVerilogScalarKind::None;
         entry.runtime_extent = dynamic;
+        if (string_element) {
+            entry.width = 0U;
+            entry.domain = frontend::ValueDomain::String;
+            entry.string_elements = static_cast<std::size_t>(elements);
+        }
         // `A` (open, passed as a handle) or `D` (sized, passed as a pointer
         // to the normalized elements), the element's code, then each
         // unpacked dimension's `/left/right`.
@@ -20573,9 +20587,71 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
     actual_names.reserve(profile.actuals.size());
     actual_directions.reserve(profile.actuals.size());
     actual_kinds.reserve(profile.actuals.size());
+    // The first call actual of each formal: an array of strings takes one
+    // string actual per element, any other formal takes one.
+    std::vector<std::size_t> first_actual;
+    first_actual.reserve(profile.actuals.size());
+    std::vector<ContainerRegisterId> string_arrays(profile.actuals.size());
+    // The index of the `ordinal`th element of an array of strings, leftmost
+    // first: a one-dimensional array takes the SystemVerilog index, a
+    // multidimensional one the row-major position (linear).
+    const auto string_element_index
+        = [this](const HirDpiFunctionActual& actual,
+              const std::uint64_t ordinal) {
+              const auto& type = *actual.open_array;
+              if (type.dimensions.size() != 1U) {
+                  return load_integer(static_cast<std::int64_t>(ordinal), 64U,
+                      frontend::ValueDomain::Bit2);
+              }
+              const auto left = type.dimensions.front().first;
+              const auto right = type.dimensions.front().second;
+              return load_integer(left >= right
+                      ? left - static_cast<std::int64_t>(ordinal)
+                      : left + static_cast<std::int64_t>(ordinal),
+                  64U, frontend::ValueDomain::Bit2);
+          };
     for (const auto& actual : profile.actuals) {
         const auto string = actual.domain == frontend::ValueDomain::String;
         RegisterId storage { };
+        first_actual.push_back(actuals.size());
+        if (actual.string_elements != 0U) {
+            // Each element is one string actual (IEEE 1800-2023 H.7.4); the
+            // array's elements are read from, and written back to, a copy.
+            const auto array = allocate_container_register(*actual.open_array);
+            string_arrays[first_actual.size() - 1U] = array;
+            const bool copy_in = callable_copy_in(actual.direction);
+            if (copy_in) {
+                const auto value
+                    = lower_hir_static_container_value(actual.expression);
+                if (!value) {
+                    return std::nullopt;
+                }
+                process_.operations.emplace_back(CopyContainerRegister {
+                    array, value->value });
+            }
+            for (std::uint64_t ordinal = 0U;
+                ordinal < actual.string_elements; ++ordinal) {
+                const auto argument = allocate_string_register();
+                if (copy_in) {
+                    const auto text = allocate_string_register();
+                    process_.operations.emplace_back(ContainerStringRead {
+                        text, array, string_element_index(actual, ordinal),
+                        true, actual.open_array->dimensions.size() != 1U,
+                        false, { } });
+                    process_.operations.emplace_back(CopyStringRegister {
+                        argument, text });
+                } else {
+                    process_.operations.emplace_back(LoadStringConstant {
+                        argument, { } });
+                }
+                actuals.push_back(argument);
+                actual_names.push_back(actual.name);
+                actual_directions.push_back(
+                    static_cast<std::uint8_t>(actual.direction));
+                actual_kinds.push_back(1U);
+            }
+            continue;
+        }
         if (actual.runtime_extent) {
             // The array's elements as a bit stream, leftmost element first.
             const auto value
@@ -20760,6 +20836,22 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
         if (!class_method_copy_out(actual.direction)) {
             continue;
         }
+        if (actual.string_elements != 0U) {
+            // The strings the C code left become the array's elements.
+            const auto array = string_arrays[index];
+            for (std::uint64_t ordinal = 0U;
+                ordinal < actual.string_elements; ++ordinal) {
+                process_.operations.emplace_back(ContainerStringWrite {
+                    array, string_element_index(actual, ordinal),
+                    actuals[first_actual[index] + ordinal], true,
+                    actual.open_array->dimensions.size() != 1U, false,
+                    { } });
+            }
+            if (!lower_hir_container_copy_out(actual.expression, array)) {
+                return std::nullopt;
+            }
+            continue;
+        }
         if (actual.runtime_extent) {
             // The bits the C code left in the stream become the array's
             // elements; its size is the one it had (IEEE 1800-2023
@@ -20767,7 +20859,7 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
             const auto array = allocate_container_register(*actual.open_array);
             ContainerBitstream unpack;
             unpack.operation = ContainerBitstreamOperation::to_container;
-            unpack.bits = actuals[index];
+            unpack.bits = actuals[first_actual[index]];
             unpack.container = array;
             process_.operations.emplace_back(unpack);
             if (!lower_hir_container_copy_out(actual.expression, array)) {
@@ -20789,7 +20881,7 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
             ContainerBitstream append;
             append.operation = ContainerBitstreamOperation::append_value;
             append.bits = bits;
-            append.value = actuals[index];
+            append.value = actuals[first_actual[index]];
             process_.operations.emplace_back(append);
             ContainerBitstream unpack;
             unpack.operation = ContainerBitstreamOperation::to_container;
@@ -20803,14 +20895,14 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
         }
         if (actual.domain == frontend::ValueDomain::String) {
             if (!lower_hir_string_copy_out(
-                    actual.expression, actuals[index])) {
+                    actual.expression, actuals[first_actual[index]])) {
                 return std::nullopt;
             }
             continue;
         }
         // The formal's value is assigned to the actual (IEEE 1800-2023
         // 35.5.6.1), widened or truncated to the actual's width.
-        auto value = actuals[index];
+        auto value = actuals[first_actual[index]];
         if (actual.scalar == frontend::SystemVerilogScalarKind::None) {
             const auto target_width = hir_expression_width(
                 actual.expression, hir_process_scope_);
@@ -20888,10 +20980,11 @@ const semantic::sv::Declaration* Lowerer::hir_dpi_export_hook(
             return nullptr;
         }
         const auto& units = design.systemverilog_hir.units();
-        return std::ranges::any_of(units,
-                   [&](const semantic::sv::Unit& unit) {
-                       return hir_dpi_export_step_hook(unit.id) != nullptr;
-                   })
+        return hir_dpi_block_hooks_exist()
+                || std::ranges::any_of(units,
+                    [&](const semantic::sv::Unit& unit) {
+                        return hir_dpi_export_step_hook(unit.id) != nullptr;
+                    })
             ? foreign
             : nullptr;
     };
@@ -20903,6 +20996,29 @@ const semantic::sv::Declaration* Lowerer::hir_dpi_export_hook(
     return own != specialized_hir_unit_->unit()
         ? find_hook(specialized_hir_unit_->unit())
         : nullptr;
+}
+
+namespace {
+
+// The hidden hook of a generate block that declares DPI exports (IEEE
+// 1800-2023 35.7); the parser names it so.
+constexpr std::string_view dpi_block_hook_prefix {
+    "__fsim_dpi_export_block_hook" };
+
+} // namespace
+
+bool Lowerer::hir_dpi_block_hooks_exist() const
+{
+    if (!dpi_block_hooks_exist_) {
+        dpi_block_hooks_exist_ = specialized_hir_unit_ != nullptr
+            && std::ranges::any_of(
+                specialized_hir_unit_->design().systemverilog_hir.declarations(),
+                [](const semantic::sv::Declaration& declaration) {
+                    return declaration.callable
+                        && declaration.name.starts_with(dpi_block_hook_prefix);
+                });
+    }
+    return *dpi_block_hooks_exist_;
 }
 
 bool Lowerer::lower_hir_dpi_export_foreign()
@@ -20961,6 +21077,88 @@ bool Lowerer::lower_hir_dpi_export_foreign()
             receiver.reset();
             if (!lowered) {
                 return false;
+            }
+        }
+    }
+    return lower_hir_dpi_block_exports_foreign();
+}
+
+bool Lowerer::lower_hir_dpi_block_exports_foreign()
+{
+    if (!hir_dpi_block_hooks_exist()) {
+        return true;
+    }
+    // The exports of a generate block are served for each instance of the
+    // block, in that instance (IEEE 1800-2023 35.5.3, 35.7): the hook of the
+    // block runs with the block instance as its receiver. The block
+    // instances of an instance are known once its specialization is
+    // recorded, so the process is lowered on its retry.
+    const auto& design = specialized_hir_unit_->design();
+    const auto& scopes = design.semantics.scopes();
+    std::set<std::string> served;
+    for (const auto& hook : design.systemverilog_hir.declarations()) {
+        if (!hook.callable || !hook.name.starts_with(dpi_block_hook_prefix)
+            || !hook.nested_scope || !hook.scope.valid()
+            || hook.scope.value() >= scopes.size()) {
+            continue;
+        }
+        // The names of the blocks from the unit's scope down to the block
+        // that declares the hook.
+        std::vector<std::string_view> chain;
+        const auto* current = &scopes[hook.scope.value()];
+        const auto unit = current->unit;
+        for (std::size_t depth = 0; depth < 64U && current->parent; ++depth) {
+            chain.insert(chain.begin(), current->name);
+            if (current->parent->value() >= scopes.size()) {
+                break;
+            }
+            current = &scopes[current->parent->value()];
+        }
+        if (hierarchical_reference_retry_) {
+            hierarchical_reference_missed_ = true;
+            return false;
+        }
+        for (const auto& specialization : design_.specializations_) {
+            if (!specialization.source_unit
+                || *specialization.source_unit != unit) {
+                continue;
+            }
+            for (const auto& block : specialization.vpi_generate_scopes) {
+                // An iteration of a loop generate shares the block's
+                // declarations (IEEE 1800-2023 27.4): its path names the
+                // blocks without their indices.
+                std::string plain;
+                for (std::size_t at = 0U; at < block.path.size(); ++at) {
+                    if (block.path[at] == '[') {
+                        at = block.path.find(']', at);
+                        if (at == std::string::npos) {
+                            break;
+                        }
+                        continue;
+                    }
+                    plain += block.path[at];
+                }
+                std::string wanted;
+                for (const auto name : chain) {
+                    wanted += wanted.empty() ? "" : ".";
+                    wanted += name;
+                }
+                if (plain != wanted) {
+                    continue;
+                }
+                const auto path = specialization.instance + "." + block.path;
+                if (!served.insert(hook.name + "@" + path).second) {
+                    continue;
+                }
+                auto& receiver = hook.callable->function
+                    ? hir_interface_receiver_override_
+                    : hir_task_receiver_override_;
+                receiver = "@instance:" + path;
+                const bool lowered = lower_hir_statements(hook.statements);
+                receiver.reset();
+                if (!lowered) {
+                    return false;
+                }
             }
         }
     }

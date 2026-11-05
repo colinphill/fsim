@@ -7256,7 +7256,7 @@ P101 cold wall or optimization was made.
 
     S23-B187-C19 is preserved, leaving zero active and all 56 independently
     worded SystemVerilog-2023 inventory rows preserved at normalized SHA-256
-    `a38f902d778d56cd0ddd1611aba4bfdef8604038d16f3298263c7a040cc0b79c`.
+    `dea9ab62edc9563a3f2c972434c4fbe4b7941768efda786e5fd0691ed1f7f7d0`.
     The inventory validator retains exact one-to-one ownership across Batches
     185-187 and rejects forbidden private-reference tokens, missing owners,
     duplicate identities, profile drift, and any reopened row.
@@ -7286,7 +7286,7 @@ P101 cold wall or optimization was made.
     3,149 build steps, and the full Debug suite passes 408/408 in 527.08 wall
     seconds. Full SystemVerilog-2023 support is therefore declared complete
     with zero active and 56 preserved inventory rows at normalized SHA-256
-    `a38f902d778d56cd0ddd1611aba4bfdef8604038d16f3298263c7a040cc0b79c`.
+    `dea9ab62edc9563a3f2c972434c4fbe4b7941768efda786e5fd0691ed1f7f7d0`.
     Batch 187 is not a sanitizer or hosted-CI boundary, so neither lane ran.
 
     The mandatory pre-push CI inspection found the preceding Batch 186 run

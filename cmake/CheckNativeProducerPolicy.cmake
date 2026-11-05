@@ -18,7 +18,6 @@ set(FSIM_PLUGIN_COMPILER
   "${FSIM_SOURCE_DIR}/src/systemc/plugin_compiler.cpp")
 set(FSIM_SYSTEMC_LOADER
   "${FSIM_SOURCE_DIR}/src/systemc/plugin_loader.cpp")
-set(FSIM_DPI_LOADER "${FSIM_SOURCE_DIR}/src/runtime/dpi_plugin.cpp")
 set(FSIM_VPI_LOADER "${FSIM_SOURCE_DIR}/src/runtime/vpi_plugin.cpp")
 set(FSIM_VHPI_LOADER "${FSIM_SOURCE_DIR}/src/runtime/vhpi_plugin.cpp")
 set(FSIM_APPLICATION_TEST
@@ -27,7 +26,6 @@ set(FSIM_INCREMENTAL_TEST
   "${FSIM_SOURCE_DIR}/tests/systemc/incremental_compiler_test.cpp")
 set(FSIM_SYSTEMC_LOADER_TEST
   "${FSIM_SOURCE_DIR}/tests/systemc/plugin_loader_test.cpp")
-set(FSIM_DPI_TEST "${FSIM_SOURCE_DIR}/tests/runtime/runtime_dpi_tests.cpp")
 set(FSIM_VPI_TEST "${FSIM_SOURCE_DIR}/tests/runtime/runtime_vpi_tests.cpp")
 set(FSIM_VHPI_TEST "${FSIM_SOURCE_DIR}/tests/runtime/runtime_vhpi_tests.cpp")
 set(FSIM_UVM_C_TEST
@@ -42,13 +40,11 @@ foreach(FSIM_INPUT IN ITEMS
     "${FSIM_INCREMENTAL_COMPILER}"
     "${FSIM_PLUGIN_COMPILER}"
     "${FSIM_SYSTEMC_LOADER}"
-    "${FSIM_DPI_LOADER}"
     "${FSIM_VPI_LOADER}"
     "${FSIM_VHPI_LOADER}"
     "${FSIM_APPLICATION_TEST}"
     "${FSIM_INCREMENTAL_TEST}"
     "${FSIM_SYSTEMC_LOADER_TEST}"
-    "${FSIM_DPI_TEST}"
     "${FSIM_VPI_TEST}"
     "${FSIM_VHPI_TEST}"
     "${FSIM_UVM_C_TEST}"
@@ -64,15 +60,15 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "bfaec1c5a63e7b59239096a507ef2e8e6e050de4e10d73b8c394d157f2f1229c")
+  "42c563ff01ef716b266cdf7fcfa8cda7fd898cd072514d6e2f9666079fd8b143")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "native producer policy digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 39)
-  message(FATAL_ERROR "native producer policy requires SPDX, header and 37 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 37)
+  message(FATAL_ERROR "native producer policy requires SPDX, header and 35 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -81,7 +77,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
      "family\tboundary\texact_identity\tpreload_and_containment")
   message(FATAL_ERROR "native producer policy header or SPDX policy changed")
 endif()
-foreach(FSIM_INDEX RANGE 2 38)
+foreach(FSIM_INDEX RANGE 2 36)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -173,8 +169,6 @@ fsim_require_native_producer_order("${FSIM_VPI_LOADER}"
   "load_systemverilog_vpi_plugin(" "validate_systemverilog_vpi_host(" "platform::DynamicLibrary::open(")
 fsim_require_native_producer_order("${FSIM_VHPI_LOADER}"
   "load_vhdl_vhpi_plugin(" "validate_vhdl_vhpi_host(" "platform::DynamicLibrary::open(")
-fsim_require_native_producer_order("${FSIM_DPI_LOADER}"
-  "load_systemverilog_dpi_plugin(" "validate_systemverilog_dpi_plugin_descriptor(" "resolve(manifest.imported_symbols")
 
 fsim_require_native_producer_tokens("${FSIM_APPLICATION_TEST}"
   "mapped-systemc-incompatible")
@@ -189,9 +183,6 @@ fsim_require_native_producer_tokens("${FSIM_INCREMENTAL_TEST}"
 fsim_require_native_producer_tokens("${FSIM_SYSTEMC_LOADER_TEST}"
   "incompatible_scv_host"
   "unopened-truncated-host")
-fsim_require_native_producer_tokens("${FSIM_DPI_TEST}"
-  "validate_systemverilog_dpi_plugin_descriptor"
-  "DPI plug-in ABI descriptors reject reserved flags")
 fsim_require_native_producer_tokens("${FSIM_VPI_TEST}"
   "validate_systemverilog_vpi_host"
   "VPI loader rejects a truncated plug-in descriptor")
@@ -210,4 +201,4 @@ fsim_require_native_producer_tokens("${FSIM_TEST_BUILD}"
   "CheckNativeProducerPolicy.cmake")
 
 message(STATUS
-  "native producer policy passed: rows=37 digest=${FSIM_CONTRACT_DIGEST}")
+  "native producer policy passed: rows=35 digest=${FSIM_CONTRACT_DIGEST}")

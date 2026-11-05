@@ -3770,9 +3770,7 @@ foreach(FSIM_SYSTEMVERILOG_2023_CALLBACK_POLICY IN ITEMS
     "SystemVerilogVpiCallbackError::ReentrantDispatch"
     "state->dispatching[index]"
     "SchedulerPhase::re_update"
-    "DPI and VPI callbacks preserve every scheduler phase"
-    "DPI context stack rejected callback entry"
-    "dpi_max_reentry_depth == 64U")
+    "VPI callbacks preserve every scheduler phase and contain same-kind re-entry")
   string(TOLOWER "${FSIM_SYSTEMVERILOG_2023_CALLBACK_POLICY}"
     FSIM_SYSTEMVERILOG_2023_CALLBACK_POLICY_LOWER)
   string(FIND "${FSIM_SYSTEMVERILOG_2023_CALLBACK_CONTENTS_LOWER}"

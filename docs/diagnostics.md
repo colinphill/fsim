@@ -2833,7 +2833,7 @@ scheduler.
 | `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint, or a composite actual does not have the length of its constrained array formal. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
 | `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves outside the supported scalar, physical-time, packed, or statically constrained composite value set. |
-| `FSIM-ELAB-GENERIC-011` | error | A top-level generic or parameter override (`--generic NAME=VALUE`) is not a STRING, integer or BOOLEAN value for a VHDL generic, or an integer or quoted string for a SystemVerilog parameter. |
+| `FSIM-ELAB-GENERIC-011` | error | A top-level generic or parameter override (`--generic NAME=VALUE`) is not a value of the generic's subtype: for a VHDL generic a STRING, integer, real literal, physical literal (`1.5ns`, `3 cm`), enumeration or character literal, or a BIT or STD_ULOGIC array given as its characters, a string literal or a B, O or X bit string literal; for a SystemVerilog parameter an integer, a real literal or a quoted string. |
 | `FSIM-ELAB-GENTYPE-001` | error | A required VHDL interface type generic has no associated subtype indication. |
 | `FSIM-ELAB-GENTYPE-002` | error | A VHDL interface type generic actual is not syntactically a subtype indication. |
 | `FSIM-ELAB-GENTYPE-003` | error | A VHDL interface type generic actual names a type that is not visible at the association. |

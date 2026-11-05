@@ -138,6 +138,75 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-11-05: Foreign-interface closure wave 4, v3 DPI layer removed (this commit, sweeps `fc8bg`, `fc8bga`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md`, the work after Phase B. Conformance inventory: `docs/foreign-interface-conformance.md`.
+
+**What landed (archive `fc8b`):**
+- **Worker packages w25–w30**, merged and fixed in the tree:
+  - **DPI (w25, w26):**
+    - String-array formals: sized `const char**` and open `svOpenArrayHandle` arrays of strings, as input, output and inout.
+    - `$unit` exports and exports declared in generate blocks, each served in its own scope. A call in a scope that does not declare the export is an error naming that scope (35.5.3).
+    - An export task can be the target of `disable` (35.9).
+  - **VPI (w27, w28):**
+    - Virtual interface variables (`vpiVirtualInterfaceVar`, `vpiInterfaceTypespec`, `vpiIsModPort`, `vpiActual`), and parameters of typedef type.
+    - **Startup routines (IEEE 1800-2023 36.10.2):** only `vpi_register_systf` and `vpi_register_cb` for the end-of-compile, start/end-of-simulation, unresolved-systf, error and PLI-error reasons can be called, plus `vpi_chk_error`. `vpi_printf`/`vpi_vprintf` stay callable too (owner decision, an exception to 36.10.2), so the nine ivtest cases that print their setup still pass.
+    - `vpi_get_cb_info` on a fired handle; `vpi_handle_by_multi_index`; `vpi_handle_by_name` with a scope no longer falls back to a global search; `vpi_handle(vpiUse, iterator)`.
+  - **VHPI (w29):**
+    - Registration (20.2.1) can use only the tool and argv handles. `vhpiRootInst` and the rest return NULL with a `vhpiError`.
+    - Relations `vhpiCompDecl`, `vhpiSubpDecl`, `vhpiLeftExpr`/`vhpiRightExpr`, `vhpiLibraryDecl(s)`, `vhpiDrivenSigs`, `vhpiDesignUnits`; properties `vhpiCompNameP`, `vhpiOpNameP`, `vhpiLibLogicalNameP`/`vhpiLibPhysicalNameP`, `vhpiCompInstKindP`. `vhpiSimNet` is the signal itself.
+  - **PLI 1.0 (w30):** `tf_strgetp` decimal for any width, `tf_sizep` (0 for a real argument, IEEE 1364-2001 25.50), `tf_nodeinfo` from host node facts, memory arguments, `reason_paramdrc` through the argument's drivers, and `read_attribute` parameters and specparams (23.10–23.12).
+- **`--generic` overrides (task 119):** real, time, character, vector/array and enum generics, `STD_ULOGIC` included.
+- **The v3 DPI layer is deleted** (owner approved): `src/runtime/dpi_*.cpp`, `include/fsim/runtime/dpi_{callback,marshalling,plugin,scope,task}.hpp` and their tests. `--sv-lib` has used the live foreign-call service since 7fa5f19d.
+  - The tests that covered only the old layer are gone. The loader tests load the DPI types plug-in instead.
+  - The contract and inventory checks were updated: the native producer policy (35 rows), the foreign ABI freeze (33 rows), the SV gap and literal-width inventories (24 rows), the SV 2023 inventory C01/C03 owners, and the ABI schema evidence.
+- Runtime state schema 100.
+
+**Gate:**
+- Archive `fc8b`.
+- ct4: 1229/1229 in normal, strict, verify and mt4.
+- Sweeps `fc8bg` and `fc8bga`: 0 losses against `fc7g` and `fc7ga`. The only change is `ivtest/vpi_br_gh117`, now excluded: it registers `cbAfterDelay` from a startup routine (36.10.2; the owner kept it excluded). Its design never ends without that callback, so the excluded run stops at the 60 s timeout.
+- **cocotb against `fc7`:** +0 −0 in three configurations. In 2.1 Verilog, `test_trigger_memory_leak.test_event_leak` failed once (diff 2109440 against the 2 MiB limit). The failure is not a regression:
+  - Each leak test computes `trigger − 2·no_trigger + start`, so an RSS drop during the idle `Timer(100_000)` window counts twice.
+  - In repeated runs, `fc7` and `fc8b` both sometimes see a 2 MiB drop in that window, and then fail whichever leak test it lands in (`fc7` `test_rising_edge_leak` 4116480, `fc8b` `test_event_leak` 2109440). Other runs of both pass all nine tests.
+  - `MIMALLOC_PURGE_DELAY=-1` does not remove it. It is most likely Python's own memory release.
+- Census: 0 losses in both modes.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, every seed collapses (4183 kept).
+
+| Suite | fc7g passed / in scope | fc8bg passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2636 / 2636 | 2635 / 2635 | 276 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2070 / 2070 | 2070 / 2070 | 345 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+| cocotb 2.1 Verilog | 708 / 708 | 707 / 708 (flaky leak test) | 1 |
+| cocotb 2.1 VHDL | 646 / 646 | 646 / 646 | 1 |
+| cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
+| cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
+
+**Foreign-run cost** (original_throughput, interleaved, median of 5, CPU 9): no library 1.27 s, idle library 1.58 s (1.24×), clock watch 1.84 s (1.45×). In the same run, `fc7` measured 1.23× and 1.46×. Both A-G7 targets hold; the idle margin stays thin.
+
+**D6 campaign `fc8b-g5b`** (`perf.sh`, 3 samples, CPU 9, ASLR off, xsim in the same session): geomean e2e 3.80× (`fc7-g5b` 3.78×), minimum simulate 3.60× (mixed_codec; `fc7-g5b` 3.62×). Both floors hold.
+- The first campaign, `fc8b-g5`, measured 3.40× and 1.96×. Host memory was fragmented again: each original_codec simulate spent 1.75–2.69 s in system time (0.11 s in `fc7-g5b`), and compaction stalls rose by 18,200 during the run. User time stayed close to `fc7`.
+- After caches were dropped and memory compacted, `fc8b-g5b` ran with no compaction stalls and 0.11–0.12 s of system time per original_codec simulate.
+- The owner added `.local-artifacts/compact.sh` (run with `sudo -n`) so the host can be compacted before a timing run.
+
+| Case | fsim e2e | xsim e2e | e2e × | fsim sim | xsim sim | sim × |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 10.616 | 29.121 | 2.74 | 1.883 | 7.500 | 3.98 |
+| original_throughput | 4.998 | 16.532 | 3.31 | 1.281 | 7.601 | 5.93 |
+| mixed_codec | 9.236 | 26.143 | 2.83 | 1.831 | 6.597 | 3.60 |
+| mixed_throughput | 4.321 | 13.006 | 3.01 | 1.381 | 6.093 | 4.41 |
+| codex_reference_mode0_frames1 | 2.165 | 9.488 | 4.38 | 0.127 | 3.838 | 30.16 |
+| codex_reference_mode0_frames2 | 2.065 | 9.388 | 4.55 | 0.127 | 3.887 | 30.58 |
+| codex_reference_mode1_frames1 | 2.266 | 10.292 | 4.54 | 0.126 | 3.840 | 30.41 |
+| codex_reference_mode1_frames2 | 2.163 | 10.442 | 4.83 | 0.127 | 3.890 | 30.61 |
+| codex_throughput_default | 2.467 | 11.147 | 4.52 | 0.278 | 4.242 | 15.24 |
+| codex_throughput_direct_syndrome | 2.216 | 9.040 | 4.08 | 0.278 | 3.994 | 14.39 |
+
 ### 2026-11-04: Foreign-interface closure after Phase B (`7fa5f19d`, `5de6fd3d` and this commit, sweeps `fc7g`, `fc7ga`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md`, the work after Phase B. Conformance inventory: `docs/foreign-interface-conformance.md`.

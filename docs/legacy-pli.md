@@ -52,9 +52,10 @@ does the same from a startup routine. The `endofcompile_routines[]` array of
 Annex F runs once after elaboration and before time 0. A `misctf` routine is
 called for `reason_endofcompile`, `reason_paramvc`, `reason_synch`,
 `reason_rosynch`, `reason_reactivate`, `reason_finish`, `reason_force`,
-`reason_release` and `reason_disable`; the reasons that belong to
-`$reset`, `$save`, `$restart`, `$stop`, `$scope` and driver changes are not
-called yet. `reason_disable` needs `simulate --foreign-probes`. The test is
+`reason_release`, `reason_disable` and `reason_paramdrc` (a change on a
+primitive driver of a net argument, after `tf_asynchon`); the reasons that
+belong to `$reset`, `$save`, `$restart`, `$stop` and `$scope` are not called
+yet. `reason_disable` needs `simulate --foreign-probes`. The test is
 `fsim.foreign.pli-mechanism`.
 
 Registration is available only to Verilog and SystemVerilog profiles. Exact
@@ -74,8 +75,9 @@ routines and `acc_fetch_delay_mode`) work on primitives, module paths and
 timing checks through `vpi_get_delays` and `vpi_put_delays`, honouring
 `accMinTypMaxDelays`, `accPathDelayCount` and `accToHiZDelay`; a change on a
 primitive retimes its later output transitions. Module input ports,
-intermodule paths and `accMapToMipd` are not available, and
-`acc_handle_datapath` and `acc_handle_path` find nothing; the
+intermodule path delays and `accMapToMipd` are not available, and
+`acc_handle_datapath` finds nothing; `acc_handle_path` finds the intermodule
+path that a delay annotation created; the
 [conformance table](foreign-interface-conformance.md#acc-routines-ieee-1364-2001-22-23)
 lists each routine's status.
 

@@ -1,0 +1,35 @@
+#c startup vlog_info=0 refused=1
+#c startup printf=0 refused=0
+#c startup after_delay=null refused=1
+#c startup end_of_compile=ok refused=0
+#c startup systf=ok refused=0
+#c end of compile
+#c multi mem[1][2] name=top.mem[1][2] size=8
+#c multi mem[1][2][3] name=top.mem[1][2][3] size=1
+#c multi mem[2][0] null
+#c multi mem[1][3] null
+#c multi mem[1][2][8] null
+#c multi mem[1][2][3][0] null
+#c multi mem[] null
+#c multi pk[2] size=8
+#c multi pk[2][5] size=1
+#c multi pk[4] null
+#c name v in top ok
+#c name c.w in top ok
+#c name top.v in top null
+#c name w in top null
+#c name top.v from root ok
+#c iterator use=1
+#c iterator reg count=2
+#c iterator scan after end null
+#c iterator release after end=0
+#c iterator nets null
+#c iterator early release=1
+#c iterator second release=0
+#c cb before reason=cbAfterDelay user=first
+#c cb event scheduled=1 release=1 again=0
+#c cb first fired at 2
+#c cb check at 4 v=5a
+#c cb info of fired reason=cbAfterDelay user=first
+#c cb release fired=1 again=0
+#c cb info after release reason=-1

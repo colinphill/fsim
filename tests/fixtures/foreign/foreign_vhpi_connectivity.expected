@@ -1,44 +1,44 @@
 #c a isbasic=1 drivers=1
-#c   basic :top:a isbasic=1 simnet=-
+#c   basic :top:a isbasic=1 simnet=:top:a
 #c     driver vhpidriverk process=:top:p1 basic=:top:a access=5 size=1 foreign=0
 #c     contributors=1
 #c     loads: :top:p2 :top:_p0
 #c v isbasic=0 drivers=3
-#c   basic :top:v(1) isbasic=1 simnet=-
+#c   basic :top:v(1) isbasic=1 simnet=:top:v(1)
 #c     driver vhpidriverk process=:top:p2 basic=:top:v(1) access=5 size=1 foreign=0
 #c     contributors=1
 #c     loads:
-#c   basic :top:v(0) isbasic=1 simnet=-
+#c   basic :top:v(0) isbasic=1 simnet=:top:v(0)
 #c     driver vhpidriverk process=:top:p1 basic=:top:v(0) access=5 size=1 foreign=0
 #c     driver vhpidriverk process=:top:p2 basic=:top:v(0) access=5 size=1 foreign=0
 #c     contributors=2
 #c     loads:
 #c c isbasic=1 drivers=1
-#c   basic :top:c isbasic=1 simnet=-
+#c   basic :top:c isbasic=1 simnet=:top:c
 #c     driver vhpidriverk process=:top:_p0 basic=:top:c access=5 size=1 foreign=0
 #c     contributors=1
 #c     loads:
 #c w isbasic=0 drivers=6
-#c   basic :top:w(3) isbasic=1 simnet=-
+#c   basic :top:w(3) isbasic=1 simnet=:top:w(3)
 #c     driver vhpidriverk process=:top:p3 basic=:top:w(3) access=5 size=1 foreign=0
 #c     driver vhpidriverk process=:top:p4 basic=:top:w(3) access=5 size=1 foreign=0
 #c     contributors=2
 #c     loads:
-#c   basic :top:w(2) isbasic=1 simnet=-
+#c   basic :top:w(2) isbasic=1 simnet=:top:w(2)
 #c     driver vhpidriverk process=:top:p3 basic=:top:w(2) access=5 size=1 foreign=0
 #c     driver vhpidriverk process=:top:p4 basic=:top:w(2) access=5 size=1 foreign=0
 #c     contributors=2
 #c     loads:
-#c   basic :top:w(1) isbasic=1 simnet=-
+#c   basic :top:w(1) isbasic=1 simnet=:top:w(1)
 #c     driver vhpidriverk process=:top:p4 basic=:top:w(1) access=5 size=1 foreign=0
 #c     contributors=1
 #c     loads:
-#c   basic :top:w(0) isbasic=1 simnet=-
+#c   basic :top:w(0) isbasic=1 simnet=:top:w(0)
 #c     driver vhpidriverk process=:top:p4 basic=:top:w(0) access=5 size=1 foreign=0
 #c     contributors=1
 #c     loads:
 #c q isbasic=1 drivers=1
-#c   basic :top:q isbasic=1 simnet=-
+#c   basic :top:q isbasic=1 simnet=:top:q
 #c     driver vhpidriverk process=:top:p5 basic=:top:q access=5 size=1 foreign=0
 #c     contributors=1
 #c     loads:

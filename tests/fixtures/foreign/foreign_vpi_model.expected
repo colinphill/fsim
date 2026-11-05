@@ -107,6 +107,7 @@
 #c param P type=vpiParameter local=0 typespec=vpiIntTypespec size=32 value=5
 #c param LP type=vpiParameter local=1 typespec=vpiIntTypespec size=32 value=6
 #c param PV type=vpiParameter local=0 typespec=vpiLogicTypespec size=8 value=60
+#c param NP type=vpiParameter local=1 typespec=vpiLogicTypespec size=4 value=5
 #c la local=-1
 #c top top=1 member=0 u0 top=0 member=0 ua[1] member=1
 #c ua ranges=[1:0] left=1
@@ -130,3 +131,6 @@
 #c td nib_t index=-
 #c ts my_int_t.0 type=vpiIntTypespec name=my_int_t ranges=- alias=vpiIntTypespec:-
 #c td my_int_t index=-
+#c ts NP.0 type=vpiLogicTypespec name=nib_t ranges=[3:0] alias=-:-
+#c ts NP.1 type=vpiLogicTypespec name=- ranges=- alias=-:-
+#c NP type=vpiParameter local=1 size=4

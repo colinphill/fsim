@@ -209,9 +209,11 @@ rejected directly.
 
 The compiled-HIR bundle is schema 3 and embeds semantic schema 5,
 SystemVerilog HIR schema 14, and VHDL HIR schema 10. The standalone design's
-other current state schemas are runtime 99, DesignIR 5, coverage 7, UVM 3, and
-class specializations (`FSIMSVCS`) 1. Runtime schema 99 stores packed values as
-their width and raw bit planes. A debug point carries the callee it belongs to (schema 99), and the point kinds
+other current state schemas are runtime 100, DesignIR 5, coverage 7, UVM 3, and
+class specializations (`FSIMSVCS`) 1. Runtime schema 100 stores packed values as
+their width and raw bit planes. Schema 100 adds the virtual interface handle
+table (IEEE 1800-2023 37.29 `vpiActual`) and the definition name of an
+interface typespec. A debug point carries the callee it belongs to (schema 99), and the point kinds
 `frame_entry`, `frame_exit` and `class_constructed` mark the frame of a
 SystemVerilog callable and a completed constructor for the execution probes.
 The standalone `FSIMSVCH` constraint-HIR state

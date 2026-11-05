@@ -306,7 +306,7 @@ void test_vhdl_vhpi_host_abi() {
   }
 
   const auto missing_bind =
-      load_vhdl_vhpi_plugin(FSIM_DPI_TEST_PLUGIN_PATH, host);
+      load_vhdl_vhpi_plugin(FSIM_DPI_ONLY_PLUGIN_PATH, host);
   require_vhpi(
       !static_cast<bool>(missing_bind)
           && missing_bind.error == VhdlVhpiPluginError::MissingBindSymbol,

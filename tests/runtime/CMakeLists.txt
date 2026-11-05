@@ -15,7 +15,6 @@ add_executable(
   runtime_scheduler_sv_tests.cpp
   runtime_private_region_scheduler_tests.cpp
   runtime_value_primitives_tests.cpp
-  runtime_dpi_tests.cpp
   runtime_dpi_abi_c_test.c
   runtime_foreign_abi_cpp_test.cpp
   runtime_vhpi_tests.cpp
@@ -110,12 +109,6 @@ add_executable(
 )
 target_compile_features(fsim_runtime_tests PRIVATE c_std_11)
 target_link_libraries(fsim_runtime_tests PRIVATE fsim_runtime)
-add_library(
-  fsim_dpi_test_plugin SHARED dpi_test_plugin.cpp dpi_test_plugin_c.c)
-fsim_configure_library(fsim_dpi_test_plugin)
-target_include_directories(
-  fsim_dpi_test_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
-target_link_libraries(fsim_dpi_test_plugin PRIVATE fsim_tf)
 add_library(fsim_vpi_test_plugin SHARED vpi_test_plugin.cpp)
 fsim_configure_library(fsim_vpi_test_plugin)
 target_include_directories(
@@ -149,14 +142,9 @@ add_library(
 fsim_configure_library(fsim_vpi_reference_cpp_plugin)
 target_include_directories(
   fsim_vpi_reference_cpp_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
-add_library(fsim_dpi_bad_abi_plugin SHARED dpi_bad_abi_plugin.cpp)
-fsim_configure_library(fsim_dpi_bad_abi_plugin)
-target_include_directories(
-  fsim_dpi_bad_abi_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
 target_compile_definitions(
   fsim_runtime_tests
-  PRIVATE FSIM_DPI_TEST_PLUGIN_PATH="$<TARGET_FILE:fsim_dpi_test_plugin>"
-          FSIM_DPI_BAD_ABI_PLUGIN_PATH="$<TARGET_FILE:fsim_dpi_bad_abi_plugin>"
+  PRIVATE FSIM_DPI_ONLY_PLUGIN_PATH="$<TARGET_FILE:fsim_foreign_dpi_types_plugin>"
           FSIM_VHPI_TEST_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_test_plugin>"
           FSIM_VHPI_REFERENCE_C_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_reference_c_plugin>"
           FSIM_VHPI_REFERENCE_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_vhpi_reference_cpp_plugin>"
@@ -166,7 +154,7 @@ target_compile_definitions(
           FSIM_VPI_REFERENCE_CPP_PLUGIN_PATH="$<TARGET_FILE:fsim_vpi_reference_cpp_plugin>"
 )
 add_dependencies(
-  fsim_runtime_tests fsim_dpi_test_plugin fsim_dpi_bad_abi_plugin
+  fsim_runtime_tests fsim_foreign_dpi_types_plugin
   fsim_vhpi_test_plugin fsim_vpi_test_plugin
   fsim_vpi_standard_startup_plugin)
 add_dependencies(
@@ -599,7 +587,7 @@ fsim_configure_debug_footprint(fsim_acc_cpp_probe_plugin)
 # The tests and plug-ins here load libfsim_tf from beside themselves.
 fsim_copy_library_beside(fsim_tf fsim_tf_link_probe_plugin
   fsim_tf_cpp_probe_plugin fsim_acc_link_probe_plugin
-  fsim_acc_cpp_probe_plugin fsim_acc_lifecycle_tests fsim_dpi_test_plugin
+  fsim_acc_cpp_probe_plugin fsim_acc_lifecycle_tests
   fsim_vpi_standard_startup_plugin)
 
 add_executable(fsim_tf_plugin_link_tests tf_plugin_link_test.cpp)
@@ -1027,10 +1015,11 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
   endif()
   # After those, MESSAGE gives text `fsim simulate` must report and SDF names
   # an SDF file annotated at elaboration; ELABORATE_MESSAGE is text a failing
-  # `fsim elaborate` must report and DPI_HEADER the header `fsim compile
-  # --dpi-header` must write.
+  # `fsim elaborate` must report, DPI_HEADER the header `fsim compile
+  # --dpi-header` must write and ELABORATE_ARGS more `fsim elaborate`
+  # arguments.
   cmake_parse_arguments(PARSE_ARGV 9 FSIM_OPTION ""
-    "MESSAGE;SDF;ELABORATE_MESSAGE;DPI_HEADER" "")
+    "MESSAGE;SDF;ELABORATE_MESSAGE;DPI_HEADER;ELABORATE_ARGS" "")
   set(FSIM_SIMULATE_MESSAGE "${FSIM_OPTION_MESSAGE}")
   set(FSIM_SDF_PATH "")
   if(NOT "${FSIM_OPTION_SDF}" STREQUAL "")
@@ -1060,6 +1049,7 @@ function(fsim_add_foreign_conformance_test FSIM_NAME FSIM_INTERFACE
         "-DFSIM_SDF=${FSIM_SDF_PATH}"
         "-DFSIM_ELABORATE_MESSAGE=${FSIM_OPTION_ELABORATE_MESSAGE}"
         "-DFSIM_DPI_HEADER=${FSIM_DPI_HEADER_PATH}"
+        "-DFSIM_ELABORATE_ARGS=${FSIM_OPTION_ELABORATE_ARGS}"
         "-DFSIM_WORK_DIR=${PROJECT_BINARY_DIR}/tests/foreign/${FSIM_NAME}-${FSIM_ENGINE}"
         -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunForeignConformanceCase.cmake")
     set_tests_properties(
@@ -1134,6 +1124,19 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vpi-classes vpi foreign_vpi_classes.sv foreign_vpi_classes.expected ""
   fsim_foreign_vpi_classes_plugin)
+# Virtual interface variables and interface typespecs (IEEE 1800-2023
+# 37.29, 37.30).
+add_library(fsim_foreign_vpi_virtual_interfaces_plugin SHARED
+  foreign_vpi_virtual_interfaces_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_virtual_interfaces_plugin)
+target_link_libraries(fsim_foreign_vpi_virtual_interfaces_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_virtual_interfaces_plugin
+  PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-virtual-interfaces vpi foreign_vpi_virtual_interfaces.sv
+  foreign_vpi_virtual_interfaces.expected ""
+  fsim_foreign_vpi_virtual_interfaces_plugin)
 # Live class objects, constraints, size changes and reclamation (IEEE
 # 1800-2023 37.33, 37.34, 37.38, 38.36.1).
 add_library(fsim_foreign_vpi_class_objects_plugin SHARED
@@ -1188,6 +1191,44 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   dpi-disable dpi foreign_dpi_disable.sv foreign_dpi_disable.expected ""
   fsim_foreign_dpi_disable_plugin "" OFF v4)
+# The DPI disable protocol when the export is the disable target (IEEE
+# 1800-2023 35.9), on the compiled kernel.
+add_library(fsim_foreign_dpi_disable_export_plugin SHARED
+  foreign_dpi_disable_export_plugin.c)
+fsim_configure_library(fsim_foreign_dpi_disable_export_plugin)
+target_link_libraries(fsim_foreign_dpi_disable_export_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_dpi_disable_export_plugin PRIVATE
+  "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  dpi-disable-export dpi foreign_dpi_disable_export.sv
+  foreign_dpi_disable_export.expected "" fsim_foreign_dpi_disable_export_plugin
+  "" OFF v4)
+# DPI exports of the compilation unit (IEEE 1800-2023 35.5.2, 35.7), on the
+# compiled kernel.
+add_library(fsim_foreign_dpi_unit_export_plugin SHARED
+  foreign_dpi_unit_export_plugin.c)
+fsim_configure_library(fsim_foreign_dpi_unit_export_plugin)
+target_link_libraries(fsim_foreign_dpi_unit_export_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_dpi_unit_export_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  dpi-unit-export dpi foreign_dpi_unit_export.sv
+  foreign_dpi_unit_export.expected "" fsim_foreign_dpi_unit_export_plugin
+  "" OFF v4)
+# DPI exports declared in generate blocks (IEEE 1800-2023 35.5.3, 35.7), on
+# the compiled kernel.
+add_library(fsim_foreign_dpi_generate_export_plugin SHARED
+  foreign_dpi_generate_export_plugin.c)
+fsim_configure_library(fsim_foreign_dpi_generate_export_plugin)
+target_link_libraries(fsim_foreign_dpi_generate_export_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_dpi_generate_export_plugin PRIVATE
+  "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  dpi-generate-export dpi foreign_dpi_generate_export.sv
+  foreign_dpi_generate_export.expected ""
+  fsim_foreign_dpi_generate_export_plugin "" OFF v4)
 # DPI argument types (IEEE 1800-2023 35.5.6, 35.5.6.1, H.7.6, H.12):
 # constant-expression ranges, open packed formals, sized unpacked arrays,
 # and real, shortreal, chandle and enumeration arrays.
@@ -1211,6 +1252,17 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   dpi-aggregates dpi foreign_dpi_aggregates.sv foreign_dpi_aggregates.expected
   "" fsim_foreign_dpi_aggregates_plugin)
+# DPI arrays of strings (IEEE 1800-2023 35.5.6, 35.5.6.1, H.7.4): sized and
+# open arrays in input, output and inout directions.
+add_library(fsim_foreign_dpi_strings_plugin SHARED
+  foreign_dpi_strings_plugin.c)
+fsim_configure_library(fsim_foreign_dpi_strings_plugin)
+target_link_libraries(fsim_foreign_dpi_strings_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_dpi_strings_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  dpi-strings dpi foreign_dpi_strings.sv foreign_dpi_strings.expected
+  "" fsim_foreign_dpi_strings_plugin)
 # A DPI function result is a small value, never a packed vector, even of
 # one bit (IEEE 1800-2023 35.5.5).
 fsim_add_foreign_conformance_test(
@@ -1267,6 +1319,20 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   pli-tf-pvc vpi foreign_pli_tf_pvc.sv foreign_pli_tf_pvc.expected ""
   fsim_foreign_pli_tf_pvc_plugin "" TRUE)
+# PLI 1.0 argument description: tf_strgetp of any width, tf_typep, tf_sizep
+# and tf_nump over every argument class, tf_nodeinfo classes, memories and
+# scalar net strength, tf_exprinfo selects, the module's time scale and
+# reason_paramdrc (25.15, 25.26, 25.27, 25.35, 25.36, 25.50, 25.53, 25.61,
+# 21.3.2).
+add_library(fsim_foreign_pli_tf_args_plugin SHARED
+  foreign_pli_tf_args_plugin.c)
+fsim_configure_library(fsim_foreign_pli_tf_args_plugin)
+target_link_libraries(fsim_foreign_pli_tf_args_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_pli_tf_args_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  pli-tf-args vpi foreign_pli_tf_args.sv foreign_pli_tf_args.expected ""
+  fsim_foreign_pli_tf_args_plugin "" TRUE "" ELABORATE_ARGS "slow drc")
 # A run-time error runs the cbError callbacks before the end of simulation
 # (IEEE 1800-2023 38.36.3); simulate fails.
 add_library(fsim_foreign_vpi_error_plugin SHARED foreign_vpi_error_plugin.c)
@@ -1345,6 +1411,17 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   pli-acc vpi foreign_pli_acc.sv foreign_pli_acc.expected ""
   fsim_foreign_pli_acc_plugin "" TRUE)
+# PLI 1.0 attributes named as parameters and specparams, and acc_handle_path
+# (IEEE 1364-2001 23.10-23.12, 23.55).
+add_library(fsim_foreign_pli_acc_names_plugin SHARED
+  foreign_pli_acc_names_plugin.c)
+fsim_configure_library(fsim_foreign_pli_acc_names_plugin)
+target_link_libraries(fsim_foreign_pli_acc_names_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_pli_acc_names_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  pli-acc-names vpi foreign_pli_acc_names.sv foreign_pli_acc_names.expected
+  "" fsim_foreign_pli_acc_names_plugin "" TRUE)
 # PLI 1.0 delay and pulse routines (IEEE 1364-2001 22.8, Clause 23).
 add_library(fsim_foreign_pli_acc_delays_plugin SHARED
   foreign_pli_acc_delays_plugin.c)
@@ -1390,6 +1467,18 @@ fsim_add_foreign_conformance_test(
   vpi-unresolved vpi foreign_vpi_unresolved.sv
   foreign_vpi_unresolved.expected "" fsim_foreign_vpi_unresolved_plugin ""
   ON)
+# Startup restrictions (IEEE 1800-2023 36.10.2), the handles of fired one-shot
+# callbacks (38.8, 38.39), multiple indexes (38.20), scoped names (38.21),
+# iterators (38.23, 38.40) and vpi_release_handle (38.38).
+add_library(fsim_foreign_vpi_lifecycle_plugin SHARED
+  foreign_vpi_lifecycle_plugin.c)
+fsim_configure_library(fsim_foreign_vpi_lifecycle_plugin)
+target_link_libraries(fsim_foreign_vpi_lifecycle_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vpi_lifecycle_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vpi-lifecycle vpi foreign_vpi_lifecycle.sv foreign_vpi_lifecycle.expected ""
+  fsim_foreign_vpi_lifecycle_plugin)
 # Processes, statements and expressions (IEEE 1800-2023 37.43-37.79).
 add_library(fsim_foreign_vpi_statements_plugin SHARED
   foreign_vpi_statements_plugin.c)
@@ -1517,6 +1606,25 @@ fsim_add_foreign_conformance_test(
   foreign_vhpi_arch_missing.expected ""
   fsim_foreign_vhpi_arch_missing_plugin 1 OFF v4
   MESSAGE "has no registered foreign architecture with an execution function")
+# Top-level generic and parameter overrides (IEEE 1076-2019 14.2, IEEE
+# 1800-2023 23.10): REAL, physical, enumeration, character and BIT or
+# STD_ULOGIC array generics, and real SystemVerilog parameters.
+add_library(fsim_foreign_generic_override_plugin SHARED
+  foreign_generic_override_plugin.c)
+fsim_configure_library(fsim_foreign_generic_override_plugin)
+target_link_libraries(fsim_foreign_generic_override_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_generic_override_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhdl-generic-override vhpi foreign_generic_override.vhd
+  foreign_generic_override.expected "" fsim_foreign_generic_override_plugin
+  "" OFF "" ELABORATE_ARGS
+  "--generic R=2.5 --generic T=1.5ns --generic D=3cm --generic E=Blue --generic \"C='z'\" --generic \"B='1'\" --generic \"S='Z'\" --generic 'V=x\"A5\"' --generic W=1010 --generic I=-7")
+fsim_add_foreign_conformance_test(
+  sv-parameter-override vpi foreign_parameter_override.sv
+  foreign_parameter_override.expected "" fsim_foreign_generic_override_plugin
+  "" OFF "" ELABORATE_ARGS
+  "--generic R=2.5 --generic S=0.5 --generic U=1.25 --generic N=2.5 --generic RT=4")
 # Registration through a tabular registry (IEEE 1076-2019 20.2.2).
 add_library(fsim_foreign_vhpi_registry_plugin SHARED
   foreign_vhpi_registry_plugin.c)
@@ -1570,3 +1678,15 @@ target_include_directories(
 fsim_add_foreign_conformance_test(
   vhpi-connectivity vhpi foreign_vhpi_connectivity.vhd
   foreign_vhpi_connectivity.expected "" fsim_foreign_vhpi_connectivity_plugin)
+# Relations of the class diagrams: component and subprogram declarations of
+# calls, driven signals, range bounds, simulated nets, libraries and design
+# units (IEEE 1076-2019 19.4, 19.10, 19.12).
+add_library(fsim_foreign_vhpi_relations_plugin SHARED
+  foreign_vhpi_relations_plugin.c)
+fsim_configure_library(fsim_foreign_vhpi_relations_plugin)
+target_link_libraries(fsim_foreign_vhpi_relations_plugin PRIVATE fsim_tf)
+target_include_directories(
+  fsim_foreign_vhpi_relations_plugin PRIVATE "${PROJECT_SOURCE_DIR}/include")
+fsim_add_foreign_conformance_test(
+  vhpi-relations vhpi foreign_vhpi_relations.vhd
+  foreign_vhpi_relations.expected "" fsim_foreign_vhpi_relations_plugin)

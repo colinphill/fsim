@@ -1841,6 +1841,9 @@ IVTEST_VPI_NONSTANDARD = {
        for name in ("nextsimtime_cb3", "nextsimtime_cb4")},
     "timescale": "calls tf_getlongsimtime, which the TF routines of IEEE 1364-2001 "
         "clause 25 do not include",
+    "br_gh117": "registers cbAfterDelay from a vlog_startup_routines entry; IEEE "
+        "1800-2023 36.10.2 allows only the end-of-compile, simulation, systf and "
+        "error reasons there",
 }
 
 

@@ -397,6 +397,7 @@ ParseResult VerilogParser::run() {
                 const auto references = implicit_net_references_.size();
                 unit.functions.push_back(parse_function(declaration));
                 resolve_compilation_unit_references(references, unit.functions.back().name);
+                record_compilation_unit_callable(unit.functions.back().name);
             }
         } else if (match_keyword("task")) {
             compilation_unit_has_design_item_ = true;
@@ -418,6 +419,7 @@ ParseResult VerilogParser::run() {
                 const auto references = implicit_net_references_.size();
                 unit.tasks.push_back(parse_task(declaration));
                 resolve_compilation_unit_references(references, unit.tasks.back().name);
+                record_compilation_unit_callable(unit.tasks.back().name);
             }
         } else if (match_keyword("primitive")) {
             compilation_unit_has_design_item_ = true;
@@ -604,6 +606,19 @@ ParseResult VerilogParser::run() {
     // Compilation-unit DPI declarations bind the `$unit` callables (IEEE
     // 1800-2017 35.5.4), wherever the export appears.
     {
+        // The compilation unit's exports are served in every scope (IEEE
+        // 1800-2023 35.5.2, 35.5.3); the package that holds its callables
+        // declares the service, whose own hidden imports resolve with it.
+        if (compilation_unit_package_) {
+            generate_dpi_export_service(
+                *compilation_unit_package_,
+                design.systemverilog_dpi_declarations,
+                compilation_unit_callable_tokens_, true);
+            resolve_dpi_declarations(
+                compilation_unit_package_->systemverilog_dpi_declarations,
+                compilation_unit_package_->functions,
+                compilation_unit_package_->tasks);
+        }
         static const std::vector<FunctionDeclaration> no_functions;
         static const std::vector<TaskDeclaration> no_tasks;
         resolve_dpi_declarations(
@@ -620,6 +635,7 @@ ParseResult VerilogParser::run() {
             design.units.begin(), std::move(*compilation_unit_package_));
         compilation_unit_package_.reset();
     }
+    compilation_unit_callable_tokens_.clear();
     if (!keyword_stack_.empty()) {
         error(
             current(),

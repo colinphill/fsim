@@ -25,6 +25,7 @@
 #include <iostream>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <deque>
 #include <functional>
 #include <numeric>
@@ -5999,6 +6000,145 @@ namespace {
         return std::nullopt;
     }
 
+    // The value of a decimal real literal given as a top-level override: an
+    // optional sign, digits, and a point followed by digits, with an optional
+    // exponent (IEEE 1076-2019 15.5.2; IEEE 1800-2023 5.7.2, which also takes
+    // an exponent without a point). Underscores separate digits.
+    std::optional<double> override_real_literal(
+        std::string_view text, const bool point_required)
+    {
+        bool negative = false;
+        if (!text.empty() && (text.front() == '-' || text.front() == '+')) {
+            negative = text.front() == '-';
+            text.remove_prefix(1U);
+        }
+        std::string digits;
+        digits.reserve(text.size());
+        for (std::size_t index { }; index < text.size(); ++index) {
+            const char character = text[index];
+            if (character == '_') {
+                if (index == 0U || index + 1U == text.size()
+                    || !std::isdigit(static_cast<unsigned char>(
+                        text[index - 1U]))
+                    || !std::isdigit(static_cast<unsigned char>(
+                        text[index + 1U]))) {
+                    return std::nullopt;
+                }
+                continue;
+            }
+            digits.push_back(character);
+        }
+        const auto point = digits.find('.');
+        const auto exponent = digits.find_first_of("eE");
+        if (digits.empty()
+            || !std::isdigit(static_cast<unsigned char>(digits.front()))
+            || (point == std::string::npos
+                && (point_required || exponent == std::string::npos))
+            || (point != std::string::npos
+                && (point + 1U >= digits.size()
+                    || !std::isdigit(static_cast<unsigned char>(
+                        digits[point + 1U]))))) {
+            return std::nullopt;
+        }
+        double value { };
+        const auto [end, error] = std::from_chars(digits.data(),
+            digits.data() + digits.size(), value, std::chars_format::general);
+        if (error != std::errc { } || end != digits.data() + digits.size()) {
+            return std::nullopt;
+        }
+        return negative ? -value : value;
+    }
+
+    // The elements of a one-dimensional array of character literals given as
+    // a top-level override: a string literal, a bit string literal (B, O or
+    // X; IEEE 1076-2019 15.8), or the element characters themselves.
+    std::optional<std::string> override_array_elements(std::string_view text)
+    {
+        if (text.size() >= 2U && text.front() == '"' && text.back() == '"') {
+            return std::string { text.substr(1U, text.size() - 2U) };
+        }
+        if (text.size() >= 3U && text.back() == '"' && text[1] == '"') {
+            const auto base = static_cast<char>(std::tolower(
+                static_cast<unsigned char>(text.front())));
+            const unsigned bits_per_digit
+                = base == 'b' ? 1U : base == 'o' ? 3U : base == 'x' ? 4U : 0U;
+            if (bits_per_digit == 0U) {
+                return std::nullopt;
+            }
+            std::string elements;
+            for (const char digit : text.substr(2U, text.size() - 3U)) {
+                if (digit == '_') {
+                    continue;
+                }
+                const auto lowered = static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(digit)));
+                const unsigned value = lowered >= '0' && lowered <= '9'
+                    ? static_cast<unsigned>(lowered - '0')
+                    : lowered >= 'a' && lowered <= 'f'
+                    ? static_cast<unsigned>(lowered - 'a') + 10U
+                    : 16U;
+                if (value >= (1U << bits_per_digit)) {
+                    return std::nullopt;
+                }
+                for (unsigned bit = bits_per_digit; bit-- > 0U;) {
+                    elements.push_back((value >> bit) & 1U ? '1' : '0');
+                }
+            }
+            return elements;
+        }
+        return std::string { text };
+    }
+
+    // A physical literal `[abstract_literal] unit_name` given as a top-level
+    // override (IEEE 1076-2019 5.2.4.1), as its magnitude spelling (empty for
+    // one unit), its unit and its sign.
+    struct OverridePhysicalLiteral {
+        std::string magnitude;
+        std::string unit;
+        bool negative { };
+    };
+
+    std::optional<OverridePhysicalLiteral> override_physical_literal(
+        std::string_view text)
+    {
+        OverridePhysicalLiteral literal;
+        if (!text.empty() && (text.front() == '-' || text.front() == '+')) {
+            literal.negative = text.front() == '-';
+            text.remove_prefix(1U);
+        }
+        // The unit starts at the first letter that is not an exponent mark.
+        std::size_t unit = 0U;
+        for (; unit < text.size(); ++unit) {
+            const auto character = static_cast<unsigned char>(text[unit]);
+            if (!std::isalpha(character)) {
+                continue;
+            }
+            const bool exponent = (character == 'e' || character == 'E')
+                && unit > 0U
+                && std::isdigit(static_cast<unsigned char>(text[unit - 1U]))
+                && unit + 1U < text.size()
+                && (std::isdigit(static_cast<unsigned char>(text[unit + 1U]))
+                    || text[unit + 1U] == '+' || text[unit + 1U] == '-');
+            if (!exponent) {
+                break;
+            }
+        }
+        auto magnitude = text.substr(0U, unit);
+        while (!magnitude.empty() && magnitude.back() == ' ') {
+            magnitude.remove_suffix(1U);
+        }
+        literal.magnitude = std::string { magnitude };
+        literal.unit = std::string { text.substr(unit) };
+        if (literal.unit.empty()
+            || !std::ranges::all_of(literal.unit, [](const char character) {
+                   return std::isalnum(static_cast<unsigned char>(character))
+                       || character == '_';
+               })) {
+            return std::nullopt;
+        }
+        return literal;
+    }
+
     std::optional<double> compiled_vhdl_static_real(
         const semantic::SpecializedHirUnit& specialization,
         const semantic::ExpressionId id,
@@ -6096,6 +6236,15 @@ namespace {
                 == semantic::vhdl::DeclarationForm::generic_constant) {
             for (const auto& actual : specialization.specialization().actual_identities) {
                 if (actual.declaration == *selected) {
+                    // A value given at elaboration, such as a top-level
+                    // override, is its IEEE 754 encoding.
+                    if (!actual.actual_expression && actual.vhdl_elaborated_bits
+                        && actual.vhdl_elaborated_bits->size() == 64U
+                        && actual.vhdl_elaborated_bits->find_first_not_of("01")
+                            == std::string::npos) {
+                        return std::bit_cast<double>(static_cast<std::uint64_t>(
+                            std::stoull(*actual.vhdl_elaborated_bits, nullptr, 2)));
+                    }
                     return actual.actual_expression && *actual.actual_expression != id
                         ? compiled_vhdl_static_real(
                               specialization, *actual.actual_expression, depth + 1U)
@@ -7663,6 +7812,254 @@ namespace {
         return !range
             || (value >= std::min(range->left, range->right)
                 && value <= std::max(range->left, range->right));
+    }
+
+    // A tool-specified value of a top-level generic (IEEE 1076-2019 14.2):
+    // its identity, and for a REAL or array value the bits and subtype the
+    // root reads it from, as for a value evaluated when its parent region
+    // was elaborated (14.4.2.1).
+    struct CompiledVhdlRootGenericValue {
+        std::string identity;
+        std::optional<std::string> elaborated_bits;
+        std::optional<semantic::vhdl::SubtypeIndication> elaborated_subtype;
+    };
+
+    std::optional<CompiledVhdlRootGenericValue>
+    compiled_vhdl_root_generic_value(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::Declaration& generic,
+        const std::string& value)
+    {
+        const auto scope = generic.scope;
+        const auto& subtype = *generic.subtype;
+        const auto effective = semantic::CompiledDesignResolver {
+            specialization
+        }.effective_vhdl_subtype(subtype, scope);
+        const auto& checked = effective ? *effective : subtype;
+        const auto integral = [&](const std::int64_t number)
+            -> std::optional<CompiledVhdlRootGenericValue> {
+            if (!compiled_vhdl_specialization_value_satisfies_subtype(
+                    specialization, checked, number)) {
+                return std::nullopt;
+            }
+            // Typed like an evaluated instance actual, so a STD_ULOGIC or
+            // physical value keeps its domain and width.
+            return CompiledVhdlRootGenericValue {
+                compiled_vhdl_integral_identity(generic, number),
+                std::nullopt, std::nullopt };
+        };
+        const auto elaborated = [&](const PackedLogic4& bits,
+                                    semantic::vhdl::SubtypeIndication shape)
+            -> CompiledVhdlRootGenericValue {
+            auto text = bits.to_msb_string();
+            return { "override;elaborated=" + text, std::move(text),
+                std::move(shape) };
+        };
+        // The type definition the subtype denotes, through subtypes and
+        // aliases.
+        const semantic::vhdl::TypeDefinition* definition { };
+        auto type_id = checked.type_mark.target;
+        std::unordered_set<std::uint32_t> visited;
+        while (type_id.valid() && visited.insert(type_id.value()).second) {
+            const auto type = specialization.find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                break;
+            }
+            definition = type->vhdl;
+            if ((definition->form != semantic::vhdl::TypeForm::subtype
+                    && definition->form != semantic::vhdl::TypeForm::alias)
+                || !definition->base.type_mark.target.valid()) {
+                break;
+            }
+            type_id = definition->base.type_mark.target;
+        }
+        const bool quoted_character = value.size() == 3U
+            && value.front() == '\'' && value.back() == '\'';
+
+        // REAL and its subtypes: a real literal (IEEE 1076-2019 5.2.5).
+        if (compiled_vhdl_real_subtype(specialization, subtype, scope)) {
+            const auto real = override_real_literal(value, true);
+            if (!real) {
+                return std::nullopt;
+            }
+            return elaborated(PackedLogic4::from_aval_bval(
+                                  64U, std::bit_cast<std::uint64_t>(*real), 0U),
+                checked);
+        }
+
+        // A physical literal, in primary units (5.2.4.1).
+        const bool time = compiled_vhdl_predefined_subtype(
+                              specialization, subtype, scope, "time")
+            || compiled_vhdl_predefined_subtype(
+                specialization, subtype, scope, "delay_length");
+        if (time
+            || (definition != nullptr
+                && definition->form == semantic::vhdl::TypeForm::physical)) {
+            if (const auto literal = override_physical_literal(value)) {
+                std::optional<std::int64_t> scale;
+                if (time) {
+                    if (const auto femtoseconds
+                        = support::vhdl_time_unit_femtoseconds(
+                            support::ascii_lower(literal->unit))) {
+                        scale = static_cast<std::int64_t>(*femtoseconds);
+                    }
+                } else {
+                    const auto unit = std::ranges::find_if(
+                        definition->physical_units,
+                        [&](const semantic::vhdl::PhysicalUnit& candidate) {
+                            return compiled_vhdl_name_equal(
+                                candidate.name, literal->unit);
+                        });
+                    if (unit != definition->physical_units.end()) {
+                        scale = unit->scale_factor;
+                        if (!scale && !unit->scale) {
+                            scale = 1;
+                        }
+                        if (!scale && unit->scale) {
+                            scale = specialization.evaluate_integral_expression(
+                                *unit->scale);
+                        }
+                    }
+                }
+                const auto magnitude = scale && *scale > 0
+                    ? semantic::detail::decimal_physical_magnitude(
+                          literal->magnitude.empty() ? "1" : literal->magnitude,
+                          static_cast<std::uint64_t>(*scale))
+                    : std::nullopt;
+                if (magnitude
+                    && *magnitude <= static_cast<std::uint64_t>(
+                           std::numeric_limits<std::int64_t>::max())) {
+                    const auto number = static_cast<std::int64_t>(*magnitude);
+                    return integral(literal->negative ? -number : number);
+                }
+            }
+        }
+
+        // An enumeration literal: an identifier or a character literal, by
+        // its position (5.2.2.1).
+        if (definition != nullptr
+            && definition->form == semantic::vhdl::TypeForm::enumeration) {
+            const auto& literals = definition->enumeration_literals;
+            for (std::size_t position { }; position < literals.size();
+                ++position) {
+                const auto& spelling = literals[position].spelling;
+                if (quoted_character
+                        ? spelling == value
+                            || (spelling.size() == 1U && spelling[0] == value[1])
+                        : !spelling.empty() && spelling.front() != '\''
+                            && compiled_vhdl_name_equal(spelling, value)) {
+                    return integral(static_cast<std::int64_t>(position));
+                }
+            }
+        }
+        if (const auto* standard = support::find_vhdl_standard_enumeration(
+                simple_name_of(checked.type_mark.spelling))) {
+            if (const auto position
+                = support::vhdl_standard_enumeration_position(
+                    *standard, value)) {
+                return integral(*position);
+            }
+        }
+        if (quoted_character
+            && compiled_vhdl_predefined_subtype(
+                specialization, subtype, scope, "character")) {
+            return integral(static_cast<unsigned char>(value[1]));
+        }
+        if (quoted_character
+            && checked.domain == semantic::vhdl::ValueDomain::bit2
+            && (value[1] == '0' || value[1] == '1')) {
+            return integral(value[1] == '1' ? 1 : 0);
+        }
+
+        // A one-dimensional array of BIT or STD_ULOGIC elements.
+        const auto type = compiled_vhdl_signal_type(
+            specialization, checked, scope);
+        if (type && type->vhdl_array
+            && (checked.domain == semantic::vhdl::ValueDomain::bit2
+                || checked.domain == semantic::vhdl::ValueDomain::logic9)) {
+            auto elements = override_array_elements(value);
+            if (!elements || elements->empty()) {
+                return std::nullopt;
+            }
+            constexpr std::string_view logic9_literals { "UX01ZWLH-" };
+            for (auto& element : *elements) {
+                element = static_cast<char>(
+                    std::toupper(static_cast<unsigned char>(element)));
+                const auto valid
+                    = checked.domain == semantic::vhdl::ValueDomain::bit2
+                    ? element == '0' || element == '1'
+                    : logic9_literals.find(element) != std::string_view::npos;
+                if (!valid) {
+                    return std::nullopt;
+                }
+            }
+            auto shape = checked;
+            const auto index = std::ranges::find(shape.constraints,
+                semantic::vhdl::RangeKind::array_index,
+                &semantic::vhdl::RangeConstraint::kind);
+            if (index != shape.constraints.end()) {
+                if (!index->left || !index->right) {
+                    return std::nullopt;
+                }
+                const auto length = index->descending
+                    ? *index->left - *index->right + 1
+                    : *index->right - *index->left + 1;
+                if (length != static_cast<std::int64_t>(elements->size())) {
+                    return std::nullopt;
+                }
+            } else {
+                // An unconstrained formal takes the index range of a string
+                // literal: its index subtype's left bound, ascending for
+                // these index subtypes (9.3.2, 5.3.2.2).
+                const auto index_subtype = definition != nullptr
+                        && definition->form == semantic::vhdl::TypeForm::array
+                        && !definition->array_dimensions.empty()
+                    ? simple_name_of(
+                          definition->array_dimensions.front()
+                              .index_subtype.spelling)
+                    : std::string_view { "natural" };
+                std::optional<std::int64_t> left;
+                if (compiled_vhdl_name_equal(index_subtype, "natural")) {
+                    left = 0;
+                } else if (compiled_vhdl_name_equal(index_subtype, "positive")) {
+                    left = 1;
+                } else if (compiled_vhdl_name_equal(index_subtype, "integer")) {
+                    left = std::numeric_limits<std::int32_t>::min();
+                }
+                if (!left) {
+                    return std::nullopt;
+                }
+                semantic::vhdl::RangeConstraint range;
+                range.kind = semantic::vhdl::RangeKind::array_index;
+                range.left = *left;
+                range.right = *left
+                    + static_cast<std::int64_t>(elements->size()) - 1;
+                range.descending = false;
+                shape.constraints.insert(shape.constraints.begin(), range);
+                shape.unconstrained = false;
+                shape.executable_width = elements->size();
+            }
+            return elaborated(
+                checked.domain == semantic::vhdl::ValueDomain::bit2
+                    ? PackedLogic4::from_msb_string(*elements)
+                    : PackedLogic4::from_logic9_msb_string(*elements),
+                std::move(shape));
+        }
+
+        // An integer, or the position of an enumeration value.
+        const auto lowered = support::ascii_lower(value);
+        if (lowered == "true" || lowered == "false") {
+            return integral(lowered == "true" ? 1 : 0);
+        }
+        try {
+            std::size_t consumed { };
+            const auto number = std::stoll(value, &consumed, 0);
+            if (consumed == value.size()) {
+                return integral(number);
+            }
+        } catch (const std::exception&) {
+        }
+        return std::nullopt;
     }
 
     struct CompiledVhdlSpecializationActual {
@@ -18159,14 +18556,37 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
                 identity_value = typed->canonical();
             }
         }
-        if (display) {
-        } else if (scalar_applicable) {
+        // A parameter of a named packed type has that type's width, sign
+        // and domain, which the declaration does not spell (6.20.2, 37.28).
+        if (!display && declaration->systemverilog->initializer
+            && declaration->systemverilog->type
+            && target_scalar == frontend::SystemVerilogScalarKind::None
+            && declaration->systemverilog->type->target.spelling != "implicit"
+            && declaration->systemverilog->type->target.spelling != "string"
+            && !declaration->systemverilog->type->executable_width) {
+            std::string typed_error;
+            if (const auto typed = evaluate_hir_systemverilog_typed_constant(
+                    specialized, *declaration->systemverilog->initializer,
+                    *declaration->systemverilog->type, typed_error);
+                typed && typed->canonical().starts_with("svconst-v3:")) {
+                display = typed->display();
+                identity_value = typed->canonical();
+            }
+        }
+        // A scalar value that does not evaluate leaves the integral,
+        // string and constant evaluations to try, unless the declared type
+        // is a real or other non-integral scalar type.
+        if (!display && scalar_applicable) {
             if (const auto scalar
                 = evaluate_hir_systemverilog_declaration_value(
                     specialized, declaration_id, scalar_error)) {
                 display = scalar->display();
                 identity_value = scalar->canonical();
             }
+        }
+        if (display
+            || (scalar_applicable
+                && target_scalar != frontend::SystemVerilogScalarKind::None)) {
         } else if (const auto value
             = specialized.evaluate_integral_declaration(
                 declaration_id)) {
@@ -18265,6 +18685,9 @@ HierarchyBuilder::compiled_vhdl_root_generic_actuals(
     if (entity == nullptr) {
         return actuals;
     }
+    // Types and subtypes of the generics are resolved in the entity.
+    std::optional<semantic::SpecializedHirUnit> interim;
+    bool interim_made { };
     for (const auto declaration_id : entity->declarations) {
         const auto declaration = compiled_->find_declaration(declaration_id);
         if (!declaration || declaration->vhdl == nullptr
@@ -18319,47 +18742,63 @@ HierarchyBuilder::compiled_vhdl_root_generic_actuals(
             return false;
         }();
         std::optional<std::string> identity;
+        std::optional<std::string> elaborated_bits;
+        std::optional<semantic::vhdl::SubtypeIndication> elaborated_subtype;
         if (string_subtype) {
             identity = semantic::systemverilog_string_identity(value);
         } else if (subtype
             && subtype->domain == semantic::vhdl::ValueDomain::logic9
             && value.size() == 3U && value.front() == '\''
             && value.back() == '\'') {
-            // A STD_ULOGIC character literal, by its position number.
+            // A STD_ULOGIC character literal. Like an instance actual
+            // evaluated at elaboration, the root reads it from its signal.
             constexpr std::string_view logic9_literals { "UX01ZWLH-" };
-            const auto position = logic9_literals.find(
-                static_cast<char>(std::toupper(
-                    static_cast<unsigned char>(value[1]))));
+            // Character literals are case sensitive (IEEE 1076-2019 15.6).
+            const auto literal = value[1];
+            const auto position = logic9_literals.find(literal);
             if (position != std::string_view::npos) {
-                identity = std::to_string(position);
+                auto bits = PackedLogic4::from_logic9_msb_string(
+                    std::string_view { &literal, 1U })
+                                .to_msb_string();
+                identity = compiled_vhdl_integral_identity(*declaration->vhdl,
+                               static_cast<std::int64_t>(position))
+                    + ";elaborated=" + bits;
+                elaborated_bits = std::move(bits);
+                elaborated_subtype = *subtype;
             }
-        } else {
-            auto lowered = support::ascii_lower(value);
-            if (lowered == "true" || lowered == "false") {
-                identity = lowered == "true" ? "1" : "0";
-            } else {
-                try {
-                    std::size_t consumed { };
-                    const auto number = std::stoll(value, &consumed, 0);
-                    if (consumed == value.size()) {
-                        identity = std::to_string(number);
-                    }
-                } catch (const std::exception&) {
+        } else if (subtype) {
+            if (!interim_made) {
+                if (auto made = semantic::make_specialized_hir_unit(
+                        validated_compiled_, entity->id,
+                        std::span<
+                            const semantic::SpecializedHirActualIdentity> { })) {
+                    interim.emplace(std::move(*made));
                 }
+                interim_made = true;
+            }
+            const auto parsed = interim
+                ? compiled_vhdl_root_generic_value(
+                      *interim, *declaration->vhdl, value)
+                : std::nullopt;
+            if (parsed) {
+                identity = parsed->identity;
+                elaborated_bits = parsed->elaborated_bits;
+                elaborated_subtype = parsed->elaborated_subtype;
             }
         }
         if (!identity) {
             report(
                 "FSIM-ELAB-GENERIC-011",
                 "top-level generic override '" + declaration->vhdl->name
-                    + "=" + value
-                    + "' is not a STRING, integer or BOOLEAN value",
+                    + "=" + value + "' is not a value of the generic's subtype",
                 compiled_source_span(*compiled_, declaration->vhdl->source));
             continue;
         }
         semantic::SpecializedHirActualIdentity actual;
         actual.declaration = declaration_id;
         actual.identity = std::move(*identity);
+        actual.vhdl_elaborated_bits = std::move(elaborated_bits);
+        actual.vhdl_elaborated_subtype = std::move(elaborated_subtype);
         actuals.push_back(std::move(actual));
     }
     return actuals;
@@ -18390,11 +18829,58 @@ HierarchyBuilder::compiled_systemverilog_root_parameter_actuals(
             continue;
         }
         const auto& value = override_value->second;
+        // A real parameter takes a real literal or an integer converted to
+        // real; a parameter with no type or range takes the type of a real
+        // value, and an integral one its value rounded to the nearest
+        // integer (IEEE 1800-2023 6.20.2, 6.12.2).
+        const auto& type = declaration->systemverilog->type;
+        const auto real_kind = !type ? frontend::SystemVerilogScalarKind::None
+            : type->target.spelling == "real"
+            ? frontend::SystemVerilogScalarKind::Real
+            : type->target.spelling == "shortreal"
+            ? frontend::SystemVerilogScalarKind::ShortReal
+            : type->target.spelling == "realtime"
+            ? frontend::SystemVerilogScalarKind::Realtime
+            : frontend::SystemVerilogScalarKind::None;
+        const bool untyped = !type
+            || (type->target.spelling == "implicit" && !type->packed_range
+                && type->packed_dimensions.empty());
+        const auto real = override_real_literal(value, false);
+        const auto real_identity = [&](const double number) {
+            frontend::SystemVerilogScalarConstant scalar;
+            scalar.kind = real_kind == frontend::SystemVerilogScalarKind::None
+                ? frontend::SystemVerilogScalarKind::Real
+                : real_kind;
+            scalar.bits
+                = scalar.kind == frontend::SystemVerilogScalarKind::ShortReal
+                ? std::bit_cast<std::uint32_t>(static_cast<float>(number))
+                : std::bit_cast<std::uint64_t>(number);
+            return scalar.canonical();
+        };
         std::optional<std::string> identity;
         if (value.size() >= 2U && value.front() == '"'
             && value.back() == '"') {
             identity = semantic::systemverilog_string_identity(
                 value.substr(1U, value.size() - 2U));
+        } else if (real
+            && (real_kind != frontend::SystemVerilogScalarKind::None
+                || untyped)) {
+            identity = real_identity(*real);
+        } else if (real) {
+            if (std::isfinite(*real)
+                && std::abs(*real) < 9.2e18) {
+                identity = compiled_systemverilog_integral_identity(
+                    *declaration->systemverilog,
+                    std::to_string(std::llround(*real)));
+            }
+        } else if (real_kind != frontend::SystemVerilogScalarKind::None) {
+            std::int64_t number { };
+            const auto parsed = std::from_chars(
+                value.data(), value.data() + value.size(), number);
+            if (!value.empty() && parsed.ec == std::errc { }
+                && parsed.ptr == value.data() + value.size()) {
+                identity = real_identity(static_cast<double>(number));
+            }
         } else {
             std::int64_t number { };
             const auto parsed = std::from_chars(
@@ -18410,7 +18896,7 @@ HierarchyBuilder::compiled_systemverilog_root_parameter_actuals(
                 "FSIM-ELAB-GENERIC-011",
                 "top-level parameter override '"
                     + declaration->systemverilog->name + "=" + value
-                    + "' is not an integer or quoted string value",
+                    + "' is not an integer, real or quoted string value",
                 compiled_source_span(
                     *compiled_, declaration->systemverilog->source));
             continue;
@@ -23138,7 +23624,13 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
         const auto id = subtype
             ? add_compiled_vhdl_composite_value_signal(working_specialization,
                   *subtype, declaration.scope, declaration.source, name,
-                  PackedLogic4::from_msb_string(*actual->vhdl_elaborated_bits),
+                  // Nine-state digits keep their STD_ULOGIC value.
+                  actual->vhdl_elaborated_bits->find_first_not_of("01xzXZ")
+                          == std::string::npos
+                      ? PackedLogic4::from_msb_string(
+                            *actual->vhdl_elaborated_bits)
+                      : PackedLogic4::from_logic9_msb_string(
+                            *actual->vhdl_elaborated_bits),
                   std::nullopt, working_path, working_signals,
                   working_read_only_signals, container_objects)
             : std::nullopt;
@@ -35205,6 +35697,10 @@ void HierarchyBuilder::finalize()
     append_toggle_coverage_monitors();
     append_fsm_coverage_monitors();
     finish();
+    // Lowering is over: the virtual interface handles move to the design
+    // for VPI (IEEE 1800-2023 37.29); no copy is made.
+    design_.systemverilog_interface_handles_
+        = std::move(systemverilog_interface_handles_);
     // Lowering is over: nothing holds a description any more, so the table
     // becomes the finished design's vector.
     design_.signal_info_.seal();

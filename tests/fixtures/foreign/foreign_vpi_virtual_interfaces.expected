@@ -1,0 +1,19 @@
+#c vi type=vpiVirtualInterfaceVar name=vi modport=0 expr=- actual=top.s1
+#c vi typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-
+#c vn type=vpiVirtualInterfaceVar name=vn modport=0 expr=- actual=top.s2
+#c vn typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-
+#c vm type=vpiVirtualInterfaceVar name=vm modport=1 expr=- actual=-
+#c vm typespec type=vpiInterfaceTypespec defname=phy modport=1 parent=SBus
+#c plain type=vpiIntVar
+#c top virtual vi
+#c top virtual vm
+#c top virtual vn
+#c top variables=5
+#c Xactor.bus type=vpiVirtualInterfaceVar name=bus modport=0 expr=- actual=-
+#c Xactor.bus typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-
+#c Xactor.pbus type=vpiVirtualInterfaceVar name=pbus modport=1 expr=- actual=-
+#c Xactor.pbus typespec type=vpiInterfaceTypespec defname=phy modport=1 parent=SBus
+#c t.bus type=vpiVirtualInterfaceVar name=bus modport=0 expr=- actual=top.s2
+#c t.bus typespec type=vpiInterfaceTypespec defname=SBus modport=0 parent=-
+#c t.pbus type=vpiVirtualInterfaceVar name=pbus modport=1 expr=- actual=-
+#c t.pbus typespec type=vpiInterfaceTypespec defname=phy modport=1 parent=SBus

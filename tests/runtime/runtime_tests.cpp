@@ -80,15 +80,6 @@ int main(const int argc, const char* const* argv)
         test_process_state_storage();
         test_executor_provenance_contract();
         test_systemverilog_scalar_values();
-        test_systemverilog_dpi_scalar_marshalling();
-        test_systemverilog_dpi_real_string_chandle_marshalling();
-        test_systemverilog_dpi_composite_marshalling();
-        test_systemverilog_dpi_open_arrays();
-        test_systemverilog_dpi_scopes();
-        test_systemverilog_dpi_callbacks();
-        test_systemverilog_dpi_tasks();
-        test_systemverilog_dpi_plugin_planning();
-        test_systemverilog_dpi_engine_differential();
         test_vhdl_vhpi_host_abi();
         test_vhdl_vhpi_error_and_handles();
         test_vhdl_vhpi_hierarchy_and_names();

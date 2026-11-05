@@ -1,0 +1,53 @@
+#c drc asynchon=0
+#c paramdrc change=1 argument=1 time=6
+#c paramdrc change=2 argument=1 time=11
+#c scales top unit=-9 precision=-12 simulation=-12,-12
+#c scales time=50 string=50000
+#c strgetp wide d=1208925819614629174706176
+#c strgetp signed d=-549755813888
+#c strgetp mixed d=X
+#c strgetp allx d=x
+#c strgetp allz d=z
+#c strgetp somez d=Z
+#c strgetp string b=hello
+#c strgetp integer d=-3
+#c strgetp time d=4294967296
+#c nump=17
+#c arg 1 type=11 size=100
+#c arg 2 type=11 size=40
+#c arg 3 type=11 size=10
+#c arg 4 type=11 size=4
+#c arg 5 type=11 size=4
+#c arg 6 type=11 size=4
+#c arg 7 type=1 size=5
+#c arg 8 type=16 size=0
+#c arg 9 type=11 size=32
+#c arg 10 type=11 size=64
+#c arg 11 type=14 size=8
+#c arg 12 type=10 size=1
+#c arg 13 type=10 size=4
+#c arg 14 type=14 size=8
+#c arg 15 type=0 size=0
+#c arg 16 type=13 size=4
+#c arg 17 type=12 size=1
+#c past typep=0 sizep=0
+#c node reg type=101 ngroups=4 size=100 sign=0 ms=99 ls=0
+#c node integer type=102 ngroups=1 size=32 sign=1 ms=31 ls=0
+#c node time type=103 ngroups=2 size=64 sign=0 ms=63 ls=0
+#c node scalar net type=105 ngroups=1 size=1 sign=0 ms=0 ls=0
+#c node vector net type=104 ngroups=1 size=4 sign=0 ms=3 ls=0
+#c node word type=101 ngroups=1 size=8 sign=0 ms=7 ls=0
+#c node part select type=101 ngroups=1 size=4 sign=0 ms=99 ls=0
+#c node null type=100 ngroups=0 size=0 sign=0 ms=0 ls=0
+#c node strength0=0 strength1=32
+#c node memory type=106 groupbytes=1 size=8 elements=4
+#c   element 0 aval=a5 bval=00
+#c   element 1 aval=5a bval=00
+#c   element 2 aval=0f bval=00
+#c   element 3 aval=ff bval=00
+#c expr 14 type=14 ngroups=1 size=8 lhs=2 rhs=2
+#c expr 16 type=13 ngroups=1 size=4 lhs=7 rhs=4
+#c expr 17 type=12 ngroups=1 size=1 lhs=3 rhs=3
+#c expr 8 type=16 ngroups=0 size=0 lhs=-1 rhs=-1
+#c scales slow unit=-7 precision=-8 simulation=-12,-12
+#c scales time=1 string=100000

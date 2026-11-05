@@ -17714,6 +17714,19 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
                             .spelling);
                 }
             }
+            // A tool-specified override has no expression; its value
+            // carries its kind (23.10).
+            const auto& actuals
+                = specialized_hir_unit_->specialization().actual_identities;
+            if (const auto bound = std::ranges::find(actuals, id,
+                    &semantic::SpecializedHirActualIdentity::declaration);
+                bound != actuals.end() && !bound->actual_expression) {
+                if (const auto scalar
+                    = decode_hir_systemverilog_scalar_constant(
+                        bound->identity)) {
+                    return scalar->kind;
+                }
+            }
             return hir_systemverilog_scalar_kind(
                 hir_parameter_type_expression(id).value_or(
                     *record.initializer));

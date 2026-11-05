@@ -783,13 +783,6 @@ add_library(
   src/runtime/vhpi_association.cpp
   src/runtime/vhpi_io.cpp
   src/runtime/vhpi_checkpoint.cpp
-    src/runtime/dpi_composite.cpp
-    src/runtime/dpi_callback.cpp
-    src/runtime/dpi_marshalling.cpp
-    src/runtime/dpi_open_array.cpp
-    src/runtime/dpi_plugin.cpp
-    src/runtime/dpi_scope.cpp
-    src/runtime/dpi_task.cpp
     src/runtime/vhpi_error.cpp
     src/runtime/vhpi_object.cpp
     src/runtime/vhpi_plugin.cpp

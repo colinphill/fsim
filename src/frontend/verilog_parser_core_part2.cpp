@@ -2163,7 +2163,9 @@ DesignUnit VerilogParser::parse_module(
         }
     }
     generate_dpi_declarations_.clear();
-    generate_dpi_export_service(unit);
+    generate_dpi_export_service(
+        unit, unit.systemverilog_dpi_declarations, callable_type_tokens_,
+        false);
     resolve_dpi_declarations(
         unit.systemverilog_dpi_declarations,
         unit.functions,

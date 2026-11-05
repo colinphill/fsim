@@ -1,0 +1,14 @@
+#c u1 kind=1 compdecl=:top:leaf compname=leaf
+#c u2 kind=0 compdecl=- compname=- error=1
+#c call twice funcdecl=:top:twice subpdecl=:top:twice
+#c call drive funcdecl=- subpdecl=:top:drive drivensigs=:top:s
+#c call "+" isoperator=1 opname="+" subpdecl=-
+#c range kind=vhpiintrangek left=2 right=6
+#c simnet of s=:top:s of t=:top:t of a process=-
+#c contributors of t=1 local=1
+#c sensitivities of q=1 signames=1
+#c library work kind=vhpilibrarydeclk
+#c unit vhpientitydeclk leaf
+#c unit vhpientitydeclk top
+#c unit vhpiarchbodyk a
+#c unit vhpiarchbodyk rtl
