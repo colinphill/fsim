@@ -93,6 +93,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 |---|---|---|
 | `FSIM-WS-001` | error | Workspace storage, object ownership, snapshot selection, or top-level name lookup failed. |
 | `FSIM-WS-002` | error | A compiled object depends on a library definition that changed or was deleted; recompile the consumer. |
+| `FSIM-WS-003` | error, note | A library object was written by an older fsim (format or schema identity differs from this build's). Elaboration reports it as an error; compile leaves the object out of its environment and, only when the compile then fails, adds a note naming the source files to recompile. |
 | `FSIM-WORKSPACE-004` | error | Catalog object selection does not match validated compiled definitions or selects duplicates. |
 | `FSIM-WS-SC001` | error | Managed SystemC compilation has no source files or repeats the same source through equivalent paths. |
 | `FSIM-WS-SC002` | error | The SystemC workspace source identity, library catalog, managed artifact allocation, or commit cannot be resolved or published. |
@@ -505,6 +506,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SDF-SESSION-001` | error | A session SDF input cannot be read within the file-body limit, or the design, time resolution or retained baseline is invalid. |
 | `FSIM-SDF-SESSION-002` | error | Session SDF selection contains no applicable annotations or an invalid selected target scope. |
 | `FSIM-SDF-SESSION-003` | error | A session SDF request contains a planned target family outside connected specify-path, timing-check, `INTERCONNECT` and `PORT` support, or an `INTERCONNECT` or `PORT` annotation without a complete effective delay. |
+| `FSIM-SDF-SESSION-004` | warning | An SDF `INTERCONNECT` or `PORT` delay is recorded and published through VPI but does not delay the net in simulation: its load is a top-level port or a select of a port, the sources of the load end with different delays (one delayed copy serves all of them), no process of the load instance reads the port, or one writes it or uses an operation the net split does not cover. |
 | `FSIM-SDF-EFFECTIVE-001` | error | Effective SDF persistence receives incomplete identities, generation, policy, exact-value records, or producer-relative provenance. |
 | `FSIM-SDF-EFFECTIVE-002` | error | An effective SDF object, design, library, native-cache, or checkpoint archive has a stale schema, wrong artifact kind, malformed/truncated envelope, trailing data, or checksum corruption. |
 | `FSIM-SDF-EFFECTIVE-003` | error | Effective SDF persistence finds duplicate target ownership or a producer, policy, generation, target, or provenance identity incompatible with the consumer. |

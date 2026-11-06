@@ -50,6 +50,25 @@ bool workspace_error(diagnostic::Engine&, std::string);
     const workspace::Store&, const WorkspaceCatalogs&,
     std::string_view replacement_library, std::span<const std::string> replaced_sources,
     diagnostic::Engine&);
+// A catalog object written by an incompatible fsim build. Compile leaves
+// it out of its environment; its own sources rebuild it.
+struct OutdatedObject {
+    std::string library;
+    std::string id;
+    std::filesystem::path path;
+    std::string reason;
+    std::vector<std::string> sources;
+    std::vector<std::string> units;
+};
+
+/// The catalogs' Hdl objects that are outdated (checked only on a failed
+/// load, so the common case reads no payload twice).
+[[nodiscard]] std::vector<OutdatedObject> find_outdated_objects(
+    const workspace::Store&, const WorkspaceCatalogs&);
+/// Names the object and the source files to recompile. `skipped` makes it
+/// a note about an object compile left out of its environment, otherwise
+/// an error.
+void report_outdated_object(diagnostic::Engine&, const OutdatedObject&, bool skipped);
 bool validate_workspace_dependencies(const WorkspaceCatalogs&, diagnostic::Engine&);
 [[nodiscard]] std::vector<workspace::UnitDependency> workspace_dependencies(
     const semantic::CompiledDesign&, std::span<const semantic::UnitId>,

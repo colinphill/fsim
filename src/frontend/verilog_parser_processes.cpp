@@ -916,7 +916,10 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
     }
     if (immediate_directive("cover")) {
         const auto start = advance();
+        bool deferred = false;
+        bool final_cover = false;
         if (match(TokenKind::Hash)) {
+            deferred = true;
             if (at(TokenKind::Number) && current().text == "0") {
                 advance();
             } else {
@@ -924,10 +927,13 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     "an observed deferred immediate cover requires '#0'");
             }
         } else {
-            (void)match_keyword("final");
+            final_cover = match_keyword("final");
         }
         Statement statement;
         statement.kind = StatementKind::If;
+        statement.immediate_directive = Statement::ImmediateDirective::Cover;
+        statement.immediate_deferred = deferred;
+        statement.immediate_final = final_cover;
         expect(TokenKind::LeftParen, "'(' after cover",
             "FSIM-SV-PARSE-137");
         statement.condition = parse_expression();

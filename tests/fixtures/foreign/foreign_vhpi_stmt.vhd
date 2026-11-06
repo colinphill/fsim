@@ -73,7 +73,7 @@ begin
 
   -- A concurrent procedure call, and a signal for the sensitivity set.
   blk : block is
-    signal sg : bit := '0';
+    signal sg, sh : bit := '0';
     procedure tick(constant d : in integer) is
     begin
       null;
@@ -86,5 +86,6 @@ begin
       sg <= '1';
       wait;
     end process;
+    sa : sh <= '1';
   end block;
 end architecture;

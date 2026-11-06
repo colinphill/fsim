@@ -702,8 +702,25 @@ namespace {
             if (record.kind != workspace::ArtifactKind::Hdl) {
                 return true;
             }
-            const auto metadata = artifact::load_object_metadata(*path, diagnostics_);
+            // An object written by an older fsim names the sources to recompile.
+            const auto outdated = [&]() -> bool {
+                const auto reason = outdated_object_reason(*path);
+                if (!reason) {
+                    return false;
+                }
+                report_outdated_object(diagnostics_,
+                    { location(index).name, record.id, *path, *reason, record.sources, { } },
+                    false);
+                return true;
+            };
+            diagnostic::Engine metadata_diagnostics;
+            const auto metadata = artifact::load_object_metadata(*path, metadata_diagnostics);
             if (!metadata) {
+                if (!outdated()) {
+                    for (const auto& diagnostic : metadata_diagnostics.diagnostics()) {
+                        diagnostics_.report(diagnostic);
+                    }
+                }
                 return false;
             }
             if (metadata->compilation_digest != record.fingerprint) {
@@ -717,10 +734,19 @@ namespace {
                 selected.active_units.push_back(owned.unit);
                 select_package_body(location(index).name, owned.unit);
             }
+            diagnostic::Engine load_diagnostics;
             const auto design = load_workspace_objects(
-                std::array { selected }, diagnostics_, false, config_.base_directory);
+                std::array { selected }, load_diagnostics, false, config_.base_directory);
             if (!design) {
+                if (!outdated()) {
+                    for (const auto& diagnostic : load_diagnostics.diagnostics()) {
+                        diagnostics_.report(diagnostic);
+                    }
+                }
                 return false;
+            }
+            for (const auto& diagnostic : load_diagnostics.diagnostics()) {
+                diagnostics_.report(diagnostic);
             }
             select_instances(*design);
             for (const auto& reference : design->references()) {

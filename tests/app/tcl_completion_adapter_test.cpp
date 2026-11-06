@@ -276,6 +276,7 @@ void test_read_only_completion_and_generation_snapshot()
         nullptr,
         nullptr,
         nullptr,
+        nullptr,
         { },
         0U,
         0U,

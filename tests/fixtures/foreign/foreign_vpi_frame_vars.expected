@@ -1,0 +1,25 @@
+#c callbacks on body=1
+#c frame start automatics=2
+#c stmt a vpiBegin line 9
+#c stmt a vpiAssignment line 10
+#c stmt a vpiAssignment line 11
+#c a automatic step vpiIntegerVar size=32 value=1
+#c a automatic twice vpiIntegerVar size=32 value=2
+#c a frame active=1 parent=0
+#c frame start automatics=2
+#c stmt b vpiBegin line 9
+#c stmt b vpiAssignment line 10
+#c stmt b vpiAssignment line 11
+#c b automatic step vpiIntegerVar size=32 value=2
+#c b automatic twice vpiIntegerVar size=32 value=4
+#c b frame active=1 parent=0
+#c valuechange refused
+#c d automatic who vpiStringVar full=top.a.describe.who value=x
+#c d automatic n vpiIntVar full=top.a.describe.n value=7
+#c d automatic tag vpiStringVar full=top.a.describe.tag value=x!
+#c d automatic mark vpiIntVar full=top.a.describe.mark value=7
+#c d automatic pending vpiRegArray full=top.a.describe.pending array=vpiQueueArray value=none
+#c describe patched 42 1
+#c t automatic tmp vpiIntVar full=top.a.tally.tmp value=3
+#c done a=2 b=4
+#c stale automatic type=-1

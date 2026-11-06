@@ -1642,6 +1642,14 @@ bool fold_expression(const CompiledDesign& design,
     if (!value) {
         return false;
     }
+    if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
+        // The VHPI static model keeps seeing the call (IEEE 1076-2019 19.8);
+        // only the literal is simulated.
+        if (expression.kind == Kind::call && !expression.unfolded_call) {
+            expression.unfolded_call
+                = std::make_shared<const vhdl::Expression>(expression);
+        }
+    }
     write_literal(expression, *value);
     return true;
 }

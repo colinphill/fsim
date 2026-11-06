@@ -729,8 +729,15 @@ state, S3):
   - *Writable* is implemented for deposits: a VPI put to a kernel-owned,
     unforced signal writes its slot (`deposit_kernel_signal`) and wakes its
     readers; VPI reads of owned signals read the slot
-    (`kernel_signal_value`). Force and release still go through the host
-    commit path.
+    (`kernel_signal_value`). Force, procedural assign, deassign and release
+    go through the host's layer (`forced_values`, `forced_masks`); the signal's
+    slot follows it (`StaticKernel::override_changed`): the signal is watched,
+    each store has the overridden bits put back (`restore_override`), so the
+    kernel's readers see the forced value and a write is hidden, and a
+    released net's drivers run again (`rerun_kernel_drivers`). A store inside
+    the activation that first overrides a signal not already published is
+    not intercepted (the watch applies at the next activation); a design with
+    a user system task call publishes every signal, so it is.
   - Per-partition recompile at a safe point is *not yet*.
 - **Witness.** T-sv, T-vhdl, T-cone (hidden signals read back mid-run and at
   the end: the on-demand class). To add: observed and writable classes.

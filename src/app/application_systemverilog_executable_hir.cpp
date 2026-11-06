@@ -1430,6 +1430,8 @@ namespace {
                         return expression(value, scope, parent);
                     });
             output.systemverilog_net_type = input.systemverilog_net_type;
+            output.systemverilog_interconnect
+                = input.systemverilog_interconnect;
             output.systemverilog_resolution_function
                 = input.systemverilog_resolution_function;
             output.signed_value = !resolved_named_type && input.is_signed;
@@ -1959,6 +1961,19 @@ namespace {
                 = elaboration::hir_assertion_severity(input.assertion_severity);
             output.assertion_has_pass_action = input.assertion_has_pass_action;
             output.assertion_has_failure_action = input.assertion_has_failure_action;
+            output.immediate_directive = static_cast<
+                sv::Statement::ImmediateDirective>(input.immediate_directive);
+            output.immediate_deferred = input.immediate_deferred;
+            output.foreach_collection = expression(
+                input.foreach_collection, child_scope, statement_origin);
+            for (const auto& variable : input.foreach_variables) {
+                output.foreach_variables.push_back(expression(
+                    variable, child_scope, statement_origin));
+            }
+            if (!input.foreach_body_span.empty()) {
+                output.foreach_body_source = source(input.foreach_body_span);
+            }
+            output.immediate_final = input.immediate_final;
             output.output_text = input.output_text;
             output.output_generated_text = static_cast<sv::GeneratedTextKind>(
                 input.output_generated_text);

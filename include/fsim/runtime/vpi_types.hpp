@@ -259,6 +259,12 @@ struct SystemVerilogVpiTypeInfo {
     std::shared_ptr<const SystemVerilogVpiTypeDescriptor> declared;
     // The declaration's typespec (IEEE 1800-2023 37.25 vpiTypespec).
     std::shared_ptr<const SystemVerilogVpiTypespec> typespec;
+    // A net or net array declared `interconnect` (IEEE 1800-2023 6.6.8,
+    // 37.24); `net_kind` is the kind of the net it was merged with.
+    bool interconnect { };
+    // The user-defined nettype a net is declared with, empty for a net of a
+    // built-in kind (IEEE 1800-2023 6.6.7, 37.16 detail 11).
+    std::string nettype;
     std::optional<SystemVerilogVpiDriverRange> driver_range;
     std::optional<std::uint32_t> semantic_unit_id;
     std::optional<std::uint32_t> source_id;
@@ -270,6 +276,20 @@ struct SystemVerilogVpiTypeInfo {
     // 1800-2023 37.10 vpiDefFile, vpiDefLineNo).
     std::string definition_path;
     std::uint32_t definition_line { };
+    // A task or function declared by a DPI import or named by a DPI export
+    // (IEEE 1800-2023 37.40 details 6-10): vpiAccessType, vpiDPIPure,
+    // vpiDPIContext, vpiDPICStr, vpiDPICIdentifier, and for an import the
+    // vpiFuncType, vpiSize and vpiSigned of its result.
+    enum class DpiAccess : std::uint8_t { None, Import, Export };
+    DpiAccess dpi_access { DpiAccess::None };
+    bool dpi_pure { };
+    bool dpi_context { };
+    // The deprecated "DPI" link string (vpiDPI) rather than "DPI-C".
+    bool dpi_legacy_string { };
+    std::string dpi_c_identifier;
+    std::int32_t dpi_func_type { };
+    std::int64_t dpi_size { };
+    bool dpi_signed { };
     // A gate primitive's type name, such as `and` (IEEE 1800-2023 37.7
     // vpiDefName, vpiPrimType).
     std::string definition_name;

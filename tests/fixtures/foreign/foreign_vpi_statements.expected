@@ -4,6 +4,14 @@
 #c   rhs: vpiOperation line=11 op=30
 #c     vpiReg line=7 top.d
 #c     vpiConstant line=11 4'b1010 const=3 size=4 bin=1010
+#c vpiContAssign line=66
+#c   delay: vpiConstant line=66 3 const=1 size=64 bin=0000000000000000000000000000000000000000000000000000000000000011
+#c   lhs: vpiNet line=66 top.nw
+#c   rhs: vpiOperation line=66 op=29
+#c     vpiReg line=7 top.d
+#c     vpiConstant line=66 4'b0001 const=3 size=4 bin=0001
+#c contassign line=11 netdeclassign=0
+#c contassign line=66 netdeclassign=1
 #c vpiAlways line=13 always_type=1
 #c   vpiEventControl line=13
 #c     cond: vpiOperation line=13 op=39
@@ -117,6 +125,13 @@
 #c formal top.wide.a type=vpiLogicTypespec left=3 right=0
 #c select top.d[0] name=d[0] value=x
 #c select top.d[2:1] name=d[2:1] value=xx
+#c immediate vpiImmediateAssert line=71 deferred=0 final=0 expr=vpiOperation then=vpiAssignment else=none
+#c immediate vpiImmediateAssume line=72 deferred=1 final=0 expr=vpiOperation then=none else=vpiSysTaskCall
+#c immediate vpiImmediateCover line=73 deferred=1 final=1 expr=vpiOperation then=vpiSysTaskCall else=none
+#c foreach vpiForeachStmt line=80 variables=top.arr
+#c foreach loopvar vpiIntegerVar
+#c foreach loopvar vpiOperation null
+#c foreach body vpiAssignment line=81
 #c 10 force vpiForce line=40 top.q=0101
 #c 12 release vpiRelease line=41 top.q=0101
 #c 13 assign vpiAssignStmt line=42 top.r=1110

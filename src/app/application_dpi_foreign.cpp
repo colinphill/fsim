@@ -66,6 +66,10 @@ struct Parameter {
     // actual per element, leftmost element first (IEEE 1800-2023 H.7.4).
     std::size_t first_actual { };
     std::size_t actual_count { 1U };
+    // An open array of strings whose size the actual gives at run time (a
+    // dynamic array or queue): its strings are the one actual, encoded
+    // (runtime::simir::encode_dpi_string_array).
+    bool whole_strings { };
 };
 
 // The bound of a dimension whose size the actual gives at run time.
@@ -360,14 +364,23 @@ void finish_type(CType& type)
         }
         parameter.first_actual = signature.actual_total;
         if (is_string_array(parameter)) {
-            // The strings pass one per actual, so every dimension is sized.
-            if (std::ranges::any_of(parameter.bounds,
-                    [](const std::int32_t bound) {
-                        return bound == runtime_extent;
-                    })) {
-                malformed();
+            const bool run_time = std::ranges::any_of(parameter.bounds,
+                [](const std::int32_t bound) {
+                    return bound == runtime_extent;
+                });
+            if (run_time) {
+                // A dynamic array or queue of strings is one dimension and
+                // passes whole, as one encoded actual.
+                if (parameter.code != 'A' || parameter.bounds.size() != 2U
+                    || parameter.bounds.front() != runtime_extent) {
+                    malformed();
+                }
+                parameter.whole_strings = true;
+            } else {
+                // The strings pass one per actual, so every dimension is
+                // sized.
+                parameter.actual_count = element_count(parameter.bounds);
             }
-            parameter.actual_count = element_count(parameter.bounds);
         }
         signature.actual_total += parameter.actual_count;
         signature.parameters.push_back(std::move(parameter));
@@ -499,21 +512,23 @@ struct LogicWord {
 
 // The C value of one actual; small scalars are held in `scalar`, strings
 // in `text`, vectors in `bits` or `logic`.
+union Scalar {
+    std::int8_t i8;
+    std::uint8_t u8;
+    std::int16_t i16;
+    std::uint16_t u16;
+    std::int32_t i32;
+    std::uint32_t u32;
+    std::int64_t i64;
+    std::uint64_t u64;
+    double f64;
+    float f32;
+    void* pointer;
+    const char* text;
+};
+
 struct Slot {
-    union {
-        std::int8_t i8;
-        std::uint8_t u8;
-        std::int16_t i16;
-        std::uint16_t u16;
-        std::int32_t i32;
-        std::uint32_t u32;
-        std::int64_t i64;
-        std::uint64_t u64;
-        double f64;
-        float f32;
-        void* pointer;
-        const char* text;
-    } scalar { };
+    Scalar scalar { };
     std::vector<std::uint32_t> bits;
     std::vector<LogicWord> logic;
     void* reference { };
@@ -524,6 +539,9 @@ struct Slot {
     // An array of strings: the C pointer of each element (IEEE 1800-2023
     // H.7.4); an open array's `bytes` is unused.
     std::vector<const char*> texts;
+    // The strings of a run-time sized array of strings, which `texts` point
+    // into.
+    std::vector<std::string> owned;
 };
 
 void store_actual(Slot& slot, const Parameter& parameter, const PackedLogic4& value,
@@ -692,6 +710,24 @@ void publish_array(Slot& slot, const Parameter& parameter, void* const data)
 void store_strings(Slot& slot, const Parameter& parameter,
     const std::vector<std::string>& strings)
 {
+    if (parameter.whole_strings) {
+        if (parameter.first_actual >= strings.size()) {
+            throw std::runtime_error {
+                "DPI string-array actual does not match its dimensions" };
+        }
+        // The size is the array's at the call: 0 upwards (H.12.2).
+        slot.owned = runtime::simir::decode_dpi_string_array(
+            strings[parameter.first_actual]);
+        slot.bounds = { 0,
+            static_cast<std::int32_t>(slot.owned.size()) - 1 };
+        slot.texts.assign(slot.owned.size(), nullptr);
+        for (std::size_t ordinal = 0U; ordinal < slot.owned.size();
+             ++ordinal) {
+            slot.texts[ordinal] = slot.owned[ordinal].c_str();
+        }
+        publish_array(slot, parameter, slot.texts.data());
+        return;
+    }
     const auto count = parameter.actual_count;
     if (parameter.first_actual + count > strings.size()) {
         throw std::runtime_error {
@@ -713,6 +749,16 @@ void store_strings(Slot& slot, const Parameter& parameter,
 void load_strings(const Slot& slot, const Parameter& parameter,
     std::vector<std::string>& strings)
 {
+    if (parameter.whole_strings) {
+        std::vector<std::string> left(slot.texts.size());
+        for (std::size_t ordinal = 0U; ordinal < left.size(); ++ordinal) {
+            const auto* const text = slot.texts[ordinal];
+            left[ordinal] = text == nullptr ? std::string { } : text;
+        }
+        strings[parameter.first_actual]
+            = runtime::simir::encode_dpi_string_array(left);
+        return;
+    }
     const auto count = parameter.actual_count;
     std::vector<std::string> result(count);
     const bool open = parameter.code == 'A';
@@ -890,30 +936,53 @@ void store_actual(Slot& slot, const Parameter& parameter, const PackedLogic4& va
     }
 }
 
+// The value of a scalar of signature letter `code` (IEEE 1800-2023 H.7.4).
+[[nodiscard]] PackedLogic4 scalar_value(const char code, const Scalar& scalar)
+{
+    switch (code) {
+    case 'c':
+    case 'C':
+        return from_bits(scalar.u8, 8U);
+    case 's':
+    case 'S':
+        return from_bits(scalar.u16, 16U);
+    case 'i':
+    case 'I':
+        return from_bits(scalar.u32, 32U);
+    case 'l':
+    case 'L':
+    case 'p':
+        return from_bits(scalar.u64, 64U);
+    case 'd':
+        return from_bits(std::bit_cast<std::uint64_t>(scalar.f64), 64U);
+    case 'f':
+        return from_bits(std::bit_cast<std::uint32_t>(scalar.f32), 32U);
+    case 'b':
+        return from_bits(scalar.u8 & 1U, 1U);
+    case 'g':
+        return PackedLogic4(1U, from_sv_logic(scalar.u8));
+    default:
+        return PackedLogic4 { };
+    }
+}
+
 [[nodiscard]] PackedLogic4 load_actual(const Slot& slot, const Parameter& parameter)
 {
     switch (parameter.code) {
     case 'c':
     case 'C':
-        return from_bits(slot.scalar.u8, 8U);
     case 's':
     case 'S':
-        return from_bits(slot.scalar.u16, 16U);
     case 'i':
     case 'I':
-        return from_bits(slot.scalar.u32, 32U);
     case 'l':
     case 'L':
     case 'p':
-        return from_bits(slot.scalar.u64, 64U);
     case 'd':
-        return from_bits(std::bit_cast<std::uint64_t>(slot.scalar.f64), 64U);
     case 'f':
-        return from_bits(std::bit_cast<std::uint32_t>(slot.scalar.f32), 32U);
     case 'b':
-        return from_bits(slot.scalar.u8 & 1U, 1U);
     case 'g':
-        return PackedLogic4(1U, from_sv_logic(slot.scalar.u8));
+        return scalar_value(parameter.code, slot.scalar);
     case 'B': {
         PackedLogic4 value(parameter.width, Logic4::zero);
         for (std::size_t index = 0U; index < parameter.width; ++index) {
@@ -943,6 +1012,205 @@ void store_actual(Slot& slot, const Parameter& parameter, const PackedLogic4& va
     default:
         return PackedLogic4 { };
     }
+}
+
+// The narrow value of `value` as the C code sees a two-state scalar: x and z
+// read as 0 (IEEE 1800-2023 H.7.2).
+[[nodiscard]] std::uint64_t known_word(const PackedLogic4& value)
+{
+    if (value.is_logic9()) {
+        return known_bits(value);
+    }
+    const auto word = value.unchecked_low_word();
+    const auto width = std::min<std::size_t>(value.width(), 64U);
+    const auto mask = width >= 64U ? ~std::uint64_t { 0 }
+                                   : (std::uint64_t { 1 } << width) - 1U;
+    return word.aval & ~word.bval & mask;
+}
+
+// The 32-bit word `index` of a value plane; zero past the plane.
+[[nodiscard]] std::uint32_t plane_word(
+    const std::span<const std::uint64_t> plane, const std::size_t index)
+{
+    const auto word = index / 2U;
+    return word < plane.size()
+        ? static_cast<std::uint32_t>(plane[word] >> ((index % 2U) * 32U))
+        : 0U;
+}
+
+// The bits of the 32-bit word `index` that lie within `width`.
+[[nodiscard]] std::uint32_t word_mask(
+    const std::size_t width, const std::size_t index)
+{
+    if (index * 32U >= width) {
+        return 0U;
+    }
+    const auto used = width - index * 32U;
+    return used >= 32U ? ~std::uint32_t { 0 }
+                       : (std::uint32_t { 1 } << used) - 1U;
+}
+
+// A packed vector actual as svBitVecVal or svLogicVecVal words (H.10.1.1)
+// at `cell`: the aval and bval planes are the C encoding, so the words are
+// copied, not visited bit by bit. A bit vector has x and z read as 0.
+void store_vector(const PackedLogic4& value, const std::size_t width,
+    const bool logic, unsigned char* const cell)
+{
+    const auto words = (width + 31U) / 32U;
+    if (value.is_logic9()) {
+        Slot slot;
+        Parameter parameter;
+        parameter.code = logic ? 'V' : 'B';
+        parameter.width = width;
+        const std::string none;
+        store_actual(slot, parameter, value, none);
+        std::memcpy(cell, logic ? static_cast<const void*>(slot.logic.data())
+                                : static_cast<const void*>(slot.bits.data()),
+            words * (logic ? 2U * sizeof(std::uint32_t)
+                           : sizeof(std::uint32_t)));
+        return;
+    }
+    const auto limit = std::min(width, value.width());
+    const auto aval = value.aval_words();
+    const auto bval = value.bval_words();
+    for (std::size_t index = 0U; index < words; ++index) {
+        const auto mask = word_mask(limit, index);
+        const auto a = plane_word(aval, index);
+        const auto b = plane_word(bval, index);
+        if (logic) {
+            const std::uint32_t pair[2] = { a & mask, b & mask };
+            std::memcpy(cell + index * sizeof(pair), pair, sizeof(pair));
+        } else {
+            const std::uint32_t known = a & ~b & mask;
+            std::memcpy(cell + index * sizeof(known), &known, sizeof(known));
+        }
+    }
+}
+
+[[nodiscard]] PackedLogic4 load_vector(const unsigned char* const cell,
+    const std::size_t width, const bool logic)
+{
+    const auto words = (width + 31U) / 32U;
+    std::vector<std::uint64_t> wide;
+    std::uint64_t aval { };
+    std::uint64_t bval { };
+    if (width > 64U) {
+        wide.assign(2U * ((width + 63U) / 64U), 0U);
+    }
+    const auto planes = wide.size() / 2U;
+    for (std::size_t index = 0U; index < words; ++index) {
+        std::uint32_t a { };
+        std::uint32_t b { };
+        if (logic) {
+            std::memcpy(&a, cell + index * 2U * sizeof(a), sizeof(a));
+            std::memcpy(&b, cell + (index * 2U + 1U) * sizeof(b), sizeof(b));
+        } else {
+            std::memcpy(&a, cell + index * sizeof(a), sizeof(a));
+        }
+        const auto mask = word_mask(width, index);
+        const auto shift = (index % 2U) * 32U;
+        if (width > 64U) {
+            wide[index / 2U] |= std::uint64_t { a & mask } << shift;
+            wide[planes + index / 2U] |= std::uint64_t { b & mask } << shift;
+        } else {
+            aval |= std::uint64_t { a & mask } << shift;
+            bval |= std::uint64_t { b & mask } << shift;
+        }
+    }
+    if (width > 64U) {
+        return PackedLogic4::from_word_planes(width,
+            std::span<const std::uint64_t> { wide.data(), planes },
+            std::span<const std::uint64_t> { wide.data() + planes, planes });
+    }
+    return PackedLogic4::from_aval_bval(width, aval, bval);
+}
+
+// One planned scalar or vector argument into its C value at `cell`; a string
+// is the caller's (its pointer).
+void store_planned(const runtime::simir::DpiArgumentPlan& argument,
+    const PackedLogic4& value, unsigned char* const cell)
+{
+    Scalar scalar { };
+    switch (static_cast<char>(argument.code)) {
+    case 'c':
+    case 'C':
+        scalar.u8 = static_cast<std::uint8_t>(known_word(value));
+        break;
+    case 's':
+    case 'S':
+        scalar.u16 = static_cast<std::uint16_t>(known_word(value));
+        break;
+    case 'i':
+    case 'I':
+        scalar.u32 = static_cast<std::uint32_t>(known_word(value));
+        break;
+    case 'l':
+    case 'L':
+    case 'p':
+        scalar.u64 = known_word(value);
+        break;
+    case 'd':
+        scalar.f64 = std::bit_cast<double>(known_word(value));
+        break;
+    case 'f':
+        scalar.f32 = std::bit_cast<float>(
+            static_cast<std::uint32_t>(known_word(value)));
+        break;
+    case 'b':
+        scalar.u8 = static_cast<std::uint8_t>(known_word(value) & 1U);
+        break;
+    case 'g':
+        scalar.u8 = value.width() == 0U ? 3U : sv_logic(value.get(0U));
+        break;
+    case 'B':
+    case 'V':
+        store_vector(value, argument.width,
+            static_cast<char>(argument.code) == 'V', cell);
+        return;
+    default:
+        throw std::runtime_error { "unsupported DPI argument type" };
+    }
+    std::memcpy(cell, &scalar, sizeof(scalar));
+}
+
+[[nodiscard]] PackedLogic4 load_planned(
+    const runtime::simir::DpiArgumentPlan& argument,
+    const unsigned char* const cell)
+{
+    const auto code = static_cast<char>(argument.code);
+    if (code == 'B' || code == 'V') {
+        return load_vector(cell, argument.width, code == 'V');
+    }
+    Scalar scalar { };
+    std::memcpy(&scalar, cell, sizeof(scalar));
+    return scalar_value(code, scalar);
+}
+
+// The C result of a call (a small integer widens to ffi_arg) as a scalar.
+[[nodiscard]] Scalar result_scalar(
+    const char code, const unsigned char* const bytes)
+{
+    Scalar scalar { };
+    switch (code) {
+    case 'd':
+        std::memcpy(&scalar.f64, bytes, sizeof(double));
+        break;
+    case 'f':
+        std::memcpy(&scalar.f32, bytes, sizeof(float));
+        break;
+    case 'c':
+    case 's':
+    case 'i':
+    case 'l':
+        scalar.i64 = static_cast<std::int64_t>(
+            *reinterpret_cast<const ffi_sarg*>(bytes));
+        break;
+    default:
+        scalar.u64 = static_cast<std::uint64_t>(
+            *reinterpret_cast<const ffi_arg*>(bytes));
+        break;
+    }
+    return scalar;
 }
 
 // Vectors, arrays and structures pass by pointer in every direction.
@@ -1056,33 +1324,213 @@ public:
             return serve_export(identity, actuals, strings);
         }
         auto& import = resolve(identity);
-        Call call;
-        prepare(import, call, actuals, strings);
         const auto caller = import.signature.context
             ? caller_of(identity)
             : std::nullopt;
         if (caller) {
+            return run_call(import, &scope_named(caller->instance),
+                caller->file, caller->line, actuals, strings);
+        }
+        return run_call(import, nullptr, { }, 0, actuals, strings);
+    }
+
+    Site bind(const std::string_view identity) override
+    {
+        return bind_site(identity);
+    }
+
+    Site bind_plan(const runtime::simir::DpiSitePlan& plan) override
+    {
+        auto* const site = bind_site(plan.identity);
+        if (site != nullptr && site->kind == BoundSite::Kind::call
+            && !plan.generic && agrees(site->import->signature, plan)) {
+            site->planned = true;
+        }
+        return site;
+    }
+
+    [[nodiscard]] bool planned_site(const Site site) const noexcept override
+    {
+        return static_cast<const BoundSite*>(site)->planned;
+    }
+
+    PackedLogic4 call_plan(const Site site,
+        const runtime::simir::DpiSitePlan& plan,
+        runtime::simir::DpiFrame& frame) override
+    {
+        const auto& bound = *static_cast<const BoundSite*>(site);
+        auto& import = *bound.import;
+        const auto count = plan.arguments.size();
+        // The C argument buffer: one cell per scalar, the words of a
+        // vector; `cells` are the pointers the by-pointer arguments pass.
+        alignas(16) unsigned char buffer[runtime::simir::dpi_planned_buffer_words
+            * 8U] { };
+        void* cells[runtime::simir::dpi_planned_argument_limit] { };
+        void* values[runtime::simir::dpi_planned_argument_limit] { };
+        alignas(16) std::uint64_t result[2] { };
+        for (std::size_t index = 0U; index < count; ++index) {
+            const auto& argument = plan.arguments[index];
+            auto* const cell = buffer + argument.offset * 8U;
+            const auto code = static_cast<char>(argument.code);
+            if (code == 'z') {
+                const char* const text = frame.read_text(argument.reg).c_str();
+                std::memcpy(cell, &text, sizeof(text));
+            } else {
+                store_planned(argument, frame.read(argument.reg), cell);
+            }
+            if (argument.reference || code == 'B' || code == 'V') {
+                cells[index] = cell;
+                values[index] = &cells[index];
+            } else {
+                values[index] = cell;
+            }
+        }
+        if (bound.scope != nullptr) {
             // A context import may call another; each restores its caller.
             const auto saved_scope = scope_;
             const auto saved_file = file_;
             const auto saved_line = line_;
-            scope_ = &scope_named(caller->instance);
-            file_ = std::string { caller->file };
-            line_ = caller->line;
-            invoke(import, call, true);
+            scope_ = bound.scope;
+            file_ = bound.file;
+            line_ = bound.line;
+            invoke(import, result, values, true);
             scope_ = saved_scope;
             file_ = saved_file;
             line_ = saved_line;
         } else {
-            invoke(import, call, false);
+            invoke(import, result, values, false);
         }
         raise_pending_error();
-        check_task_status(import, call);
-        return complete(import, call, actuals, strings);
+        check_task_status(import, static_cast<const void*>(result));
+        for (std::size_t index = 0U; index < count; ++index) {
+            const auto& argument = plan.arguments[index];
+            if (!argument.copy_out) {
+                continue;
+            }
+            const auto* const cell = buffer + argument.offset * 8U;
+            if (static_cast<char>(argument.code) == 'z') {
+                const char* text { };
+                std::memcpy(&text, cell, sizeof(text));
+                frame.write_text(argument.reg,
+                    text == nullptr ? std::string { } : std::string { text });
+            } else {
+                frame.write(argument.reg, load_planned(argument, cell));
+            }
+        }
+        const auto code = static_cast<char>(plan.result);
+        if (code == 'z') {
+            const char* text { };
+            std::memcpy(&text, result, sizeof(text));
+            frame.write_text(plan.result_text,
+                text == nullptr ? std::string { } : std::string { text });
+            return PackedLogic4(1U, Logic4::zero);
+        }
+        if (code == 'v' || code == 'T') {
+            return PackedLogic4(1U, Logic4::zero);
+        }
+        return scalar_value(code,
+            result_scalar(code, reinterpret_cast<const unsigned char*>(result)));
+    }
+
+    [[nodiscard]] bool context_site(const Site site) const noexcept override
+    {
+        const auto& bound = *static_cast<const BoundSite*>(site);
+        return DpiForeignService::context_import(bound.identity);
+    }
+
+    PackedLogic4 call_site(const Site site, std::vector<PackedLogic4>& actuals,
+        std::vector<std::string>& strings) override
+    {
+        const auto& bound = *static_cast<const BoundSite*>(site);
+        if (bound.kind == BoundSite::Kind::start) {
+            start(bound, actuals, strings);
+            return PackedLogic4(1U, Logic4::zero);
+        }
+        if (bound.kind == BoundSite::Kind::finish) {
+            return finish(bound.identity, actuals, strings);
+        }
+        return run_call(*bound.import, bound.scope, bound.file, bound.line,
+            actuals, strings);
     }
 
 private:
     static constexpr std::string_view export_prefix { "__fsim_dpi_export_" };
+
+    // A call site bound by `bind`: what a call needs of its identity, parsed
+    // once.
+    struct BoundSite {
+        enum class Kind { call, start, finish };
+        Kind kind { Kind::call };
+        // The identity without the start or finish marker.
+        std::string identity;
+        Import* import { };
+        // The caller's scope, file and line of a context import.
+        Scope* scope { };
+        std::string file;
+        int line { };
+        // The plan of the call site agrees with the import's signature and
+        // its arguments marshal natively (call_plan).
+        bool planned { };
+    };
+
+    // Whether a kernel image's plan describes the C signature of the loaded
+    // import: the same formals by letter, direction and width, the same
+    // result and context kind; each formal one actual.
+    [[nodiscard]] static bool agrees(const Signature& signature,
+        const runtime::simir::DpiSitePlan& plan)
+    {
+        if (signature.parameters.size() != plan.arguments.size()
+            || signature.result != static_cast<char>(plan.result)
+            || signature.context != plan.context
+            || signature.actual_total != plan.arguments.size()
+            || plan.arguments.size() > runtime::simir::dpi_planned_argument_limit) {
+            return false;
+        }
+        for (std::size_t index = 0U; index < plan.arguments.size(); ++index) {
+            const auto& parameter = signature.parameters[index];
+            const auto& argument = plan.arguments[index];
+            if (parameter.code != static_cast<char>(argument.code)
+                || parameter.reference != argument.reference
+                || parameter.width != argument.width
+                || parameter.actual_count != 1U
+                || parameter.first_actual != index) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    BoundSite* bind_site(const std::string_view identity)
+    {
+        // The export services and the other services' identities
+        // (`$vpi:`, `$vhpi:`) are not import calls.
+        if (identity.starts_with(export_prefix) || identity.starts_with('$')) {
+            return nullptr;
+        }
+        auto site = std::make_unique<BoundSite>();
+        auto text = identity;
+        if (identity.starts_with("!x")) {
+            site->kind = BoundSite::Kind::start;
+            text.remove_prefix(2U);
+        } else if (identity.starts_with("!f")) {
+            site->kind = BoundSite::Kind::finish;
+            text.remove_prefix(2U);
+        }
+        site->identity = std::string { text };
+        if (site->kind != BoundSite::Kind::finish) {
+            site->import = &resolve(text);
+            if (const auto caller = site->kind == BoundSite::Kind::start
+                        || site->import->signature.context
+                    ? caller_of(text)
+                    : std::nullopt) {
+                site->scope = &scope_named(caller->instance);
+                site->file = std::string { caller->file };
+                site->line = caller->line;
+            }
+        }
+        sites_.push_back(std::move(site));
+        return sites_.back().get();
+    }
 
     // The C values of one call's actuals.
     struct Call {
@@ -1135,6 +1583,33 @@ private:
         std::string error;
     };
 
+    // A call of `import`; a context import's `scope` is the caller's.
+    PackedLogic4 run_call(Import& import, Scope* const scope,
+        const std::string_view file, const int line,
+        std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings)
+    {
+        Call call;
+        prepare(import, call, actuals, strings);
+        if (scope != nullptr) {
+            // A context import may call another; each restores its caller.
+            const auto saved_scope = scope_;
+            const auto saved_file = file_;
+            const auto saved_line = line_;
+            scope_ = scope;
+            file_ = std::string { file };
+            line_ = line;
+            invoke(import, call, true);
+            scope_ = saved_scope;
+            file_ = saved_file;
+            line_ = saved_line;
+        } else {
+            invoke(import, call, false);
+        }
+        raise_pending_error();
+        check_task_status(import, call);
+        return complete(import, call, actuals, strings);
+    }
+
     void prepare(const Import& import, Call& call,
         const std::vector<PackedLogic4>& actuals,
         const std::vector<std::string>& strings)
@@ -1173,12 +1648,18 @@ private:
 
     void invoke(Import& import, Call& call, const bool context)
     {
+        invoke(import, call.result, call.values.data(), context);
+    }
+
+    void invoke(Import& import, void* const result, void** const values,
+        const bool context)
+    {
         const bool entered = context
             && fsim_svdpi_call_context_enter_v3(&context_) == 0;
         if (!context) {
             noncontext_import = &import;
         }
-        ffi_call(&import.cif, import.function, call.result, call.values.data());
+        ffi_call(&import.cif, import.function, result, values);
         noncontext_import = nullptr;
         if (entered) {
             (void)fsim_svdpi_call_context_leave_v3(&context_);
@@ -1213,7 +1694,6 @@ private:
             actuals[parameter.first_actual]
                 = load_actual(call.slots[index], parameter);
         }
-        Slot returned;
         const auto code = import.signature.result;
         if (code == 'z') {
             const char* text { };
@@ -1224,31 +1704,9 @@ private:
         if (code == 'v' || code == 'T') {
             return PackedLogic4(1U, Logic4::zero);
         }
-        const auto* const bytes
-            = reinterpret_cast<const unsigned char*>(call.result);
-        switch (code) {
-        case 'd':
-            std::memcpy(&returned.scalar.f64, bytes, sizeof(double));
-            break;
-        case 'f':
-            std::memcpy(&returned.scalar.f32, bytes, sizeof(float));
-            break;
-        case 'c':
-        case 's':
-        case 'i':
-        case 'l':
-            returned.scalar.i64 = static_cast<std::int64_t>(
-                *reinterpret_cast<const ffi_sarg*>(bytes));
-            break;
-        default:
-            returned.scalar.u64 = static_cast<std::uint64_t>(
-                *reinterpret_cast<const ffi_arg*>(bytes));
-            break;
-        }
-        Parameter scalar;
-        scalar.code = code;
-        scalar.width = code_width(code);
-        return load_actual(returned, scalar);
+        return scalar_value(code,
+            result_scalar(code,
+                reinterpret_cast<const unsigned char*>(call.result)));
     }
 
     // Start a context import whose C code may call exports: the caller
@@ -1257,7 +1715,22 @@ private:
         const std::vector<PackedLogic4>& actuals,
         const std::vector<std::string>& strings)
     {
-        auto& import = resolve(identity);
+        BoundSite site;
+        site.kind = BoundSite::Kind::start;
+        site.import = &resolve(identity);
+        if (const auto caller = caller_of(identity)) {
+            site.scope = &scope_named(caller->instance);
+            site.file = std::string { caller->file };
+            site.line = caller->line;
+        }
+        start(site, actuals, strings);
+    }
+
+    void start(const BoundSite& site,
+        const std::vector<PackedLogic4>& actuals,
+        const std::vector<std::string>& strings)
+    {
+        auto& import = *site.import;
         auto flight = std::make_unique<Flight>();
         auto& state = *flight;
         state.import = &import;
@@ -1268,10 +1741,10 @@ private:
         state.saved_line = line_;
         state.process = runtime::DpiCallProcess::current();
         state.position = runtime::DpiCallProcess::position();
-        if (const auto caller = caller_of(identity)) {
-            scope_ = &scope_named(caller->instance);
-            file_ = std::string { caller->file };
-            line_ = caller->line;
+        if (site.scope != nullptr) {
+            scope_ = site.scope;
+            file_ = site.file;
+            line_ = site.line;
         }
         state.scope = scope_;
         flights_.push_back(std::move(flight));
@@ -1409,15 +1882,25 @@ private:
     // An imported task returns its disable status (IEEE 1800-2023 35.9).
     [[nodiscard]] static std::int32_t task_status(const Call& call)
     {
+        return task_status(static_cast<const void*>(call.result));
+    }
+
+    [[nodiscard]] static std::int32_t task_status(const void* const result)
+    {
         return static_cast<std::int32_t>(
-            *reinterpret_cast<const ffi_arg*>(call.result));
+            *static_cast<const ffi_arg*>(result));
     }
 
     // Item b): a task returns 0 unless it returns due to a disable, which
     // the kernel hands over (process_disabled) before the task returns.
     static void check_task_status(const Import& import, const Call& call)
     {
-        if (import.signature.result == 'T' && task_status(call) != 0) {
+        check_task_status(import, static_cast<const void*>(call.result));
+    }
+
+    static void check_task_status(const Import& import, const void* const result)
+    {
+        if (import.signature.result == 'T' && task_status(result) != 0) {
             throw std::runtime_error { "DPI import task '"
                 + import.signature.linkage
                 + "' returned a nonzero disable status without a disable "
@@ -1900,6 +2383,7 @@ private:
     std::vector<std::unique_ptr<Flight>> flights_;
     ThreadEntry thread_entry_;
     std::unordered_map<std::string, std::unique_ptr<Import>> imports_;
+    std::vector<std::unique_ptr<BoundSite>> sites_;
     std::unordered_map<std::string, std::unique_ptr<Scope>> scopes_;
     fsim_svdpi_call_context_v3 context_;
     Clock clock_;

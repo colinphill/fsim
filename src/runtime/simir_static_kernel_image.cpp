@@ -18,6 +18,8 @@
 // caller builds afresh and compares the images instead.
 #include "simir_static_kernel_compiled_internal.hpp"
 
+#include "fsim/runtime/run_state_image.hpp"
+
 #include <boost/pfr.hpp>
 
 #include <algorithm>
@@ -53,7 +55,7 @@ using namespace static_kernel_compiled_detail;
 
 namespace {
 
-constexpr std::string_view image_magic { "fsim-static-kernel-image-v2" };
+constexpr std::string_view image_magic { "fsim-static-kernel-image-v4" };
 
 template <typename T>
 struct is_vector : std::false_type { };
@@ -379,6 +381,7 @@ void Interpreter::Impl::StaticKernel::visit_image_fields(Self& self, Visit&& vis
     visit(self.compiled_members_);
     visit(self.specialized_members_);
     visit(self.forwarded_loads_);
+    visit(self.dpi_sites_);
 }
 
 std::uint64_t Interpreter::Impl::StaticKernel::image_spec_digest(
@@ -399,6 +402,32 @@ std::uint64_t Interpreter::Impl::StaticKernel::image_spec_digest(
     writer.write(spec.sole_writer_inputs);
     writer.write(spec.codegen != nullptr);
     return std::hash<std::string_view> { }(bytes);
+}
+
+void Interpreter::Impl::StaticKernel::record_value_section(std::string& out) const
+{
+    RunStateWriter writer { out };
+    writer.u64(slots_.size());
+    writer.words(arena_);
+    writer.words(published_);
+}
+
+bool Interpreter::Impl::StaticKernel::restore_value_section(
+    const std::string_view bytes)
+{
+    RunStateReader reader { bytes };
+    std::uint64_t slot_count { };
+    std::vector<std::uint64_t> arena;
+    std::vector<std::uint64_t> published;
+    if (!reader.u64(slot_count) || !reader.words(arena) || !reader.words(published)
+        || !reader.done() || slot_count != slots_.size()
+        || arena.size() != arena_.size() || published.size() != published_.size()) {
+        return false;
+    }
+    // In place: the native code holds the arrays' addresses.
+    std::ranges::copy(arena, arena_.begin());
+    std::ranges::copy(published, published_.begin());
+    return true;
 }
 
 bool Interpreter::Impl::StaticKernel::image_scope(
@@ -696,6 +725,19 @@ bool Interpreter::Impl::StaticKernel::restore_image(
             member.body_identity = nullptr;
         } else if (member.body_begin != member.prologue_end) {
             failure = "operations:body_begin";
+            ok = false;
+            break;
+        }
+        // The DPI call sites of the member's operations, one entry per
+        // operation (plan_dpi_sites).
+        if (!member.dpi_site_at.empty()
+            && (member.dpi_site_at.size()
+                    != (lazy ? operation_count : member.operations_.size())
+                || std::ranges::any_of(member.dpi_site_at,
+                    [&](const std::uint32_t site) {
+                        return site != no_slot && site >= dpi_sites_.size();
+                    }))) {
+            failure = "operations:dpi";
             ok = false;
             break;
         }

@@ -214,6 +214,7 @@ void SystemVerilogHirBuilder::apply_named_type_dimensions(
                 return expression(value, scope, parent);
             });
     output.systemverilog_net_type = input.systemverilog_net_type;
+    output.systemverilog_interconnect = input.systemverilog_interconnect;
     output.systemverilog_resolution_function
         = input.systemverilog_resolution_function;
     if (!resolved_typedef_base) {

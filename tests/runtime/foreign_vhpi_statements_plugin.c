@@ -673,6 +673,53 @@ static void subprogram(const char* path)
     body_statements(1, body);
 }
 
+// A package subprogram whose body is declared in the package body
+// (IEEE 1076-2019 4.8, Figure 34).
+static void package_subprogram(const char* package_name)
+{
+    vhpiHandleT packages = vhpi_iterator(vhpiPackInsts, NULL);
+    vhpiHandleT package;
+    while (packages != NULL && (package = vhpi_scan(packages)) != NULL) {
+        vhpiHandleT declarations;
+        vhpiHandleT item;
+        if (strcmp(text_property(package, vhpiNameP), package_name) != 0) {
+            continue;
+        }
+        declarations = vhpi_iterator(vhpiDecls, package);
+        while (declarations != NULL && (item = vhpi_scan(declarations)) != NULL) {
+            vhpiHandleT body;
+            if (vhpi_get(vhpiKindP, item) != vhpiFuncDeclK) {
+                continue;
+            }
+            body = vhpi_handle(vhpiSubpBody, item);
+            printf("#c package %s subprogram %s body=%d", package_name,
+                text_property(item, vhpiNameP), body != NULL);
+            if (body != NULL) {
+                printf(" %s lines=%d/%d", text_property(body, vhpiKindStrP),
+                    (int)vhpi_get(vhpiBeginLineNoP, body),
+                    (int)vhpi_get(vhpiEndLineNoP, body));
+            }
+            printf("\n");
+        }
+    }
+}
+
+// The guard expression of a block statement.
+static void guard_expression(const char* path)
+{
+    vhpiHandleT block = vhpi_handle_by_name(path, NULL);
+    vhpiHandleT guard = vhpi_handle(vhpiGuardExpr, block);
+    printf("#c block %s guard=%s\n", text_property(block, vhpiNameP),
+        guard == NULL ? "none" : text_property(guard, vhpiKindStrP));
+    // The implicit signal GUARD (11.2, Figure 23).
+    guard = vhpi_handle(vhpiGuardSig, block);
+    printf("#c block %s guardsig=%s %s guarded=%d\n",
+        text_property(block, vhpiNameP),
+        guard == NULL ? "none" : text_property(guard, vhpiKindStrP),
+        guard == NULL ? "-" : text_property(guard, vhpiFullNameP),
+        (int)vhpi_get(vhpiIsGuardedP, block));
+}
+
 // The interface of a component declaration.
 static void component(const char* path)
 {
@@ -756,6 +803,10 @@ static void sub_model(void)
     subprogram("top.sub.add1");
     subprogram("top.sub.note");
     subprogram("top.sub.drive");
+    package_subprogram("pk");
+    // The guard expression of a guarded block (11.2, Figure 23).
+    guard_expression("top.gb");
+    guard_expression("top.sub");
     component("top.sub.cmp");
     printf("#c process expr\n");
     body_statements(1, process);

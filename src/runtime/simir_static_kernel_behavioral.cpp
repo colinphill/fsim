@@ -2261,6 +2261,60 @@ struct Interpreter::Impl::StaticKernel::MemberContainerAccess final
     std::uint32_t pc;
 };
 
+namespace {
+
+/// A planned DPI call's registers (DpiFrame) are the member's.
+class DpiAccessFrame final : public DpiFrame {
+public:
+    explicit DpiAccessFrame(ContainerRegisterAccess& access) noexcept
+        : access_ { access }
+    {
+    }
+    [[nodiscard]] const PackedLogic4& read(const RegisterId id) override
+    {
+        return access_.read(id);
+    }
+    void write(const RegisterId id, PackedLogic4 value) override
+    {
+        access_.write(id, std::move(value));
+    }
+    [[nodiscard]] const std::string& read_text(const StringRegisterId id) override
+    {
+        return access_.read_string(id);
+    }
+    void write_text(const StringRegisterId id, std::string value) override
+    {
+        access_.string(id) = std::move(value);
+    }
+
+private:
+    ContainerRegisterAccess& access_;
+};
+
+} // namespace
+
+const char* Interpreter::Impl::StaticKernel::run_dpi_site(
+    ContainerRegisterAccess& access, const ClassStaticMethodCall& operation,
+    const std::uint32_t site, const ProcessId process)
+{
+    const auto& binding = dpi_binding(site);
+    if (!binding.planned) {
+        // A site the service serves through the actual vectors (generic
+        // formals, a context import that serves exports) or by identity.
+        const DpiBoundSite bound { binding.site };
+        return impl_.run_class_operation(
+            access, operation, process, binding.resolved ? &bound : nullptr);
+    }
+    // The service keys an import call chain by its process (IEEE 1800-2023
+    // 35.9).
+    DpiCallProcess::set_current(process);
+    DpiAccessFrame frame { access };
+    auto result = impl_.dpi_site_hooks.call_plan(
+        binding.site, dpi_sites_[site], frame);
+    access.write(operation.destination, std::move(result));
+    return nullptr;
+}
+
 template <typename Op>
 bool Interpreter::Impl::StaticKernel::behavioral_operation(
     const std::uint32_t member_index, const std::uint32_t pc, const Op& op)
@@ -2931,20 +2985,30 @@ bool Interpreter::Impl::StaticKernel::behavioral_operation(
             // method or DPI function call (IEEE 1800-2023 8.10, 35.5) for
             // the running process, or a VHDL foreign subprogram (IEEE
             // 1076-2019 20.2.1.2, VHPI).
+            // An imported DPI call has its site, numbered when the image was
+            // built: no identity is read to find it (a driver disconnection
+            // is never one).
+            const auto site = pc < member.dpi_site_at.size()
+                ? member.dpi_site_at[pc] : no_slot;
             bool disconnected = false;
-            try {
-                disconnected = impl_.try_vhdl_disconnect_call(member.process,
-                    op.method_identity);
-            } catch (const std::exception& error) {
-                fail(member_index, pc, error.what());
+            if (site == no_slot) {
+                try {
+                    disconnected = impl_.try_vhdl_disconnect_call(
+                        member.process, op.method_identity);
+                } catch (const std::exception& error) {
+                    fail(member_index, pc, error.what());
+                }
             }
             if (!disconnected) {
                 MemberContainerAccess access { *this, member_index, pc };
                 // A DPI call names its position for the disable protocol
                 // (IEEE 1800-2023 35.9).
                 DpiCallProcess::set_position(pc);
-                if (const auto* error = impl_.run_class_operation(access, op,
-                        running_process(member_index))) {
+                if (const auto* error = site == no_slot
+                        ? impl_.run_class_operation(access, op,
+                              running_process(member_index))
+                        : run_dpi_site(access, op, site,
+                              running_process(member_index))) {
                     fail(member_index, pc, error);
                 }
             }
@@ -4308,6 +4372,32 @@ std::string Interpreter::Impl::StaticKernel::debug_string_register(
         throw std::logic_error { "SimIR debug string local is unavailable" };
     }
     return found->strings[reg];
+}
+
+void Interpreter::Impl::StaticKernel::debug_write_container_register(
+    const ProcessId process, const ContainerRegisterId reg,
+    const ContainerValue& value)
+{
+    const auto found = std::ranges::find_if(members_, [&](const Member& member) {
+        return member.process == process;
+    });
+    if (found == members_.end() || !found->dynamic_container(reg)) {
+        throw std::logic_error { "SimIR debug container local is not dynamic" };
+    }
+    found->dynamic_containers[reg] = std::make_shared<ContainerValue>(value);
+}
+
+void Interpreter::Impl::StaticKernel::debug_write_string_register(
+    const ProcessId process, const StringRegisterId reg,
+    const std::string_view value)
+{
+    const auto found = std::ranges::find_if(members_, [&](const Member& member) {
+        return member.process == process;
+    });
+    if (found == members_.end() || reg >= found->strings.size()) {
+        throw std::logic_error { "SimIR debug string local is unavailable" };
+    }
+    found->strings[reg] = std::string { value };
 }
 
 void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)

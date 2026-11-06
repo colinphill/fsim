@@ -518,6 +518,11 @@ DebuggerSession::DebuggerSession(
         retain_scope(design_path(simulation, object.path));
       }
     }
+    // An instance is a scope even when it declares nothing (a foreign
+    // library may select it through vpiSetInteractiveScope).
+    for (const auto& instance : simulation.design_ir().instances()) {
+      retain_scope(design_path(simulation, instance.path));
+    }
     std::ranges::sort(execution_scope_paths_);
     observer_ = simulation_.add_signal_change_hook(
         [this](
@@ -576,6 +581,27 @@ DebuggerSession::DebuggerSession(
                   + std::to_string(event.delta)};
           simulation_.request_stop();
         });
+    scope_anchor_ = std::make_shared<DebuggerSession*>(this);
+    simulation_.add_lifecycle_hook(
+        [anchor = std::weak_ptr<DebuggerSession*>{scope_anchor_}](
+            const Simulation::LifecycleEvent event,
+            const std::string_view location) {
+          if (event != Simulation::LifecycleEvent::scope_change) {
+            return;
+          }
+          if (const auto session = anchor.lock()) {
+            (*session)->adopt_scope(location);
+          }
+        });
+  }
+
+void DebuggerSession::adopt_scope(const std::string_view path)  {
+    if (path == scope_) {
+      return;
+    }
+    if (const auto resolved = resolve_scope(path)) {
+      scope_ = *resolved;
+    }
   }
 
 DebuggerSession::~DebuggerSession()  {
@@ -1337,6 +1363,8 @@ DebuggerScopeInfo DebuggerSession::scope(
       throw std::invalid_argument("unknown scope: " + std::string(*path));
     }
     scope_ = *resolved;
+    simulation_.notify_lifecycle(
+        Simulation::LifecycleEvent::scope_change, scope_);
   }
   return { scope_, child_scopes(scope_) };
 }
@@ -1728,6 +1756,8 @@ void DebuggerSession::scope_command(const std::vector<std::string>& command)  {
       return;
     }
     scope_ = *resolved;
+    simulation_.notify_lifecycle(
+        Simulation::LifecycleEvent::scope_change, scope_);
     output_ << "scope " << scope_ << '\n';
   }
 
@@ -2526,6 +2556,32 @@ void DebuggerSession::report_result(const runtime::RunResult& result)  {
     output_
         << (simulation_.finished() ? "simulation finished" : "stopped")
         << " at time " << result.time << ", delta " << result.delta << '\n';
+    enter_prompt();
+  }
+
+// The session returns to its command prompt: the foreign interfaces hear
+// that the tool entered interactive mode (IEEE 1800-2023 38.36.3
+// cbEnterInteractive; IEEE 1076-2019 21.3.7.8). A finished simulation has
+// no run to resume, so it is not interactive mode.
+void DebuggerSession::enter_prompt()  {
+    if (at_prompt_ || simulation_.finished()) {
+      return;
+    }
+    at_prompt_ = true;
+    simulation_.notify_lifecycle(
+        Simulation::LifecycleEvent::enter_interactive);
+  }
+
+// A command resumes the run, so the tool leaves interactive mode (IEEE
+// 1800-2023 38.36.3 cbExitInteractive; IEEE 1076-2019 21.3.7.9). The
+// session starts at its prompt.
+void DebuggerSession::leave_prompt()  {
+    if (!at_prompt_) {
+      return;
+    }
+    at_prompt_ = false;
+    simulation_.notify_lifecycle(
+        Simulation::LifecycleEvent::exit_interactive);
   }
 
 [[nodiscard]] bool DebuggerSession::can_execute()  {
@@ -2558,6 +2614,7 @@ void DebuggerSession::run(const std::optional<SimulationTick> requested_limit)  
     phase_transition_.reset();
     install_execution_hook(time_breakpoint);
     try {
+      leave_prompt();
       simulation_.clear_stop();
       executing_ = true;
       ExecutionGuard guard{executing_};
@@ -2597,6 +2654,7 @@ void DebuggerSession::step(const bool delta_step)  {
               || (!delta_step && scheduler.now() > start_time);
         });
     try {
+      leave_prompt();
       simulation_.clear_stop();
       executing_ = true;
       ExecutionGuard guard{executing_};
@@ -2628,6 +2686,7 @@ void DebuggerSession::step_phase() {
   install_execution_hook(earliest_time_breakpoint(
       simulation_.now(), std::nullopt));
   try {
+    leave_prompt();
     simulation_.clear_stop();
     executing_ = true;
     ExecutionGuard guard{executing_};
@@ -2681,6 +2740,7 @@ void DebuggerSession::step_execution(const bool process_step)  {
                   == runtime::simir::ExecutionPointKind::process_suspend;
         });
     try {
+      leave_prompt();
       simulation_.clear_stop();
       executing_ = true;
       ExecutionGuard guard{executing_};

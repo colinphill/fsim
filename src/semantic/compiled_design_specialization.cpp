@@ -10717,12 +10717,18 @@ private:
         if (!view || view->systemverilog == nullptr) {
             return false;
         }
+        // A typedef of string names no `string` spelling but carries the
+        // form of its definition (IEEE 1800-2023 6.18, 6.16).
+        const auto is_string = [](const sv::TypeReference& type) {
+            return type.target.spelling == "string"
+                || (!type.container_form
+                    && type.value_form == sv::TypeForm::string);
+        };
         if (view->systemverilog->callable) {
-            return view->systemverilog->callable->return_type.target.spelling
-                == "string";
+            return is_string(view->systemverilog->callable->return_type);
         }
         return view->systemverilog->type
-            && view->systemverilog->type->target.spelling == "string";
+            && is_string(*view->systemverilog->type);
     }
 
     /// The literals of the enumerated type of an expression that names a

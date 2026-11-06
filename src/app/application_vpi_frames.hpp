@@ -42,6 +42,10 @@ public:
         runtime::simir::ProcessId design_process { };
         // The callable's name.
         std::string callee;
+        // The suffix naming the lowering of the callable the frame runs
+        // (`@hir-callable-<n>`), which its debug locals carry when another
+        // lowering in the process took their names.
+        std::string lowering;
         // The statement of the caller that activated the frame, where its
         // call is (vpiOrigin, 37.43 details 5 and 6), and the statement the
         // frame executes (the frame to stmt transition).
@@ -82,6 +86,13 @@ public:
     }
     /// The active (innermost) frame of a thread, 0 when it has none.
     [[nodiscard]] std::uint64_t active_frame(std::uint64_t thread) const;
+    /// The live thread a process runs, 0 when none.
+    [[nodiscard]] std::uint64_t thread_of(
+        runtime::simir::ProcessId process) const
+    {
+        const auto found = by_process_.find(process);
+        return found == by_process_.end() ? 0U : found->second;
+    }
     /// The live threads in creation order.
     [[nodiscard]] std::vector<std::uint64_t> threads() const;
 

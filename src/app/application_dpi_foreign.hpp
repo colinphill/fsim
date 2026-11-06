@@ -2,6 +2,7 @@
 #pragma once
 
 #include "fsim/runtime/packed_value.hpp"
+#include "fsim/runtime/simir.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -60,6 +61,46 @@ public:
     /// context (as the VPI context of the calling simulation).
     using ThreadEntry = std::function<void(const std::function<void()>&)>;
     virtual void set_thread_entry(ThreadEntry entry) = 0;
+
+    /// A call site bound once: the resolved C symbol and call interface, the
+    /// per-formal marshalling plan and the caller's scope, file and line
+    /// (a context import's `|<instance>|<file>|<line>`), so that a call
+    /// parses and looks up nothing. The service owns it for its lifetime.
+    using Site = const void*;
+
+    /// Bind the call `identity` names (as `call` takes it). Null when the
+    /// service does not serve the identity as an import call or its start
+    /// or finish; it throws as `call` does for an identity with no loaded
+    /// C implementation.
+    [[nodiscard]] virtual Site bind(std::string_view identity) = 0;
+
+    /// Whether `site` is a context import (see `context_import`).
+    [[nodiscard]] virtual bool context_site(Site site) const noexcept = 0;
+
+    /// Call a bound site; the same as `call` with the identity it was bound
+    /// from.
+    [[nodiscard]] virtual runtime::PackedLogic4 call_site(Site site,
+        std::vector<runtime::PackedLogic4>& actuals,
+        std::vector<std::string>& strings)
+        = 0;
+
+    /// Bind a call site of a kernel image (the plan of the import call): as
+    /// `bind` with the plan's identity; a site whose plan agrees with the
+    /// loaded import's C signature and has native marshalling (`planned_site`)
+    /// is then called with `call_plan`.
+    [[nodiscard]] virtual Site bind_plan(
+        const runtime::simir::DpiSitePlan& plan)
+        = 0;
+
+    /// Whether `site` calls through its plan.
+    [[nodiscard]] virtual bool planned_site(Site site) const noexcept = 0;
+
+    /// Call a planned site: the arguments are read from the frame's registers
+    /// straight into the C argument buffer, and the copy-out values and a
+    /// string result are written back to it; the result is returned.
+    [[nodiscard]] virtual runtime::PackedLogic4 call_plan(Site site,
+        const runtime::simir::DpiSitePlan& plan, runtime::simir::DpiFrame& frame)
+        = 0;
 
     /// Call one import. Output and inout actuals are written back in place.
     [[nodiscard]] virtual runtime::PackedLogic4 call(

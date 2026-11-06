@@ -8,7 +8,7 @@ module top;
       v = x;
     endfunction
   endclass
-  Item it;
+  Item it, cp;
   int n;
   function automatic int twice(int x);
     return x * 2;
@@ -26,6 +26,8 @@ module top;
       #1 n = n + 100;
     join
     it = new(5);
+    // The copy is a class object too (38.36.1 cbCreateObj).
+    cp = new it;
     #1 $display("#c done n=%0d v=%0d", n, it.v);
   end
 endmodule

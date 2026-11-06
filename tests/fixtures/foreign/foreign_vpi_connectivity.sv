@@ -42,6 +42,20 @@ module top;
         $display("%0d", add(1, 2));
     end
 
+    // DPI imports and exports are task and function objects (35.5, 37.40);
+    // the calls of an import name it.
+    import "DPI-C" pure c_conn_twice = function int dpi_twice(input int x);
+    import "DPI-C" context c_conn_note = task dpi_note(input int x);
+    function automatic int dpi_exp(input int x);
+        return x;
+    endfunction
+    export "DPI-C" function dpi_exp;
+    integer dv;
+    initial begin
+        dv = dpi_twice(4);
+        dpi_note(dv);
+    end
+
     // A generate block and another top-level module name d by a simple and
     // by a hierarchical name (37.21, 37.46); system function calls (37.42).
     logic gv;
@@ -54,10 +68,9 @@ module top;
         sv = $clog2(8);
         tv = $time;
     end
-endmodule
 
-module spy;
-    logic z;
-    assign z = top.d[1];
-    wire [1:0] nd = top.d[3:2];
+    // A net declaration assignment is a continuous assignment, so a driver
+    // of its net (10.3.1, 37.46).
+    logic [3:0] nsrc;
+    wire [1:0] nd = nsrc[3:2];
 endmodule

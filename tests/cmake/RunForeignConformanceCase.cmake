@@ -15,6 +15,9 @@
 # report; either ends the case there.
 # FSIM_ELABORATE_ARGS holds more `fsim elaborate` arguments, separated as a
 # shell would.
+# FSIM_DEBUG_COMMANDS, when set, names a Tcl script that `fsim debug`
+# evaluates after loading the plug-in in place of `fsim simulate`; the
+# trace is then the plug-in's "#c " lines from that session.
 
 cmake_minimum_required(VERSION 3.25)
 
@@ -108,8 +111,15 @@ elseif(FSIM_INTERFACE STREQUAL "dpi")
 else()
   set(FSIM_LIBRARY_ARGUMENTS "--${FSIM_INTERFACE}" "${FSIM_PLUGIN}")
 endif()
-fsim_step(simulate simulate --engine "${FSIM_ENGINE}"
-  ${FSIM_LIBRARY_ARGUMENTS} ${FSIM_SIMULATE_ARGUMENTS})
+if(DEFINED FSIM_DEBUG_COMMANDS AND NOT FSIM_DEBUG_COMMANDS STREQUAL "")
+  file(READ "${FSIM_DEBUG_COMMANDS}" FSIM_DEBUG_SCRIPT)
+  fsim_step(debug debug --engine "${FSIM_ENGINE}"
+    ${FSIM_LIBRARY_ARGUMENTS} ${FSIM_SIMULATE_ARGUMENTS}
+    --command "${FSIM_DEBUG_SCRIPT}")
+else()
+  fsim_step(simulate simulate --engine "${FSIM_ENGINE}"
+    ${FSIM_LIBRARY_ARGUMENTS} ${FSIM_SIMULATE_ARGUMENTS})
+endif()
 
 # FSIM_SIMULATE_MESSAGE is text the run must report, in either stream.
 if(DEFINED FSIM_SIMULATE_MESSAGE AND NOT FSIM_SIMULATE_MESSAGE STREQUAL "")

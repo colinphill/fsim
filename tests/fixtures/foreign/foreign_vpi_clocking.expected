@@ -31,7 +31,26 @@
 #c clocking blocks=3
 #c by name cb2
 #c default clocking cb global clocking gck
+#c nettype real_t typespec=vpiRealTypespec
 #c nettype real_t type=vpiNettypeDecl full=top.real_t with=- alias=-
+#c nettype alias_t typespec=vpiRealTypespec
 #c nettype alias_t type=vpiNettypeDecl full=top.alias_t with=- alias=real_t
+#c nettype pick_t typespec=vpiRealTypespec
 #c nettype pick_t type=vpiNettypeDecl full=top.pick_t with=pick alias=-
-#c nettypes=3
+#c nettype vec_t typespec=vpiLogicTypespec
+#c nettype vec_t type=vpiNettypeDecl full=top.vec_t with=- alias=-
+#c nettypes=4
+#c net top.nv type=vpiNet nettype=14 resolved=14 size=4 decl=vec_t typespec=vpiLogicTypespec
+#c net top.ic type=vpiInterconnectNet nettype=16 resolved=1 size=1 decl=- typespec=-
+#c net top.icv type=vpiInterconnectNet nettype=16 resolved=1 size=4 decl=- typespec=vpiLogicTypespec
+#c net top.ica type=vpiInterconnectArray nettype=16 resolved=1 size=2 decl=- typespec=-
+#c net top.ica packed=0
+#c net top.ica left=1 right=0
+#c element top.ica[0] type=vpiInterconnectNet size=4
+#c element top.ica[1] type=vpiInterconnectNet size=4
+#c net top.icq type=vpiInterconnectNet nettype=16 resolved=1 size=4 decl=- typespec=vpiStructTypespec
+#c member top.icq.hi type=vpiInterconnectNet size=2
+#c member top.icq.lo type=vpiInterconnectNet size=2
+#c net top.icd type=vpiInterconnectNet nettype=16 resolved=1 size=4 decl=- typespec=vpiPackedArrayTypespec
+#c element top.icd[1] type=vpiInterconnectNet size=2
+#c element top.icd[0] type=vpiInterconnectNet size=2

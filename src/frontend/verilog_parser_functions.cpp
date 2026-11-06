@@ -116,7 +116,7 @@ FunctionDeclaration VerilogParser::parse_function(
       advance();
       function.name = expect_identifier("exported function name").text;
     }
-    auto& recorded = callable_type_tokens_[function.name];
+    auto& recorded = begin_callable_tokens(function.name);
     recorded = { true, { tokens_.begin()
                              + static_cast<std::ptrdiff_t>(return_begin),
                            tokens_.begin()
@@ -815,7 +815,7 @@ TaskDeclaration VerilogParser::parse_task(
     task.name += "::";
     task.name += expect_identifier("selected task name").text;
   }
-  callable_type_tokens_[task.name] = { };
+  begin_callable_tokens(task.name) = { };
   const ImplicitNetDiscard method_scope { implicit_net_references_,
       implicit_net_references_.size(),
       task.name.find("::") != std::string::npos };

@@ -759,6 +759,47 @@ std::optional<semantic::CompiledDesign> deserialize_compiled_hir_bundle(
         });
 }
 
+std::optional<std::string> compiled_hir_bundle_outdated(
+    const std::string_view bytes)
+{
+    // Only the identity headers are read: the bundle's own, then each
+    // length-prefixed inner state's magic and schema.
+    using codec_detail::Reader;
+    Reader reader { bytes };
+    std::uint32_t schema { };
+    if (!reader.raw("FSIMCHIR") || !reader.read(schema)) {
+        return std::nullopt;
+    }
+    if (schema != kCompiledHirBundleSchema) {
+        return "compiled-HIR bundle schema " + std::to_string(schema)
+            + ", this build reads " + std::to_string(kCompiledHirBundleSchema);
+    }
+    struct Inner {
+        std::string_view magic;
+        std::string_view label;
+        std::uint32_t required;
+    };
+    for (const auto& inner : { Inner { "FSIMSEM1", "semantic", kSemanticStateSchema },
+             Inner { "FSIMSVCH", "SystemVerilog HIR",
+                 kSystemVerilogConstraintHirStateSchema },
+             Inner { "FSIMVHIR", "VHDL HIR", kVhdlHirStateSchema } }) {
+        std::string_view slice;
+        if (!reader.string_slice(slice)) {
+            return std::nullopt;
+        }
+        Reader state { slice };
+        std::uint32_t found { };
+        if (!state.raw(inner.magic) || !state.read(found)) {
+            return std::nullopt;
+        }
+        if (found != inner.required) {
+            return std::string { inner.label } + " schema " + std::to_string(found)
+                + ", this build reads " + std::to_string(inner.required);
+        }
+    }
+    return std::nullopt;
+}
+
 namespace codec_detail {
 
 std::optional<semantic::CompiledDesign>

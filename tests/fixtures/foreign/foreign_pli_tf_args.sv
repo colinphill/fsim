@@ -2,7 +2,8 @@
 // PLI 1.0 argument description (IEEE 1364-2001 25.15, 25.26, 25.27, 25.35,
 // 25.36, 25.50, 25.53, 25.61, 21.3.2): $pli_tf_args describes seventeen
 // arguments, one of them omitted; $pli_tf_scales reads the time scale of its
-// module; $pli_tf_drc watches the driver of a net.
+// module; $pli_tf_drc watches the drivers of a net, of
+// a net driven by a continuous assignment and of a reg (Table 88).
 `timescale 100ns / 10ns
 module slow;
   initial #1 $pli_tf_scales;
@@ -54,5 +55,41 @@ module drc;
     #1 $pli_tf_drc(n);
     #5 d = 1;
     #5 d = 0;
+  end
+endmodule
+
+// A continuous assignment is a driver too; a procedural assignment is not
+// (IEEE 1364-2001 26.6.7 detail 7, IEEE 1800-2023 37.21), so rg going high
+// is no reason_paramdrc call.
+module drc2;
+  reg e;
+  reg rg;
+  wire ca;
+  assign ca = e;
+  initial begin
+    e = 0;
+    rg = 0;
+    #2 $pli_tf_drc(ca, rg);
+    #8 e = 1;
+    #5 rg = 1;
+  end
+endmodule
+
+// Each driver's change is one call, attributed to that driver, even when the
+// net's value does not change (Table 88): ea going high leaves w at 0, and so
+// does eb going low.
+module drc3;
+  reg ea;
+  reg eb;
+  wire w;
+  assign w = ea ? 1'b0 : 1'bz;
+  assign w = eb ? 1'b0 : 1'bz;
+  initial begin
+    ea = 0;
+    eb = 1;
+    #2 $pli_tf_drc(w);
+    #20 ea = 1;
+    #4 eb = 0;
+    #4 ea = 0;
   end
 endmodule

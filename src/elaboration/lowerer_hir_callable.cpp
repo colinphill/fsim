@@ -59,6 +59,17 @@ private:
 
 namespace {
 
+    // The literals the class descriptor turns into a property's initial
+    // bits (class_property_descriptor in application_class_inspection.cpp).
+    [[nodiscard]] bool class_descriptor_decimal_literal(
+        const std::string_view text)
+    {
+        std::int64_t value { };
+        const auto* const end = text.data() + text.size();
+        const auto converted = std::from_chars(text.data(), end, value, 10);
+        return converted.ec == std::errc { } && converted.ptr == end;
+    }
+
     constexpr std::size_t maximum_effective_subtype_cache_entries = 4096U;
     constexpr std::size_t maximum_expression_resolution_cache_entries
         = 16384U;
@@ -5867,10 +5878,23 @@ bool Lowerer::lower_hir_class_property_initializers(
             restore();
             return false;
         }
+        // A typedef of a real type is real (IEEE 1800-2023 6.18).
+        const auto property_declaration
+            = specialized_hir_unit_->find_declaration(property.declaration);
+        const auto scalar = hir_declared_type_scalar_kind(property.type,
+            property_declaration && property_declaration->systemverilog
+                ? property_declaration->systemverilog->scope
+                : declaration.scope);
+        // The class descriptor already holds a boolean, string or plain
+        // decimal integer literal as the property's initial value; any other
+        // literal (a real, `1_000`, a real-typed property) converts here.
         const auto kind = initializer->systemverilog->kind;
-        if (kind == ExpressionKind::integer_literal
-            || kind == ExpressionKind::boolean_literal
-            || kind == ExpressionKind::string_literal) {
+        if (kind == ExpressionKind::boolean_literal
+            || kind == ExpressionKind::string_literal
+            || (kind == ExpressionKind::integer_literal
+                && scalar == frontend::SystemVerilogScalarKind::None
+                && class_descriptor_decimal_literal(
+                    initializer->systemverilog->text))) {
             continue;
         }
         if (property.type.value_form == semantic::sv::TypeForm::string) {
@@ -5909,16 +5933,13 @@ bool Lowerer::lower_hir_class_property_initializers(
             restore();
             return false;
         }
-        const auto spelling = std::string_view { property.type.target.spelling };
-        const auto scalar = spelling == "real"
-            ? frontend::SystemVerilogScalarKind::Real
-            : spelling == "shortreal"
-            ? frontend::SystemVerilogScalarKind::ShortReal
-            : spelling == "realtime"
-            ? frontend::SystemVerilogScalarKind::Realtime
-            : frontend::SystemVerilogScalarKind::None;
         auto value = lower_hir_scalar_converted_value(
-            *property.initializer, *width, scalar);
+            *property.initializer, *width,
+            scalar == frontend::SystemVerilogScalarKind::Real
+                    || scalar == frontend::SystemVerilogScalarKind::ShortReal
+                    || scalar == frontend::SystemVerilogScalarKind::Realtime
+                ? scalar
+                : frontend::SystemVerilogScalarKind::None);
         if (!value) {
             restore();
             return false;
@@ -6017,13 +6038,14 @@ bool Lowerer::lower_hir_class_static_property_initializer(
     if (!width || *width == 0U) {
         return false;
     }
-    const auto spelling = std::string_view { property.type.target.spelling };
-    const auto scalar = spelling == "real"
-        ? frontend::SystemVerilogScalarKind::Real
-        : spelling == "shortreal"
-        ? frontend::SystemVerilogScalarKind::ShortReal
-        : spelling == "realtime"
-        ? frontend::SystemVerilogScalarKind::Realtime
+    // A typedef of a real type is real (IEEE 1800-2023 6.18).
+    const auto declared = handle ? frontend::SystemVerilogScalarKind::None
+                                 : hir_declared_type_scalar_kind(
+                                       property.type, hir_process_scope_);
+    const auto scalar = declared == frontend::SystemVerilogScalarKind::Real
+            || declared == frontend::SystemVerilogScalarKind::ShortReal
+            || declared == frontend::SystemVerilogScalarKind::Realtime
+        ? declared
         : frontend::SystemVerilogScalarKind::None;
     auto value = lower_hir_scalar_converted_value(
         *property.initializer, *width, scalar);
@@ -17363,11 +17385,20 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             // A dynamic array or queue actual supplies its first dimension's
             // size when called; its other dimensions are fixed (IEEE
             // 1800-2023 35.5.6.1, H.12.2).
-            if (aggregate_element || string_element
-                || !(*dimensions)[0].open) {
+            if (aggregate_element || !(*dimensions)[0].open) {
                 return std::nullopt;
             }
-            if (container->element_kind == ContainerElementKind::Container
+            if (string_element) {
+                // The strings pass whole, as one string actual (the DPI
+                // service decodes it into the handle's elements, H.7.4);
+                // only a one-dimensional array of strings has a run-time
+                // size.
+                if (dimensions->size() != 1U
+                    || container->element_kind
+                        != ContainerElementKind::String) {
+                    return std::nullopt;
+                }
+            } else if (container->element_kind == ContainerElementKind::Container
                 && container->element_types.size() == 1U
                 && container->element_types.front().fixed
                 && !container->element_types.front().queue
@@ -17378,7 +17409,8 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
             } else if (dimensions->size() != 1U) {
                 return std::nullopt;
             }
-            if (rows->element_kind != ContainerElementKind::Packed
+            if (!string_element
+                && rows->element_kind != ContainerElementKind::Packed
                 && rows->element_kind != ContainerElementKind::Scalar) {
                 return std::nullopt;
             }
@@ -17454,7 +17486,11 @@ std::optional<Lowerer::HirDpiFunctionProfile> Lowerer::hir_dpi_profile(
         if (string_element) {
             entry.width = 0U;
             entry.domain = frontend::ValueDomain::String;
-            entry.string_elements = static_cast<std::size_t>(elements);
+            // A run-time sized array of strings has no element count here:
+            // it passes whole (runtime_extent).
+            if (!dynamic) {
+                entry.string_elements = static_cast<std::size_t>(elements);
+            }
         }
         // `A` (open, passed as a handle) or `D` (sized, passed as a pointer
         // to the normalized elements), the element's code, then each
@@ -20398,12 +20434,290 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_resolution_call(
             + std::to_string(element_width));
 }
 
+std::optional<std::vector<VhdlResolverSegment>>
+Lowerer::hir_vhdl_resolver_pieces(
+    const HirProcessDescription::VhdlResolver& resolver)
+{
+    const auto& signal = design_.signal_info_[resolver.signal];
+    std::vector<VhdlResolverSegment> pieces;
+    if (!resolver.segments.empty()) {
+        for (const auto& segment : resolver.segments) {
+            const auto type = hir_callable_type(
+                segment.function, segment.width);
+            const auto width = type ? type->width : std::size_t { };
+            if (width == 0U || segment.width % width != 0U
+                || segment.width / width > 4096U
+                || segment.offset + segment.width > signal.width) {
+                return std::nullopt;
+            }
+            for (std::size_t offset { }; offset < segment.width;
+                offset += width) {
+                pieces.push_back(VhdlResolverSegment {
+                    segment.offset + offset, width, segment.function });
+            }
+        }
+        return pieces;
+    }
+    const auto function_type = hir_callable_type(
+        resolver.function, signal.width);
+    const auto element_width = function_type
+        ? function_type->width
+        : std::size_t { };
+    const bool per_element = signal.vhdl_array != nullptr
+        && element_width != 0U && element_width < signal.width
+        && signal.width % element_width == 0U
+        && signal.width / element_width <= 4096U;
+    if (per_element) {
+        for (std::size_t offset { }; offset < signal.width;
+            offset += element_width) {
+            pieces.push_back(VhdlResolverSegment {
+                offset, element_width, resolver.function });
+        }
+    }
+    return pieces;
+}
+
+bool Lowerer::lower_hir_vhdl_dynamic_resolver(
+    const HirProcessDescription::VhdlResolver& resolver)
+{
+    // The driving values are one array whose length is a run-time value, so
+    // the formal takes them as a shaped value (IEEE 1076-2008 4.2.2.2,
+    // 14.7.3.2).
+    const auto& signal = design_.signal_info_[resolver.signal];
+    if (signal.width == 0U) {
+        return false;
+    }
+    const auto parts = hir_vhdl_resolver_pieces(resolver);
+    if (!parts) {
+        return false;
+    }
+    // The profile of the formal of `function`, whose elements are `width`
+    // bits, and the call's key.
+    const auto formal_profile = [&](const semantic::DeclarationId function,
+                                    const std::size_t width)
+        -> std::optional<HirVhdlShapedProfile> {
+        const auto declaration = specialized_hir_unit_->find_declaration(
+            function);
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->callable
+            || declaration->vhdl->callable->formals.size() != 1U) {
+            return std::nullopt;
+        }
+        const auto function_type = hir_callable_type(function, width);
+        if (!function_type || function_type->width != width) {
+            return std::nullopt;
+        }
+        const auto formal = specialized_hir_unit_->find_declaration(
+            declaration->vhdl->callable->formals.front());
+        if (!formal || formal->vhdl == nullptr || !formal->vhdl->subtype) {
+            return std::nullopt;
+        }
+        const auto formal_subtype = hir_effective_vhdl_subtype(
+            *formal->vhdl->subtype);
+        auto profile = formal_subtype
+            ? hir_vhdl_shaped_open_profile(*formal_subtype)
+            : std::nullopt;
+        if (!profile || profile->constraints.size() != 1U
+            || profile->outer_rank != 0U || !profile->members.empty()
+            || profile->element_width != width) {
+            return std::nullopt;
+        }
+        return profile;
+    };
+    // The runtime writes the driving values to `input` (count * width bits,
+    // the first driver most significant) and the count to the register that
+    // follows it.
+    const auto input = allocate_register(signal.width, signal.source_domain);
+    const auto count = allocate_register(64U, frontend::ValueDomain::Integer);
+    const auto output = allocate_register(signal.width, signal.source_domain);
+    if (count != input + 1U) {
+        return false;
+    }
+    const auto low = load_integer(0, 64U, frontend::ValueDomain::Integer);
+    const auto one = load_integer(1, 64U, frontend::ValueDomain::Integer);
+    const auto high = allocate_register(64U, frontend::ValueDomain::Integer);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::subtract_signed, high, count, one });
+    const auto key = [&](const semantic::DeclarationId function,
+                         const std::size_t width) {
+        return "vhdl-resolver-dynamic:" + std::to_string(function.value())
+            + ":" + std::to_string(width);
+    };
+    if (parts->empty()) {
+        const auto profile = formal_profile(resolver.function, signal.width);
+        if (!profile) {
+            return false;
+        }
+        const auto container = allocate_container_register(profile->type);
+        const auto fill = load_constant(
+            profile->element_default, profile->element_domain);
+        process_.operations.emplace_back(VhdlShaped {
+            VhdlShapedOperation::create, container, { }, fill,
+            std::vector<RegisterId> { low, high },
+            std::vector<std::uint8_t> { 0U }, profile->type, 0U,
+            VhdlShapedAttribute::length, 0U, { } });
+        process_.operations.emplace_back(VhdlShaped {
+            VhdlShapedOperation::from_packed, container, { }, input, { }, { },
+            { }, 0U, VhdlShapedAttribute::length, 0U, { } });
+        const std::pair<ContainerRegisterId, HirVhdlShapedProfile> shaped {
+            container, *profile };
+        const auto resolved = lower_hir_vhdl_register_call(resolver.function,
+            input, signal.width, std::nullopt,
+            key(resolver.function, signal.width), &shaped);
+        if (!resolved || register_width(*resolved) != signal.width) {
+            return false;
+        }
+        process_.operations.emplace_back(CopyRegister { output, *resolved });
+        hir_vhdl_resolver_registers_ = std::pair { input, output };
+        return true;
+    }
+    // A composite resolved element by element: the driving values are first
+    // held as an array of whole signal values, from which each part's
+    // driving values are gathered, one array per part, in a loop over the
+    // drivers.
+    ContainerType whole_type;
+    whole_type.element_kind = ContainerElementKind::Packed;
+    whole_type.element_width = static_cast<std::uint32_t>(signal.width);
+    whole_type.two_state
+        = signal.source_domain != frontend::ValueDomain::Logic4
+        && signal.source_domain != frontend::ValueDomain::Logic9;
+    whole_type.vhdl_shaped = true;
+    whole_type.vhdl_rank = 1U;
+    const auto whole = allocate_container_register(whole_type);
+    const auto whole_fill = load_constant(
+        unsigned_value(0U, signal.width), signal.source_domain);
+    process_.operations.emplace_back(VhdlShaped {
+        VhdlShapedOperation::create, whole, { }, whole_fill,
+        std::vector<RegisterId> { low, high },
+        std::vector<std::uint8_t> { 0U }, whole_type, 0U,
+        VhdlShapedAttribute::length, 0U, { } });
+    process_.operations.emplace_back(VhdlShaped {
+        VhdlShapedOperation::from_packed, whole, { }, input, { }, { }, { },
+        0U, VhdlShapedAttribute::length, 0U, { } });
+    // The whole value one driver (by constant or run-time index) drives.
+    const auto driver_value = [&](const RegisterId index) {
+        const auto value = allocate_register(
+            signal.width, signal.source_domain);
+        process_.operations.emplace_back(VhdlShaped {
+            VhdlShapedOperation::element_read, whole, whole, value,
+            std::vector<RegisterId> { index }, { }, { }, 0U,
+            VhdlShapedAttribute::length,
+            static_cast<std::uint32_t>(signal.width), { } });
+        return value;
+    };
+    // An unresolved record element has the value of the driver that drives
+    // it; the resolved elements are written over. A driver of the whole
+    // signal gives the base value, as for the fixed-count programs.
+    const auto& regions = resolver.driver_regions;
+    std::size_t base { };
+    while (base < regions.size() && !regions[base].empty()) {
+        ++base;
+    }
+    if (base >= regions.size()) {
+        base = 0U;
+    }
+    process_.operations.emplace_back(CopyRegister { output,
+        driver_value(load_integer(
+            static_cast<std::int64_t>(base), 64U,
+            frontend::ValueDomain::Integer)) });
+    // Every declared driver is among the connected ones, so its index is
+    // below the count (the fixed-count programs serve smaller counts).
+    for (std::size_t driver { }; driver < regions.size(); ++driver) {
+        if (driver == base) {
+            continue;
+        }
+        const auto index = load_integer(static_cast<std::int64_t>(driver),
+            64U, frontend::ValueDomain::Integer);
+        for (const auto& [offset, width] : regions[driver]) {
+            if (width == 0U || offset + width > signal.width) {
+                continue;
+            }
+            const auto source = driver_value(index);
+            const auto part = allocate_register(width, signal.source_domain);
+            process_.operations.emplace_back(Extract {
+                part, source, static_cast<std::uint32_t>(offset),
+                static_cast<std::uint32_t>(width) });
+            const auto updated = allocate_register(
+                signal.width, signal.source_domain);
+            process_.operations.emplace_back(Insert {
+                updated, output, part, static_cast<std::uint32_t>(offset) });
+            process_.operations.emplace_back(
+                CopyRegister { output, updated });
+        }
+    }
+    for (const auto& piece : *parts) {
+        const auto profile = formal_profile(piece.function, piece.width);
+        if (!profile) {
+            return false;
+        }
+        const auto array = allocate_container_register(profile->type);
+        const auto fill = load_constant(
+            profile->element_default, profile->element_domain);
+        process_.operations.emplace_back(VhdlShaped {
+            VhdlShapedOperation::create, array, { }, fill,
+            std::vector<RegisterId> { low, high },
+            std::vector<std::uint8_t> { 0U }, profile->type, 0U,
+            VhdlShapedAttribute::length, 0U, { } });
+        // for index in 0 to count - 1: array(index) := the piece of
+        // driver `index`.
+        const auto index = allocate_register(
+            64U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(CopyRegister { index, low });
+        const auto loop = static_cast<InstructionIndex>(
+            process_.operations.size());
+        const auto more = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::less_signed, more, index, count });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            more, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+        const auto source = driver_value(index);
+        const auto part = allocate_register(
+            piece.width, signal.source_domain);
+        process_.operations.emplace_back(Extract {
+            part, source, static_cast<std::uint32_t>(piece.offset),
+            static_cast<std::uint32_t>(piece.width) });
+        process_.operations.emplace_back(VhdlShaped {
+            VhdlShapedOperation::element_write, array, { }, part,
+            std::vector<RegisterId> { index }, { }, { }, 0U,
+            VhdlShapedAttribute::length, 0U, { } });
+        const auto advanced = allocate_register(
+            64U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_signed, advanced, index, one });
+        process_.operations.emplace_back(CopyRegister { index, advanced });
+        process_.operations.emplace_back(Jump { loop });
+        process_.operations[branch] = Branch {
+            more, branch + 1U,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false };
+        const std::pair<ContainerRegisterId, HirVhdlShapedProfile> shaped {
+            array, *profile };
+        const auto resolved = lower_hir_vhdl_register_call(piece.function,
+            input, piece.width, std::nullopt,
+            key(piece.function, piece.width), &shaped);
+        if (!resolved || register_width(*resolved) != piece.width) {
+            return false;
+        }
+        const auto updated = allocate_register(
+            signal.width, signal.source_domain);
+        process_.operations.emplace_back(Insert {
+            updated, output, *resolved,
+            static_cast<std::uint32_t>(piece.offset) });
+        process_.operations.emplace_back(CopyRegister { output, updated });
+    }
+    hir_vhdl_resolver_registers_ = std::pair { input, output };
+    return true;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_vhdl_register_call(
     const semantic::DeclarationId function,
     const RegisterId argument,
     const std::size_t contextual_width,
     const std::optional<HirPackedRange> formal_range,
-    std::string callable_key)
+    std::string callable_key,
+    const std::pair<ContainerRegisterId, HirVhdlShapedProfile>* const shaped)
 {
     const auto declaration = specialized_hir_unit_->find_declaration(function);
     if (!declaration || declaration->vhdl == nullptr
@@ -20451,8 +20765,21 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_register_call(
         }
         frame.argument_is_string.push_back(false);
         frame.argument_is_container.push_back(false);
-        frame.arguments.push_back(allocate_register(
-            register_width(argument), register_domain(argument)));
+        if (shaped != nullptr) {
+            // The formal names a shaped value whose index range the actual
+            // gives when the call runs (4.2.2.2); a placeholder register
+            // keeps argument positions aligned.
+            HirVhdlShapedLocal local;
+            local.container = allocate_container_register(shaped->second.type);
+            local.profile = shaped->second;
+            frame.invocation_containers.push_back(local.container);
+            frame.vhdl_shaped_formals.emplace(formal.value(), std::move(local));
+            frame.arguments.push_back(
+                allocate_register(1U, frontend::ValueDomain::Bit2));
+        } else {
+            frame.arguments.push_back(allocate_register(
+                register_width(argument), register_domain(argument)));
+        }
         frame.string_arguments.push_back({ });
         frame.container_arguments.push_back({ });
         frame.container_output_defaults.push_back(std::nullopt);
@@ -20485,8 +20812,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_register_call(
         frame.result,
         callable_default_value(frame.type.width, frame.type.domain),
     });
-    process_.operations.emplace_back(CopyRegister {
-        frame.arguments.front(), argument });
+    if (shaped != nullptr) {
+        process_.operations.emplace_back(CopyContainerRegister {
+            frame.vhdl_shaped_formals.at(formal.value()).container,
+            shaped->first });
+    } else {
+        process_.operations.emplace_back(CopyRegister {
+            frame.arguments.front(), argument });
+    }
     // The callee may run a method on this protected object.
     flush_hir_vhdl_protected_caches();
     const auto call_site = static_cast<InstructionIndex>(
@@ -20650,6 +20983,27 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
                     static_cast<std::uint8_t>(actual.direction));
                 actual_kinds.push_back(1U);
             }
+            continue;
+        }
+        if (actual.runtime_extent && string) {
+            // A dynamic array or queue of strings passes whole, as the
+            // container register itself: the service encodes its elements
+            // into the one string actual of the formal, and hands the
+            // strings the C code left back (kind 4 in, kind 5 in and out).
+            const auto value
+                = lower_hir_static_container_value(actual.expression);
+            if (!value) {
+                return std::nullopt;
+            }
+            const auto array = allocate_container_register(*actual.open_array);
+            process_.operations.emplace_back(CopyContainerRegister {
+                array, value->value });
+            actuals.push_back(array);
+            actual_names.push_back(actual.name);
+            actual_directions.push_back(
+                static_cast<std::uint8_t>(actual.direction));
+            actual_kinds.push_back(
+                class_method_copy_out(actual.direction) ? 5U : 4U);
             continue;
         }
         if (actual.runtime_extent) {
@@ -20848,6 +21202,15 @@ std::optional<RegisterId> Lowerer::emit_hir_dpi_call(
                     { } });
             }
             if (!lower_hir_container_copy_out(actual.expression, array)) {
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (actual.runtime_extent && actual.domain == frontend::ValueDomain::String) {
+            // The strings the C code left in the copy become the array's
+            // elements; its size is the one it had.
+            if (!lower_hir_container_copy_out(
+                    actual.expression, actuals[first_actual[index]])) {
                 return std::nullopt;
             }
             continue;
@@ -24222,13 +24585,15 @@ bool Lowerer::lower_hir_callable_return(
     auto return_kind = ScalarKind::None;
     if (declaration && declaration->systemverilog != nullptr
         && declaration->systemverilog->callable) {
-        const auto& spelling
-            = declaration->systemverilog->callable->return_type.target
-                  .spelling;
-        return_kind = spelling == "real" ? ScalarKind::Real
-            : spelling == "realtime"     ? ScalarKind::Realtime
-            : spelling == "shortreal"    ? ScalarKind::ShortReal
-                                         : ScalarKind::None;
+        // A typedef of a real type is real (6.18).
+        const auto declared = hir_declared_type_scalar_kind(
+            declaration->systemverilog->callable->return_type,
+            declaration->systemverilog->scope);
+        return_kind = declared == ScalarKind::Real
+                || declared == ScalarKind::Realtime
+                || declared == ScalarKind::ShortReal
+            ? declared
+            : ScalarKind::None;
     }
     const auto real_kind = [](const ScalarKind kind) {
         return kind == ScalarKind::Real || kind == ScalarKind::Realtime
@@ -25519,11 +25884,16 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     // A SystemVerilog callable's frame is activated once its automatic
     // variables exist (IEEE 1800-2023 37.43); the probe plan of simulate
     // --foreign-probes reports it, any other plan compiles the point away.
+    // The point names the lowering by the suffix its debug locals carry
+    // when another lowering of the callable took their names.
     const auto* const frame_declaration = declaration->systemverilog;
+    const auto frame_point_name = frame_declaration == nullptr
+        ? std::string { }
+        : frame_declaration->name + "@hir-callable-"
+            + std::to_string(initial_frame->invocation_identity);
     if (frame_declaration != nullptr && declarations_ready) {
         emit_debug_point(DebugPointKind::frame_entry,
-            hir_source_span(frame_declaration->source),
-            frame_declaration->name);
+            hir_source_span(frame_declaration->source), frame_point_name);
     }
     if (declarations_ready && initial_frame->class_receiver) {
         cache_hir_class_container_properties(
@@ -25549,8 +25919,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         // Every return reaches the frame's end (IEEE 1800-2023 37.43).
         if (frame_declaration != nullptr) {
             emit_debug_point(DebugPointKind::frame_exit,
-                hir_source_span(frame_declaration->source),
-                frame_declaration->name);
+                hir_source_span(frame_declaration->source), frame_point_name);
         }
         flush_hir_class_container_caches();
         flush_hir_vhdl_protected_caches();

@@ -75,11 +75,41 @@ object lookup and cannot perturb scheduling.
 The CLI, Tcl and C session adapters connect file input to the existing parser,
 resolver, planner and timing application. Their connected target kinds are
 Verilog/SystemVerilog specify paths (`IOPATH`) and timing checks. An
-`INTERCONNECT` or `PORT` delay is recorded in the elaborated design (runtime
-schema 99) with its terminals and effective transition delays, and VPI
+`INTERCONNECT` or `PORT` delay is recorded in the elaborated design
+(`sdf_net_delays`) with its terminals and effective transition delays, and VPI
 publishes it as an intermodule path, delay device and delay terms (IEEE
-1800-2023 37.37, 37.45); the scheduler does not apply it to net propagation.
-They reject other planned target kinds with `FSIM-SDF-SESSION-003` before
+1800-2023 37.37, 37.45). The delay also delays the net in simulation (IEEE
+1364-2005 16, 1800-2023 38.10): a port connection shares one signal between
+the driver side and the instance behind the port, so annotation splits it for
+each annotated load port only. The load gets a signal of its own, a copy of
+the net that a new process writes with the delay's rise, fall and turn-off
+transition delays (an inertial, continuous-assignment write, the way a
+primitive's output delay is simulated), and the processes of the load's
+instance (those whose names lie below its path) read the copy. The driver
+side, and every other load of the net, keeps the undelayed value: a reference
+to the source yields the undelayed value and one to the load the delayed one.
+The records that end at a load port apply in order of occurrence (IEEE
+1364-2005 16.3): a `PORT` delay after an `INTERCONNECT` replaces the delay of
+every source, an `INTERCONNECT` after a `PORT` changes only the delay from its
+own source (16.2.4), and a record that repeats an earlier one applies at its
+later place. The net split delays the net as a whole, so a load whose sources
+end with different delays is not applied and says so with
+`FSIM-SDF-SESSION-004`; a source that no `INTERCONNECT` names is taken to be
+the one the records name. A delay of zero, a delay on a bit or part select of
+a port, one on a top-level port, and a load whose instance has a process that
+writes the port or uses an operation the rewrite does not cover are not
+applied; the last two say so with the warning `FSIM-SDF-SESSION-004`, and the
+record and its VPI objects remain. A design without an annotated port keeps
+its processes and signals. The copy's driver is a slotted delayed write in a
+run with a VPI or PLI library, so `vpi_put_delays` on the intermodule path or
+delay device, and `acc_replace_delays` or `acc_append_delays` on the whole
+input port, retime its later transitions (a pending transition keeps its
+time). The twelve transition delays reduce to the rise (0 to 1), fall (1 to 0)
+and turn-off (the smaller of 0 to z and 1 to z) delays that continuous
+assignments use; `PATHPULSE` limits of a net, the x and z transitions apart
+from those, a delay on one bit of a port, and a delay on a port that no
+annotation created are not simulated. The VPI object of the load port reads
+the net, not the delayed copy. They reject other planned target kinds with `FSIM-SDF-SESSION-003` before
 publication or live commit. The broader interconnect, drive, pulse, VITAL and mixed-language
 APIs described above retain their separate source-tree contracts and tests;
 those tests do not establish file-input integration for every family.

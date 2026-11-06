@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // VPI clocking block and nettype conformance plug-in (IEEE 1800-2023 37.23,
 // 37.48): clocking blocks of a module with their events, skews, edges and
-// clockvars, the default and global clocking, and nettype declarations.
+// clockvars, the default and global clocking, nettype declarations, nets of a
+// nettype, and interconnect nets and arrays (37.16, 37.24).
 // Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
@@ -95,11 +96,81 @@ static void clocking(vpiHandle block)
 
 static void nettype(vpiHandle declaration)
 {
+    vpiHandle typespec = vpi_handle(vpiTypespec, declaration);
+    vpi_printf("#c nettype %s typespec=%s\n", name_of(declaration),
+        typespec != NULL ? text(vpi_get_str(vpiType, typespec)) : "-");
     vpi_printf("#c nettype %s type=%s full=%s with=%s alias=%s\n",
         name_of(declaration), text(vpi_get_str(vpiType, declaration)),
         text(vpi_get_str(vpiFullName, declaration)),
         name_of(vpi_handle(vpiWith, declaration)),
         name_of(vpi_handle(vpiNetTypedefAlias, declaration)));
+}
+
+// A net of a nettype or an interconnect net or array (37.16, 37.24).
+static void net(char* path)
+{
+    vpiHandle object = vpi_handle_by_name(path, NULL);
+    vpiHandle typespec;
+    vpiHandle iterator;
+    vpiHandle element;
+    if (object == NULL) {
+        vpi_printf("#c net %s missing\n", path);
+        return;
+    }
+    typespec = vpi_handle(vpiTypespec, object);
+    vpi_printf("#c net %s type=%s nettype=%d resolved=%d size=%d decl=%s "
+               "typespec=%s\n",
+        path, text(vpi_get_str(vpiType, object)),
+        (int)vpi_get(vpiNetType, object),
+        (int)vpi_get(vpiResolvedNetType, object),
+        (int)vpi_get(vpiSize, object),
+        name_of(vpi_handle(vpiNettypeDecl, object)),
+        typespec != NULL ? text(vpi_get_str(vpiType, typespec)) : "-");
+    if (vpi_get(vpiType, object) == vpiInterconnectNet) {
+        /* The members and elements of the typespec of the connected net
+         * (37.24 detail 1). */
+        iterator = vpi_iterate(vpiMember, object);
+        while (iterator != NULL && (element = vpi_scan(iterator)) != NULL) {
+            vpi_printf("#c member %s type=%s size=%d\n",
+                text(vpi_get_str(vpiFullName, element)),
+                text(vpi_get_str(vpiType, element)),
+                (int)vpi_get(vpiSize, element));
+        }
+        iterator = vpi_iterate(vpiElement, object);
+        while (iterator != NULL && (element = vpi_scan(iterator)) != NULL) {
+            vpi_printf("#c element %s type=%s size=%d\n",
+                text(vpi_get_str(vpiFullName, element)),
+                text(vpi_get_str(vpiType, element)),
+                (int)vpi_get(vpiSize, element));
+        }
+        return;
+    }
+    if (vpi_get(vpiType, object) != vpiInterconnectArray) {
+        return;
+    }
+    vpi_printf("#c net %s packed=%d\n", path, (int)vpi_get(vpiPacked, object));
+    {
+        s_vpi_value value;
+        vpiHandle left = vpi_handle(vpiLeftRange, object);
+        vpiHandle right = vpi_handle(vpiRightRange, object);
+        memset(&value, 0, sizeof value);
+        value.format = vpiIntVal;
+        if (left != NULL) {
+            vpi_get_value(left, &value);
+        }
+        vpi_printf("#c net %s left=%d", path, left != NULL ? (int)value.value.integer : -1);
+        if (right != NULL) {
+            vpi_get_value(right, &value);
+        }
+        vpi_printf(" right=%d\n", right != NULL ? (int)value.value.integer : -1);
+    }
+    iterator = vpi_iterate(vpiElement, object);
+    while (iterator != NULL && (element = vpi_scan(iterator)) != NULL) {
+        vpi_printf("#c element %s type=%s size=%d\n",
+            text(vpi_get_str(vpiFullName, element)),
+            text(vpi_get_str(vpiType, element)),
+            (int)vpi_get(vpiSize, element));
+    }
 }
 
 static PLI_INT32 check(p_cb_data data)
@@ -129,6 +200,12 @@ static PLI_INT32 check(p_cb_data data)
         ++count;
     }
     vpi_printf("#c nettypes=%d\n", count);
+    net("top.nv");
+    net("top.ic");
+    net("top.icv");
+    net("top.ica");
+    net("top.icq");
+    net("top.icd");
     return 0;
 }
 

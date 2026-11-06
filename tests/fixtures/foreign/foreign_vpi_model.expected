@@ -1,3 +1,4 @@
+#c RP display=2.500000
 #c pr type=vpiStructVar name=pr full=top.pr size=8 vector=1 packed=1
 #c pr[0] type=vpiReg name=hi full=top.pr.hi parent=pr su=1 pa=0
 #c pr[1] type=vpiReg name=lo full=top.pr.lo parent=pr su=1 pa=0
@@ -131,6 +132,43 @@
 #c td nib_t index=-
 #c ts my_int_t.0 type=vpiIntTypespec name=my_int_t ranges=- alias=vpiIntTypespec:-
 #c td my_int_t index=-
+#c ts aa_t.0 type=vpiArrayTypespec name=aa_t ranges=[] alias=-:-
+#c ts aa_t.1 type=vpiIntTypespec name=- ranges=- alias=-:-
+#c td aa_t index=vpiStringTypespec
+#c ts real_t.0 type=vpiRealTypespec name=real_t ranges=- alias=vpiRealTypespec:-
+#c td real_t index=-
+#c ts str_t.0 type=vpiStringTypespec name=str_t ranges=- alias=vpiStringTypespec:-
+#c td str_t index=-
+#c typedef top.g[1] gint_t type=vpiIntTypespec
+#c typedefs top.g[1] found=1
+#c typedef pkg_p pk_int_t type=vpiIntTypespec
+#c typedef pkg_p pk_pair_t type=vpiLogicTypespec
+#c typedefs pkg_p found=1
+#c typedef $unit rec_t type=vpiStructTypespec
+#c typedef $unit colors type=vpiEnumTypespec
+#c typedefs $unit found=1
+#c genvar i type=vpiGenVar full=top.i
+#c genvar k type=vpiGenVar full=top.k
+#c genblk3[1] param k local=1 value=1
+#c RP type=vpiParameter local=1 typespec=vpiRealTypespec name=real_t value=2.50
+#c SP type=vpiParameter local=1 typespec=vpiStringTypespec name=str_t value=hi
+#c delay type=vpiOperation optype=37 operands=3 values=1,2,3
 #c ts NP.0 type=vpiLogicTypespec name=nib_t ranges=[3:0] alias=-:-
 #c ts NP.1 type=vpiLogicTypespec name=- ranges=- alias=-:-
 #c NP type=vpiParameter local=1 size=4
+#c RS type=vpiStructVar name=RS full=top.RS size=2 vector=0 packed=0
+#c RS[0] type=vpiIntVar name=a full=top.RS.a parent=RS su=1 pa=0
+#c RS[1] type=vpiReg name=b full=top.RS.b parent=RS su=1 pa=0
+#c RS count=2
+#c RS.a int=3
+#c RS.b hex=5a
+#c ts RS.0 type=vpiStructTypespec name=rec_t ranges=- alias=-:-
+#c RS scope parameter=0 variables=1
+#c else scope type=vpiGenScope name=ge_else
+#c else variable type=vpiReg full=top.ge_else.b1
+#c else block type=vpiNamedBegin full=top.ge_else.eb parent=ge_else
+#c else absent if=1
+#c shared else block type=vpiNamedBegin s2=1 s1=0
+#c sv type=vpiStringVar
+#c sv watch=1
+#c sv changed value=b

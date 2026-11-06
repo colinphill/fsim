@@ -1,0 +1,39 @@
+#c mipd fetch ok=1 error=0
+#c mipd delays 4.000 4.000
+#c ic0 fetch ok=1 error=0
+#c ic0 delays 2.000 3.000
+#c ic2 fetch ok=1 error=0
+#c ic2 delays 5.000 1.000
+#c output port fetch ok=0 error=1
+#c mipd fetch 12 ok=1 error=0
+#c mipd delays 12 4.000 4.000 4.000 4.000 4.000 4.000 4.000 4.000 4.000 4.000 4.000 4.000
+#c ic0 replace max ok=1 error=0
+#c ic0 fetch ok=1 error=0
+#c ic0 delays 6.000 7.000
+#c mipd fetch ok=1 error=0
+#c mipd delays 6.000 7.000
+#c ic0 replace min ok=1 error=0
+#c mipd fetch ok=1 error=0
+#c mipd delays 5.000 1.000
+#c ic2 replace latest ok=1 error=0
+#c ic2 fetch ok=1 error=0
+#c ic2 delays 8.000 9.000
+#c ic0 fetch ok=1 error=0
+#c ic0 delays 6.000 7.000
+#c mipd fetch ok=1 error=0
+#c mipd delays 8.000 9.000
+#c mipd append ok=1 error=0
+#c mipd fetch ok=1 error=0
+#c mipd delays 9.000 10.000
+#c ic0 replace bad mode ok=0 error=1
+#c ic0 fetch ok=1 error=0
+#c ic0 delays 6.000 7.000
+#c vec port fetch ok=1 error=0
+#c vec port delays 0.000 0.000
+#c bit0 replace ok=1 error=0
+#c bit0 fetch ok=1 error=0
+#c bit0 delays 7.000 8.000
+#c bit1 fetch ok=1 error=0
+#c bit1 delays 0.000 0.000
+#c vec port fetch ok=1 error=0
+#c vec port delays 0.000 0.000

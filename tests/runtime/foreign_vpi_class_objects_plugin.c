@@ -124,7 +124,8 @@ static void property_of(vpiHandle member)
     vpi_get_value(member, &value);
     vpi_printf("#c property %s type=%s full=%s value=%s class-obj=%s "
                "objid-set=%d\n",
-        name, type_of(member), text(vpi_get_str(vpiFullName, member)),
+        name, type_of(member),
+        vpi_get_str(vpiFullName, member) != NULL ? "set" : "-",
         value.format == vpiSuppressVal ? "none" : "read",
         obj == NULL ? "null" : "set", vpi_get(vpiObjId, member) > 0);
 }

@@ -367,6 +367,15 @@ public:
     StaticKernel(const StaticKernel&) = delete;
     StaticKernel& operator=(const StaticKernel&) = delete;
 
+    /// Run-state image sections (simir_static_kernel_image.cpp). The
+    /// "kernel.values" section holds the slot values (the arena and the
+    /// published outputs), so far the only kernel section: threads, waiters,
+    /// timers and containers are not saved yet. restore_value_section is
+    /// false, with the kernel unchanged, when the bytes do not fit this
+    /// kernel's slots.
+    void record_value_section(std::string& out) const;
+    [[nodiscard]] bool restore_value_section(std::string_view bytes);
+
     /// Returns true when the kernel staged updates to its own inputs and
     /// must run again in the next delta.
     [[nodiscard]] bool activate();
@@ -401,6 +410,17 @@ public:
     /// writing it runs again (so the written value lasts until its inputs
     /// change, as a live driver's would).
     void note_external_write(SignalId signal);
+    /// The host's force or procedural assign layer of a kernel-owned signal
+    /// changed (Impl::publish_override_change). While any bit is overridden
+    /// the signal is watched (its stores take the general path) and every
+    /// store has the overridden bits put back (restore_override), so the
+    /// kernel's readers see the host's value and a write is hidden, as for
+    /// a host signal. The slot takes the host's effective value now.
+    void override_changed(SignalId signal, SignalChangeOrigin origin);
+    /// A foreign release of a net: the combinational members writing the
+    /// signal run again, so it returns to its drivers' value (IEEE 1800-2023
+    /// 10.6.2); a released variable keeps the forced value.
+    void rerun_writers(SignalId signal);
     /// Interpreter::deposit_kernel_signal and kernel_signal_value.
     [[nodiscard]] bool deposit_owned(SignalId signal, const PackedLogic4& value);
     [[nodiscard]] std::optional<PackedLogic4> owned_value(SignalId signal);
@@ -505,9 +525,12 @@ public:
     /// there is one) in register `input`, the program run to its halt over
     /// the host's current values of the signals it reads, the result from
     /// `output`.
+    /// `count`, when set, is the driver count of a run-time-count program,
+    /// written to the register after `input` (VhdlResolverVariant).
     [[nodiscard]] PackedLogic4 run_resolver(ProcessId process,
         const std::optional<PackedLogic4>& driving, RegisterId input,
-        RegisterId output);
+        RegisterId output,
+        const std::optional<PackedLogic4>& count = std::nullopt);
     /// Debugger plan: members stop at their debug points.
     [[nodiscard]] bool debug_points() const noexcept { return debug_points_; }
     /// A mixed kernel with a host boundary: its first round, the VHDL
@@ -575,6 +598,15 @@ public:
         ProcessId process, StringRegisterId reg) const;
     [[nodiscard]] ContainerValue debug_container_register(
         ProcessId process, ContainerRegisterId reg) const;
+    /// Replaces a dynamic array, queue or associative array register of a
+    /// thread member (vpi_put_value_array on a frame's automatic container,
+    /// IEEE 1800-2023 38.34); a kernel fixed array throws.
+    void debug_write_container_register(
+        ProcessId process, ContainerRegisterId reg, const ContainerValue& value);
+    /// Writes a string register of a thread member (a frame's automatic
+    /// string, IEEE 1800-2023 37.43 with vpi_put_value, 38.34).
+    void debug_write_string_register(
+        ProcessId process, StringRegisterId reg, std::string_view value);
     /// The thread member a debugger process id names: the member itself, or
     /// the member whose fork created the child with that id (children get the
     /// ids the reference evaluator would give them, in a debugger plan).
@@ -676,6 +708,9 @@ private:
         mutable const Impl* operations_source { };
         /// build_fresh inlined the calls of the body (static_kernel_inline_calls).
         bool inlined_calls { };
+        /// Per operation, the index in dpi_sites_ of an imported DPI call
+        /// (plan_dpi_sites), else no_slot; empty when the member has none.
+        std::vector<std::uint32_t> dpi_site_at;
         [[nodiscard]] std::vector<Operation>& operations()
         {
             if (operations_source != nullptr) [[unlikely]] {
@@ -1036,6 +1071,12 @@ private:
     /// outputs, waiters, edges).
     void slot_changed_general(std::uint32_t slot, std::uint64_t changed_mask,
         const std::uint64_t* before, std::uint32_t field_offset);
+    /// A write reached a slot whose signal a foreign library forced or
+    /// assigned (override_changed): puts the overridden bits back, which the
+    /// write hid (IEEE 1800-2023 10.6.2, 10.6.1), and returns `changed_mask`
+    /// without them.
+    [[nodiscard]] std::uint64_t restore_override(std::uint32_t slot,
+        std::uint64_t changed_mask, std::uint32_t field_offset);
     /// Builds the slot's chunk index of its ranged readers.
     static void index_ranged_readers(Slot& slot);
     [[nodiscard]] Logic4 slot_edge_bit(std::uint32_t slot) const noexcept;
@@ -1252,6 +1293,31 @@ private:
         std::vector<std::uint32_t>& register_of_slot,
         std::vector<std::uint32_t>& forwarded) const;
     std::size_t forwarded_loads_ { };
+    /// The imported DPI call sites of the members' operations, in member and
+    /// operation order (Member::dpi_site_at); part of the kernel image.
+    std::vector<DpiSitePlan> dpi_sites_;
+    /// A site's binding to the loaded C symbol, made once at load
+    /// (bind_dpi_sites) or on its first call: the service's site, null when
+    /// the call takes the generic hooks.
+    struct DpiBinding {
+        const void* site { };
+        bool resolved { };
+        bool planned { };
+    };
+    std::vector<DpiBinding> dpi_bound_;
+    /// Numbers the imported DPI calls of the members' operations
+    /// (build_fresh).
+    void plan_dpi_sites();
+    /// Binds each DPI site to the service's resolved import, when the
+    /// service is installed; a site that does not bind takes the generic
+    /// path, which reports the import without an implementation at its call.
+    void bind_dpi_sites();
+    [[nodiscard]] DpiBinding& dpi_binding(std::uint32_t site);
+    /// One imported DPI call through its site: the planned call reads the
+    /// argument registers straight into the C argument buffer.
+    [[nodiscard]] const char* run_dpi_site(ContainerRegisterAccess& access,
+        const ClassStaticMethodCall& operation, std::uint32_t site,
+        ProcessId process);
     /// Returns whether a two-state caller got a result with X or U bits.
     /// execute_generic's in-place path for a narrow field written into a
     /// wide register; false when the reference path must run instead.
@@ -1532,6 +1598,11 @@ private:
     std::vector<std::uint32_t> pending_dissolves_;
     /// (process, member) pairs ordered by process, built on first use.
     std::vector<std::pair<ProcessId, std::uint32_t>> member_of_process_;
+    /// Per slot, 1 while the host overrides some bit of its signal
+    /// (override_changed); sized on the first override, so a run with none
+    /// pays one counter test in slot_changed_general.
+    std::vector<std::uint8_t> slot_override_;
+    std::uint32_t overrides_active_ { };
 
     /// Hot scheduling state, packed apart from the large member and
     /// partition records; filled by build_schedule_targets.

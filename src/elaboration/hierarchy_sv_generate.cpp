@@ -428,7 +428,8 @@ ValidationResult validate_generated_constant(
 
     const auto description = "generated parameter '" + record.name + "'";
     if (hierarchy_sv_parameters_detail::
-            compiled_systemverilog_string_declaration(record)) {
+            compiled_systemverilog_string_declaration(
+                *occurrence.specialization, record)) {
         if (occurrence.specialization->evaluate_string_declaration(
                 declaration_id)) {
             return { };
@@ -460,8 +461,8 @@ ValidationResult validate_generated_constant(
 
     const auto scalar_applicable
         = (record.type
-              && frontend::systemverilog_scalar_kind(
-                          record.type->target.spelling)
+              && hir_systemverilog_declared_scalar_kind(
+                      *occurrence.specialization, *record.type, record.scope)
                   != frontend::SystemVerilogScalarKind::None)
         || hir_systemverilog_scalar_expression_applicable(
             *occurrence.specialization, *record.initializer);

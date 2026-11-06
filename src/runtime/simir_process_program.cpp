@@ -827,6 +827,20 @@ void Interpreter::Impl::ProcessColdState::inherit_fork_program(
     instance.final = false;
 }
 
+void Interpreter::Impl::ProcessColdState::inherit_driver_owner_program(
+    const ProcessColdState& model,
+    const ProcessId owner_id)
+{
+    auto& storage = program_storage();
+    storage.program_template = model.program_storage().program_template;
+    storage.instance_program = model.program_storage().instance_program;
+    auto& instance = storage.instance_program;
+    instance.id = owner_id;
+    instance.name += ".$driver_owner[" + std::to_string(owner_id) + "]";
+    instance.initialize = false;
+    instance.final = false;
+}
+
 ProcessProgramView
 Interpreter::Impl::ProcessColdState::program() const noexcept
 {

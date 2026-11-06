@@ -1,0 +1,10 @@
+#c av op=5 rc=0 1010
+#c n nv=1010
+#c av op=2 rc=0 1100
+#c n nv=1100
+#c av op=5 rc=0 1100
+#c n nv=1100
+#c av op=5 rc=0 0110
+#c n nv=0110
+#c av op=5 rc=0 0001
+#c n nv=0001

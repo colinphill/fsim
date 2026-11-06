@@ -1427,6 +1427,12 @@ Simulation::Impl::Impl(
                         (void)class_heap.release(copy);
                         throw;
                     }
+                    // The copy is a new object (IEEE 1800-2023 38.36.1
+                    // cbCreateObj): no constructor runs, so it is announced
+                    // here.
+                    if (foreign_probes && class_created_hook) {
+                        class_created_hook(copy);
+                    }
                     return runtime::PackedLogic4::from_aval_bval(64U, copy, 0U);
                 }
                 // `obj.srandom(seed)` (IEEE 1800-2017 18.13.3).

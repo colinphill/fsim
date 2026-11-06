@@ -17644,6 +17644,27 @@ bool Lowerer::hir_vhdl_expression_is_real(
     return subtype && hir_vhdl_subtype_is_real(*subtype);
 }
 
+frontend::SystemVerilogScalarKind Lowerer::hir_declared_type_scalar_kind(
+    const semantic::sv::TypeReference& type, const semantic::ScopeId scope) const
+{
+    using Kind = frontend::SystemVerilogScalarKind;
+    const auto& spelling = type.target.spelling;
+    const auto direct = frontend::systemverilog_scalar_kind(spelling);
+    if (direct != Kind::None || specialized_hir_unit_ == nullptr
+        || type.container_form || !type.packed_dimensions.empty()
+        || type.packed_range || spelling.empty() || spelling == "implicit"
+        || spelling == "logic" || spelling == "bit" || spelling == "reg"
+        || spelling == "int" || spelling == "integer" || spelling == "string") {
+        return direct;
+    }
+    const auto underlying
+        = hir_resolver().underlying_systemverilog_type(type, scope);
+    return underlying && !underlying->container_form
+            && underlying->packed_dimensions.empty() && !underlying->packed_range
+        ? frontend::systemverilog_scalar_kind(underlying->target.spelling)
+        : Kind::None;
+}
+
 frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     const semantic::ExpressionId expression_id,
     const frontend::SystemVerilogScalarKind contextual_kind) const
@@ -17674,7 +17695,7 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
         && semantic::sv::systemverilog_cast_value_operand(source)) {
         const auto cast_type = hir_systemverilog_cast_type(expression_id);
         const auto cast_kind = cast_type
-            ? frontend::systemverilog_scalar_kind(cast_type->target.spelling)
+            ? hir_declared_type_scalar_kind(*cast_type, hir_process_scope_)
             : Kind::None;
         if (cast_kind == Kind::ShortReal || cast_kind == Kind::Real
             || cast_kind == Kind::Realtime) {
@@ -17709,9 +17730,9 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
                     *callee_id);
                 if (callee && callee->systemverilog != nullptr
                     && callee->systemverilog->callable) {
-                    return frontend::systemverilog_scalar_kind(
-                        callee->systemverilog->callable->return_type.target
-                            .spelling);
+                    return hir_declared_type_scalar_kind(
+                        callee->systemverilog->callable->return_type,
+                        callee->systemverilog->scope);
                 }
             }
             // A tool-specified override has no expression; its value
@@ -17755,6 +17776,43 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     const auto retained_kind = static_cast<Kind>(source.scalar_kind);
     if (retained_kind != Kind::None) {
         return retained_kind;
+    }
+    // A class property or method result of a typedef of a real type is
+    // real (IEEE 1800-2023 6.18, 8.5); the frontend leaves compilation-unit
+    // typedefs to the HIR.
+    using ExpressionKind = semantic::sv::ExpressionKind;
+    if (source.kind == ExpressionKind::class_property
+        || source.kind == ExpressionKind::class_static_property) {
+        if (const auto profile = hir_class_property_profile(expression_id);
+            profile && profile->type.class_identity.empty()) {
+            if (const auto kind = hir_declared_type_scalar_kind(
+                    profile->type, hir_process_scope_);
+                kind != Kind::None) {
+                return kind;
+            }
+        }
+    }
+    if ((source.kind == ExpressionKind::class_method_call
+            || source.kind == ExpressionKind::class_static_method_call)
+        && !source.class_member_identity.empty()
+        && !source.class_member_identity.starts_with("@")) {
+        const auto* const method = hir_resolver()
+            .resolve_systemverilog_class_method(source.class_member_identity,
+                source.kind == ExpressionKind::class_static_method_call,
+                semantic::sv::ClassMethodKind::function)
+            .unique();
+        const auto declaration = method != nullptr
+            ? specialized_hir_unit_->find_declaration(method->declaration)
+            : std::nullopt;
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->type) {
+            if (const auto kind = hir_declared_type_scalar_kind(
+                    *declaration->systemverilog->type,
+                    declaration->systemverilog->scope);
+                kind != Kind::None) {
+                return kind;
+            }
+        }
     }
     if (source.kind == semantic::sv::ExpressionKind::name
         && source.text.find('.') != std::string::npos) {
@@ -17852,9 +17910,9 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
             if (callee && callee->systemverilog != nullptr
                 && callee->systemverilog->callable
                 && callee->systemverilog->callable->function) {
-                if (const auto kind = frontend::systemverilog_scalar_kind(
-                        callee->systemverilog->callable->return_type.target
-                            .spelling);
+                if (const auto kind = hir_declared_type_scalar_kind(
+                        callee->systemverilog->callable->return_type,
+                        callee->systemverilog->scope);
                     kind != Kind::None) {
                     return kind;
                 }
@@ -17950,6 +18008,7 @@ Lowerer::hir_systemverilog_parameter_type(
         || (source.type->target.spelling == "implicit"
             && !source.type->packed_range)
         || source.type->container_form
+        || source.type->value_form == semantic::sv::TypeForm::string
         || source.type->target.spelling == "string") {
         return std::nullopt;
     }

@@ -238,6 +238,11 @@ bool Simulation::signal_is_forced(const SignalId signal) const
     return impl_->interpreter->signal_is_forced(signal);
 }
 
+bool Simulation::signal_is_assigned(const SignalId signal) const
+{
+    return impl_->interpreter->signal_is_assigned(signal);
+}
+
 void Simulation::start()
 {
     if (impl_->lifecycle != Impl::Lifecycle::ready) {
@@ -878,6 +883,12 @@ void Simulation::set_systemverilog_dpi_function_hook(
 {
     impl_->dpi_function_hook = hook;
     impl_->interpreter->set_dpi_function_call_hook(std::move(hook));
+}
+
+void Simulation::set_systemverilog_dpi_site_hooks(
+    SystemVerilogDpiSiteHooks hooks)
+{
+    impl_->interpreter->set_dpi_site_hooks(std::move(hooks));
 }
 
 Simulation::SystemVerilogDpiFunctionHook

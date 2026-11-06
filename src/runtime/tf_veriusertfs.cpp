@@ -20,6 +20,7 @@
 #include <cstring>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -1217,7 +1218,11 @@ uint32_t read_object(const vpiHandle object,
   // Direction, index, edge and time scale (acc_fetch_direction, _index,
   // _edge and _timescale_info).
   if (type == accPort || type == accPortBit || type == accTerminal) {
-    result->direction = acc_direction(vpi_get(vpiDirection, object));
+    // A port bit has the direction of its port.
+    const auto owner = type == accPortBit ? vpi_handle(vpiParent, object)
+                                          : object;
+    result->direction =
+        acc_direction(vpi_get(vpiDirection, owner == nullptr ? object : owner));
   }
   if (type == accPort) {
     result->index = std::max(vpi_get(vpiPortIndex, object), 0);
@@ -1243,7 +1248,15 @@ uint32_t read_object(const vpiHandle object,
                                   FSIM_ACC_TIMING_CAP_POLARITY;
     result->timing_delay_count = 12;
   } else if (type == accWirePath) {
-    result->timing_capabilities = FSIM_ACC_TIMING_CAP_POLARITY;
+    // An intermodule path has up to twelve delays (23.1, 23.14, 23.90).
+    result->timing_capabilities =
+        FSIM_ACC_TIMING_CAP_DELAYS | FSIM_ACC_TIMING_CAP_POLARITY;
+    result->timing_delay_count = 12;
+  } else if ((type == accPort || type == accPortBit) &&
+             result->direction == accInput) {
+    // The delay of a module input port or of a bit of one, a MIPD (22.5.2).
+    result->timing_capabilities = FSIM_ACC_TIMING_CAP_DELAYS;
+    result->timing_delay_count = 12;
   } else if (type == accPrimitive && full_type != accPullupGate &&
              full_type != accPulldownGate) {
     result->timing_capabilities = FSIM_ACC_TIMING_CAP_DELAYS;
@@ -1356,10 +1369,10 @@ uint32_t FSIM_NATIVE_PLUGIN_CALL acc_write(
   case accPureTransportDelay: flags = vpiPureTransportDelay; break;
   case accForceFlag: flags = vpiForceFlag; break;
   case accReleaseFlag: flags = vpiReleaseFlag; break;
-  // VPI has only force and release: procedural assign and deassign take
-  // their overriding-until-released effect through them (23.96).
-  case accAssignFlag: flags = vpiForceFlag; break;
-  case accDeassignFlag: flags = vpiReleaseFlag; break;
+  // VPI has only force and release: assign and deassign reach the
+  // simulation's procedural assign layer through fsim's own flags (23.96).
+  case accAssignFlag: flags = FSIM_ACC_VPI_ASSIGN_FLAG; break;
+  case accDeassignFlag: flags = FSIM_ACC_VPI_DEASSIGN_FLAG; break;
   default: return FSIM_ACC_VPI_OBJECT_INVALID;
   }
   // accTime and accRealTime count the object's time units, accSimTime ticks.
@@ -1378,7 +1391,8 @@ uint32_t FSIM_NATIVE_PLUGIN_CALL acc_write(
   std::vector<s_vpi_vecval> words;
   std::string text;
   const auto& input = query->value;
-  const bool release = flags == vpiReleaseFlag;
+  const bool release =
+      flags == vpiReleaseFlag || flags == FSIM_ACC_VPI_DEASSIGN_FLAG;
   switch (release ? accVectorVal : input.format) {
   case accScalarVal:
   case accIntVal:
@@ -1629,6 +1643,97 @@ void truncate_pulse_limits(std::vector<double>& rows) {
   }
 }
 
+// The twelve transition delays of an object in scheduler ticks, so that
+// delays move between objects of different time units unchanged.
+bool vpi_tick_delays(const vpiHandle object, const bool put,
+                     std::array<uint64_t, 12>& ticks) {
+  std::array<s_vpi_time, 12> times{};
+  for (std::size_t index = 0; index < times.size(); ++index) {
+    times[index].type = vpiSimTime;
+    if (put) {
+      times[index].high = static_cast<PLI_UINT32>(ticks[index] >> 32u);
+      times[index].low = static_cast<PLI_UINT32>(ticks[index]);
+    }
+  }
+  s_vpi_delay delays{};
+  delays.da = times.data();
+  delays.no_of_delays = 12;
+  delays.time_type = vpiSimTime;
+  if (put) {
+    vpi_put_delays(object, &delays);
+  } else {
+    vpi_get_delays(object, &delays);
+  }
+  if (vpi_chk_error(nullptr) != 0) {
+    return false;
+  }
+  for (std::size_t index = 0; !put && index < times.size(); ++index) {
+    ticks[index] = (static_cast<uint64_t>(times[index].high) << 32u) |
+                   times[index].low;
+  }
+  return true;
+}
+
+// The accMapToMipd setting; none for a value outside Table 130.
+std::optional<std::string> mipd_mapping() {
+  const auto configured = fsim::runtime::acc_detail::configuration_value(
+      accMapToMipd);
+  std::string mode = !configured.has_value() || configured->empty()
+                         ? "max"
+                         : *configured;
+  if (mode != "max" && mode != "min" && mode != "latest") {
+    return std::nullopt;
+  }
+  return mode;
+}
+
+// accMapToMipd (IEEE 1364-2005 Table 130): a module input port has one
+// delay, so a delay written to an intermodule path ending at the port is
+// mapped to it. With several intermodule paths to the port (its net has
+// several output ports driving it) "max" maps the longest of their delays
+// (each transition separately), "min" the shortest and "latest" the one
+// just written.
+bool map_to_mipd(const vpiHandle path) {
+  const auto mode = mipd_mapping();
+  if (!mode.has_value()) {
+    return false;
+  }
+  const auto ports = members(vpiPort, path);
+  if (ports.size() != 2) {
+    return true;
+  }
+  std::vector<vpiHandle> paths{path};
+  if (*mode != "latest") {
+    const auto net = vpi_handle(vpiHighConn, ports[1]);
+    for (const auto driver :
+         net == nullptr ? std::vector<vpiHandle>{} : members(vpiDriver, net)) {
+      if (vpi_get(vpiType, driver) != vpiPort ||
+          vpi_compare_objects(driver, ports[0]) != 0) {
+        continue;
+      }
+      if (const auto other =
+              vpi_handle_multi(vpiInterModPath, driver, ports[1])) {
+        paths.push_back(other);
+      }
+    }
+  }
+  std::array<uint64_t, 12> mapped{};
+  bool first = true;
+  for (const auto item : paths) {
+    std::array<uint64_t, 12> ticks{};
+    if (!vpi_tick_delays(item, false, ticks)) {
+      return false;
+    }
+    for (std::size_t index = 0; index < ticks.size(); ++index) {
+      mapped[index] = first                ? ticks[index]
+                      : *mode == "min"      ? std::min(mapped[index], ticks[index])
+                                           : std::max(mapped[index], ticks[index]);
+    }
+    first = false;
+  }
+  return vpi_tick_delays(ports[1], true, mapped);
+}
+
 // acc_append_delays and acc_replace_delays on a primitive, module path or
 // timing check (IEEE 1364-2001 22.8, 23.1, 23.90). A path or 3-state
 // primitive written with two delays and accToHiZDelay other than from_user
@@ -1639,6 +1744,9 @@ bool write_delays(const vpiHandle object,
                   const fsim_acc_timing_query_v3& query, const bool append) {
   const bool mtm = query.min_typ_max != 0;
   const auto type = vpi_get(vpiType, object);
+  if (type == vpiInterModPath && !mipd_mapping().has_value()) {
+    return false;
+  }
   const bool path = type == vpiModPath;
   const bool primitive = type == vpiGate || type == vpiSwitch || type == vpiUdp;
   auto count = static_cast<PLI_INT32>(query.delay_count);
@@ -1665,6 +1773,9 @@ bool write_delays(const vpiHandle object,
   }
   if (!vpi_delay_rows(object, count, mtm, false, append_rows, true, rows)) {
     return false;
+  }
+  if (type == vpiInterModPath) {
+    return map_to_mipd(object);
   }
   if (!path) {
     return true;
@@ -2465,15 +2576,27 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
         callback.value = &value;
         callback.user_data = reinterpret_cast<PLI_BYTE8*>(&watch);
         (void)vpi_register_cb(&callback);
-        // A change on a driver of a net argument calls misctf with
-        // reason_paramdrc (IEEE 1364-2001 21.3.2, 21.3.3, Table 88). A driver
-        // is watched through the signal it drives; a driver the VPI cannot
-        // watch (a continuous assignment) is not.
+        // A change on a driver of a net or variable argument calls misctf
+        // with reason_paramdrc (IEEE 1364-2005 21.3.2, 21.3.3, Table 88). A
+        // primitive driver is watched through the signal it drives; a
+        // continuous assignment through the driver the kernel contributes for
+        // it, so each driver's change is one call whether or not the
+        // argument's value changes. A force or a procedural continuous
+        // assignment, and a continuous assignment the kernel's drivers cannot
+        // be matched to, has no value of its own; what it drives reaches the
+        // argument, so the argument is watched once for all of them, and
+        // misctf is called once per change. A blocking or nonblocking
+        // assignment is not a driver (IEEE 1364-2001 26.6.7 detail 7, IEEE
+        // 1800-2023 37.21).
         const auto type = vpi_get(vpiType, handle);
-        if (type != vpiNet && type != vpiNetBit) {
+        if (type != vpiNet && type != vpiNetBit && type != vpiReg &&
+            type != vpiRegBit && type != vpiIntegerVar &&
+            type != vpiTimeVar && type != vpiRealVar) {
           continue;
         }
-        for (const auto driver : members(vpiDriver, handle)) {
+        bool unwatched_driver = false;
+        std::vector<vpiHandle> statement_watches;
+        const auto watch_driver = [&](const vpiHandle driver) {
           auto& driver_watch = instance.watches.emplace_back(Watch{
               &instance, static_cast<PLI_INT32>(argument + 1u),
               reason_paramdrc});
@@ -2485,7 +2608,35 @@ void run(Instance& instance, const uint32_t phase, const PLI_INT32 reason,
           driver_callback.value = &value;
           driver_callback.user_data =
               reinterpret_cast<PLI_BYTE8*>(&driver_watch);
-          (void)vpi_register_cb(&driver_callback);
+          return vpi_register_cb(&driver_callback);
+        };
+        for (const auto driver : members(vpiDriver, handle)) {
+          const auto driver_type = vpi_get(vpiType, driver);
+          if (driver_type == vpiContAssign) {
+            if (const auto registered = watch_driver(driver)) {
+              statement_watches.push_back(registered);
+            } else {
+              unwatched_driver = true;
+            }
+            continue;
+          }
+          if (driver_type == vpiContAssignBit || driver_type == vpiAssignStmt ||
+              driver_type == vpiForce) {
+            unwatched_driver = true;
+            continue;
+          }
+          if (type != vpiNet && type != vpiNetBit) {
+            continue;
+          }
+          (void)watch_driver(driver);
+        }
+        if (unwatched_driver) {
+          // One watch for all of them, so none of the per-driver ones also
+          // calls misctf for the same change.
+          for (const auto registered : statement_watches) {
+            (void)vpi_remove_cb(registered);
+          }
+          (void)watch_driver(handle);
         }
       }
       continue;
@@ -2759,6 +2910,22 @@ PLI_INT32 forced(const p_cb_data data) {
   return 0;
 }
 
+// misctf(reason_interactive) when the tool enters interactive mode ($stop,
+// tf_dostop), and misctf(reason_scope) when the interactive scope changes
+// ($scope, vpi_control(vpiSetInteractiveScope), acc_set_interactive_scope
+// with its callback flag set), Table 88. VPI callbacks run once, so each
+// registers the next occurrence.
+PLI_INT32 interactive_event(const p_cb_data data) {
+  const auto reason = data->reason == cbEnterInteractive ? reason_interactive
+                                                         : reason_scope;
+  notify_statement(reason, nullptr);
+  s_cb_data again{};
+  again.reason = data->reason;
+  again.cb_rtn = &interactive_event;
+  (void)vpi_register_cb(&again);
+  return 0;
+}
+
 PLI_INT32 disabled(const p_cb_data) {
   notify_statement(reason_disable, nullptr);
   return 0;
@@ -2815,6 +2982,12 @@ PLI_INT32 install_statement_watches(p_cb_data data) {
     s_cb_data callback{};
     callback.reason = reason;
     callback.cb_rtn = &forced;
+    (void)vpi_register_cb(&callback);
+  }
+  for (const auto reason : {cbEnterInteractive, cbInteractiveScopeChange}) {
+    s_cb_data callback{};
+    callback.reason = reason;
+    callback.cb_rtn = &interactive_event;
     (void)vpi_register_cb(&callback);
   }
   return end_of_compile_disables(data);

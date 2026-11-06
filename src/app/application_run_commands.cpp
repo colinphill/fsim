@@ -172,6 +172,267 @@ int handle_build(
     return 0;
 }
 
+struct ForeignLibraries::Impl {
+    // Destroyed last to first: the VPI and VHPI services, then the signal
+    // trap, then the DPI libraries the services resolve against.
+    std::unique_ptr<DpiForeignService> dpi;
+    std::optional<InterruptSignalGuard> interrupt_signal;
+    std::unique_ptr<VhpiForeignService> vhpi;
+    std::unique_ptr<VpiForeignService> vpi;
+    // A run-time error that ended the run (IEEE 1800-2023 38.36.3).
+    std::optional<std::string> error;
+    bool finished { };
+};
+
+ForeignLibraries::ForeignLibraries(Simulation& simulation)
+    : simulation_(simulation), impl_(std::make_unique<Impl>())
+{
+}
+
+ForeignLibraries::~ForeignLibraries()
+{
+    finish();
+}
+
+void ForeignLibraries::run_error(std::string message)
+{
+    impl_->error = std::move(message);
+}
+
+void ForeignLibraries::finish_vhpi()
+{
+    if (impl_->vhpi) {
+        impl_->vhpi->finish();
+    }
+}
+
+bool ForeignLibraries::vhpi_failed() const
+{
+    return impl_->vhpi && impl_->vhpi->failed();
+}
+
+// However the run ends, the foreign interfaces see the end of simulation
+// and of the tool while their libraries are still loaded (IEEE 1800-2023
+// 38.36.3, IEEE 1076-2019 20.10).
+void ForeignLibraries::finish() noexcept
+{
+    if (impl_->finished) {
+        return;
+    }
+    impl_->finished = true;
+    if (impl_->vpi && impl_->error) {
+        impl_->vpi->run_error(*impl_->error);
+    }
+    simulation_.end_foreign_simulation();
+    try {
+        finish_vhpi();
+    } catch (...) {
+    }
+}
+
+bool foreign_libraries_requested(const project::Config& config)
+{
+    return !config.run.vpi_modules.empty() || !config.run.vhpi_modules.empty()
+        || !config.run.vhpi_registries.empty() || !config.run.sv_libs.empty();
+}
+
+// Loads the --sv-lib, --vpi and --vhpi libraries and starts their services;
+// the batch run and the Tcl and debugger sessions share it. Null after a
+// diagnostic when a library does not load.
+std::unique_ptr<ForeignLibraries> attach_foreign_libraries(
+    Simulation& simulation,
+    const project::Config& config,
+    const std::span<const std::string> plusargs,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    const SimulationOutputSink sink,
+    const std::size_t design_process_count)
+{
+    const bool vpi_modules = !config.run.vpi_modules.empty();
+    const bool vhpi_modules = !config.run.vhpi_modules.empty()
+        || !config.run.vhpi_registries.empty();
+    const bool foreign = foreign_libraries_requested(config);
+    auto libraries = std::make_unique<ForeignLibraries>(simulation);
+    auto& impl = *libraries->impl_;
+    // A library that did not load gets no end of simulation.
+    const auto failed = [&impl]() -> std::unique_ptr<ForeignLibraries> {
+        impl.finished = true;
+        return nullptr;
+    };
+    // DPI imports resolve in the --sv-lib libraries, then in the VPI
+    // modules, which load with global symbols.
+    if (foreign) {
+        impl.dpi = load_dpi_libraries(config.run.sv_libs, diagnostics);
+        if (!impl.dpi) {
+            return failed();
+        }
+        auto& time = simulation.systemverilog_vpi_time();
+        impl.dpi->set_clock({
+            [&time] {
+                const auto now = time.query(
+                    runtime::SystemVerilogVpiTimeFormat::IntegerTicks);
+                return (static_cast<std::uint64_t>(now.value.high) << 32U)
+                    | now.value.low;
+            },
+            time.profile().precision_exponent,
+            time.profile().unit_exponent,
+            [&simulation](const std::string_view name)
+                -> std::optional<std::string> {
+                const auto found
+                    = simulation.systemverilog_vpi_objects().find(name);
+                if (!found) {
+                    return std::nullopt;
+                }
+                using Kind = runtime::SystemVerilogVpiObjectKind;
+                const auto kind = found.value->kind;
+                // A configured top is published as a Root object.
+                if (kind != Kind::Root && kind != Kind::Module
+                    && kind != Kind::Interface && kind != Kind::Program
+                    && kind != Kind::GenerateScope) {
+                    return std::nullopt;
+                }
+                return found.value->full_name;
+            },
+            [&simulation](std::string_view path)
+                -> std::optional<std::pair<int, int>> {
+                // A generate scope has the time scale of its module.
+                while (true) {
+                    if (const auto scale
+                        = simulation.systemverilog_instance_time_scale(path)) {
+                        return scale;
+                    }
+                    const auto dot = path.rfind('.');
+                    if (dot == std::string_view::npos) {
+                        return std::nullopt;
+                    }
+                    path = path.substr(0U, dot);
+                }
+            },
+        });
+    }
+    // Installed before the foreign libraries load, so a signal trap that
+    // their startup routines set up replaces it (IEEE 1800-2023 38.36.3,
+    // IEEE 1076-2019 21.3.7.10), and destroyed after them.
+    impl.interrupt_signal.emplace();
+    // A library loaded through one interface may load a library that uses
+    // the other one (a mixed-language cocotb run loads its VHPI layer from
+    // its VPI library, or the reverse), so each interface the design has a
+    // language for is served. A service with no modules of its own is
+    // attached before the one whose startup routines run; with both served,
+    // each answers calls while the other's routines and callbacks run.
+    const auto has_language = [&](const auto... languages) {
+        return std::ranges::any_of(simulation.design_ir().specializations(),
+            [&](const auto& specialization) {
+                return ((specialization.language == languages) || ...);
+            });
+    };
+    const bool vpi_wanted = vpi_modules
+        || (vhpi_modules
+            && has_language(semantic::Language::verilog,
+                semantic::Language::system_verilog));
+    // A foreign architecture needs a VHPI program that registers its model
+    // (IEEE 1076-2019 20.2.4); without a module that is an error the VHPI
+    // service reports.
+    const bool vhpi_wanted = vhpi_modules
+        || (vpi_modules && has_language(semantic::Language::vhdl))
+        || (has_language(semantic::Language::vhdl)
+            && (design_has_vhdl_foreign_architecture(simulation)
+                || design_has_vhdl_foreign_subprogram(simulation)));
+    const auto vhpi_print = [&] {
+        return sink == SimulationOutputSink::builtin_stdout
+            ? VhpiForeignService::PrintSink { [](const std::string_view text) {
+                  (void)std::fwrite(text.data(), 1U, text.size(), stdout);
+              } }
+            : VhpiForeignService::PrintSink {
+                  [&output](const std::string_view text) { output << text; } };
+    };
+    // The workspace's library directories, read only when a VHPI program
+    // asks for a physical name.
+    const auto vhpi_libraries = [root = config.base_directory] {
+        std::vector<std::pair<std::string, std::filesystem::path>> result;
+        std::string failure;
+        if (const auto locations
+            = workspace::Store { root }.library_locations(failure)) {
+            for (const auto& location : *locations) {
+                result.emplace_back(location.name,
+                    location.directory.is_absolute()
+                        ? location.directory
+                        : root / location.directory);
+            }
+        }
+        return result;
+    };
+    if (vhpi_wanted && !vhpi_modules) {
+        impl.vhpi = attach_vhpi_modules(
+            simulation, {}, {}, vhpi_print(), plusargs, diagnostics, {},
+            vhpi_libraries);
+        if (!impl.vhpi) {
+            return failed();
+        }
+    }
+        if (vpi_wanted) {
+        auto print = sink == SimulationOutputSink::builtin_stdout
+            ? VpiForeignService::PrintSink { [](const std::string_view text) {
+                  (void)std::fwrite(text.data(), 1U, text.size(), stdout);
+              } }
+            : VpiForeignService::PrintSink {
+                  [&output](const std::string_view text) { output << text; } };
+        impl.vpi = attach_vpi_modules(simulation, config.run.vpi_modules,
+            design_process_count, std::move(print), plusargs,
+            impl.dpi.get(), diagnostics,
+            impl.vhpi ? impl.vhpi->calls() : ForeignCompanion {});
+        if (!impl.vpi) {
+            return failed();
+        }
+    } else if (impl.dpi) {
+        simulation.set_systemverilog_dpi_function_hook(
+            [dpi = impl.dpi.get()](const std::string_view identity,
+                std::vector<runtime::PackedLogic4>& actuals,
+                std::vector<std::string>& strings,
+                const std::span<const std::string>,
+                const std::span<const std::uint8_t>) {
+                return dpi->call(identity, actuals, strings);
+            });
+        simulation.set_systemverilog_dpi_site_hooks({
+            [dpi = impl.dpi.get()](const std::string_view identity) {
+                return dpi->bind(identity);
+            },
+            [dpi = impl.dpi.get()](const void* const site,
+                std::vector<runtime::PackedLogic4>& actuals,
+                std::vector<std::string>& strings) {
+                return dpi->call_site(site, actuals, strings);
+            },
+            [dpi = impl.dpi.get()](
+                const runtime::simir::DpiSitePlan& plan) {
+                return dpi->bind_plan(plan);
+            },
+            [dpi = impl.dpi.get()](const void* const site) {
+                return dpi->planned_site(site);
+            },
+            [dpi = impl.dpi.get()](const void* const site,
+                const runtime::simir::DpiSitePlan& plan,
+                runtime::simir::DpiFrame& frame) {
+                return dpi->call_plan(site, plan, frame);
+            },
+        });
+    }
+    if (vhpi_modules) {
+        impl.vhpi = attach_vhpi_modules(simulation,
+            config.run.vhpi_modules, config.run.vhpi_registries, vhpi_print(),
+            plusargs, diagnostics,
+            impl.vpi ? impl.vpi->calls() : ForeignCompanion {},
+            vhpi_libraries);
+        if (!impl.vhpi) {
+            return failed();
+        }
+    }
+    if (impl.vpi && impl.vhpi) {
+        impl.vpi->set_companion(impl.vhpi->calls());
+        impl.vhpi->set_companion(impl.vpi->calls());
+    }
+    return libraries;
+}
+
 int run_built_project(
     BuiltProject built,
     const SimulationEngine engine,
@@ -306,157 +567,10 @@ int run_built_project(
                 }
             });
     }
-    // DPI imports resolve in the --sv-lib libraries, then in the VPI
-    // modules, which load with global symbols.
-    std::unique_ptr<DpiForeignService> dpi_service;
-    if (foreign) {
-        dpi_service = load_dpi_libraries(config.run.sv_libs, diagnostics);
-        if (!dpi_service) {
-            return 1;
-        }
-        auto& time = simulation.systemverilog_vpi_time();
-        dpi_service->set_clock({
-            [&time] {
-                const auto now = time.query(
-                    runtime::SystemVerilogVpiTimeFormat::IntegerTicks);
-                return (static_cast<std::uint64_t>(now.value.high) << 32U)
-                    | now.value.low;
-            },
-            time.profile().precision_exponent,
-            time.profile().unit_exponent,
-            [&simulation](const std::string_view name)
-                -> std::optional<std::string> {
-                const auto found
-                    = simulation.systemverilog_vpi_objects().find(name);
-                if (!found) {
-                    return std::nullopt;
-                }
-                using Kind = runtime::SystemVerilogVpiObjectKind;
-                const auto kind = found.value->kind;
-                // A configured top is published as a Root object.
-                if (kind != Kind::Root && kind != Kind::Module
-                    && kind != Kind::Interface && kind != Kind::Program
-                    && kind != Kind::GenerateScope) {
-                    return std::nullopt;
-                }
-                return found.value->full_name;
-            },
-            [&simulation](std::string_view path)
-                -> std::optional<std::pair<int, int>> {
-                // A generate scope has the time scale of its module.
-                while (true) {
-                    if (const auto scale
-                        = simulation.systemverilog_instance_time_scale(path)) {
-                        return scale;
-                    }
-                    const auto dot = path.rfind('.');
-                    if (dot == std::string_view::npos) {
-                        return std::nullopt;
-                    }
-                    path = path.substr(0U, dot);
-                }
-            },
-        });
-    }
-    // Installed before the foreign libraries load, so a signal trap that
-    // their startup routines set up replaces it (IEEE 1800-2023 38.36.3,
-    // IEEE 1076-2019 21.3.7.10), and destroyed after them.
-    const InterruptSignalGuard interrupt_signal;
-    // A library loaded through one interface may load a library that uses
-    // the other one (a mixed-language cocotb run loads its VHPI layer from
-    // its VPI library, or the reverse), so each interface the design has a
-    // language for is served. A service with no modules of its own is
-    // attached before the one whose startup routines run; with both served,
-    // each answers calls while the other's routines and callbacks run.
-    const auto has_language = [&](const auto... languages) {
-        return std::ranges::any_of(simulation.design_ir().specializations(),
-            [&](const auto& specialization) {
-                return ((specialization.language == languages) || ...);
-            });
-    };
-    const bool vpi_wanted = vpi_modules
-        || (vhpi_modules
-            && has_language(semantic::Language::verilog,
-                semantic::Language::system_verilog));
-    // A foreign architecture needs a VHPI program that registers its model
-    // (IEEE 1076-2019 20.2.4); without a module that is an error the VHPI
-    // service reports.
-    const bool vhpi_wanted = vhpi_modules
-        || (vpi_modules && has_language(semantic::Language::vhdl))
-        || (has_language(semantic::Language::vhdl)
-            && (design_has_vhdl_foreign_architecture(simulation)
-                || design_has_vhdl_foreign_subprogram(simulation)));
-    const auto vhpi_print = [&] {
-        return sink == SimulationOutputSink::builtin_stdout
-            ? VhpiForeignService::PrintSink { [](const std::string_view text) {
-                  (void)std::fwrite(text.data(), 1U, text.size(), stdout);
-              } }
-            : VhpiForeignService::PrintSink {
-                  [&output](const std::string_view text) { output << text; } };
-    };
-    // The workspace's library directories, read only when a VHPI program
-    // asks for a physical name.
-    const auto vhpi_libraries = [root = config.base_directory] {
-        std::vector<std::pair<std::string, std::filesystem::path>> result;
-        std::string failure;
-        if (const auto locations
-            = workspace::Store { root }.library_locations(failure)) {
-            for (const auto& location : *locations) {
-                result.emplace_back(location.name,
-                    location.directory.is_absolute()
-                        ? location.directory
-                        : root / location.directory);
-            }
-        }
-        return result;
-    };
-    std::unique_ptr<VhpiForeignService> vhpi_service;
-    if (vhpi_wanted && !vhpi_modules) {
-        vhpi_service = attach_vhpi_modules(
-            simulation, {}, {}, vhpi_print(), plusargs, diagnostics, {},
-            vhpi_libraries);
-        if (!vhpi_service) {
-            return 1;
-        }
-    }
-    std::unique_ptr<VpiForeignService> vpi_service;
-    if (vpi_wanted) {
-        auto print = sink == SimulationOutputSink::builtin_stdout
-            ? VpiForeignService::PrintSink { [](const std::string_view text) {
-                  (void)std::fwrite(text.data(), 1U, text.size(), stdout);
-              } }
-            : VpiForeignService::PrintSink {
-                  [&output](const std::string_view text) { output << text; } };
-        vpi_service = attach_vpi_modules(simulation, config.run.vpi_modules,
-            design_process_count, std::move(print), plusargs,
-            dpi_service.get(), diagnostics,
-            vhpi_service ? vhpi_service->calls() : ForeignCompanion {});
-        if (!vpi_service) {
-            return 1;
-        }
-    } else if (dpi_service) {
-        simulation.set_systemverilog_dpi_function_hook(
-            [dpi = dpi_service.get()](const std::string_view identity,
-                std::vector<runtime::PackedLogic4>& actuals,
-                std::vector<std::string>& strings,
-                const std::span<const std::string>,
-                const std::span<const std::uint8_t>) {
-                return dpi->call(identity, actuals, strings);
-            });
-    }
-    if (vhpi_modules) {
-        vhpi_service = attach_vhpi_modules(simulation,
-            config.run.vhpi_modules, config.run.vhpi_registries, vhpi_print(),
-            plusargs, diagnostics,
-            vpi_service ? vpi_service->calls() : ForeignCompanion {},
-            vhpi_libraries);
-        if (!vhpi_service) {
-            return 1;
-        }
-    }
-    if (vpi_service && vhpi_service) {
-        vpi_service->set_companion(vhpi_service->calls());
-        vhpi_service->set_companion(vpi_service->calls());
+    auto foreign_libraries = attach_foreign_libraries(simulation, config,
+        plusargs, diagnostics, output, sink, design_process_count);
+    if (!foreign_libraries) {
+        return 1;
     }
     const BuiltinStdoutFlush stdout_flush {
         sink == SimulationOutputSink::builtin_stdout
@@ -489,28 +603,11 @@ int run_built_project(
     }
     install_interrupt_hook(simulation);
     // However the run ends, the foreign interfaces see the end of
-    // simulation and of the tool while their libraries are still loaded
-    // (IEEE 1800-2023 38.36.3, IEEE 1076-2019 20.10).
+    // simulation and of the tool while their libraries are still loaded.
     struct ForeignEnd {
-        Simulation& simulation;
-        VpiForeignService* vpi;
-        VhpiForeignService* vhpi;
-        // A run-time error that ended the run (IEEE 1800-2023 38.36.3).
-        std::optional<std::string> error;
-        ~ForeignEnd()
-        {
-            if (vpi != nullptr && error) {
-                vpi->run_error(*error);
-            }
-            simulation.end_foreign_simulation();
-            if (vhpi != nullptr) {
-                try {
-                    vhpi->finish();
-                } catch (...) {
-                }
-            }
-        }
-    } foreign_end { simulation, vpi_service.get(), vhpi_service.get(), { } };
+        ForeignLibraries& libraries;
+        ~ForeignEnd() { libraries.finish(); }
+    } foreign_end { *foreign_libraries };
     try {
         // Native materialization overlaps the initial interpreted execution.
         // Each deferred executor is installed only at a process-resume safe
@@ -547,11 +644,9 @@ int run_built_project(
                 return 1;
             }
         }
-        if (vhpi_service) {
-            vhpi_service->finish();
-            if (sink == SimulationOutputSink::builtin_stdout) {
-                (void)std::fflush(stdout);
-            }
+        foreign_libraries->finish_vhpi();
+        if (sink == SimulationOutputSink::builtin_stdout) {
+            (void)std::fflush(stdout);
         }
         output << "simulation "
                << (result.status == runtime::RunStatus::completed
@@ -598,7 +693,7 @@ int run_built_project(
             }
             return static_cast<int>(*result.simulator_status);
         }
-        return vhpi_service && vhpi_service->failed() ? 1 : 0;
+        return foreign_libraries->vhpi_failed() ? 1 : 0;
     } catch (const runtime::DeltaCycleLimitError& error) {
         std::ostringstream message;
         message << error.what() << "; active process IDs: ";
@@ -625,7 +720,7 @@ int run_built_project(
                 message << error.recent_signals()[index];
             }
         }
-        foreign_end.error = message.str();
+        foreign_libraries->run_error(message.str());
         diagnostics.error(
             "FSIM-RUN-DELTA-0001", message.str());
     } catch (const runtime::simir::AssertionError& error) {
@@ -656,10 +751,10 @@ int run_built_project(
             message += simulation.process_program(error.process()).name;
             message += '\'';
         }
-        foreign_end.error = message;
+        foreign_libraries->run_error(message);
         diagnostics.error("FSIM-RUN-0001", std::move(message));
     } catch (const std::exception& error) {
-        foreign_end.error = error.what();
+        foreign_libraries->run_error(error.what());
         diagnostics.error("FSIM-RUN-0002", error.what());
     }
     return 1;

@@ -5,8 +5,10 @@
 #include "fsim/app/artifact_phase.hpp"
 #include "fsim/artifact/coverage_database_codec.hpp"
 #include "fsim/artifact/design.hpp"
+#include "fsim/artifact/object.hpp"
 #include "fsim/cli/driver.hpp"
 #include "fsim/support/path.hpp"
+#include "fsim/support/payload_checksum.hpp"
 #include "../support/test_helpers.hpp"
 
 #include <algorithm>
@@ -2077,6 +2079,96 @@ void test_compile_order_keeps_cache_key()
     invoke({ "compile", "--quiet", "use.sv" }, false);
 }
 
+// Rewrites the object of unit `name` as an older fsim wrote it: its
+// SystemVerilog HIR state names the previous schema. The catalog follows
+// (new fingerprint), as a compile of the same sources would leave it.
+void make_outdated(const workspace::Store& store, const std::string_view name)
+{
+    const auto library = catalog(store);
+    const auto old = record_for(library, name);
+    std::string error;
+    const auto old_path = store.artifact_path(library.location, old, error);
+    assert(old_path);
+    fsim::diagnostic::Engine diagnostics;
+    auto metadata = fsim::artifact::load_object_metadata(*old_path, diagnostics);
+    assert(metadata && !diagnostics.has_error());
+    constexpr std::uint64_t maximum = std::uint64_t { 1 } << 30;
+    std::vector<fsim::library::PortablePayload> payloads;
+    std::set<std::string> seen;
+    for (const auto& unit : metadata->units) {
+        if (unit.artifact.empty() || !seen.insert(fsim::support::path_to_utf8(unit.artifact)).second)
+            continue;
+        auto bytes = fsim::artifact::read_object_payload(
+            *old_path, unit.artifact, unit.checksum, maximum, diagnostics);
+        assert(bytes);
+        payloads.emplace_back(unit.artifact, std::move(*bytes));
+    }
+    auto hir = fsim::artifact::read_object_payload(*old_path, metadata->compiled_hir_artifact,
+        metadata->compiled_hir_checksum, maximum, diagnostics);
+    assert(hir);
+    // The little-endian schema follows the inner state's magic.
+    const auto at = hir->find("FSIMSVCH");
+    assert(at != std::string::npos && at + 8U < hir->size());
+    (*hir)[at + 8U] = static_cast<char>((*hir)[at + 8U] - 1);
+    metadata->compiled_hir_checksum = fsim::support::payload_checksum(*hir);
+    metadata->compilation_digest = fsim::artifact::compute_object_compilation_digest(*metadata);
+    payloads.emplace_back(metadata->compiled_hir_artifact, std::move(*hir));
+    auto transaction = store.begin_library(library.location.name, error);
+    assert(transaction);
+    auto record = transaction->allocate_artifact(workspace::ArtifactKind::Hdl, error);
+    assert(record);
+    assert(fsim::artifact::publish_object(
+        transaction->artifact_path(*record), *metadata, payloads, diagnostics));
+    record->sources = old.sources;
+    record->units = old.units;
+    record->dependencies = old.dependencies;
+    record->fingerprint = metadata->compilation_digest;
+    const auto replaced = old.sources;
+    assert(transaction->commit({ std::move(*record) }, replaced, error));
+}
+
+void test_outdated_objects()
+{
+    // An object written by an older fsim is left out of a compile's
+    // environment and rebuilt with its own sources; elaboration and a
+    // compile that needs one of its units name the sources to recompile.
+    Directory directory;
+    workspace::Store store { directory.path };
+    write_file("a.sv", module("ou_a", "OU_A"));
+    write_file("b.sv", module("ou_b", "OU_B"));
+    write_file("pkg.sv", "package ou_pkg;\n  parameter int V = 7;\nendpackage\n");
+    write_file("use.sv", "module ou_use; import ou_pkg::*;\n"
+                         "  initial $display(\"OU_USE %0d\", V);\nendmodule\n");
+    assert(invoke({ "compile", "--quiet", "a.sv" }).output.empty());
+    assert(invoke({ "compile", "--quiet", "pkg.sv" }).output.empty());
+    make_outdated(store, "ou_a");
+    make_outdated(store, "ou_pkg");
+    const auto mentions = [](const Capture& capture, const std::string_view text) {
+        if ((capture.output + capture.error).find(text) == std::string::npos)
+            std::cerr << "Missing '" << text << "':\n" << capture.output << capture.error;
+        assert((capture.output + capture.error).find(text) != std::string::npos);
+    };
+
+    // (1) Outdated objects do not block an unrelated compile.
+    assert(invoke({ "compile", "--quiet", "b.sv" }).output.empty());
+    // (4) A unit only an outdated object provides names its source.
+    const auto missing = invoke({ "compile", "--quiet", "use.sv" }, false);
+    mentions(missing, "FSIM-WS-003");
+    mentions(missing, "pkg.sv");
+    // (3) Elaboration meets the outdated object.
+    const auto stale = elaborate({ "ou_a" }, "default", false);
+    mentions(stale, "FSIM-WS-003");
+    mentions(stale, "a.sv");
+    // (2) Recompiling the sources rebuilds them, in any order.
+    assert(invoke({ "compile", "--quiet", "a.sv" }).output.empty());
+    elaborate({ "ou_a" });
+    assert_output(simulate(), "OU_A");
+    assert(invoke({ "compile", "--quiet", "pkg.sv" }).output.empty());
+    assert(invoke({ "compile", "--quiet", "use.sv" }).output.empty());
+    elaborate({ "ou_use" });
+    assert_output(simulate(), "OU_USE 7");
+}
+
 void test_package_first_compile()
 {
     // A package passes no state to the files after it, so its users compile
@@ -2172,6 +2264,7 @@ int main(const int argc, const char* const* argv)
         Case { "vhdl-latest-architecture", test_vhdl_latest_architecture },
         Case { "compile-order-cache-key", test_compile_order_keeps_cache_key },
         Case { "package-first-compile", test_package_first_compile },
+        Case { "outdated-objects", test_outdated_objects },
     };
     if (argc > 2) {
         std::cerr << "usage: workspace-application [CASE]\n";

@@ -520,6 +520,23 @@ struct Statement {
     AssertionSeverity assertion_severity { AssertionSeverity::error };
     bool assertion_has_pass_action { };
     bool assertion_has_failure_action { };
+    // An immediate assertion's directive, and whether it is deferred (`#0`)
+    // or final (IEEE 1800-2023 16.3, 37.55).
+    enum class ImmediateDirective : std::uint8_t {
+        none,
+        assertion,
+        assumption,
+        cover
+    };
+    ImmediateDirective immediate_directive { ImmediateDirective::none };
+    bool immediate_deferred { };
+    bool immediate_final { };
+    // A foreach statement desugared to nested loops: its collection, loop
+    // variables left to right (none for a skipped one) and where its body's
+    // first token is (IEEE 1800-2023 12.7.3, 37.51).
+    std::optional<ExpressionId> foreach_collection;
+    std::vector<std::optional<ExpressionId>> foreach_variables;
+    std::optional<SourceSpanId> foreach_body_source;
     std::string output_text;
     bool output_newline { true };
     bool output_postponed { };
@@ -632,6 +649,9 @@ struct TypeReference {
     std::string interface_modport;
     std::vector<ActualAssociation> interface_parameter_actuals;
     std::string systemverilog_net_type;
+    // An `interconnect` net (IEEE 1800-2023 6.6.8); VPI publishes it as an
+    // interconnect net or array (37.24).
+    bool systemverilog_interconnect { };
     std::string systemverilog_resolution_function;
     std::optional<PackedRange> packed_range;
     // Every packed dimension, outermost first, when there is more than one

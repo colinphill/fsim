@@ -94,7 +94,8 @@ static PLI_INT32 frame_start(p_cb_data data)
         type_of(origin), line_of(origin),
         line_of(parent != NULL ? vpi_handle(vpiStmt, parent) : NULL));
     if (depth_of(frame) == 1) {
-        // The automatic variables of a frame are not modelled.
+        // Task outer declares no variable, so it has no automatics (the
+        // variables of a frame are checked by foreign_vpi_frame_vars).
         iterator = vpi_iterate(vpiAutomatics, frame);
         vpi_printf("#c automatics=%d\n", iterator != NULL);
     }

@@ -1,4 +1,4 @@
-#c refused stmt clk: statement callbacks need a sequential statement, a branch or a process
+#c refused stmt clk: statement callbacks need a statement, a branch or a process
 #c refused endcall bump: end of subprogram call callbacks need a subprogram call
 #c refused endcall inc: end of subprogram call callbacks need a subprogram call
 #c stmt clock vhpiForLoopK line 11 t=0
@@ -24,6 +24,7 @@
 #c startcall cc vhpiConcProcCallStmtK line 82 t=0
 #c stmt cc vhpiNullStmtK line 79 t=0
 #c endcall cc vhpiConcProcCallStmtK line 82 t=0
+#c stmt sa vhpiSimpleSigAssignStmtK line 89 t=0
 #c sensitivity clk vhpiSigDeclK line 7 t=0 event=0
 #c sensitivity set vhpiAnyCollectionK line -1 t=0 event=0 bitmap=1 elems=1
 #c resume watch vhpiVarAssignStmtK line 21 t=0

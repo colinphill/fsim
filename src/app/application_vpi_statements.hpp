@@ -8,10 +8,13 @@
 #include "sv_vpi_user.h"
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -108,10 +111,42 @@ public:
     };
     [[nodiscard]] std::optional<BlockSource> block_source(
         const VpiHirScope& scope);
+    /// The source extent of a named block, task or function scope; none for
+    /// other scopes. Used to tell whether an execution point lies inside the
+    /// scope (cbDisable activity, IEEE 1800-2023 38.36.1).
+    struct ScopeSpan {
+        std::string logical_name;
+        std::string physical_name;
+        std::uint32_t begin_line { };
+        std::uint32_t begin_column { };
+        std::uint32_t end_line { };
+        std::uint32_t end_column { };
+
+        /// Whether `line`:`column` of `file` lies within the extent.
+        [[nodiscard]] bool contains(std::string_view file,
+            std::uint32_t line, std::uint32_t column) const
+        {
+            if (!file.empty() && file != logical_name
+                && file != physical_name) {
+                return false;
+            }
+            const auto at = std::pair { line, column };
+            return at >= std::pair { begin_line, begin_column }
+                && at <= std::pair { end_line, end_column };
+        }
+    };
+    [[nodiscard]] std::optional<ScopeSpan> scope_span(const VpiHirScope& scope);
     /// Whether a task, function or named block scope declares `name`
     /// itself, as a formal or a local (IEEE 1800-2023 23.9): such a name
     /// hides the same name of the enclosing scopes.
     [[nodiscard]] bool declares(
+        const VpiHirScope& scope, const std::string& name);
+    /// Whether the formal or local `name` of a task or function has the
+    /// automatic lifetime (IEEE 1800-2023 6.21, 13.3.1): a variable declared
+    /// `automatic`, or one with no lifetime keyword in an automatic callable.
+    /// None when the scope is not a callable of the HIR or declares no such
+    /// name.
+    [[nodiscard]] std::optional<bool> local_automatic(
         const VpiHirScope& scope, const std::string& name);
     /// vpi_handle(vpiStmt | vpiReturn, scope) of a task, function or named
     /// block (IEEE 1800-2023 37.41, 37.42).
@@ -144,17 +179,34 @@ public:
         std::uint64_t serial) const;
 
     /// What `connections` collects (IEEE 1800-2023 37.21, 37.46, 37.58):
-    /// the assignments that write an object, those that read it, or every
-    /// statement and continuous assignment that mentions it.
+    /// the continuous assignments, forces and procedural continuous assigns
+    /// that write an object, those that read it, or every statement and
+    /// continuous assignment that mentions it.
     enum class Connection : std::uint8_t { driver, load, use };
-    /// The continuous assignments, assignment statements, forces and
-    /// procedural assigns of `scope`, its tasks and functions and the
-    /// statements below them that are drivers or loads of `object`, or use
-    /// it. `scope` is the scope that declares the object. Primitive
-    /// terminals are not modelled.
+    /// The continuous assignments, forces and procedural assigns of `scope`,
+    /// its tasks and functions and the statements below them that are
+    /// drivers or loads of `object`, or the statements that use it. A
+    /// blocking or nonblocking assignment is only a use. `scope` is the
+    /// scope that declares the object. Primitive terminals are not
+    /// modelled.
+    /// With `owners`, one entry per returned statement says what executes
+    /// it: a continuous assignment, a HIR process of the scope, or a callable
+    /// (run by whichever process calls it).
+    struct ConnectionOwner {
+        enum class Kind : std::uint8_t { continuous, process, callable };
+        Kind kind { Kind::callable };
+        /// The HIR process id of Kind::process.
+        std::uint32_t process { };
+        /// The position of a continuous assignment among the scope's
+        /// concurrent statements.
+        std::uint32_t order { };
+        /// Whether the statement's target names this object alone.
+        bool single_target { };
+    };
     [[nodiscard]] std::vector<fsim_vpi_handle_v1> connections(
         const VpiHirScope& scope, fsim_vpi_handle_v1 object,
-        Connection connection);
+        Connection connection,
+        std::vector<ConnectionOwner>* owners = nullptr);
 
     /// The handle of HIR expression `id` seen from `scope`: the object a
     /// name denotes, otherwise an expression node whose vpiParent is
@@ -166,6 +218,13 @@ public:
     {
         return expression_handle(id, scope, parent);
     }
+
+    /// The vpiListOp operation of an instance array's connections (IEEE
+    /// 1800-2023 37.11 detail 1): `operands` are the connection expressions
+    /// in port order and `array` is its vpiParent. One operation per array.
+    [[nodiscard]] fsim_vpi_handle_v1 connection_list(
+        std::vector<fsim_vpi_handle_v1> operands, fsim_vpi_handle_v1 scope,
+        fsim_vpi_handle_v1 array);
 
     [[nodiscard]] bool owns(std::uint64_t serial) const noexcept
     {
@@ -211,8 +270,16 @@ private:
         // their vpiEventOrOp.
         sensitivity_list,
         sensitivity,
-        // A delay given by a value rather than an expression.
+        // A delay given by a value rather than an expression: `aux` 0 is the
+        // first delay of a delay list, `aux` n its nth additional one.
         delay,
+        // The delays of a continuous assignment that specifies more than one,
+        // an operation of vpiOpType vpiListOp (IEEE 1800-2023 37.47, 37.80).
+        delay_list,
+        // The connections of an instance array, an operation of vpiOpType
+        // vpiListOp (IEEE 1800-2023 37.11 detail 1): `id` indexes
+        // `connection_lists_`.
+        connection_list,
         cont_assign,
         // One bit of a continuous assignment's left-hand side (IEEE
         // 1800-2023 37.47): `id` is the assignment, `aux` the bit's offset.
@@ -222,6 +289,9 @@ private:
         // The implicit unnamed block of a statement list that is not one
         // statement: a process, callable, branch or case item body.
         body,
+        // A skipped loop variable of a foreach statement: a vpiNullOp
+        // operation at position `aux` (IEEE 1800-2023 37.51 detail 2).
+        foreach_null,
         // A for loop's initialization and increment as assignments.
         loop_init,
         loop_step,
@@ -260,6 +330,10 @@ private:
     [[nodiscard]] fsim_vpi_handle_v1 node(Kind kind, std::uint32_t id,
         std::uint32_t aux, fsim_vpi_handle_v1 scope,
         fsim_vpi_handle_v1 parent, bool of_process = false);
+    // The statement a foreach's body is within the loops it was desugared
+    // to, found by where its first token is (IEEE 1800-2023 12.7.3, 37.51).
+    [[nodiscard]] std::optional<semantic::StatementId> foreach_body(
+        const semantic::sv::Statement& record) const;
     [[nodiscard]] fsim_vpi_handle_v1 statement_handle(
         semantic::StatementId statement, fsim_vpi_handle_v1 scope,
         fsim_vpi_handle_v1 parent);
@@ -328,9 +402,16 @@ private:
     Hooks hooks_;
     std::unordered_map<std::uint32_t, const semantic::sv::Statement*>
         statements_;
+    // The net declaration assignments that take the delay of their net's
+    // declaration (`wire #3 w = e;`), copies of the HIR statements with it
+    // set; `statements_` points at them (IEEE 1800-2023 37.46 vpiDelay).
+    std::deque<semantic::sv::Statement> declaration_assignments_;
     std::unordered_map<std::uint32_t, const semantic::sv::Process*>
         processes_;
     std::vector<Node> nodes_;
+    // The operands of each instance array's connection list.
+    std::deque<std::vector<fsim_vpi_handle_v1>> connection_lists_;
+    std::map<fsim_vpi_handle_v1, std::uint32_t> connection_list_of_array_;
     std::map<std::tuple<Kind, std::uint32_t, std::uint32_t,
                  fsim_vpi_handle_v1, bool>,
         std::uint64_t>
@@ -338,5 +419,15 @@ private:
     // Expression operands a name resolution produced, by expression node.
     std::map<std::uint64_t, fsim_vpi_handle_v1> resolved_;
 };
+
+/// The vpiFuncType, vpiSize and vpiSigned of the result of a DPI import
+/// (IEEE 1800-2023 37.40, 37.41); a task has none, a void result is size 0.
+struct VpiDpiResult {
+    PLI_INT32 func_type { vpiOtherFunc };
+    std::int64_t size { };
+    bool is_signed { };
+};
+[[nodiscard]] VpiDpiResult vpi_dpi_result(
+    const semantic::sv::DpiDeclaration& declaration);
 
 } // namespace fsim::app::application_detail

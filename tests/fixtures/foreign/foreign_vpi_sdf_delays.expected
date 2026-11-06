@@ -25,3 +25,11 @@
 #c multi swapped=none
 #c multi unannotated=none
 #c multi other type=none
+#c net top.u0 a=0 t=20
+#c net top.u2 a=0 t=25
+#c net top.u1 a=0 t=27
+#c net top.u3 a=0 t=28
+#c net top.u0 a=1 t=40
+#c net top.u2 a=1 t=45
+#c net top.u1 a=1 t=46
+#c net top.u3 a=1 t=47

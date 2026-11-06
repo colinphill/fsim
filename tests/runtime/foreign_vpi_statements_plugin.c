@@ -212,6 +212,70 @@ static void extras(vpiHandle top)
     }
 }
 
+// The immediate assertions of a task (IEEE 1800-2023 37.55).
+static void immediates(char* name)
+{
+    vpiHandle const task = vpi_handle_by_name(name, NULL);
+    vpiHandle const body = task != NULL ? vpi_handle(vpiStmt, task) : NULL;
+    vpiHandle const items = body != NULL ? vpi_iterate(vpiStmt, body) : NULL;
+    vpiHandle item;
+    while (items != NULL && (item = vpi_scan(items)) != NULL) {
+        vpiHandle const expr = vpi_handle(vpiExpr, item);
+        vpiHandle const pass = vpi_handle(vpiStmt, item);
+        vpiHandle const fail = vpi_handle(vpiElseStmt, item);
+        vpi_printf("#c immediate %s line=%d deferred=%d final=%d expr=%s "
+                   "then=%s else=%s\n",
+            text(vpiType, item), (int)vpi_get(vpiLineNo, item),
+            (int)vpi_get(vpiIsDeferred, item), (int)vpi_get(vpiIsFinal, item),
+            expr != NULL ? text(vpiType, expr) : "none",
+            pass != NULL ? text(vpiType, pass) : "none",
+            fail != NULL ? text(vpiType, fail) : "none");
+    }
+}
+
+// The foreach statement of a task (IEEE 1800-2023 37.51).
+static void foreach_statement(char* name)
+{
+    vpiHandle const task = vpi_handle_by_name(name, NULL);
+    vpiHandle const each = task != NULL ? vpi_handle(vpiStmt, task) : NULL;
+    vpiHandle variables;
+    vpiHandle loop_vars;
+    vpiHandle item;
+    vpiHandle body;
+    if (each == NULL) {
+        vpi_printf("#c foreach %s: missing\n", name);
+        return;
+    }
+    variables = vpi_handle(vpiVariables, each);
+    vpi_printf("#c foreach %s line=%d variables=%s\n", text(vpiType, each),
+        (int)vpi_get(vpiLineNo, each),
+        variables != NULL ? text(vpiFullName, variables) : "none");
+    loop_vars = vpi_iterate(vpiLoopVars, each);
+    while (loop_vars != NULL && (item = vpi_scan(loop_vars)) != NULL) {
+        vpi_printf("#c foreach loopvar %s%s\n", text(vpiType, item),
+            vpi_get(vpiType, item) == vpiOperation
+                    && vpi_get(vpiOpType, item) == vpiNullOp
+                ? " null"
+                : "");
+    }
+    body = vpi_handle(vpiStmt, each);
+    vpi_printf("#c foreach body %s line=%d\n",
+        body != NULL ? text(vpiType, body) : "none",
+        body != NULL ? (int)vpi_get(vpiLineNo, body) : 0);
+}
+
+// Whether each continuous assignment of the module is a net declaration
+// assignment (37.46).
+static void assignments(vpiHandle top)
+{
+    vpiHandle const items = vpi_iterate(vpiContAssign, top);
+    vpiHandle item;
+    while (items != NULL && (item = vpi_scan(items)) != NULL) {
+        vpi_printf("#c contassign line=%d netdeclassign=%d\n",
+            (int)vpi_get(vpiLineNo, item), (int)vpi_get(vpiNetDeclAssign, item));
+    }
+}
+
 static PLI_INT32 start(p_cb_data data)
 {
     vpiHandle const top = vpi_handle_by_name("top", NULL);
@@ -222,6 +286,7 @@ static PLI_INT32 start(p_cb_data data)
         return 0;
     }
     children(top, vpiContAssign, 0, "");
+    assignments(top);
     children(top, vpiProcess, 0, "");
     task = vpi_handle_by_name("top.pulse", NULL);
     if (task != NULL) {
@@ -229,6 +294,8 @@ static PLI_INT32 start(p_cb_data data)
         child(task, vpiStmt, 1, "");
     }
     extras(top);
+    immediates("top.chk");
+    foreach_statement("top.each");
     return 0;
 }
 

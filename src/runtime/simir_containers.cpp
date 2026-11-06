@@ -1533,11 +1533,13 @@ void Interpreter::Impl::publish_container_alias_family(
                     && (!forced_current
                         || force_updates[leaf.ordinal].active)) {
                     signal_transactions.at(leaf.signal) = transaction_stamp;
+                    signal_transaction_systemverilog.at(leaf.signal) = 0U;
                     any_transaction = true;
                 }
             }
             if (any_transaction) {
                 signal_transactions.at(proxy) = transaction_stamp;
+                signal_transaction_systemverilog.at(proxy) = 0U;
             }
             for (const auto& leaf : plan) {
                 if (!leaf.selected

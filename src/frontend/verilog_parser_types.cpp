@@ -1011,9 +1011,11 @@ void VerilogParser::parse_optional_net_type(Type& type)
     }
     auto keyword_token = advance();
     // An interconnect net carries the values of the ports it connects
-    // (IEEE 1800-2017 6.6.8); it is kept as a wire.
+    // (IEEE 1800-2017 6.6.8); it is kept as a wire, marked so the VPI model
+    // can publish it as an interconnect net (37.24).
     if (keyword_token.text == "interconnect") {
         keyword_token.text = "wire";
+        type.systemverilog_interconnect = true;
     }
     const bool net_keyword = contains_word(
         { "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",

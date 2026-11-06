@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -441,6 +442,12 @@ struct Expression {
     // the name of a predefined type whose declaration is not retained.
     std::optional<TypeId> resolved_type;
     std::string resolved_builtin_type;
+    // The function call this literal replaced when normalization folded a
+    // static call (IEEE 1076-2019 9.4); the folded literal stays the value
+    // that simulation uses, and only the VHPI static model reads the call
+    // (19.8, funcCall). The node is shared by every copy of the expression and
+    // its operand ids index the same expression table.
+    std::shared_ptr<const Expression> unfolded_call;
 };
 
 struct DelayValue {

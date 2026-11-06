@@ -22589,8 +22589,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     widths.push_back(static_cast<std::uint32_t>(*width));
                     signed_actuals.push_back(
                         hir_expression_signed(*argument.actual) ? 1U : 0U);
-                    auto scalar_kind
-                        = frontend::systemverilog_scalar_kind(spelling);
+                    auto scalar_kind = declaration
+                            && declaration->systemverilog != nullptr
+                            && declaration->systemverilog->type
+                        ? hir_declared_type_scalar_kind(
+                              *declaration->systemverilog->type,
+                              declaration->systemverilog->scope)
+                        : frontend::systemverilog_scalar_kind(spelling);
                     const auto expression
                         = specialized_hir_unit_->find_expression(
                             *argument.actual);

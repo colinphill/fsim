@@ -689,6 +689,44 @@ void test_simir_force_release()
         "final selected release must reveal the complete underlying value");
 }
 
+void test_simir_assign_is_not_force()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+
+    // A procedural continuous assign (IEEE 1364-2005 9.3.1) is not a force
+    // (9.3.2): it sets the assigned state, never the forced one, until a
+    // force lies over it.
+    Interpreter interpreter;
+    const auto signal = interpreter.add_signal(
+        { "top.assigned", PackedLogic4::from_msb_string("0000") });
+    require(!interpreter.signal_is_assigned(signal)
+            && !interpreter.signal_is_forced(signal),
+        "a plain register is neither assigned nor forced");
+    interpreter.assign_signal(signal, PackedLogic4::from_msb_string("0101"));
+    require(interpreter.signal_is_assigned(signal)
+            && !interpreter.signal_is_forced(signal)
+            && interpreter.signal_has_override(signal)
+            && interpreter.signal_value(signal).to_msb_string() == "0101",
+        "an assigned register is assigned, not forced");
+    interpreter.force_signal_slice(
+        signal, PackedLogic4::from_msb_string("1"), 3);
+    require(interpreter.signal_is_assigned(signal)
+            && interpreter.signal_is_forced(signal)
+            && interpreter.signal_value(signal).to_msb_string() == "1101",
+        "a force over an assign is forced and assigned");
+    interpreter.release_signal(signal);
+    require(interpreter.signal_is_assigned(signal)
+            && !interpreter.signal_is_forced(signal)
+            && interpreter.signal_value(signal).to_msb_string() == "0101",
+        "releasing the force leaves the assign");
+    interpreter.deassign_signal(signal);
+    require(!interpreter.signal_is_assigned(signal)
+            && !interpreter.signal_is_forced(signal)
+            && !interpreter.signal_has_override(signal),
+        "a deassigned register is neither assigned nor forced");
+}
+
 void test_simir_event_alias_lifecycle()
 {
     using namespace fsim::runtime;

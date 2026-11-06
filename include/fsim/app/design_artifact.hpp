@@ -19,15 +19,15 @@
 
 namespace fsim::app {
 
-inline constexpr std::uint32_t kRuntimeStateSchema = 100;
+inline constexpr std::uint32_t kRuntimeStateSchema = 101;
 inline constexpr std::uint32_t kSemanticStateSchema = 5;
 inline constexpr std::uint32_t kDesignIrStateSchema = 5;
 inline constexpr std::uint32_t kCompiledHirBundleSchema = 3;
-inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 14;
+inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 16;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 7;
 inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 3;
 inline constexpr std::uint32_t kSystemVerilogClassSpecializationStateSchema = 1;
-inline constexpr std::uint32_t kVhdlHirStateSchema = 10;
+inline constexpr std::uint32_t kVhdlHirStateSchema = 11;
 // A UVM testbench's compiled HIR decodes to about 270 MiB.
 inline constexpr std::size_t kCompiledHirDecodeBudgetBytes
     = 512U * 1024U * 1024U;
@@ -108,6 +108,13 @@ deserialize_compiled_hir_bundle(
     std::string_view bytes,
     std::string source_name,
     diagnostic::Engine& diagnostics);
+
+/// Reads only the identity headers of a compiled-HIR bundle: a description
+/// of the first schema (bundle or inner state) that differs from this
+/// build's, or nullopt when every header is current or the bytes are not a
+/// bundle at all (a corrupt payload stays a decode error).
+[[nodiscard]] std::optional<std::string> compiled_hir_bundle_outdated(
+    std::string_view bytes);
 
 [[nodiscard]] std::optional<std::string> serialize_design_ir_state(
     const semantic::design::DesignIr& design,

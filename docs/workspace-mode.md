@@ -123,6 +123,18 @@ After a provider changes or is deleted, recompile affected consumers before
 creating a new snapshot. fsim diagnoses stale dependencies rather than using
 old folded values. Existing snapshots retain their earlier behavior.
 
+### Objects written by an older fsim
+
+After upgrading fsim, objects in `.fsim/libraries` that an older build wrote
+can no longer be read; never delete `.fsim` for this. `fsim compile` leaves
+such an object out of its environment, units included, so compiling any other
+file works, and each outdated object is rebuilt when its own sources are
+recompiled, in any order. If the file being compiled needs a unit only an
+outdated object provides, the failure is followed by an `FSIM-WS-003` note
+naming the source files to recompile; `fsim compile -v` lists the skipped
+objects. `fsim elaborate` fails with `FSIM-WS-003` naming the same sources
+when its design reaches an outdated object.
+
 ## Map an out-of-tree library
 
 Create a mapping before compiling into an external library directory:

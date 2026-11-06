@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <set>
@@ -91,6 +92,12 @@ struct IsPair : std::false_type { };
 
 template <typename First, typename Second>
 struct IsPair<std::pair<First, Second>> : std::true_type { };
+
+template <typename T>
+struct IsSharedPtr : std::false_type { };
+
+template <typename T>
+struct IsSharedPtr<std::shared_ptr<T>> : std::true_type { };
 
 template <typename T>
 struct IsId : std::false_type { };
@@ -186,6 +193,14 @@ void project(Value& value, const Projection& projection)
     } else if constexpr (IsPair<Type>::value) {
         project(value.first, projection);
         project(value.second, projection);
+    } else if constexpr (IsSharedPtr<Type>::value) {
+        // The pointee may be shared: project a copy of it.
+        if (value) {
+            auto copy = std::make_shared<
+                std::remove_const_t<typename Type::element_type>>(*value);
+            project(*copy, projection);
+            value = std::move(copy);
+        }
     } else if constexpr (std::is_aggregate_v<Type>) {
         boost::pfr::for_each_field(
             value, [&](auto& field) { project(field, projection); });
@@ -257,6 +272,14 @@ void relocate(Value& value, const Relocation& relocation)
     } else if constexpr (IsPair<Type>::value) {
         relocate(value.first, relocation);
         relocate(value.second, relocation);
+    } else if constexpr (IsSharedPtr<Type>::value) {
+        // The pointee may be shared: relocate a copy of it.
+        if (value) {
+            auto copy = std::make_shared<
+                std::remove_const_t<typename Type::element_type>>(*value);
+            relocate(*copy, relocation);
+            value = std::move(copy);
+        }
     } else if constexpr (std::is_aggregate_v<Type>) {
         boost::pfr::for_each_field(
             value, [&](auto& field) { relocate(field, relocation); });
@@ -372,6 +395,8 @@ bool ids_in_range(const Value& value, const IdLimits& limits)
     } else if constexpr (IsPair<Type>::value) {
         return ids_in_range(value.first, limits)
             && ids_in_range(value.second, limits);
+    } else if constexpr (IsSharedPtr<Type>::value) {
+        return !value || ids_in_range(*value, limits);
     } else if constexpr (std::is_aggregate_v<Type>) {
         bool valid = true;
         boost::pfr::for_each_field(value, [&](const auto& field) {
@@ -730,6 +755,10 @@ void retain_provenance(
     } else if constexpr (IsPair<Type>::value) {
         retain_provenance(value.first, retained);
         retain_provenance(value.second, retained);
+    } else if constexpr (IsSharedPtr<Type>::value) {
+        if (value) {
+            retain_provenance(*value, retained);
+        }
     } else if constexpr (std::is_aggregate_v<Type>) {
         boost::pfr::for_each_field(value, [&](const auto& field) {
             retain_provenance(field, retained);

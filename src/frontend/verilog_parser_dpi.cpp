@@ -981,6 +981,11 @@ void VerilogParser::finish_generate_block_dpi_exports(
     return;
   }
   resolve_dpi_declarations(local, body.functions, body.tasks);
+  for (const auto& declaration : local) {
+    if (declaration.validated && declaration.resolved_profile) {
+      generate_block_dpi_exports_.push_back(declaration);
+    }
+  }
   // A block's service, in the block's own scope: the export tasks, a step
   // that serves a pending call whose chain is in this block instance, and
   // the hook the lowerer runs for each instance of the block. The block's

@@ -974,6 +974,21 @@ class VerilogParser final : private detail::ParserBase {
     std::vector<std::pair<std::vector<Token>, std::vector<Token>>> formals;
   };
   std::unordered_map<std::string, CallableTypeTokens> callable_type_tokens_;
+  // A callable of a generate block that has the name of one already
+  // recorded replaces its tokens only while the block is parsed (the block's
+  // export reads them at its end); the module's own are restored then.
+  std::vector<std::pair<std::string, CallableTypeTokens>>
+      shadowed_callable_tokens_;
+  std::size_t generate_block_depth_ {};
+  CallableTypeTokens& begin_callable_tokens(const std::string& name) {
+    if (generate_block_depth_ != 0U) {
+      if (const auto found = callable_type_tokens_.find(name);
+          found != callable_type_tokens_.end()) {
+        shadowed_callable_tokens_.emplace_back(name, found->second);
+      }
+    }
+    return callable_type_tokens_[name];
+  }
   // Declares hidden module items through which a context import's C code
   // calls the unit's DPI exports (IEEE 1800-2023 35.5.3, 35.9). The
   // compilation unit's exports are those of its package, declared at the
@@ -1208,6 +1223,10 @@ class VerilogParser final : private detail::ParserBase {
   std::vector<NestedUpwardReference> nested_upward_references_;
   // DPI declarations of generate blocks, declared in their module.
   std::vector<SystemVerilogDpiDeclaration> generate_dpi_declarations_;
+  // The exports a generate block defines itself (IEEE 1800-2023 35.7): the
+  // block's own service runs them, and the module lists them for its C
+  // header (35.5.4) once its own declarations are resolved.
+  std::vector<SystemVerilogDpiDeclaration> generate_block_dpi_exports_;
   std::unordered_set<std::string> declared_genvars_;
   std::vector<Token> external_genvar_uses_;
   std::size_t next_implicit_generate_scope_{1};

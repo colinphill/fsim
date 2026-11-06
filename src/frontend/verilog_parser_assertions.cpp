@@ -285,7 +285,11 @@ Statement VerilogParser::parse_immediate_assertion(const Token& start)
 
     Statement statement;
     statement.kind = StatementKind::Assert;
+    statement.immediate_directive = start.text == "assume"
+        ? Statement::ImmediateDirective::Assume
+        : Statement::ImmediateDirective::Assert;
     if (match(TokenKind::Hash)) {
+        statement.immediate_deferred = true;
         const auto qualifier = current();
         (void)require_standard(
             "an observed deferred immediate assertion",
@@ -311,6 +315,7 @@ Statement VerilogParser::parse_immediate_assertion(const Token& start)
             previous(),
             "FSIM-SV-PARSE-348");
         statement.output_postponed = true;
+        statement.immediate_final = true;
     }
 
     expect(

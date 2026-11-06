@@ -590,6 +590,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::optional<std::uint64_t> pending_dynamic_event;
         std::optional<StringRegisterId> pending_mailbox_string_result;
         std::optional<ProcessId> fork_parent;
+        // The process's thread_start point was raised (probe builds).
+        bool thread_announced { };
         std::optional<InstructionIndex> fork_site;
         // Spawned by a detached fork (a pending clocking drive).
         bool fork_detached { };
@@ -627,6 +629,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
             ProcessId child_id,
             InstructionIndex fork_instruction,
             std::size_t child_index);
+        // The program of a foreign driver owner made from `model`, whose
+        // process never runs it.
+        void inherit_driver_owner_program(
+            const ProcessColdState& model, ProcessId owner_id);
         [[nodiscard]] ProcessProgramView program() const noexcept;
         [[nodiscard]] const Process& public_program() const;
     };
@@ -1400,11 +1406,22 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // Drivers of guarded signals disconnected by a null transaction
     // (IEEE 1076-2008 10.5.2.2); a later value reconnects them.
     std::set<std::pair<SignalId, ProcessId>> vhdl_disconnected_drivers;
+    // Drivers a foreign architecture created at run time (IEEE 1076-2019
+    // 23.6) for a user-resolved signal, in creation order: sources of the
+    // signal after resolver.drivers (14.7.3.2). Empty without a foreign
+    // library.
+    std::unordered_map<SignalId, std::vector<ProcessId>>
+        vhdl_created_drivers;
     std::unordered_map<SignalId, PackedLogic4> vhdl_resolved_values;
     std::unordered_map<SignalId, PackedLogic4> vhdl_driver_initial_values;
     mutable std::vector<SignalId> pending_vhdl_resolutions;
     mutable std::unordered_set<SignalId> pending_vhdl_resolution_set;
     bool running_vhdl_resolvers { };
+    // Set when a program the update commit runs found a SystemVerilog change
+    // of the update phase's own delta current (in_current_delta): the
+    // programs that did run again in the next cycle, queued here.
+    mutable bool vhdl_resolver_read_systemverilog_change { };
+    std::vector<SignalId> vhdl_next_cycle_resolutions;
     // Signals given a value before the first cycle (a VHPI start-of-
     // simulation deposit); initialization keeps that value, as it does for
     // a driven signal, until a source of the signal changes.
@@ -1428,6 +1445,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::optional<std::pair<SimulationTick, std::uint64_t>>
             last_transaction;
         bool transaction_pending { };
+        // The stamps' origin: SystemVerilog work stamps the current delta,
+        // a VHDL update the next, which an update-phase attribute query
+        // needs to tell this cycle's SystemVerilog change from the previous
+        // cycle's VHDL one.
+        bool last_event_systemverilog { };
+        bool last_transaction_systemverilog { };
     };
     std::vector<std::vector<SignalSelectionHistory>>
         signal_selection_histories;
@@ -1503,6 +1526,19 @@ struct Interpreter::Impl : SchedulerBatchTask {
     };
     std::unordered_map<SignalId, std::vector<PortForceLayer>>
         port_force_layers;
+    // Procedural continuous assignment (IEEE 1364-2005 9.3.1, acc_set_value
+    // accAssignFlag 23.96) lies beneath a force: its bits, then the force's
+    // bits over them, make up forced_values and forced_masks, so every reader
+    // of the override sees one layer. The record keeps the assigned bits and
+    // the force alone so that releasing the force reveals the assignment.
+    // Empty unless a host assigned a signal.
+    struct AssignLayer {
+        PackedLogic4 value;
+        PackedLogic4 mask;
+        std::unique_ptr<PackedLogic4> force_value;
+        std::unique_ptr<PackedLogic4> force_mask;
+    };
+    std::unordered_map<SignalId, AssignLayer> assign_layers;
     // Named-event variables carry synchronization-object identities rather
     // than copied packed values. Each event starts with its own stable object.
     std::vector<std::optional<SignalId>> event_identities;
@@ -1621,6 +1657,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::optional<std::pair<
         SimulationTick, std::uint64_t>>>
         signal_transactions;
+    // Whether each signal's last transaction was SystemVerilog work's; kept
+    // only while a VHDL resolver or conversion program can query it
+    // (vhdl_stamp_origins), see signal_attribute_detail::in_current_delta.
+    std::vector<std::uint8_t> signal_transaction_systemverilog;
+    bool vhdl_stamp_origins { };
     std::vector<PendingUpdate> pending_updates;
     std::vector<PackedLogic4> pending_update_values;
     // Update-phase scratch is indexed by the dense signal identity and reused
@@ -1751,6 +1792,17 @@ struct Interpreter::Impl : SchedulerBatchTask {
     ClassStaticPropertyWriteHook class_static_property_write_hook;
     ClassStaticMethodCallContextHook class_static_method_call_context_hook;
     DpiFunctionCallHook dpi_function_call_hook;
+    // The bound DPI call sites of the reference interpreter
+    // (set_dpi_site_hooks), by call operation; the static kernel's are
+    // numbered by its image (StaticKernel::dpi_sites_).
+    // The identity guards against an operation replaced at the same
+    // address; a null site is an identity the identity hook serves.
+    struct DpiSite {
+        std::string identity;
+        const void* site { };
+    };
+    DpiSiteHooks dpi_site_hooks;
+    std::unordered_map<const void*, DpiSite> dpi_sites;
     std::optional<MonitorInstall> monitor;
     std::vector<std::uint8_t> monitor_signal_watch_mask;
     bool monitor_signal_watches_unknown { };
@@ -1850,6 +1902,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     /// member driver identities; those commits must not be imported back.
     bool static_kernel_publishing { };
     void import_static_kernel_write(SignalId signal, SignalChangeOrigin origin);
+    /// The force or assign layer of a signal changed: a kernel-owned one has
+    /// its slot follow the layer (StaticKernel::override_changed).
+    void static_kernel_override_changed(SignalId signal, SignalChangeOrigin origin);
     // Hosted processes (StaticKernelMemberKind::hosted,
     // simir_static_kernel_hosted.cpp): 1 for a process the kernel schedules
     // and this evaluator executes. Every queue_* entry point hands such a
@@ -2704,8 +2759,24 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // disconnection is the caller's (try_vhdl_disconnect_call).
     [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
         const ClassMethodCall&, ProcessId process);
+    // A DPI call whose site the static kernel's image numbered passes it as
+    // `bound`: its service site, or null for the identity hook; no lookup by
+    // operation.
+    struct DpiBoundSite {
+        const void* site { };
+    };
     [[nodiscard]] const char* run_class_operation(ContainerRegisterAccess&,
-        const ClassStaticMethodCall&, ProcessId process);
+        const ClassStaticMethodCall&, ProcessId process,
+        const DpiBoundSite* bound = nullptr);
+    // One imported DPI function call (35.5): through the bound site, else
+    // (the reference interpreter) through the call operation's site bound on
+    // its first run when the service binds it, else the identity hook.
+    // `identity` is the operation's without the DPI prefix.
+    [[nodiscard]] PackedLogic4 call_dpi_import(
+        const ClassStaticMethodCall&, std::string_view identity,
+        std::vector<PackedLogic4>& actuals,
+        std::vector<std::string>& strings,
+        const DpiBoundSite* bound = nullptr);
     // The assertion controls and counts (16.5.6).
     void run_vhdl_assert_api(VhdlApiStorage&, const VhdlAssertApi&);
     // The date and time functions (16.5.5); a bad operand fails.
@@ -3115,10 +3186,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal_id, std::size_t offset, std::size_t width);
     void stage_selected_signal_transaction_mask(
         SignalId signal_id, std::span<const std::uint64_t> mask_words);
-    void note_selected_signal_transaction(SignalId signal_id);
+    void note_selected_signal_transaction(
+        SignalId signal_id, SignalChangeOrigin origin);
     void clear_pending_selected_signal_transactions() noexcept;
     void update_selected_signal_value_history(
-        SignalId signal_id, std::uint64_t generic_delta);
+        SignalId signal_id, std::uint64_t generic_delta,
+        SignalChangeOrigin origin);
     void publish_value_change(
         SignalId signal_id,
         bool notify_fanout,
@@ -3144,6 +3217,27 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void release_slice(
         SignalId signal_id, std::size_t offset, std::size_t width,
         SignalChangeOrigin origin = { }, bool port_segment = false);
+
+    // A procedural assign beneath any force and its deassign, which leaves
+    // the assigned value as the stored one until the next assignment
+    // (IEEE 1364-2005 9.3.1).
+    void assign_slice(
+        SignalId signal_id, PackedLogic4 value, std::size_t offset,
+        SignalChangeOrigin origin = { });
+    void deassign_slice(
+        SignalId signal_id, std::size_t offset, std::size_t width,
+        SignalChangeOrigin origin = { });
+    // Rebuilds forced_values and forced_masks from the assign layer: the
+    // assigned bits with the forced bits over them.
+    void compose_assign_force(SignalId signal_id, const AssignLayer& layer);
+    // Which override layers signal_is_forced, signal_is_assigned and
+    // signal_has_override count: a force, a procedural assign, or either.
+    enum class OverrideKind { forced, assigned, any };
+    [[nodiscard]] bool signal_override_query(
+        SignalId signal, OverrideKind kind) const;
+    // Publishes the effective value after the override layers changed.
+    void publish_override_change(
+        SignalId signal_id, SignalChangeOrigin origin);
 
     // Records a force in the port layers; true when a force by the net's own
     // name hides it, so it takes effect only once that force is released.
@@ -3332,6 +3426,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void schedule_vhdl_disconnect(
         ProcessId process, SignalId signal, SimulationTick delay);
     void drain_vhdl_resolutions();
+    void schedule_next_cycle_vhdl_resolutions();
     // Queue a port conversion whose source was active; the conversion runs
     // in this cycle's update (IEEE 1076-2008 14.7.3.3), so an update commit
     // is scheduled when none will drain it.

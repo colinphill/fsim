@@ -1,8 +1,16 @@
 #c u1 kind=1 compdecl=:top:leaf compname=leaf
 #c u2 kind=0 compdecl=- compname=- error=1
+#c top configspecs=1
+#c top.u1 configspec=1 generics=0
+#c   spec compname=leaf ports=2 generics=0
+#c   spec port assoc formal=vhpiportdeclk:i actual=vhpiportdeclk:i
+#c   spec port assoc formal=vhpiportdeclk:o actual=vhpiportdeclk:o
+#c top.u2 configspec=0 generics=1
+#c   generic assoc formal=vhpigenericdeclk:n actual=vhpiintliteralk
 #c call twice funcdecl=:top:twice subpdecl=:top:twice
 #c call drive funcdecl=- subpdecl=:top:drive drivensigs=:top:s
 #c call "+" isoperator=1 opname="+" subpdecl=-
+#c call twice kind=vhpifunccallk funcdecl=:top:twice isoperator=0 params=1 static=1002 actual=vhpiintliteralk 2
 #c range kind=vhpiintrangek left=2 right=6
 #c simnet of s=:top:s of t=:top:t of a process=-
 #c contributors of t=1 local=1
@@ -12,3 +20,18 @@
 #c unit vhpientitydeclk top
 #c unit vhpiarchbodyk a
 #c unit vhpiarchbodyk rtl
+#c top.s has 3 implicit signals
+#c   vhpiparamattrnamek :top:s'delayed attrkind=3 predef=1004 prefix=:top:s basic=1 value=0
+#c   vhpiparamattrnamek :top:s'quiet attrkind=3 predef=1021 prefix=:top:s basic=1 value=1
+#c   vhpiparamattrnamek :top:s'stable attrkind=3 predef=1027 prefix=:top:s basic=1 value=1
+#c top.t has 3 implicit signals
+#c   vhpisimpattrnamek :top:t'quiet attrkind=3 predef=1021 prefix=:top:t basic=1 value=1
+#c   vhpisimpattrnamek :top:t'stable attrkind=3 predef=1027 prefix=:top:t basic=1 value=1
+#c   vhpisimpattrnamek :top:t'transaction attrkind=3 predef=1029 prefix=:top:t basic=1 value=1
+#c top.d has 0 implicit signals
+#c s'quiet change value=0 at 0
+#c s'stable change value=0 at 0
+#c s change value=1 stable=0 quiet=0 at 0
+#c delayed change 1 value=1 at 2000000
+#c s'quiet change value=1 at 3000000
+#c s'stable change value=1 at 5000000

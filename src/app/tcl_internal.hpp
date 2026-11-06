@@ -39,6 +39,9 @@ struct TclContext {
     std::optional<BuiltProject> built;
     std::unique_ptr<Simulation> simulation;
     std::optional<SimulationEngine> simulation_engine;
+    // The --vpi, --vhpi and --sv-lib libraries; destroyed before the
+    // simulation they are loaded into.
+    std::unique_ptr<application_detail::ForeignLibraries> foreign;
     std::unique_ptr<std::ostringstream> debug_output;
     std::unique_ptr<std::ostringstream> debug_error;
     std::unique_ptr<DebuggerControl> debugger;

@@ -818,7 +818,13 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                            const semantic::sv::TypeReference& input,
                            const semantic::ScopeId use_scope,
                            const unsigned depth) -> std::optional<Typespec> {
-        if (depth > 32U || input.virtual_interface || input.type_of) {
+        // A virtual interface is only the element of a fixed array here
+        // (below); a scalar one has its typespec from the declaration.
+        if (depth > 32U || input.type_of
+            || (input.virtual_interface && input.unpacked_dimensions.empty()
+                && !input.container_form)
+            || (input.virtual_interface && input.container_form
+                && *input.container_form != Form::static_array)) {
             return std::nullopt;
         }
         // An unpacked dimension, leftmost first, or a dynamic array, queue
@@ -873,7 +879,19 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 array.ranges.push_back(*bounds);
             }
             element.unpacked_dimensions.clear();
-            auto inner = self(self, element, use_scope, depth + 1U);
+            // The element of an array of virtual interfaces is an interface
+            // typespec, named by its typedef when it was declared through
+            // one (IEEE 1800-2023 37.29 example 1, 37.30).
+            auto inner = element.virtual_interface
+                ? std::optional<Typespec> {
+                      runtime::make_systemverilog_vpi_interface_typespec(
+                          element.interface_type, element.interface_modport,
+                          element.target.target.valid()
+                                  && element.target.spelling
+                                      != element.interface_type
+                              ? std::string_view { element.target.spelling }
+                              : std::string_view { }) }
+                : self(self, element, use_scope, depth + 1U);
             if (!inner) {
                 return std::nullopt;
             }
@@ -1031,6 +1049,14 @@ std::optional<runtime::SystemVerilogVpiTypespec> systemverilog_vpi_typespec(
                 }
                 element.container_form.reset();
                 element.unpacked_dimensions.clear();
+                // The typedef's own form is the container's; the element
+                // type it names is not (7.4, 7.8: `typedef int aa_t
+                // [string]`).
+                if (element.value_form && *element.value_form != Form::string
+                    && *element.value_form != Form::packed_integral
+                    && *element.value_form != Form::enumeration) {
+                    element.value_form.reset();
+                }
             } else {
                 array.kind = Kind::PackedArray;
                 auto own = record->base.packed_dimensions;

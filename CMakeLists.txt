@@ -744,6 +744,7 @@ add_library(
   src/runtime/uvm_register_model_sequences.cpp
   src/runtime/uvm_register_model_coverage.cpp
     src/runtime/uvm_checkpoint.cpp
+    src/runtime/run_state_image.cpp
     src/runtime/uvm_foreign.cpp
     src/runtime/uvm_foreign_integration.cpp
     src/runtime/uvm_objection.cpp
@@ -920,6 +921,7 @@ endif()
       src/elaboration/hierarchy_resolution.cpp
       src/elaboration/hierarchy_specify.cpp
       src/elaboration/hierarchy_specify_expression.cpp
+      src/elaboration/sdf_net_delay_split.cpp
       src/elaboration/hierarchy_sv_aliases.cpp
       src/elaboration/hierarchy_sv_configuration.cpp
       src/elaboration/hierarchy_sv_constant_evaluator.cpp

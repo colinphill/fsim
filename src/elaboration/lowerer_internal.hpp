@@ -653,7 +653,9 @@ public:
     // A VHDL resolver program (IEEE 1076-2008 14.7.3.2): the runtime writes
     // the driving values of `signal`'s `driver_count` drivers, leftmost
     // first, to `input` and reads the resolved value from `output` after one
-    // pass of the program.
+    // pass of the program. With `dynamic_count` the program serves any
+    // number of drivers: the runtime also writes the count to register
+    // `input + 1` and `input` holds exactly count * width bits.
     struct HirVhdlResolverProgram {
         Process process;
         RegisterId input { };
@@ -664,7 +666,8 @@ public:
         semantic::DeclarationId function, std::size_t driver_count,
         std::string_view hierarchy,
         std::vector<VhdlResolverSegment> segments = { },
-        std::vector<VhdlDriverRegions> driver_regions = { });
+        std::vector<VhdlDriverRegions> driver_regions = { },
+        bool dynamic_count = false);
     // A VHDL conversion of a port association (IEEE 1076-2008 6.5.7.1,
     // 14.7.3): the program computes `destination`'s effective value from
     // the signals it reads, in the same simulation cycle they change.
@@ -1020,6 +1023,7 @@ private:
             std::size_t driver_count { };
             std::vector<VhdlResolverSegment> segments;
             std::vector<VhdlDriverRegions> driver_regions;
+            bool dynamic_count { };
         };
         std::optional<VhdlResolver> vhdl_resolver;
         // A class static property initializer: the specialization and the
@@ -2784,6 +2788,12 @@ private:
     hir_expression_domain(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // The scalar kind a declared type names, following a typedef or type
+    // parameter to its built-in base (IEEE 1800-2023 6.18, 6.20.3).
+    [[nodiscard]] frontend::SystemVerilogScalarKind
+    hir_declared_type_scalar_kind(
+        const semantic::sv::TypeReference& type,
+        semantic::ScopeId scope) const;
     [[nodiscard]] frontend::SystemVerilogScalarKind
     hir_systemverilog_scalar_kind(
         semantic::ExpressionId expression,
@@ -5724,7 +5734,23 @@ private:
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_register_call(
         semantic::DeclarationId function, RegisterId argument,
         std::size_t contextual_width,
-        std::optional<HirPackedRange> formal_range, std::string callable_key);
+        std::optional<HirPackedRange> formal_range, std::string callable_key,
+        const std::pair<ContainerRegisterId, HirVhdlShapedProfile>* shaped
+            = nullptr);
+    // The body of a resolver program whose driver count is a run-time value
+    // (lower_hir_vhdl_resolver_process with `dynamic_count`): the driving
+    // values become a shaped array indexed from 0 that the resolution
+    // function takes as its unconstrained formal (IEEE 1076-2008 4.2.2.2).
+    [[nodiscard]] bool lower_hir_vhdl_dynamic_resolver(
+        const HirProcessDescription::VhdlResolver& resolver);
+    // The parts of a composite signal a resolver program resolves on their
+    // own (IEEE 1076-2008 14.7.3.2): each element of an array of a resolved
+    // element subtype, or each resolved element (or element of an element) of
+    // a record. Empty when the whole signal is resolved by one call; nullopt
+    // when a part cannot be lowered.
+    [[nodiscard]] std::optional<std::vector<VhdlResolverSegment>>
+    hir_vhdl_resolver_pieces(
+        const HirProcessDescription::VhdlResolver& resolver);
     std::optional<std::pair<RegisterId, RegisterId>> hir_vhdl_resolver_registers_;
     // Set while a port conversion program is lowered: an inertial part of
     // the actual reads its signal through the implicit signal S'DELAYED(0),

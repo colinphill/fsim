@@ -138,7 +138,101 @@ per completed phase).
 
 ## 4. Log
 
-### 2026-11-05: Foreign-interface closure wave 4, v3 DPI layer removed (this commit, sweeps `fc8bg`, `fc8bga`)
+### 2026-11-05: Foreign-interface closure waves 5–10 (this commit, sweeps `fc9bg`, `fc9bga`)
+
+Plan: `~/.claude/plans/playful-kindling-teacup.md`, the work after Phase B. Conformance inventory: `docs/foreign-interface-conformance.md`. Worker packages w31–w69 ran in hand-made worktrees; the lead merged, built and tested them.
+
+**Wave 5:**
+
+- **VHPI processes and drivers (#140).**
+  - `vhpi_create` makes any number of processes in a foreign architecture instance (IEEE 1076-2019 23.6). The first process uses the instance's placeholder process. Every later process, and every driver created with no process, gets a run-time driver owner: `Interpreter::add_foreign_driver_owner`, appended like a fork child; it never runs.
+  - A created driver is a source of its signal from its creation (14.7.2): `Interpreter::add_host_driver` inserts its DriverTable record at the driver's initial value.
+  - Test `vhpi-foreign-arch`: signal `r` has three created drivers (two processes and one with no process), and the resolved values at 1, 11, 14, 21 and 24 ns are checked.
+- **Unfolded static calls (#141).**
+  - `vhdl::Expression::unfolded_call` keeps the call that normalization folds, so the VHPI static model still reads a `funcCall` (19.8) while simulation uses the literal. VHDL HIR schema 10→11.
+  - The linker's id walkers (`project`, `relocate`, `ids_in_range`, `retain_provenance` in `compiled_design_linker.cpp`) now go through `shared_ptr`. Before, they skipped it, which left stale ids: a wrong formal, and FSIM-ART-0013 on `vhpi-relations`.
+- **DPI (#142, step 1):** lazy per-operation DPI site binding (`DpiSiteHooks`); no identity parsing per call.
+- **Run-state image (#128, step 1):** the `RunStateImage` container (`FSIMRSI1`: sections with xxh64, full and incremental images) and a `kernel.values` section; reset and save/restart are not claimed yet.
+- **Interactive mode (#129, part 1):**
+  - `vpiSetInteractiveScope`, `cbInteractiveScopeChange`, `reason_scope` and `acc_set_interactive_scope`.
+  - The debugger prompt fires enter/exit interactive.
+  - Owner 2026-11-05: a batch `$stop` fires no interactive callback. The debugger session cannot load foreign libraries yet, so that part remains.
+- **Path table (#139):** `hierarchy_path_codec::Limits` raised to 16M paths, 896 MiB of path bytes and a 1 GiB payload.
+  - rs_param_tb Verilog (`--lang systemverilog`) now elaborates in 35.4 s with a 4.3 GB peak; `fc8c` fails with FSIM-ART-0014 after 17.5 s.
+  - v4 simulate: 336 PASS / 0 FAIL (25.7 s, 5.6 GB).
+  - The elaboration time after the path table is a perf follow-up: a quarter of the samples are kernel page-fault time.
+- **Targeted checks:** ctest -R foreign/VPI/VHPI/DPI/artifact/VHDL: 1029/1029. caserun on the 107 foreign-interface corpus cases against `fc8bg`: 107/107.
+
+**Waves 6–10:**
+- **VHPI created drivers (#140, w39, w40, w48):** a created driver can take part in a user-defined resolution function, including composite and segmented resolvers, with no fixed limit; `vhpi_create` also works in the simulation phase, and the signal is resolved again.
+- **Interactive mode (#129, w37):** the debugger session loads VPI, VHPI and PLI libraries through the same `ForeignLibraries` holder as a batch run. It adopts the scope set by `vpiSetInteractiveScope` and fires the interactive callbacks from its prompt (test `vpi-interactive-debug`).
+- **DPI in the kernel (#142, w38, w69):** each call site has a dense slot in the kernel image with native argument marshalling. String actuals of dynamic arrays and queues are supported. Kernel image `fsim-static-kernel-image-v4`.
+- **VPI model (w41, w45, w50, w58, w60–w62, w65, w66):**
+  - Package typedefs and `pkg::` full names; parameters of real, struct and union typedef type (a struct parameter is a constant `vpiStructVar` with members, owner decision).
+  - Real typedef ports and variables; named blocks in unlabelled and generate scopes; the generate `else` branch.
+  - Interconnect nets and arrays, `nettype` nets and typespecs, the `NetDeclAssign` object. An interconnect net's typespec is that of the nets it connects (37.24).
+  - Instance-array `vpiListOp` connections, strings in arrays and class properties, virtual interface arrays, `cbStmt` on hierarchical task calls.
+  - `vpiAutomatics` lists automatic-lifetime variables only (37.43), with values for strings and containers and `vpi_put_value`.
+  - A callable lowered more than once into one process reports the locals of the lowering that runs: frame points carry the lowering identity.
+  - Threads (37.44): the interpreter reports `cbStartOfThread`/`cbEndOfThread`/`cbEnterThread` for SystemVerilog procedures and fork branches as the kernel does, so `vpi-frames-threads` runs on both engines. A VHDL process is not a thread.
+  - Assertions (w67): immediate assume and cover, deferred and final assertions (`vpiIsDeferred`, `vpiIsFinal`), `vpiForeachStmt` with `vpiLoopVars`, DPI task/function objects.
+- **VHPI model (w42, w51, w59, w68):**
+  - Implicit signals (`vhpiSigAttrs`): `S'STABLE(T)` and `S'QUIET(T)` are value signals computed by a resolver program, with and without `T`. A user-declared `GUARD` drives guarded assignments; implicit signals have drivers and loads.
+  - `S'STABLE`/`S'QUIET` are exact when the prefix is driven from SystemVerilog: an SV-origin stamp in the current delta re-runs the resolver in the next delta, so the attribute returns to TRUE one delta after the change (test `vhpi-stable-mixed`).
+  - Connectivity: signal parameters as basic signals (19.12.2.2), `vhpiCompConfigK` and `vhpiConfigSpecs`. Connectivity is not claimed yet.
+- **PLI 1.0 (w43, w52, w69):** the `acc` assign lane; `signal_is_assigned` separate from forced; `reason_paramdrc` per driver (Table 88: a driver object is announced only when its value changes); `acc_handle_datapath`; MIPD and `accMapToMipd`.
+- **Kernel-owned foreign force and assign (w47):** `vpi_put_value` force/release and PLI assign on kernel-owned variables run natively; a release re-runs the net's writers (test `pli-acc-force`).
+- **SDF net delays (w57, w64 part 1):** INTERCONNECT, PORT and MIPD delays are simulated through a delayed copy of each load; annotation order follows IEEE 1364-2005 16.3 for a uniform source. A load that cannot be split is FSIM-SDF-SESSION-004. The rest (per-source copies, twelve transitions, select loads, VPI reads of the copy, lazy MIPD, PATHPULSE, reannotation) is the next gate (#149).
+- **Drivers and loads follow 37.21 strictly** (owner 2026-11-05, after the first gate run): `vpiDriver` and `vpiLoad` list continuous assignments, forces, procedural continuous assigns (`vpiAssignStmt`) and ports, and no blocking or nonblocking assignment; `vpiUse` still lists them. `reason_paramdrc` follows, so a reg written only procedurally has no driver change (IEEE 1364-2001 26.6.7 detail 7). The first gate run on `fc9` lost ivtest `vpi_br_gh141` to extra `reason_paramdrc` calls from wave 10's per-driver watch on such assignments.
+- **Workspace (w54):** an object compiled from outdated sources is skipped at compile with FSIM-WS-003.
+- **Formats:** runtime state schema 101, SV HIR schema 16, VHDL HIR schema 11, kernel image v4. Diagnostic catalog 2987.
+
+**Moved out of this gate (owner 2026-11-05):**
+- Mixed SV→VHDL ports at time 0 keep the existing behaviour: the port is one signal with the SV initial value, so only `'QUIET` toggles at 0. xsim starts the VHDL side at 'U' and gives it an event at 0; a same-pass separate VHDL view is the next project (#152).
+- Save/restart/reset (#128) and the remaining wave-10 partial rows (#150: VPI expression and function-call evaluation, property and sequence trees, constraint leaves, event automatics, deferred-assertion actions with `$display`, and others) are the follow-up project. 64-bit VHDL `INTEGER` (#133) stays separate.
+
+**Gate (archive `fc9b`):**
+- The first run on `fc9` had one loss in both sweeps and the census, ivtest `vpi_br_gh141` (see the drivers and loads item); everything else matched. `fc9b` adds the fix.
+- ct4: 1252/1252 in normal, strict, verify and mt4.
+- Sweeps `fc9bg` and `fc9bga`: 0 losses against `fc8bg` and `fc8bga`.
+- **cocotb against `fc8b`:** 0 losses in all four configurations; 2.1 Verilog +1 is the leak test that failed once in `fc8b` (flaky, see the wave-4 gate).
+- Census: 0 losses in both modes.
+- vgate: identical (kept 5637 and 3358).
+- `collapse_fuzz` seeds 1–200: 0 failures, every seed collapses (4183 kept).
+
+| Suite | fc8bg passed / in scope | fc9bg passed / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2635 / 2635 | 2635 / 2635 | 276 |
+| nvc | 1257 / 1257 | 1257 / 1257 | 225 |
+| sv-tests | 1495 / 1495 | 1495 / 1495 | 2 |
+| verilator | 2070 / 2070 | 2070 / 2070 | 345 |
+| vests | 3663 / 3663 | 3663 / 3663 | 2 |
+| vhdl-compliance | 65 / 65 | 65 / 65 | 7 |
+| cocotb 2.1 Verilog | 707 / 708 (flaky leak test) | 708 / 708 | 1 |
+| cocotb 2.1 VHDL | 646 / 646 | 646 / 646 | 1 |
+| cocotb master Verilog | 735 / 735 | 735 / 735 | 1 |
+| cocotb master VHDL | 666 / 666 | 666 / 666 | 1 |
+
+**Foreign-run cost** (original_throughput, interleaved, median of 5, CPU 9): no library 1.25 s, idle library 1.55 s (1.24×), clock watch 1.83 s (1.46×). `fc8b` measured 1.23× and 1.44× in the same run. Both A-G7 targets hold; the idle margin stays thin.
+
+**D6 campaign `fc9b-g5`** (`perf.sh`, 3 samples, CPU 9, ASLR off, xsim in the same session): geomean e2e 3.66× (`fc8b-g5b` 3.80×), minimum simulate 3.55× (mixed_codec; `fc8b-g5b` 3.60×). Both floors hold.
+- fsim's own medians are within 4% of `fc8b-g5b` on every case (original_codec e2e 10.76 s against 10.62 s, simulate 1.93 s against 1.88 s). Most of the drop in the ratios is xsim, which ran 1–11% faster in this session.
+- `compact.sh` failed (sudo asked for a password), but the run is valid: `compact_stall` did not change across the campaign, and the host had 511 free order-10 blocks before it.
+
+| Case | fsim e2e | xsim e2e | e2e × | fsim sim | xsim sim | sim × |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 10.764 | 28.618 | 2.66 | 1.931 | 7.348 | 3.81 |
+| original_throughput | 4.941 | 15.977 | 3.23 | 1.279 | 7.447 | 5.83 |
+| mixed_codec | 9.030 | 24.628 | 2.73 | 1.830 | 6.495 | 3.55 |
+| mixed_throughput | 4.364 | 12.636 | 2.90 | 1.429 | 5.942 | 4.16 |
+| codex_reference_mode0_frames1 | 2.167 | 9.328 | 4.30 | 0.125 | 3.837 | 30.69 |
+| codex_reference_mode0_frames2 | 2.057 | 9.276 | 4.51 | 0.125 | 3.786 | 30.26 |
+| codex_reference_mode1_frames1 | 2.258 | 9.829 | 4.35 | 0.125 | 3.786 | 30.20 |
+| codex_reference_mode1_frames2 | 2.255 | 9.830 | 4.36 | 0.125 | 3.787 | 30.40 |
+| codex_throughput_default | 2.358 | 9.879 | 4.19 | 0.275 | 3.886 | 14.11 |
+| codex_throughput_direct_syndrome | 2.157 | 8.775 | 4.07 | 0.276 | 3.886 | 14.09 |
+
+### 2026-11-05: Foreign-interface closure wave 4, v3 DPI layer removed (`2b076ba4`, sweeps `fc8bg`, `fc8bga`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md`, the work after Phase B. Conformance inventory: `docs/foreign-interface-conformance.md`.
 
@@ -207,7 +301,7 @@ Plan: `~/.claude/plans/playful-kindling-teacup.md`, the work after Phase B. Conf
 | codex_throughput_default | 2.467 | 11.147 | 4.52 | 0.278 | 4.242 | 15.24 |
 | codex_throughput_direct_syndrome | 2.216 | 9.040 | 4.08 | 0.278 | 3.994 | 14.39 |
 
-### 2026-11-04: Foreign-interface closure after Phase B (`7fa5f19d`, `5de6fd3d` and this commit, sweeps `fc7g`, `fc7ga`)
+### 2026-11-04: Foreign-interface closure after Phase B (`7fa5f19d`, `5de6fd3d`, `4107ed29`, sweeps `fc7g`, `fc7ga`)
 
 Plan: `~/.claude/plans/playful-kindling-teacup.md`, the work after Phase B. Conformance inventory: `docs/foreign-interface-conformance.md`.
 

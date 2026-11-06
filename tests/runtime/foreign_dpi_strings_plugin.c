@@ -66,3 +66,30 @@ FSIM_DPI_PLUGIN_EXPORT void FSIM_DPI_PLUGIN_CALL dpi_s_fill(
     *element(r, svLow(r, 1)) = "low";
     *element(r, svHigh(r, 1)) = "high";
 }
+
+/* A dynamic array or queue of strings as the actual of an open-array formal
+   (35.5.6.1, H.12.2): the size is the actual's at the call, bounds 0 upwards;
+   the strings the C code writes copy back in output and inout. */
+FSIM_DPI_PLUGIN_EXPORT int FSIM_DPI_PLUGIN_CALL dpi_s_dyn(
+    const svOpenArrayHandle q, const svOpenArrayHandle io,
+    const svOpenArrayHandle o)
+{
+    static const char* const names[] = { "n0", "n1", "n2", "n3" };
+    int index;
+    printf("#c dyn q size=%d left=%d right=%d\n", svSize(q, 1), svLeft(q, 1),
+        svRight(q, 1));
+    for (index = svLow(q, 1); index <= svHigh(q, 1); ++index) {
+        printf("#c dyn q[%d]=%s\n", index, *element(q, index));
+    }
+    for (index = svLow(io, 1); index <= svHigh(io, 1); ++index) {
+        printf("#c dyn io[%d]=%s\n", index, *element(io, index));
+    }
+    *element(io, svLow(io, 1)) = "first";
+    *element(io, svHigh(io, 1)) = "last";
+    printf("#c dyn o size=%d\n", svSize(o, 1));
+    for (index = svLow(o, 1); index <= svHigh(o, 1); ++index) {
+        *element(o, index) = names[index - svLow(o, 1)];
+    }
+    fflush(stdout);
+    return svSize(q, 1) + svSize(io, 1) + svSize(o, 1);
+}

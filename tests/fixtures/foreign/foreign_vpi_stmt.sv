@@ -28,4 +28,29 @@ module top;
   reg g;
   initial begin g = 0; #20 g = 1; end
   always @(posedge g) r = 4'h3;
+  // A statement of a generate block's process (38.36.1.1).
+  if (1) begin : gen
+    initial #30 begin : gblk
+      n = n + 1;
+    end
+  end
+  // A disable of a block that has finished runs no cbDisable callback.
+  reg q;
+  initial begin : idle q = 0; end
+  initial #3 disable idle;
+  // A named block of an unlabelled generate block, which takes the implicit
+  // name genblk<n> (27.6), is a scope beneath it (37.43).
+  if (1) begin
+    initial #35 begin : ublk
+      n = n + 1;
+    end
+  end
+  // A generate scope that holds an asserted process is published at once,
+  // with the named blocks of its other processes.
+  if (1) begin : eager
+    assert property (@(posedge g) 1'b1);
+    initial #40 begin : eblk
+      n = n + 1;
+    end
+  end
 endmodule

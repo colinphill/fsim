@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+(DELAYFILE
+  (SDFVERSION "4.0")
+  (DESIGN "top")
+  (DIVIDER .)
+  (TIMESCALE 1 ns)
+  (CELL (CELLTYPE "top") (INSTANCE top)
+    (DELAY (ABSOLUTE
+      (INTERCONNECT u0.z u1.a (2) (3))
+      (INTERCONNECT u2.z u1.a (5) (1)))))
+  (CELL (CELLTYPE "drv") (INSTANCE top.u1)
+    (DELAY (ABSOLUTE
+      (PORT a (4))))))

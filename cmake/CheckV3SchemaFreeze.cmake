@@ -140,7 +140,7 @@ fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 5"
   "kCompiledHirBundleSchema = 3"
-  "kSystemVerilogConstraintHirStateSchema = 14"
+  "kSystemVerilogConstraintHirStateSchema = 16"
   "kSystemVerilogCoverageStateSchema = 7"
   "kSystemVerilogUvmStateSchema = 3"
   "kVhdlHirStateSchema = 8")

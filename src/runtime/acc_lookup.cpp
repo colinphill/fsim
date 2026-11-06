@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/runtime/acc_user.h"
+#include "vpi_user.h"
 
 #include "acc_internal.hpp"
 #include "fsim/runtime/tf_containment.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +26,15 @@ struct ScopeState {
   std::uint64_t pli_scope{};
   std::uint64_t interactive_scope{};
   PLI_INT32 interactive_callback{};
+  // Orders this state's interactive scope against the one vpi_control set.
+  std::uint64_t interactive_sequence{};
 };
+
+// The interactive scope vpi_control last set, and when. The interactive
+// scope is one setting of the tool, so the later of the two writers wins.
+std::atomic<std::uint64_t> interactive_sequence{};
+std::atomic<std::uint64_t> vpi_interactive_scope{};
+std::atomic<std::uint64_t> vpi_interactive_sequence{};
 
 std::mutex scope_mutex;
 std::map<ScopeKey, ScopeState> scope_states;
@@ -178,6 +188,7 @@ using fsim::runtime::acc_detail::publish_error;
     static_cast<void>(inserted);
     found->second.interactive_scope = object;
     found->second.interactive_callback = callback;
+    found->second.interactive_sequence = ++interactive_sequence;
     return true;
   } catch (...) {
     return false;
@@ -288,6 +299,15 @@ using fsim::runtime::acc_detail::publish_error;
 
 }  // namespace
 
+namespace fsim::runtime::acc_detail {
+
+void note_interactive_scope(const std::uint64_t object) noexcept {
+  vpi_interactive_scope.store(object);
+  vpi_interactive_sequence.store(++interactive_sequence);
+}
+
+}  // namespace fsim::runtime::acc_detail
+
 extern "C" {
 
 handle acc_handle_by_name(PLI_BYTE8* const name, const handle scope) {
@@ -339,7 +359,10 @@ handle acc_handle_interactive_scope(void) {
     publish_error(true);
     return nullptr;
   }
-  return fsim_acc_handle_from_vpi_v3(state.interactive_scope);
+  const auto from_vpi = vpi_interactive_sequence.load();
+  return fsim_acc_handle_from_vpi_v3(
+      from_vpi > state.interactive_sequence ? vpi_interactive_scope.load()
+                                            : state.interactive_scope);
 }
 
 PLI_INT32 acc_set_interactive_scope(const handle scope,
@@ -351,6 +374,13 @@ PLI_INT32 acc_set_interactive_scope(const handle scope,
       !set_interactive_scope(object, callback)) {
     publish_error(true);
     return 0;
+  }
+  // The misctf routines hear reason_scope at once only when asked (IEEE
+  // 1364-2001 23.93); the VPI scope-change callbacks stand for them.
+  if (callback != 0) {
+    (void)vpi_control(
+        vpiSetInteractiveScope,
+        reinterpret_cast<vpiHandle>(static_cast<std::uintptr_t>(object)));
   }
   publish_error(false);
   return 1;

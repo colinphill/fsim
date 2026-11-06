@@ -157,6 +157,7 @@ int main(const int argc, const char* const* argv)
         test_simir_insert_and_partial_writes();
         test_simir_dynamic_packed_indices();
         test_simir_force_release();
+        test_simir_assign_is_not_force();
         test_simir_wait_order();
         test_simir_postponed_process_ordering();
         test_simir_design_stop_identity();
@@ -228,6 +229,7 @@ int main(const int argc, const char* const* argv)
         test_systemverilog_uvm_register_callbacks_and_coverage();
         test_systemverilog_uvm_register_callback_coverage_limits();
         test_systemverilog_uvm_checkpoint();
+        test_run_state_image();
         test_systemverilog_uvm_registry();
         test_systemverilog_uvm_factory();
         test_systemverilog_uvm_resource_pool();

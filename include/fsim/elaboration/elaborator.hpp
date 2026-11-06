@@ -832,6 +832,9 @@ struct VpiGenerateParameterInfo {
     std::string identity;
     semantic::DeclarationId declaration;
     bool local { };
+    // The typespec of the typedef the parameter is declared with (37.28
+    // vpiTypespec); null for a built-in type.
+    std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
 };
 
 /// One generate block occurrence of an instance: its path relative to the
@@ -839,7 +842,13 @@ struct VpiGenerateParameterInfo {
 /// 1800-2023 27.6, 37.85).
 struct VpiGenerateScopeInfo {
     std::string path;
+    // The generate region the elaborator selected for the occurrence, which
+    // tells the branches of an if that share one scope name apart (27.5).
+    semantic::DeclarationId region;
     std::vector<VpiGenerateParameterInfo> parameters;
+    // The typedefs the block declares, in declaration order (IEEE 1800-2023
+    // 37.85 detail 5).
+    std::vector<VpiTypedefInfo> typedefs;
 };
 
 /// A package parameter or local parameter with its elaborated value (IEEE
@@ -851,6 +860,18 @@ struct VpiPackageParameterInfo {
     std::string identity;
     semantic::DeclarationId declaration;
     bool local { };
+    // The typespec of the parameter's type (37.28 vpiTypespec); null for a
+    // built-in type.
+    std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
+};
+
+/// A typedef a package or `$unit` declares, as a typespec (IEEE 1800-2023
+/// 3.12.1, 37.10 vpiTypedef). The package is named by its library and name,
+/// `lib::name`.
+struct VpiPackageTypedefInfo {
+    std::string package;
+    std::string name;
+    std::shared_ptr<const runtime::SystemVerilogVpiTypespec> typespec { };
 };
 
 struct SpecializationInfo {
@@ -901,12 +922,23 @@ struct SpecializationInfo {
     // The typespec of each value parameter whose declared type names a
     // typedef, by parameter name (IEEE 1800-2023 37.28 vpiTypespec).
     std::vector<VpiTypedefInfo> vpi_parameter_typespecs;
+    // The typespec of each port whose declared type names a typedef, by
+    // port name: a port that shares its actual's runtime signal keeps its
+    // own declared type (IEEE 1800-2023 37.14, 37.17).
+    std::vector<VpiTypedefInfo> vpi_port_typespecs;
+    // The typespec of each user-defined nettype the instance declares, by
+    // nettype name: the data type the nettype carries (IEEE 1800-2023 37.23
+    // vpiTypespec).
+    std::vector<VpiTypedefInfo> vpi_nettype_typespecs;
     // The generate block occurrences of the instance, with the parameters
     // each declares (IEEE 1800-2023 27.6, 37.85).
     std::vector<VpiGenerateScopeInfo> vpi_generate_scopes;
     // The parameters of the design's packages, recorded once with the first
     // SystemVerilog instance (IEEE 1800-2023 3.12.1, 37.10).
     std::vector<VpiPackageParameterInfo> vpi_package_parameters;
+    // The typedefs of the design's packages and `$unit`, recorded once with
+    // the parameters above (IEEE 1800-2023 3.12.1, 37.10).
+    std::vector<VpiPackageTypedefInfo> vpi_package_typedefs;
 };
 
 using UdpTableId = std::uint32_t;
@@ -1145,6 +1177,14 @@ struct SdfNetDelayInfo {
     SdfNetDelayTerminal source;
     SdfNetDelayTerminal destination;
     std::vector<runtime::SimulationTick> delays;
+    /// Set when annotation split the load port's net (split_sdf_net_delays):
+    /// the instance behind `destination` reads `load_signal`, a delayed copy
+    /// of `destination.signal` that `driver` writes with a delayed
+    /// (slotted when a foreign library is loaded) transition-delay write.
+    /// Records that end at the same load port share one driver.
+    bool delayed { };
+    runtime::simir::SignalId load_signal { };
+    runtime::simir::ProcessId driver { };
 };
 
 struct ElaboratedDesignState {

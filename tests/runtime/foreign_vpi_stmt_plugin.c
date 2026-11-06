@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // cbStmt conformance plug-in (IEEE 1800-2023 38.36.1.1): places a callback
-// on top.main, each of its statements and the body of task bump, and
-// reports each call. Without simulate --foreign-probes the registration
+// on top.main, each of its statements and the body of task bump, on the
+// block and statement of a generate block's process, and reports each call. Without simulate --foreign-probes the registration
 // fails with an error. Lines starting with "#c " form the checked trace.
 #include "fsim/runtime/vpi_abi.h"
 #include "vpi_user.h"
@@ -111,6 +111,74 @@ static PLI_INT32 start(p_cb_data data)
         disable.time = &time;
         vpi_printf("#c cbDisable accepted=%d\n",
             vpi_register_cb(&disable) != NULL);
+    }
+    // A disable of a block that is not active reports nothing.
+    {
+        static s_vpi_time time = { vpiSimTime, 0, 0, 0.0 };
+        s_cb_data disable;
+        memset(&disable, 0, sizeof disable);
+        disable.reason = cbDisable;
+        disable.cb_rtn = disabled;
+        disable.obj = vpi_handle_by_name("top.idle", NULL);
+        disable.time = &time;
+        vpi_printf("#c cbDisable idle accepted=%d\n",
+            vpi_register_cb(&disable) != NULL);
+    }
+    // The statements of a process of a generate block.
+    {
+        vpiHandle generated = vpi_handle_by_name("top.gen.gblk", NULL);
+        if (generated == NULL) {
+            vpi_printf("#c missing generate scope\n");
+        } else if (place(generated)) {
+            iterator = vpi_iterate(vpiStmt, generated);
+            while (iterator != NULL && (item = vpi_scan(iterator)) != NULL) {
+                (void)place(item);
+            }
+        }
+    }
+    // The named block of an unlabelled generate block, beneath the scope
+    // genblk<n> (IEEE 1800-2023 27.6, 37.43).
+    {
+        vpiHandle scopes = vpi_iterate(vpiInternalScope,
+            vpi_handle_by_name("top", NULL));
+        vpiHandle scope;
+        int found = 0;
+        while (scopes != NULL && (scope = vpi_scan(scopes)) != NULL) {
+            const char* name = vpi_get_str(vpiName, scope);
+            char path[128];
+            vpiHandle unlabelled;
+            if (name == NULL || strncmp(name, "genblk", 6U) != 0) {
+                continue;
+            }
+            snprintf(path, sizeof path, "top.%s.ublk", name);
+            unlabelled = vpi_handle_by_name(path, NULL);
+            vpi_printf("#c implicit scope %s block=%d\n", name,
+                unlabelled != NULL);
+            found = 1;
+            if (unlabelled != NULL && place(unlabelled)) {
+                iterator = vpi_iterate(vpiStmt, unlabelled);
+                while (iterator != NULL
+                    && (item = vpi_scan(iterator)) != NULL) {
+                    (void)place(item);
+                }
+            }
+        }
+        if (!found) {
+            vpi_printf("#c missing implicit scope\n");
+        }
+    }
+    // A generate scope created with an asserted process holds its named
+    // blocks too.
+    {
+        vpiHandle eager = vpi_handle_by_name("top.eager.eblk", NULL);
+        if (eager == NULL) {
+            vpi_printf("#c missing eager generate block\n");
+        } else if (place(eager)) {
+            iterator = vpi_iterate(vpiStmt, eager);
+            while (iterator != NULL && (item = vpi_scan(iterator)) != NULL) {
+                (void)place(item);
+            }
+        }
     }
     // A process is not a statement.
     iterator = vpi_iterate(vpiProcess, vpi_handle_by_name("top", NULL));

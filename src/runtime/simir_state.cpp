@@ -2403,7 +2403,7 @@ void Interpreter::Impl::stamp_signal_event(
     const std::uint64_t generic_delta,
     const SignalChangeOrigin origin)
 {
-    update_selected_signal_value_history(signal, generic_delta);
+    update_selected_signal_value_history(signal, generic_delta, origin);
     signal_events.at(signal)
         = std::pair { scheduler.now(), generic_delta };
     const auto systemverilog_round
@@ -2529,7 +2529,8 @@ void Interpreter::Impl::stage_selected_signal_transaction_mask(
 }
 
 void Interpreter::Impl::note_selected_signal_transaction(
-    const SignalId signal)
+    const SignalId signal,
+    const SignalChangeOrigin origin)
 {
     if (signal >= signal_selection_histories.size()
         || signal_selection_histories[signal].empty()) {
@@ -2541,10 +2542,14 @@ void Interpreter::Impl::note_selected_signal_transaction(
             history.transaction_pending = true;
         }
     }
-    const auto stamp = std::pair { scheduler.now(), scheduler.delta() + 1U };
+    const auto stamp
+        = std::pair { scheduler.now(), signal_event_delta(origin) };
+    const bool systemverilog
+        = origin.process_domain == ProcessSchedulingDomain::systemverilog;
     for (auto& history : histories) {
         if (history.transaction_pending) {
             history.last_transaction = stamp;
+            history.last_transaction_systemverilog = systemverilog;
             history.transaction_pending = false;
         }
     }
@@ -2572,7 +2577,8 @@ void Interpreter::Impl::clear_pending_selected_signal_transactions() noexcept
 
 void Interpreter::Impl::update_selected_signal_value_history(
     const SignalId signal,
-    const std::uint64_t generic_delta)
+    const std::uint64_t generic_delta,
+    const SignalChangeOrigin origin)
 {
     if (signal >= signal_selection_histories.size()
         || signal_selection_histories[signal].empty()) {
@@ -2596,6 +2602,8 @@ void Interpreter::Impl::update_selected_signal_value_history(
         }
         if (before != after) {
             history.last_event = stamp;
+            history.last_event_systemverilog = origin.process_domain
+                == ProcessSchedulingDomain::systemverilog;
         }
     }
 }
@@ -2789,6 +2797,24 @@ void Interpreter::Impl::notify_execution_point(
                 && fusion_dormant_process[process.id] == 2U)
             || static_kernel_host(process.id))) {
         return;
+    }
+    // The interpreter's thread lifetime for the foreign frame model (IEEE
+    // 1800-2023 37.44, 38.36.1): a process or fork branch becomes a thread
+    // at its first point and ends in complete_process, as in the kernel.
+    // Only a SystemVerilog procedure is a thread; a VHDL process is not.
+    if (execution_point_hook && !process.cold().thread_announced
+        && process.program().scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog
+        && kind != ExecutionPointKind::thread_start
+        && kind != ExecutionPointKind::thread_end
+        && kind != ExecutionPointKind::thread_enter) {
+        process.cold().thread_announced = true;
+        notify_execution_point(
+            process.id, process.cold().design_process, process.program(),
+            instruction, ExecutionPointKind::thread_start, source,
+            scope.empty() ? std::string_view { process.cold().current_scope }
+                          : scope,
+            {}, process.cold().fork_parent);
     }
     notify_execution_point(
         process.id, process.cold().design_process, process.program(),
@@ -3889,7 +3915,12 @@ void Interpreter::Impl::note_signal_transaction(
     }
     const bool group_static_fanout = fanout_cohort_grouping_enabled;
     signal_transactions[signal_id] = std::pair { scheduler.now(), signal_event_delta(origin) };
-    note_selected_signal_transaction(signal_id);
+    if (vhdl_stamp_origins) {
+        signal_transaction_systemverilog[signal_id] = static_cast<std::uint8_t>(
+            origin.process_domain == ProcessSchedulingDomain::systemverilog
+                ? 1U : 0U);
+    }
+    note_selected_signal_transaction(signal_id, origin);
     if (signal_id < signal_container_element_aliases.size()
         && signal_container_element_aliases[signal_id]) {
         const auto object

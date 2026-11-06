@@ -566,6 +566,10 @@ struct Type {
     std::shared_ptr<const Expression> systemverilog_type_of;
     SystemVerilogScalarKind systemverilog_scalar { SystemVerilogScalarKind::None };
     std::string systemverilog_net_type;
+    // An `interconnect` net, kept as a wire for simulation; the marker only
+    // lets the VPI model publish a generic interconnect net or array
+    // (IEEE 1800-2023 6.6.8, 37.24).
+    bool systemverilog_interconnect { };
     // Canonical selected function name from a SystemVerilog user-defined
     // nettype. Empty selects the ordinary net resolution for the base type.
     std::string systemverilog_resolution_function;
@@ -1822,6 +1826,25 @@ struct Statement {
     // neither field changes the assertion condition's procedural sampling.
     bool assertion_has_pass_action { };
     bool assertion_has_failure_action { };
+    // The directive of a SystemVerilog immediate assertion and whether it
+    // is deferred (`#0`) or final (IEEE 1800-2023 16.3, 37.55); an immediate
+    // cover is lowered to a conditional, so its directive is kept here.
+    enum class ImmediateDirective : std::uint8_t {
+        None,
+        Assert,
+        Assume,
+        Cover
+    };
+    ImmediateDirective immediate_directive { ImmediateDirective::None };
+    bool immediate_deferred { };
+    bool immediate_final { };
+    // A foreach statement desugared to nested loops (IEEE 1800-2023 12.7.3)
+    // keeps its collection, its loop variables left to right (an invalid
+    // expression for a skipped one) and the span of its body's first token
+    // on the block that holds the loops (37.51).
+    Expression foreach_collection;
+    std::vector<Expression> foreach_variables;
+    SourceSpan foreach_body_span;
     // Bounded literal language output used by Verilog/SystemVerilog output
     // tasks and VHDL report statements. Formatting operands are added
     // separately.

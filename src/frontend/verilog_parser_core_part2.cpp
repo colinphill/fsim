@@ -1053,6 +1053,7 @@ DesignUnit VerilogParser::parse_module(
     unit_associative_index_types_.clear();
     unit_foreach_types_.clear();
     generate_dpi_declarations_.clear();
+    generate_block_dpi_exports_.clear();
     port_type_refinements_.clear();
     implicit_net_references_.clear();
     wildcard_import_uses_.clear();
@@ -2170,6 +2171,21 @@ DesignUnit VerilogParser::parse_module(
         unit.systemverilog_dpi_declarations,
         unit.functions,
         unit.tasks);
+    // A block's own exports were resolved in the block; the module declares
+    // them for the C header, one C name once however many blocks repeat it.
+    for (auto& declaration : generate_block_dpi_exports_) {
+        declaration.owner_identity = unit.name;
+        if (std::ranges::none_of(unit.systemverilog_dpi_declarations,
+                [&](const SystemVerilogDpiDeclaration& existing) {
+                    return existing.direction == declaration.direction
+                        && existing.systemverilog_name
+                            == declaration.systemverilog_name;
+                })) {
+            unit.systemverilog_dpi_declarations.push_back(
+                std::move(declaration));
+        }
+    }
+    generate_block_dpi_exports_.clear();
     pending_systemverilog_fsm_pragmas_.clear();
     pending_systemverilog_fsm_pragma_target_position_.reset();
     program_generate_context_ = previous_program_generate_context;

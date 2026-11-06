@@ -60,4 +60,24 @@ module top;
     function automatic logic [7:0] wide(input logic [3:0] a);
         return {a, a};
     endfunction
+
+    // A net declaration assignment is a continuous assignment of its own
+    // (6.7.1, 37.46); the declaration's delay is its delay.
+    wire [3:0] #3 nw = d | 4'b0001;
+
+    // Immediate assertions: assert, assume or cover, observed deferred by #0
+    // or final deferred, whose actions are subroutine calls (16.4, 37.55).
+    task automatic chk;
+        assert (d !== 4'bzzzz) n = 1;
+        assume #0 (d !== 4'bzzzz) else $info("assume failed");
+        cover final (d !== 4'bzzzz) $info("covered");
+    endtask
+
+    // A foreach statement keeps its collection, its loop variables (a
+    // skipped one is a null operation) and its body (12.7.3, 37.51).
+    logic [3:0] arr [0:2][0:1];
+    task automatic each;
+        foreach (arr[i, ])
+            n = i;
+    endtask
 endmodule

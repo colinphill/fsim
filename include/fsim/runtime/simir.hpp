@@ -32,6 +32,10 @@
 #include <variant>
 #include <vector>
 
+namespace fsim::runtime {
+class RunStateImage;
+}
+
 namespace fsim::runtime::simir {
 using RegisterId = std::uint32_t;
 using StringRegisterId = std::uint32_t;
@@ -2386,6 +2390,33 @@ public:
         std::span<const std::string>,
         std::span<const std::uint8_t>)>;
 
+    /// The imported DPI call sites bound once. `bind` takes the identity a
+    /// DpiFunctionCallHook would take and returns an opaque site (the C
+    /// symbol, call interface and caller context resolved), or null when the
+    /// service does not serve the identity as a plain import call; the
+    /// reference interpreter binds each call operation on its first run and
+    /// every later run calls through the site, with no identity parsing. The
+    /// static kernel numbers its call sites when its image is built and
+    /// binds them once at load (`bind_plan`).
+    struct DpiSiteHooks {
+        std::function<const void*(std::string_view)> bind;
+        std::function<PackedLogic4(const void*, std::vector<PackedLogic4>&,
+            std::vector<std::string>&)>
+            call;
+        /// A kernel image's call sites (DpiSitePlan): `bind_plan` binds one
+        /// to the loaded C symbol once, at load, and returns the site (null
+        /// when the service does not serve the identity as an import call;
+        /// it throws as `bind` does for an import without an implementation).
+        /// `planned` tells whether the site calls through its plan, which
+        /// `call_plan` then does, reading the arguments from the frame's
+        /// registers into the C argument buffer and writing the copy-out
+        /// values and the result back; every other site takes `call`.
+        std::function<const void*(const DpiSitePlan&)> bind_plan;
+        std::function<bool(const void*)> planned;
+        std::function<PackedLogic4(const void*, const DpiSitePlan&, DpiFrame&)>
+            call_plan;
+    };
+
     explicit Interpreter(
         SchedulerOptions options = { },
         std::uint64_t seed = 1);
@@ -2576,6 +2607,17 @@ public:
     /// the run unchanged, when can_reset_run_state() is false.
     [[nodiscard]] bool reset_run_state();
 
+    /// Adds the sections of the run state this engine can save to `image`
+    /// (run_state_image.hpp). The static kernel's "kernel.values" section
+    /// (slot values) is the only one so far; threads, waiters, timers,
+    /// containers and the interpreter's host state are not saved yet, so the
+    /// image does not restore a run and can_reset_run_state() stays false.
+    /// Returns false while the image is incomplete in that way.
+    bool record_run_state(RunStateImage& image) const;
+    /// Restores the sections record_run_state() wrote; false, with the run
+    /// unchanged, when one is missing or does not fit this design.
+    [[nodiscard]] bool restore_run_state(const RunStateImage& image);
+
     /// Deposit immediately and activate sensitive processes in the next delta.
     /// A systemverilog origin domain (a VPI write from a calltf) wakes
     /// SystemVerilog processes in the current Active region instead
@@ -2603,6 +2645,16 @@ public:
     /// Release a host driver (IEEE 1076-2019 22.5.4).
     void release_host_driver(ProcessId process, SignalId signal,
         std::size_t offset, std::size_t width);
+    /// A new process with the program of `model` that never runs: the
+    /// owner of the drivers of one more process (or of a driver with no
+    /// process) that a foreign program creates in the instance whose
+    /// placeholder process is `model` (IEEE 1076-2019 23.6). It can be
+    /// added before or after the simulation starts.
+    [[nodiscard]] ProcessId add_foreign_driver_owner(ProcessId model);
+    /// Gives `process` a driver of `signal` at the driver's initial value
+    /// (IEEE 1076-2019 14.7.2), unless it has one: a driver vhpi_create
+    /// makes is a source of the signal from its creation (23.6).
+    void add_host_driver(ProcessId process, SignalId signal);
 
     /// Override the visible value while preserving subsequently driven values.
     /// Releasing the force publishes the most recent underlying driven value.
@@ -2610,11 +2662,26 @@ public:
         ProcessSchedulingDomain origin_domain = ProcessSchedulingDomain::generic);
     void release_signal(SignalId signal,
         ProcessSchedulingDomain origin_domain = ProcessSchedulingDomain::generic);
+    /// Procedural continuous assignment of a register from a host (IEEE
+    /// 1364-2005 9.3.1): the value overrides the register's procedural writes
+    /// until the deassign, which leaves it as the stored value; a force wins
+    /// over it, and releasing that force reveals it again.
+    void assign_signal(SignalId signal, PackedLogic4 value,
+        ProcessSchedulingDomain origin_domain = ProcessSchedulingDomain::generic);
+    void deassign_signal(SignalId signal,
+        ProcessSchedulingDomain origin_domain = ProcessSchedulingDomain::generic);
     void force_signal_slice(
         SignalId signal, PackedLogic4 value, std::size_t offset);
     void release_signal_slice(
         SignalId signal, std::size_t offset, std::size_t width);
+    /// True when a force (not a procedural continuous assign) holds a bit.
     [[nodiscard]] bool signal_is_forced(SignalId signal) const;
+    /// True when a procedural continuous assign (acc_set_value accAssignFlag,
+    /// IEEE 1364-2005 9.3.1) holds a bit.
+    [[nodiscard]] bool signal_is_assigned(SignalId signal) const;
+    /// True when a force or an assign overrides the stored value, so reads
+    /// return the effective value.
+    [[nodiscard]] bool signal_has_override(SignalId signal) const;
 
     /// Schedule an external drive in the update phase of an absolute timestamp.
     void schedule_signal_at(SignalId signal, PackedLogic4 value,
@@ -2667,6 +2734,10 @@ public:
     /// an observation barrier; nullopt under the same conditions.
     [[nodiscard]] std::optional<PackedLogic4> kernel_signal_value(
         SignalId signal) const;
+    /// After a foreign release of a net the kernel owns: the members that
+    /// drive it run again, so it returns to the drivers' value (IEEE
+    /// 1800-2023 10.6.2). No effect on any other signal.
+    void rerun_kernel_drivers(SignalId signal);
 
     /// Return a live reference; its backing remains on public storage because
     /// callers may retain it beyond this call.
@@ -2766,6 +2837,14 @@ public:
         ProcessId process, std::size_t local_index, const PackedLogic4& value);
     [[nodiscard]] std::string read_debug_string_local(
         ProcessId process, std::size_t local_index) const;
+    /// Deposit a value into a string debug local (a frame's automatic
+    /// string, vpi_put_value on it, IEEE 1800-2023 37.43, 38.34).
+    void write_debug_string_local(ProcessId process, std::size_t local_index,
+        std::string_view value);
+    /// Replace a container debug local of the same type (vpi_put_value_array
+    /// on a frame's automatic container, IEEE 1800-2023 38.34).
+    void write_debug_container_local(ProcessId process,
+        std::size_t local_index, const ContainerValue& value);
     [[nodiscard]] ContainerValue read_debug_container_local(
         ProcessId process, std::size_t local_index) const;
     /// True once a language-level Stop operation (`$finish` or equivalent) has
@@ -2859,6 +2938,7 @@ public:
     void set_class_static_method_call_context_hook(
         ClassStaticMethodCallContextHook hook);
     void set_dpi_function_call_hook(DpiFunctionCallHook hook);
+    void set_dpi_site_hooks(DpiSiteHooks hooks);
 
 private:
     [[nodiscard]] ProcessId

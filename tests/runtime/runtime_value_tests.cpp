@@ -1097,6 +1097,7 @@ void test_simir_permanent_wait() {
   process.id = 0;
   process.name = "permanent_wait";
   process.register_count = 1;
+  process.scheduling_domain = ProcessSchedulingDomain::systemverilog;
   process.operations = {
       WaitForever{},
       LoadConstant{0, PackedLogic4::from_msb_string("1")},
@@ -1117,11 +1118,14 @@ void test_simir_permanent_wait() {
   require(
       interpreter.signal_value(signal).to_msb_string() == "0",
       "operations after a permanent wait must remain unreachable");
+  // A SystemVerilog process becomes a thread at its first point (IEEE
+  // 1800-2023 37.44).
   require(
-      points.size() == 1
-          && points.front().kind
+      points.size() == 2
+          && points.front().kind == ExecutionPointKind::thread_start
+          && points.back().kind
               == ExecutionPointKind::process_suspend
-          && points.front().instruction == 0,
+          && points.back().instruction == 0,
       "a permanent wait remains debugger-visible as process suspension");
 }
 

@@ -487,7 +487,8 @@ void Interpreter::Impl::StaticKernel::run_startup_member(const ProcessId process
 
 PackedLogic4 Interpreter::Impl::StaticKernel::run_resolver(
     const ProcessId process, const std::optional<PackedLogic4>& driving,
-    const RegisterId input, const RegisterId output)
+    const RegisterId input, const RegisterId output,
+    const std::optional<PackedLogic4>& count)
 {
     const auto found = resolver_members_.find(process);
     if (found == resolver_members_.end()) {
@@ -496,6 +497,9 @@ PackedLogic4 Interpreter::Impl::StaticKernel::run_resolver(
     const auto member = found->second;
     if (driving) {
         set_member_register(member, input, *driving);
+    }
+    if (count) {
+        set_member_register(member, input + 1U, *count);
     }
     // The pass runs inside the host's update commit, which may have changed
     // the host signals it reads since the kernel's last scan: their mirrors

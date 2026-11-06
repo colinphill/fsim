@@ -799,6 +799,13 @@ std::size_t ElaboratedDesign::bind_primitive_delay_slots()
         drivers.insert(drivers.end(), primitive.drivers.begin(),
             primitive.drivers.end());
     }
+    // The delayed copy of a net that an SDF interconnect or port delay
+    // delays is retimed like a primitive's output.
+    for (const auto& delay : sdf_net_delays_) {
+        if (delay.delayed) {
+            drivers.push_back(delay.driver);
+        }
+    }
     if (drivers.empty()) {
         return 0U;
     }
@@ -2285,7 +2292,10 @@ ElaboratedDesign::from_state_with_process_rows(
     for (const auto& delay : state.sdf_net_delays) {
         if (delay.source.signal >= state.signals.size()
             || delay.destination.signal >= state.signals.size()
-            || delay.delays.size() != 12U) {
+            || delay.delays.size() != 12U
+            || (delay.delayed
+                && (delay.load_signal >= state.signals.size()
+                    || delay.driver >= process_count))) {
             return std::nullopt;
         }
     }

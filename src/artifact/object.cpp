@@ -819,6 +819,36 @@ std::optional<ObjectMetadata> load_object_metadata(
       *bytes, support::path_to_utf8(object), diagnostics);
 }
 
+std::optional<std::string> object_outdated(const std::filesystem::path& object) {
+  std::string failure;
+  auto reader = ContainerReader::open(object, kObjectArtifactKind, failure);
+  const auto bytes = reader
+      ? reader->read(kObjectMetadataFilename, kMaximumMetadataBytes, failure)
+      : std::nullopt;
+  if (!bytes) {
+    return std::nullopt;
+  }
+  Reader canonical{*bytes};
+  if (!canonical.bytes(kMagic)) {
+    return std::nullopt;
+  }
+  const auto format = canonical.u32();
+  const auto schema = canonical.u32();
+  const auto compiled_hir_schema = canonical.u32();
+  if (!format || !schema || !compiled_hir_schema
+      || (*format == kObjectFormatVersion
+          && *schema == library::kPortableSchemaVersion
+          && *compiled_hir_schema == library::kCompiledHirSchemaVersion)) {
+    return std::nullopt;
+  }
+  return "object format " + std::to_string(*format) + ", portable-unit schema "
+      + std::to_string(*schema) + ", compiled-HIR schema "
+      + std::to_string(*compiled_hir_schema) + "; this build reads format "
+      + std::to_string(kObjectFormatVersion) + ", "
+      + std::to_string(library::kPortableSchemaVersion) + ", "
+      + std::to_string(library::kCompiledHirSchemaVersion);
+}
+
 std::optional<std::string> read_object_payload(
     const std::filesystem::path& object,
     const std::filesystem::path& payload,

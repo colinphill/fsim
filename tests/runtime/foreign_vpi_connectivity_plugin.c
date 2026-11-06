@@ -2,8 +2,10 @@
 // Connectivity conformance plug-in (IEEE 1800-2023 37.21, 37.41, 37.42,
 // 37.46, 37.58, 37.74): at the start of simulation the plug-in prints the
 // drivers, loads and uses of nets and variables, the var selects of the
-// initial process, and the task and function declarations and calls.
+// initial process, the task and function declarations and calls, and the
+// DPI imports and exports (37.40) with the calls of an import.
 // Lines starting with "#c " form the checked trace.
+#include "fsim/runtime/dpi_plugin_abi.h"
 #include "fsim/runtime/vpi_abi.h"
 #include "sv_vpi_user.h"
 
@@ -121,6 +123,82 @@ static void signature(char* name)
         vpi_printf("#c %s:   return %s %s size=%d\n", name,
             text(vpiType, result), text(vpiName, result),
             (int)vpi_get(vpiSize, result));
+    }
+}
+
+// The C functions the design's DPI imports bind to (IEEE 1800-2023 35.5).
+FSIM_DPI_PLUGIN_EXPORT int FSIM_DPI_PLUGIN_CALL c_conn_twice(const int x)
+{
+    return 2 * x;
+}
+
+FSIM_DPI_PLUGIN_EXPORT int FSIM_DPI_PLUGIN_CALL c_conn_note(const int x)
+{
+    (void)x;
+    return 0;
+}
+
+// The DPI properties of a task or function (IEEE 1800-2023 37.40 details
+// 6-10).
+static void dpi_signature(char* name)
+{
+    vpiHandle const callable = vpi_handle_by_name(name, NULL);
+    if (callable == NULL) {
+        vpi_printf("#c %s: missing\n", name);
+        return;
+    }
+    vpi_printf("#c %s: %s access=%d pure=%d context=%d cstr=%d cid=%s\n",
+        name, text(vpiType, callable), (int)vpi_get(vpiAccessType, callable),
+        (int)vpi_get(vpiDPIPure, callable),
+        (int)vpi_get(vpiDPIContext, callable),
+        (int)vpi_get(vpiDPICStr, callable),
+        text(vpiDPICIdentifier, callable));
+    vpi_printf("#c %s: method=%d virtual=%d visibility=%d\n", name,
+        (int)vpi_get(vpiMethod, callable), (int)vpi_get(vpiVirtual, callable),
+        (int)vpi_get(vpiVisibility, callable));
+    if (vpi_get(vpiType, callable) == vpiFunction) {
+        vpi_printf("#c %s: functype=%d size=%d signed=%d\n", name,
+            (int)vpi_get(vpiFuncType, callable), (int)vpi_get(vpiSize, callable),
+            (int)vpi_get(vpiSigned, callable));
+    }
+}
+
+// The calls to a DPI import: the statement's task, or the function of the
+// call an assignment reads (IEEE 1800-2023 37.40, 37.42, 37.43).
+static void dpi_calls(vpiHandle top)
+{
+    vpiHandle const processes = vpi_iterate(vpiProcess, top);
+    vpiHandle process;
+    while (processes != NULL && (process = vpi_scan(processes)) != NULL) {
+        vpiHandle const body = vpi_handle(vpiStmt, process);
+        vpiHandle const items = body != NULL ? vpi_iterate(vpiStmt, body) : NULL;
+        vpiHandle item;
+        while (items != NULL && (item = vpi_scan(items)) != NULL) {
+            vpiHandle call = item;
+            vpiHandle callee;
+            if (vpi_get(vpiType, item) == vpiAssignment) {
+                call = vpi_handle(vpiRhs, item);
+            }
+            if (call == NULL) {
+                continue;
+            }
+            callee = vpi_get(vpiType, call) == vpiTaskCall
+                ? vpi_handle(vpiTask, call)
+                : vpi_get(vpiType, call) == vpiFuncCall
+                ? vpi_handle(vpiFunction, call)
+                : NULL;
+            if (callee != NULL
+                && vpi_get(vpiAccessType, callee) == vpiDPIImportAcc) {
+                vpi_printf("#c dpi call line %d: %s %s access=%d",
+                    (int)vpi_get(vpiLineNo, item), text(vpiType, call),
+                    text(vpiFullName, callee),
+                    (int)vpi_get(vpiAccessType, callee));
+                if (vpi_get(vpiType, call) == vpiFuncCall) {
+                    vpi_printf(" functype=%d", (int)vpi_get(vpiFuncType, call));
+                }
+                vpi_printf("\n");
+            }
+        }
     }
 }
 
@@ -259,8 +337,12 @@ static PLI_INT32 start(p_cb_data data)
     signature("top.add");
     signature("top.wide");
     signature("top.bump");
+    dpi_signature("top.dpi_twice");
+    dpi_signature("top.dpi_note");
+    dpi_signature("top.dpi_exp");
+    dpi_calls(top);
     assignment_bits("top.w");
-    assignment_bits("spy.nd");
+    assignment_bits("top.nd");
     system_calls(top);
     return 0;
 }

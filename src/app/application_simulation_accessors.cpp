@@ -35,6 +35,54 @@ std::vector<fsim_vpi_handle_v1> Simulation::vpi_signal_object_handles(
         : found->second;
 }
 
+std::vector<std::pair<fsim_vpi_handle_v1, runtime::simir::ProcessId>>
+Simulation::vpi_driver_objects(const fsim_vpi_handle_v1 object)
+{
+    std::vector<std::pair<fsim_vpi_handle_v1, runtime::simir::ProcessId>> found;
+    impl_->materialize_vpi_children(object);
+    std::scoped_lock bridge_lock { impl_->vpi_bridge_mutex };
+    const auto signal = impl_->vpi_handle_signals.find(object);
+    if (signal == impl_->vpi_handle_signals.end()) {
+        return found;
+    }
+    const auto drivers = impl_->vpi_driver_bindings.find(signal->second);
+    if (drivers == impl_->vpi_driver_bindings.end()) {
+        return found;
+    }
+    for (const auto& driver : drivers->second) {
+        found.emplace_back(driver.handle, driver.process);
+    }
+    return found;
+}
+
+runtime::SystemVerilogVpiValueError Simulation::assign_vpi_value(
+    const fsim_vpi_handle_v1 object,
+    std::optional<runtime::SystemVerilogVpiStoredValue> value)
+{
+    std::scoped_lock bridge_lock { impl_->vpi_bridge_mutex };
+    const auto signal = impl_->vpi_handle_signals.find(object);
+    if (signal == impl_->vpi_handle_signals.end()) {
+        return runtime::SystemVerilogVpiValueError::NotBound;
+    }
+    const auto bound = signal->second;
+    try {
+        if (value) {
+            impl_->interpreter->assign_signal(bound,
+                systemverilog_vpi_packed_value(*value,
+                    impl_->vpi_scalar_kinds.at(bound),
+                    impl_->vpi_categories.at(bound)),
+                runtime::simir::ProcessSchedulingDomain::systemverilog);
+        } else {
+            impl_->interpreter->deassign_signal(bound,
+                runtime::simir::ProcessSchedulingDomain::systemverilog);
+        }
+        impl_->refresh_observation_hooks();
+    } catch (...) {
+        return runtime::SystemVerilogVpiValueError::ResourceLimit;
+    }
+    return runtime::SystemVerilogVpiValueError::None;
+}
+
 const std::vector<runtime::SystemVerilogVpiPort>&
 Simulation::systemverilog_vpi_ports() const noexcept
 {
@@ -439,6 +487,20 @@ std::string Simulation::read_process_string_local(
         process, local_index);
 }
 
+void Simulation::write_process_string_local(
+    const runtime::simir::ProcessId process, const std::size_t local_index,
+    const std::string_view value)
+{
+    impl_->interpreter->write_debug_string_local(process, local_index, value);
+}
+
+void Simulation::write_process_container_local(
+    const runtime::simir::ProcessId process, const std::size_t local_index,
+    const runtime::simir::ContainerValue& value)
+{
+    impl_->interpreter->write_debug_container_local(process, local_index, value);
+}
+
 runtime::simir::ContainerValue
 Simulation::read_process_container_local(
     const runtime::simir::ProcessId process,
@@ -465,6 +527,17 @@ const std::vector<semantic::sv::ClassSpecialization>&
 Simulation::class_specializations() const noexcept
 {
     return impl_->built.compiled_systemverilog_class_specializations;
+}
+
+const semantic::sv::ClassSpecialization*
+Simulation::class_specialization(const std::string_view identity) const
+{
+    const auto& designed = impl_->built.compiled_systemverilog_class_specializations;
+    const auto found = std::ranges::find(designed, identity,
+        &semantic::sv::ClassSpecialization::specialization_identity);
+    return found != designed.end()
+        ? &*found
+        : impl_->generated_class_specialization(identity);
 }
 
 SystemVerilogClassExecutionStatistics

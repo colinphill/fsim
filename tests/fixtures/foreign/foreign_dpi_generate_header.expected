@@ -1,0 +1,30 @@
+/* DPI-C prototypes of the design's imports and exports (IEEE 1800-2023 35, Annex H). */
+#ifndef FSIM_DPI_HEADER_H
+#define FSIM_DPI_HEADER_H
+#include "svdpi.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern int fsim_svdpi_export_call_v3(const char* name, void** arguments, void* result);
+/* Exported function dpi_gen_note */
+extern void dpi_gen_note(int value);
+/* Exported task dpi_gen_wait */
+extern int dpi_gen_wait(int delay);
+#ifndef FSIM_DPI_NO_EXPORT_STUBS
+__attribute__((weak)) void dpi_gen_note(int value)
+{
+    void* fsim_arguments[] = { (void*)&value };
+    (void)fsim_svdpi_export_call_v3("dpi_gen_note", fsim_arguments, 0);
+}
+__attribute__((weak)) int dpi_gen_wait(int delay)
+{
+    void* fsim_arguments[] = { (void*)&delay };
+    int fsim_result = 0;
+    const int fsim_status = fsim_svdpi_export_call_v3("dpi_gen_wait", fsim_arguments, &fsim_result);
+    return fsim_status != 0 ? 1 : fsim_result;
+}
+#endif
+#ifdef __cplusplus
+}
+#endif
+#endif

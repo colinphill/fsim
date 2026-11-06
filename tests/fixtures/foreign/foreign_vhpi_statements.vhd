@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: Apache-2.0
-library ieee;
+package pk is function tripled(n : integer) return integer; end package; package body pk is function tripled(n : integer) return integer is begin return n * 3; end function tripled; end package body; library ieee;
 use ieee.std_logic_1164.all;
 
 entity top is
@@ -8,7 +8,7 @@ end entity;
 architecture a of top is
   signal clk : std_logic := '0';
   signal a : integer := 0;
-  signal b : integer := 0;
+  signal b : integer := work.pk.tripled(0);
   signal s : integer := 0;
   signal t : integer := 0;
   signal u : integer := 0;
@@ -174,4 +174,8 @@ begin
 
     cp : drive(sig2, 7);
   end block sub;
+
+  gb : block (a > 0) is
+  begin
+  end block gb;
 end architecture;

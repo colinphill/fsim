@@ -425,6 +425,13 @@ void Interpreter::Impl::execute(ProcessId id)
         return;
     }
     restore_callable_context(process);
+    // A thread that ran before is entered again as it resumes (IEEE 1800-2023
+    // 38.36.1 cbEnterThread), as the static kernel's run_thread reports it;
+    // free without an execution-point hook.
+    if (execution_point_hook && process.cold().thread_announced) {
+        notify_execution_point(process, process.pc,
+            ExecutionPointKind::thread_enter, process.cold().current_source);
+    }
     if (!process.executor && process.cold().deferred_executor
         && can_install_deferred_executor(process)
         && deferred_executor_ready(process)) {
@@ -2405,7 +2412,11 @@ bool Interpreter::Impl::signal_event_attribute(const SignalId signal,
     const auto* selected
         = selected_attribute_history(signal, selection, "event");
     return signal_attribute_detail::in_current_delta(*this,
-        selected != nullptr ? selected->last_event : signal_events[signal]);
+        selected != nullptr ? selected->last_event : signal_events[signal],
+        selected != nullptr
+            ? selected->last_event_systemverilog
+            : signal_event_scheduling_stamps[signal].origin.process_domain
+                == ProcessSchedulingDomain::systemverilog);
 }
 
 bool Interpreter::Impl::signal_active_attribute(const SignalId signal,
@@ -2415,7 +2426,9 @@ bool Interpreter::Impl::signal_active_attribute(const SignalId signal,
         = selected_attribute_history(signal, selection, "active");
     return signal_attribute_detail::in_current_delta(*this,
         selected != nullptr ? selected->last_transaction
-                            : signal_transactions[signal]);
+                            : signal_transactions[signal],
+        selected != nullptr ? selected->last_transaction_systemverilog
+                            : signal_transaction_systemverilog[signal] != 0U);
 }
 
 const PackedLogic4& Interpreter::Impl::signal_last_value_attribute(

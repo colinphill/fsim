@@ -1604,8 +1604,9 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                 : std::nullopt;
             return declaration && declaration->systemverilog != nullptr
                     && declaration->systemverilog->type
-                ? frontend::systemverilog_scalar_kind(
-                      declaration->systemverilog->type->target.spelling)
+                ? hir_declared_type_scalar_kind(
+                      *declaration->systemverilog->type,
+                      declaration->systemverilog->scope)
                 : frontend::SystemVerilogScalarKind::None;
         };
     const auto integral_expression = [&]
@@ -2560,8 +2561,9 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             || !declaration->systemverilog->type) {
             return frontend::SystemVerilogScalarKind::None;
         }
-        return frontend::systemverilog_scalar_kind(
-            declaration->systemverilog->type->target.spelling);
+        return hir_declared_type_scalar_kind(
+            *declaration->systemverilog->type,
+            declaration->systemverilog->scope);
     };
     struct TextTarget {
         FileTextTargetKind kind { FileTextTargetKind::string_register };
@@ -4805,9 +4807,9 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                 return declaration
                         && declaration->systemverilog != nullptr
                         && declaration->systemverilog->type
-                    ? frontend::systemverilog_scalar_kind(
-                          declaration->systemverilog->type
-                              ->target.spelling)
+                    ? hir_declared_type_scalar_kind(
+                          *declaration->systemverilog->type,
+                          declaration->systemverilog->scope)
                     : frontend::SystemVerilogScalarKind::None;
             };
         const auto scalar_format_matches = [&]

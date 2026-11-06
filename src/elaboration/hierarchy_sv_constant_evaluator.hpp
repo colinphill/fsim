@@ -156,6 +156,15 @@ evaluate_hir_systemverilog_declaration_value(
     semantic::DeclarationId declaration,
     std::string& error);
 
+/// The scalar kind a declared type has, following a typedef or type
+/// parameter to the built-in type it names, so that `typedef real real_t;
+/// localparam real_t P = 2.5;` is a real parameter (IEEE 1800-2023 6.18,
+/// 6.20.2); None for an aggregate or packed type.
+[[nodiscard]] frontend::SystemVerilogScalarKind
+hir_systemverilog_declared_scalar_kind(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& type, semantic::ScopeId scope);
+
 /// Convert a constant to a real-family or chandle kind; any other kind
 /// leaves an integral value unchanged.
 [[nodiscard]] std::optional<HirSystemVerilogConstant>

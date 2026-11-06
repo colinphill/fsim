@@ -53,6 +53,17 @@ struct VhdlResolverVariant {
       const VhdlResolverVariant&, const VhdlResolverVariant&) = default;
 };
 
+/// A foreign architecture may create drivers of a user-resolved signal while
+/// the simulation runs (IEEE 1076-2019 23.6). Its `variants` then hold, after
+/// the entry for the declared drivers, one program for each of the first
+/// `vhdl_resolver_static_created_drivers` created drivers (an invalid process
+/// where none was built), and one last, count-independent program for any
+/// larger number: its register `input` is followed by the register
+/// `input + 1` that holds the driver count, and the runtime writes the
+/// driving values of all the connected drivers, exactly count * element
+/// width bits, to `input` (14.7.3.2).
+inline constexpr std::size_t vhdl_resolver_static_created_drivers = 8U;
+
 struct VhdlSignalResolver {
   ProcessId process{};
   RegisterId input{};
@@ -73,6 +84,16 @@ struct VhdlSignalResolver {
   // formal's drivers in the same simulation cycle; the formal's out-side
   // conversion reads it.
   std::optional<SignalId> driving_mirror{};
+
+  /// The program that serves a created-driver count the fixed variants do
+  /// not (vhdl_resolver_static_created_drivers), or null.
+  [[nodiscard]] const VhdlResolverVariant* dynamic_variant() const noexcept {
+    const auto fixed = drivers.size() + vhdl_resolver_static_created_drivers + 1U;
+    return variants.size() > fixed
+            && variants[fixed].process != std::numeric_limits<ProcessId>::max()
+        ? &variants[fixed]
+        : nullptr;
+  }
 
   friend bool operator==(
       const VhdlSignalResolver&, const VhdlSignalResolver&) = default;

@@ -8,6 +8,7 @@ module top;
     Item next;
     int w;
     int arr[4];
+    static int count;
     constraint c_small { value < 100; value > 1; }
     constraint cond { if (value > 50) { value < 80; } else value < 10; }
     constraint impl { value == 7 -> value != 9; }

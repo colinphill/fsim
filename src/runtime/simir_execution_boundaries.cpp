@@ -938,9 +938,38 @@ const char* Interpreter::Impl::run_class_operation(
     return nullptr;
 }
 
+PackedLogic4 Interpreter::Impl::call_dpi_import(
+    const ClassStaticMethodCall& operation, const std::string_view identity,
+    std::vector<PackedLogic4>& actuals, std::vector<std::string>& strings,
+    const DpiBoundSite* const bound)
+{
+    if (bound != nullptr) {
+        return bound->site != nullptr
+            ? dpi_site_hooks.call(bound->site, actuals, strings)
+            : dpi_function_call_hook(identity, actuals, strings,
+                operation.actual_names, operation.actual_directions);
+    }
+    if (!dpi_site_hooks.bind) {
+        return dpi_function_call_hook(identity, actuals, strings,
+            operation.actual_names, operation.actual_directions);
+    }
+    auto& entry = dpi_sites[&operation];
+    if (entry.identity != identity) {
+        // First run of the operation (or another one at its address): bind
+        // it once.
+        entry.site = dpi_site_hooks.bind(identity);
+        entry.identity = std::string { identity };
+    }
+    if (entry.site == nullptr) {
+        return dpi_function_call_hook(identity, actuals, strings,
+            operation.actual_names, operation.actual_directions);
+    }
+    return dpi_site_hooks.call(entry.site, actuals, strings);
+}
+
 const char* Interpreter::Impl::run_class_operation(
     ContainerRegisterAccess& access, const ClassStaticMethodCall& operation,
-    const ProcessId process)
+    const ProcessId process, const DpiBoundSite* const bound)
 {
     const auto dpi = std::string_view { operation.method_identity }
         .starts_with(systemverilog_dpi_function_prefix);
@@ -962,12 +991,21 @@ const char* Interpreter::Impl::run_class_operation(
         const auto stream_actual = !operation.actual_kinds.empty()
             && (operation.actual_kinds[index] == 2U
                 || operation.actual_kinds[index] == 3U);
-        actuals.push_back(string_actual ? PackedLogic4(64)
+        // A dynamic array or queue of strings (kind 4 in, kind 5 in and
+        // out) passes its strings as the one encoded string actual.
+        const auto strings_actual = !operation.actual_kinds.empty()
+            && (operation.actual_kinds[index] == 4U
+                || operation.actual_kinds[index] == 5U);
+        actuals.push_back(string_actual || strings_actual ? PackedLogic4(64)
                 : stream_actual
                 ? bit_stream_value(access.read_container(actual))
                 : access.read(actual));
         string_actuals.push_back(
-            string_actual ? access.read_string(actual) : std::string { });
+            string_actual ? access.read_string(actual)
+            : strings_actual
+            ? encode_dpi_string_array(
+                  access.read_container(actual).string_elements)
+            : std::string { });
     }
     const auto identity = dpi
         ? std::string_view { operation.method_identity }.substr(
@@ -979,8 +1017,7 @@ const char* Interpreter::Impl::run_class_operation(
         DpiCallProcess::set_current(process);
     }
     auto result = dpi
-        ? dpi_function_call_hook(identity, actuals, string_actuals,
-              operation.actual_names, operation.actual_directions)
+        ? call_dpi_import(operation, identity, actuals, string_actuals, bound)
         : class_static_method_call_context_hook(process, identity, actuals,
               string_actuals, operation.actual_names,
               operation.actual_directions);
@@ -995,8 +1032,13 @@ const char* Interpreter::Impl::run_class_operation(
             && operation.actual_kinds[index] == 3U) {
             set_bit_stream(access.container(operation.actuals[index]),
                 actuals[index]);
+        } else if (!operation.actual_kinds.empty()
+            && operation.actual_kinds[index] == 5U) {
+            access.container(operation.actuals[index]).string_elements
+                = decode_dpi_string_array(string_actuals[index]);
         } else if (operation.actual_kinds.empty()
-            || operation.actual_kinds[index] != 2U) {
+            || (operation.actual_kinds[index] != 2U
+                && operation.actual_kinds[index] != 4U)) {
             access.write(operation.actuals[index], std::move(actuals[index]));
         }
     }
@@ -2485,7 +2527,8 @@ void Interpreter::Impl::handle_boundary(
         }
         const auto stamp = selected->last_event;
         const auto active
-            = signal_attribute_detail::in_current_delta(*this, stamp);
+            = signal_attribute_detail::in_current_delta(
+                *this, stamp, selected->last_event_systemverilog);
         write_process_register(
             process, event->destination,
             PackedLogic4(1U, active ? Logic4::one : Logic4::zero));
@@ -2520,7 +2563,8 @@ void Interpreter::Impl::handle_boundary(
         }
         const auto stamp = selected->last_transaction;
         const auto in_current_delta
-            = signal_attribute_detail::in_current_delta(*this, stamp);
+            = signal_attribute_detail::in_current_delta(
+                *this, stamp, selected->last_transaction_systemverilog);
         write_process_register(
             process, active->destination,
             PackedLogic4(1U,
@@ -2885,14 +2929,21 @@ void Interpreter::Impl::handle_boundary(
             const auto stream_actual = !method->actual_kinds.empty()
                 && (method->actual_kinds[index] == 2U
                     || method->actual_kinds[index] == 3U);
+            const auto strings_actual = !method->actual_kinds.empty()
+                && (method->actual_kinds[index] == 4U
+                    || method->actual_kinds[index] == 5U);
             actuals.push_back(
-                string_actual ? PackedLogic4(64)
+                string_actual || strings_actual ? PackedLogic4(64)
                 : stream_actual
                 ? bit_stream_value(read_container_register(process, actual))
                 : read_boundary_value(actual));
             string_actuals.push_back(
                 string_actual
                     ? process.executor->read_string_register(actual)
+                : strings_actual
+                    ? encode_dpi_string_array(
+                          read_container_register(process, actual)
+                              .string_elements)
                     : std::string { });
         }
         const auto identity = dpi
@@ -2908,12 +2959,8 @@ void Interpreter::Impl::handle_boundary(
             method->destination,
             resize_class_value(
                 dpi
-                    ? dpi_function_call_hook(
-                          identity,
-                          actuals,
-                          string_actuals,
-                          method->actual_names,
-                          method->actual_directions)
+                    ? call_dpi_import(
+                          *method, identity, actuals, string_actuals)
                     : class_static_method_call_context_hook(
                           process.id,
                           identity,
@@ -2933,8 +2980,14 @@ void Interpreter::Impl::handle_boundary(
                 set_bit_stream(
                     get_container_register(process, method->actuals[index]),
                     actuals[index]);
+            } else if (!method->actual_kinds.empty()
+                && method->actual_kinds[index] == 5U) {
+                get_container_register(process, method->actuals[index])
+                    .string_elements
+                    = decode_dpi_string_array(string_actuals[index]);
             } else if (method->actual_kinds.empty()
-                || method->actual_kinds[index] != 2U) {
+                || (method->actual_kinds[index] != 2U
+                    && method->actual_kinds[index] != 4U)) {
                 write_process_register(process, method->actuals[index], actuals[index]);
             }
         }

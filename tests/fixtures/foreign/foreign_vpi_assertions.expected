@@ -14,6 +14,7 @@
 #c props c_hit clock-inferred=0 cover-sequence=0
 #c props a_seq clock-inferred=0 cover-sequence=0
 #c props cs_hit clock-inferred=0 cover-sequence=1
+#c where c_hit start=14:3 end=14:48
 #c 0 sys-initialized
 #c 0 sys-on
 #c 5 start a_req info=yes

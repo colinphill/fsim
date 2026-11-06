@@ -877,11 +877,10 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             }
             continue;
         }
+        // A port of a typedef of string is a string port too.
         const bool string_port = formal_declaration.type
-            && (formal_declaration.type->value_form
-                    == semantic::sv::TypeForm::string
-                || formal_declaration.type->target.spelling
-                    == "string");
+            && compiled_systemverilog_string_declaration(
+                *child_interface_specialization, formal_declaration);
         if (string_port) {
             auto actual = working_strings.find(actual_name);
             // An instance array's string port connected to a fixed string

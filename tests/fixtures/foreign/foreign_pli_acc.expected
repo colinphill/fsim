@@ -5,6 +5,7 @@
 #c children=1
 #c net name=io full=top.io type=25 fulltype=260
 #c net name=out full=top.out type=25 fulltype=260
+#c variable name=av full=top.av type=30 fulltype=30
 #c variable name=stim full=top.stim type=30 fulltype=30
 #c variable name=vec full=top.vec type=30 fulltype=30
 #c variable name=count full=top.count type=281 fulltype=281
@@ -46,3 +47,19 @@
 #c vcl tag=link reason=8 value=1
 #c vcl tag=link reason=8 value=0
 #c vcl deleted flag=0
+#c av op=1 rc=0 0101
+#c av op=5 rc=0 0101
+#c av op=2 rc=0 1100
+#c av op=3 rc=0 0101
+#c av op=5 rc=0 0101
+#c av op=4 rc=0 0101
+#c av op=5 rc=0 0101
+#c av op=5 rc=0 0011
+#c av op=2 rc=0 1100
+#c av op=5 rc=0 1100
+#c d av=1100
+#c av op=3 rc=0 1100
+#c av op=5 rc=0 1100
+#c d av=1100
+#c av op=5 rc=0 1010
+#c d av=1010

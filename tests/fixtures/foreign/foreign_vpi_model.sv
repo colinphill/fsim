@@ -58,10 +58,23 @@ module top;
   int q [$];
   for (genvar i = 0; i < 3; i++) begin : g
     logic [i:0] v;
+    typedef int gint_t;
   end
   // An unnamed generate block takes an implicit name (27.6, 37.85).
   if (P > 0) begin
     logic gw;
+  end
+  // An unnamed loop generate block does too, and its genvar is a local
+  // parameter of each scope (37.85 details 2, 3).
+  for (genvar k = 0; k < 2; k++) begin
+    logic gk;
+  end
+  // A continuous assignment with more than one delay (37.47, 37.80).
+  wire dly;
+  assign #(1, 2, 3) dly = la[0];
+  string sv = "a";
+  initial begin
+    #1 sv = "b";
   end
   tri tn;
   // An implicitly declared net (6.10).
@@ -76,7 +89,43 @@ module top;
   typedef int my_int_t;
   typedef int aa_t [string];
   localparam nib_t NP = 4'h5;
+  // A parameter declared with a typedef of a real or a string (37.28).
+  typedef real real_t;
+  localparam real_t RP = 2.5;
+  // A parameter of a typedef of real is a real parameter in simulation
+  // too (6.20.2).
+  initial $display("#c RP display=%f", RP);
+  typedef string str_t;
+  localparam str_t SP = "hi";
+  // A parameter of an unpacked structure type is a constant structure var
+  // (37.28; 37.26).
+  localparam rec_t RS = '{a: 3, b: 8'h5A};
+  // The else branch of a generate if is a scope of its own, and a named
+  // block of its process is a scope beneath it (27.5, 37.43, 37.85).
+  if (P < 0) begin : ge_if
+    logic a1;
+  end else begin : ge_else
+    logic b1;
+    initial begin : eb
+      b1 = 1'b1;
+    end
+  end
+  // An else branch named like its if branch shares its scope (27.5).
+  if (P < 0) begin : shr
+    logic s1;
+  end else begin : shr
+    logic s2;
+    initial begin : sb
+      s2 = 1'b0;
+    end
+  end
   leaf u1(.a({la[1:0], la[3:2]}), .y(), .z());
   leaf u2(.a(4'h9), .y(), .z());
   leaf u3(.a(la[3:0]), .y(), .z());
 endmodule
+
+// The typedefs of a package (3.12.1, 37.10).
+package pkg_p;
+  typedef int pk_int_t;
+  typedef logic [1:0] pk_pair_t;
+endpackage

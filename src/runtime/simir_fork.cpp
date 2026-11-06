@@ -494,6 +494,8 @@ bool Interpreter::Impl::alias_event(const EventAlias& alias)
             = signal_event_scheduling_stamps.at(alias.source);
         signal_transactions.at(alias.target)
             = signal_transactions.at(alias.source);
+        signal_transaction_systemverilog.at(alias.target)
+            = signal_transaction_systemverilog.at(alias.source);
     }
     return true;
 }
@@ -545,6 +547,11 @@ void Interpreter::Impl::complete_process(
         queue_active_current(waiter_id);
     }
     process.cold().escaping_callable_contexts.clear();
+    if (execution_point_hook && process.cold().thread_announced) {
+        process.cold().thread_announced = false;
+        notify_execution_point(process, 0U, ExecutionPointKind::thread_end,
+            process.cold().current_source);
+    }
 }
 
 [[nodiscard]] bool Interpreter::Impl::handle_process_boundary(

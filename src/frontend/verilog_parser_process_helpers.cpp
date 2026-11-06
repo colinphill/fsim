@@ -1182,7 +1182,20 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     if (loops > 1U) {
         foreach_break_targets_.pop_back();
     }
-    return desugared ? std::move(*desugared) : statement;
+    if (!desugared) {
+        return statement;
+    }
+    // The block keeps the foreach statement's own parts (37.51).
+    desugared->foreach_collection = statement.target;
+    if (statement.condition.operands.size() > 1U) {
+        desugared->foreach_variables.assign(
+            statement.condition.operands.begin() + 1,
+            statement.condition.operands.end());
+    }
+    if (!body_tokens.empty()) {
+        desugared->foreach_body_span = body_tokens.front().span;
+    }
+    return std::move(*desugared);
 }
 
 Statement VerilogParser::parse_repeat_statement(const Token& start)

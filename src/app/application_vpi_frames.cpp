@@ -57,6 +57,11 @@ std::vector<VpiFrameModel::Occurrence> VpiFrameModel::apply(
         started.parent = thread.frames.empty() ? 0U : thread.frames.back();
         started.design_process = point.design_process;
         started.callee = point.callee;
+        if (const auto suffix = started.callee.find('@');
+            suffix != std::string::npos) {
+            started.lowering = started.callee.substr(suffix);
+            started.callee.resize(suffix);
+        }
         // The caller's active statement holds the call (37.43 detail 5).
         if (started.parent != 0U) {
             const auto& caller = frames_.at(started.parent);

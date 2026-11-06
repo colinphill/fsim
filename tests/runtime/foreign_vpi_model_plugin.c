@@ -77,6 +77,32 @@ static int in_scope(PLI_INT32 relation, const char* name)
 
 static void hierarchy(void);
 
+// A string variable announces its changes (IEEE 1800-2023 37.17, 38.36.1).
+static PLI_INT32 string_changed(p_cb_data data)
+{
+    vpi_printf("#c sv changed value=%s\n",
+        data->value != NULL && data->value->format == vpiStringVal
+            ? text(data->value->value.str)
+            : "-");
+    return 0;
+}
+
+static void string_watch(void)
+{
+    static s_vpi_value value = { vpiStringVal, { 0 } };
+    static s_vpi_time time = { vpiSuppressTime, 0, 0, 0.0 };
+    s_cb_data callback;
+    vpiHandle object = vpi_handle_by_name("top.sv", NULL);
+    vpi_printf("#c sv type=%s\n", text(vpi_get_str(vpiType, object)));
+    memset(&callback, 0, sizeof callback);
+    callback.reason = cbValueChange;
+    callback.cb_rtn = string_changed;
+    callback.obj = object;
+    callback.time = &time;
+    callback.value = &value;
+    vpi_printf("#c sv watch=%d\n", vpi_register_cb(&callback) != NULL);
+}
+
 static PLI_INT32 check(p_cb_data data)
 {
     vpiHandle pr = vpi_handle_by_name("top.pr", NULL);
@@ -145,6 +171,7 @@ static PLI_INT32 check(p_cb_data data)
         in_scope(vpiNetArray, "wa"), in_scope(vpiRegArray, "ra"),
         in_scope(vpiRegArray, "wa"));
     hierarchy();
+    string_watch();
     return 0;
 }
 
@@ -269,6 +296,12 @@ static void definitions(void)
     iterator = vpi_iterate(vpiParameter, vpi_handle_by_name("top", NULL));
     while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
         s_vpi_value value = { vpiIntVal, { 0 } };
+        const char* parameter = vpi_get_str(vpiName, object);
+        // RP and SP are checked in late_checks.
+        if (parameter != NULL
+            && (strcmp(parameter, "RP") == 0 || strcmp(parameter, "SP") == 0)) {
+            continue;
+        }
         vpi_get_value(object, &value);
         vpi_printf("#c param %s type=%s local=%d typespec=%s size=%d "
                    "value=%d\n",
@@ -478,12 +511,138 @@ static void late_checks(void)
         vpi_printf("#c td %s index=%s\n", name_of(object),
             key != NULL ? text(vpi_get_str(vpiType, key)) : "-");
     }
+    // Typedefs of a generate scope, a package and $unit (37.85 detail 5,
+    // 3.12.1, 37.10).
+    {
+        static char* owners[] = { "top.g[1]", "pkg_p", "$unit" };
+        // A package's full name ends in `::` (37.10).
+        static char* lookups[] = { "top.g[1]", "pkg_p::", "$unit" };
+        for (size_t index = 0U; index < sizeof owners / sizeof owners[0];
+             ++index) {
+            int found = 0;
+            iterator = vpi_iterate(vpiTypedef,
+                vpi_handle_by_name(lookups[index], NULL));
+            while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+                const char* typedef_name = vpi_get_str(vpiName, object);
+                if (typedef_name == NULL) {
+                    continue;
+                }
+                if (index != 2U || strcmp(typedef_name, "colors") == 0
+                    || strcmp(typedef_name, "rec_t") == 0) {
+                    vpi_printf("#c typedef %s %s type=%s\n", owners[index],
+                        typedef_name, text(vpi_get_str(vpiType, object)));
+                }
+                ++found;
+            }
+            vpi_printf("#c typedefs %s found=%d\n", owners[index],
+                found != 0);
+        }
+    }
+    // The genvars of an instance, and the implicit scope of an unnamed loop
+    // with its genvar as a local parameter (37.85 details 2, 3).
+    iterator = vpi_iterate(vpiGenVar, vpi_handle_by_name("top", NULL));
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        vpi_printf("#c genvar %s type=%s full=%s\n", name_of(object),
+            text(vpi_get_str(vpiType, object)),
+            text(vpi_get_str(vpiFullName, object)));
+    }
+    iterator = vpi_iterate(vpiParameter,
+        vpi_handle_by_name("top.genblk3[1]", NULL));
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        s_vpi_value value = { vpiIntVal, { 0 } };
+        vpi_get_value(object, &value);
+        vpi_printf("#c genblk3[1] param %s local=%d value=%d\n",
+            name_of(object), (int)vpi_get(vpiLocalParam, object),
+            (int)value.value.integer);
+    }
+    // A parameter declared with a typedef of a real or a string (37.28).
+    {
+        s_vpi_value real_value = { vpiRealVal, { 0 } };
+        s_vpi_value string_value = { vpiStringVal, { 0 } };
+        object = vpi_handle_by_name("top.RP", NULL);
+        vpi_get_value(object, &real_value);
+        vpi_printf("#c RP type=%s local=%d typespec=%s name=%s value=%.2f\n",
+            text(vpi_get_str(vpiType, object)),
+            (int)vpi_get(vpiLocalParam, object),
+            text(vpi_get_str(vpiType, vpi_handle(vpiTypespec, object))),
+            text(vpi_get_str(vpiName, vpi_handle(vpiTypespec, object))),
+            real_value.value.real);
+        object = vpi_handle_by_name("top.SP", NULL);
+        vpi_get_value(object, &string_value);
+        vpi_printf("#c SP type=%s local=%d typespec=%s name=%s value=%s\n",
+            text(vpi_get_str(vpiType, object)),
+            (int)vpi_get(vpiLocalParam, object),
+            text(vpi_get_str(vpiType, vpi_handle(vpiTypespec, object))),
+            text(vpi_get_str(vpiName, vpi_handle(vpiTypespec, object))),
+            text(string_value.value.str));
+    }
+    // More than one delay is an operation of vpiOpType vpiListOp (37.47).
+    iterator = vpi_iterate(vpiContAssign, vpi_handle_by_name("top", NULL));
+    while (iterator != NULL && (object = vpi_scan(iterator)) != NULL) {
+        vpiHandle delay = vpi_handle(vpiDelay, object);
+        vpiHandle operands;
+        vpiHandle operand;
+        int operand_count = 0;
+        char values[64] = "";
+        if (delay == NULL) {
+            continue;
+        }
+        operands = vpi_iterate(vpiOperand, delay);
+        while (operands != NULL && (operand = vpi_scan(operands)) != NULL) {
+            s_vpi_value value = { vpiIntVal, { 0 } };
+            vpi_get_value(operand, &value);
+            snprintf(values + strlen(values), sizeof values - strlen(values),
+                "%s%d", operand_count != 0 ? "," : "", (int)value.value.integer);
+            ++operand_count;
+        }
+        vpi_printf("#c delay type=%s optype=%d operands=%d values=%s\n",
+            text(vpi_get_str(vpiType, delay)), (int)vpi_get(vpiOpType, delay),
+            operand_count, values);
+    }
     object = vpi_handle(vpiTypespec, vpi_handle_by_name("top.NP", NULL));
     typespec_chain("NP", object);
     object = vpi_handle_by_name("top.NP", NULL);
     vpi_printf("#c NP type=%s local=%d size=%d\n",
         text(vpi_get_str(vpiType, object)), (int)vpi_get(vpiLocalParam, object),
         (int)vpi_get(vpiSize, object));
+    // An unpacked structure parameter is a constant structure var: members
+    // by iteration and by name read from its value, its typedef's typespec,
+    // and it iterates with the variables, not the parameters.
+    {
+        s_vpi_value member_value = { vpiIntVal, { 0 } };
+        object = vpi_handle_by_name("top.RS", NULL);
+        show("RS", object);
+        members("RS", object, vpiMember);
+        vpi_get_value(vpi_handle_by_name("top.RS.a", NULL), &member_value);
+        vpi_printf("#c RS.a int=%d\n", (int)member_value.value.integer);
+        show_hex("RS.b", vpi_handle_by_name("top.RS.b", NULL));
+        typespec_chain("RS", vpi_handle(vpiTypespec, object));
+        vpi_printf("#c RS scope parameter=%d variables=%d\n",
+            in_scope(vpiParameter, "RS"), in_scope(vpiVariables, "RS"));
+    }
+    // The else branch of a generate if: its scope, its variable and the
+    // named block of its process; the if branch has no scope (27.5).
+    object = vpi_handle_by_name("top.ge_else", NULL);
+    vpi_printf("#c else scope type=%s name=%s\n",
+        text(vpi_get_str(vpiType, object)), text(vpi_get_str(vpiName, object)));
+    object = vpi_handle_by_name("top.ge_else.b1", NULL);
+    vpi_printf("#c else variable type=%s full=%s\n",
+        text(vpi_get_str(vpiType, object)),
+        text(vpi_get_str(vpiFullName, object)));
+    object = vpi_handle_by_name("top.ge_else.eb", NULL);
+    vpi_printf("#c else block type=%s full=%s parent=%s\n",
+        text(vpi_get_str(vpiType, object)),
+        text(vpi_get_str(vpiFullName, object)),
+        object != NULL
+            ? text(vpi_get_str(vpiName, vpi_handle(vpiScope, object)))
+            : "-");
+    vpi_printf("#c else absent if=%d\n",
+        vpi_handle_by_name("top.ge_if", NULL) == NULL);
+    object = vpi_handle_by_name("top.shr.sb", NULL);
+    vpi_printf("#c shared else block type=%s s2=%d s1=%d\n",
+        text(vpi_get_str(vpiType, object)),
+        vpi_handle_by_name("top.shr.s2", NULL) != NULL,
+        vpi_handle_by_name("top.shr.s1", NULL) != NULL);
 }
 
 static PLI_INT32 start(p_cb_data data)

@@ -920,6 +920,8 @@ void VerilogParser::parse_generate_branch(
   next_implicit_generate_scope_ = 1;
   auto outer_dpi_exports = std::move(block_dpi_exports_);
   block_dpi_exports_.clear();
+  const auto shadowed_at_entry = shadowed_callable_tokens_.size();
+  ++generate_block_depth_;
   std::vector<std::string> local_names;
   std::vector<std::string> local_genvars;
   bool parsed_direct_item = false;
@@ -1148,6 +1150,14 @@ void VerilogParser::parse_generate_branch(
   next_implicit_generate_scope_ = parent_generate_ordinal;
   finish_generate_block_dpi_exports(body, std::move(block_dpi_exports_));
   block_dpi_exports_ = std::move(outer_dpi_exports);
+  --generate_block_depth_;
+  // The module's callables of the same names read their own tokens again
+  // (the service of the module's exports is generated at its end).
+  while (shadowed_callable_tokens_.size() > shadowed_at_entry) {
+    callable_type_tokens_[shadowed_callable_tokens_.back().first]
+        = std::move(shadowed_callable_tokens_.back().second);
+    shadowed_callable_tokens_.pop_back();
+  }
 }
 
 void VerilogParser::parse_generate_typedef(

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "fsim/runtime/run_state_image.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 #include "simir_internal.hpp"
 #include "simir_static_kernel.hpp"
@@ -184,6 +185,12 @@ void Interpreter::set_dpi_function_call_hook(DpiFunctionCallHook hook)
     impl_->dpi_function_call_hook = std::move(hook);
 }
 
+void Interpreter::set_dpi_site_hooks(DpiSiteHooks hooks)
+{
+    impl_->dpi_site_hooks = std::move(hooks);
+    impl_->dpi_sites.clear();
+}
+
 SignalId Interpreter::add_signal(Signal signal)
 {
     if (impl_->started || impl_->start_in_progress) {
@@ -364,6 +371,7 @@ SignalId Interpreter::add_signal(Signal signal)
         impl_->vhdl_scalar_widths.emplace(id, signal.vhdl_scalar_width);
     }
     if (!signal.vhdl_conversion_drivers.empty()) {
+        impl_->vhdl_stamp_origins = true;
         for (const auto& driver : signal.vhdl_conversion_drivers) {
             for (const auto source : driver.sources) {
                 auto& dependents = impl_->vhdl_conversion_dependents[source];
@@ -378,6 +386,7 @@ SignalId Interpreter::add_signal(Signal signal)
             id, std::move(signal.vhdl_conversion_drivers));
     }
     if (signal.vhdl_resolver) {
+        impl_->vhdl_stamp_origins = true;
         // Each driver of a resolved VHDL signal starts at the signal's
         // initial value (IEEE 1076-2008 14.7.2).
         for (const auto source : signal.vhdl_resolver->sources) {
@@ -422,6 +431,7 @@ SignalId Interpreter::add_signal(Signal signal)
     impl_->signal_events.emplace_back();
     impl_->signal_event_scheduling_stamps.emplace_back();
     impl_->signal_transactions.emplace_back();
+    impl_->signal_transaction_systemverilog.push_back(0U);
     impl_->signal_container_aliases.emplace_back();
     impl_->signal_container_element_aliases.emplace_back(std::nullopt);
     impl_->sampled_value_dependency_mask.push_back(0U);
@@ -3705,6 +3715,26 @@ bool Interpreter::reset_run_state()
     return can_reset_run_state();
 }
 
+bool Interpreter::record_run_state(RunStateImage& image) const
+{
+    if (impl_->static_kernel) {
+        std::string bytes;
+        impl_->static_kernel->record_value_section(bytes);
+        image.put("kernel.values", 1U, std::move(bytes));
+    }
+    return false;
+}
+
+bool Interpreter::restore_run_state(const RunStateImage& image)
+{
+    if (!impl_->static_kernel) {
+        return false;
+    }
+    const auto* const section = image.find("kernel.values");
+    return section != nullptr && section->version == 1U
+        && impl_->static_kernel->restore_value_section(section->bytes);
+}
+
 void Interpreter::deposit_signal(SignalId signal, PackedLogic4 value,
     const ProcessSchedulingDomain origin_domain)
 {
@@ -3793,6 +3823,81 @@ void Interpreter::release_host_driver(const ProcessId process,
     impl_->release_driver_slice(process, signal, offset, width);
 }
 
+void Interpreter::add_host_driver(const ProcessId process, const SignalId signal)
+{
+    if (process >= impl_->processes.size()) {
+        throw std::out_of_range("invalid SimIR process ID");
+    }
+    (void)impl_->get_signal(signal);
+    auto& impl = *impl_;
+    const auto resolver = impl.vhdl_resolvers.find(signal);
+    const auto created = impl.vhdl_created_drivers.find(signal);
+    const std::size_t created_count
+        = created != impl.vhdl_created_drivers.end()
+        ? created->second.size()
+        : std::size_t { };
+    const bool joins = resolver != impl.vhdl_resolvers.end()
+        && !resolver->second.drivers.empty()
+        && std::ranges::find(resolver->second.drivers, process)
+            == resolver->second.drivers.end()
+        && (created_count == 0U
+            || std::ranges::find(created->second, process)
+                == created->second.end());
+    if (joins) {
+        // A user resolution function takes the created driver as a further
+        // source, with the program elaboration built for that count, or its
+        // run-time-count program (IEEE 1076-2019 23.6, 14.7.3.2).
+        const auto total = resolver->second.drivers.size() + created_count + 1U;
+        if ((total >= resolver->second.variants.size()
+                || resolver->second.variants[total].process
+                    == std::numeric_limits<ProcessId>::max())
+            && resolver->second.dynamic_variant() == nullptr) {
+            throw std::length_error { "too many drivers created for a "
+                                      "signal with a resolution function" };
+        }
+    }
+    (void)impl.driver_slot(process, signal);
+    if (!joins) {
+        return;
+    }
+    impl.vhdl_created_drivers[signal].push_back(process);
+    if (impl.started) {
+        // The new source holds the driver default until its first
+        // transaction (IEEE 1076-2019 14.7.2); the signal resolves again.
+        impl.queue_vhdl_conversion(signal);
+    }
+}
+
+ProcessId Interpreter::add_foreign_driver_owner(const ProcessId model)
+{
+    auto& impl = *impl_;
+    if (model >= impl.processes.size()) {
+        throw std::out_of_range("invalid SimIR process ID");
+    }
+    const auto id = static_cast<ProcessId>(impl.processes.size());
+    if (static_cast<std::size_t>(id) != impl.processes.size()) {
+        throw std::length_error { "too many dynamic SimIR processes" };
+    }
+    if (impl.next_process_generation == 0) {
+        throw std::overflow_error { "SimIR process generation overflow" };
+    }
+    auto& source = impl.processes.promote_state(model);
+    // As a fork child joins the table at run time: the owner shares the
+    // placeholder's program and waits for nothing, so it never runs.
+    Impl::ProcessState owner;
+    owner.generation = impl.next_process_generation++;
+    owner.id = id;
+    owner.cold().inherit_driver_owner_program(source.cold(), id);
+    owner.cold().design_process = source.cold().design_process;
+    owner.cold().random_state = Impl::initial_random_state(impl.root_seed, id);
+    owner.execution_phase = source.execution_phase;
+    owner.static_trigger_mask = 0U;
+    owner.status = ProcessStatus::waiting;
+    impl.processes.push_back(std::move(owner));
+    impl.static_kernel_adopt_fork_child(model, id);
+    return id;
+}
+
 void Interpreter::deposit_scalar_signal(
     const SignalId signal,
     const SystemVerilogScalarValue value)
@@ -3854,6 +3959,43 @@ void Interpreter::release_signal(SignalId signal,
         SignalChangeOrigin { origin_domain, SchedulerPhase::active });
 }
 
+void Interpreter::assign_signal(SignalId signal, PackedLogic4 value,
+    const ProcessSchedulingDomain origin_domain)
+{
+    if (impl_->package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot assign a signal"
+        };
+    }
+    const auto width = impl_->get_signal(signal).initial_value.width();
+    if (width != value.width()) {
+        throw std::invalid_argument("SimIR signal assign width mismatch");
+    }
+    note_external_signal_write(signal);
+    impl_->assign_slice(signal, std::move(value), 0,
+        SignalChangeOrigin { origin_domain, SchedulerPhase::active });
+}
+
+void Interpreter::deassign_signal(SignalId signal,
+    const ProcessSchedulingDomain origin_domain)
+{
+    if (impl_->package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot deassign a signal"
+        };
+    }
+    const auto width = impl_->get_signal(signal).initial_value.width();
+    note_external_signal_write(signal);
+    impl_->deassign_slice(signal, 0, width,
+        SignalChangeOrigin { origin_domain, SchedulerPhase::active });
+    // The assigned value stays as the stored one (IEEE 1364-2005 9.3.1). The
+    // visible value need not change, so no host commit imports it: a
+    // kernel-owned register's slot, which kept the procedural writes the
+    // assign hid, takes it here.
+    impl_->import_static_kernel_write(signal,
+        SignalChangeOrigin { origin_domain, SchedulerPhase::active });
+}
+
 void Interpreter::force_signal_slice(
     const SignalId signal,
     PackedLogic4 value,
@@ -3885,15 +4027,21 @@ void Interpreter::release_signal_slice(
 bool Interpreter::signal_is_forced(const SignalId signal) const
 {
     (void)impl_->get_signal(signal);
-    if (signal < impl_->signal_container_aggregate_aliases.size()
-        && impl_->signal_container_aggregate_aliases[signal]) {
-        const auto object = *impl_->signal_container_aggregate_aliases[signal];
-        const auto& aliases = impl_->container_element_signal_aliases.at(object);
-        return std::ranges::any_of(aliases, [&](const auto& alias) {
-            return alias && static_cast<bool>(impl_->forced_values[alias->signal]);
-        });
-    }
-    return static_cast<bool>(impl_->forced_values[signal]);
+    // A force (IEEE 1364-2005 9.3.2) only; bits held by a procedural
+    // continuous assign alone are not forced (9.3.1).
+    return impl_->signal_override_query(signal, Impl::OverrideKind::forced);
+}
+
+bool Interpreter::signal_is_assigned(const SignalId signal) const
+{
+    (void)impl_->get_signal(signal);
+    return impl_->signal_override_query(signal, Impl::OverrideKind::assigned);
+}
+
+bool Interpreter::signal_has_override(const SignalId signal) const
+{
+    (void)impl_->get_signal(signal);
+    return impl_->signal_override_query(signal, Impl::OverrideKind::any);
 }
 
 void Interpreter::schedule_signal_at(SignalId signal, PackedLogic4 value,
@@ -4595,6 +4743,68 @@ std::string Interpreter::read_debug_string_local(
     }
     return impl_->ensure_process_frame(state).string_registers.at(
         local.register_id);
+}
+
+void Interpreter::write_debug_string_local(const ProcessId process,
+    const std::size_t local_index, const std::string_view value)
+{
+    const auto kernel_owner = impl_->static_kernel
+        ? impl_->static_kernel->debug_owner(process) : std::nullopt;
+    const auto* const kernel_original = kernel_owner
+        ? impl_->static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl_->processes.program_view(kernel_owner.value_or(process));
+    if (local_index >= program.debug_string_locals().size()) {
+        throw std::out_of_range { "invalid SimIR string debug-local index" };
+    }
+    const auto& local = program.debug_string_locals()[local_index];
+    if (kernel_owner) {
+        impl_->static_kernel->debug_write_string_register(
+            *kernel_owner, local.register_id, value);
+        return;
+    }
+    auto& state = impl_->get_process(process);
+    if (state.executor) {
+        state.executor->write_string_register(local.register_id, value);
+        return;
+    }
+    impl_->ensure_process_frame(state).string_registers.at(local.register_id)
+        = std::string { value };
+}
+
+void Interpreter::write_debug_container_local(const ProcessId process,
+    const std::size_t local_index, const ContainerValue& value)
+{
+    const auto kernel_owner = impl_->static_kernel
+        ? impl_->static_kernel->debug_owner(process) : std::nullopt;
+    const auto* const kernel_original = kernel_owner
+        ? impl_->static_kernel->debug_program(*kernel_owner) : nullptr;
+    const auto program = kernel_original != nullptr
+        ? ProcessProgramView { *kernel_original }
+        : impl_->processes.program_view(kernel_owner.value_or(process));
+    if (local_index >= program.debug_container_locals().size()) {
+        throw std::out_of_range {
+            "invalid SimIR container debug-local index"
+        };
+    }
+    const auto& local = program.debug_container_locals()[local_index];
+    if (!(value.type == local.type)) {
+        throw std::invalid_argument { "SimIR container debug-local type" };
+    }
+    if (kernel_owner) {
+        impl_->static_kernel->debug_write_container_register(
+            *kernel_owner, local.register_id, value);
+        return;
+    }
+    auto& state = impl_->get_process(process);
+    if (state.executor) {
+        state.executor->write_container_register(local.register_id, value);
+        return;
+    }
+    (void)impl_->ensure_process_frame(state);
+    impl_->set_container_register_storage(
+        state, local.register_id, std::make_shared<ContainerValue>(value));
 }
 
 ContainerValue Interpreter::read_debug_container_local(

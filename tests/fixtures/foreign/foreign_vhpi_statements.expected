@@ -238,7 +238,10 @@
 #c       lhs=vhpisigdeclk :top:ext:q2
 #c       reject=-
 #c       waveform elem unaffected=0 line=118
-#c         val=vhpiintliteralk 4 intval=4
+#c         val=vhpifunccallk twice operator=0 params=1
+#c           assoc pos=0 named=0 open=0
+#c             actual=vhpiintliteralk 2 intval=2
+#c             formal=set
 #c         time=-
 #c       eq process=vhpiprocessstmtk postponed=0 passive=0 foreign=0 lines=118/118
 #c     vhpiconcproccallstmtk name=pc case=pc full=:top:ext:pc label=pc line=120 file=foreign_vhpi_statements.vhd seq=0
@@ -251,6 +254,7 @@
 #c           formal=set
 #c       eq process=vhpiprocessstmtk postponed=0 passive=0 foreign=0 lines=120/120
 #c   vhpiblockstmtk name=sub case=sub full=:top:sub label=sub line=125 file=foreign_vhpi_statements.vhd seq=0
+#c   vhpiblockstmtk name=gb case=gb full=:top:gb label=gb line=178 file=foreign_vhpi_statements.vhd seq=0
 #c by name clock=vhpiprocessstmtk
 #c by name blk._p0=vhpisimplesigassignstmtk
 #c protected var kind=vhpivardeclk shared=1 protected=1
@@ -316,6 +320,11 @@
 #c   param vhpiconstparamdeclk d mode=in type=integer
 #c   body vhpisubpbodyk lines=146/149 foreign=0
 #c   vhpiseqsigassignstmtk line=148
+#c package pk subprogram tripled body=1 vhpisubpbodyk lines=2/2
+#c block gb guard=vhpifunccallk
+#c block gb guardsig=vhpisigdeclk :top:gb:guard guarded=1
+#c block sub guard=none
+#c block sub guardsig=none - guarded=0
 #c component cmp
 #c   generic vhpigenericdeclk g
 #c   port vhpiportdeclk pin mode=in

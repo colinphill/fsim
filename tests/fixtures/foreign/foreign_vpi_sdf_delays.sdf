@@ -4,9 +4,13 @@
   (DESIGN "top")
   (DIVIDER .)
   (TIMESCALE 1 ns)
+  (CELL (CELLTYPE "drv") (INSTANCE top.u3)
+    (DELAY (ABSOLUTE
+      (PORT a (9)))))
   (CELL (CELLTYPE "top") (INSTANCE top)
     (DELAY (ABSOLUTE
-      (INTERCONNECT u0.z u1.a (2) (3)))))
+      (INTERCONNECT u0.z u1.a (2) (3))
+      (INTERCONNECT u2.z u3.a (2) (3)))))
   (CELL (CELLTYPE "drv") (INSTANCE top.u1)
     (DELAY (ABSOLUTE
       (PORT a (4))))))

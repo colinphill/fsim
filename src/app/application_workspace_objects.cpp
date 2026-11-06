@@ -393,6 +393,23 @@ compiled_object_unit_entries(const semantic::CompiledDesign& design,
     return result;
 }
 
+std::optional<std::string> outdated_object_reason(
+    const std::filesystem::path& object)
+{
+    if (auto reason = artifact::object_outdated(object)) {
+        return reason;
+    }
+    diagnostic::Engine quiet;
+    const auto metadata = artifact::load_object_metadata(object, quiet);
+    if (!metadata) {
+        return std::nullopt;
+    }
+    const auto bytes = artifact::read_object_payload(object,
+        metadata->compiled_hir_artifact, metadata->compiled_hir_checksum,
+        kCompiledHirDecodeBudgetBytes, quiet);
+    return bytes ? compiled_hir_bundle_outdated(*bytes) : std::nullopt;
+}
+
 std::optional<CompilationWorkspace> load_workspace_objects(
     const std::span<const WorkspaceObjectSelection> objects,
     diagnostic::Engine& diagnostics,

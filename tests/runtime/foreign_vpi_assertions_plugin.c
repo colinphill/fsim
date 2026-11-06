@@ -214,6 +214,15 @@ static void properties(vpiHandle assertion, const char* name)
         (int)vpi_get(vpiIsCoverSequence, assertion));
 }
 
+// The location of an assertion statement (IEEE 1800-2023 37.49).
+static void location(vpiHandle assertion, const char* name)
+{
+    vpi_printf("#c where %s start=%d:%d end=%d:%d\n", name,
+        (int)vpi_get(vpiStartLine, assertion), (int)vpi_get(vpiColumn, assertion),
+        (int)vpi_get(vpiEndLine, assertion),
+        (int)vpi_get(vpiEndColumn, assertion));
+}
+
 static void sequence_assertions(vpiHandle top)
 {
     static const PLI_INT32 reasons[] = { cbAssertionStart, cbAssertionSuccess,
@@ -224,6 +233,7 @@ static void sequence_assertions(vpiHandle top)
     properties(c_hit, "c_hit");
     properties(a_seq, "a_seq");
     properties(vpi_handle_by_name("cs_hit", top), "cs_hit");
+    location(c_hit, "c_hit");
     for (index = 0; index < sizeof reasons / sizeof reasons[0]; ++index) {
         seq_callbacks[index] = vpi_register_assertion_cb(
             a_seq, reasons[index], attempt_observed, NULL);

@@ -1556,6 +1556,28 @@ struct RealMathFunction {
     return value;
 }
 
+// The real kind of real, shortreal, realtime or a typedef of one: such a
+// type converts its value as a real does, not as an integral of the type's
+// width (IEEE 1800-2023 6.12, 6.18).
+[[nodiscard]] ScalarKind typedef_real_kind(
+    const semantic::sv::TypeReference& type,
+    const semantic::SpecializedHirUnit* const specialization)
+{
+    if (!type.unpacked_dimensions.empty() || type.container_form) {
+        return ScalarKind::None;
+    }
+    auto kind = frontend::systemverilog_scalar_kind(type.target.spelling);
+    if (kind == ScalarKind::None && specialization != nullptr
+        && type.target.target.valid()) {
+        kind = hir_systemverilog_declared_scalar_kind(
+            *specialization, type, specialization->scope());
+    }
+    return kind == ScalarKind::Real || kind == ScalarKind::ShortReal
+            || kind == ScalarKind::Realtime
+        ? kind
+        : ScalarKind::None;
+}
+
 [[nodiscard]] Value chandle_value(const std::uint64_t bits)
 {
     auto result = make_known(bits, 64U, false, false,
@@ -1748,6 +1770,10 @@ private:
             width = resolved_type_width(type, &specialization_, visiting);
             SharedCacheLock lock { constants.mutex };
             constants.record_type_widths.emplace(&type, *width);
+        }
+        if (const auto kind = typedef_real_kind(type, &specialization_);
+            kind != ScalarKind::None) {
+            return convert_value_kind(std::move(value), kind, error_);
         }
         return convert_constant_to_width(std::move(value), type, error_,
             *width);
@@ -2357,6 +2383,15 @@ private:
         return width;
     }
 
+    // The scalar kind of a declared type, following a typedef (6.18).
+    [[nodiscard]] ScalarKind declared_kind(
+        const semantic::sv::TypeReference& type,
+        const semantic::ScopeId scope) const
+    {
+        return hir_systemverilog_declared_scalar_kind(
+            specialization_, type, scope);
+    }
+
     [[nodiscard]] std::optional<Value> value_for_declaration(
         const semantic::DeclarationId declaration)
     {
@@ -2390,7 +2425,15 @@ private:
                     std::distance(class_frame, frames_.rend()) - 1);
                 // An aggregate or packed property takes its declared
                 // layout, as a declaration does (IEEE 1800-2023 10.9).
-                auto value = scalar_kind(property->type) == ScalarKind::None
+                const auto property_view
+                    = specialization_.find_declaration(declaration);
+                auto value = declared_kind(property->type,
+                                 property_view
+                                         && property_view->systemverilog
+                                             != nullptr
+                                     ? property_view->systemverilog->scope
+                                     : semantic::ScopeId { })
+                        == ScalarKind::None
                     ? evaluate_typed(*property->initializer, property->type)
                     : evaluate(*property->initializer);
                 if (value && frames_.size() == depth) {
@@ -2460,7 +2503,8 @@ private:
                     declaration);
                 const auto formal_kind = view && view->systemverilog != nullptr
                         && view->systemverilog->type
-                    ? scalar_kind(*view->systemverilog->type)
+                    ? declared_kind(*view->systemverilog->type,
+                          view->systemverilog->scope)
                     : ScalarKind::None;
                 if (real_family(formal_kind)) {
                     auto converted = convert_value_kind(
@@ -2509,7 +2553,8 @@ private:
         // A real-family or chandle declaration converts its initializer
         // to its own type (IEEE 1800-2017 6.12.2).
         const auto declared_kind = view->systemverilog->type
-            ? scalar_kind(*view->systemverilog->type)
+            ? hir_systemverilog_declared_scalar_kind(specialization_,
+                  *view->systemverilog->type, view->systemverilog->scope)
             : ScalarKind::None;
         auto result = view->systemverilog->type
                 && !real_family(declared_kind)
@@ -4606,6 +4651,16 @@ private:
                          record.type_operand.front(), record.scope);
                 } else {
                     type = named_cast_type(record, cast_name);
+                    // A cast to a typedef of a real type converts to real
+                    // (IEEE 1800-2023 6.24.1, 6.18).
+                    if (type) {
+                        if (const auto kind = declared_kind(
+                                *type, record.scope);
+                            real_family(kind) || kind == ScalarKind::Chandle) {
+                            return convert_value_kind(
+                                std::move(*result), kind, error_);
+                        }
+                    }
                 }
                 // `W'(v)` with W a constant parameter is a size cast
                 // (IEEE 1800-2023 6.24.1).
@@ -5171,18 +5226,17 @@ private:
             return std::nullopt;
         }
         // A real result or argument is outside integral evaluation.
-        const auto real_spelling = [](const std::string_view spelling) {
-            return spelling == "real" || spelling == "realtime"
-                || spelling == "shortreal";
-        };
-        if (real_spelling(callable.callable->return_type.target.spelling)
+        // A typedef of a real type is real (IEEE 1800-2023 6.18).
+        if (real_family(declared_kind(
+                callable.callable->return_type, callable.scope))
             || std::ranges::any_of(callable.callable->formals,
                 [&](const semantic::DeclarationId formal) {
                     const auto view = specialization_.find_declaration(formal);
                     return view && view->systemverilog != nullptr
                         && view->systemverilog->type
-                        && real_spelling(
-                            view->systemverilog->type->target.spelling);
+                        && real_family(declared_kind(
+                            *view->systemverilog->type,
+                            view->systemverilog->scope));
                 })) {
             error_ = "a real constant function is outside integral "
                      "constant evaluation";
@@ -9379,7 +9433,8 @@ private:
             const auto& candidate = *declared->systemverilog;
             if (candidate.type
                 && candidate.type->target.spelling != "implicit") {
-                return real_family(scalar_kind(*candidate.type));
+                return real_family(
+                    declared_kind(*candidate.type, candidate.scope));
             }
             if (actual != actuals.end()) {
                 const auto scalar = parse_scalar_identity(actual->identity);
@@ -9997,7 +10052,10 @@ private:
             if (value && value->systemverilog != nullptr) {
                 const auto& candidate = *value->systemverilog;
                 if ((candidate.type
-                        && scalar_kind(*candidate.type) != ScalarKind::None)
+                        && hir_systemverilog_declared_scalar_kind(
+                               specialization, *candidate.type,
+                               candidate.scope)
+                            != ScalarKind::None)
                     || (candidate.initializer
                         && scalar_expression_applicable(specialization,
                             *candidate.initializer, expressions,
@@ -10402,6 +10460,26 @@ evaluate_hir_systemverilog_declaration_value(
         .evaluate_declaration(declaration);
 }
 
+frontend::SystemVerilogScalarKind hir_systemverilog_declared_scalar_kind(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& type, const semantic::ScopeId scope)
+{
+    const auto direct = scalar_kind(type);
+    if (direct != ScalarKind::None || type.container_form
+        || !type.packed_dimensions.empty() || type.packed_range
+        || type.target.spelling.empty() || type.target.spelling == "implicit") {
+        return direct;
+    }
+    // A typedef names its scalar through its base (IEEE 1800-2023 6.18).
+    const auto underlying = semantic::CompiledDesignResolver { specialization }
+        .underlying_systemverilog_type(type, scope);
+    if (!underlying || underlying->container_form
+        || !underlying->packed_dimensions.empty() || underlying->packed_range) {
+        return ScalarKind::None;
+    }
+    return scalar_kind(*underlying);
+}
+
 std::optional<HirSystemVerilogConstant>
 convert_hir_systemverilog_value_kind(HirSystemVerilogConstant value,
     const frontend::SystemVerilogScalarKind kind, std::string& error)
@@ -10423,7 +10501,8 @@ evaluate_hir_systemverilog_scalar_declaration(
     const auto view = specialization.find_declaration(declaration);
     const auto kind = view && view->systemverilog != nullptr
             && view->systemverilog->type
-        ? scalar_kind(*view->systemverilog->type)
+        ? hir_systemverilog_declared_scalar_kind(specialization,
+              *view->systemverilog->type, view->systemverilog->scope)
         : ScalarKind::None;
     return scalar_of(*value, kind, error);
 }
@@ -10435,6 +10514,10 @@ convert_hir_systemverilog_constant(
     std::string& error,
     const semantic::SpecializedHirUnit* const specialization)
 {
+    if (const auto kind = typedef_real_kind(type, specialization);
+        kind != ScalarKind::None) {
+        return convert_value_kind(std::move(value), kind, error);
+    }
     std::unordered_set<std::uint32_t> visiting;
     return convert_constant_to_width(std::move(value), type, error,
         resolved_type_width(type, specialization, visiting));

@@ -348,6 +348,54 @@ std::vector<WorkspaceObjectSelection> workspace_object_selections(
     return result;
 }
 
+std::vector<OutdatedObject> find_outdated_objects(
+    const workspace::Store& store, const WorkspaceCatalogs& catalogs)
+{
+    std::vector<OutdatedObject> result;
+    for (const auto& catalog : catalogs) {
+        for (const auto& artifact : catalog.artifacts) {
+            if (artifact.kind != workspace::ArtifactKind::Hdl || artifact.units.empty()) {
+                continue;
+            }
+            std::string error;
+            auto path = store.artifact_path(catalog.location, artifact, error);
+            if (!path) {
+                continue;
+            }
+            auto reason = outdated_object_reason(*path);
+            if (!reason) {
+                continue;
+            }
+            OutdatedObject object { catalog.location.name, artifact.id, std::move(*path),
+                std::move(*reason), artifact.sources, { } };
+            for (const auto& owned : artifact.units) {
+                object.units.push_back(owned.unit.name);
+            }
+            result.push_back(std::move(object));
+        }
+    }
+    return result;
+}
+
+void report_outdated_object(diagnostic::Engine& diagnostics, const OutdatedObject& object,
+    const bool skipped)
+{
+    std::string sources;
+    for (const auto& source : object.sources) {
+        sources += (sources.empty() ? "" : ", ") + source;
+    }
+    auto message = "object '" + support::path_to_utf8(object.path.filename())
+        + "' of library '" + object.library + "' was written by an older fsim ("
+        + object.reason + ")";
+    if (skipped) {
+        message += " and was left out of this compile; if the error above concerns one of "
+            "its units, recompile " + sources;
+        diagnostics.note("FSIM-WS-003", std::move(message));
+        return;
+    }
+    diagnostics.error("FSIM-WS-003", message + "; recompile " + sources);
+}
+
 bool validate_workspace_dependencies(const WorkspaceCatalogs& catalogs,
     diagnostic::Engine& diagnostics)
 {

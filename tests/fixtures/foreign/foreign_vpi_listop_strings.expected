@@ -1,0 +1,13 @@
+#c top.ua expr type=vpiOperation optype=37 operands=2 parent=ua
+#c top.ua operand 0 type=vpiReg name=la optype=-1
+#c top.ua operand 1 type=vpiReg name=ly optype=-1
+#c top.ub expr type=vpiOperation optype=37 operands=2 parent=ub
+#c top.ub operand 0 type=vpiOperation name=- optype=33
+#c top.ub operand 1 type=vpiReg name=ly optype=-1
+#c g NP type=vpiParameter typespec=vpiLogicTypespec name=nib_t value=3
+#c g GP type=vpiParameter typespec=vpiIntTypespec name=gint_t value=5
+#c g BP type=vpiParameter typespec=vpiIntTypespec name=- value=7
+#c watch sa[1] 1
+#c watch label 1
+#c change sa[1] value=c
+#c change label value=y

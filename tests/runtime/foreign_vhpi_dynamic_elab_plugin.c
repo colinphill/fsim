@@ -4,16 +4,69 @@
 // function and at the end of its calls, walks vhpiCurStackFrame of the call
 // objects, vhpiUpStack and vhpiFrameLevelP, and reads the formal and the
 // variable the call elaborated (vhpiParamDecls and vhpiVarDecls of a
-// subpCall). Lines starting with "#c " form the checked trace.
+// subpCall). At a statement of a procedure with signal parameters it lists
+// the basic signals and local contributors of the formals the call
+// elaborated (19.12.2.2 c). Lines starting with "#c " form the checked
+// trace.
 #include "fsim/runtime/vhpi_abi.h"
 #include "vhpi_user.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
 static vhpiHandleT outer_call;
 static vhpiHandleT inner_call;
 static vhpiHandleT leaf_call;
+static vhpiHandleT drive_call;
+
+// The number of objects of an iteration.
+static int count(vhpiOneToManyT relation, vhpiHandleT object)
+{
+    vhpiHandleT iterator = vhpi_iterator(relation, object);
+    int total = 0;
+    while (iterator != NULL && vhpi_scan(iterator) != NULL) {
+        ++total;
+    }
+    return total;
+}
+
+// Whether a driver belongs to the process "main" (letter case of names is
+// not specified).
+static int main_driver(vhpiHandleT driver)
+{
+    vhpiHandleT process = vhpi_handle(vhpiEqProcessStmt, driver);
+    const char* name
+        = process != NULL ? (const char*)vhpi_get_str(vhpiNameP, process) : NULL;
+    return name != NULL && tolower((unsigned char)name[0]) == 'm'
+        && tolower((unsigned char)name[1]) == 'a'
+        && tolower((unsigned char)name[2]) == 'i'
+        && tolower((unsigned char)name[3]) == 'n' && name[4] == 0;
+}
+
+// The basic signals and local contributors of the signal parameters a
+// running call elaborated: a formal of mode in has those of its actual, one
+// of mode out the driver the calling process holds for it.
+static void formals(vhpiHandleT call)
+{
+    vhpiHandleT iterator = vhpi_iterator(vhpiParamDecls, call);
+    vhpiHandleT formal;
+    while (iterator != NULL && (formal = vhpi_scan(iterator)) != NULL) {
+        vhpiHandleT contributors
+            = vhpi_iterator(vhpiLocalContributors, formal);
+        vhpiHandleT contributor;
+        printf("#c   %s basics=%d contributors:",
+            (const char*)vhpi_get_str(vhpiNameP, formal),
+            count(vhpiBasicSignals, formal));
+        while (contributors != NULL
+            && (contributor = vhpi_scan(contributors)) != NULL) {
+            printf(" %s(main=%d)",
+                (const char*)vhpi_get_str(vhpiKindStrP, contributor),
+                main_driver(contributor));
+        }
+        printf("\n");
+    }
+}
 
 // The formals and variables a running call elaborated, with their values.
 static void variables(vhpiHandleT call)
@@ -74,6 +127,8 @@ static void report(const vhpiCbDataT* data)
         describe("inner", inner_call, 1);
     } else if (strcmp(label, "leaf.return") == 0) {
         describe("leaf", leaf_call, 0);
+    } else if (strcmp(label, "drive") == 0) {
+        formals(drive_call);
     } else if (strcmp(label, "inner") == 0) {
         describe("inner", inner_call, 1);
     } else {
@@ -95,18 +150,25 @@ static void place(int32_t reason, vhpiHandleT object, const char* label)
     }
 }
 
-// The first statement of a process, body or branch of the given kind.
-static vhpiHandleT first_of(vhpiHandleT owner, int32_t kind)
+// The statement of the given kind, counting from zero, in a process, body
+// or branch.
+static vhpiHandleT nth_of(vhpiHandleT owner, int32_t kind, int skip)
 {
     vhpiHandleT iterator = vhpi_iterator(vhpiSeqStmts, owner);
     vhpiHandleT statement;
     while (iterator != NULL && (statement = vhpi_scan(iterator)) != NULL) {
-        if (vhpi_get(vhpiKindP, statement) == kind) {
+        if (vhpi_get(vhpiKindP, statement) == kind && skip-- == 0) {
             vhpi_release_handle(iterator);
             return statement;
         }
     }
     return NULL;
+}
+
+// The first statement of a process, body or branch of the given kind.
+static vhpiHandleT first_of(vhpiHandleT owner, int32_t kind)
+{
+    return nth_of(owner, kind, 0);
 }
 
 static void start(const vhpiCbDataT* data)
@@ -117,6 +179,8 @@ static void start(const vhpiCbDataT* data)
         vhpiSubpBody, vhpi_handle_by_name("top.main.down", NULL));
     vhpiHandleT leaf_body = vhpi_handle(
         vhpiSubpBody, vhpi_handle_by_name("top.main.leaf", NULL));
+    vhpiHandleT drive_body = vhpi_handle(
+        vhpiSubpBody, vhpi_handle_by_name("top.main.drive", NULL));
     vhpiHandleT branches
         = vhpi_iterator(vhpiBranchs, first_of(down_body, vhpiIfStmtK));
     vhpiHandleT then_branch = vhpi_scan(branches);
@@ -131,7 +195,9 @@ static void start(const vhpiCbDataT* data)
     outer_call = first_of(main_process, vhpiSeqProcCallStmtK);
     inner_call = first_of(then_branch, vhpiSeqProcCallStmtK);
     leaf_call = vhpi_handle(vhpiRhsExpr, first_of(else_branch, vhpiVarAssignStmtK));
+    drive_call = nth_of(main_process, vhpiSeqProcCallStmtK, 1);
     place(vhpiCbStmt, first_of(down_body, vhpiVarAssignStmtK), "probe");
+    place(vhpiCbStmt, first_of(drive_body, vhpiSeqSigAssignStmtK), "drive");
     place(vhpiCbStmt, first_of(leaf_body, vhpiReturnStmtK), "leaf.return");
     place(vhpiCbEndOfSubpCall, inner_call, "inner");
     place(vhpiCbEndOfSubpCall, outer_call, "outer");

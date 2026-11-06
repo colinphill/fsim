@@ -23,10 +23,12 @@
 #include "simir_container_helpers.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
 #include "fsim/support/parallel_for.hpp"
+#include "fsim/frontend/design_core.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <chrono>
 #include <cstring>
 #include <unordered_set>
@@ -34,6 +36,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <stdexcept>
@@ -165,6 +168,158 @@ void copy_bits(std::uint64_t* target, const std::uint32_t offset,
     return value.width() == 0U ? Logic4::x : value.get(0U);
 }
 
+/// The C width of a scalar DPI signature letter (IEEE 1800-2023 H.7.4), 0
+/// for a string (a pointer) and for a letter that is not a planned scalar.
+[[nodiscard]] std::optional<std::uint32_t> dpi_scalar_bits(const char code)
+{
+    switch (code) {
+    case 'c':
+    case 'C':
+        return 8U;
+    case 's':
+    case 'S':
+        return 16U;
+    case 'i':
+    case 'I':
+    case 'f':
+        return 32U;
+    case 'l':
+    case 'L':
+    case 'd':
+    case 'p':
+        return 64U;
+    case 'b':
+    case 'g':
+        return 1U;
+    case 'z':
+        return 0U;
+    default:
+        return std::nullopt;
+    }
+}
+
+/// The imported DPI call `operation` (identity `<c name>#<formals>:<result>
+/// [@c][|<instance>|<file>|<line>]` after the DPI prefix, with `!x` and `!f`
+/// marking the start and finish of a context import that serves exports) as a
+/// call site: its identity, directions and kinds, and, when every formal and
+/// the result are of the IEEE 1800-2023 H.7.4 scalar, string and packed
+/// vector types, a marshalling plan per formal. Anything else leaves the
+/// site generic.
+[[nodiscard]] DpiSitePlan plan_dpi_site(const ClassStaticMethodCall& operation)
+{
+    DpiSitePlan plan;
+    const std::string_view identity = std::string_view { operation.method_identity }
+        .substr(systemverilog_dpi_function_prefix.size());
+    plan.identity = std::string { identity };
+    plan.directions = operation.actual_directions;
+    plan.kinds = operation.actual_kinds;
+    plan.result_width = operation.result_width;
+    if (identity.starts_with('$') || identity.starts_with("!x")
+        || identity.starts_with("!f")
+        || identity.starts_with("__fsim_dpi_export_")) {
+        return plan;
+    }
+    const auto hash = identity.find('#');
+    const auto colon = hash == std::string_view::npos
+        ? std::string_view::npos
+        : identity.find(':', hash);
+    if (colon == std::string_view::npos || colon + 1U >= identity.size()) {
+        return plan;
+    }
+    const auto bar = identity.find('|', colon);
+    const auto end = bar == std::string_view::npos ? identity.size() : bar;
+    const auto tail = identity.substr(colon + 1U, end - colon - 1U);
+    if (tail.empty()) {
+        return plan;
+    }
+    plan.c_name = std::string { identity.substr(0U, hash) };
+    plan.signature = std::string { identity.substr(hash + 1U, end - hash - 1U) };
+    plan.result = static_cast<std::uint8_t>(tail.front());
+    plan.context = tail.substr(1U).starts_with("@c");
+    const bool string_result = tail.front() == 'z';
+    const bool result_scalar = tail.front() == 'v' || tail.front() == 'T'
+        || dpi_scalar_bits(tail.front()).has_value();
+    if (!result_scalar) {
+        return plan;
+    }
+    auto formals = identity.substr(hash + 1U, colon - hash - 1U);
+    std::vector<DpiArgumentPlan> arguments;
+    std::uint32_t offset { };
+    while (!formals.empty()) {
+        const auto comma = formals.find(',');
+        auto text = formals.substr(0U, comma);
+        formals = comma == std::string_view::npos
+            ? std::string_view { }
+            : formals.substr(comma + 1U);
+        DpiArgumentPlan argument;
+        if (text.starts_with('&')) {
+            argument.reference = true;
+            text.remove_prefix(1U);
+        }
+        if (text.empty()) {
+            return plan;
+        }
+        argument.code = static_cast<std::uint8_t>(text.front());
+        if (const auto bits = dpi_scalar_bits(text.front())) {
+            argument.width = *bits;
+            argument.words = 1U;
+        } else if (text.front() == 'B' || text.front() == 'V') {
+            std::uint32_t width { };
+            const auto digits = text.substr(1U);
+            const auto parsed = std::from_chars(
+                digits.data(), digits.data() + digits.size(), width);
+            if (parsed.ec != std::errc { }
+                || parsed.ptr != digits.data() + digits.size() || width == 0U) {
+                return plan;
+            }
+            argument.width = width;
+            // Eight-byte words: svBitVecVal takes four bytes per 32 bits,
+            // svLogicVecVal eight.
+            argument.words = text.front() == 'B' ? (width + 63U) / 64U
+                                                 : (width + 31U) / 32U;
+        } else {
+            return plan;
+        }
+        argument.offset = offset;
+        offset += argument.words;
+        arguments.push_back(argument);
+    }
+    // The formals and a string result's extra actual; every one a plain
+    // register, or a string register for `z`.
+    const auto expected = arguments.size() + (string_result ? 1U : 0U);
+    if (operation.actuals.size() != expected || arguments.size() > dpi_planned_argument_limit
+        || offset > dpi_planned_buffer_words
+        || (!operation.actual_kinds.empty()
+            && operation.actual_kinds.size() != operation.actuals.size())) {
+        return plan;
+    }
+    for (std::size_t index = 0U; index < arguments.size(); ++index) {
+        const auto kind = operation.actual_kinds.empty()
+            ? std::uint8_t { 0U } : operation.actual_kinds[index];
+        if (kind != (arguments[index].code == 'z' ? 1U : 0U)) {
+            return plan;
+        }
+        arguments[index].reg = operation.actuals[index];
+        const auto code = static_cast<char>(arguments[index].code);
+        arguments[index].copy_out = arguments[index].reference
+            || ((code == 'B' || code == 'V')
+                && index < operation.actual_directions.size()
+                && operation.actual_directions[index]
+                    != static_cast<std::uint8_t>(
+                        frontend::PortDirection::Input));
+    }
+    if (string_result) {
+        if (operation.actual_kinds.empty() || operation.actual_kinds.back() != 1U) {
+            return plan;
+        }
+        plan.result_text = operation.actuals.back();
+    }
+    plan.buffer_words = offset;
+    plan.arguments = std::move(arguments);
+    plan.generic = false;
+    return plan;
+}
+
 } // namespace
 
 std::string static_kernel_detail::static_kernel_constructor_identity()
@@ -233,6 +388,8 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             }
         }
     }
+    // The DPI call sites bind to the loaded C symbols once, here.
+    bind_dpi_sites();
     // FSIM_STATIC_KERNEL_DISPATCH_GROUPS=0 schedules every sequential member
     // on its own. Fused groups (FSIM_CYCLE_DRIVER) are native units.
     if (const char* groups = std::getenv("FSIM_STATIC_KERNEL_DISPATCH_GROUPS");
@@ -1591,6 +1748,62 @@ void Interpreter::Impl::StaticKernel::build_fresh(StaticKernelRuntimeSpec& spec,
         }
         stage("partitions");
     }
+    plan_dpi_sites();
+}
+
+void Interpreter::Impl::StaticKernel::plan_dpi_sites()
+{
+    // Operation positions are final here: the image restores them, and a
+    // call's position is its site's index in the member's table.
+    for (auto& member : members_) {
+        const auto& operations = member.operations();
+        for (std::size_t pc = 0U; pc < operations.size(); ++pc) {
+            const auto* call = operation_get_if<ClassStaticMethodCall>(&operations[pc]);
+            if (call == nullptr
+                || !std::string_view { call->method_identity }
+                        .starts_with(systemverilog_dpi_function_prefix)) {
+                continue;
+            }
+            if (member.dpi_site_at.empty()) {
+                member.dpi_site_at.assign(operations.size(), no_slot);
+            }
+            member.dpi_site_at[pc] = static_cast<std::uint32_t>(dpi_sites_.size());
+            dpi_sites_.push_back(plan_dpi_site(*call));
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::bind_dpi_sites()
+{
+    dpi_bound_.assign(dpi_sites_.size(), DpiBinding { });
+    if (!impl_.dpi_site_hooks.bind_plan) {
+        return;
+    }
+    for (std::uint32_t site = 0U; site < dpi_sites_.size(); ++site) {
+        (void)dpi_binding(site);
+    }
+}
+
+Interpreter::Impl::StaticKernel::DpiBinding&
+Interpreter::Impl::StaticKernel::dpi_binding(const std::uint32_t site)
+{
+    if (dpi_bound_.size() != dpi_sites_.size()) {
+        dpi_bound_.resize(dpi_sites_.size());
+    }
+    auto& binding = dpi_bound_[site];
+    if (!binding.resolved && impl_.dpi_site_hooks.bind_plan) {
+        binding.resolved = true;
+        try {
+            binding.site = impl_.dpi_site_hooks.bind_plan(dpi_sites_[site]);
+            binding.planned = binding.site != nullptr
+                && impl_.dpi_site_hooks.planned
+                && impl_.dpi_site_hooks.planned(binding.site);
+        } catch (const std::exception&) {
+            // No implementation: the generic call reports it when it runs.
+            binding.site = nullptr;
+        }
+    }
+    return binding;
 }
 
 void Interpreter::Impl::StaticKernel::build_container_info()
@@ -2549,6 +2762,39 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
     }
 }
 
+std::uint64_t Interpreter::Impl::StaticKernel::restore_override(
+    const std::uint32_t slot_index, const std::uint64_t changed_mask,
+    const std::uint32_t field_offset)
+{
+    const auto& slot = slots_[slot_index];
+    if (slot.signal >= impl_.forced_values.size()
+        || !impl_.forced_values[slot.signal]) {
+        // The override ended without a notice reaching the kernel.
+        slot_override_[slot_index] = 0U;
+        --overrides_active_;
+        return changed_mask;
+    }
+    const auto held = Impl::coerce_value_kind(
+        impl_.apply_force(slot.signal, slot_value(slot_index)),
+        slot.planes == 4U ? ValueKind::logic9 : ValueKind::logic4);
+    for (std::uint32_t plane = 0U; plane < slot.planes; ++plane) {
+        const auto words = value_plane(held, plane);
+        for (std::uint32_t word = 0U; word < slot.words; ++word) {
+            arena_[slot.offset + plane * slot.words + word]
+                = word < words.size() ? words[word] : 0U;
+        }
+    }
+    const auto& mask = *impl_.forced_masks[slot.signal];
+    std::uint64_t forced_bits { };
+    for (std::uint32_t bit = 0U;
+         bit < 64U && field_offset + bit < slot.width; ++bit) {
+        if (mask.get(field_offset + bit) == Logic4::one) {
+            forced_bits |= std::uint64_t { 1U } << bit;
+        }
+    }
+    return changed_mask & ~forced_bits;
+}
+
 bool Interpreter::Impl::StaticKernel::waiter_range_changed(
     const Waiter& waiter, const WaitChange& change) const
 {
@@ -2578,10 +2824,20 @@ bool Interpreter::Impl::StaticKernel::waiter_range_changed(
 }
 
 void Interpreter::Impl::StaticKernel::slot_changed_general(
-    const std::uint32_t slot_index, const std::uint64_t changed_mask,
+    const std::uint32_t slot_index, std::uint64_t changed_mask,
     const std::uint64_t* before, const std::uint32_t field_offset)
 {
     auto& slot = slots_[slot_index];
+    if (overrides_active_ != 0U && slot_override_[slot_index] != 0U) {
+        // The host forces or assigns some bits of the signal: the write did
+        // not change them (IEEE 1800-2023 10.6.1, 10.6.2).
+        const auto visible
+            = restore_override(slot_index, changed_mask, field_offset);
+        if (changed_mask != 0U && visible == 0U) {
+            return;
+        }
+        changed_mask = visible;
+    }
     bool scan = before != nullptr || slot.chunk_begin.empty();
     if (!scan) {
         // The readers of the changed bits' chunks, in the group order of the
@@ -7826,6 +8082,83 @@ void Interpreter::Impl::StaticKernel::open_boundary()
     }
 }
 
+void Interpreter::Impl::StaticKernel::override_changed(
+    const SignalId signal, const SignalChangeOrigin origin)
+{
+    if (signal >= slot_of_signal_.size()
+        || family_of_signal_[signal] != no_slot
+        || slot_of_signal_[signal] == no_slot) {
+        return;
+    }
+    const auto slot_index = slot_of_signal_[signal];
+    const bool overridden = signal < impl_.forced_values.size()
+        && impl_.forced_values[signal] != nullptr;
+    if (slot_override_.size() < slots_.size()) {
+        slot_override_.resize(slots_.size(), 0U);
+    }
+    if ((slot_override_[slot_index] != 0U) != overridden) {
+        slot_override_[slot_index] = overridden ? 1U : 0U;
+        if (overridden) {
+            ++overrides_active_;
+        } else {
+            --overrides_active_;
+        }
+    }
+    // The slot takes the host's effective value, the overridden bits over
+    // the stored ones, before the signal is watched (the host's copy is
+    // current when the watch materializes it).
+    import_host_write(signal, origin);
+    if (overridden && !slots_[slot_index].output) {
+        const SignalId watched[] { signal };
+        watch(watched);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::rerun_writers(const SignalId signal)
+{
+    if (signal >= slot_of_signal_.size()
+        || family_of_signal_[signal] != no_slot
+        || slot_of_signal_[signal] == no_slot) {
+        return;
+    }
+    const auto slot_index = slot_of_signal_[signal];
+    if (slots_[slot_index].writers.empty()) {
+        return;
+    }
+    if (member_of_process_.empty()) {
+        member_of_process_.reserve(members_.size());
+        for (std::uint32_t member = 0U; member < members_.size(); ++member) {
+            member_of_process_.emplace_back(members_[member].process, member);
+        }
+        std::ranges::sort(member_of_process_);
+    }
+    bool woken = false;
+    for (const auto& writer : slots_[slot_index].writers) {
+        for (auto it = std::ranges::lower_bound(member_of_process_,
+                 std::pair { writer.process, std::uint32_t { 0U } });
+             it != member_of_process_.end() && it->first == writer.process; ++it) {
+            const auto& member = members_[it->second];
+            if (member.kind != StaticKernelMemberKind::combinational
+                || member.vhdl) {
+                continue;
+            }
+            if (member.partition != no_slot
+                && member.partition < dissolved_.size()
+                && dissolved_[member.partition]) {
+                // A member gated since the foreign write runs only when due.
+                dissolved_[member.partition]->due[member.position] = 1U;
+            }
+            schedule(it->second);
+            woken = true;
+        }
+    }
+    if (woken && !in_activation_) {
+        impl_.queue_next_delta(host_process_,
+            SignalChangeOrigin { ProcessSchedulingDomain::systemverilog,
+                SchedulerPhase::active });
+    }
+}
+
 void Interpreter::Impl::StaticKernel::note_external_write(const SignalId signal)
 {
     if (signal >= slot_of_signal_.size()) {
@@ -8327,6 +8660,17 @@ std::optional<PackedLogic4> Interpreter::Impl::StaticKernel::owned_value(
 {
     const auto slot_index = sole_owned_slot(signal);
     if (slot_index == no_slot) {
+        // An output the running activation changed in the Active region and
+        // the host has not heard of yet: the slot is the current value.
+        if (signal < slot_of_signal_.size()
+            && family_of_signal_[signal] == no_slot
+            && slot_of_signal_[signal] != no_slot) {
+            const auto& slot = slots_[slot_of_signal_[signal]];
+            if (slot.output && slot.output_pending && !slot.publish_nba
+                && slot.lazy_writers.empty()) {
+                return slot_value(slot_of_signal_[signal]);
+            }
+        }
         return std::nullopt;
     }
     return slot_value(slot_index);
@@ -8488,6 +8832,26 @@ void Interpreter::Impl::import_static_kernel_write(
         return;
     }
     static_kernel->import_host_write(signal, origin);
+}
+
+void Interpreter::Impl::static_kernel_override_changed(
+    const SignalId signal, const SignalChangeOrigin origin)
+{
+    if (!static_kernel || static_kernel_materializing || static_kernel_publishing
+        || signal >= static_kernel_owned_signal.size()
+        || static_kernel_owned_signal[signal] == 0U) {
+        return;
+    }
+    static_kernel->override_changed(signal, origin);
+}
+
+void Interpreter::rerun_kernel_drivers(const SignalId signal)
+{
+    if (impl_->static_kernel && impl_->started
+        && signal < impl_->static_kernel_owned_signal.size()
+        && impl_->static_kernel_owned_signal[signal] != 0U) {
+        impl_->static_kernel->rerun_writers(signal);
+    }
 }
 
 void InterpreterProgramAccess::set_static_kernel_time_warp(

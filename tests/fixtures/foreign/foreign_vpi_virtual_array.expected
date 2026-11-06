@@ -1,0 +1,7 @@
+#c va type=vpiRegArray size=2
+#c va[0] type=vpiVirtualInterfaceVar name=va[0] modport=0 actual=top.s1 defname=SBus
+#c va[1] type=vpiVirtualInterfaceVar name=va[1] modport=0 actual=top.s2 defname=SBus
+#c top virtual vb
+#c top virtual va[0]
+#c top virtual va[1]
+#c top variables=2

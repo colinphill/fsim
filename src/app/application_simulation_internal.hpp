@@ -451,6 +451,9 @@ struct Simulation::Impl {
     [[nodiscard]] runtime::SystemVerilogVpiStoredValue vpi_driver_value(
         const SignalId signal,
         const SystemVerilogVpiDriverBinding& binding) const;
+    void announce_vpi_driver(
+        const SignalId signal,
+        const SystemVerilogVpiDriverBinding& binding);
 
     static void require_vpi_value(
         const runtime::SystemVerilogVpiValueError error,
@@ -482,6 +485,14 @@ struct Simulation::Impl {
     /// callback was registered on it); an object without a signal, word or
     /// driver binding watches every value.
     void watch_vpi_object(std::optional<fsim_vpi_handle_v1> object);
+    // A watched string variable's value change is found by comparing its
+    // string object's text at each safe point (IEEE 1800-2023 38.36.1).
+    [[nodiscard]] std::optional<std::string> vpi_string_text(
+        fsim_vpi_handle_v1 handle,
+        std::map<runtime::simir::ContainerObjectId,
+            runtime::simir::ContainerValue>& snapshots) const;
+    void watch_vpi_string(fsim_vpi_handle_v1 handle);
+    void publish_vpi_strings();
     void sync_vpi_live_memory(runtime::simir::ContainerObjectId object,
         const runtime::simir::ContainerValue& value);
     void publish_vpi_container(
@@ -746,6 +757,12 @@ struct Simulation::Impl {
     std::unordered_map<fsim_vpi_handle_v1,
         std::pair<runtime::simir::ProcessId, SignalId>>
         vpi_driver_handles;
+    // The value each watched driver object last announced, from its watch
+    // on: a driver's callback hears of its own changes alone, whichever
+    // hook reports them (IEEE 1364-2005 Table 88, IEEE 1800-2023 38.36.1).
+    std::unordered_map<fsim_vpi_handle_v1,
+        runtime::SystemVerilogVpiStoredValue>
+        vpi_driver_announced;
 
     // The signals and memories whose value changes reach VPI observers; a
     // watched memory keeps its last announced value to find changed words.
@@ -767,6 +784,10 @@ struct Simulation::Impl {
     // interpreter's string objects (IEEE 1800-2023 37.17, 38.15).
     std::map<fsim_vpi_handle_v1, runtime::simir::StringObjectId>
         vpi_string_handles;
+    // The watched string variables with the text last announced, and the
+    // safe-point observer that compares them (0 until one is watched).
+    std::map<fsim_vpi_handle_v1, std::string> vpi_watched_strings;
+    std::uint64_t vpi_string_watch_observer { };
 
     std::map<runtime::simir::ContainerObjectId,
         runtime::SystemVerilogScalarKind>

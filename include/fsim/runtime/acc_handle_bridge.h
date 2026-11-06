@@ -23,6 +23,11 @@
 #define FSIM_ACC_RELATION_SCOPE 2u
 #define FSIM_ACC_RELATION_SIMULATED_NET 3u
 #define FSIM_ACC_NAME_MAXIMUM_BYTES 4096u
+/* The vpi_put_value flags the ACC layer passes for the procedural assign and
+   deassign of acc_set_value (IEEE 1364-2005 9.3.1, 23.96); private to the
+   ACC layer, not VPI flags. */
+#define FSIM_ACC_VPI_ASSIGN_FLAG 0xF05
+#define FSIM_ACC_VPI_DEASSIGN_FLAG 0xF06
 #define FSIM_ACC_TRAVERSE_BEGIN 1u
 #define FSIM_ACC_TRAVERSE_NEXT 2u
 #define FSIM_ACC_TRAVERSE_END 3u

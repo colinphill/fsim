@@ -578,6 +578,14 @@ PLI_INT32 vpi_control(const PLI_INT32 operation, ...) {
       static_cast<std::uint64_t>(operation), pointer_argument(&arguments));
   const auto ok = invoke(Routine::Control, request, result);
   va_end(arguments);
+  if (ok && result.value != 0U && operation == vpiSetInteractiveScope) {
+    // The ACC routines report the interactive scope this call set.
+    va_start(arguments, operation);
+    const auto scope = va_arg(arguments, vpiHandle);
+    va_end(arguments);
+    fsim::runtime::acc_detail::note_interactive_scope(
+        static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(scope)));
+  }
   return ok ? static_cast<PLI_INT32>(result.value) : 0;
 }
 

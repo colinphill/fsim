@@ -265,7 +265,7 @@ int main() {
       Record{accTchk, accSetup, 0, FSIM_ACC_TIMING_CAP_DELAYS, 1});
   const auto port_object = add(
       fixture, root, "input",
-      Record{accPort, accScalarPort, accInput, FSIM_ACC_TIMING_CAP_DELAYS, 1});
+      Record{accPort, accScalarPort, accInput, FSIM_ACC_TIMING_CAP_DELAYS, 12});
   const auto three_state_object = add(
       fixture, root, "tri_gate",
       Record{accPrimitive, accBufif1Gate, 0, FSIM_ACC_TIMING_CAP_DELAYS, 3});
@@ -309,8 +309,11 @@ int main() {
   require(acc_replace_delays(primitive, 3.0, 4.0) == 1 &&
               fixture.captured.operation == FSIM_ACC_TIMING_REPLACE_DELAYS,
           "primitive delay arity comes from object metadata");
+  // An input port takes accPathDelayCount delays, like a path (IEEE
+  // 1364-2005 23.14).
   require(acc_fetch_delays(check, &first) == 1 &&
-              acc_fetch_delays(port, &second) == 1,
+              acc_fetch_delays(port, &first, &second) == 1 &&
+              fixture.captured.delay_count == 2,
           "timing checks and input ports expose delays");
   require(acc_fetch_delays(net, &first) == 0 && acc_error_flag == 1,
           "non-timing nets reject delay access");

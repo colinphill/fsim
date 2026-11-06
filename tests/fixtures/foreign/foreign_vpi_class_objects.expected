@@ -9,6 +9,7 @@
 #c property next type=vpiClassVar full=- value=none class-obj=set objid-set=1
 #c property w type=vpiIntVar full=- value=read class-obj=null objid-set=0
 #c property arr type=vpiReg full=- value=none class-obj=null objid-set=0
+#c property count type=vpiIntVar full=set value=read class-obj=null objid-set=0
 #c put value value=9
 #c object methods=0 parameters=0 constraints=6
 #c constraint c_small type=vpiConstraint enabled=0 automatic=1 access=0 alloc=2 parent=vpiClassObj

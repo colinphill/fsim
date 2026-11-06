@@ -14,11 +14,16 @@ namespace fsim::app::hierarchy_path_codec {
 inline constexpr std::string_view kMagic = "FSIMHPT1";
 inline constexpr std::uint32_t kSchema = 1U;
 
+// Decode guards, sized for a design with one path per elaborated object: a
+// parameterized testbench of ~50 generate-heavy codec instances (rs_param_tb)
+// elaborates several million signals and objects, so the bounds sit well
+// above the million-path scale. The payload bound covers the path bytes plus
+// the 4-byte length prefixes of a full table.
 struct Limits {
-    std::size_t maximum_payload_bytes { 128U * 1024U * 1024U };
-    std::size_t maximum_paths { 1'000'000U };
+    std::size_t maximum_payload_bytes { 1024U * 1024U * 1024U };
+    std::size_t maximum_paths { 16'000'000U };
     std::size_t maximum_path_bytes { 1024U * 1024U };
-    std::size_t maximum_total_path_bytes { 96U * 1024U * 1024U };
+    std::size_t maximum_total_path_bytes { 896U * 1024U * 1024U };
 };
 
 enum class Error : std::uint8_t {

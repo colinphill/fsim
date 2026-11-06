@@ -1,4 +1,6 @@
 #c cbDisable accepted=1
+#c cbDisable idle accepted=1
+#c implicit scope genblk2 block=1
 #c process accepted=0
 #c cbStmt vpiNamedBegin line 12 t=0 time=set value=null index=0
 #c cbStmt vpiAssignment line 13 t=0 time=set value=null index=0
@@ -20,3 +22,9 @@
 #c cbDisable vpiNamedBegin top.worker t=2
 #c done n=13
 #c cbStmt vpiEventControl line 30 t=20 time=set value=null index=0
+#c cbStmt vpiNamedBegin line 33 t=30 time=set value=null index=0
+#c cbStmt vpiAssignment line 34 t=30 time=set value=null index=0
+#c cbStmt vpiNamedBegin line 44 t=35 time=set value=null index=0
+#c cbStmt vpiAssignment line 45 t=35 time=set value=null index=0
+#c cbStmt vpiNamedBegin line 52 t=40 time=set value=null index=0
+#c cbStmt vpiAssignment line 53 t=40 time=set value=null index=0

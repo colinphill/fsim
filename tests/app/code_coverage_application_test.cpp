@@ -73,6 +73,12 @@ void run_debug_engine()
     interpreter.set_execution_point_hook(
         [&](runtime::Scheduler& scheduler,
             const runtime::simir::ExecutionPoint& point) {
+            // Thread lifetime points carry no statement observation.
+            if (point.kind == runtime::simir::ExecutionPointKind::thread_start
+                || point.kind
+                    == runtime::simir::ExecutionPointKind::thread_end) {
+                return;
+            }
             points.push_back(point);
             if (points.size() == 1U) {
                 scheduler.request_stop();

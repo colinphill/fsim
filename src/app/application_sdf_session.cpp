@@ -12,6 +12,7 @@
 #include "fsim/app/sdf_scheduling.hpp"
 #include "fsim/app/sdf_drive_timing.hpp"
 #include "fsim/app/sdf_schema.hpp"
+#include "fsim/elaboration/sdf_net_delay_split.hpp"
 #include "fsim/app/sdf_artifact_identity.hpp"
 #include "fsim/app/sdf_portable_archive.hpp"
 #include "fsim/support/path.hpp"
@@ -427,10 +428,11 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
                 }
                 const auto same = std::ranges::find(net_delays,
                     record->identity, &elaboration::SdfNetDelayInfo::identity);
+                // A repeated record applies at its later place (IEEE
+                // 1364-2005 16.3: in order of occurrence).
                 if (same != net_delays.end())
-                    *same = std::move(*record);
-                else
-                    net_delays.push_back(std::move(*record));
+                    net_delays.erase(same);
+                net_delays.push_back(std::move(*record));
                 continue;
             }
             if (annotation.target_kind != SdfTimingTargetKind::SpecifyPath
@@ -503,6 +505,15 @@ std::optional<SdfSessionPlan> plan_sdf_session_inputs(
     // A design without an interconnect or port delay keeps none (IEEE
     // 1800-2023 37.45).
     result_state.sdf_net_delays = std::move(net_delays);
+    // An interconnect or port delay delays the load's net (IEEE 1364-2005
+    // 16, 1800-2023 38.10); a load that cannot be split keeps the record and
+    // its VPI objects, and says so.
+    const auto split = elaboration::split_sdf_net_delays(result_state);
+    for (const auto& reason : split.skipped) {
+        diagnostics.warning("FSIM-SDF-SESSION-004",
+            "SDF interconnect or port delay is recorded but does not delay "
+            "the net in simulation: " + reason);
+    }
     auto result_design = elaboration::ElaboratedDesign::from_state(
         std::move(result_state));
     if (!result_design) {

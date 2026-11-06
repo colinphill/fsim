@@ -1,0 +1,6 @@
+#c scope change to top.c
+#c scope set c result=1
+#c scope set signal result=0 error=1
+#c scope change to top
+#c scope set top result=1
+#c end enters=0 exits=0

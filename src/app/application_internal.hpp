@@ -1273,6 +1273,56 @@ enum class SimulationOutputSink {
 void plan_kernel_access(
     BuiltProject& built, SimulationEngine engine, bool debug_points = false);
 
+/// The foreign libraries (--sv-lib, --vpi, --vhpi, PLI tables) loaded into a
+/// simulation and the services that run their startup routines, answer
+/// their calls and deliver the end of simulation and of the tool (IEEE
+/// 1800-2023 38.36.3, IEEE 1076-2019 20.10). The batch run and the Tcl and
+/// debugger sessions share it. The libraries stay loaded until it is
+/// destroyed, which must come before the simulation's.
+class ForeignLibraries final {
+public:
+    explicit ForeignLibraries(Simulation& simulation);
+    ~ForeignLibraries();
+
+    ForeignLibraries(const ForeignLibraries&) = delete;
+    ForeignLibraries& operator=(const ForeignLibraries&) = delete;
+
+    /// Remember a run-time error that ended the run; `finish` reports it.
+    void run_error(std::string message);
+    /// The VHPI end of simulation and of the tool, once.
+    void finish_vhpi();
+    [[nodiscard]] bool vhpi_failed() const;
+    /// End of simulation and of the tool for every interface, once; a
+    /// failure in a callback is ignored.
+    void finish() noexcept;
+
+private:
+    struct Impl;
+    friend std::unique_ptr<ForeignLibraries> attach_foreign_libraries(
+        Simulation&, const project::Config&, std::span<const std::string>,
+        diagnostic::Engine&, std::ostream&, SimulationOutputSink,
+        std::size_t);
+
+    Simulation& simulation_;
+    std::unique_ptr<Impl> impl_;
+};
+
+/// True when the configuration names a foreign library.
+[[nodiscard]] bool foreign_libraries_requested(const project::Config& config);
+
+/// Loads the configured libraries into `simulation` and starts their
+/// services. Null after a diagnostic when a library does not load.
+/// `design_process_count` is the design's process count before the
+/// simulation took the design over.
+[[nodiscard]] std::unique_ptr<ForeignLibraries> attach_foreign_libraries(
+    Simulation& simulation,
+    const project::Config& config,
+    std::span<const std::string> plusargs,
+    diagnostic::Engine& diagnostics,
+    std::ostream& output,
+    SimulationOutputSink sink,
+    std::size_t design_process_count);
+
 int run_built_project(
     BuiltProject project,
     SimulationEngine engine,
@@ -1495,6 +1545,14 @@ private:
 
     void report_result(const runtime::RunResult& result);
 
+    /// The foreign interfaces hear of the session entering and leaving
+    /// interactive mode (Simulation::LifecycleEvent).
+    void enter_prompt();
+    void leave_prompt();
+    /// A foreign library selected the interactive scope (IEEE 1800-2023
+    /// 38.4 vpiSetInteractiveScope): the session's scope follows it.
+    void adopt_scope(std::string_view path);
+
     [[nodiscard]] bool can_execute();
 
     void run(const std::optional<SimulationTick> requested_limit);
@@ -1534,6 +1592,12 @@ private:
     std::uint64_t uvm_observer_ { };
     bool executing_ { };
     bool stop_on_phase_transition_ { };
+    /// The session is at its command prompt; it starts there.
+    bool at_prompt_ { true };
+    /// The lifecycle hook that carries a library's scope selection reaches
+    /// the session through this; it dies with the session, which cannot
+    /// remove the hook.
+    std::shared_ptr<DebuggerSession*> scope_anchor_;
 };
 
 struct ParsedMagnitude {

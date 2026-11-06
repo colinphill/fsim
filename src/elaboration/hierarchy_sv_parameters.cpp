@@ -507,8 +507,10 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             && binding.expression && !formal_is_type_parameter
             && !formal->systemverilog->array_parameter) {
             const auto target_scalar = formal->systemverilog->type
-                ? frontend::systemverilog_scalar_kind(
-                          formal->systemverilog->type->target.spelling)
+                ? hir_systemverilog_declared_scalar_kind(
+                      working_specialization,
+                      *formal->systemverilog->type,
+                      formal->systemverilog->scope)
                 : frontend::SystemVerilogScalarKind::None;
             const auto scalar_applicable = target_scalar
                     != frontend::SystemVerilogScalarKind::None

@@ -13,3 +13,11 @@
 #c swap in x=x1,x0 y=y1,y0
 #c swap x=x1,x0 y=y1,y0
 #c fill r=low,high
+#c dyn q size=3 left=0 right=2
+#c dyn q[0]=p
+#c dyn q[1]=q
+#c dyn q[2]=r
+#c dyn io[0]=i0
+#c dyn io[1]=i1
+#c dyn o size=2
+#c dyn ret=7 io=first,last o=n0,n1

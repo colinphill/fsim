@@ -3766,7 +3766,7 @@ Lowerer::lower_hir_vhdl_resolver_process(const SignalId signal,
     const semantic::DeclarationId function, const std::size_t driver_count,
     const std::string_view hierarchy,
     std::vector<VhdlResolverSegment> segments,
-    std::vector<VhdlDriverRegions> driver_regions)
+    std::vector<VhdlDriverRegions> driver_regions, const bool dynamic_count)
 {
     [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
         *this
@@ -3787,7 +3787,7 @@ Lowerer::lower_hir_vhdl_resolver_process(const SignalId signal,
     description.kind = frontend::ProcessKind::VhdlProcess;
     description.vhdl_resolver = HirProcessDescription::VhdlResolver {
         signal, function, driver_count, std::move(segments),
-        std::move(driver_regions) };
+        std::move(driver_regions), dynamic_count };
     hir_vhdl_resolver_registers_.reset();
     auto process = lower_hir_process_body(
         description, frontend::Language::Vhdl2008, hierarchy);
@@ -4981,6 +4981,12 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             process_ = { };
             return std::nullopt;
         }
+    } else if (description.vhdl_resolver
+        && description.vhdl_resolver->dynamic_count) {
+        if (!lower_hir_vhdl_dynamic_resolver(*description.vhdl_resolver)) {
+            process_ = { };
+            return std::nullopt;
+        }
     } else if (description.vhdl_resolver) {
         const auto& resolver = *description.vhdl_resolver;
         const auto& signal = design_.signal_info_[resolver.signal];
@@ -4996,47 +5002,15 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         const auto input = allocate_register(
             signal.width * std::max<std::size_t>(resolver.driver_count, 1U),
             signal.source_domain);
-        // A composite whose element subtype is resolved resolves each
-        // scalar subelement on its own (IEEE 1076-2008 14.7.3.2).
-        const auto function_type = hir_callable_type(
-            resolver.function, signal.width);
-        const auto element_width = function_type
-            ? function_type->width
-            : std::size_t { };
-        const bool per_element = signal.vhdl_array != nullptr
-            && element_width != 0U && element_width < signal.width
-            && signal.width % element_width == 0U
-            && signal.width / element_width <= 4096U;
         const auto output = allocate_register(
             signal.width, signal.source_domain);
-        // The parts resolved on their own: each element of an array of a
-        // resolved element subtype, or each resolved element (or element
-        // of an element) of a record.
-        std::vector<VhdlResolverSegment> pieces;
-        if (!resolver.segments.empty()) {
-            for (const auto& segment : resolver.segments) {
-                const auto type = hir_callable_type(
-                    segment.function, segment.width);
-                const auto width = type ? type->width : std::size_t { };
-                if (width == 0U || segment.width % width != 0U
-                    || segment.width / width > 4096U
-                    || segment.offset + segment.width > signal.width) {
-                    process_ = { };
-                    return std::nullopt;
-                }
-                for (std::size_t offset { }; offset < segment.width;
-                    offset += width) {
-                    pieces.push_back(VhdlResolverSegment {
-                        segment.offset + offset, width, segment.function });
-                }
-            }
-        } else if (per_element) {
-            for (std::size_t offset { }; offset < signal.width;
-                offset += element_width) {
-                pieces.push_back(VhdlResolverSegment {
-                    offset, element_width, resolver.function });
-            }
+        // The parts resolved on their own (IEEE 1076-2008 14.7.3.2).
+        auto parts = hir_vhdl_resolver_pieces(resolver);
+        if (!parts) {
+            process_ = { };
+            return std::nullopt;
         }
+        const auto& pieces = *parts;
         if (!pieces.empty()) {
             const auto drivers
                 = std::max<std::size_t>(resolver.driver_count, 1U);

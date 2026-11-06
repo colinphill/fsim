@@ -1,0 +1,33 @@
+#c byte a=-5 b=21
+#c byte ret=-105 o=-4 b=42
+#c short a=-300 b=1000
+#c short ret=-1300 o=-299 b=2000
+#c int a=-70000 b=100000
+#c int ret=-70001 o=-69999 b=300000
+#c long a=-5000000000 b=6000000000
+#c long ret=-10000000000 o=-4999999999 b=6000000001
+#c unsigned a=200 b=60000 c=4000000000 d=18000000000000000000
+#c unsigned ret=60200
+#c real a=1.250 b=-2.500
+#c real ret=-1.250 o=2.500 b=-2.375
+#c shortreal a=0.500 b=3.250
+#c shortreal ret=3.750 o=1.000 b=3.500
+#c chandle a=0
+#c chandle ret=1 o=0
+#c chandle a=2
+#c chandle ret=1 o=1 same=1
+#c string a=hello
+#c string ret=ret:hello o=out
+#c bit a=1 b=0
+#c bit ret=0 o=1 b=1
+#c logic a=3 b=2
+#c logic ret=1 o=z b=x
+#c bits a=a5 b=23456789,1 c=87654321,fedcba9,87654321,9 io=1abc
+#c bits ret=166 o=79abcdef012345678deadbeef io=0543
+#c logics a aval=cc bval=50
+#c logics b aval=f,0,1 bval=0
+#c logics io aval=c bval=5
+#c logics ret=7 o=100000000a5a5a5zx io=z0x1
+#c byte a=-5 b=42
+#c byte again ret=-105 o=-4 b=84
+#c void a=7

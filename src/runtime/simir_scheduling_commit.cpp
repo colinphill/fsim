@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <limits>
 #include <optional>
 
 namespace fsim::runtime::simir {
@@ -843,6 +844,24 @@ void Interpreter::Impl::force_slice(
         return;
     }
     value = coerce_value_kind(std::move(value), signal.value_kind);
+    if (const auto layer = assign_layers.find(signal_id);
+        layer != assign_layers.end()) {
+        // A force over a procedural assign wins; its release reveals the
+        // assigned value again while the assign is active (IEEE 1364-2005
+        // 9.3.2).
+        auto& assigned = layer->second;
+        if (!assigned.force_value) {
+            assigned.force_value
+                = std::make_unique<PackedLogic4>(driven_values[signal_id]);
+            assigned.force_mask = std::make_unique<PackedLogic4>(
+                signal.initial_value.width(), Logic4::zero);
+        }
+        insert_force_value(*assigned.force_value, value, offset);
+        update_force_mask(*assigned.force_mask, offset, value.width(), true);
+        compose_assign_force(signal_id, assigned);
+        publish_override_change(signal_id, origin);
+        return;
+    }
     if (!forced_values[signal_id]) {
         forced_values[signal_id]
             = std::make_unique<PackedLogic4>(driven_values[signal_id]);
@@ -851,6 +870,14 @@ void Interpreter::Impl::force_slice(
     }
     insert_force_value(*forced_values[signal_id], value, offset);
     update_force_mask(*forced_masks[signal_id], offset, value.width(), true);
+    publish_override_change(signal_id, origin);
+}
+
+void Interpreter::Impl::publish_override_change(
+    const SignalId signal_id,
+    const SignalChangeOrigin origin)
+{
+    const auto& signal = get_signal(signal_id);
     refresh_direct_single_driver_route(signal_id);
     auto effective = apply_force(signal_id, driven_values[signal_id]);
     const bool current_changed = signal.initial_value != effective;
@@ -863,6 +890,161 @@ void Interpreter::Impl::force_slice(
     }
     mark_switch_network_dirty(signal_id);
     refresh_switch_network();
+    // A kernel-owned signal's slot follows the layer: its readers see the
+    // forced or assigned value and a kernel write is hidden under it.
+    static_kernel_override_changed(signal_id, origin);
+}
+
+bool Interpreter::Impl::signal_override_query(
+    const SignalId signal, const OverrideKind kind) const
+{
+    // The assign layer's bits live in forced_values beside the force's
+    // (compose_assign_force); only the layer record tells them apart.
+    const auto present = [&](const SignalId id) {
+        if (!forced_values[id]) {
+            return false;
+        }
+        if (kind == OverrideKind::any) {
+            return true;
+        }
+        const auto layer = assign_layers.find(id);
+        if (layer == assign_layers.end()) {
+            return kind == OverrideKind::forced;
+        }
+        if (kind == OverrideKind::assigned) {
+            return true;
+        }
+        return layer->second.force_mask
+            && has_forced_bits(*layer->second.force_mask);
+    };
+    if (signal < signal_container_aggregate_aliases.size()
+        && signal_container_aggregate_aliases[signal]) {
+        const auto object = *signal_container_aggregate_aliases[signal];
+        const auto& aliases = container_element_signal_aliases.at(object);
+        return std::ranges::any_of(aliases, [&](const auto& alias) {
+            return alias && present(alias->signal);
+        });
+    }
+    return present(signal);
+}
+
+void Interpreter::Impl::compose_assign_force(
+    const SignalId signal_id,
+    const AssignLayer& layer)
+{
+    auto value = layer.value;
+    auto mask = layer.mask;
+    if (layer.force_mask) {
+        for (std::size_t bit = 0; bit < mask.width(); ++bit) {
+            if (layer.force_mask->get(bit) != Logic4::one) {
+                continue;
+            }
+            if (value.is_logic9()) {
+                value.set_logic9(bit, layer.force_value->get_logic9(bit));
+            } else {
+                value.set(bit, layer.force_value->get(bit));
+            }
+            mask.set(bit, Logic4::one);
+        }
+    }
+    if (!has_forced_bits(mask)) {
+        forced_values[signal_id].reset();
+        forced_masks[signal_id].reset();
+        return;
+    }
+    forced_values[signal_id] = std::make_unique<PackedLogic4>(std::move(value));
+    forced_masks[signal_id] = std::make_unique<PackedLogic4>(std::move(mask));
+}
+
+void Interpreter::Impl::assign_slice(
+    const SignalId signal_id,
+    PackedLogic4 value,
+    const std::size_t offset,
+    const SignalChangeOrigin origin)
+{
+    if (package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot assign a signal slice"
+        };
+    }
+    require_writable_aggregate_signal(signal_id);
+    const auto& signal = get_signal(signal_id);
+    if (signal.systemverilog_scalar != SystemVerilogScalarKind::None
+        || (signal_id < signal_container_aggregate_aliases.size()
+            && signal_container_aggregate_aliases[signal_id])) {
+        throw std::invalid_argument {
+            "a procedural assign needs a plain register signal"
+        };
+    }
+    if (offset > signal.initial_value.width()
+        || value.width() > signal.initial_value.width() - offset) {
+        throw std::invalid_argument("SimIR signal assign slice is out of range");
+    }
+    value = coerce_value_kind(std::move(value), signal.value_kind);
+    auto [position, created] = assign_layers.try_emplace(signal_id);
+    auto& layer = position->second;
+    if (created) {
+        layer.value = driven_values[signal_id];
+        layer.mask = PackedLogic4(signal.initial_value.width(), Logic4::zero);
+        if (forced_values[signal_id]) {
+            // A force already on the signal stays above the new assign.
+            layer.force_value
+                = std::make_unique<PackedLogic4>(*forced_values[signal_id]);
+            layer.force_mask
+                = std::make_unique<PackedLogic4>(*forced_masks[signal_id]);
+        }
+    }
+    insert_force_value(layer.value, value, offset);
+    update_force_mask(layer.mask, offset, value.width(), true);
+    compose_assign_force(signal_id, layer);
+    publish_override_change(signal_id, origin);
+}
+
+void Interpreter::Impl::deassign_slice(
+    const SignalId signal_id,
+    const std::size_t offset,
+    const std::size_t width,
+    const SignalChangeOrigin origin)
+{
+    if (package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot deassign a signal slice"
+        };
+    }
+    const auto& signal = get_signal(signal_id);
+    if (offset > signal.initial_value.width()
+        || width > signal.initial_value.width() - offset) {
+        throw std::invalid_argument(
+            "SimIR signal deassign slice is out of range");
+    }
+    const auto position = assign_layers.find(signal_id);
+    if (position == assign_layers.end()) {
+        return;
+    }
+    auto& layer = position->second;
+    // The register keeps the assigned value until its next procedural
+    // assignment (IEEE 1364-2005 9.3.1).
+    for (std::size_t bit = offset; bit < offset + width; ++bit) {
+        if (layer.mask.get(bit) != Logic4::one) {
+            continue;
+        }
+        if (driven_values[signal_id].is_logic9()) {
+            driven_values[signal_id].set_logic9(
+                bit, layer.value.get_logic9(bit));
+        } else {
+            driven_values[signal_id].set(bit, layer.value.get(bit));
+        }
+    }
+    update_force_mask(layer.mask, offset, width, false);
+    if (has_forced_bits(layer.mask)) {
+        compose_assign_force(signal_id, layer);
+    } else {
+        // No assigned bit is left: the force alone, if any, is the override.
+        forced_values[signal_id] = std::move(layer.force_value);
+        forced_masks[signal_id] = std::move(layer.force_mask);
+        assign_layers.erase(position);
+    }
+    publish_override_change(signal_id, origin);
 }
 
 void Interpreter::Impl::release_slice(
@@ -929,6 +1111,20 @@ void Interpreter::Impl::release_slice(
             signal_id, offset, width, port_segment, origin)) {
         return;
     }
+    if (const auto layer = assign_layers.find(signal_id);
+        layer != assign_layers.end()) {
+        auto& assigned = layer->second;
+        if (assigned.force_mask) {
+            update_force_mask(*assigned.force_mask, offset, width, false);
+            if (!has_forced_bits(*assigned.force_mask)) {
+                assigned.force_value.reset();
+                assigned.force_mask.reset();
+            }
+        }
+        compose_assign_force(signal_id, assigned);
+        publish_override_change(signal_id, origin);
+        return;
+    }
     if (!forced_values[signal_id]) {
         return;
     }
@@ -938,18 +1134,7 @@ void Interpreter::Impl::release_slice(
         forced_values[signal_id].reset();
         forced_masks[signal_id].reset();
     }
-    refresh_direct_single_driver_route(signal_id);
-    auto effective = apply_force(signal_id, driven_values[signal_id]);
-    const bool current_changed = signal.initial_value != effective;
-    publish_normalized(signal_id,
-        normalize_signal_value(signal_id, std::move(effective)), true,
-        origin);
-    if (current_changed && signal_container_element_aliases[signal_id]) {
-        // Force changes the logical element without changing its stored driver.
-        publish_container_signal_aliases(signal_id, { }, false);
-    }
-    mark_switch_network_dirty(signal_id);
-    refresh_switch_network();
+    publish_override_change(signal_id, origin);
 }
 
 PackedLogic4 Interpreter::Impl::apply_driver_force(
@@ -1547,10 +1732,22 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
             connected.push_back(driver);
         }
     }
+    // The drivers a foreign architecture created follow the declared ones.
+    if (!vhdl_created_drivers.empty()) {
+        if (const auto created = vhdl_created_drivers.find(signal_id);
+            created != vhdl_created_drivers.end()) {
+            for (const auto driver : created->second) {
+                if (!vhdl_disconnected_drivers.contains({ signal_id, driver })) {
+                    connected.push_back(driver);
+                }
+            }
+        }
+    }
     const auto count = connected.size();
     auto program_process = resolver.process;
     auto program_input = resolver.input;
     auto program_output = resolver.output;
+    bool dynamic_count { };
     if (count != resolver.drivers.size()) {
         // A register keeps its value while every driver is disconnected.
         if (count == 0U
@@ -1563,16 +1760,26 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
                 ? found->second
                 : signal.initial_value;
         }
-        if (count >= resolver.variants.size()) {
+        const auto* variant = count < resolver.variants.size()
+            && resolver.variants[count].process
+                != std::numeric_limits<ProcessId>::max()
+            ? &resolver.variants[count]
+            : nullptr;
+        if (variant == nullptr) {
+            // More created drivers than the fixed programs serve: the last
+            // program takes the count at run time (VhdlResolverVariant).
+            variant = resolver.dynamic_variant();
+            dynamic_count = variant != nullptr;
+        }
+        if (variant == nullptr) {
             throw std::invalid_argument {
-                "VHDL guarded signal has no resolver for its connected "
+                "VHDL resolved signal has no resolver for its connected "
                 "drivers"
             };
         }
-        const auto& variant = resolver.variants[count];
-        program_process = variant.process;
-        program_input = variant.input;
-        program_output = variant.output;
+        program_process = variant->process;
+        program_input = variant->input;
+        program_output = variant->output;
     }
     PackedLogic4 driving { width * count, Logic4::x };
     if (signal.value_kind == ValueKind::logic9) {
@@ -1593,12 +1800,21 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
         return coerce_value_kind(
             static_kernel->run_resolver(program_process,
                 count != 0U ? std::optional { std::move(driving) } : std::nullopt,
-                program_input, program_output),
+                program_input, program_output,
+                dynamic_count
+                    ? std::optional { PackedLogic4::from_aval_bval(
+                          64U, count, 0U) }
+                    : std::nullopt),
             signal.value_kind);
     }
     auto& process = get_process(program_process);
     if (count != 0U) {
         get_register(process, program_input) = std::move(driving);
+    }
+    if (dynamic_count) {
+        // The register after the input holds the driver count.
+        get_register(process, program_input + 1U)
+            = PackedLogic4::from_aval_bval(64U, count, 0U);
     }
     // Each resolution is one complete pass of the program, which halts.
     process.pc = 0U;
@@ -1852,12 +2068,38 @@ void Interpreter::Impl::drain_vhdl_resolutions()
             pending_vhdl_resolution_set.erase(signal_id);
             publish_vhdl_formal_driving_value(signal_id, false);
         }
+        vhdl_resolver_read_systemverilog_change = false;
         auto value = run_vhdl_resolver(signal_id);
+        if (vhdl_resolver_read_systemverilog_change) {
+            vhdl_next_cycle_resolutions.push_back(signal_id);
+        }
         vhdl_resolved_values.insert_or_assign(signal_id, value);
         commit(signal_id, apply_force(signal_id, std::move(value)));
     }
     pending_vhdl_resolutions.clear();
     pending_vhdl_resolution_set.clear();
+    schedule_next_cycle_vhdl_resolutions();
+}
+
+void Interpreter::Impl::schedule_next_cycle_vhdl_resolutions()
+{
+    // A SystemVerilog change this update phase counted as current is past in
+    // the next cycle: S'STABLE and S'QUIET read it again there (IEEE
+    // 1076-2019 14.7.4), when no update of S starts their programs.
+    if (vhdl_next_cycle_resolutions.empty()) {
+        return;
+    }
+    scheduler.schedule_next_delta(SchedulerPhase::update,
+        std::numeric_limits<StableOrder>::max(), [this](Scheduler&) {
+            auto targets = std::move(vhdl_next_cycle_resolutions);
+            vhdl_next_cycle_resolutions.clear();
+            for (const auto target : targets) {
+                if (pending_vhdl_resolution_set.insert(target).second) {
+                    pending_vhdl_resolutions.push_back(target);
+                }
+            }
+            drain_vhdl_resolutions();
+        });
 }
 
 void Interpreter::Impl::initialize_vhdl_resolutions()

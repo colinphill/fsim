@@ -193,6 +193,19 @@ void Simulation::release_foreign_driver(
     impl_->refresh_observation_hooks();
 }
 
+runtime::simir::ProcessId Simulation::add_foreign_driver_owner(
+    const runtime::simir::ProcessId placeholder)
+{
+    return impl_->interpreter->add_foreign_driver_owner(placeholder);
+}
+
+void Simulation::add_foreign_driver(
+    const runtime::simir::ProcessId process, const SignalId signal)
+{
+    impl_->interpreter->add_host_driver(process, signal);
+    impl_->refresh_observation_hooks();
+}
+
 void Simulation::deposit_scalar_signal(
     const SignalId signal,
     runtime::SystemVerilogScalarValue value)

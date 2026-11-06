@@ -24,6 +24,13 @@ struct WorkspaceCompiledObject {
     std::map<std::string, std::string> unit_sources { };
 };
 
+// Why an object was written by an incompatible fsim build (a format or
+// schema identity other than this build's), checked on its metadata header
+// and the headers of its compiled-HIR bundle; nullopt for a current,
+// unreadable or corrupt object, which stay hard load errors.
+[[nodiscard]] std::optional<std::string> outdated_object_reason(
+    const std::filesystem::path& object);
+
 [[nodiscard]] std::optional<std::vector<WorkspaceCompiledObject>>
 partition_workspace_objects(const CompilationWorkspace&, const project::Config&,
     diagnostic::Engine&);

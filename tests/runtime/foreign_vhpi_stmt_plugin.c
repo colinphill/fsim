@@ -135,6 +135,8 @@ static void function_calls(void)
     branch = vhpi_scan(branches);
     (void)place(vhpiCbStmt, branch, "fn.else");
     (void)place(vhpiCbStmt, concurrent, "cc");
+    // A concurrent signal assignment is its equivalent process's statement.
+    (void)place(vhpiCbStmt, vhpi_handle_by_name("top.blk.sa", NULL), "sa");
     (void)place(vhpiCbStartOfSubpCall, concurrent, "cc");
     (void)place(vhpiCbEndOfSubpCall, concurrent, "cc");
     set = vhpi_create(vhpiAnyCollectionK, set,

@@ -670,6 +670,8 @@ public:
     using SystemCommandHook = runtime::simir::Interpreter::SystemCommandHook;
     using SystemVerilogDpiFunctionHook
         = runtime::simir::Interpreter::DpiFunctionCallHook;
+    using SystemVerilogDpiSiteHooks
+        = runtime::simir::Interpreter::DpiSiteHooks;
     using VcdControlHook = runtime::simir::Interpreter::VcdControlHook;
     using ConcurrentAssertionHook = std::function<void(const ConcurrentAssertionEvent&)>;
     /// An attempt of the VPI assertion object (a handle) started at the tick
@@ -777,6 +779,10 @@ public:
         runtime::simir::ProcessId process, std::size_t local_index) const;
     [[nodiscard]] std::string read_process_string_local(
         runtime::simir::ProcessId process, std::size_t local_index) const;
+    void write_process_string_local(runtime::simir::ProcessId process,
+        std::size_t local_index, std::string_view value);
+    void write_process_container_local(runtime::simir::ProcessId process,
+        std::size_t local_index, const runtime::simir::ContainerValue& value);
     [[nodiscard]] runtime::simir::ContainerValue
     read_process_container_local(
         runtime::simir::ProcessId process, std::size_t local_index) const;
@@ -788,6 +794,11 @@ public:
     [[nodiscard]] const std::vector<
         semantic::sv::ClassSpecialization>&
     class_specializations() const noexcept;
+    // A class specialization by identity: a design-wide one, or the class of
+    // a generated scope or design element instance, which is rebuilt from
+    // its identity on first use (IEEE 1800-2023 6.22, 27.4); null when none.
+    [[nodiscard]] const semantic::sv::ClassSpecialization*
+    class_specialization(std::string_view identity) const;
     [[nodiscard]] SystemVerilogClassExecutionStatistics
     class_execution_statistics() const noexcept;
     [[nodiscard]] runtime::SystemVerilogClassHeap& class_heap() noexcept;
@@ -873,6 +884,19 @@ public:
     /// Registry handles that publish `signal` (a net, port, or alias of it).
     [[nodiscard]] std::vector<fsim_vpi_handle_v1> vpi_signal_object_handles(
         runtime::simir::SignalId signal) const;
+    /// The driver objects beneath the net or variable `object`, each with the
+    /// kernel process that drives it (IEEE 1800-2023 37.16); materializes
+    /// them first.
+    [[nodiscard]] std::vector<
+        std::pair<fsim_vpi_handle_v1, runtime::simir::ProcessId>>
+    vpi_driver_objects(fsim_vpi_handle_v1 object);
+    /// A procedural assign of the register `object` to `value`, or its
+    /// deassign when `value` is empty (IEEE 1364-2005 9.3.1, ACC
+    /// acc_set_value accAssignFlag and accDeassignFlag 23.96). Only a
+    /// signal-bound register takes it.
+    [[nodiscard]] runtime::SystemVerilogVpiValueError assign_vpi_value(
+        fsim_vpi_handle_v1 object,
+        std::optional<runtime::SystemVerilogVpiStoredValue> value);
     /// The ports of the published instances, each instance's in port order.
     [[nodiscard]] const std::vector<runtime::SystemVerilogVpiPort>&
     systemverilog_vpi_ports() const noexcept;
@@ -1140,6 +1164,15 @@ public:
         runtime::simir::SignalId signal,
         std::size_t offset,
         std::size_t width);
+    /// A new owner of foreign drivers in the instance whose placeholder
+    /// process is `placeholder`: one more process vhpi_create makes there,
+    /// or a driver it makes with no process (IEEE 1076-2019 23.6).
+    /// Gives `process` a driver of `signal` at its initial value, unless it
+    /// has one (a driver vhpi_create makes, IEEE 1076-2019 23.6).
+    void add_foreign_driver(
+        runtime::simir::ProcessId process, runtime::simir::SignalId signal);
+    [[nodiscard]] runtime::simir::ProcessId add_foreign_driver_owner(
+        runtime::simir::ProcessId placeholder);
     /// Run `task` in the next signal-update phase of the current time, as
     /// VHPI vhpiDepositPropagate and vhpiForcePropagate require for their
     /// updates (IEEE 1076-2019 22.5.3).
@@ -1156,6 +1189,10 @@ public:
         runtime::SystemVerilogScalarValue value);
     void release_signal(runtime::simir::SignalId signal);
     [[nodiscard]] bool signal_is_forced(
+        runtime::simir::SignalId signal) const;
+    /// Held by a procedural continuous assign (IEEE 1364-2005 9.3.1); a
+    /// forced report excludes bits only an assign holds.
+    [[nodiscard]] bool signal_is_assigned(
         runtime::simir::SignalId signal) const;
 
     void start();
@@ -1175,9 +1212,21 @@ public:
         end_of_restart,
         start_of_reset,
         end_of_reset,
+        /// A front end that accepts commands takes control of the run, and
+        /// gives it back (IEEE 1800-2023 38.36.3 cbEnterInteractive,
+        /// cbExitInteractive; IEEE 1076-2019 21.3.7.8, 21.3.7.9). The
+        /// debugger session fires them around each command that resumes
+        /// the run. A batch run never enters interactive mode, so a $stop
+        /// there fires neither.
+        enter_interactive,
+        exit_interactive,
+        /// The interactive scope changed (IEEE 1800-2023 38.4
+        /// vpiSetInteractiveScope, 38.36.3 cbInteractiveScopeChange).
+        scope_change,
     };
     /// `location` names the save/restart location for the save and restart
-    /// events, and is empty for the others. Hooks run in registration order.
+    /// events and the hierarchical name of the new scope for scope_change,
+    /// and is empty for the others. Hooks run in registration order.
     using LifecycleHook
         = std::function<void(LifecycleEvent, std::string_view location)>;
     void add_lifecycle_hook(LifecycleHook hook);
@@ -1301,6 +1350,9 @@ public:
     /// The callback receives the C linkage name and mutable copy-out actuals.
     void set_systemverilog_dpi_function_hook(
         SystemVerilogDpiFunctionHook hook);
+    /// Install the bound call sites of the imported DPI functions: calls the
+    /// service binds run through their site instead of the identity hook.
+    void set_systemverilog_dpi_site_hooks(SystemVerilogDpiSiteHooks hooks);
     /// The installed DPI function boundary, for a service that serves some
     /// identities itself and passes the others on.
     [[nodiscard]] SystemVerilogDpiFunctionHook

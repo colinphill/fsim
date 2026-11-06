@@ -2867,6 +2867,25 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
             span);
         return std::nullopt;
     }
+    // S'STABLE(T) and S'QUIET(T) are updated in the simulation cycle of
+    // the event or transaction on S (IEEE 1076-2019 14.7.4). The value
+    // signal is a port-conversion style resolver over S and a trigger, which
+    // the runtime evaluates in that cycle's update phase: after T, the
+    // timer signal S'STABLE_TIMER(T) (driven TRUE T after each event, the
+    // driver of S'STABLE(T)); for T = 0, the settle signal that toggles one
+    // cycle after each event.
+    const bool state_signal = attribute == "stable" || attribute == "quiet";
+    std::optional<SignalId> trigger;
+    if (state_signal) {
+        const bool stable = attribute == "stable";
+        trigger = vhdl_implicit_signal_attribute(source,
+            duration != 0U ? (stable ? "stable_timer" : "quiet_timer")
+                           : (stable ? "stable_settle" : "quiet_settle"),
+            duration, span);
+        if (!trigger) {
+            return std::nullopt;
+        }
+    }
     guard_design_write();
     const auto process_index = design_.process_count()
         + 1U + generated_processes_.size();
@@ -2920,6 +2939,43 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
         : design_.signals_[source];
     signal.name = name;
     signal.resolution = ResolutionKind::none;
+    if (state_signal) {
+        // One pass of this program gives the signal's value whenever S or
+        // the trigger has a transaction (Impl::run_vhdl_resolver, in the
+        // update phase after S's own update): FALSE in a cycle with an
+        // event on S (S'STABLE) or S active (S'QUIET), else the timer's
+        // value; with no timer (T = 0), TRUE.
+        const bool stable = attribute == "stable";
+        Process program;
+        program.id = static_cast<ProcessId>(process_index);
+        program.name = name + ".$implicit_value";
+        program.initialize = false;
+        program.register_count = duration != 0U ? 4U : 2U;
+        program.register_value_kinds.assign(
+            program.register_count, ValueKind::logic4);
+        if (stable) {
+            program.operations.emplace_back(SignalEvent { 0U, source });
+        } else {
+            program.operations.emplace_back(SignalActive { 0U, source });
+        }
+        program.operations.emplace_back(UnaryNot { 1U, 0U });
+        RegisterId output = 1U;
+        if (duration != 0U) {
+            program.operations.emplace_back(ReadSignal { 2U, *trigger });
+            program.operations.emplace_back(Binary {
+                BinaryOperator::bit_and, 3U, 2U, 1U });
+            output = 3U;
+        }
+        program.operations.emplace_back(Halt { });
+        VhdlSignalResolver resolver { program.id, 0U, output, { } };
+        resolver.sources = { source, *trigger };
+        signal.vhdl_resolver = std::move(resolver);
+        design_.signals_.push_back(std::move(signal));
+        design_.signal_by_name_.emplace(name, derived);
+        generated_processes_.push_back(std::move(program));
+        record_implicit_signal_dependency(derived);
+        return derived;
+    }
     design_.signals_.push_back(std::move(signal));
     design_.signal_by_name_.emplace(name, derived);
 
@@ -2931,7 +2987,7 @@ std::optional<SignalId> Lowerer::vhdl_implicit_signal_attribute(
     driver.initialize = false;
     driver.static_sensitivity.push_back({
         source,
-        attribute == "transaction" || attribute == "quiet"
+        attribute == "transaction" || attribute == "quiet_timer"
                 || attribute == "quiet_settle"
             ? EdgeKind::transaction
             : EdgeKind::any,
@@ -3470,6 +3526,11 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
         // S'QUIET(0) in one with a transaction), so it changes when that
         // differs from the previous cycle, which the settle signal (toggled
         // one delta after each event or transaction) reports.
+        // The implicit signal itself is created with its settle signal.
+        if (!vhdl_implicit_signal_attribute(attribute->signal,
+                stable ? "stable" : "quiet", 0U, span)) {
+            return std::nullopt;
+        }
         const auto settle = vhdl_implicit_signal_attribute(
             attribute->signal, stable ? "stable_settle" : "quiet_settle",
             0U, span);
@@ -3647,8 +3708,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
         // signal makes a waiter sensitive to their return to TRUE.
         if (!vhdl_implicit_signal_attribute(attribute->signal,
                 attribute->kind == HirVhdlSignalAttributeKind::stable
-                    ? "stable_settle"
-                    : "quiet_settle",
+                    ? "stable"
+                    : "quiet",
                 0U, span)) {
             return std::nullopt;
         }
@@ -20232,9 +20293,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         });
         result = destination;
     } else if (const auto cast_type = hir_systemverilog_cast_type(expression_id);
-        cast_type && (cast_type->target.spelling == "real"
-            || cast_type->target.spelling == "realtime"
-            || cast_type->target.spelling == "shortreal")) {
+        cast_type
+        && [&] {
+               // A cast to a typedef of a real type is a real cast (6.18).
+               const auto kind = hir_declared_type_scalar_kind(
+                   *cast_type, hir_process_scope_);
+               return kind == frontend::SystemVerilogScalarKind::Real
+                   || kind == frontend::SystemVerilogScalarKind::Realtime
+                   || kind == frontend::SystemVerilogScalarKind::ShortReal;
+           }()) {
         // A real cast converts an integral operand's value and changes the
         // precision of a real operand (IEEE 1800-2017 6.24.1).
         using ScalarKind = frontend::SystemVerilogScalarKind;
@@ -23091,13 +23158,17 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 ? std::string_view {
                       declared->systemverilog->type->target.spelling }
                 : std::string_view { };
-            auto declared_kind = declared_spelling == "real"
-                ? frontend::SystemVerilogScalarKind::Real
-                : declared_spelling == "realtime"
-                ? frontend::SystemVerilogScalarKind::Realtime
-                : declared_spelling == "shortreal"
-                ? frontend::SystemVerilogScalarKind::ShortReal
+            // A typedef of a real type is followed to it (IEEE 1800-2023
+            // 6.18, 6.20.2).
+            auto declared_kind = declared && declared->systemverilog != nullptr
+                    && declared->systemverilog->type
+                ? hir_systemverilog_declared_scalar_kind(*specialized_hir_unit_,
+                      *declared->systemverilog->type,
+                      declared->systemverilog->scope)
                 : frontend::SystemVerilogScalarKind::None;
+            if (!frontend::is_real_scalar_kind(declared_kind)) {
+                declared_kind = frontend::SystemVerilogScalarKind::None;
+            }
             // An untyped parameter whose final value is real is real
             // (IEEE 1800-2017 6.20.2).
             if (declared_kind == frontend::SystemVerilogScalarKind::None

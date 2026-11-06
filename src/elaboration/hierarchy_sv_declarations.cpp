@@ -1036,8 +1036,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
                     continue;
                 }
             } else if (frontend::is_real_scalar_kind(
-                           frontend::systemverilog_scalar_kind(
-                               source.type->target.spelling))) {
+                           hir_systemverilog_declared_scalar_kind(
+                               specialization, *source.type, source.scope))) {
                 // A real variable holds its IEEE payload, which the typed
                 // constant (an integer conversion) is not (IEEE 1800-2023
                 // 6.12): the callable initialization path stores it.
@@ -1288,7 +1288,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             && declaration.callable->lifetime != semantic::sv::Lifetime::automatic
             && declaration.type
             && declaration.type->target.spelling != "void"
-            && (compiled_systemverilog_string_declaration(declaration)
+            && (compiled_systemverilog_string_declaration(
+                    working_specialization, declaration)
                 || hierarchy_sv_type_layout_detail::systemverilog_container_type(
                     working_specialization, *declaration.type)
                 || hierarchy_sv_type_layout_detail::systemverilog_declaration_width(

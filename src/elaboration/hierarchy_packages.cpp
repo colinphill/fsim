@@ -131,13 +131,16 @@ namespace {
     }
 
     bool compiled_systemverilog_integral_constant_type(
-        const std::optional<semantic::sv::TypeReference>& type) noexcept
+        const semantic::SpecializedHirUnit& specialization,
+        const std::optional<semantic::sv::TypeReference>& type,
+        const semantic::ScopeId scope)
     {
         if (!type) {
             return true;
         }
-        const auto scalar = frontend::systemverilog_scalar_kind(
-            type->target.spelling);
+        // A typedef of real is a real type (IEEE 1800-2023 6.18).
+        const auto scalar = hir_systemverilog_declared_scalar_kind(
+            specialization, *type, scope);
         return scalar == frontend::SystemVerilogScalarKind::None
             || scalar == frontend::SystemVerilogScalarKind::Time;
     }
@@ -8991,8 +8994,9 @@ namespace {
                 || !declaration->systemverilog->type) {
                 continue;
             }
-            const auto target_scalar = frontend::systemverilog_scalar_kind(
-                declaration->systemverilog->type->target.spelling);
+            const auto target_scalar = hir_systemverilog_declared_scalar_kind(
+                *result, *declaration->systemverilog->type,
+                declaration->systemverilog->scope);
             if (target_scalar
                 != frontend::SystemVerilogScalarKind::None) {
                 auto scalar = decode_hir_systemverilog_scalar_constant(
@@ -9096,7 +9100,7 @@ namespace {
                       return;
                   }
                   if (compiled_systemverilog_string_declaration(
-                          *declaration->systemverilog)) {
+                          *result, *declaration->systemverilog)) {
                       const auto string_value = result->evaluate_string_expression(
                           *declaration->systemverilog->initializer);
                       if (string_value) {
@@ -9114,8 +9118,9 @@ namespace {
                       return;
                   }
                   const auto target_scalar = declaration->systemverilog->type
-                      ? frontend::systemverilog_scalar_kind(
-                            declaration->systemverilog->type->target.spelling)
+                      ? hir_systemverilog_declared_scalar_kind(*result,
+                            *declaration->systemverilog->type,
+                            declaration->systemverilog->scope)
                       : frontend::SystemVerilogScalarKind::None;
                   const auto& declared_type = declaration->systemverilog->type;
                   // An unpacked aggregate's value is its bit stream
@@ -9151,7 +9156,8 @@ namespace {
                   // concatenation of its items.
                   auto constant = !unpacked_aggregate
                           && !compiled_systemverilog_integral_constant_type(
-                              declared_type)
+                              *result, declared_type,
+                              declaration->systemverilog->scope)
                       ? std::optional<HirSystemVerilogConstant> { }
                       : declared_type
                       ? evaluate_hir_systemverilog_typed_constant(*result,
@@ -9170,7 +9176,8 @@ namespace {
                   if (!constant && declared_type
                       && (unpacked_aggregate
                           || compiled_systemverilog_integral_constant_type(
-                              declared_type))) {
+                              *result, declared_type,
+                              declaration->systemverilog->scope))) {
                       std::string fallback_error;
                       auto fallback = evaluate_hir_systemverilog_constant(
                           *result, *declaration->systemverilog->initializer,
@@ -13276,7 +13283,8 @@ namespace {
                         && declaration->systemverilog->type->value_form
                             == TypeForm::string)
                     || !compiled_systemverilog_integral_constant_type(
-                        declaration->systemverilog->type)
+                        *specialized, declaration->systemverilog->type,
+                        declaration->systemverilog->scope)
                     || specialized->evaluate_integral_declaration(
                         declaration_id)) {
                     continue;
@@ -14522,6 +14530,28 @@ namespace {
         subtype.executable_width = actual_info.width;
         return subtype;
     }
+
+// A value parameter whose type names a typedef, or is an unpacked structure
+// or union spelled in place, has a typespec VPI publishes (IEEE 1800-2023
+// 37.28; an unpacked aggregate parameter takes its member shape from it).
+[[nodiscard]] bool vpi_parameter_has_typespec(
+    const semantic::sv::TypeReference& type) noexcept
+{
+    // A name that is no built-in type names a typedef, resolved in the
+    // declaration's scope even when it is a compilation-unit typedef the
+    // reference does not bind (IEEE 1800-2023 3.12.1, 6.18).
+    static constexpr std::array<std::string_view, 16> built_in { "implicit",
+        "logic", "bit", "reg", "byte", "shortint", "int", "longint",
+        "integer", "time", "real", "shortreal", "realtime", "string",
+        "chandle", "event" };
+    const auto& spelling = type.target.spelling;
+    return type.target.target.valid()
+        || (type.value_form
+            && (*type.value_form == semantic::sv::TypeForm::unpacked_structure
+                || *type.value_form == semantic::sv::TypeForm::unpacked_union))
+        || (!spelling.empty() && type.class_identity.empty()
+            && std::ranges::find(built_in, spelling) == built_in.end());
+}
 
 } // namespace
 
@@ -17059,7 +17089,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                 || declaration->systemverilog->form
                     == semantic::sv::DeclarationForm::local_parameter)
             && declaration->systemverilog->type
-            && declaration->systemverilog->type->target.target.valid()) {
+            && vpi_parameter_has_typespec(*declaration->systemverilog->type)) {
             auto typespec
                 = hierarchy_sv_type_layout_detail::systemverilog_vpi_typespec(
                     *specialized, *declaration->systemverilog->type,
@@ -17069,6 +17099,45 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                     declaration->systemverilog->name,
                     std::make_shared<const runtime::SystemVerilogVpiTypespec>(
                         std::move(*typespec)),
+                });
+            }
+            continue;
+        }
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->form
+                == semantic::sv::DeclarationForm::port
+            && declaration->systemverilog->type
+            && vpi_parameter_has_typespec(*declaration->systemverilog->type)) {
+            if (auto typespec = hierarchy_sv_type_layout_detail::
+                    systemverilog_vpi_typespec(*specialized,
+                        *declaration->systemverilog->type,
+                        declaration->systemverilog->scope)) {
+                specialization.vpi_port_typespecs.push_back({
+                    declaration->systemverilog->name,
+                    std::make_shared<const runtime::SystemVerilogVpiTypespec>(
+                        std::move(*typespec)),
+                });
+            }
+            continue;
+        }
+        // A nettype's typespec is that of the data type it carries (37.23).
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->form
+                == semantic::sv::DeclarationForm::nettype_declaration
+            && declaration->systemverilog->declared_type) {
+            const auto definition = specialized->find_type(
+                *declaration->systemverilog->declared_type);
+            if (definition && definition->systemverilog != nullptr) {
+                auto typespec
+                    = hierarchy_sv_type_layout_detail::systemverilog_vpi_typespec(
+                        *specialized, definition->systemverilog->base,
+                        declaration->systemverilog->scope);
+                specialization.vpi_nettype_typespecs.push_back({
+                    declaration->systemverilog->name,
+                    typespec ? std::make_shared<
+                                   const runtime::SystemVerilogVpiTypespec>(
+                                   std::move(*typespec))
+                             : nullptr,
                 });
             }
             continue;
@@ -17121,6 +17190,31 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                 ? recorded_value->second
                 : recorded_identity->second;
         };
+        // A typedef declaration as the typespec a use of it would have; none
+        // when the declaration is not a typedef.
+        const auto vpi_recorded_typedef
+            = [](const semantic::SpecializedHirUnit& owner_unit,
+                  const auto& declared) -> std::optional<VpiTypedefInfo> {
+            if (!declared || declared->systemverilog == nullptr
+                || declared->systemverilog->form
+                    != semantic::sv::DeclarationForm::typedef_declaration
+                || !declared->systemverilog->declared_type) {
+                return std::nullopt;
+            }
+            semantic::sv::TypeReference reference;
+            reference.target.target = *declared->systemverilog->declared_type;
+            reference.target.spelling = declared->systemverilog->name;
+            auto typespec
+                = hierarchy_sv_type_layout_detail::systemverilog_vpi_typespec(
+                    owner_unit, reference, declared->systemverilog->scope);
+            return VpiTypedefInfo {
+                declared->systemverilog->name,
+                typespec ? std::make_shared<
+                               const runtime::SystemVerilogVpiTypespec>(
+                               std::move(*typespec))
+                         : nullptr,
+            };
+        };
         const auto is_value_parameter
             = [](const semantic::sv::Declaration& candidate) {
                   return candidate.form
@@ -17141,6 +17235,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             }
             VpiGenerateScopeInfo recorded_scope;
             recorded_scope.path = std::move(relative_scope);
+            recorded_scope.region = occurrence.region->declaration;
             for (const auto declaration_id : occurrence.region->declarations) {
                 const auto declared
                     = occurrence.specialization->find_declaration(declaration_id);
@@ -17152,10 +17247,36 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                 if (const auto canonical = vpi_recorded_identity(
                         *occurrence.specialization, declaration_id,
                         parameter_record)) {
+                    // A parameter declared with a typedef takes the
+                    // typedef's typespec, as an instance's does (37.28).
+                    std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
+                        parameter_typespec;
+                    if (parameter_record.type
+                        && vpi_parameter_has_typespec(*parameter_record.type)) {
+                        if (auto typespec = hierarchy_sv_type_layout_detail::
+                                systemverilog_vpi_typespec(
+                                    *occurrence.specialization,
+                                    *parameter_record.type,
+                                    parameter_record.scope)) {
+                            parameter_typespec = std::make_shared<
+                                const runtime::SystemVerilogVpiTypespec>(
+                                std::move(*typespec));
+                        }
+                    }
                     recorded_scope.parameters.push_back({ parameter_record.name,
                         *canonical, declaration_id,
                         parameter_record.form
-                            == semantic::sv::DeclarationForm::local_parameter });
+                            == semantic::sv::DeclarationForm::local_parameter,
+                        std::move(parameter_typespec) });
+                }
+            }
+            // The typedefs the block declares (37.85 detail 5).
+            for (const auto declaration_id : occurrence.region->declarations) {
+                const auto declared
+                    = occurrence.specialization->find_declaration(declaration_id);
+                if (auto typedef_info
+                    = vpi_recorded_typedef(*occurrence.specialization, declared)) {
+                    recorded_scope.typedefs.push_back(std::move(*typedef_info));
                 }
             }
             specialization.vpi_generate_scopes.push_back(
@@ -17173,6 +17294,13 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                 for (const auto declaration_id : package_unit.declarations) {
                     const auto declared
                         = specialized->find_declaration(declaration_id);
+                    if (auto typedef_info
+                        = vpi_recorded_typedef(*specialized, declared)) {
+                        specialization.vpi_package_typedefs.push_back({
+                            package_key, std::move(typedef_info->name),
+                            std::move(typedef_info->typespec) });
+                        continue;
+                    }
                     if (!declared || declared->systemverilog == nullptr
                         || !is_value_parameter(*declared->systemverilog)) {
                         continue;
@@ -17180,12 +17308,27 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                     const auto& parameter_record = *declared->systemverilog;
                     if (const auto canonical = vpi_recorded_identity(
                             *specialized, declaration_id, parameter_record)) {
+                        std::shared_ptr<const runtime::SystemVerilogVpiTypespec>
+                            parameter_typespec;
+                        if (parameter_record.type
+                            && vpi_parameter_has_typespec(
+                                *parameter_record.type)) {
+                            if (auto typespec = hierarchy_sv_type_layout_detail::
+                                    systemverilog_vpi_typespec(*specialized,
+                                        *parameter_record.type,
+                                        parameter_record.scope)) {
+                                parameter_typespec = std::make_shared<
+                                    const runtime::SystemVerilogVpiTypespec>(
+                                    std::move(*typespec));
+                            }
+                        }
                         specialization.vpi_package_parameters.push_back({
                             package_key, parameter_record.name, *canonical,
                             declaration_id,
                             parameter_record.form
                                 == semantic::sv::DeclarationForm::
-                                    local_parameter });
+                                    local_parameter,
+                            std::move(parameter_typespec) });
                     }
                 }
             }
@@ -17626,9 +17769,10 @@ void HierarchyBuilder::resolve_compiled_systemverilog_virtual_interface_initiali
             }
             const auto target_scalar
                 = declaration->systemverilog->type
-                ? frontend::systemverilog_scalar_kind(
-                      declaration->systemverilog->type
-                          ->target.spelling)
+                ? hir_systemverilog_declared_scalar_kind(
+                      *specialized_interface,
+                      *declaration->systemverilog->type,
+                      declaration->systemverilog->scope)
                 : frontend::SystemVerilogScalarKind::None;
             const bool scalar_applicable
                 = declaration->systemverilog->initializer
@@ -18508,8 +18652,9 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
     }
     if (!display) {
         const auto target_scalar = declaration->systemverilog->type
-            ? frontend::systemverilog_scalar_kind(
-                  declaration->systemverilog->type->target.spelling)
+            ? hir_systemverilog_declared_scalar_kind(specialized,
+                  *declaration->systemverilog->type,
+                  declaration->systemverilog->scope)
             : frontend::SystemVerilogScalarKind::None;
         const auto scalar_applicable
             = declaration->systemverilog->initializer
@@ -18834,12 +18979,27 @@ HierarchyBuilder::compiled_systemverilog_root_parameter_actuals(
         // value, and an integral one its value rounded to the nearest
         // integer (IEEE 1800-2023 6.20.2, 6.12.2).
         const auto& type = declaration->systemverilog->type;
+        // A typedef of a real type is a real parameter (6.18).
+        auto real_spelling = type ? type->target.spelling : std::string { };
+        if (type && !real_spelling.empty()
+            && frontend::systemverilog_scalar_kind(real_spelling)
+                == frontend::SystemVerilogScalarKind::None) {
+            if (const auto underlying
+                = semantic::CompiledDesignResolver { *compiled_, root.id }
+                      .underlying_systemverilog_type(
+                          *type, declaration->systemverilog->scope);
+                underlying && !underlying->container_form
+                && underlying->packed_dimensions.empty()
+                && !underlying->packed_range) {
+                real_spelling = underlying->target.spelling;
+            }
+        }
         const auto real_kind = !type ? frontend::SystemVerilogScalarKind::None
-            : type->target.spelling == "real"
+            : real_spelling == "real"
             ? frontend::SystemVerilogScalarKind::Real
-            : type->target.spelling == "shortreal"
+            : real_spelling == "shortreal"
             ? frontend::SystemVerilogScalarKind::ShortReal
-            : type->target.spelling == "realtime"
+            : real_spelling == "realtime"
             ? frontend::SystemVerilogScalarKind::Realtime
             : frontend::SystemVerilogScalarKind::None;
         const bool untyped = !type
@@ -21203,7 +21363,8 @@ HierarchyBuilder::compiled_systemverilog_package_variable_signal(
             || !source.type->unpacked_dimensions.empty()
             || !source.type->container_element_types.empty()
             || source.type->target.spelling == "event"
-            || compiled_systemverilog_string_declaration(source)) {
+            || compiled_systemverilog_string_declaration(
+                specialization, source)) {
             return false;
         }
         const auto width

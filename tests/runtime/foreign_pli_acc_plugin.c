@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // PLI 1.0 access routine conformance plug-in (IEEE 1364-2001 Clauses 22
-// and 23): the tasks $acc_walk, $acc_watch and $acc_unwatch are registered
+// and 23): the tasks $acc_walk, $acc_av, $acc_watch and $acc_unwatch are registered
 // through a veriusertfs table. Lines starting with "#c " form the checked
 // trace.
 #include "fsim/runtime/acc_user.h"
@@ -176,6 +176,53 @@ static PLI_INT32 walk_calltf(PLI_INT32 data, PLI_INT32 reason)
     return 0;
 }
 
+// One step of the assign layer check: $acc_av(reg, op) assigns 4'b0101
+// (1), forces 4'b1100 (2), releases (3), deassigns (4) or only shows (5)
+// the register; the value after the step follows (IEEE 1364-2005 9.3,
+// 23.96). Step 6 releases without showing, for a net that returns to its
+// driver only when the simulation runs on.
+static PLI_INT32 av_calltf(PLI_INT32 data, PLI_INT32 reason)
+{
+    handle reg;
+    int op;
+    int rc = 0;
+    s_setval_value value;
+    s_setval_delay delay;
+    s_acc_vecval vector;
+    char label[32];
+    (void)data;
+    (void)reason;
+    (void)acc_initialize();
+    reg = acc_handle_tfarg(1);
+    op = (int)tf_getp(2);
+    memset(&value, 0, sizeof value);
+    memset(&delay, 0, sizeof delay);
+    vector.aval = op == 2 ? 12 : 5;
+    vector.bval = 0;
+    value.format = accVectorVal;
+    value.value.vector = &vector;
+    if (op == 1) {
+        delay.model = accAssignFlag;
+    } else if (op == 2) {
+        delay.model = accForceFlag;
+    } else if (op == 3 || op == 6) {
+        delay.model = accReleaseFlag;
+    } else if (op == 4) {
+        delay.model = accDeassignFlag;
+    }
+    if ((op >= 1 && op <= 4) || op == 6) {
+        rc = (int)acc_set_value(reg, &value, &delay);
+    }
+    if (op == 6) {
+        acc_close();
+        return rc;
+    }
+    snprintf(label, sizeof label, "av op=%d rc=%d", op, rc);
+    show_value(label, reg, "%b");
+    acc_close();
+    return 0;
+}
+
 static char tag[] = "link";
 
 static PLI_INT32 consumer(p_vc_record record)
@@ -209,6 +256,7 @@ static PLI_INT32 unwatch_calltf(PLI_INT32 data, PLI_INT32 reason)
 
 static s_tfcell table[] = {
     { usertask, 0, NULL, NULL, walk_calltf, NULL, "$acc_walk", 0, NULL, NULL, { 0 } },
+    { usertask, 0, NULL, NULL, av_calltf, NULL, "$acc_av", 0, NULL, NULL, { 0 } },
     { usertask, 0, NULL, NULL, watch_calltf, NULL, "$acc_watch", 0, NULL, NULL, { 0 } },
     { usertask, 0, NULL, NULL, unwatch_calltf, NULL, "$acc_unwatch", 0, NULL, NULL, { 0 } },
     { 0, 0, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL, { 0 } },

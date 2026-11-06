@@ -71,12 +71,19 @@ using fsim::runtime::acc_detail::publish_error;
   return fsim::runtime::acc_detail::type_matches(type, accPrimitive);
 }
 
+// A module input port or a bit of one, which has a delay (MIPD) of the same
+// number of values as a path (IEEE 1364-2005 22.5.2, 23.1, 23.14, 23.90).
+[[nodiscard]] bool input_port_target(
+    const fsim_acc_read_result_v3& metadata) noexcept {
+  return (fsim::runtime::acc_detail::type_matches(metadata.type, accPort) ||
+          fsim::runtime::acc_detail::type_matches(metadata.full_type, accPort) ||
+          metadata.type == accPortBit || metadata.full_type == accPortBit) &&
+         metadata.direction == accInput;
+}
+
 [[nodiscard]] bool delay_target(
     const fsim_acc_read_result_v3& metadata) noexcept {
-  const bool input_port =
-      (fsim::runtime::acc_detail::type_matches(metadata.type, accPort) ||
-       fsim::runtime::acc_detail::type_matches(metadata.full_type, accPort)) &&
-      metadata.direction == accInput;
+  const bool input_port = input_port_target(metadata);
   return (metadata.timing_capabilities & FSIM_ACC_TIMING_CAP_DELAYS) != 0 &&
          (is_path_type(metadata.type) || is_path_type(metadata.full_type) ||
           is_timing_check_type(metadata.type) ||
@@ -149,7 +156,8 @@ struct PreparedTiming {
   prepared.min_typ_max = *configured_mtm;
   prepared.to_hiz = *configured_hiz;
   if (is_path_type(prepared.metadata.type) ||
-      is_path_type(prepared.metadata.full_type)) {
+      is_path_type(prepared.metadata.full_type) ||
+      input_port_target(prepared.metadata)) {
     const auto configured_count = path_delay_count();
     if (!configured_count.has_value() ||
         *configured_count > prepared.metadata.timing_delay_count) {

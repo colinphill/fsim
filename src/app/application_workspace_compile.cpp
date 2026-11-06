@@ -675,17 +675,61 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
             return 1;
         }
     }
+    // An object written by an older fsim cannot be decoded. It is left out
+    // of the environment (its units too) and is rebuilt when its own sources
+    // are recompiled. Outdated objects are looked for only after a failed
+    // load, so a current workspace reads no payload twice.
+    std::vector<OutdatedObject> outdated;
     std::vector<CompiledUnitAvailability> available_units;
-    const auto imported_catalogs = compile_environment_catalogs(*catalogs, sources,
-        replaced_sources, available_units);
-    auto objects = workspace_object_selections(store, imported_catalogs, sources.library,
-        replaced_sources, diagnostics);
-    if (diagnostics.has_error()) {
-        return 1;
+    std::vector<WorkspaceObjectSelection> objects;
+    std::optional<CompilationWorkspace> imported;
+    for (;;) {
+        diagnostic::Engine attempt;
+        available_units.clear();
+        const auto imported_catalogs = compile_environment_catalogs(*catalogs, sources,
+            replaced_sources, available_units);
+        objects = workspace_object_selections(store, imported_catalogs, sources.library,
+            replaced_sources, attempt);
+        if (!attempt.has_error()) {
+            imported = load_workspace_objects(
+                objects, attempt, false, config.base_directory);
+        }
+        if (imported && !attempt.has_error()) {
+            for (const auto& diagnostic : attempt.diagnostics()) {
+                diagnostics.report(diagnostic);
+            }
+            break;
+        }
+        imported.reset();
+        auto found = find_outdated_objects(store, imported_catalogs);
+        if (found.empty()) {
+            for (const auto& diagnostic : attempt.diagnostics()) {
+                diagnostics.report(diagnostic);
+            }
+            break;
+        }
+        for (auto& object : found) {
+            for (auto& catalog : *catalogs) {
+                if (catalog.location.name == object.library) {
+                    std::erase_if(catalog.artifacts, [&](const auto& artifact) {
+                        return artifact.id == object.id;
+                    });
+                }
+            }
+            if (invocation.verbosity == cli::Verbosity::verbose) {
+                output << "  skipping outdated object " << object.path.filename().string()
+                       << " (" << object.reason << ")\n";
+            }
+            outdated.push_back(std::move(object));
+        }
     }
-    auto imported = load_workspace_objects(
-        objects, diagnostics, false, config.base_directory);
+    const auto report_skipped = [&] {
+        for (const auto& object : outdated) {
+            report_outdated_object(diagnostics, object, true);
+        }
+    };
     if (!imported) {
+        report_skipped();
         return 1;
     }
     if (invocation.verbosity == cli::Verbosity::verbose) {
@@ -696,6 +740,8 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
     auto checked_workspace = check_project_for_object(config, diagnostics, &*imported,
         available_units);
     if (!checked_workspace) {
+        // A unit only a skipped object provides is reported as missing.
+        report_skipped();
         return 1;
     }
     auto groups = partition_workspace_objects(*checked_workspace, config, diagnostics);

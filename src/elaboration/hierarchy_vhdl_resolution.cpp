@@ -14,10 +14,6 @@
 #include <utility>
 
 namespace fsim::elaboration {
-namespace {
-
-} // namespace
-
 std::optional<CompiledVhdlResolutionDiagnostic>
 HierarchyBuilder::register_compiled_vhdl_resolution(
     const SignalId signal,
@@ -214,6 +210,61 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
                 design_.append_process_record(std::move(variant->process));
                 resolver.variants.push_back(VhdlResolverVariant {
                     variant_process, variant->input, variant->output });
+            }
+        }
+        // A foreign architecture instance may create further drivers of the
+        // signal while the simulation runs (IEEE 1076-2019 23.6): its
+        // resolution function then receives the values of all its sources,
+        // the created ones after the declared ones in creation order
+        // (14.7.3.2). The programs are fixed once the design is elaborated:
+        // variants[count] resolves `count` connected drivers for the first
+        // vhdl_resolver_static_created_drivers created ones (an invalid
+        // process marks a count the base program serves or one that is not
+        // built), and a last program, whose driver count is a run-time
+        // value, serves every larger number. Only signals a foreign
+        // architecture drives get these programs.
+        const auto declared = found->second.size();
+        const bool foreign = std::ranges::any_of(found->second,
+            [&](const ProcessId driver) {
+                return design_.process_view(driver).name().ends_with(
+                    vhdl_foreign_architecture_process_suffix);
+            });
+        const bool guarded_complete = resolver.guarded_kind == 0U
+            || resolver.variants.size() == declared;
+        if (foreign && guarded_complete) {
+            const VhdlResolverVariant none {
+                std::numeric_limits<ProcessId>::max(), 0U, 0U };
+            resolver.variants.resize(declared, none);
+            resolver.variants.push_back(none);
+            for (std::size_t extra { 1U };
+                extra <= runtime::simir::vhdl_resolver_static_created_drivers;
+                ++extra) {
+                const auto diagnostics_before = diagnostics_.size();
+                auto variant = lowerer.lower_hir_vhdl_resolver_process(
+                    signal, pending.body, declared + extra, hierarchy,
+                    pending.segments, driver_regions);
+                if (!variant) {
+                    diagnostics_.resize(diagnostics_before);
+                    resolver.variants.push_back(none);
+                    continue;
+                }
+                const auto variant_process = variant->process.id;
+                design_.append_process_record(std::move(variant->process));
+                resolver.variants.push_back(VhdlResolverVariant {
+                    variant_process, variant->input, variant->output });
+            }
+            const auto diagnostics_before = diagnostics_.size();
+            auto dynamic = lowerer.lower_hir_vhdl_resolver_process(
+                signal, pending.body, 0U, hierarchy, pending.segments,
+                driver_regions, true);
+            if (dynamic) {
+                const auto dynamic_process = dynamic->process.id;
+                design_.append_process_record(std::move(dynamic->process));
+                resolver.variants.push_back(VhdlResolverVariant {
+                    dynamic_process, dynamic->input, dynamic->output });
+            } else {
+                diagnostics_.resize(diagnostics_before);
+                resolver.variants.push_back(none);
             }
         }
         design_.signals_[signal].vhdl_resolver = std::move(resolver);

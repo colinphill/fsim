@@ -297,10 +297,16 @@ enum class ListKind : std::uint8_t {
     // Connectivity (IEEE 1076-2019 19.12).
     drivers,
     port_assocs,
+    generic_assocs,
+    // Configuration specifications of an architecture body (IEEE 1076-2019
+    // 19.5, Figure 3).
+    config_specs,
     // Expressions and collections (IEEE 1076-2019 19.8, 19.15).
     param_assocs,
     elem_assocs,
     members,
+    // The implicit signals attached to a signal (IEEE 1076-2019 19.4.3).
+    sig_attrs,
 };
 
 struct Object final : Handle {
@@ -320,6 +326,9 @@ struct Object final : Handle {
     // Regions: the design hierarchy path and the declarations in scope.
     std::string path;
     const vhdl::Unit* unit { };
+    // A subprogram body object: the declaration that holds the body, which
+    // is `declaration` unless the body is declared apart from it.
+    const vhdl::Declaration* body_declaration { };
     const vhdl::Unit* entity { };
     std::vector<const vhdl::Declaration*> region_declarations;
     std::vector<Object*> design_units;
@@ -359,16 +368,32 @@ struct Object final : Handle {
     // A driver: the basic signal it drives (IEEE 1076-2019 19.12.1); its
     // parent is the process or concurrent statement that holds it.
     Object* basic { };
+    // An attribute name of an implicit signal (S'DELAYED(t), S'STABLE(t),
+    // S'QUIET(t), S'TRANSACTION; IEEE 1076-2019 14.7.3.3, 19.4.3): the
+    // designator, when the object has no expression of its own. Its
+    // `signal` is the kernel signal that holds the implicit signal.
+    std::string_view implicit_attribute;
     // A component instantiation: its elaborated occurrence, whose HIR
     // instance holds the port map (IEEE 1076-2019 19.10).
     const semantic::design::InstanceOccurrence* occurrence { };
-    // A port association element: the association of the port map.
+    // A port or generic association element: the association of the map,
+    // and whether it is one of a generic map.
     const vhdl::Association* port_association { };
+    bool generic_association { };
+    // A component configuration (class compConfig, IEEE 1076-2019 19.5): the
+    // configuration specification it stands for; its binding indication's
+    // formals are the generics and ports of `entity` and, when it was
+    // reached from a component instantiation, `instance` is that statement,
+    // which gives the actuals the component they name ports of.
+    const vhdl::ComponentConfiguration* component_config { };
     // A foreign architecture (IEEE 1076-2019 20.4): for the process and
     // the drivers vhpi_create made, the index of the instance in
     // foreign_instances_; an architecture body is reached from its
     // instance.
     std::optional<std::size_t> foreign;
+    // The run-time process that owns the drivers of a created process, or
+    // a created driver of no process (23.6).
+    std::optional<runtime::simir::ProcessId> foreign_owner;
     bool foreign_process { };
     bool created_driver { };
     Object* instance { };
@@ -788,6 +813,8 @@ struct RegistryEntry {
     case vhpiCbQuiescense:
     case vhpiCbPLIError:
     case vhpiCbSigInterrupt:
+    case vhpiCbEnterInteractive:
+    case vhpiCbExitInteractive:
     case vhpiCbStmt:
     case vhpiCbResume:
     case vhpiCbSuspend:
@@ -1696,6 +1723,8 @@ private:
         case vhpiCbQuiescense:
         case vhpiCbPLIError:
         case vhpiCbSigInterrupt:
+        case vhpiCbEnterInteractive:
+        case vhpiCbExitInteractive:
         // The obj, time and value members of a save, restart or reset
         // callback are ignored (IEEE 1076-2019 21.3.8.1).
         case vhpiCbStartOfSave:
@@ -1919,7 +1948,9 @@ private:
             && data->reason != vhpiCbStartOfRestart
             && data->reason != vhpiCbEndOfRestart
             && data->reason != vhpiCbStartOfReset
-            && data->reason != vhpiCbEndOfReset) {
+            && data->reason != vhpiCbEndOfReset
+            && data->reason != vhpiCbEnterInteractive
+            && data->reason != vhpiCbExitInteractive) {
             simulation_.open_external_observation();
         }
         if ((data->reason == vhpiCbValueChange || data->reason == vhpiCbSensitivity)
@@ -2278,6 +2309,16 @@ private:
         case Simulation::LifecycleEvent::end_of_reset:
             dispatch(vhpiCbEndOfReset);
             restart_initialization();
+            break;
+        // The interactive modes are the front end's (IEEE 1076-2019
+        // 21.3.7.8, 21.3.7.9); VHPI has no scope-change callback.
+        case Simulation::LifecycleEvent::enter_interactive:
+            dispatch(vhpiCbEnterInteractive);
+            break;
+        case Simulation::LifecycleEvent::exit_interactive:
+            dispatch(vhpiCbExitInteractive);
+            break;
+        case Simulation::LifecycleEvent::scope_change:
             break;
         }
     }
@@ -2843,7 +2884,9 @@ private:
     // callback reports; a case alternative before its first statement; an if
     // statement's first branch before its condition, which the if statement's
     // own point precedes, and an elsif branch before its condition; an else
-    // branch, which has no condition, before its first statement.
+    // branch, which has no condition, before its first statement. A
+    // concurrent signal assignment or assertion, the one statement of its
+    // equivalent process, triggers before it executes.
     [[nodiscard]] bool place_statement_callback(
         Callback& callback, Object& object)
     {
@@ -2881,9 +2924,19 @@ private:
             }
         } else if (object.is_stmt && object.sequential) {
             trigger = &object;
+        } else if (object.is_stmt && !object.sequential
+            && object.statement != nullptr
+            && (object.kind == vhpiSimpleSigAssignStmtK
+                || object.kind == vhpiCondSigAssignStmtK
+                || object.kind == vhpiSelectSigAssignStmtK
+                || object.kind == vhpiConcAssertStmtK)) {
+            // A concurrent signal assignment or assertion is the equivalent
+            // process's one statement (IEEE 1076-2019 11.4, 11.5, 21.3.4.2),
+            // which triggers before it executes.
+            trigger = &object;
         } else {
-            error(vhpiError, "statement callbacks need a sequential "
-                             "statement, a branch or a process");
+            error(vhpiError, "statement callbacks need a statement, a "
+                             "branch or a process");
             return false;
         }
         bool in_body = false;
@@ -3333,7 +3386,10 @@ private:
                 const auto* const callee = called_declaration(*call);
                 if (callee != nullptr && callback->object != nullptr
                     && callback->object->declaration != nullptr
-                    && callback->object->declaration->id == callee->id) {
+                    && (callback->object->declaration->id == callee->id
+                        || (callback->object->body_declaration != nullptr
+                            && callback->object->body_declaration->id
+                                == callee->id))) {
                     selected.emplace_back(callback, callback->order);
                 }
             }
@@ -3458,7 +3514,9 @@ private:
     {
         for (auto* const body : all_bodies()) {
             if (body->declaration != nullptr
-                && body->declaration->id == callee.id) {
+                && (body->declaration->id == callee.id
+                    || (body->body_declaration != nullptr
+                        && body->body_declaration->id == callee.id))) {
                 return body;
             }
         }
@@ -3487,6 +3545,18 @@ private:
         object->full_name = call->full_name + ":" + object->name;
         object->full_case_name = call->full_case_name + ":" + object->case_name;
         object->activation = &frame;
+        // A formal signal parameter denotes its actual signal for the call
+        // and takes its constraint (IEEE 1076-2019 4.2.2.3, 6.5.6.3), so it
+        // is a signal of the model with basic signals of its own (19.12.2.1).
+        if (declaration.kind == vhpiSigParamDeclK
+            && declaration.declaration != nullptr) {
+            if (const auto* const actual
+                = signal_parameter_actual(*call, *declaration.declaration)) {
+                object->signal = actual->signal;
+                object->offset = actual->offset;
+                object->type = actual->type;
+            }
+        }
         frame.children.emplace(key, object);
         return object;
     }
@@ -4517,6 +4587,137 @@ private:
             == source_position(statement.source);
     }
 
+    // The implicit signals S'DELAYED(t), S'STABLE(t), S'QUIET(t) and
+    // S'TRANSACTION the design uses of a declared signal or port, in the
+    // order elaboration created them (vhpiSigAttrs, IEEE 1076-2019 14.7.3.3,
+    // 19.4.3). Each is an attribute name whose signal is the kernel signal
+    // `<signal>'<attribute>(<ticks>)` the lowering made for it; S'STABLE and
+    // S'QUIET with no time are the signals of ticks 0 and are simple
+    // attribute names. S(i)'TRANSACTION belongs to the element or slice
+    // object: its kernel signal is `<signal>'transaction(0)[<offset>+<width>]`.
+    [[nodiscard]] std::vector<Object*> implicit_signals(Object& object)
+    {
+        std::vector<Object*> result;
+        const bool whole = object.kind == vhpiSigDeclK
+            || object.kind == vhpiPortDeclK;
+        const bool element = object.kind == vhpiIndexedNameK
+            || object.kind == vhpiSelectedNameK
+            || object.kind == vhpiSliceNameK;
+        if ((!whole && !element) || !object.signal
+            || (whole && object.declaration == nullptr)
+            || (element && object.type == nullptr)) {
+            return result;
+        }
+        if (const auto found = object.lists.find(ListKind::sig_attrs);
+            found != object.lists.end()) {
+            return found->second;
+        }
+        const auto* const source = signal_info(*object.signal);
+        if (source != nullptr) {
+            static constexpr std::array<std::string_view, 4> designators {
+                "delayed", "stable", "quiet", "transaction"
+            };
+            const std::string prefix = source->name + "'";
+            const std::string element_suffix = element
+                ? "[" + std::to_string(object.offset) + "+"
+                    + std::to_string(width_of(*object.type)) + "]"
+                : std::string { };
+            for (const auto& info : simulation_.design().signals()) {
+                if (!info.name.starts_with(prefix)) {
+                    continue;
+                }
+                std::string_view rest
+                    = std::string_view { info.name }.substr(prefix.size());
+                // An element's own implicit signal carries its selection.
+                const bool selected = rest.ends_with(']');
+                if (selected) {
+                    if (!element || !rest.ends_with(element_suffix)) {
+                        continue;
+                    }
+                    rest.remove_suffix(element_suffix.size());
+                } else if (element) {
+                    continue;
+                }
+                const auto open = rest.find('(');
+                if (open == std::string_view::npos || !rest.ends_with(')')) {
+                    continue;
+                }
+                const auto designator = std::ranges::find(
+                    designators, rest.substr(0U, open));
+                const auto ticks = rest.substr(open + 1U, rest.size() - open - 2U);
+                if (designator == designators.end() || ticks.empty()
+                    || !std::ranges::all_of(ticks, [](const char c) {
+                           return c >= '0' && c <= '9';
+                       })
+                    || (element && *designator != "transaction")) {
+                    continue;
+                }
+                const bool parameterized = *designator == "delayed"
+                    || ((*designator == "stable" || *designator == "quiet")
+                        && ticks != "0");
+                const auto key = "@sigattr:" + info.name;
+                auto* attribute = static_cast<Object*>(nullptr);
+                if (const auto existing = object.children.find(key);
+                    existing != object.children.end()) {
+                    attribute = existing->second;
+                } else {
+                    attribute = make_object(parameterized ? vhpiParamAttrNameK
+                                                          : vhpiSimpAttrNameK,
+                        object.name + "'" + std::string { *designator }, &object);
+                    attribute->case_name = object.case_name + "'"
+                        + std::string { *designator };
+                    attribute->full_name
+                        = object.full_name + "'" + std::string { *designator };
+                    attribute->full_case_name = object.full_case_name + "'"
+                        + std::string { *designator };
+                    attribute->implicit_attribute = *designator;
+                    attribute->signal = info.id;
+                    // S'TRANSACTION is of type BIT, S'STABLE and S'QUIET
+                    // BOOLEAN (IEEE 1076-2019 16.2.4).
+                    attribute->type = *designator == "delayed"
+                        ? object.type
+                        : standard_type(*designator == "transaction"
+                                  ? "bit"
+                                  : "boolean");
+                    object.children.emplace(key, attribute);
+                }
+                result.push_back(attribute);
+            }
+        }
+        object.lists[ListKind::sig_attrs] = result;
+        return result;
+    }
+
+    // The signal GUARD of a guarded block (IEEE 1076-2019 11.2, 11.6): the
+    // implicit signal the frontend declares in a block with a guard
+    // expression. A block with no guard expression has none of its own; with
+    // `assignment`, a guarded signal assignment in it takes the signal GUARD
+    // the design declares in the block or the nearest enclosing region that
+    // does (11.6).
+    [[nodiscard]] Object* guard_signal(Object& block, const bool assignment = false)
+    {
+        const bool guarded_block = block.kind == vhpiBlockStmtK
+            && block.generate != nullptr && block.generate->condition;
+        if (!assignment && !guarded_block) {
+            return nullptr;
+        }
+        for (auto* region = &block; region != nullptr; region = region->parent) {
+            if (!is_region(*region)) {
+                continue;
+            }
+            for (const auto* const declaration : region->region_declarations) {
+                if (declaration->form == vhdl::DeclarationForm::signal
+                    && same_name(declared_name(*declaration), "guard")) {
+                    return declared(*region, *declaration);
+                }
+            }
+            if (!assignment || guarded_block) {
+                break;
+            }
+        }
+        return nullptr;
+    }
+
     // The driver the frontend adds to a guarded block for GUARD.
     [[nodiscard]] bool guard_driver(
         const Object& region, const vhdl::Statement& statement) const
@@ -5161,6 +5362,102 @@ private:
         }
     }
 
+    // The signal a procedure call associates with a formal signal parameter:
+    // the actual of the argument for that formal (IEEE 1076-2019 4.2.2.3).
+    [[nodiscard]] Object* signal_parameter_actual(
+        Object& call, const vhdl::Declaration& formal)
+    {
+        if (call.statement == nullptr
+            || call.statement->kind != vhdl::StatementKind::procedure_call) {
+            return nullptr;
+        }
+        auto* scope = call.parent;
+        while (scope != nullptr && !is_declarative(*scope)) {
+            scope = scope->parent;
+        }
+        if (scope == nullptr) {
+            return nullptr;
+        }
+        for (std::size_t index = 0U;
+             index < call.statement->procedure_arguments.size(); ++index) {
+            const auto* const candidate = call_formal(*call.statement, index);
+            if (candidate == nullptr || candidate->id != formal.id) {
+                continue;
+            }
+            auto* const actual = target_object(
+                *scope, call.statement->procedure_arguments[index].actual, 0U);
+            return actual != nullptr && actual->signal ? actual : nullptr;
+        }
+        return nullptr;
+    }
+
+    // The frame-bound signal parameter a signal object is, or is a part of.
+    [[nodiscard]] static Object* signal_parameter_root(Object& object) noexcept
+    {
+        auto* root = &object;
+        while (root->parent != nullptr
+            && (root->kind == vhpiIndexedNameK
+                || root->kind == vhpiSelectedNameK
+                || root->kind == vhpiSliceNameK)) {
+            root = root->parent;
+        }
+        return root->kind == vhpiSigParamDeclK && root->activation != nullptr
+                && root->activation->frame_call != nullptr
+                && root->declaration != nullptr
+            ? root
+            : nullptr;
+    }
+
+    // The basic signal of the actual that a basic signal of a formal signal
+    // parameter of a running call stands for (IEEE 1076-2019 19.12.2.2 c).
+    [[nodiscard]] Object* formal_actual_basic(Object& basic)
+    {
+        auto* const root = signal_parameter_root(basic);
+        if (root == nullptr) {
+            return nullptr;
+        }
+        auto* const actual = signal_parameter_actual(
+            *root->activation->frame_call, *root->declaration);
+        if (actual == nullptr) {
+            return nullptr;
+        }
+        for (auto* const candidate : basic_signals(*actual)) {
+            if (candidate->signal == basic.signal
+                && candidate->offset == basic.offset) {
+                return canonical_basic(*candidate);
+            }
+        }
+        return nullptr;
+    }
+
+    // The driver the process that makes a call holds for the actual of an
+    // out or inout formal signal parameter: the driver for the formal
+    // (IEEE 1076-2019 4.2.2.3, 19.12.2.2 c).
+    [[nodiscard]] std::vector<Object*> formal_drivers(Object& basic)
+    {
+        std::vector<Object*> result;
+        auto* const root = signal_parameter_root(basic);
+        auto* const actual = formal_actual_basic(basic);
+        if (root == nullptr || actual == nullptr
+            || root->declaration->direction == vhdl::Direction::input) {
+            return result;
+        }
+        auto* owner = root->activation->frame_call;
+        while (owner != nullptr && owner->kind != vhpiProcessStmtK
+            && !(owner->is_stmt && !owner->sequential)) {
+            owner = owner->parent;
+        }
+        if (owner == nullptr) {
+            return result;
+        }
+        for (auto* const driver : process_drivers(*owner)) {
+            if (driver->basic == actual) {
+                result.push_back(driver);
+            }
+        }
+        return result;
+    }
+
     // The signals a target names, as basic signals: names, indexed names,
     // slices and aggregates of those, to the longest static prefix.
     void collect_targets(Object& scope, const semantic::ExpressionId id,
@@ -5339,6 +5636,50 @@ private:
         return result;
     }
 
+    // The local contributors of a basic signal, appended to `result`: the
+    // drivers, the ports and conversions associated with the signal, and a
+    // default expression when it has no source (IEEE 1076-2019 19.12.2.2).
+    // A formal signal parameter of mode in or inout has those of the actual
+    // signal it is associated with; one of mode out has the driver for the
+    // formal (19.12.2.2 c).
+    void local_contributors(Object& basic, std::vector<Object*>& result)
+    {
+        if (signal_parameter_root(basic) != nullptr) {
+            if (signal_parameter_root(basic)->declaration->direction
+                == vhdl::Direction::output) {
+                const auto drivers = formal_drivers(basic);
+                result.insert(result.end(), drivers.begin(), drivers.end());
+            } else if (auto* const actual = formal_actual_basic(basic)) {
+                std::vector<Object*> inherited;
+                local_contributors(*actual, inherited);
+                for (auto* const contributor : inherited) {
+                    if (std::ranges::find(result, contributor) == result.end()) {
+                        result.push_back(contributor);
+                    }
+                }
+            }
+            return;
+        }
+        const auto first = result.size();
+        const auto drivers = signal_drivers(basic);
+        result.insert(result.end(), drivers.begin(), drivers.end());
+        for (auto* const other : connection_objects(basic, true)) {
+            if (std::ranges::find(result, other) == result.end()) {
+                result.push_back(other);
+            }
+        }
+        if (result.size() == first && basic.declaration != nullptr
+            && basic.declaration->form == vhdl::DeclarationForm::signal
+            && basic.declaration->initializer) {
+            if (auto* const region = declaring_region(basic)) {
+                if (auto* const initial = expression_object(
+                        *region, *basic.declaration->initializer)) {
+                    result.push_back(initial);
+                }
+            }
+        }
+    }
+
     // The drivers of a signal: those of its basic signals.
     [[nodiscard]] std::vector<Object*> drivers_of(Object& object)
     {
@@ -5347,7 +5688,11 @@ private:
             return process_drivers(object);
         }
         for (auto* const basic : basic_signals(object)) {
-            const auto drivers = signal_drivers(*basic);
+            // The driver of a formal signal parameter is the one its call's
+            // process holds for the actual (19.12.2.2 c).
+            const auto drivers = signal_parameter_root(*basic) != nullptr
+                ? formal_drivers(*basic)
+                : signal_drivers(*basic);
             result.insert(result.end(), drivers.begin(), drivers.end());
         }
         return result;
@@ -5386,14 +5731,43 @@ private:
         return instance != nullptr ? &instance->port_map : nullptr;
     }
 
-    // The association elements of a port map, in order (vhpiPortAssocs).
-    [[nodiscard]] std::vector<Object*>& port_associations(Object& region)
+    // The generic map of an instance or block statement.
+    [[nodiscard]] const std::vector<vhdl::Association>* generic_map_of(
+        const Object& region) const
     {
-        auto& result = region.lists[ListKind::port_assocs];
+        if (region.generate != nullptr) {
+            return region.generate->kind == vhdl::GenerateKind::block
+                ? &region.generate->generic_map
+                : nullptr;
+        }
+        if (region.kind != vhpiCompInstStmtK || region.occurrence == nullptr
+            || !region.occurrence->source_instance || region.unit == nullptr) {
+            return nullptr;
+        }
+        const auto* const instance = semantic::find_by_id(
+            hir_.instances(), *region.occurrence->source_instance);
+        return instance != nullptr ? &instance->generic_map : nullptr;
+    }
+
+    // The association elements of a port map or a generic map of an instance,
+    // a block statement or a component configuration, in order
+    // (vhpiPortAssocs, vhpiGenericAssocs).
+    [[nodiscard]] std::vector<Object*>& associations(
+        Object& region, const bool generic)
+    {
+        auto& result
+            = region.lists[generic ? ListKind::generic_assocs
+                                   : ListKind::port_assocs];
         if (!result.empty()) {
             return result;
         }
-        const auto* const map = port_map_of(region);
+        const std::vector<vhdl::Association>* map = nullptr;
+        if (region.component_config != nullptr) {
+            map = generic ? &region.component_config->binding.generic_map
+                          : &region.component_config->binding.port_map;
+        } else {
+            map = generic ? generic_map_of(region) : port_map_of(region);
+        }
         if (map == nullptr) {
             return result;
         }
@@ -5402,6 +5776,7 @@ private:
             auto* const object = make_object(vhpiAssocElemK, "", &region);
             object->position = static_cast<std::int64_t>(index);
             object->port_association = &association;
+            object->generic_association = generic;
             object->actual = association.expression;
             object->named
                 = association.formal && !association.formal->spelling.empty();
@@ -5409,6 +5784,130 @@ private:
             result.push_back(object);
         }
         return result;
+    }
+
+    // The association elements of a port map, in order (vhpiPortAssocs).
+    [[nodiscard]] std::vector<Object*>& port_associations(Object& region)
+    {
+        return associations(region, false);
+    }
+
+    // The entity declaration a binding indication names, if it binds an
+    // entity (IEEE 1076-2019 7.3.2.2).
+    [[nodiscard]] const vhdl::Unit* binding_entity(
+        const vhdl::BindingIndication& binding) const
+    {
+        if (binding.kind != vhdl::BindingKind::entity) {
+            return nullptr;
+        }
+        auto text = binding.entity.text();
+        const auto dot = text.rfind('.');
+        const auto leaf = dot == std::string_view::npos
+            ? text
+            : text.substr(dot + 1U);
+        const auto library = dot == std::string_view::npos
+            ? std::string_view { }
+            : text.substr(0U, dot);
+        const auto library_dot = library.rfind('.');
+        const auto library_name = library_dot == std::string_view::npos
+            ? library
+            : library.substr(library_dot + 1U);
+        const auto found = std::ranges::find_if(hir_.units(), [&](const auto& c) {
+            return c.kind == vhdl::UnitKind::entity
+                && same_name(c.name, leaf)
+                && (library_name.empty() || same_name(c.library, library_name));
+        });
+        return found == hir_.units().end() ? nullptr : &*found;
+    }
+
+    // The component configuration object of a configuration specification of
+    // an architecture body (class compConfig, IEEE 1076-2019 19.5): its
+    // region declarations are the generics and ports of the entity its
+    // binding indication names, the formals of its maps.
+    [[nodiscard]] Object* config_spec_object(Object& architecture,
+        const vhdl::ComponentConfiguration& specification)
+    {
+        const auto key = "@configspec:"
+            + std::to_string(reinterpret_cast<std::uintptr_t>(&specification));
+        if (const auto found = architecture.children.find(key);
+            found != architecture.children.end()) {
+            return found->second;
+        }
+        auto* const object
+            = make_object(vhpiCompConfigK, "", &architecture);
+        object->component_config = &specification;
+        object->entity = binding_entity(specification.binding);
+        if (object->entity != nullptr) {
+            for (const auto id : object->entity->declarations) {
+                if (const auto* const declaration = hir_.find_declaration(id)) {
+                    object->region_declarations.push_back(declaration);
+                }
+            }
+        }
+        architecture.children.emplace(key, object);
+        return object;
+    }
+
+    // The configuration specifications of an architecture body, in order
+    // (vhpiConfigSpecs).
+    [[nodiscard]] std::vector<Object*> config_specs(Object& architecture)
+    {
+        std::vector<Object*> result;
+        if (architecture.kind != vhpiArchBodyK || architecture.unit == nullptr) {
+            return result;
+        }
+        for (const auto& specification :
+            architecture.unit->component_configurations) {
+            result.push_back(config_spec_object(architecture, specification));
+        }
+        return result;
+    }
+
+    // Whether a configuration specification applies to an instantiation
+    // statement (IEEE 1076-2019 7.3.2.1).
+    [[nodiscard]] static bool specification_applies(
+        const vhdl::ComponentConfiguration& specification,
+        const vhdl::Instance& source)
+    {
+        return same_name(specification.component.text(), source.target.text())
+            && (specification.selection != vhdl::InstanceSelection::labels
+                || std::ranges::any_of(specification.labels,
+                    [&](const std::string& label) {
+                        return same_name(label, source.name);
+                    }));
+    }
+
+    // The configuration specification that binds a component instantiation
+    // (vhpiConfigSpec); none when the binding is the default one.
+    [[nodiscard]] Object* config_spec_of(Object& instance)
+    {
+        const auto* const source = instantiation_of(instance);
+        if (source == nullptr || !source->component || source->configuration) {
+            return nullptr;
+        }
+        for (auto* region = instance.parent; region != nullptr;
+             region = region->parent) {
+            if (region->unit == nullptr) {
+                continue;
+            }
+            auto* const architecture = design_unit_object(*region);
+            if (architecture == nullptr || architecture->unit == nullptr) {
+                return nullptr;
+            }
+            for (const auto& specification :
+                architecture->unit->component_configurations) {
+                if (specification_applies(specification, *source)) {
+                    auto* const object
+                        = config_spec_object(*architecture, specification);
+                    if (object->instance == nullptr) {
+                        object->instance = &instance;
+                    }
+                    return object;
+                }
+            }
+            return nullptr;
+        }
+        return nullptr;
     }
 
     // The part of a port that `rest` (what follows the port name in a formal
@@ -5477,7 +5976,8 @@ private:
     // The port part a formal part designates; a conversion function or type
     // mark around the port name is recorded in `conversion`.
     [[nodiscard]] Object* named_formal(Object& region, std::string_view text,
-        Object*& conversion, const std::size_t depth)
+        Object*& conversion, const std::size_t depth,
+        const vhdl::DeclarationForm form = vhdl::DeclarationForm::port)
     {
         const auto name = leading_identifier(text);
         if (name.empty() || depth > 4U) {
@@ -5486,7 +5986,7 @@ private:
         auto rest = text.substr(
             static_cast<std::size_t>(name.data() - text.data()) + name.size());
         for (const auto* const declaration : region.region_declarations) {
-            if (declaration->form == vhdl::DeclarationForm::port
+            if (declaration->form == form
                 && same_name(declaration->name, name)) {
                 auto* const port = declared(region, *declaration);
                 return port != nullptr ? designated_part(*port, rest) : nullptr;
@@ -5503,7 +6003,8 @@ private:
             return nullptr;
         }
         auto* const part = named_formal(
-            region, rest.substr(1U, rest.size() - 2U), conversion, depth + 1U);
+            region, rest.substr(1U, rest.size() - 2U), conversion, depth + 1U,
+            form);
         if (part != nullptr && conversion == nullptr) {
             const auto* const type = lookup_name(region, name);
             const bool function = standard_type(std::string { name }) == nullptr
@@ -5558,26 +6059,39 @@ private:
         PortConnection connection;
         auto* const region = association.parent;
         const auto* const source = association.port_association;
+        const auto form = association.generic_association
+            ? vhdl::DeclarationForm::generic_constant
+            : vhdl::DeclarationForm::port;
         if (region != nullptr && source != nullptr) {
             connection.open = source->kind == vhdl::AssociationKind::open
                 || source->kind == vhdl::AssociationKind::default_box
                 || !source->expression;
             if (association.named) {
                 connection.formal = named_formal(*region,
-                    source->formal->spelling, connection.formal_conversion, 0U);
+                    source->formal->spelling, connection.formal_conversion, 0U,
+                    form);
             } else {
                 std::size_t seen { };
                 for (const auto* const declaration : region->region_declarations) {
-                    if (declaration->form == vhdl::DeclarationForm::port
+                    if (declaration->form == form
                         && seen++ == static_cast<std::size_t>(association.position)) {
                         connection.formal = declared(*region, *declaration);
                         break;
                     }
                 }
             }
-            if (!connection.open && region->parent != nullptr) {
+            // The actual part of a binding indication names the generics and
+            // ports of the component, of a map of an instance or block the
+            // objects of the region around it.
+            Object* actual_scope = region->parent;
+            if (region->component_config != nullptr) {
+                actual_scope = region->instance != nullptr
+                    ? component_declaration(*region->instance)
+                    : nullptr;
+            }
+            if (!connection.open && actual_scope != nullptr) {
                 resolve_actual(
-                    *region->parent, *source->expression, connection);
+                    *actual_scope, *source->expression, connection);
             }
         }
         return connections_.emplace(&association, connection).first->second;
@@ -5996,7 +6510,9 @@ private:
         const Object& driver) const
     {
         if (driver.foreign) {
-            return foreign_instances_[*driver.foreign].process;
+            return driver.foreign_owner
+                ? *driver.foreign_owner
+                : foreign_instances_[*driver.foreign].process;
         }
         if (driver.parent == nullptr) {
             return std::nullopt;
@@ -6051,6 +6567,12 @@ private:
         const auto* const expression = hir_expression(id);
         if (expression == nullptr) {
             return nullptr;
+        }
+        // A static call that normalization folded still is a funcCall of the
+        // static model; the literal stays the simulated value.
+        if (expression->unfolded_call
+            && is_function_call(*expression->unfolded_call)) {
+            return call_object(scope, id, *expression->unfolded_call);
         }
         switch (expression->kind) {
         case vhdl::ExpressionKind::name: {
@@ -7527,13 +8049,88 @@ private:
 
     // The body of a subprogram declaration (class subpBody, Figure 34):
     // its declarations and statements. A declaration that holds no body has
-    // none (a specification whose body is declared apart has no object).
-    [[nodiscard]] Object* body_object(
-        Object& owner, const vhdl::Declaration& declaration)
+    // none; a specification whose body is declared apart gets that body.
+    // The declaration that holds the body of a subprogram declaration: the
+    // declaration itself when it has one, else the body declared apart in
+    // the same declarative part or, for a package, in its package body
+    // (IEEE 1076-2019 4.2.1, 4.8, Figure 34). Overloads are told apart by
+    // the formal count, the formal names and, when both specifications
+    // repeat them, the lexical elements.
+    [[nodiscard]] const vhdl::Declaration* body_declaration(
+        const Object& owner, const vhdl::Declaration& declaration) const
     {
-        if (!declaration.callable || !declaration.callable->defined) {
+        if (!declaration.callable) {
             return nullptr;
         }
+        if (declaration.callable->defined) {
+            return &declaration;
+        }
+        std::vector<const vhdl::Declaration*> candidates;
+        const auto collect = [&](const vhdl::Declaration* const candidate) {
+            if (candidate != nullptr && candidate != &declaration
+                && candidate->callable && candidate->callable->defined
+                && candidate->form == declaration.form
+                && same_name(candidate->name, declaration.name)
+                && candidate->callable->formals.size()
+                    == declaration.callable->formals.size()) {
+                candidates.push_back(candidate);
+            }
+        };
+        for (const auto* const sibling : owner.region_declarations) {
+            collect(sibling);
+        }
+        if (owner.unit != nullptr && owner.unit->kind == vhdl::UnitKind::package
+            && owner.unit->primary_name.empty()) {
+            for (const auto& unit : hir_.units()) {
+                if (unit.kind != vhdl::UnitKind::package
+                    || unit.primary_name.empty()
+                    || !same_name(unit.library, owner.unit->library)
+                    || !same_name(unit.primary_name, owner.unit->name)) {
+                    continue;
+                }
+                for (const auto id : unit.declarations) {
+                    collect(hir_.find_declaration(id));
+                }
+            }
+        }
+        const auto formal_names_match = [&](const vhdl::Declaration& body) {
+            const auto& left = declaration.callable->formals;
+            const auto& right = body.callable->formals;
+            for (std::size_t index = 0; index < left.size(); ++index) {
+                const auto* const a = hir_.find_declaration(left[index]);
+                const auto* const b = hir_.find_declaration(right[index]);
+                if (a == nullptr || b == nullptr
+                    || !same_name(a->name, b->name)) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        const vhdl::Declaration* found { };
+        for (const auto* const candidate : candidates) {
+            if (!formal_names_match(*candidate)) {
+                continue;
+            }
+            const auto& lexemes = candidate->callable->specification_lexemes;
+            if (!lexemes.empty()
+                && lexemes == declaration.callable->specification_lexemes) {
+                return candidate;
+            }
+            if (found == nullptr) {
+                found = candidate;
+            }
+        }
+        return found;
+    }
+
+    [[nodiscard]] Object* body_object(
+        Object& owner, const vhdl::Declaration& specification)
+    {
+        const auto* const resolved = body_declaration(owner, specification);
+        if (resolved == nullptr) {
+            return nullptr;
+        }
+        const auto& declaration = *resolved;
         const auto key = "@body:"
             + std::to_string(reinterpret_cast<std::uintptr_t>(&declaration));
         if (const auto found = owner.children.find(key);
@@ -7541,7 +8138,10 @@ private:
             return found->second;
         }
         auto* const object = make_declared_object(vhpiSubpBodyK, declaration, &owner);
-        object->declaration = &declaration;
+        // The object stands for the specification: formals and the result
+        // type are the subprogram declaration's (Figure 34).
+        object->declaration = &specification;
+        object->body_declaration = &declaration;
         object->body = &declaration.statements;
         object->source = declaration.source;
         object->full_name = owner.full_name + ":" + object->name;
@@ -7592,8 +8192,13 @@ private:
                     continue;
                 }
                 if (auto* const body = body_object(*owner, *declaration)) {
-                    all_bodies_->push_back(body);
-                    owners.push_back(body);
+                    // A specification and a body declared apart share one
+                    // object.
+                    if (std::ranges::find(*all_bodies_, body)
+                        == all_bodies_->end()) {
+                        all_bodies_->push_back(body);
+                        owners.push_back(body);
+                    }
                 }
             }
             if (is_region(*owner)) {
@@ -8772,6 +9377,9 @@ private:
                 || object->kind == vhpiSliceNameK) {
                 return to_handle(object->parent);
             }
+            if (!object->implicit_attribute.empty()) {
+                return to_handle(object->parent);
+            }
             if ((object->kind == vhpiSimpAttrNameK
                     || object->kind == vhpiParamAttrNameK
                     || object->kind == vhpiUserAttrNameK)
@@ -8885,6 +9493,13 @@ private:
             return object->unit != nullptr && is_design_unit(*object)
                 ? to_handle(library_object(object->unit->library))
                 : nullptr;
+        case vhpiConfigSpec: {
+            // The configuration specification that binds a component
+            // instantiation (Figure 3).
+            auto* const specification = config_spec_of(*object);
+            return specification == nullptr ? nullptr
+                                            : to_handle(specification);
+        }
         case vhpiCompDecl: {
             // The component a component instantiation instantiates
             // (Figure 11).
@@ -8974,6 +9589,38 @@ private:
                 }
             }
             return expression == nullptr ? nullptr : to_handle(expression);
+        }
+        case vhpiGuardExpr: {
+            // The guard condition of a guarded block statement (IEEE
+            // 1076-2019 11.2, Figure 23); none for an unguarded block.
+            if (object->kind != vhpiBlockStmtK || object->generate == nullptr
+                || !object->generate->condition) {
+                return nullptr;
+            }
+            auto* const guard
+                = expression_object(*object, *object->generate->condition);
+            return guard == nullptr ? nullptr : to_handle(guard);
+        }
+        case vhpiGuardSig: {
+            // The implicit signal GUARD of a guarded block, and of a guarded
+            // signal assignment the one of the block that guards it (IEEE
+            // 1076-2019 11.2, 11.6, Figure 23, Figure 39).
+            auto* block = object;
+            if (is_signal_assignment(*object)) {
+                const auto& assignment = assignment_of(*object->statement);
+                if (!object->statement->guarded_assignment
+                    && !assignment.guarded_assignment) {
+                    return nullptr;
+                }
+                block = object->parent;
+                while (block != nullptr && !is_region(*block)) {
+                    block = block->parent;
+                }
+            }
+            auto* const guard = block == nullptr
+                ? nullptr
+                : guard_signal(*block, is_signal_assignment(*object));
+            return guard == nullptr ? nullptr : to_handle(guard);
         }
         case vhpiInPort:
         case vhpiOutPort: {
@@ -9492,9 +10139,26 @@ private:
                 result = basic_signals(*object);
             }
             break;
+        case vhpiSigAttrs:
+            if (object != nullptr) {
+                result = implicit_signals(*object);
+            }
+            break;
         case vhpiPortAssocs:
-            if (object != nullptr && is_region(*object)) {
+            if (object != nullptr
+                && (is_region(*object) || object->kind == vhpiCompConfigK)) {
                 result = port_associations(*object);
+            }
+            break;
+        case vhpiGenericAssocs:
+            if (object != nullptr
+                && (is_region(*object) || object->kind == vhpiCompConfigK)) {
+                result = associations(*object, true);
+            }
+            break;
+        case vhpiConfigSpecs:
+            if (object != nullptr) {
+                result = config_specs(*object);
             }
             break;
         case DEPRECATED_vhpiContributors:
@@ -9504,25 +10168,7 @@ private:
             // (IEEE 1076-2019 19.12.2.2).
             if (object != nullptr && is_signal_object(*object)) {
                 for (auto* const basic : basic_signals(*object)) {
-                    const auto first = result.size();
-                    const auto drivers = signal_drivers(*basic);
-                    result.insert(result.end(), drivers.begin(), drivers.end());
-                    for (auto* const other : connection_objects(*basic, true)) {
-                        if (std::ranges::find(result, other) == result.end()) {
-                            result.push_back(other);
-                        }
-                    }
-                    if (result.size() == first && basic->declaration != nullptr
-                        && basic->declaration->form
-                            == vhdl::DeclarationForm::signal
-                        && basic->declaration->initializer) {
-                        if (auto* const region = declaring_region(*basic)) {
-                            if (auto* const initial = expression_object(
-                                    *region, *basic->declaration->initializer)) {
-                                result.push_back(initial);
-                            }
-                        }
-                    }
+                    local_contributors(*basic, result);
                 }
             }
             break;
@@ -9531,6 +10177,11 @@ private:
             // it is associated with (19.12.2.3).
             if (object != nullptr && is_signal_object(*object)) {
                 for (auto* const basic : basic_signals(*object)) {
+                    // The model gives a formal signal parameter no load of
+                    // its own: the subprogram body is no process of it.
+                    if (signal_parameter_root(*basic) != nullptr) {
+                        continue;
+                    }
                     for (auto* const load : signal_loads(*basic)) {
                         if (std::ranges::find(result, load) == result.end()) {
                             result.push_back(load);
@@ -10630,14 +11281,7 @@ private:
             }
             return !std::ranges::any_of(region->unit->component_configurations,
                 [&](const vhdl::ComponentConfiguration& specification) {
-                    return same_name(specification.component.text(),
-                               source->target.text())
-                        && (specification.selection
-                                != vhdl::InstanceSelection::labels
-                            || std::ranges::any_of(specification.labels,
-                                [&](const std::string& label) {
-                                    return same_name(label, source->name);
-                                }));
+                    return specification_applies(specification, *source);
                 });
         }
         return true;
@@ -10773,7 +11417,7 @@ private:
     // (IEEE 1076-2019 16.2, 19.8 Figure 24); none for 'SUBTYPE, 'ELEMENT
     // and the others vhpiPredefAttrT does not list.
     [[nodiscard]] static const PredefinedAttribute* predefined_attribute(
-        const vhdl::Expression& expression)
+        const std::string_view designator)
     {
         static constexpr std::array<PredefinedAttribute, 31> table { {
             { "active", vhpiValueAK, vhpiActivePA },
@@ -10808,12 +11452,17 @@ private:
             { "val", vhpiFunctionAK, vhpiValPA },
             { "value", vhpiFunctionAK, vhpiValuePA },
         } };
-        const auto lowered = lower(std::string_view { expression.text }.substr(
-            expression.text.starts_with('\'') ? 1U : 0U));
-        const std::string_view designator { lowered };
         const auto found = std::ranges::find(
             table, designator, &PredefinedAttribute::designator);
         return found == table.end() ? nullptr : &*found;
+    }
+
+    [[nodiscard]] static const PredefinedAttribute* predefined_attribute(
+        const vhdl::Expression& expression)
+    {
+        const auto lowered = lower(std::string_view { expression.text }.substr(
+            expression.text.starts_with('\'') ? 1U : 0U));
+        return predefined_attribute(std::string_view { lowered });
     }
 
     [[nodiscard]] vhpiIntT get(const vhpiIntPropertyT property,
@@ -11350,6 +11999,14 @@ private:
             break;
         case vhpiAttrKindP:
         case vhpiPredefAttrP:
+            if (!object.implicit_attribute.empty()) {
+                if (const auto* const attribute
+                    = predefined_attribute(object.implicit_attribute)) {
+                    return static_cast<vhpiIntT>(property == vhpiAttrKindP
+                            ? static_cast<int>(attribute->kind)
+                            : static_cast<int>(attribute->attribute));
+                }
+            }
             if ((object.kind == vhpiSimpAttrNameK
                     || object.kind == vhpiParamAttrNameK)
                 && object.expression != nullptr) {
@@ -11589,11 +12246,18 @@ private:
         case vhpiCompNameP: {
             // The name of the component a component instantiation
             // instantiates (Figure 11).
+            if (object.kind == vhpiCompConfigK
+                && object.component_config != nullptr) {
+                scratch = std::string {
+                    object.component_config->component.text()
+                };
+                break;
+            }
             const auto* const source = instantiation_of(object);
             if (source == nullptr || !source->component) {
                 error(vhpiError,
                     "vhpiCompNameP needs a component instantiation of a "
-                    "component");
+                    "component or a component configuration");
                 return nullptr;
             }
             scratch = std::string { source->target.text() };
@@ -13462,12 +14126,13 @@ private:
         const vhdl::ForeignArchitectureBinding* binding { };
         runtime::simir::ProcessId process { };
         ForeignModel* model { };
-        // The processStmt vhpi_create made: one per instance, as the
-        // placeholder process is the only process of the instance whose
-        // drivers exist before the simulation starts.
-        Object* created { };
-        // The (signal, offset) pairs the foreign process has a driver for.
-        std::set<std::pair<SignalId, std::size_t>> driven;
+        // The processStmts vhpi_create made. The first owns its drivers
+        // through the placeholder process; each later one, and each driver
+        // made with no process, has a run-time owner of its own.
+        std::vector<Object*> created;
+        // The (signal, offset) pairs each created process has a driver for.
+        std::map<const Object*, std::set<std::pair<SignalId, std::size_t>>>
+            driven;
     };
 
     using ForeignFunction = decltype(vhpiForeignDataT::elabf);
@@ -13861,25 +14526,31 @@ private:
                 return nullptr;
             }
             auto& entry = foreign_instances_[*index];
-            if (entry.created != nullptr) {
-                // The placeholder process is the one process of the
-                // instance whose drivers exist from the start; a second one
-                // would need drivers registered at run time.
-                error(vhpiError, "vhpi_create: " + entry.path
-                        + " already has a foreign process; fsim creates one "
-                          "per foreign architecture instance");
-                return nullptr;
+            // The names of a created process are not specified (23.6).
+            std::string name { "foreign_process" };
+            runtime::simir::ProcessId runtime_owner = entry.process;
+            if (!entry.created.empty()) {
+                name += "_" + std::to_string(entry.created.size() + 1U);
+                try {
+                    runtime_owner
+                        = simulation_.add_foreign_driver_owner(entry.process);
+                } catch (const std::exception& failure) {
+                    error(vhpiError, std::string { "vhpi_create: " }
+                            + failure.what());
+                    return nullptr;
+                }
             }
             auto* const process
-                = make_object(vhpiProcessStmtK, "foreign_process", nullptr);
+                = make_object(vhpiProcessStmtK, name, nullptr);
             process->foreign = index;
+            process->foreign_owner = runtime_owner;
             process->foreign_process = true;
             if (auto* const region = region_at(entry.path)) {
                 process->full_name = region->full_name + ":" + process->name;
                 process->full_case_name
                     = region->full_case_name + ":" + process->case_name;
             }
-            entry.created = process;
+            entry.created.push_back(process);
             return to_handle(process);
         }
         // A driver for a basic signal (23.6).
@@ -13927,13 +14598,37 @@ private:
                 return nullptr;
             }
             // A process has one driver for a basic signal (23.6).
-            if (!entry.driven.emplace(*owner->signal, owner->offset).second) {
+            if (!entry.driven[process]
+                     .emplace(*owner->signal, owner->offset)
+                     .second) {
                 error(vhpiError, "vhpi_create: the process already has a "
                                  "driver for " + owner->full_name);
                 return nullptr;
             }
         }
+        // A driver of no process is a source of its own.
+        std::optional<runtime::simir::ProcessId> driver_owner;
+        if (process != nullptr) {
+            driver_owner = process->foreign_owner;
+        } else {
+            try {
+                driver_owner = simulation_.add_foreign_driver_owner(
+                    entry.process);
+            } catch (const std::exception& failure) {
+                error(vhpiError, std::string { "vhpi_create: " }
+                        + failure.what());
+                return nullptr;
+            }
+        }
+        try {
+            simulation_.add_foreign_driver(
+                driver_owner.value_or(entry.process), *owner->signal);
+        } catch (const std::exception& failure) {
+            error(vhpiError, std::string { "vhpi_create: " } + failure.what());
+            return nullptr;
+        }
         auto* const driver = make_object(vhpiDriverK, "", process);
+        driver->foreign_owner = driver_owner;
         driver->basic = canonical_basic(*owner);
         driver->signal = owner->signal;
         driver->offset = owner->offset;

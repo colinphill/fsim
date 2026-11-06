@@ -277,6 +277,7 @@ namespace fsim::app::tcl_detail {
         context.debugger.reset();
         context.debug_output.reset();
         context.debug_error.reset();
+        context.foreign.reset();
         context.simulation.reset();
         context.simulation_engine.reset();
         context.built.reset();
@@ -363,6 +364,14 @@ namespace fsim::app::tcl_detail {
         // time, as a foreign library does).
         application_detail::plan_kernel_access(
             *context.built, engine, context.config.run.foreign_probes);
+        // Only a session with a library compiles the primitive delay slots in.
+        const bool foreign = application_detail::foreign_libraries_requested(context.config);
+        if (foreign
+            && context.built->design.bind_primitive_delay_slots() != 0U) {
+            context.built->kernel_access.delay_slots = true;
+        }
+        const auto design_process_count
+            = context.built->design.process_count();
         context.simulation = std::make_unique<Simulation>(
             std::move(*context.built),
             context.config.run.max_deltas,
@@ -429,6 +438,20 @@ namespace fsim::app::tcl_detail {
             });
         context.built.reset();
         context.simulation_engine = engine;
+        if (foreign) {
+            context.foreign = application_detail::attach_foreign_libraries(
+                *context.simulation, context.config,
+                context.invocation.plusargs, context.diagnostics,
+                context.output, application_detail::SimulationOutputSink::callback,
+                design_process_count);
+            if (!context.foreign) {
+                context.simulation.reset();
+                context.simulation_engine.reset();
+                (void)command_error(
+                    interpreter, "a foreign library did not load");
+                return false;
+            }
+        }
         attach_callbacks(context);
         return true;
     }

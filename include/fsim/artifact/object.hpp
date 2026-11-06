@@ -100,6 +100,13 @@ inline constexpr std::string_view kSourceCoverageMagic = "fsim-source-coverage-v
     const std::filesystem::path& object,
     diagnostic::Engine& diagnostics);
 
+// Describes the format identity (object format, portable-unit and
+// compiled-HIR schemas) of an object written by a different fsim build, or
+// nullopt when the identity is current or the metadata cannot be read at all
+// (corruption stays a load error). Reads only the metadata header.
+[[nodiscard]] std::optional<std::string> object_outdated(
+    const std::filesystem::path& object);
+
 // One payload of a published object, verified against `expected_checksum`.
 [[nodiscard]] std::optional<std::string> read_object_payload(
     const std::filesystem::path& object,

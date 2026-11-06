@@ -12,6 +12,7 @@
 #c frame start depth=1
 #c frame end depth=1
 #c cbCreateObj type=vpiClassObj typespec=1 id=1
+#c cbCreateObj type=vpiClassObj typespec=1 id=1
 #c done n=106 v=5
 #c thread end parent=0 children=0
 #c enters=3

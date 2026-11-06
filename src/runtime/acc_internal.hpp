@@ -28,6 +28,11 @@ inline void publish_error(
   report_error(failed, where.function_name());
 }
 
+// vpi_control(vpiSetInteractiveScope) changed the interactive scope to the
+// VPI object; acc_handle_interactive_scope reports it until a later
+// acc_set_interactive_scope.
+void note_interactive_scope(std::uint64_t object) noexcept;
+
 [[nodiscard]] const fsim_acc_handle_context_v3* current_context() noexcept;
 [[nodiscard]] const fsim_acc_tf_context_v3* current_tf_context() noexcept;
 [[nodiscard]] bool valid_tf_context_binding(

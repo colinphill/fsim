@@ -1,6 +1,12 @@
 #c drc asynchon=0
+#c drc asynchon=0
+#c drc asynchon=0
 #c paramdrc change=1 argument=1 time=6
-#c paramdrc change=2 argument=1 time=11
+#c paramdrc change=2 argument=1 time=10
+#c paramdrc change=3 argument=1 time=11
+#c paramdrc change=4 argument=1 time=22
+#c paramdrc change=5 argument=1 time=26
+#c paramdrc change=6 argument=1 time=30
 #c scales top unit=-9 precision=-12 simulation=-12,-12
 #c scales time=50 string=50000
 #c strgetp wide d=1208925819614629174706176
